@@ -327,8 +327,15 @@ impl Session {
         let effect = match target {
             PresetSaveTarget::Effect {
                 target: chain,
-                slot,
-            } => Some(*self.effect_chain_of(chain)?.get(slot as usize)?),
+                device,
+            } => {
+                let chain = self.effect_chain_of(chain)?;
+                let slot = chain.position_of(device)?;
+                // As a patch: the identity belongs to the row it was opened
+                // from, and a preset that carried one would hand it to every
+                // project that loaded the bundle.
+                Some(chain.get(slot as usize)?.as_patch())
+            }
             _ => None,
         };
         Some(PresetSource {

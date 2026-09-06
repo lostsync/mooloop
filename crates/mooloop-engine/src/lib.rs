@@ -19,7 +19,7 @@ use jack::{AudioOut, Client, ClientOptions, MidiIn};
 use mooloop_core::{
     BufferParams, EffectKind, EffectParams, EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS,
     modulation::CONTROL_SOURCE_SLOTS,
-    DeviceKind, SliceMap,
+    DeviceId, DeviceKind, SliceMap,
 };
 use mooloop_dsp::{
     buffer_allocation_key, build_effect_at_tempo, AudioNode, DryAlign, SampleData,
@@ -66,6 +66,11 @@ pub enum StructuralCommand {
     InstallEffect {
         target: EffectTarget,
         slot: u8,
+        /// The identity the authoring model minted for this device. Carried
+        /// rather than derived, for the reason `InstallModulator` carries a
+        /// `ModSourceId`: both sides have to agree on what a saved route
+        /// names, and only one of them mints.
+        device: DeviceId,
         kind: EffectKind,
         resource_key: Option<u64>,
         node: Box<dyn AudioNode + Send>,

@@ -176,15 +176,15 @@ impl ChannelPattern {
         Some(self.lanes.remove(index))
     }
 
-    /// Re-point the lanes that address `scope`'s effect chain after it was
-    /// edited, dropping those whose device is gone. In place and without
-    /// allocating, so the engine can run it where the edit arrives.
-    pub fn retarget_lanes(
+    /// Drop the lanes aimed at a device that has left `scope`'s chain. In
+    /// place and without allocating, so the engine can run it where the edit
+    /// arrives. A reorder needs nothing: a lane names the device.
+    pub fn drop_lanes_for_device(
         &mut self,
         scope: crate::EffectTarget,
-        remap: &crate::structure::SlotRemap,
+        device: crate::DeviceId,
     ) -> bool {
-        crate::structure::retarget_lanes(&mut self.lanes, scope, remap)
+        crate::structure::drop_lanes_for_device(&mut self.lanes, scope, device)
     }
 
     /// Replace the whole lane set. Used by project load, which is the only

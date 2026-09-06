@@ -175,7 +175,11 @@ mod tests {
     use crate::EffectTarget;
 
     fn lane() -> AutomationLane {
-        AutomationLane::new(ParamAddr::effect(EffectTarget::Channel(0), 0, 3))
+        AutomationLane::new(ParamAddr::effect(
+            EffectTarget::Channel(0),
+            crate::DeviceId(0),
+            3,
+        ))
     }
 
     #[test]

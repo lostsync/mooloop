@@ -1,209 +1,251 @@
-//! Structural edits -- moving devices and channels -- and everything that has
-//! to follow them.
+//! The device chain, and the structural edits that rearrange it.
 //!
-//! A parameter is addressed by *where* its owner sits: `ParamOwner::Effect {
-//! slot }` is a position in a chain, and `EffectTarget::Channel(n)` is a
-//! position in the channel list. Positions are what the realtime path indexes,
-//! which is why they are cheap; the price is that a structural edit changes
-//! them. Every route, every automation lane, and the lane the editor happens
-//! to be showing named a device, not a number, and the number has to follow
-//! the device.
+//! A rack row is named by *what it is*, not by where it sits.
+//! [`DeviceId`](crate::DeviceId) is minted when a device is added, carried
+//! through every reorder, and never reused; `ParamOwner::Effect { device }`
+//! is what a modulation route and an automation lane persist. Position is a
+//! derived thing -- the realtime path indexes by it, because a bounded array
+//! lookup is what a callback can afford, and nothing saves it.
 //!
-//! This module states each structural edit as one permutation, computed once
-//! and applied everywhere a position is stored. The UI's model and the
-//! engine's mirror both run the same [`SlotRemap`] for the same gesture, so
-//! neither side can end up pointing at a different device than the other.
-//! The alternative -- durable ids on effect slots, resolved to positions on
-//! every read -- was what modulator sources needed, because a route names a
-//! source *from elsewhere*. Nothing outside a chain names an effect slot
-//! except through `ParamAddr`, and `ParamAddr` travels through here.
+//! So reordering a chain is not an addressing event. Nothing has to be
+//! remapped, because nothing that was saved ever mentioned position. Only
+//! *removal* still reaches outside the chain, and it reaches with an
+//! identity: the routes and lanes that named the departed device go with it.
+//!
+//! This is the division [`ModSourceId`](crate::ModSourceId) already draws for
+//! modulator slots, and it is the reason a container -- a device holding
+//! devices -- is a tree of the same rows rather than a format migration:
+//! nesting changes structure, and structure is not identity.
+//!
+//! Channels are still addressed by position, and [`ChannelEdit`] is what
+//! carries an address across a channel insertion or deletion.
 
 use crate::automation::AutomationLane;
-use crate::effect::EffectSlotState;
+use crate::effect::{DeviceId, EffectSlotState};
 use crate::mixer::EffectTarget;
 use crate::modulation::{ParamAddr, ParamOwner};
 use crate::MAX_EFFECTS_PER_CHANNEL;
 
-/// Where every slot of a chain lands after one structural edit.
+/// One chain of devices, and the counter that keeps their identities unique.
 ///
-/// Built by [`move_effect`], [`insert_effect`] and [`remove_effect`] over
-/// the whole addressable chain rather than its populated length, so the
-/// engine -- which knows only which slots hold nodes -- computes exactly the
-/// same table as the model that knows the `Vec`. `None` is a slot whose
-/// device is gone.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct SlotRemap {
-    map: [Option<u8>; MAX_EFFECTS_PER_CHANNEL],
+/// Reads go through `Deref` to the slice, so a caller that only wants the
+/// device in row 2 indexes it exactly as it indexed the `Vec` this replaced.
+/// Structural change does not: [`push`](Self::push), [`insert`](Self::insert),
+/// [`remove`](Self::remove) and [`move_device`](Self::move_device) are the
+/// only ways in and out, which is what makes "mint on add" impossible to skip.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceChain {
+    slots: Vec<EffectSlotState>,
+    /// Next identity to mint. Monotonic within the chain, so removing a
+    /// device and adding another never hands the newcomer the departed
+    /// device's routes.
+    next_id: u32,
 }
 
-impl std::fmt::Debug for SlotRemap {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let moved: Vec<(usize, Option<u8>)> = self
-            .map
+impl Default for DeviceChain {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DeviceChain {
+    pub const fn new() -> Self {
+        Self {
+            slots: Vec::new(),
+            next_id: 0,
+        }
+    }
+
+    /// Take a bare list of rows and give every one of them an identity.
+    ///
+    /// A row that already has one keeps it; a row that does not takes its
+    /// position, which is exactly the number every address written before
+    /// device identity was already using. That is the whole compatibility
+    /// story: an old project's `slot = 2` decodes as `DeviceId(2)`, and the
+    /// device it named is the one this hands `DeviceId(2)` to.
+    pub fn adopt(slots: Vec<EffectSlotState>) -> Self {
+        let mut slots = slots;
+        for (position, slot) in slots.iter_mut().enumerate() {
+            if slot.id.is_unset() {
+                slot.id = DeviceId(position as u32);
+            }
+        }
+        let next_id = slots
             .iter()
-            .enumerate()
-            .filter(|(old, new)| **new != Some(*old as u8))
-            .map(|(old, new)| (old, *new))
-            .collect();
-        f.debug_struct("SlotRemap").field("moved", &moved).finish()
-    }
-}
-
-impl SlotRemap {
-    pub const fn identity() -> Self {
-        let mut map = [None; MAX_EFFECTS_PER_CHANNEL];
-        let mut slot = 0;
-        while slot < MAX_EFFECTS_PER_CHANNEL {
-            map[slot] = Some(slot as u8);
-            slot += 1;
-        }
-        Self { map }
+            .map(|slot| slot.id.0.wrapping_add(1))
+            .max()
+            .unwrap_or(0);
+        Self { slots, next_id }
     }
 
-    /// The permutation of moving the device in `from` to position `to`:
-    /// it lands on `to`, and everything between shifts one place toward
-    /// `from`. Out-of-range or equal positions are the identity.
-    pub fn for_move(from: usize, to: usize) -> Self {
-        let mut remap = Self::identity();
-        if from == to || from >= MAX_EFFECTS_PER_CHANNEL || to >= MAX_EFFECTS_PER_CHANNEL {
-            return remap;
+    fn mint(&mut self) -> DeviceId {
+        // `UNSET` is the one value that means "no identity", so it is stepped
+        // over rather than handed out. Reaching it takes four billion inserts
+        // into one chain; the guard costs a comparison and removes the need
+        // to think about it again.
+        if self.next_id == DeviceId::UNSET.0 {
+            self.next_id = self.next_id.wrapping_add(1);
         }
-        remap.map[from] = Some(to as u8);
-        if from < to {
-            for slot in from + 1..=to {
-                remap.map[slot] = Some((slot - 1) as u8);
-            }
-        } else {
-            for slot in to..from {
-                remap.map[slot] = Some((slot + 1) as u8);
-            }
-        }
-        remap
+        let id = DeviceId(self.next_id);
+        self.next_id = self.next_id.wrapping_add(1);
+        id
     }
 
-    /// The permutation of inserting a device at `at`: that slot and every
-    /// one after it shift up by one. The last addressable slot has nowhere
-    /// to go, which is why [`insert_effect`] refuses a full chain.
-    pub fn for_insert(at: usize) -> Self {
-        let mut remap = Self::identity();
-        for slot in at..MAX_EFFECTS_PER_CHANNEL {
-            remap.map[slot] = u8::try_from(slot + 1).ok();
-        }
-        remap
+    /// Append a device, stamping it with a fresh identity. `None` when the
+    /// chain is already at the addressable limit.
+    pub fn push(&mut self, state: EffectSlotState) -> Option<DeviceId> {
+        let at = self.slots.len();
+        self.insert(at, state).map(|(_, id)| id)
     }
 
-    /// The permutation of removing the device at `at`: it resolves to
-    /// nothing, and everything after it shifts down by one.
-    pub fn for_remove(at: usize) -> Self {
-        let mut remap = Self::identity();
-        if at >= MAX_EFFECTS_PER_CHANNEL {
-            return remap;
+    /// Insert `state` at `at` (clamped to the end), stamping it with a fresh
+    /// identity and returning where it landed. `None` when the chain is full.
+    pub fn insert(&mut self, at: usize, state: EffectSlotState) -> Option<(usize, DeviceId)> {
+        if self.slots.len() >= MAX_EFFECTS_PER_CHANNEL {
+            return None;
         }
-        remap.map[at] = None;
-        for slot in at + 1..MAX_EFFECTS_PER_CHANNEL {
-            remap.map[slot] = Some((slot - 1) as u8);
-        }
-        remap
+        let at = at.min(self.slots.len());
+        let id = self.mint();
+        self.slots.insert(at, EffectSlotState { id, ..state });
+        Some((at, id))
     }
 
-    pub fn is_identity(&self) -> bool {
-        *self == Self::identity()
+    /// Take the device at `at` out, returning it. `None` when there is
+    /// nothing there. The caller is what drops the routes and lanes that
+    /// named it -- see [`drop_lanes_for_device`].
+    pub fn remove(&mut self, at: usize) -> Option<EffectSlotState> {
+        (at < self.slots.len()).then(|| self.slots.remove(at))
     }
 
-    /// Where the device that was in `old` now sits.
-    pub fn slot(&self, old: u8) -> Option<u8> {
-        self.map[old as usize]
-    }
-
-    /// Where `address` points after the edit. An address outside `scope`, or
-    /// one not owned by an effect slot, is untouched; `None` means the device
-    /// it named is gone, and whatever held the address should let go of it.
-    pub fn address(&self, scope: EffectTarget, address: ParamAddr) -> Option<ParamAddr> {
-        if address.scope != scope {
-            return Some(address);
+    /// Move the device at `from` to position `to`. Returns whether anything
+    /// moved.
+    ///
+    /// Nothing else in the project has to hear about this. Every route and
+    /// every lane named the device, and the device is the thing that moved.
+    pub fn move_device(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.slots.len() || to >= self.slots.len() || from == to {
+            return false;
         }
-        let ParamOwner::Effect { slot } = address.owner else {
-            return Some(address);
+        let device = self.slots.remove(from);
+        self.slots.insert(to, device);
+        true
+    }
+
+    /// The identity of the device in `slot`, if any.
+    pub fn id_at(&self, slot: usize) -> Option<DeviceId> {
+        self.slots.get(slot).map(|state| state.id)
+    }
+
+    /// Where `device` currently sits: the runtime locator, resolved from the
+    /// identity whenever the chain changes rather than stored anywhere.
+    pub fn position_of(&self, device: DeviceId) -> Option<u8> {
+        self.slots
+            .iter()
+            .position(|state| state.id == device)
+            .and_then(|slot| u8::try_from(slot).ok())
+    }
+
+    /// One row, to change what the device *is doing*: a knob, a bypass, a
+    /// trim. Deliberately not a whole-row assignment -- see
+    /// [`replace_state`](Self::replace_state).
+    pub fn get_mut(&mut self, slot: usize) -> Option<&mut EffectSlotState> {
+        self.slots.get_mut(slot)
+    }
+
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, EffectSlotState> {
+        self.slots.iter_mut()
+    }
+
+    /// Put different settings in `slot`, keeping the device that is there.
+    ///
+    /// This is what loading a preset into a row is: the patch changes and the
+    /// device does not, so every route and lane aimed at it goes on meaning
+    /// the same knob. Any identity `state` arrives with is discarded, which
+    /// is why this exists rather than an assignment through the slice.
+    pub fn replace_state(&mut self, slot: usize, state: EffectSlotState) -> bool {
+        let Some(row) = self.slots.get_mut(slot) else {
+            return false;
         };
-        let slot = self.slot(slot)?;
-        Some(ParamAddr {
-            owner: ParamOwner::Effect { slot },
-            ..address
-        })
+        *row = EffectSlotState { id: row.id, ..state };
+        true
     }
 }
 
-/// Move the device at `from` to position `to`, returning the permutation
-/// everything that names a slot in this chain must now run. `None` when
-/// nothing moved: either position is out of range, or they are equal.
-pub fn move_effect(
-    effects: &mut Vec<EffectSlotState>,
-    from: usize,
-    to: usize,
-) -> Option<SlotRemap> {
-    if from >= effects.len() || to >= effects.len() || from == to {
-        return None;
+impl std::ops::Deref for DeviceChain {
+    type Target = [EffectSlotState];
+
+    fn deref(&self) -> &Self::Target {
+        &self.slots
     }
-    let effect = effects.remove(from);
-    effects.insert(to, effect);
-    Some(SlotRemap::for_move(from, to))
 }
 
-/// Insert `effect` at `at` (clamped to the end of the chain), returning the
-/// slot it landed in and the permutation. `None` when the chain is full.
-pub fn insert_effect(
-    effects: &mut Vec<EffectSlotState>,
-    at: usize,
-    effect: EffectSlotState,
-) -> Option<(usize, SlotRemap)> {
-    if effects.len() >= MAX_EFFECTS_PER_CHANNEL {
-        return None;
+impl FromIterator<EffectSlotState> for DeviceChain {
+    fn from_iter<T: IntoIterator<Item = EffectSlotState>>(iter: T) -> Self {
+        Self::adopt(iter.into_iter().collect())
     }
-    let at = at.min(effects.len());
-    effects.insert(at, effect);
-    Some((at, SlotRemap::for_insert(at)))
 }
 
-/// Remove the device at `at`, returning it and the permutation. `None` when
-/// there is nothing there.
-pub fn remove_effect(
-    effects: &mut Vec<EffectSlotState>,
-    at: usize,
-) -> Option<(EffectSlotState, SlotRemap)> {
-    if at >= effects.len() {
-        return None;
+impl<'a> IntoIterator for &'a DeviceChain {
+    type Item = &'a EffectSlotState;
+    type IntoIter = std::slice::Iter<'a, EffectSlotState>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.slots.iter()
     }
-    let effect = effects.remove(at);
-    Some((effect, SlotRemap::for_remove(at)))
 }
 
-/// Re-point every lane that addresses `scope`'s chain, dropping those whose
-/// device is gone. Returns whether anything changed. Removal is in place:
-/// the engine's lane storage is preallocated, and this runs on its thread.
-pub fn retarget_lanes(
+/// The persisted form is the bare list of rows it always was, each now
+/// carrying its own `id`. Nothing about the chain's shape is written: the
+/// mint counter is derived on load from the ids present, so a saved project
+/// cannot disagree with itself about which identities are already spent.
+impl serde::Serialize for DeviceChain {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.slots.serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for DeviceChain {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(Self::adopt(Vec::<EffectSlotState>::deserialize(
+            deserializer,
+        )?))
+    }
+}
+
+impl ParamAddr {
+    /// Whether this address names `device` in `scope`.
+    pub fn names_device(&self, scope: EffectTarget, device: DeviceId) -> bool {
+        self.scope == scope && self.owner == ParamOwner::Effect { device }
+    }
+}
+
+/// Drop every lane that names `device` in `scope`. Returns whether anything
+/// went.
+///
+/// This is all that is left of what a chain edit used to owe the rest of the
+/// project. A reorder owes it nothing; only a departure does, and a departure
+/// names one identity rather than permuting a table. Removal is in place: the
+/// engine's lane storage is preallocated, and this runs on its thread.
+pub fn drop_lanes_for_device(
     lanes: &mut Vec<AutomationLane>,
     scope: EffectTarget,
-    remap: &SlotRemap,
+    device: DeviceId,
 ) -> bool {
-    let mut changed = false;
-    lanes.retain_mut(|lane| match remap.address(scope, lane.target) {
-        Some(target) => {
-            changed |= target != lane.target;
-            lane.target = target;
-            true
-        }
-        None => {
-            changed = true;
-            false
-        }
-    });
-    changed
+    let before = lanes.len();
+    lanes.retain(|lane| !lane.target.names_device(scope, device));
+    lanes.len() != before
 }
 
 /// One edit to the channel list, and where every channel index lands after
-/// it. Channels are addressed by position exactly as effect slots are, so a
-/// route or lane scoped to channel 4 has to become channel 3 when channel 1
-/// is deleted -- and has to be dropped when channel 4 itself is.
+/// it. Channels are still addressed by position -- a route or lane scoped to
+/// channel 4 has to become channel 3 when channel 1 is deleted, and has to be
+/// dropped when channel 4 itself is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelEdit {
     Removed(u8),
@@ -258,27 +300,50 @@ mod tests {
     use super::*;
     use crate::effect::EffectKind;
 
-    fn chain(kinds: &[EffectKind]) -> Vec<EffectSlotState> {
-        kinds.iter().map(|kind| EffectSlotState::of_kind(*kind)).collect()
+    fn chain(kinds: &[EffectKind]) -> DeviceChain {
+        kinds
+            .iter()
+            .copied()
+            .map(EffectSlotState::of_kind)
+            .collect()
     }
 
-    fn kinds(effects: &[EffectSlotState]) -> Vec<EffectKind> {
-        effects.iter().map(EffectSlotState::kind).collect()
+    fn kinds(chain: &DeviceChain) -> Vec<EffectKind> {
+        chain.iter().map(EffectSlotState::kind).collect()
+    }
+
+    fn ids(chain: &DeviceChain) -> Vec<u32> {
+        chain.iter().map(|slot| slot.id.0).collect()
     }
 
     const SCOPE: EffectTarget = EffectTarget::Channel(2);
 
     #[test]
-    fn a_move_forward_shifts_the_slots_it_passes_over_down() {
-        let mut effects = chain(&[
+    fn every_added_device_is_minted_a_fresh_identity() {
+        let mut chain = chain(&[EffectKind::Filter, EffectKind::Drive]);
+        assert_eq!(ids(&chain), [0, 1]);
+        let (slot, id) = chain
+            .insert(0, EffectSlotState::of_kind(EffectKind::Delay))
+            .expect("room");
+        assert_eq!((slot, id), (0, DeviceId(2)));
+        assert_eq!(ids(&chain), [2, 0, 1]);
+    }
+
+    /// The property the whole change exists for: a reorder is not an
+    /// addressing event, so an address written before it means the same
+    /// device after it, with nothing having been rewritten.
+    #[test]
+    fn a_reorder_moves_no_identity() {
+        let mut chain = chain(&[
             EffectKind::Filter,
             EffectKind::Drive,
             EffectKind::Delay,
             EffectKind::Reverb,
         ]);
-        let remap = move_effect(&mut effects, 0, 2).expect("moved");
+        let filter = chain.id_at(0).expect("occupied");
+        assert!(chain.move_device(0, 2));
         assert_eq!(
-            kinds(&effects),
+            kinds(&chain),
             [
                 EffectKind::Drive,
                 EffectKind::Delay,
@@ -286,109 +351,104 @@ mod tests {
                 EffectKind::Reverb
             ]
         );
-        assert_eq!(remap.slot(0), Some(2));
-        assert_eq!(remap.slot(1), Some(0));
-        assert_eq!(remap.slot(2), Some(1));
-        assert_eq!(remap.slot(3), Some(3));
+        assert_eq!(chain.position_of(filter), Some(2));
+        assert_eq!(chain.id_at(2), Some(filter));
+        // And the address itself never moved: it named the filter before the
+        // drag and names the filter after it, unrewritten.
+        let address = ParamAddr::effect(SCOPE, filter, 7);
+        assert_eq!(address, ParamAddr::effect(SCOPE, chain.id_at(2).unwrap(), 7));
+    }
+
+    /// A departed device never comes back, and its identity never goes to
+    /// anybody else -- which is what stops a new device inheriting the routes
+    /// of the one it replaced.
+    #[test]
+    fn an_identity_is_never_reused() {
+        let mut chain = chain(&[EffectKind::Filter, EffectKind::Drive]);
+        let drive = chain.id_at(1).expect("occupied");
+        assert_eq!(chain.remove(1).map(|state| state.id), Some(drive));
+        let replacement = chain
+            .push(EffectSlotState::of_kind(EffectKind::Delay))
+            .expect("room");
+        assert_ne!(replacement, drive);
+        assert_eq!(chain.position_of(drive), None);
     }
 
     #[test]
-    fn a_move_backward_shifts_the_slots_it_passes_over_up() {
-        let mut effects = chain(&[
-            EffectKind::Filter,
-            EffectKind::Drive,
-            EffectKind::Delay,
-            EffectKind::Reverb,
-        ]);
-        let remap = move_effect(&mut effects, 3, 1).expect("moved");
+    fn a_full_chain_refuses_an_insert() {
+        let mut full = chain(&vec![EffectKind::Filter; MAX_EFFECTS_PER_CHANNEL]);
+        assert!(full
+            .insert(0, EffectSlotState::of_kind(EffectKind::Drive))
+            .is_none());
+        assert_eq!(full.len(), MAX_EFFECTS_PER_CHANNEL);
+        let mut chain = chain(&[EffectKind::Filter]);
+        let (slot, _) = chain
+            .insert(9, EffectSlotState::of_kind(EffectKind::Drive))
+            .expect("room");
+        assert_eq!(slot, 1, "an insert past the end lands at the end");
+    }
+
+    /// The compatibility path: a project written before device identity has
+    /// no ids at all, and its rows take their positions -- the very numbers
+    /// its saved addresses were already using.
+    #[test]
+    fn rows_without_an_identity_take_their_position_as_one() {
+        let legacy: Vec<EffectSlotState> = [EffectKind::Filter, EffectKind::Drive, EffectKind::Delay]
+            .into_iter()
+            .map(EffectSlotState::of_kind)
+            .collect();
+        assert!(legacy.iter().all(|slot| slot.id.is_unset()));
+        let mut chain = DeviceChain::adopt(legacy);
+        assert_eq!(ids(&chain), [0, 1, 2]);
+        // And the counter clears them, so the next device is not handed an
+        // identity a legacy address already names.
         assert_eq!(
-            kinds(&effects),
-            [
-                EffectKind::Filter,
-                EffectKind::Reverb,
-                EffectKind::Drive,
-                EffectKind::Delay
-            ]
+            chain.push(EffectSlotState::of_kind(EffectKind::Reverb)),
+            Some(DeviceId(3))
         );
-        assert_eq!(remap.slot(3), Some(1));
-        assert_eq!(remap.slot(1), Some(2));
-        assert_eq!(remap.slot(2), Some(3));
-        assert_eq!(remap.slot(0), Some(0));
-    }
-
-    /// The model applies one permutation for a move; the engine, which only
-    /// has a move primitive too, applies the same one. Insert and remove are
-    /// spelled on the engine as install-at-tail-then-move and
-    /// move-to-tail-then-remove, so those compositions must equal the
-    /// model's single-step tables on every populated slot.
-    #[test]
-    fn the_engines_two_step_insert_and_remove_compose_to_the_models_tables() {
-        let len = 5;
-        for at in 0..len {
-            let model = SlotRemap::for_insert(at);
-            let engine = SlotRemap::for_move(len, at);
-            for slot in 0..len as u8 {
-                assert_eq!(model.slot(slot), engine.slot(slot), "insert at {at}, slot {slot}");
-            }
-        }
-        for at in 0..len {
-            let model = SlotRemap::for_remove(at);
-            let to_tail = SlotRemap::for_move(at, len - 1);
-            let drop_tail = SlotRemap::for_remove(len - 1);
-            for slot in 0..len as u8 {
-                let engine = to_tail.slot(slot).and_then(|slot| drop_tail.slot(slot));
-                assert_eq!(model.slot(slot), engine, "remove at {at}, slot {slot}");
-            }
-        }
     }
 
     #[test]
-    fn an_address_follows_its_device_and_a_removed_device_takes_its_address_with_it() {
-        let remap = SlotRemap::for_remove(1);
-        let before = ParamAddr::effect(SCOPE, 2, 7);
-        assert_eq!(
-            remap.address(SCOPE, before),
-            Some(ParamAddr::effect(SCOPE, 1, 7))
-        );
-        assert_eq!(remap.address(SCOPE, ParamAddr::effect(SCOPE, 1, 7)), None);
-        // Another chain, or another owner, is none of this edit's business.
-        let elsewhere = ParamAddr::effect(EffectTarget::Bus(0), 1, 7);
-        assert_eq!(remap.address(SCOPE, elsewhere), Some(elsewhere));
-        let strip = ParamAddr::strip(SCOPE, 0);
-        assert_eq!(remap.address(SCOPE, strip), Some(strip));
+    fn a_saved_chain_round_trips_its_identities() {
+        let mut chain = chain(&[EffectKind::Filter, EffectKind::Drive, EffectKind::Delay]);
+        chain.remove(0);
+        chain.push(EffectSlotState::of_kind(EffectKind::Reverb));
+        let encoded = toml::to_string(&Wrapper { effects: chain.clone() }).expect("encodes");
+        let decoded: Wrapper = toml::from_str(&encoded).expect("decodes");
+        assert_eq!(decoded.effects, chain);
+        assert_eq!(ids(&decoded.effects), [1, 2, 3]);
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct Wrapper {
+        effects: DeviceChain,
     }
 
     #[test]
-    fn lanes_follow_the_permutation_and_the_orphan_is_dropped() {
+    fn lanes_that_named_a_departed_device_go_with_it() {
+        let mut chain = chain(&[EffectKind::Filter, EffectKind::Drive, EffectKind::Delay]);
+        let drive = chain.id_at(1).expect("occupied");
+        let filter = chain.id_at(0).expect("occupied");
         let mut lanes = vec![
-            AutomationLane::new(ParamAddr::effect(SCOPE, 0, 1)),
-            AutomationLane::new(ParamAddr::effect(SCOPE, 1, 1)),
-            AutomationLane::new(ParamAddr::effect(SCOPE, 2, 1)),
+            AutomationLane::new(ParamAddr::effect(SCOPE, filter, 1)),
+            AutomationLane::new(ParamAddr::effect(SCOPE, drive, 1)),
             AutomationLane::new(ParamAddr::strip(SCOPE, 0)),
+            // Another chain's device, which this edit is none of the business
+            // of even if the two chains happened to mint the same number.
+            AutomationLane::new(ParamAddr::effect(EffectTarget::Bus(0), drive, 1)),
         ];
-        assert!(retarget_lanes(&mut lanes, SCOPE, &SlotRemap::for_remove(1)));
+        chain.remove(1);
+        assert!(drop_lanes_for_device(&mut lanes, SCOPE, drive));
         let targets: Vec<ParamAddr> = lanes.iter().map(|lane| lane.target).collect();
         assert_eq!(
             targets,
             [
-                ParamAddr::effect(SCOPE, 0, 1),
-                ParamAddr::effect(SCOPE, 1, 1),
+                ParamAddr::effect(SCOPE, filter, 1),
                 ParamAddr::strip(SCOPE, 0),
+                ParamAddr::effect(EffectTarget::Bus(0), drive, 1),
             ]
         );
-        assert!(!retarget_lanes(&mut lanes, SCOPE, &SlotRemap::identity()));
-    }
-
-    #[test]
-    fn a_full_chain_refuses_an_insert_rather_than_pushing_a_slot_off_the_end() {
-        let mut effects = chain(&vec![EffectKind::Filter; MAX_EFFECTS_PER_CHANNEL]);
-        assert!(insert_effect(&mut effects, 0, EffectSlotState::of_kind(EffectKind::Drive)).is_none());
-        assert_eq!(effects.len(), MAX_EFFECTS_PER_CHANNEL);
-        let mut effects = chain(&[EffectKind::Filter]);
-        let (slot, remap) =
-            insert_effect(&mut effects, 9, EffectSlotState::of_kind(EffectKind::Drive)).unwrap();
-        assert_eq!(slot, 1, "an insert past the end lands at the end");
-        assert!(remap.is_identity() || remap.slot(1) == Some(2));
+        assert!(!drop_lanes_for_device(&mut lanes, SCOPE, drive));
     }
 
     #[test]
@@ -401,7 +461,7 @@ mod tests {
         assert_eq!(inserted.channel(0), Some(0));
         assert_eq!(inserted.channel(1), Some(2));
         assert_eq!(inserted.channel(2), Some(3));
-        let bus = ParamAddr::effect(EffectTarget::Bus(3), 0, 0);
+        let bus = ParamAddr::effect(EffectTarget::Bus(3), DeviceId(0), 0);
         assert_eq!(removed.address(bus), Some(bus));
         assert_eq!(
             removed.address(ParamAddr::strip(EffectTarget::Channel(5), 0)),

@@ -465,21 +465,26 @@ land on its own when it starts to matter:
   rotation (`MoveEffect`), and knob changes arrive as sample-timed
   `ParamValue` events. Effect chains persist in song files
   (`ChannelSetup.effects`, serde-defaulted for older manifests).
-- Structural edits keep every address honest. An effect is addressed by its
-  slot and a channel by its index, so adding, moving, or removing a device --
-  or deleting or pasting a channel -- is stated once as a permutation
-  (`mooloop_core::structure`) and run over everything that names a position:
-  the modulation matrix, every automation lane in every pattern, and the
-  lane the editor is showing. The UI's model and the engine's mirror apply
-  the same table for the same command, so a route or lane keeps meaning the
-  device it was drawn on; a removed device takes its routes and lanes with
-  it. Add, move and remove are undoable edits. The modulator grid follows the
-  same rule one level down: a route aimed at a modulator's own parameter
-  moves with that module and is dropped when its slot is emptied. On load,
-  the integrity pass points a route or lane stranded on another channel's
-  index back at its own channel and drops one that names a device or control
-  that is not there, leaving addresses on a generator that has no descriptor
-  table yet untouched.
+- A rack row is addressed by the device in it, not by where it sits. Adding a
+  device to a chain mints it a durable `DeviceId` (`mooloop_core::structure`),
+  never reused, and every modulation route, automation lane, preset label and
+  open save dialog names that. So inserting a device above another one, or
+  dragging a row somewhere else, is not an addressing event at all: nothing
+  that was saved ever mentioned position, so nothing has to be rewritten, and
+  the two sides cannot fall out of step. Position is derived — the realtime
+  path indexes by it, reading each row's identity out of the slot state it is
+  already standing in, and nothing persists it. Removing a device is the one
+  chain edit that still reaches outside the chain, and it reaches with one
+  identity: its routes and lanes go with it. Add, move and remove are
+  undoable edits. The modulator grid has followed the same rule since its
+  `ModSourceId` landed, one level down: a route aimed at a modulator's own
+  parameter moves with that module and is dropped when its slot is emptied.
+  Channels are still addressed by index, so deleting or pasting one is stated
+  once as a `ChannelEdit` and run over everything scoped to a channel. On
+  load, the integrity pass points a route or lane stranded on another
+  channel's index back at its own channel and drops one that names a device
+  or control that is not there, leaving addresses on a generator that has no
+  descriptor table yet untouched.
 - Twelve effect kinds ship: a low-pass/high-pass filter, a drive/saturation
   with four curves at 2x oversampling, a bitcrush that is deliberately not
   oversampled, a stereo delay with damped cross-feedable feedback and
@@ -534,8 +539,9 @@ land on its own when it starts to matter:
   ring primitive with cubic-Hermite fractional reads and crossfaded head
   jumps. The delay effect is its first consumer; the retained-audio buffer
   device is meant to be the second rather than growing its own ring.
-- `ParamAddr` addresses parameters owned by a source, effect slot, modulator
-  slot, or strip within its channel-or-bus scope. The per-channel `ModRack` and clip
+- `ParamAddr` addresses parameters owned by a source, a rack device (by its
+  durable `DeviceId`), a modulator slot, or the strip, within its
+  channel-or-bus scope. The per-channel `ModRack` and clip
   automation resolve through it. They compose rather than compete: a lane
   supplies the base a knob would otherwise supply, and the matrix adds its
   offsets on top, so an LFO wobbles around a drawn curve. Both resolve at the

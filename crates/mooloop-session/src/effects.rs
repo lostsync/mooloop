@@ -6,8 +6,8 @@
 use crate::session::Session;
 use mooloop_core::gain::{db_to_linear, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::{
-    insert_effect, move_effect, remove_effect, DelayTimeDivision, EffectKind, EffectParams,
-    EffectSlotState, EffectTarget, EngineCommand,
+    DelayTimeDivision, DeviceId, EffectKind, EffectParams, EffectSlotState, EffectTarget,
+    EngineCommand,
 };
 
 /// Trim knobs work in dB from unity and stop at the container's headroom; the
@@ -23,6 +23,9 @@ pub struct EffectInserted {
     pub target: EffectTarget,
     pub slot: usize,
     pub tail: usize,
+    /// The identity the chain minted. The engine is told it rather than
+    /// deriving one, so both sides agree on what a route names.
+    pub device: DeviceId,
     pub kind: EffectKind,
     pub params: EffectParams,
 }
@@ -36,10 +39,11 @@ pub struct EffectRemoved {
 }
 
 impl Session {
-    /// Inserts `kind` before slot `insert_before`.
+    /// Inserts `kind` before slot `insert_before`, minting the device its
+    /// identity.
     ///
-    /// Routes and lanes naming a slot are retargeted through the permutation
-    /// the insert reports, so an edit never silently re-aims them.
+    /// Nothing has to be retargeted: no route and no lane named the row this
+    /// pushes down, because none of them ever named a row.
     pub fn insert_effect_at(
         &mut self,
         kind: EffectKind,
@@ -49,34 +53,40 @@ impl Session {
         let effects = self.effect_chain_mut()?;
         let tail = effects.len();
         let effect = EffectSlotState::of_kind(kind);
-        let (slot, remap) = insert_effect(effects, insert_before, effect)?;
-        self.retarget_effect_slots(target, &remap);
+        let (slot, device) = effects.insert(insert_before, effect)?;
         Some(EffectInserted {
             target,
             slot,
             tail,
+            device,
             kind,
             params: effect.params,
         })
     }
 
-    /// Removes the effect in `slot`.
+    /// Removes the effect in `slot`, and with it every route, lane and label
+    /// that named the device that was in it.
     pub fn remove_effect_at(&mut self, slot: usize) -> Option<EffectRemoved> {
         let target = self.effect_target;
         let effects = self.effect_chain_mut()?;
-        let (_, remap) = remove_effect(effects, slot)?;
+        let removed = effects.remove(slot)?;
         let tail = effects.len();
-        self.retarget_effect_slots(target, &remap);
+        self.forget_device(target, removed.id);
         Some(EffectRemoved { target, slot, tail })
     }
 
     /// Reorders the chain, returning what the rack is pointed at.
+    ///
+    /// A reorder is not an addressing event. The devices change places and
+    /// every address in the project goes on meaning exactly what it meant.
     pub fn move_effect_to(&mut self, from: usize, to: usize) -> Option<EffectTarget> {
         let target = self.effect_target;
-        let remap = self
+        if !self
             .effect_chain_mut()
-            .and_then(|effects| move_effect(effects, from, to))?;
-        self.retarget_effect_slots(target, &remap);
+            .is_some_and(|effects| effects.move_device(from, to))
+        {
+            return None;
+        }
         Some(target)
     }
 
@@ -207,10 +217,13 @@ impl Session {
         if effect.kind() != preset.kind() {
             return None;
         }
-        *effect = *preset;
-        if let Ok(slot) = u8::try_from(slot) {
-            self.set_effect_preset_name(target, slot, name);
-        }
+        // The row's identity is the row's, not the preset's: a preset is a
+        // patch and carries none. Everything aimed at this device goes on
+        // meaning the same knob, which is what makes loading a preset an
+        // edit rather than a replacement.
+        let device = effect.id;
+        self.effect_chain_mut()?.replace_state(slot, *preset);
+        self.set_effect_preset_name(target, device, name);
         self.mark_dirty();
         Some(target)
     }
@@ -383,11 +396,12 @@ mod tests {
         session.insert_effect_at(EffectKind::Delay, 0).expect("room");
         session.insert_effect_at(EffectKind::Filter, 1).expect("room");
         session.insert_effect_at(EffectKind::Delay, 2).expect("room");
-        session.channels[0].effects[2] = dialled_in_delay();
+        session.channels[0].effects.replace_state(2, dialled_in_delay());
+        let device = session.channels[0].effects.id_at(2).expect("three rows");
 
         session.pending_preset_save = Some(PresetSaveTarget::Effect {
             target: EffectTarget::Channel(0),
-            slot: 2,
+            device,
         });
         let source = session.take_preset_save(120, 50).expect("a save was pending");
         assert!(session.pending_preset_save.is_none(), "a taken save is spent");
@@ -402,14 +416,21 @@ mod tests {
             panic!("not an effect");
         };
 
+        let row_zero = session.channels[0].effects.id_at(0).expect("three rows");
         assert_eq!(
             session.load_effect_preset(0, &loaded, "Dialled"),
             Some(EffectTarget::Channel(0))
         );
-        assert_eq!(session.channels[0].effects[0], dialled_in_delay());
+        assert_eq!(session.channels[0].effects[0].as_patch(), dialled_in_delay());
+        // ...and it is still the device it was. Loading a patch changes what
+        // the row does, not which device it is, so every route and lane aimed
+        // at it goes on meaning the same knob. The preset carried no identity
+        // to overwrite it with, either.
+        assert_eq!(session.channels[0].effects.id_at(0), Some(row_zero));
+        assert!(loaded.id.is_unset(), "a saved preset carried an identity");
         // The row in between was not touched, and the source row is as it was.
         assert_eq!(session.channels[0].effects[1].kind(), EffectKind::Filter);
-        assert_eq!(session.channels[0].effects[2], dialled_in_delay());
+        assert_eq!(session.channels[0].effects[2].as_patch(), dialled_in_delay());
     }
 
     #[test]
@@ -441,7 +462,8 @@ mod tests {
             output_trim: 1.25,
             ..EffectSlotState::of_kind(EffectKind::Delay)
         };
-        session.channels[0].effects[0] = original;
+        session.channels[0].effects.replace_state(0, original);
+        let original = session.channels[0].effects[0];
 
         let mut history = History::default();
         let before = session.project_snapshot(120, 50);
@@ -455,7 +477,7 @@ mod tests {
             label: "Effect preset loaded",
             gesture: None,
         });
-        assert_eq!(session.channels[0].effects[0], dialled_in_delay());
+        assert_eq!(session.channels[0].effects[0].as_patch(), dialled_in_delay());
 
         let restore = history.undo_target().expect("one entry").before.clone();
         let samples = session.sample_snapshots();
@@ -465,23 +487,26 @@ mod tests {
         assert_eq!(session.channels[0].effects[0], original);
     }
 
-    /// The dialog names a device, not a position. Reordering the rack while
-    /// it is open moves the pending save with the row it was opened from,
-    /// and removing that row drops the save rather than re-aiming it.
+    /// The dialog names a device, not a position, so a reorder or an insert
+    /// made while it is open changes nothing about what it is pointed at --
+    /// there is no permutation to run and none to forget. Removing the device
+    /// it names drops the save rather than re-aiming it at whatever slid in.
     #[test]
-    fn a_pending_effect_save_follows_its_row_through_a_reorder() {
+    fn a_pending_effect_save_names_its_device_not_its_row() {
         let mut session = Session::default();
         session.insert_effect_at(EffectKind::Delay, 0).expect("room");
         session.insert_effect_at(EffectKind::Filter, 1).expect("room");
         session.insert_effect_at(EffectKind::Drive, 2).expect("room");
         let target = EffectTarget::Channel(0);
+        let filter = session.device_at(target, 1).expect("three rows");
 
-        session.pending_preset_save = Some(PresetSaveTarget::Effect { target, slot: 1 });
+        let pending = PresetSaveTarget::Effect {
+            target,
+            device: filter,
+        };
+        session.pending_preset_save = Some(pending);
         session.move_effect_to(1, 2).expect("in range");
-        assert_eq!(
-            session.pending_preset_save,
-            Some(PresetSaveTarget::Effect { target, slot: 2 })
-        );
+        assert_eq!(session.pending_preset_save, Some(pending));
         let source = session.take_preset_save(120, 50).expect("still pending");
         assert_eq!(
             source.effect.map(|effect| effect.kind()),
@@ -489,24 +514,25 @@ mod tests {
             "the save names the filter it was opened from"
         );
 
-        // An insert ahead of it shifts it up; a removal of it drops it.
-        session.pending_preset_save = Some(PresetSaveTarget::Effect { target, slot: 1 });
+        // An insert ahead of it moves the filter down a row and moves the
+        // save not at all; removing the filter drops it.
+        session.pending_preset_save = Some(pending);
         session.insert_effect_at(EffectKind::Gate, 0).expect("room");
-        assert_eq!(
-            session.pending_preset_save,
-            Some(PresetSaveTarget::Effect { target, slot: 2 })
-        );
-        session.remove_effect_at(2).expect("in range");
+        assert_eq!(session.pending_preset_save, Some(pending));
+        assert_eq!(session.device_slot(target, filter), Some(3));
+        session.remove_effect_at(3).expect("in range");
         assert_eq!(session.pending_preset_save, None);
 
-        // A reorder on some other chain leaves it alone.
-        session.pending_preset_save = Some(PresetSaveTarget::Effect { target, slot: 0 });
+        // An edit on some other chain leaves it alone.
+        let delay = session.device_at(target, 0).expect("still populated");
+        let elsewhere = PresetSaveTarget::Effect {
+            target,
+            device: delay,
+        };
+        session.pending_preset_save = Some(elsewhere);
         session.effect_target = EffectTarget::Bus(0);
         session.insert_effect_at(EffectKind::Limiter, 0).expect("room");
-        assert_eq!(
-            session.pending_preset_save,
-            Some(PresetSaveTarget::Effect { target, slot: 0 })
-        );
+        assert_eq!(session.pending_preset_save, Some(elsewhere));
     }
 
     /// A rack row on a bus is a row like any other; the save reads from the
@@ -518,9 +544,12 @@ mod tests {
             ..Session::default()
         };
         session.insert_effect_at(EffectKind::Compressor, 0).expect("room");
+        let device = session
+            .device_at(EffectTarget::Bus(1), 0)
+            .expect("one row");
         session.pending_preset_save = Some(PresetSaveTarget::Effect {
             target: EffectTarget::Bus(1),
-            slot: 0,
+            device,
         });
         let source = session.take_preset_save(120, 50).expect("pending");
         assert_eq!(
@@ -546,30 +575,34 @@ mod tests {
         session.insert_effect_at(EffectKind::Delay, 0).expect("room");
         session.insert_effect_at(EffectKind::Filter, 1).expect("room");
         let target = EffectTarget::Channel(0);
+        let delay = session.device_at(target, 0).expect("two rows");
+        let filter = session.device_at(target, 1).expect("two rows");
 
         session
             .load_effect_preset(0, &dialled_in_delay(), "Dub Runaway")
             .expect("same kind");
-        assert_eq!(session.effect_preset_name(target, 0), Some("Dub Runaway"));
-        assert_eq!(session.effect_preset_name(target, 1), None);
+        assert_eq!(session.effect_preset_name(target, delay), Some("Dub Runaway"));
+        assert_eq!(session.effect_preset_name(target, filter), None);
 
         // A refused load leaves the label alone rather than claiming a row it
         // did not change.
         assert_eq!(session.load_effect_preset(1, &dialled_in_delay(), "Dub Runaway"), None);
-        assert_eq!(session.effect_preset_name(target, 1), None);
+        assert_eq!(session.effect_preset_name(target, filter), None);
 
-        // The label travels with its device.
+        // The label travels with its device, and nothing had to be rewritten
+        // for it to: it was never keyed by the row.
         session.move_effect_to(0, 1).expect("in range");
-        assert_eq!(session.effect_preset_name(target, 1), Some("Dub Runaway"));
-        assert_eq!(session.effect_preset_name(target, 0), None);
+        assert_eq!(session.device_slot(target, delay), Some(1));
+        assert_eq!(session.effect_preset_name(target, delay), Some("Dub Runaway"));
+        assert_eq!(session.effect_preset_name(target, filter), None);
 
         // A knob move keeps it: the settings still came from that preset.
         session.set_effect_wet_dry(1, 0.2).expect("a delay is there");
-        assert_eq!(session.effect_preset_name(target, 1), Some("Dub Runaway"));
+        assert_eq!(session.effect_preset_name(target, delay), Some("Dub Runaway"));
 
         // Removing the device takes it.
         session.remove_effect_at(1).expect("in range");
-        assert_eq!(session.effect_preset_name(target, 1), None);
+        assert_eq!(session.effect_preset_name(target, delay), None);
         assert!(session.effect_preset_names.is_empty());
     }
 
@@ -579,16 +612,24 @@ mod tests {
     fn a_label_belongs_to_one_chain() {
         let mut session = Session::default();
         session.insert_effect_at(EffectKind::Gate, 0).expect("room");
-        session.set_effect_preset_name(EffectTarget::Channel(0), 0, "Tight Drum Gate");
+        let channel_gate = session
+            .device_at(EffectTarget::Channel(0), 0)
+            .expect("one row");
+        session.set_effect_preset_name(EffectTarget::Channel(0), channel_gate, "Tight Drum Gate");
 
         session.effect_target = EffectTarget::Bus(1);
         session.insert_effect_at(EffectKind::Limiter, 0).expect("room");
         session.insert_effect_at(EffectKind::Gate, 0).expect("room");
+        let bus_gate = session.device_at(EffectTarget::Bus(1), 0).expect("one row");
 
         assert_eq!(
-            session.effect_preset_name(EffectTarget::Channel(0), 0),
+            session.effect_preset_name(EffectTarget::Channel(0), channel_gate),
             Some("Tight Drum Gate")
         );
-        assert_eq!(session.effect_preset_name(EffectTarget::Bus(1), 0), None);
+        assert_eq!(
+            session.effect_preset_name(EffectTarget::Bus(1), bus_gate),
+            None,
+            "two chains can mint the same number and must not share a label"
+        );
     }
 }

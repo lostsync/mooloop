@@ -211,9 +211,12 @@ pub enum EngineCommand {
     /// between them by one (drag reorder). Rotating array entries moves
     /// pointers only, so this is safe on the realtime thread -- installing
     /// and removing nodes is not, and goes through the engine's structural
-    /// command ring instead. The engine runs the same `SlotRemap` over its
-    /// routes and lanes that the sender ran over its model, so everything
-    /// that named a slot in this chain keeps naming the same device.
+    /// command ring instead.
+    ///
+    /// Nothing else has to be told. A route and a lane name the device by its
+    /// durable `DeviceId`, which rides in the slot state the rotation moves,
+    /// so a reorder cannot leave either side pointing at a different device
+    /// than the other.
     MoveEffect {
         target: EffectTarget,
         from: u8,

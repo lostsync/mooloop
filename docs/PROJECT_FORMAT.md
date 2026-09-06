@@ -196,8 +196,16 @@ Three later additions all hang off `#[serde(default)]`, so a manifest written
 before any of them existed still loads:
 
 - `channels[].setup.effects` is the ordered insert chain: one
-  `EffectSlotState` per slot, each a tagged `EffectParams` enum. The
-  pre-tag untagged filter shape still decodes.
+  `EffectSlotState` per row, each a tagged `EffectParams` enum. The
+  pre-tag untagged filter shape still decodes. Each row also carries an
+  `id`: the device's durable identity, minted when it is added to the rack
+  and never reused, which is what every modulation route and automation lane
+  names it by. A row written before device identity has no `id`, and takes
+  its position in the chain as one — exactly the number those addresses were
+  already using, so an old project's routes and lanes resolve to the devices
+  they always meant. The mint counter is not stored; it is derived on load
+  from the ids present, so a file cannot disagree with itself about which
+  identities are spent.
 - `channels[].setup.modulation` is that channel's `ModRack`. Only occupied
   slots are written, each with its slot index, its durable `id`, and its
   module parameters. Routes persist their durable `source` id alone; the
@@ -211,11 +219,16 @@ before any of them existed still loads:
   (pattern, channel), at most one lane per destination — and address a
   `ParamAddr`, which may name a bus.
 
-Because all three name positions (`slot`, channel index) rather than
-identities, loading runs an integrity pass: a route or lane stranded on
-another channel's index is pointed back at its own channel, and one naming a
-device or control that is not present is dropped. Addresses on a generator
-that has no descriptor table yet are left untouched.
+A `ParamAddr` naming a rack row writes `owner.effect.device`, the device's
+durable id. A manifest written before device identity wrote
+`owner.effect.slot` instead, and readers accept it as the id — which is the
+same compatibility rule the chain's own rows follow, and it makes reordering
+a rack a change that touches no saved address at all.
+
+Channel indices are still positions, so loading runs an integrity pass: a
+route or lane stranded on another channel's index is pointed back at its own
+channel, and one naming a device or control that is not present is dropped.
+Addresses on a generator that has no descriptor table yet are left untouched.
 
 ## Kit And Channel Documents
 
@@ -230,12 +243,19 @@ while retaining that channel's notes. Sampler presets include parameters and a
 sample reference; every generated source's preset is its generator parameters
 and requires no audio asset.
 
+An effect document is one rack row: an `EffectSlotState` and nothing else.
+It carries no `id`, because a preset is a patch and an identity belongs to
+the device it was minted for; the chain it is loaded into keeps the identity
+the receiving row already has, so every route and lane aimed at that row goes
+on meaning the same knob.
+
 A channel document's modulation routes are rescoped as they load. A route
 names its destination channel absolutely, so a preset saved from channel 3
 would otherwise modulate channel 3 wherever it landed; `rescope_modulation`
 rewrites those addresses onto the receiving channel. This is the concrete
 case behind `COMPOSABLE_DEVICE_UNITS.md`'s rule that a saveable fragment must
-not name its neighbours by index.
+not name its neighbours by index. A channel document's own chain does carry
+its rows' ids, because the chain and the routes into it arrive together.
 
 ## Sample References
 
@@ -285,7 +305,10 @@ audio file.
 - Finite, bounded mixer and sampler values; polyphony and choke groups from
   their current engine limits.
 - Up to 256 effect slots per channel — the same complete `u8` space, for the
-  same reason.
+  same reason. That is a bound on how many devices a chain holds at once, not
+  on how many it may ever hold: identities are minted from a `u32` and never
+  reused, so adding and removing devices does not exhaust anything a project
+  will reach.
 - Up to `MAX_MODULATORS_PER_CHANNEL` (8) modules and
   `MAX_MOD_ROUTES_PER_CHANNEL` (16) routes per channel. Both are engine
   constants rather than format fields: a manifest carrying more is truncated

@@ -241,11 +241,13 @@ impl ChannelSource {
 pub struct ChannelSetup {
     pub channel: Channel,
     pub source: ChannelSource,
-    /// Effect chain slots in order. Defaulted on load so songs written
-    /// before effects existed stay readable (same pattern as
-    /// `MonoSynthParams.lfo`).
+    /// The insert chain, in order, each row carrying the durable id every
+    /// route and lane names it by. Defaulted on load so songs written before
+    /// effects existed stay readable (same pattern as `MonoSynthParams.lfo`),
+    /// and rows written before device identity are stamped with their
+    /// position on the way in (`DeviceChain::adopt`).
     #[serde(default)]
-    pub effects: Vec<crate::EffectSlotState>,
+    pub effects: crate::DeviceChain,
     /// Per-channel modulator slots and their matrix routes. The default keeps
     /// projects written before modulation was added completely compatible.
     #[serde(default)]
@@ -257,7 +259,7 @@ impl ChannelSetup {
         Self {
             channel: Channel::new(name, DeviceKind::Sampler),
             source: ChannelSource::default(),
-            effects: Vec::new(),
+            effects: crate::DeviceChain::new(),
             modulation: ModRack::default(),
         }
     }
@@ -270,7 +272,7 @@ impl ChannelSetup {
         Self {
             channel: Channel::new(name, DeviceKind::DrumSynth),
             source: ChannelSource::DrumSynth(DrumSynthState { params }),
-            effects: Vec::new(),
+            effects: crate::DeviceChain::new(),
             modulation: ModRack::default(),
         }
     }
@@ -283,7 +285,7 @@ impl ChannelSetup {
         Self {
             channel: Channel::new(name, DeviceKind::MonoSynth),
             source: ChannelSource::MonoSynth(MonoSynthState { params }),
-            effects: Vec::new(),
+            effects: crate::DeviceChain::new(),
             modulation: ModRack::default(),
         }
     }
@@ -296,7 +298,7 @@ impl ChannelSetup {
         Self {
             channel: Channel::new(name, DeviceKind::MlM1),
             source: ChannelSource::MlM1(MlM1State { params }),
-            effects: Vec::new(),
+            effects: crate::DeviceChain::new(),
             modulation: ModRack::default(),
         }
     }
@@ -309,7 +311,7 @@ impl ChannelSetup {
         Self {
             channel: Channel::new(name, DeviceKind::MlP8),
             source: ChannelSource::MlP8(MlP8State { params }),
-            effects: Vec::new(),
+            effects: crate::DeviceChain::new(),
             modulation: ModRack::default(),
         }
     }
@@ -322,7 +324,7 @@ impl ChannelSetup {
         Self {
             channel: Channel::new(name, DeviceKind::Ds01),
             source: ChannelSource::Ds01(Ds01State { params }),
-            effects: Vec::new(),
+            effects: crate::DeviceChain::new(),
             modulation: ModRack::default(),
         }
     }
@@ -335,7 +337,7 @@ impl ChannelSetup {
         Self {
             channel: Channel::new(name, DeviceKind::PolySynth),
             source: ChannelSource::PolySynth(PolySynthState { params }),
-            effects: Vec::new(),
+            effects: crate::DeviceChain::new(),
             modulation: ModRack::default(),
         }
     }
@@ -876,7 +878,7 @@ mod tests {
                 0,
                 crate::ParamAddr::effect(
                     crate::EffectTarget::Channel(0),
-                    0,
+                    crate::DeviceId(0),
                     crate::FILTER_PARAM_CUTOFF_HZ,
                 ),
                 0.3,

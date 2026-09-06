@@ -67,8 +67,8 @@ Alphabetical by model name, then by harness.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-09-05
-- Sessions: 49
+- Last seen: 2026-09-06
+- Sessions: 50
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -80,7 +80,8 @@ Alphabetical by model name, then by harness.
   `scripts/slint-sketch` and `scripts/loop-profile`;
   `docs/WIDGET_INVENTORY.md`; `docs/ARCHITECTURE_REVIEW.md`; and the
   September 2026 documentation audit, plus the 2026-09-05 refresh that
-  rewrote `FOCUS.md` around Adam's new list, and cut the `v0.1.2` release.
+  rewrote `FOCUS.md` around Adam's new list, and cut the `v0.1.2` release;
+  and durable device identity for rack rows, which retired `SlotRemap`.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

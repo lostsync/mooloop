@@ -395,7 +395,9 @@ fn equal_power_blend_preserves_energy_when_decorrelated() {
     channel.setup.effects.push(slot);
     let energy = |wet_dry: f32| {
         let mut channel = channel.clone();
-        channel.setup.effects[0].wet_dry = wet_dry;
+        if let Some(slot) = channel.setup.effects.get_mut(0) {
+            slot.wet_dry = wet_dry;
+        }
         let mut render = RenderState::from_project(SAMPLE_RATE, &single_channel_project(channel), &[]);
         render.play();
         let mut remaining = (SAMPLE_RATE as f32 * 2.0) as usize;
@@ -585,8 +587,8 @@ fn drum_contribution_db(
 ) -> f32 {
     let chain = |pad_muted, drums_muted| {
         let mut project = pad_and_drums(pad_volume, pad_muted, drums_muted);
-        project.buses[0].effects = master.to_vec();
-        project.channels[0].setup.effects = pad_channel.to_vec();
+        project.buses[0].effects = master.iter().copied().collect();
+        project.channels[0].setup.effects = pad_channel.iter().copied().collect();
         project
     };
     // The kick lands on beat 2: tick 96 at 120 BPM.

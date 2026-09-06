@@ -33,8 +33,20 @@ pub enum ParamOwner {
     SourceRoute {
         route: u16,
     },
+    /// One device in the channel's or bus's insert chain, by the device's
+    /// durable id.
+    ///
+    /// Not by its position. A rack row's identity is minted when the device
+    /// is added and never reused, so inserting a device above this one, or
+    /// dragging it somewhere else, moves nothing that was saved --
+    /// `crate::structure` carries the argument.
     Effect {
-        slot: u8,
+        /// `slot` is the pre-identity spelling. An address written then named
+        /// a position, and a chain loaded from such a project hands each row
+        /// its position as its id, so the number means the same device it
+        /// always did.
+        #[serde(alias = "slot")]
+        device: crate::effect::DeviceId,
     },
     Modulator {
         slot: u8,
@@ -58,10 +70,14 @@ pub struct ParamAddr {
 }
 
 impl ParamAddr {
-    pub const fn effect(scope: EffectTarget, slot: u8, param: u32) -> Self {
+    pub const fn effect(
+        scope: EffectTarget,
+        device: crate::effect::DeviceId,
+        param: u32,
+    ) -> Self {
         Self {
             scope,
-            owner: ParamOwner::Effect { slot },
+            owner: ParamOwner::Effect { device },
             param,
         }
     }
@@ -1855,30 +1871,25 @@ impl ModRack {
         removed
     }
 
-    /// Re-point every route at where its destination's device now sits after
-    /// a chain edit in `scope`, dropping the routes whose device is gone. The
-    /// UI's rack and the engine's mirror both run this for the same gesture,
-    /// which is what keeps a route meaning the same knob on both sides.
-    /// Returns whether anything changed.
-    pub fn retarget_effect_slots(
+    /// Drop every route aimed at `device` in `scope`. Returns whether
+    /// anything went.
+    ///
+    /// A chain edit used to owe this rack a permutation; it no longer owes it
+    /// anything, because a route names the device rather than the row it sits
+    /// in. Only a departure is left, and a departure names one identity.
+    pub fn drop_routes_for_device(
         &mut self,
         scope: EffectTarget,
-        remap: &crate::structure::SlotRemap,
+        device: crate::effect::DeviceId,
     ) -> bool {
         let mut changed = false;
         for entry in self.routes.iter_mut() {
             let Some(route) = entry else {
                 continue;
             };
-            match remap.address(scope, route.destination) {
-                Some(destination) => {
-                    changed |= destination != route.destination;
-                    route.destination = destination;
-                }
-                None => {
-                    *entry = None;
-                    changed = true;
-                }
+            if route.destination.names_device(scope, device) {
+                *entry = None;
+                changed = true;
             }
         }
         changed
@@ -1964,8 +1975,44 @@ impl ModRack {
 mod tests {
     use super::*;
 
+    /// The compatibility half of device identity, and the half a saved
+    /// project depends on. An address written before a rack row had one named
+    /// a *position*; a chain loaded from such a project hands each row its
+    /// position as its id (`DeviceChain::adopt`), so reading `slot` as the
+    /// device is what makes the two halves agree on the same device.
+    #[test]
+    fn a_pre_identity_address_reads_its_slot_number_as_the_device() {
+        #[derive(serde::Deserialize)]
+        struct Holder {
+            destination: ParamAddr,
+        }
+
+        let legacy = r#"
+[destination]
+scope = { channel = 4 }
+param = 7
+
+[destination.owner.effect]
+slot = 2
+"#;
+        let holder: Holder = toml::from_str(legacy).expect("a legacy address decodes");
+        assert_eq!(
+            holder.destination,
+            ParamAddr::effect(EffectTarget::Channel(4), crate::DeviceId(2), 7)
+        );
+
+        // And what is written now is the durable spelling, which the same
+        // reader accepts.
+        let written = toml::to_string(&holder.destination).expect("encodes");
+        assert!(written.contains("device = 2"), "{written}");
+        assert_eq!(
+            toml::from_str::<ParamAddr>(&written).expect("round trips"),
+            holder.destination
+        );
+    }
+
     fn addr(param: u32) -> ParamAddr {
-        ParamAddr::effect(EffectTarget::Channel(0), 0, param)
+        ParamAddr::effect(EffectTarget::Channel(0), crate::DeviceId(0), param)
     }
 
     /// A rack with `count` modules installed. Routes need a real source to
@@ -2374,27 +2421,26 @@ retrigger = true
         // One slot is a module plus its durable identity, and the widest
         // module is the step pattern's sixteen values.
         assert_eq!(size_of::<Option<ModSlot>>(), 76);
-        // A route is an address and a depth, and the address grew by four
-        // bytes when `ParamOwner` gained `SourceRoute { route: u16 }`: a
-        // durable route id does not fit in the byte a slot index did. It is
-        // paid once per stored route -- 64 bytes per channel's rack, a
-        // kilobyte across the whole project -- and, crucially, not on the
-        // command ring, which the rack stopped travelling on.
-        assert_eq!(size_of::<ParamAddr>(), 12);
-        // The route itself grew four the same way and for the same kind of
-        // reason: its source is a `ModSourceRef` rather than a bare
-        // `ModSourceId`, because a generator outlet is not a rack module and
-        // has no identity the rack could mint. Four bytes a route, 64 a
-        // channel, 16 KiB across the reserved channel count -- the same
-        // price and the same argument as the address above.
-        assert_eq!(size_of::<ModRoute>(), 28);
+        // A route is an address and a depth, and the address has grown by
+        // four bytes twice, both times for the same reason: a durable id does
+        // not fit in the byte a position did. First `SourceRoute { route:
+        // u16 }`, then `Effect { device: DeviceId }` -- a rack row's identity
+        // is minted and never reused, so it is a `u32` exactly as
+        // `ModSourceId` is, and a `u8` would have been the slot number this
+        // change exists to stop persisting.
+        assert_eq!(size_of::<ParamAddr>(), 16);
+        // The route grew the same four bytes with it. Four bytes a route, 64
+        // a channel, 16 KiB across the reserved channel count -- the same
+        // price and the same argument as the address above, and again not on
+        // the command ring.
+        assert_eq!(size_of::<ModRoute>(), 32);
         assert_eq!(
             size_of::<ModRack>(),
             MAX_MODULATORS_PER_CHANNEL * size_of::<Option<ModSlot>>()
                 + MAX_MOD_ROUTES_PER_CHANNEL * size_of::<ModRoute>()
                 + size_of::<u32>()
         );
-        assert_eq!(size_of::<ModRack>(), 1_060);
+        assert_eq!(size_of::<ModRack>(), 1_124);
 
         // The rack no longer travels, and neither does the ML-P8. That
         // device's parameter block moved this number twice, and the note here

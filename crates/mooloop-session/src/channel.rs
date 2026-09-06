@@ -6,7 +6,7 @@
 //! and automation banks.
 
 use mooloop_core::{
-    AutomationLane, DeviceKind, Ds01Params, EffectSlotState, GeneratorParams, MlM1Params,
+    AutomationLane, DeviceChain, DeviceKind, Ds01Params, GeneratorParams, MlM1Params,
     MlP8Params, ModRack, MonoSynthParams, NoteEvent, NoteId, PolySynthParams, Project,
     ProjectChannel, SampleCommit, SampleReference, SamplerParams, SliceMap, DrumSynthParams,
     MASTER_BUS, MAX_CHANNELS,
@@ -55,7 +55,9 @@ pub struct ChannelState {
     /// never destroys what is behind it.
     pub automation: Vec<Vec<AutomationLane>>,
     pub next_note_id: NoteId,
-    pub effects: Vec<EffectSlotState>,
+    /// The insert chain, each row carrying the durable identity every route
+    /// and lane names it by.
+    pub effects: DeviceChain,
     pub modulation: ModRack,
     /// Mixer bus this channel feeds; 0 is the master.
     pub bus: u8,
@@ -119,7 +121,7 @@ impl ChannelState {
             notes: vec![Vec::new()],
             automation: vec![Vec::new()],
             next_note_id: 1,
-            effects: Vec::new(),
+            effects: DeviceChain::new(),
             modulation: ModRack::default(),
             bus: MASTER_BUS,
         }

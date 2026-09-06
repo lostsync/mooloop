@@ -1,15 +1,17 @@
 //! What a structural edit must not silently break.
 //!
-//! `docs/FOCUS.md` records the bug these exist for: routes and automation
-//! lanes named their destination by slot and their channel by index, so any
-//! structural edit re-aimed them at whatever slid into the seat.
-//! `mooloop_core::structure` states each edit once as a permutation; what had
-//! never been asserted is that the *session* runs that permutation over
-//! everything it holds that names a position.
+//! The bug these exist for: routes and automation lanes named their
+//! destination by slot and their channel by index, so any structural edit
+//! re-aimed them at whatever slid into the seat. A rack row now carries a
+//! durable `DeviceId` minted when the device is added, and every saved
+//! address names *that*, so a reorder is no longer an addressing event at
+//! all -- these assert that a route, a lane and the open lane come out of an
+//! edit meaning the same knob, and that a removal is the one edit that still
+//! reaches them.
 
 use mooloop_core::{
-    DeviceKind, EffectKind, EffectTarget, ModPolarity, ModRoute, ModulatorKind, ParamAddr, Project,
-    TICKS_PER_STEP,
+    DeviceId, DeviceKind, EffectKind, EffectTarget, ModPolarity, ModRoute, ModulatorKind,
+    ParamAddr, Project, TICKS_PER_STEP,
 };
 use mooloop_session::session::Session;
 
@@ -28,7 +30,8 @@ fn session_with_routes() -> Session {
             .add_modulation_source(ModulatorKind::Lfo)
             .expect("an empty rack has a free slot");
 
-        let destination = filter_param(channel as u8, 1);
+        let filter = session.device_at(EffectTarget::Channel(channel as u8), 1).expect("a filter");
+        let destination = filter_param(channel as u8, filter);
         session.channels[channel]
             .modulation
             .add_route(ModRoute::to_slot(0, destination, 0.5, ModPolarity::Bipolar))
@@ -42,89 +45,115 @@ fn session_with_routes() -> Session {
     // single open lane, not one per channel, so which one it names matters.
     session.selected = 0;
     session.effect_target = EffectTarget::Channel(0);
+    let filter = session
+        .device_at(EffectTarget::Channel(0), 1)
+        .expect("a filter");
     session
-        .open_automation_lane_at(filter_param(0, 1))
+        .open_automation_lane_at(filter_param(0, filter))
         .expect("channel 0's filter exists");
     session
 }
 
-/// The address of the filter's first parameter in `slot` on `channel`.
-fn filter_param(channel: u8, slot: u8) -> ParamAddr {
+/// The address of `device`'s first filter parameter on `channel`.
+fn filter_param(channel: u8, device: DeviceId) -> ParamAddr {
     let descriptors = EffectKind::Filter.descriptors();
-    ParamAddr::effect(
-        EffectTarget::Channel(channel),
-        slot,
-        descriptors[0].id,
-    )
+    ParamAddr::effect(EffectTarget::Channel(channel), device, descriptors[0].id)
 }
 
-/// A device-scoped address as the pair that a structural edit can move.
-type SlotParam = (u8, u32);
+/// A device-scoped address as the pair a saved route or lane actually holds.
+type DeviceParam = (DeviceId, u32);
 
-/// Every route and lane on `channel`, by the slot and parameter they name.
-fn addresses(session: &Session, channel: usize) -> (Vec<SlotParam>, Vec<SlotParam>) {
+/// Every route and lane on `channel`, by the device and parameter they name.
+fn addresses(session: &Session, channel: usize) -> (Vec<DeviceParam>, Vec<DeviceParam>) {
     let routes = session.channels[channel]
         .modulation
         .routes
         .iter()
         .flatten()
-        .filter_map(|route| slot_and_param(route.destination))
+        .filter_map(|route| device_and_param(route.destination))
         .collect();
     let lanes = session.channels[channel].automation[0]
         .iter()
-        .filter_map(|lane| slot_and_param(lane.target))
+        .filter_map(|lane| device_and_param(lane.target))
         .collect();
     (routes, lanes)
 }
 
-fn slot_and_param(address: ParamAddr) -> Option<SlotParam> {
+fn device_and_param(address: ParamAddr) -> Option<DeviceParam> {
     match address.owner {
-        mooloop_core::ParamOwner::Effect { slot } => Some((slot, address.param)),
+        mooloop_core::ParamOwner::Effect { device } => Some((device, address.param)),
         _ => None,
     }
 }
 
-/// Reordering the chain moves the device; the route and the lane have to
-/// follow the *device*, not stay on the slot number it used to occupy.
+/// Reordering the chain moves the device and moves *nothing else*. The route,
+/// the lane and the open lane all named the device, so the edit is not an
+/// addressing event: every address comes out of it byte for byte what it went
+/// in as, still resolving to the filter.
 #[test]
-fn reordering_effects_carries_routes_and_lanes_with_the_device() {
+fn reordering_effects_leaves_every_address_alone() {
     let mut session = session_with_routes();
-    let (routes_before, lanes_before) = addresses(&session, 0);
-    assert_eq!(routes_before, vec![(1, lanes_before[0].1)]);
+    let target = EffectTarget::Channel(0);
+    let filter = session.device_at(target, 1).expect("a filter in slot 1");
+    let before = addresses(&session, 0);
+    let shown_before = session.automation_target.get();
+    assert_eq!(before.0, vec![(filter, before.1[0].1)]);
 
     // Filter moves from slot 1 to slot 0.
     session.move_effect_to(1, 0).expect("both slots occupied");
 
-    let (routes, lanes) = addresses(&session, 0);
     assert_eq!(
-        routes,
-        vec![(0, routes_before[0].1)],
-        "the route stayed on the old slot number"
+        addresses(&session, 0),
+        before,
+        "a reorder rewrote an address that named a device"
     );
     assert_eq!(
-        lanes,
-        vec![(0, lanes_before[0].1)],
-        "the automation lane stayed on the old slot number"
+        session.automation_target.get(),
+        shown_before,
+        "the open lane was re-aimed by a reorder"
     );
     assert_eq!(
-        session.automation_target.get().and_then(slot_and_param),
-        Some((0, lanes_before[0].1)),
-        "the open lane is still showing the parameter it was showing"
+        session.device_slot(target, filter),
+        Some(0),
+        "the filter is where the drag put it"
     );
+}
+
+/// The other half of the same property, and the one position-as-identity got
+/// wrong most often: inserting above a device renumbers its row and changes
+/// nothing about what names it.
+#[test]
+fn inserting_above_a_device_does_not_touch_what_names_it() {
+    let mut session = session_with_routes();
+    let target = EffectTarget::Channel(0);
+    let filter = session.device_at(target, 1).expect("a filter in slot 1");
+    let before = addresses(&session, 0);
+
+    session.insert_effect_at(EffectKind::Drive, 0).expect("room");
+
+    assert_eq!(session.device_slot(target, filter), Some(2));
+    assert_eq!(
+        addresses(&session, 0),
+        before,
+        "an insert re-aimed a route or a lane"
+    );
+    // And the newcomer did not inherit anything: the identity it was minted
+    // is one nothing has ever named.
+    let inserted = session.device_at(target, 0).expect("the drive");
+    assert!(!before.0.iter().any(|(device, _)| *device == inserted));
 }
 
 /// Removing the device a route names must drop that route, not leave it
 /// pointing at whatever moves up into the slot.
 #[test]
-fn removing_an_effect_drops_what_named_it_and_renumbers_the_rest() {
+fn removing_an_effect_drops_what_named_it_and_leaves_the_rest_alone() {
     let mut session = session_with_routes();
-    // A second route, aimed at the delay in slot 0, so there is something
-    // that must survive alongside the one that must not.
-    let delay_param = ParamAddr::effect(
-        EffectTarget::Channel(0),
-        0,
-        EffectKind::Delay.descriptors()[0].id,
-    );
+    let target = EffectTarget::Channel(0);
+    let delay = session.device_at(target, 0).expect("a delay in slot 0");
+    let filter = session.device_at(target, 1).expect("a filter in slot 1");
+    // A second route, aimed at the delay, so there is something that must go
+    // alongside the one that must stay.
+    let delay_param = ParamAddr::effect(target, delay, EffectKind::Delay.descriptors()[0].id);
     session.channels[0]
         .modulation
         .add_route(ModRoute::to_slot(0, delay_param, 0.25, ModPolarity::Bipolar))
@@ -135,29 +164,28 @@ fn removing_an_effect_drops_what_named_it_and_renumbers_the_rest() {
 
     let (routes, lanes) = addresses(&session, 0);
     assert_eq!(
-        routes.len(),
-        1,
-        "the route naming the removed device survived: {routes:?}"
+        routes,
+        vec![(filter, lanes[0].1)],
+        "the route naming the removed device survived, or the survivor moved"
     );
-    assert_eq!(routes[0].0, 0, "the surviving route was not renumbered");
-    assert_eq!(lanes, vec![(0, routes[0].1)]);
+    assert_eq!(lanes, vec![(filter, routes[0].1)]);
+    assert_eq!(session.device_slot(target, filter), Some(0));
+    assert_eq!(session.device_slot(target, delay), None);
 }
 
 /// A bus chain can be automated from any channel's clip, so a bus-side edit
 /// has to run over every channel rather than the selected one.
 #[test]
-fn a_bus_chain_edit_retargets_every_channels_lanes() {
+fn a_bus_chain_removal_reaches_every_channels_lanes() {
     let mut session = Session::default();
     session.add_channel(DeviceKind::Sampler);
     session.select_bus(1).expect("bus 1 exists");
     session.insert_effect_at(EffectKind::Delay, 0).expect("room");
     session.insert_effect_at(EffectKind::Filter, 1).expect("room");
+    let bus = EffectTarget::Bus(1);
+    let filter = session.device_at(bus, 1).expect("a filter");
 
-    let bus_filter = ParamAddr::effect(
-        EffectTarget::Bus(1),
-        1,
-        EffectKind::Filter.descriptors()[0].id,
-    );
+    let bus_filter = ParamAddr::effect(bus, filter, EffectKind::Filter.descriptors()[0].id);
     for channel in [0usize, 1] {
         session.selected = channel;
         session.automation_target.set(Some(bus_filter));
@@ -166,17 +194,29 @@ fn a_bus_chain_edit_retargets_every_channels_lanes() {
             .expect("the destination exists");
     }
 
+    // A reorder is nothing to any of them.
     session.move_effect_to(1, 0).expect("both slots occupied");
-
     for channel in [0usize, 1] {
         let lanes: Vec<_> = session.channels[channel].automation[0]
             .iter()
-            .filter_map(|lane| slot_and_param(lane.target))
+            .filter_map(|lane| device_and_param(lane.target))
             .collect();
         assert_eq!(
-            lanes.first().map(|(slot, _)| *slot),
-            Some(0),
-            "channel {channel}'s lane on the bus chain was not retargeted"
+            lanes.first().map(|(device, _)| *device),
+            Some(filter),
+            "channel {channel}'s lane on the bus chain was re-aimed by a reorder"
+        );
+    }
+
+    // The removal is, and it has to reach every channel: a bus chain can be
+    // automated from any clip.
+    session.remove_effect_at(0).expect("the filter is in slot 0");
+    for channel in [0usize, 1] {
+        assert!(
+            session.channels[channel].automation[0]
+                .iter()
+                .all(|lane| device_and_param(lane.target).is_none()),
+            "channel {channel} kept a lane on a device that left the bus chain"
         );
     }
 }

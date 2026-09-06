@@ -374,6 +374,12 @@ pub fn save_generator_preset(
 /// carried either, so nothing in the bundle names a channel and nothing has
 /// to be re-scoped when it lands on another one.
 ///
+/// The row's [`mooloop_core::DeviceId`] is not stored either, and for a
+/// stronger reason than the rest: a preset is a patch, and an identity
+/// belongs to the device it was minted for. Writing one would hand every
+/// project that loads this preset an address belonging to somebody else's
+/// device. The chain stamps a fresh one wherever the preset lands.
+///
 /// An effect references no samples -- [`mooloop_core::BufferParams`] holds a
 /// length in bars, a read offset and a crossfade, not audio -- so the asset
 /// closure has nothing to prepare and `mode` only records itself in the
@@ -384,7 +390,7 @@ pub fn save_effect_preset(
     info: PresetInfo,
     mode: AssetMode,
 ) -> Result<SaveReport, Error> {
-    let mut effect = *effect;
+    let mut effect = effect.as_patch();
     let diagnosis = integrity::repair_effect(DocumentKind::Effect, &mut effect);
     if !diagnosis.is_usable() {
         return Err(diagnosis.into());
@@ -1254,7 +1260,8 @@ mod tests {
     #[test]
     fn two_lanes_on_one_destination_are_rejected() {
         let mut project = Project::default();
-        let target = ParamAddr::effect(mooloop_core::EffectTarget::Channel(0), 0, 1);
+        let target =
+            ParamAddr::effect(mooloop_core::EffectTarget::Channel(0), mooloop_core::DeviceId(0), 1);
         project.channels[0].automation[0].push(AutomationLane::new(target));
         project.channels[0].automation[0].push(AutomationLane::new(target));
         assert!(matches!(validate_project(&project), Err(Error::InvalidDocument(_))));
@@ -1802,8 +1809,10 @@ id = "default_kick"
         let channel = project.channels[0].clone();
         project.channels = vec![channel; mooloop_core::MAX_CHANNELS];
         let effect = mooloop_core::EffectSlotState::of_kind(mooloop_core::EffectKind::Filter);
-        project.channels[0].setup.effects = vec![effect; mooloop_core::MAX_EFFECTS_PER_CHANNEL];
-        project.buses[0].effects = vec![effect; mooloop_core::MAX_EFFECTS_PER_CHANNEL];
+        project.channels[0].setup.effects =
+            std::iter::repeat_n(effect, mooloop_core::MAX_EFFECTS_PER_CHANNEL).collect();
+        project.buses[0].effects =
+            std::iter::repeat_n(effect, mooloop_core::MAX_EFFECTS_PER_CHANNEL).collect();
 
         validate_project(&project).expect("the complete realtime address space is supported");
     }

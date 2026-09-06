@@ -71,7 +71,7 @@ extends it; it does not replace it.
 
 | Surface | Contract retained |
 | --- | --- |
-| `ParamAddr` | Stable destination address: scope, owner, and a per-kind never-renumbered descriptor ID. It already models sources, effect slots, modulator slots, and strips. |
+| `ParamAddr` | Stable destination address: scope, owner, and a per-kind never-renumbered descriptor ID. It models sources, rack devices (by durable `DeviceId`, so a chain reorder moves no address), modulator slots, and strips. |
 | `ParamDescriptor` | Single source of truth for natural range, curve, default, and normalized conversion. Events carry natural values; routes operate in normalized destination space. |
 | `ModRack` | Persisted per-channel module slots and routes. Realtime storage is `MAX_MODULATORS_PER_CHANNEL` (8) slots and `MAX_MOD_ROUTES_PER_CHANNEL` (16) route rows. Both are compile-time constants; raising the first is one edit with a linear, measured cost. |
 | `ModRoute` | Durable `ModSourceId`, its resolved runtime slot, destination, signed full-range depth, and polarity. Reassigning the same source/destination retunes instead of duplicating it. An unresolvable source parks the route's slot out of range, where it contributes nothing. |

@@ -54,9 +54,15 @@ effect's internal state.
 
 `ParamAddr` is the stable destination address used by automation and
 modulation. It combines a channel-or-bus scope, an owning surface (source,
-effect slot, modulator slot, or strip), and that owner's stable descriptor id.
+rack device, modulator slot, or strip), and that owner's stable descriptor id.
 It is persisted and must never be retyped merely because a new routing surface
 is added.
+
+*Amended September 2026:* the rack device is named by a durable `DeviceId`
+minted when it is added to the chain, not by the row it sits in. Position is
+derived for the realtime path and never persisted, so reordering a chain
+rewrites no address — the same division `ModSourceId` draws for modulator
+sources.
 
 This is deliberately a destination address, not a claim that every parameter
 is already a legal modulation target. Descriptors declare range and curve;

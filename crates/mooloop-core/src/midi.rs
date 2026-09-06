@@ -269,6 +269,10 @@ pub struct BufferMidiMap {
     /// `None` listens on every channel.
     pub channel: Option<u8>,
     pub target: crate::EffectTarget,
+    /// Which row of `target`'s chain, by position. Safe only because this map
+    /// is runtime state that nothing persists and nothing yet installs: the
+    /// moment a mapping is saved, this has to become the device's
+    /// [`crate::DeviceId`], for the reason `structure.rs` gives.
     pub slot: u8,
     pub notes: [Option<BufferNoteMapping>; MAX_BUFFER_NOTE_MAPPINGS],
     pub controls: [Option<BufferCcMapping>; MAX_BUFFER_CC_MAPPINGS],

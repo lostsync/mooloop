@@ -22,8 +22,6 @@
 //! (feedback routing) rather than a fallback, and it needs a latency story
 //! this engine does not have yet.
 
-use crate::EffectSlotState;
-
 /// Insert buses available in addition to the master.
 pub const INSERT_BUSES: usize = 16;
 
@@ -84,14 +82,14 @@ impl MixerBus {
 pub struct BusSetup {
     pub bus: MixerBus,
     #[serde(default)]
-    pub effects: Vec<EffectSlotState>,
+    pub effects: crate::DeviceChain,
 }
 
 impl BusSetup {
     pub fn new(index: usize) -> Self {
         Self {
             bus: MixerBus::new(index),
-            effects: Vec::new(),
+            effects: crate::DeviceChain::new(),
         }
     }
 }

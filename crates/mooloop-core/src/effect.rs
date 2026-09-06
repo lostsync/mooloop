@@ -2216,9 +2216,61 @@ where
     })
 }
 
+/// The durable identity of one device in a chain.
+///
+/// Minted when the device is added to the rack, carried through every
+/// reorder, and never reused -- so a modulation route or an automation lane
+/// that names a device keeps naming *that* device however the chain is
+/// rearranged. Position stays the realtime locator, derived from the id
+/// whenever the chain changes and never persisted, which is the same division
+/// [`crate::ModSourceId`] draws for modulator slots.
+///
+/// Unique within its chain, which is all an address needs: a
+/// [`crate::ParamAddr`] already carries the channel or bus its chain belongs
+/// to in `scope`.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub struct DeviceId(pub u32);
+
+impl DeviceId {
+    /// A row that has no identity yet. Two things wear it: a slot state just
+    /// built from a kind's defaults, and one decoded from a preset -- a
+    /// preset is a patch, not a device, and must never carry the identity of
+    /// whichever row it was saved from. [`crate::DeviceChain`] stamps a real
+    /// id on the way in, and it is the only thing that mints one.
+    pub const UNSET: Self = Self(u32::MAX);
+
+    pub const fn is_unset(&self) -> bool {
+        self.0 == u32::MAX
+    }
+
+    /// serde's `default` for the field below. A project written before device
+    /// identity has no id on any row, and the chain stamps those on load.
+    pub(crate) fn unset() -> Self {
+        Self::UNSET
+    }
+}
+
 /// Persisted state of one slot in a channel's effect chain.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EffectSlotState {
+    /// What every saved address names this device by. Absent from a preset
+    /// and from any project written before device identity; both are stamped
+    /// by [`crate::DeviceChain`] rather than defaulted here, because the
+    /// legacy id a row has to take is its position, which only the chain
+    /// knows.
+    #[serde(default = "DeviceId::unset", skip_serializing_if = "DeviceId::is_unset")]
+    pub id: DeviceId,
     #[serde(deserialize_with = "deserialize_effect_params")]
     pub params: EffectParams,
     pub bypassed: bool,
@@ -2243,11 +2295,25 @@ fn default_output_trim() -> f32 {
 impl EffectSlotState {
     pub fn new(params: EffectParams) -> Self {
         Self {
+            id: DeviceId::UNSET,
             params,
             bypassed: false,
             wet_dry: 1.0,
             input_trim: 1.0,
             output_trim: 1.0,
+        }
+    }
+
+    /// This row's settings without its identity: what a preset stores.
+    ///
+    /// A preset is a patch. Writing the identity of the row it was saved
+    /// from would hand every project that loads it an address belonging to
+    /// somebody else's device, so identity is stripped on the way out and
+    /// re-stamped by the chain on the way in.
+    pub fn as_patch(&self) -> Self {
+        Self {
+            id: DeviceId::UNSET,
+            ..*self
         }
     }
 
