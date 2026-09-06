@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-05
-- Sessions: 59
+- Sessions: 60
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -89,7 +89,8 @@ Alphabetical by model name, then by harness.
   block-path measurement that found the control pass costing more than the
   audio, the sleeping-device shape evaluation behind it, and what an effect
   costs while it rests and while it works, the sleeping mixer, and the undo
-  history that had no ceiling. Longer accounts of
+  history that had no ceiling, and the double parse in front of every song
+  that opened. Longer accounts of
   most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

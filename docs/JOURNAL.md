@@ -640,6 +640,45 @@ believed. Counting the allocations instead — a `#[cfg(test)]` global allocator
 in `mooloop-session` — gives figures that rise monotonically with both
 channels and notes, which is the shape the answer has to have.
 
+## Sep 6 (finally) — opening a song ran the parser over it twice
+
+The engine and the edit path had both been measured, so this measured the
+one thing a user actually waits for: `io_cost::save_and_load_cost`, saving and
+opening songs from four channels to thirty-two and from 256 notes to 32,768.
+
+Saving was fine and loading was five to six times slower than it, at every
+size — 136 milliseconds to open a three-megabyte song, 72 for a
+sixteen-channel one. A ratio that steady across an order of magnitude of file
+size is not a hot function; it is the same work being done more than once.
+
+It was. `load_bundle` cannot know which `T` to deserialize until it has read
+the document type, so it parsed the manifest into a `Header` to find out, then
+parsed the whole file again into `Envelope<T>`. The header exists precisely
+because the type has to be known first, and the price of asking was running
+the TOML parser over the entire document to read four fields.
+
+It parses once now: into a `toml::Table`, with the header fields as lookups in
+it and the envelope deserialized from the same table rather than from the text
+again. Load fell 20 to 35 per cent — 136 milliseconds to 102, 72 to 58, and a
+small song 4.4 to 2.8.
+
+**Not the halving that "one parse instead of two" suggests**, and worth saying
+why: the discarded parse was deserializing into a four-field struct, so it was
+paying for lexing the file rather than for building a project out of it. What
+is left is one parse and one deserialization, which is what the format costs.
+Going below that is a question about TOML rather than about this function.
+
+**And the suite caught a regression on the way.** The first version read only
+the two fields `load_bundle` needs before the match — version and type — and
+left `contains` empty. That is the field an effect preset holding something
+this build does not understand is refused by, so the refusal quietly stopped
+happening, and
+`an_effect_preset_containing_something_unknown_is_refused` failed on the first
+run. All four fields are read now. The lesson is the ordinary one about
+partial replacements: the fast path has to answer everything the slow one did,
+and the reason it is easy to miss is that two of those answers were only used
+much further down.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.

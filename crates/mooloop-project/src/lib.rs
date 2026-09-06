@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 
 pub mod factory;
 pub mod integrity;
+#[cfg(test)]
+mod io_cost;
 
 pub use factory::{
     rescope_modulation, seed_ds01_bank, seed_effect_bank, seed_mlm1_bank, seed_mlp8_bank,
@@ -234,6 +236,55 @@ struct Header {
     preset: Option<PresetInfo>,
     #[serde(default)]
     contains: Vec<String>,
+}
+
+impl Header {
+    /// The two fields `load_bundle` needs before it knows what `T` is, taken
+    /// as lookups in an already-parsed table.
+    ///
+    /// Deserializing the whole `Header` would work and is what this replaces:
+    /// it re-ran the TOML parser over the entire file to read four fields.
+    /// The derived `Deserialize` is still what the preset lister and the
+    /// tests use, where the files are small and one parse is the only parse.
+    ///
+    /// All four, not the two `load_bundle` reads first. `contains` is how an
+    /// effect preset holding something this build does not understand is
+    /// refused, and leaving it empty here made that refusal silently stop
+    /// happening -- which is what
+    /// `an_effect_preset_containing_something_unknown_is_refused` is for.
+    fn from_table(table: &toml::Table) -> Result<Self, Error> {
+        let format_version = table
+            .get("format_version")
+            .and_then(toml::Value::as_integer)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or(Error::UnsupportedVersion(0))?;
+        let document_type = table
+            .get("document_type")
+            .and_then(toml::Value::as_str)
+            .ok_or_else(|| Error::UnsupportedDocument(String::new()))?
+            .to_string();
+        let preset = table
+            .get("preset")
+            .cloned()
+            .map(|value| value.try_into::<PresetInfo>())
+            .transpose()?;
+        let contains = table
+            .get("contains")
+            .and_then(toml::Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|entry| entry.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(Self {
+            format_version,
+            document_type,
+            preset,
+            contains,
+        })
+    }
 }
 
 /// Writes `project` to `path`, correcting on the way out anything that can be
@@ -802,24 +853,32 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
         path.to_path_buf()
     };
     let manifest = fs::read_to_string(&manifest_path)?;
-    let header: Header = toml::from_str(&manifest)?;
+    // Parsed once, not twice. The header has to be read before the document
+    // type is known and therefore before `T` is, and this used to mean
+    // running the whole file through the TOML parser for the two fields and
+    // then again for everything -- which on a three-megabyte song was most of
+    // the time spent opening it. The table is the parse; the header fields
+    // are two lookups in it, and the envelope is deserialized from the same
+    // table rather than from the text again.
+    let table: toml::Table = manifest.parse()?;
+    let header = Header::from_table(&table)?;
     if header.format_version != FORMAT_VERSION {
         return Err(Error::UnsupportedVersion(header.format_version));
     }
 
     let (mut document, asset_mode) = match header.document_type.as_str() {
         "song" => {
-            let envelope: Envelope<Project> = toml::from_str(&manifest)?;
+            let envelope: Envelope<Project> = table.try_into()?;
             validate_envelope(&envelope, "song")?;
             (LoadedDocument::Song(envelope.document), envelope.asset_mode)
         }
         "kit" => {
-            let envelope: Envelope<Kit> = toml::from_str(&manifest)?;
+            let envelope: Envelope<Kit> = table.try_into()?;
             validate_envelope(&envelope, "kit")?;
             (LoadedDocument::Kit(envelope.document), envelope.asset_mode)
         }
         "channel" => {
-            let envelope: Envelope<ChannelSetup> = toml::from_str(&manifest)?;
+            let envelope: Envelope<ChannelSetup> = table.try_into()?;
             validate_envelope(&envelope, "channel")?;
             (
                 LoadedDocument::Channel(Box::new(envelope.document)),
@@ -827,7 +886,7 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
             )
         }
         "generator" => {
-            let envelope: Envelope<ChannelSource> = toml::from_str(&manifest)?;
+            let envelope: Envelope<ChannelSource> = table.try_into()?;
             validate_envelope(&envelope, "generator")?;
             (
                 LoadedDocument::Generator(Box::new(envelope.document)),
@@ -840,7 +899,7 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
             // than an `EffectSlotState`, and parsing that part alone would
             // be exactly the partial load the list exists to prevent.
             validate_contains(&header.contains, EFFECT_PRESET_CONTAINS)?;
-            let envelope: Envelope<EffectSlotState> = toml::from_str(&manifest)?;
+            let envelope: Envelope<EffectSlotState> = table.try_into()?;
             validate_envelope(&envelope, "effect")?;
             (
                 LoadedDocument::Effect(Box::new(envelope.document)),
