@@ -940,6 +940,34 @@ impl Session {
     /// in hand.
     pub fn replace_project(&mut self, project: &Project, samples: &[Option<Arc<SampleData>>]) {
         self.source_revision = self.source_revision.wrapping_add(1);
+        // Every baked commit currently in hand, found by what it was baked
+        // from rather than by which channel is holding it.
+        //
+        // Re-rendering one is a couple of hundred milliseconds on the UI
+        // thread, and this used to look only at `self.channels[index]` -- the
+        // channel sitting in the same seat. That holds for an edit that
+        // leaves the channel list alone and fails for every edit that does
+        // not: undoing an insert or a delete moves everything past it along
+        // by one, so each of those channels found a stranger in its seat and
+        // re-rendered. Two channels of one-second audio measured 0.08 ms
+        // aligned and 55 ms shifted, and it scales with both the channel
+        // count and the sample length.
+        //
+        // A `Vec` rather than a map because `SampleCommit` holds floats and
+        // cannot be hashed, and because the scan is a pointer comparison
+        // against at most a few hundred entries -- which is nothing beside
+        // the render it avoids.
+        let baked: Vec<(&Arc<SampleData>, &mooloop_core::SampleCommit, Arc<SampleData>)> = self
+            .channels
+            .iter()
+            .filter_map(|held| {
+                Some((
+                    held.sample_data.as_ref()?,
+                    held.commit.as_deref()?,
+                    held.committed_sample.clone()?,
+                ))
+            })
+            .collect();
         let channels = project
             .channels
             .iter()
@@ -1009,14 +1037,13 @@ impl Session {
                 let commit = sampler.and_then(|state| state.commit.clone());
                 let committed = commit.as_ref().zip(sample.as_ref()).and_then(
                     |(commit, source)| {
-                        let held = self.channels.get(index).filter(|held| {
-                            held.commit.as_ref() == Some(commit)
-                                && held
-                                    .sample_data
-                                    .as_ref()
-                                    .is_some_and(|held| Arc::ptr_eq(held, source))
-                        });
-                        held.and_then(|held| held.committed_sample.clone())
+                        baked
+                            .iter()
+                            .find(|(held_source, held_commit, _)| {
+                                Arc::ptr_eq(held_source, source)
+                                    && *held_commit == commit.as_ref()
+                            })
+                            .map(|(_, _, buffer)| buffer.clone())
                             .or_else(|| mooloop_dsp::commit::rerender_commit(source, commit))
                     },
                 );
@@ -1308,5 +1335,100 @@ impl Session {
             channel: project.channels.get(index)?.clone(),
             sample: self.sample_snapshots().get(index)?.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod commit_reuse_tests {
+    use std::sync::Arc;
+
+    use mooloop_core::{Project, ProjectChannel, SampleCommit, StretchMode};
+    use mooloop_dsp::SampleData;
+
+    use super::Session;
+
+    fn sample(seed: f32) -> Arc<SampleData> {
+        Arc::new(SampleData {
+            frames: (0..24_000)
+                .map(|index| {
+                    let phase = index as f32 / 48_000.0 * (220.0 + seed) * std::f32::consts::TAU;
+                    [phase.sin() * 0.8, (phase * 1.5).sin() * 0.8]
+                })
+                .collect(),
+            sample_rate: 48_000,
+            root_note: 60,
+        })
+    }
+
+    fn committed(channels: usize) -> (Project, Vec<Option<Arc<SampleData>>>) {
+        let mut project = Project {
+            pattern_lengths: vec![64],
+            ..Project::default()
+        };
+        project.channels.clear();
+        let mut samples = Vec::new();
+        for index in 0..channels {
+            let mut channel = ProjectChannel::sampler(index, 1);
+            if let Some(state) = channel.setup.source.sampler_state_mut() {
+                state.commit = Some(Box::new(SampleCommit {
+                    mode: StretchMode::Music,
+                    ratio: 1.5,
+                    grain: 40,
+                    source_markers: Vec::new(),
+                    source_start: 0.0,
+                    source_end: 1.0,
+                    source_loop_start: 0.0,
+                    source_loop_end: 1.0,
+                }));
+            }
+            project.channels.push(channel);
+            samples.push(Some(sample(index as f32)));
+        }
+        (project, samples)
+    }
+
+    /// A baked commit is found by what it was baked from, not by which seat
+    /// its channel is sitting in.
+    ///
+    /// Re-rendering one costs a couple of hundred milliseconds on the UI
+    /// thread, so the buffer already in hand is reused -- and every edit that
+    /// changes the channel list moves channels into different indices. This
+    /// installs the same channels one seat along, the way undoing an insert
+    /// does, and asserts the buffers are the same allocations rather than
+    /// equal ones: a fresh render would be a new `Arc`, and would have cost
+    /// the stall this test exists to prevent.
+    #[test]
+    fn a_baked_commit_survives_the_channels_moving_along_by_one() {
+        let (project, samples) = committed(3);
+        let mut session = Session::default();
+        session.replace_project(&project, &samples);
+
+        let before: Vec<Arc<SampleData>> = session
+            .channels
+            .iter()
+            .map(|channel| {
+                channel
+                    .committed_sample
+                    .clone()
+                    .expect("every channel was committed")
+            })
+            .collect();
+
+        let mut shifted = project.clone();
+        let mut shifted_samples = samples.clone();
+        shifted.channels.insert(0, ProjectChannel::sampler(99, 1));
+        shifted_samples.insert(0, None);
+        session.replace_project(&shifted, &shifted_samples);
+
+        for (index, original) in before.iter().enumerate() {
+            let moved = session.channels[index + 1]
+                .committed_sample
+                .as_ref()
+                .expect("the committed buffer moved with its channel");
+            assert!(
+                Arc::ptr_eq(original, moved),
+                "channel {index} re-rendered its commit after moving one seat along"
+            );
+        }
     }
 }

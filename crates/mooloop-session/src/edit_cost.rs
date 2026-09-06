@@ -159,3 +159,144 @@ fn undo_entry_memory() {
         }
     }
 }
+
+/// `seconds` of stereo audio, as a sample a channel could be holding.
+fn loaded_sample(seconds: f32) -> std::sync::Arc<mooloop_dsp::SampleData> {
+    let rate = 48_000;
+    let frames = (seconds * rate as f32) as usize;
+    std::sync::Arc::new(mooloop_dsp::SampleData {
+        frames: (0..frames)
+            .map(|index| {
+                let phase = index as f32 / rate as f32 * 220.0 * std::f32::consts::TAU;
+                [phase.sin() * 0.8, (phase * 1.5).sin() * 0.8]
+            })
+            .collect(),
+        sample_rate: rate,
+        root_note: 60,
+    })
+}
+
+/// What pressing undo costs.
+///
+/// Undo installs a whole snapshot through `Session::replace_project`, which
+/// rebuilds the session's own view of the song — and for every sampler
+/// channel that includes re-binning its waveform. A sample is hundreds of
+/// thousands of frames, so this is the one part of the edit path whose cost
+/// is set by the audio a project holds rather than by its notes.
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn undo_install_cost() {
+    println!();
+    println!("  sampler channels  seconds each   ms per undo");
+    for channels in [1usize, 4, 8, 16] {
+        for seconds in [1.0f32, 10.0] {
+            let mut project = Project::default();
+            project.pattern_lengths = vec![64; 1];
+            project.channels.clear();
+            let mut samples = Vec::new();
+            for index in 0..channels {
+                project.channels.push(ProjectChannel::sampler(index, 1));
+                samples.push(Some(loaded_sample(seconds)));
+            }
+
+            let mut session = Session::default();
+            session.replace_project(&project, &samples);
+
+            let mut timings = Vec::with_capacity(50);
+            for _ in 0..50 {
+                let started = Instant::now();
+                session.replace_project(&project, &samples);
+                timings.push(started.elapsed().as_nanos());
+            }
+            println!(
+                "  {channels:>16}  {seconds:>12.0}  {:>12.3}",
+                median(timings) as f64 / 1.0e6
+            );
+        }
+    }
+}
+
+/// A project of `channels` sampler channels, each holding `seconds` of audio
+/// with a committed stretch on it.
+///
+/// A *different* sample on each channel, which is the whole point: sharing one
+/// made a shifted install still match at most indices by luck, and the
+/// measurement said the cost was independent of the channel count. It is not.
+fn committed_project(
+    channels: usize,
+    seconds: f32,
+) -> (Project, Vec<Option<std::sync::Arc<mooloop_dsp::SampleData>>>) {
+    let mut project = Project::default();
+    project.pattern_lengths = vec![64; 1];
+    project.channels.clear();
+    let mut samples = Vec::new();
+    for index in 0..channels {
+        let sample = loaded_sample(seconds + index as f32 * 0.01);
+        let mut channel = ProjectChannel::sampler(index, 1);
+        if let Some(state) = channel.setup.source.sampler_state_mut() {
+            state.commit = Some(Box::new(mooloop_core::SampleCommit {
+                mode: mooloop_core::StretchMode::Music,
+                ratio: 1.5,
+                grain: 40,
+                source_markers: Vec::new(),
+                source_start: 0.0,
+                source_end: 1.0,
+                source_loop_start: 0.0,
+                source_loop_end: 1.0,
+            }));
+        }
+        project.channels.push(channel);
+        samples.push(Some(sample));
+    }
+    (project, samples)
+}
+
+/// The cost of an undo that moves the channels along by one.
+///
+/// `replace_project` reuses an already-baked commit rather than re-rendering
+/// it, which its own comment calls a visible stall of a couple of hundred
+/// milliseconds a channel. The buffer it reuses is found at
+/// `self.channels.get(index)` — by *position*. An undo of a channel insert or
+/// delete shifts every channel after the edit into a different index, so this
+/// asks what that costs: the same document installed twice, once aligned and
+/// once shifted by one.
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn undo_install_cost_when_channels_shift() {
+    println!();
+    println!("  channels  seconds   aligned ms   shifted ms");
+    for channels in [2usize, 4, 8] {
+        for seconds in [1.0f32, 4.0] {
+            let (project, samples) = committed_project(channels, seconds);
+            let mut shifted = project.clone();
+            let mut shifted_samples = samples.clone();
+            // What undoing "insert a channel at the top" hands back.
+            shifted.channels.insert(0, ProjectChannel::sampler(99, 1));
+            shifted_samples.insert(0, None);
+
+            let mut session = Session::default();
+            session.replace_project(&project, &samples);
+
+            let mut aligned_timings = Vec::new();
+            for _ in 0..5 {
+                let started = Instant::now();
+                session.replace_project(&project, &samples);
+                aligned_timings.push(started.elapsed().as_nanos());
+            }
+
+            let mut shifted_timings = Vec::new();
+            for _ in 0..5 {
+                session.replace_project(&project, &samples);
+                let started = Instant::now();
+                session.replace_project(&shifted, &shifted_samples);
+                shifted_timings.push(started.elapsed().as_nanos());
+            }
+
+            println!(
+                "  {channels:>8}  {seconds:>7.0}  {:>11.3}  {:>11.3}",
+                median(aligned_timings) as f64 / 1.0e6,
+                median(shifted_timings) as f64 / 1.0e6
+            );
+        }
+    }
+}

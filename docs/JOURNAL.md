@@ -679,6 +679,54 @@ partial replacements: the fast path has to answer everything the slow one did,
 and the reason it is easy to miss is that two of those answers were only used
 much further down.
 
+## Sep 6 (later still) — a position is not an identity, for the third time, and this one is a stall
+
+Undo installs a whole snapshot through `Session::replace_project`, so this
+measured what pressing it costs. The ordinary answer is fine: sixteen sampler
+channels holding ten seconds of audio each reinstall in 5 milliseconds, which
+is the waveform re-binning and nothing else.
+
+The interesting part was already half-solved. A committed stretch is
+re-rendered rather than stored, and `replace_project` reuses a buffer already
+in hand instead — with a comment saying exactly why, that a commit is a couple
+of hundred milliseconds of rendering per channel paid on the UI thread. The
+buffer it reused was the one at `self.channels[index]`: **the channel sitting
+in the same seat.**
+
+That holds for an edit which leaves the channel list alone, and fails for
+every edit which does not. Undoing an insert or a delete moves everything past
+it along by one, so each of those channels finds a stranger in its seat and
+re-renders. Two channels of one-second audio: 0.08 ms aligned, 113 ms shifted.
+Eight channels of four seconds: 1.5 ms aligned, **1,814 ms shifted**. Pressing
+undo after deleting a channel stalls the interface for the better part of two
+seconds, and it scales with both the channel count and the sample length.
+
+The lookup is by identity now — the source `Arc` and the commit it was baked
+under — rather than by position. A `Vec` scan rather than a map, because
+`SampleCommit` holds floats and cannot be hashed, and a pointer comparison
+against a few hundred entries is nothing beside the render it avoids. Shifted
+now costs what aligned costs: 1,814 ms to 1.5.
+
+`a_baked_commit_survives_the_channels_moving_along_by_one` asserts the buffers
+are the same allocations rather than equal ones, because a fresh render would
+be a new `Arc` and equality would not notice. It was checked against the old
+code and fails there, which is the only way to know a regression test tests
+anything.
+
+This is the third time this repository has written down *a position is not an
+identity* — the other two are in `Patterns worth noticing` below, and both
+were correctness bugs where a route or a lane silently re-aimed after a
+structural edit. This is the same mistake wearing a different symptom: nothing
+was wrong with what came out, only with how long it took, which is why no test
+caught it and why it took a measurement rather than a reading.
+
+**And the measurement lied once first.** The fixture gave every channel the
+same sample and the same commit, so a shifted install still matched at most
+indices by luck and only the last channel missed — the table said the cost was
+113 ms whatever the channel count, which is a suspicious shape for something
+described as per-channel work. Distinct samples, which is what a real project
+has, is what made it scale.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.
