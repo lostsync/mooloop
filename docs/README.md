@@ -21,6 +21,7 @@ table of which document to read for which task. Start there, not here.
 | [ACTIONS.md](ACTIONS.md) | The action registry: how a shortcut, menu row, or future console command is added. |
 | [WIDGET_INVENTORY.md](WIDGET_INVENTORY.md) | UI patterns duplicated in `.slint` with no component behind them. Read before writing a new widget. |
 | [JOURNAL.md](JOURNAL.md) | The narrative: what was built, what broke, and what it taught. |
+| [LOOSE_ENDS.md](LOOSE_ENDS.md) | Small verified gaps that were deliberate stopping points. Delete a row when it is fixed. |
 | [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md) | The engine graded against an external reference architecture, and where the one real gap is. |
 
 ## What it is for

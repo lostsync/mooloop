@@ -58,6 +58,7 @@ that affect the decision at hand.
 | Open-ended priority or scope choice | `docs/FOCUS.md` and `docs/ROADMAP.md` |
 | Which plans are live, and what state each is in | `docs/plans/README.md` |
 | Broad existing user surface or known gap | `docs/CURRENT.md` |
+| A small known gap you are about to rediscover | `docs/LOOSE_ENDS.md` |
 | UI layout, controls, or interaction | `docs/UI_DESIGN.md` |
 | A new shortcut, menu row, or command surface | `docs/ACTIONS.md` |
 | Modulation sources, routes, or destination policy | `docs/MODULATOR_SYSTEM_SPEC.md` |
