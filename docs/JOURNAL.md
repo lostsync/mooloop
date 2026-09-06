@@ -591,6 +591,55 @@ as an ignored test rather than fixed, because
 `skipping_renders_the_same_at_any_block_size` states its claim without
 qualification and this is where that claim stops holding.
 
+## Sep 6 (after that) — the undo history had no ceiling, and the thing I went looking for was fine
+
+Five rounds in the engine had taken an empty block to 763 nanoseconds and
+left the big numbers as honest DSP, so this looked somewhere else: the edit
+path, which runs on the UI thread and is what a drag has to keep up with.
+
+`Session::project_snapshot` is a rebuild rather than a clone — every channel's
+source state, notes, automation, slices and effects reconstructed from the
+session's own structures — and the history takes one for `before` and one for
+`after` on every edit. A pointer drag reports an edit per move frame, and
+gesture coalescing then throws the `before` away, so a twenty-frame note drag
+builds forty projects and keeps two. That sounded expensive.
+
+**It is not.** `edit_cost::snapshot_cost` puts one snapshot at 8 microseconds
+for a sixteen-channel song and 159 for a thirty-two channel one with a busy
+pattern — so an edit is 0.016 ms and 0.317 ms respectively, against a
+sixteen-millisecond pointer frame. The rebuild is two per cent of a frame at
+its worst and a tenth of a per cent in practice. Nothing to fix, and the
+hypothesis was wrong.
+
+What was underneath it was: **`History` had no cap at all.** `entries` is a
+plain `Vec` and every edit pushes two whole project snapshots onto it, so a
+session grew without bound. `edit_cost::undo_entry_memory` says by how much,
+and the shape is not what the drag question suggested — the cost is mostly the
+channels' *device parameters* rather than their notes, so sixteen channels
+with only sixteen notes to a pattern is already 100 KB an entry. A realistic
+song is about 200 KB, a large one 1.1 MB. Five hundred edits — an afternoon —
+is 96 MB and 566 MB, and it keeps going. Every entry also holds an `Arc` to
+each sample loaded when it was taken, so a sample the user replaced stayed
+resident for the rest of the session.
+
+The depth is 256 now, dropping the oldest first, which bounds the realistic
+case at about 50 MB. It is one named constant with the arithmetic written
+beside it, the way `CAPACITY_POLICY.md` treats the modulation capacity: a
+number to raise in one edit rather than a limit the interface should ever have
+to explain. Coalescing already meant a drag is one entry however many frames
+it reports, and a test says so, because a depth that a drag could exhaust
+would be a different thing entirely.
+
+**And the first memory measurement was worthless in a way worth recording.**
+It sampled resident set size, and reported three of the nine project sizes as
+costing *exactly zero* — which is impossible, and was the instrument rather
+than the answer: RSS moves a page at a time and a warmed allocator returns
+nothing to the OS, so two hundred entries fitted in pages that were already
+resident. The numbers around the zeros looked plausible enough to have been
+believed. Counting the allocations instead — a `#[cfg(test)]` global allocator
+in `mooloop-session` — gives figures that rise monotonically with both
+channels and notes, which is the shape the answer has to have.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.

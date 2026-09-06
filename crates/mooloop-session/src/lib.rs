@@ -15,6 +15,47 @@ pub mod channel;
 pub mod command;
 pub mod dialogs;
 pub mod document;
+#[cfg(test)]
+mod edit_cost;
+
+/// A counting allocator, installed only for this crate's own tests.
+///
+/// `edit_cost::undo_entry_memory` asks how much memory an undo entry holds,
+/// and resident set size cannot answer it: pages are the wrong granularity
+/// and freed memory is not returned to the OS, so a warmed-up allocator
+/// reported several project sizes as costing nothing at all.
+#[cfg(test)]
+pub(crate) struct CountingAllocator {
+    live: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(test)]
+impl CountingAllocator {
+    pub(crate) fn live(&self) -> usize {
+        self.live.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        self.live
+            .fetch_add(layout.size(), std::sync::atomic::Ordering::Relaxed);
+        unsafe { std::alloc::System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        self.live
+            .fetch_sub(layout.size(), std::sync::atomic::Ordering::Relaxed);
+        unsafe { std::alloc::System.dealloc(ptr, layout) }
+    }
+}
+
+#[cfg(test)]
+#[global_allocator]
+pub(crate) static COUNTING: CountingAllocator = CountingAllocator {
+    live: std::sync::atomic::AtomicUsize::new(0),
+};
 pub mod effects;
 pub mod engine;
 pub mod history;
