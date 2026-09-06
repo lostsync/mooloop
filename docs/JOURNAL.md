@@ -334,7 +334,7 @@ Four things the doing turned up.
 
 What it cost: 4 KiB across a sixteen-channel project that never uses it, and no buffers at all. What it did not do, and said so from the first document: parallel sends, sidechain key inputs, and feedback cycles. All three now hang off a compiled edge model rather than waiting for one. Three plan directories archived on the same afternoon.
 
-## Sep 5 (last) — a device that is not doing anything stops being run
+## Sep 5 (later still) — a device that is not doing anything stops being run
 
 Every occupied effect slot and every channel strip ran every block regardless. `AudioNode` mirrors VST3, CLAP and LV2 faithfully — buffer in place, sorted sample-timed events, reported latency — except for the one thing all three have and it did not: a way to say there is nothing to do. So the engine had no basis on which to skip anything, and a thirty-two channel arrangement with four things sounding paid for twenty-eight generators, twenty-eight effect chains and twenty-eight pan stages rendering silence. That is now 10,130 microseconds a 256-frame block against 1,057, on a block that is 5,333 microseconds of wall clock: the difference between twice over budget and a fifth of it. With every channel sounding it costs what it did, which is the number that had to be measured rather than assumed.
 
@@ -351,6 +351,22 @@ The mechanism is small — a tail in frames, a "my state has settled" flag, both
 The last one is a small piece of numerical honesty that took an hour: **a one-pole ramp in `f32` does not reach its target.** It reaches a fixed point of its own recurrence and stops — for the default gate, a fiftieth of a dB short of full attenuation — so "close enough to shut" was never going to become true. The gate asks whether the next step *would be a step*. Everything else gates on `Smoothed::is_settled`, which is exact because that lag snaps rather than asymptoting, for exactly this reason, written down a month ago.
 
 `RenderState::set_idle_skipping` is what holds all of it honest: a render can be run twice and compared sample for sample, because a mechanism whose whole claim is that it changes nothing has to be checkable against the thing it claims not to change. The equivalence test also asserts that a quarter of the channel-blocks were actually skipped, since a skip that never fires would pass every other test in the file.
+
+## Sep 5 (last) — the control pass cost more than the audio it was skipping
+
+The entry above stopped a channel with nothing to play from being rendered. Measuring what a block then cost said the skip had barely moved the number: thirty-two ML-P8 channels *doing nothing* cost 254 microseconds a 128-frame block against 280 for the same thirty-two playing. A sleeping channel was within a tenth of a sounding one, which means almost none of the block was ever the audio.
+
+`crates/mooloop-engine/src/block_cost.rs` is that measurement, kept: two `#[ignore]`d tests that print nanoseconds a block against the block's own real-time budget, across four buffer sizes and four channel counts, playing and idle. It exists because every conclusion below came from reading its table rather than from reading the code, and two of the three are in places nobody would have looked.
+
+**The engine asked, two hundred times a channel a block, a question with one answer.** Before a strip renders, every descriptor of its device resolves against modulation and automation. `ModRack::modulates` walks a sixteen-entry route table; `Sequencer::automation_lane_at` walks every active channel's lane list. Both are cheap. Both are also asked once per descriptor, and ML-P8 declares about two hundred — so a thirty-two channel song paid roughly two hundred route walks and two hundred lane walks *per channel*, each lane walk itself proportional to the channel count, for a song with no routes and no lanes drawn in it. That is quadratic in channels and it is entirely about work nobody authored. `ModRack::has_routes` and `Sequencer::has_automation_at` are the same questions asked once for the whole rack and once for the whole playhead, and the three loops that used to ask per descriptor now skip outright.
+
+**A 192 KB memset opened every block.** The note-gate table is indexed by control tick and then by channel, and it is sized for the largest block the engine will accept — 8192 frames, so 256 ticks of 256 channels. It was a local, so every block zeroed all 192 KB of it and then wrote four rows. It is a field now, cleared a row at a time over the rows this block will actually read: 3 KB at a 128-frame buffer instead of 192, and the audio thread no longer evicts an L2's worth of cache before it renders anything.
+
+**`StripSegments` is two kilobytes built before finding out whether it is wanted.** Its own doc comment already said the still-fader case should stay one pass over the block; the code filled the table first and discovered it was undriven afterwards, then threw all of it away. The check moved above the initializer.
+
+At a 128-frame buffer and thirty-two channels that is 280,528 nanoseconds a block down to 64,053 — 10.5% of the block's budget to 2.4%, and idle 254,007 down to 63,414. The shape changed as well as the size: an idle arrangement now costs a quarter of a playing one instead of the same.
+
+What is left is honest DSP with one exception, and the measurement points straight at it. Thirty-two *sleeping* channels still cost 240 microseconds at a 512-frame buffer, scaling exactly with frames times channels, because `MlP8::skip_block` advances the device LFO one sample at a time for the whole block. The reason it advances at all is right and was argued in the previous entry — a clock-driven phase that froze would come back somewhere else. Advancing it by N samples in N iterations is what is not obviously necessary, and closed-forming it per waveform is the next thing to measure rather than the next thing to assume.
 
 ## Patterns worth noticing
 
@@ -392,6 +408,7 @@ Refreshed 2026-09-02, with the September documentation audit's threads merged in
 
 - ~~The v1 drum synth is still the only generator that cannot be modulated~~ — it has a table as of 2026-09-05 (`FOCUS.md` step 2). DS-01 is done and archived: nine steps, a six-page face, a seventeen-patch bank, played and signed off on 2026-09-04, and step 07's audio outlets closed on 2026-09-05.
 - ~~ML-P8 stops inside step 06~~ — closed 2026-09-05, along with DS-01's step 07 and `typed-audio-edges/` itself. All three directories are archived. What is *not* built is the rest of `AUDIO_ARCHITECTURE.md`'s step 6: parallel sends (a channel still feeds exactly one bus) and sidechain key inputs (they need a dependency edge that schedules a producer without summing it in). Both now extend a compiled edge model rather than needing one built first.
+- `MlP8::skip_block` advances the device LFO one sample at a time for a block nothing is rendering, so thirty-two sleeping channels still cost 240 microseconds at a 512-frame buffer. Closed-forming the advance per waveform is the obvious answer and is not obviously correct for the ones with per-sample state; `block_cost.rs` is the measurement to hold it to.
 - Buffer Stage 1's acceptance test 8 — no allocations or locks in the callback — is still unverified. It needs an allocation-tracking harness, not a reading of the code.
 - The sampler's four-voice stretching polyphony cap is not enforced anywhere: `StretchPool::new` builds a reader for all sixteen voices.
 - Acid's Cutoff knob means a different frequency from the other two ML-M1 models — 0.41x nominal against 0.65–0.68x. The compensation constant is load-bearing, not a typo; correcting it lines the corners up and breaks the filter. Lining them up means re-deriving it, and whether it *should* track the others is a taste question Adam has not been asked.

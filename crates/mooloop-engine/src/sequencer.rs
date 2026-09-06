@@ -312,6 +312,54 @@ impl Sequencer {
         }
     }
 
+    /// Whether anything under the playhead could resolve a lane at all.
+    ///
+    /// [`Self::automation_lane_at`] answers one destination, and the engine
+    /// asks it for every descriptor of every device on every live channel,
+    /// once a block. On a song with no automation drawn -- which is most
+    /// songs, and all of them until somebody draws one -- every one of those
+    /// questions walks every active channel's lane list to arrive at `None`,
+    /// so the cost of automation nobody authored is the descriptor count
+    /// times the channel count, squared into the channel count again by the
+    /// outer loop. This is the same walk done once, hoisted to the top of the
+    /// block: exactly one of its answers can be `true`, and while it is
+    /// `false` no destination needs asking.
+    pub fn has_automation_at(&self, song_tick: f64) -> bool {
+        match self.playback_mode {
+            PlaybackMode::Pattern => self
+                .patterns
+                .get(self.current)
+                .is_some_and(|pattern| self.pattern_has_lanes(pattern)),
+            PlaybackMode::Song => {
+                let position = wrap_tick(song_tick, self.song_length_ticks());
+                self.playlist.iter().any(|placement| {
+                    let pattern_index = placement.pattern as usize;
+                    if pattern_index >= self.active_patterns {
+                        return false;
+                    }
+                    let pattern = &self.patterns[pattern_index];
+                    let start = placement.start_tick;
+                    if position < start as f64
+                        || position >= start.saturating_add(pattern.length_ticks()) as f64
+                    {
+                        return false;
+                    }
+                    self.pattern_has_lanes(pattern)
+                })
+            }
+        }
+    }
+
+    /// Whether any active channel of `pattern` holds a lane with points in it.
+    /// The emptiness filter matches [`Self::automation_lane_at`]'s: a lane
+    /// that was opened and then cleared resolves to nothing there, so it must
+    /// not count as automation here either.
+    fn pattern_has_lanes(&self, pattern: &Pattern) -> bool {
+        (0..self.active_channels)
+            .filter_map(|channel| pattern.channel(channel))
+            .any(|channel| channel.lanes().iter().any(|lane| !lane.is_empty()))
+    }
+
     /// Resolve `target` to the lane driving it at `song_tick`, together with
     /// that lane's pattern-local tick and its pattern's length.
     ///

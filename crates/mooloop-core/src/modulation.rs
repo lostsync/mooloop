@@ -1968,6 +1968,17 @@ impl ModRack {
         policy.allowed && self.destinations().any(|address| address == destination)
     }
 
+    /// Whether the rack holds any route at all, whatever it drives.
+    ///
+    /// [`Self::modulates`] is asked once for every descriptor of every device
+    /// on every live channel, once a block, and an empty rack walks its whole
+    /// route table to answer `false` to each of them. This is that answer for
+    /// the rack rather than for one destination, so a channel with no routes
+    /// can skip the question instead of asking it two hundred times.
+    pub fn has_routes(&self) -> bool {
+        self.routes.iter().any(Option::is_some)
+    }
+
     /// Every destination this rack drives, for the UI's "which knobs are
     /// modulated" pass. Includes routes whose destination currently refuses
     /// modulation, because the inspector still has to show them.

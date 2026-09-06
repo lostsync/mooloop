@@ -150,6 +150,25 @@ came from, and `scripts/antibox --prune` deletes the caches whose checkout no
 longer exists. A run that finds the box above 90% full says so and points at
 it.
 
+## Measuring what a block costs
+
+`crates/mooloop-engine/src/block_cost.rs` prints nanoseconds per
+`process_block` against the block's own real-time budget, across four buffer
+sizes and four channel counts, with the channels playing and idle. It is two
+`#[ignore]`d tests rather than a benchmark harness, so it needs asking for:
+
+```sh
+scripts/antibox cargo test -p mooloop-engine --release block_cost \
+  -- --ignored --nocapture --test-threads=1
+```
+
+`--release` because a debug build measures the wrong program, and
+`--test-threads=1` because the two tests otherwise contend and inflate each
+other by a third. Run it before and after anything on the block path. The
+figures in the `Sep 5 (last)` entry of `docs/JOURNAL.md` are what it said on
+the build box, and are the comparison to beat rather than to reproduce -- the
+laptop's numbers are its own.
+
 ## Software-rendered UI checks
 
 Prefer headless software rendering: it is deterministic, does not need a

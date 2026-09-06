@@ -171,6 +171,15 @@ const MAX_CONTROL_TICKS_PER_BLOCK: usize = MAX_BLOCK_SIZE / CONTROL_RATE_FRAMES;
 /// into one flat address space at the point a route reads them.
 type ControlOutputs = [[f32; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK];
 
+/// Every channel's note gates at every control subdivision of one block, for
+/// the modulators that key off them.
+///
+/// Tick-major, because a rack is advanced one subdivision at a time and needs
+/// every channel's gates at that subdivision -- an envelope can follow another
+/// channel's notes. At full size this is 192 KB, so it is kept and cleared a
+/// row at a time rather than built on the stack of the audio callback.
+type GateTable = [[NoteGateEvents; MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK];
+
 fn default_generator_params(kind: DeviceKind) -> GeneratorParams {
     match kind {
         DeviceKind::Sampler => GeneratorParams::Sampler(SamplerParams::default()),
@@ -637,6 +646,16 @@ impl EffectChain {
         modulation: Option<&ModulationBlock<'_>>,
         automation: Option<&AutomationBlock<'_>>,
     ) {
+        // No route in the channel's rack and no lane under the playhead means
+        // every descriptor below can only reach its `continue`. Both are facts
+        // about the channel, not the descriptor, and this runs once per effect
+        // slot per block over everything the effect declares -- so asking here
+        // is one question in place of a hundred and something.
+        if !modulation.is_some_and(|modulation| modulation.rack.has_routes())
+            && automation.is_none()
+        {
+            return;
+        }
         let Some(state) = self.slot(slot) else {
             return;
         };
@@ -1045,6 +1064,13 @@ fn resolve_strip_segments(
         .max(automation.map_or(0, |automation| automation.ticks))
         .min(MAX_CONTROL_TICKS_PER_BLOCK);
     if ticks == 0 {
+        return None;
+    }
+    // Asked before the table exists rather than after. `StripSegments` is two
+    // kilobytes, every byte of it written by the initializer below, and a
+    // channel with an empty rack and no lane throws all of it away -- which
+    // is every channel on a song nobody has automated or routed.
+    if !modulation.rack.has_routes() && automation.is_none() {
         return None;
     }
     let mut segments = StripSegments {
@@ -1725,6 +1751,8 @@ pub(crate) struct RenderState {
     /// every addressable channel cost 2 MiB before a project existed
     /// (`docs/plans/archive/modulator-capacity/`).
     control_outputs: Vec<Box<ControlOutputs>>,
+    /// This block's note gates, kept rather than rebuilt. See [`GateTable`].
+    gate_ticks: Box<GateTable>,
     sample_rate: u32,
     /// Nodes displaced from effect slots this block, awaiting handoff to the
     /// reclaim ring (realtime playback) or plain drop (offline render).
@@ -1821,6 +1849,8 @@ impl RenderState {
             modulation: (0..MAX_CHANNELS).map(|_| ModRack::default()).collect(),
             modulators: (0..MAX_CHANNELS).map(|_| ModulatorRack::new()).collect(),
             control_outputs: Vec::with_capacity(MAX_CHANNELS),
+            gate_ticks: Box::new([[NoteGateEvents::default(); MAX_CHANNELS];
+                MAX_CONTROL_TICKS_PER_BLOCK]),
             sample_rate,
             reclaim: Vec::new(),
             meters: BusMeters::new(),
@@ -2337,18 +2367,23 @@ impl RenderState {
     /// Tick one channel's source rack for every 32-frame subdivision and
     /// capture each output before advancing it. The final subdivision can be
     /// shorter; its event still starts at its exact frame offset.
+    ///
+    /// Takes the two tables it advances rather than `&mut self`, because the
+    /// gate table it reads is now a field too and only field-level borrows
+    /// can see that the three are disjoint.
     fn tick_channel_modulators(
-        &mut self,
+        modulators: &mut [ModulatorRack],
+        control_outputs: &mut [Box<ControlOutputs>],
+        sample_rate: u32,
+        bpm: f64,
         channel: usize,
         frames: usize,
-        gate_ticks: &[[NoteGateEvents; MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK],
+        gate_ticks: &GateTable,
     ) -> usize {
-        let sample_rate = self.sample_rate;
-        let bpm = self.transport.bpm;
-        let Some(runtime) = self.modulators.get_mut(channel) else {
+        let Some(runtime) = modulators.get_mut(channel) else {
             return 0;
         };
-        let Some(outputs) = self.control_outputs.get_mut(channel) else {
+        let Some(outputs) = control_outputs.get_mut(channel) else {
             return 0;
         };
 
@@ -2360,6 +2395,23 @@ impl RenderState {
             tick += 1;
         }
         tick
+    }
+
+    /// The block path's call to [`Self::tick_channel_modulators`], reading the
+    /// gate table the tests set up on the state itself. Only the borrow
+    /// splitting differs; the arguments are the ones `process_block_inner`
+    /// passes.
+    #[cfg(test)]
+    fn tick_modulators_from_gate_table(&mut self, channel: usize, frames: usize) -> usize {
+        Self::tick_channel_modulators(
+            &mut self.modulators,
+            &mut self.control_outputs,
+            self.sample_rate,
+            self.transport.bpm,
+            channel,
+            frames,
+            &self.gate_ticks,
+        )
     }
 
     /// Apply a structural change (install/remove of a boxed node). Called on
@@ -3102,17 +3154,31 @@ impl RenderState {
         // unmuting does not restart its phase.
         let active_channels = self.live_channels();
         let mut modulator_ticks = [0usize; MAX_CHANNELS];
-        let mut gate_ticks =
-            [[NoteGateEvents::default(); MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK];
+        // The gate table is sized for the largest block the engine accepts,
+        // which is 8192 frames and so 256 control ticks of 256 channels. That
+        // is 192 KB, and it used to be a local: every block began by zeroing
+        // all of it and then writing four rows. Kept here instead, only the
+        // rows this block will read are cleared, and the audio thread stops
+        // wiping an L2's worth of cache before it renders anything.
+        let control_ticks = frames.div_ceil(CONTROL_RATE_FRAMES);
+        for row in self.gate_ticks.iter_mut().take(control_ticks) {
+            *row = [NoteGateEvents::default(); MAX_CHANNELS];
+        }
+        // A zero-frame block has no subdivision to file a gate under, and no
+        // cleared row to file it in either; nothing will read the table.
+        let gated_channels = if control_ticks == 0 { 0 } else { active_channels };
         // Not an iterator loop: `gate_ticks` is indexed by control tick first
         // and by channel second, so the loop variable is not this array's
         // outer index and enumerating it would walk the wrong axis.
         #[allow(clippy::needless_range_loop)]
-        for source_channel in 0..active_channels {
+        for source_channel in 0..gated_channels {
             for event in self.events[source_channel].iter() {
+                // Clamped into the cleared region rather than into the array:
+                // an offset past the end of the block is already nonsense,
+                // and the rows beyond this block's own are stale.
                 let tick = (event.offset as usize / CONTROL_RATE_FRAMES)
-                    .min(MAX_CONTROL_TICKS_PER_BLOCK - 1);
-                let gate = &mut gate_ticks[tick][source_channel];
+                    .min(control_ticks.saturating_sub(1));
+                let gate = &mut self.gate_ticks[tick][source_channel];
                 match event.event {
                     Event::NoteOn { .. } => gate.note_ons = gate.note_ons.saturating_add(1),
                     Event::NoteOff { .. } => gate.note_offs = gate.note_offs.saturating_add(1),
@@ -3121,18 +3187,36 @@ impl RenderState {
                 }
             }
         }
+        // Field-by-field rather than through `self`, so the gate table stays
+        // borrowable while the racks it feeds are advanced.
         for (index, ticks) in modulator_ticks.iter_mut().enumerate().take(active_channels) {
-            *ticks = self.tick_channel_modulators(index, frames, &gate_ticks);
+            *ticks = Self::tick_channel_modulators(
+                &mut self.modulators,
+                &mut self.control_outputs,
+                self.sample_rate,
+                self.transport.bpm,
+                index,
+                frames,
+                &self.gate_ticks,
+            );
         }
         // Lanes resolve whether or not the transport is running: stopped, the
         // playhead simply holds still and the destination sits at the value
         // drawn under it. Making automation conditional on playback would mean
         // a knob that jumps the moment you press play.
-        let automation = (frames > 0).then(|| AutomationBlock {
-            sequencer: &self.sequencer,
-            start_tick,
-            ticks_per_sample,
-            ticks: frames.div_ceil(CONTROL_RATE_FRAMES),
+        //
+        // It *is* conditional on a lane existing, which is a different claim
+        // and costs nothing to make: with none under the playhead every
+        // `curve_for` below can only answer `None`, and each of those answers
+        // is a walk over every active channel. Asking once here instead of
+        // once per descriptor per channel is the whole of the saving.
+        let automation = (frames > 0 && self.sequencer.has_automation_at(start_tick)).then(|| {
+            AutomationBlock {
+                sequencer: &self.sequencer,
+                start_tick,
+                ticks_per_sample,
+                ticks: frames.div_ceil(CONTROL_RATE_FRAMES),
+            }
         });
         for strip in &mut self.buses {
             strip.bus.clear(frames);
@@ -3210,7 +3294,13 @@ impl RenderState {
             // block holds `&self.sequencer` for the whole loop, and only the
             // compiler's field-level borrow splitting can see that
             // `self.events` and `self.strips` are disjoint from it.
-            {
+            // Neither pass below can produce an event without either a route
+            // in this channel's rack or a lane under the playhead, and both
+            // questions are settled for the whole channel before either loop
+            // starts. Asked per descriptor instead, a device the size of
+            // ML-P8 pays two hundred route-table walks a block to be told
+            // what one walk already said.
+            if modulation.rack.has_routes() || automation.is_some() {
                 let base = self.strips[index].source_base;
                 let scope = EffectTarget::Channel(index as u8);
                 for descriptor in base.kind().descriptors() {
@@ -4182,8 +4272,7 @@ mod tests {
         ));
         let project = synth_project(channel);
         let mut render = RenderState::from_project(48_000, &project, &[]);
-        let none = [[NoteGateEvents::default(); MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK];
-        assert_eq!(render.tick_channel_modulators(0, 64, &none), 2);
+        assert_eq!(render.tick_modulators_from_gate_table(0, 64), 2);
         assert_eq!(render.control_outputs[0][0][0], -1.0);
         assert_eq!(render.control_outputs[0][1][0], -0.5);
 
@@ -4191,9 +4280,8 @@ mod tests {
         // NoteOn offsets. The tick method applies it before sampling, so the
         // destination sees the reset phase on that subdivision rather than
         // one control tick later.
-        let mut note_on = [[NoteGateEvents::default(); MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK];
-        note_on[0][0].note_ons = 1;
-        render.tick_channel_modulators(0, 32, &note_on);
+        render.gate_ticks[0][0].note_ons = 1;
+        render.tick_modulators_from_gate_table(0, 32);
         assert_eq!(render.control_outputs[0][0][0], -1.0);
     }
 
@@ -4212,10 +4300,9 @@ mod tests {
         let mut project = synth_project(target);
         project.channels.push(ProjectChannel::sampler(1, 1));
         let mut render = RenderState::from_project(48_000, &project, &[]);
-        let mut gates = [[NoteGateEvents::default(); MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK];
-        gates[0][1].note_ons = 1;
+        render.gate_ticks[0][1].note_ons = 1;
 
-        render.tick_channel_modulators(0, 32, &gates);
+        render.tick_modulators_from_gate_table(0, 32);
         assert_eq!(render.control_outputs[0][0][0], 1.0);
     }
 
