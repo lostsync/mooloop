@@ -541,6 +541,56 @@ What is left in those rows is arithmetic that does something. The reverb at
 running, and the honest next question about it is whether eight channels of
 hall is a thing anyone does rather than whether the loop can be shaved.
 
+## Sep 6 (last) — sixteen buses nobody routed to were most of an empty block
+
+`default_buses` builds all seventeen for every project and a song uses one or
+two. The render loop emptied, peaked twice, chained, balanced and metered
+every one of them, every block, whether or not anything reached it — the one
+place the rule the channels got on Sep 5 had never been applied.
+
+The first attempt to measure that was worthless and said so: it truncated
+`project.buses`, but `RenderState` builds `(0..MAX_BUSES)` regardless of the
+project, so the experiment changed nothing and returned a confident null. The
+second attempt skipped the non-master buses behind a scratch switch and
+answered properly: **the sixteen unused buses were 91% of an empty block**,
+14,197 nanoseconds against 1,245.
+
+A bus sleeps on the same terms a channel does, with one addition. Nothing
+reached it, its chain has finished — a reverb on a bus has to be heard out
+after the channel feeding it stops, which is exactly the moment "nothing
+reached this bus" becomes true — and its compensation ring has been fed
+silence for at least its own length. That last one is the condition that is
+easy to miss: until then the ring still holds audio it has not emitted, and
+freezing it would strand that audio until the bus woke. Buffers are emptied
+only when they may hold something, and once at full capacity on the way down,
+because a later block may be longer than the one that cleared it and would
+otherwise read past the cleared region into audio from before the silence.
+
+An empty block went from 14,197 nanoseconds to 763 at 512 frames, and it is
+now nearly flat across block size — 433 at 64 against 763 at 512 — because
+nothing left in it scales with the frame count.
+
+**The tests caught two things that would otherwise have shipped.** The preview
+voice writes into the master *after* the bus walk has decided whether to empty
+it, so it has to say that it did; without that a retired preview's last frames
+stayed in the buffer and played for as long as nothing else routed to the
+master. `preview_voice_plays_replaces_and_retires` failed on the first run,
+which is what that test is for.
+
+And the new equivalence test asserted bit-exactness and failed — **identically
+on unmodified `main`, to the same value at the same frame**. So the change is
+provably neutral and the claim was simply too strong. Taking the project apart
+narrowed it: a bus route alone diverges by nothing, a bus route carrying the
+reverb by nothing, drums straight into a compressed master by nothing. It
+takes the reverb *and* a compressor downstream of it, which points at the slot
+silence counter — it advances a block at a time, so a tail decaying through
+`SILENCE_PEAK` crosses it in a different block at 128 frames than at 1024, and
+the compressor is told its input went quiet one block apart in the two
+renders. Two parts in 10^16, against the note-off bug's two in 10^5. Recorded
+as an ignored test rather than fixed, because
+`skipping_renders_the_same_at_any_block_size` states its claim without
+qualification and this is where that claim stops holding.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.
@@ -581,6 +631,7 @@ Refreshed 2026-09-02, with the September documentation audit's threads merged in
 
 - ~~The v1 drum synth is still the only generator that cannot be modulated~~ — it has a table as of 2026-09-05 (`FOCUS.md` step 2). DS-01 is done and archived: nine steps, a six-page face, a seventeen-patch bank, played and signed off on 2026-09-04, and step 07's audio outlets closed on 2026-09-05.
 - ~~ML-P8 stops inside step 06~~ — closed 2026-09-05, along with DS-01's step 07 and `typed-audio-edges/` itself. All three directories are archived. What is *not* built is the rest of `AUDIO_ARCHITECTURE.md`'s step 6: parallel sends (a channel still feeds exactly one bus) and sidechain key inputs (they need a dependency edge that schedules a producer without summing it in). Both now extend a compiled edge model rather than needing one built first.
+- A reverb on a bus feeding a compressor on the master renders differently at 128 frames a block than at 1024, by 2e-16. Narrowed to the slot silence counter advancing a block at a time; recorded as an `#[ignore]`d test in `idle_skip_tests.rs`. Inaudible, but it bounds a claim three other tests make without qualification.
 - A note-off landing on the pattern's last tick moves by one sample depending on the host's buffer size, so an export does not match a take for any generator still sounding there. Narrowed to `Sequencer::schedule_edge_once` rounding a delta off `Transport::position_ticks`, which accumulates per block where `frames_played` does not; recorded as an `#[ignore]`d test in `idle_skip_tests.rs`. The fix needs a tempo anchor, not a substitution.
 - Buffer Stage 1's acceptance test 8 — no allocations or locks in the callback — is still unverified. It needs an allocation-tracking harness, not a reading of the code.
 - The sampler's four-voice stretching polyphony cap is not enforced anywhere: `StretchPool::new` builds a reader for all sixteen voices.

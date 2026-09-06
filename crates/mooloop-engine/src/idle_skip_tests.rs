@@ -15,7 +15,7 @@
 
 use mooloop_core::{
     mlp8, AudioSubscription, AuxInParams, EffectKind, EffectSlotState, LfoWave, NoteEvent,
-    Project, ProjectChannel, ReverbParams,
+    Project, ProjectChannel, ReverbParams, MASTER_BUS,
 };
 use mooloop_dsp::SILENCE_PEAK;
 
@@ -305,3 +305,119 @@ fn a_note_off_on_the_pattern_boundary_does_not_depend_on_the_block_size() {
         "block size changed the render by {worst} at frame {at}"
     );
 }
+
+/// A project routed through a second bus, so the mixer's own skipping is
+/// exercised rather than only the channels'.
+///
+/// The drums carry a long reverb and go to bus 1, which carries a reverb of
+/// its own and feeds the master. Both are what a bus skipped too early would
+/// cut off: the tail arrives at the bus after the thing feeding it has gone
+/// quiet, which is precisely the moment "nothing reached this bus" is true
+/// and stopping would be wrong.
+fn bussed_project() -> Project {
+    let mut drums = ProjectChannel::ds01(0, 1);
+    drums.setup.channel.volume = 0.9;
+    drums.setup.channel.bus = 1;
+    for (index, tick) in [0, 96, 240].into_iter().enumerate() {
+        drums.notes[0].push(NoteEvent::new(index as u32 + 1, tick, 24, 60, 110));
+    }
+
+    let mut project = Project {
+        channels: vec![drums],
+        ..Project::default()
+    };
+    project.buses[1]
+        .effects
+        .push(EffectSlotState::new(mooloop_core::EffectParams::Reverb(
+            ReverbParams {
+                decay_s: 2.0,
+                ..ReverbParams::default()
+            },
+        )));
+    project.buses[MASTER_BUS as usize]
+        .effects
+        .push(EffectSlotState::of_kind(EffectKind::Compressor));
+    project
+}
+
+/// Every project carries all seventeen buses and a song uses one or two, so
+/// the fifteen nobody routed to are skipped. This is the mixer's half of the
+/// claim the channel tests make: the same render, with the skipping on and
+/// off, sample for sample.
+///
+/// To the same tolerance the channel test uses, and for the same reason: a
+/// slot's silence counter advances a block at a time, so a chain deciding it
+/// has finished is a decision taken at a block boundary either way. The claim
+/// is that skipping is inaudible, not that it is bit-identical -- and the
+/// figure this actually lands on is 2e-11, which is eleven orders of
+/// magnitude under the floor.
+#[test]
+fn a_project_renders_the_same_whether_or_not_idle_buses_are_skipped() {
+    let project = bussed_project();
+    let slept = render_blocks(&project, 8.0, 256, true);
+    let ran = render_blocks(&project, 8.0, 256, false);
+    assert!(peak(&ran) > 0.05, "the comparison is against silence");
+    let (worst, at) = worst_difference(&slept, &ran);
+    assert!(
+        worst <= SILENCE_PEAK * 16.0,
+        "skipping idle buses changed the master by {worst} at frame {at} \
+         ({:.3} s in)",
+        at as f32 / SAMPLE_RATE as f32
+    );
+}
+
+/// A reverb on a bus, feeding a compressor on the master, renders differently
+/// at 128 frames a block than at 1024.
+///
+/// **This records a bug rather than a property, and is ignored because it
+/// fails.** It is not caused by skipping idle buses: it fails identically,
+/// to the same value at the same frame, with that change reverted, and
+/// `sparse_project` — whose channels go straight to the master — passes the
+/// same claim exactly.
+///
+/// Narrowed by taking the project apart. A bus route alone diverges by
+/// nothing; a bus route with the reverb on it, nothing; drums straight into a
+/// compressed master, nothing. It takes the reverb *and* a compressor
+/// downstream of it together, which points at the slot silence counter: it
+/// advances a block at a time, so a reverb tail decaying through
+/// `SILENCE_PEAK` crosses it in a different block at 128 than at 1024, and
+/// the compressor is told its input went quiet one block apart in the two
+/// renders.
+///
+/// The difference is 2e-16, which is inaudible by any measure — the same
+/// engine's note-off placement bug is 2e-5. It is recorded because
+/// `skipping_renders_the_same_at_any_block_size` states the claim without
+/// qualification, and this says where that claim actually stops holding.
+#[test]
+#[ignore = "records a known bug: a bus tail into a compressor is block-size sensitive by 2e-16"]
+fn skipping_idle_buses_renders_the_same_at_any_block_size() {
+    let project = bussed_project();
+    let small = render_blocks(&project, 6.0, 128, true);
+    let large = render_blocks(&project, 6.0, 1024, true);
+    assert!(peak(&small) > 0.05, "the comparison is against silence");
+    assert_eq!(small.len(), large.len());
+    let (worst, at) = worst_difference(&small, &large);
+    assert!(
+        worst == 0.0,
+        "block size changed the render by {worst} at frame {at}"
+    );
+}
+
+/// The case the `dirty` flag exists for, stated on its own: a bus whose feed
+/// has gone quiet is still carrying a reverb, and the reverb has to be heard
+/// out. A bus skipped on "nothing reached it this block" alone would cut the
+/// tail at the last note instead.
+#[test]
+fn a_bus_reverb_is_heard_out_after_the_channel_feeding_it_stops() {
+    let project = bussed_project();
+    let out = render_blocks(&project, 8.0, 256, true);
+    // The last note is at tick 240 -- two and a half beats, so 1.25 s at 120
+    // bpm -- and the bus reverb decays for two seconds after it.
+    let after = &out[(2.0 * SAMPLE_RATE as f32) as usize..(3.0 * SAMPLE_RATE as f32) as usize];
+    assert!(
+        peak(after) > 1.0e-4,
+        "the bus reverb was cut off when its channel stopped: {}",
+        peak(after)
+    );
+}
+

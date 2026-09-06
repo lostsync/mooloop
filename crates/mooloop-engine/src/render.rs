@@ -1193,6 +1193,18 @@ struct BusStrip {
     /// contract as a channel's, and always `None` on the master, which feeds
     /// nothing.
     compensation: Option<Box<IntegerDelay>>,
+    /// Whether `bus` may hold anything but zeros: set when something sums
+    /// into it and when the strip runs, since a chain with a tail writes into
+    /// a buffer nothing fed. Read at the top of the next block to decide
+    /// whether it needs emptying at all.
+    dirty: bool,
+    /// Frames since anything last reached this bus. The chain's tail is
+    /// measured against it, and so is the compensation ring: once silence has
+    /// been fed for the ring's whole length every slot in it is a zero.
+    silent_frames: u32,
+    /// Whether the strip has already done the once-only work of going to
+    /// sleep, so that emptying the buffer is not repeated every idle block.
+    sleeping: bool,
 }
 
 impl BusStrip {
@@ -1203,7 +1215,27 @@ impl BusStrip {
             // Unity, not a channel's 0.8: see `mooloop_core::MixerBus::new`.
             output: OutputStage::new(1.0),
             compensation: None,
+            // Nothing has been written yet, but the first block empties it
+            // anyway rather than reasoning about a buffer it did not fill.
+            dirty: true,
+            silent_frames: 0,
+            sleeping: false,
         }
+    }
+
+    /// Whether this bus can be left unrendered for a block in which nothing
+    /// reached it.
+    ///
+    /// Two conditions, and the second is the one that is easy to miss. The
+    /// chain has to have finished — a reverb on a bus must be allowed to
+    /// decay after the last thing feeding it stops. And the compensation ring
+    /// has to have been fed silence for at least its own length, because
+    /// until then it is still holding audio it has not emitted yet, and
+    /// freezing it would strand that audio until the bus woke.
+    fn is_resting(&self) -> bool {
+        self.effects.is_at_rest()
+            && self.silent_frames
+                >= self.compensation.as_ref().map_or(0, |delay| delay.len() as u32)
     }
 
     fn reset(&mut self, reclaim: &mut Reclaim) {
@@ -1613,9 +1645,11 @@ fn mix_into(buses: &mut [BusStrip], from: usize, into: usize, frames: usize) {
     if from < into {
         let source = &left[from];
         right[0].bus.add_from(&source.bus, frames);
+        right[0].dirty = true;
     } else {
         let source = &right[0];
         left[into].bus.add_from(&source.bus, frames);
+        left[into].dirty = true;
     }
 }
 
@@ -1922,11 +1956,17 @@ impl RenderState {
         let samples = &voice.sample.frames;
         let start = voice.position.min(samples.len());
         let count = (start + frames).min(samples.len()) - start;
-        let master = &mut self.buses[MASTER_BUS as usize].bus;
+        let master = &mut self.buses[MASTER_BUS as usize];
+        // The preview writes into the master after the bus walk has already
+        // decided whether to empty it, so it has to say that it did: a master
+        // left holding the last frames of a retired preview would keep
+        // playing them for as long as nothing else routed to it.
+        master.dirty = true;
+        let bus = &mut master.bus;
         for index in 0..count {
             let frame = samples[start + index];
-            master.l[index] += frame[0] * gain;
-            master.r[index] += frame[1] * gain;
+            bus.l[index] += frame[0] * gain;
+            bus.r[index] += frame[1] * gain;
         }
         let played = start + count;
         if played >= samples.len() {
@@ -3218,8 +3258,14 @@ impl RenderState {
                 ticks: frames.div_ceil(CONTROL_RATE_FRAMES),
             }
         });
+        // Only the buses that may hold something. A song uses one or two of
+        // the seventeen every project carries, and emptying a buffer that is
+        // already zero is the largest single line in an empty block.
         for strip in &mut self.buses {
-            strip.bus.clear(frames);
+            if strip.dirty {
+                strip.bus.clear(frames);
+                strip.dirty = false;
+            }
         }
         // Emptied before anything renders, so a producer that stopped playing
         // -- or a channel that stopped existing -- publishes silence rather
@@ -3499,6 +3545,7 @@ impl RenderState {
             }
             if let Some(destination) = self.buses.get_mut(strip.destination as usize) {
                 destination.bus.add_from(&strip.bus, frames);
+                destination.dirty = true;
             }
         }
 
@@ -3512,6 +3559,48 @@ impl RenderState {
             let Some(strip) = self.buses.get_mut(index) else {
                 continue;
             };
+            // Everything feeding this bus has already run -- that is what the
+            // compiled order guarantees -- so `dirty` is the settled answer to
+            // whether anything reached it this block, and costs no pass over
+            // the buffer to ask.
+            if strip.dirty {
+                strip.silent_frames = 0;
+            } else {
+                strip.silent_frames = strip.silent_frames.saturating_add(frames as u32);
+            }
+            // A bus nobody routed to, whose chain has finished and whose
+            // compensation ring holds only the silence it has been fed, has
+            // nothing to contribute. Every project carries all seventeen and
+            // a song uses one or two, so this is most of what an empty block
+            // was spending: sixteen buffers emptied, peaked twice, balanced
+            // and metered to say nothing.
+            if skip_idle && !strip.dirty && strip.is_resting() {
+                strip.effects.sleep(&context);
+                if !strip.sleeping {
+                    strip.sleeping = true;
+                    // The whole buffer, once, rather than this block's worth.
+                    // A later block may be longer than the one that emptied
+                    // it, and would then read past what was cleared into
+                    // audio from before the silence.
+                    let capacity = strip.bus.capacity();
+                    strip.bus.clear(capacity);
+                }
+                // Written rather than left alone: a meter that stops being
+                // published holds its last value, and a silent bus reading
+                // its last audible peak is exactly the stale needle the
+                // playhead publish below the channel loop exists to avoid.
+                self.device_meters
+                    .publish_input(MAX_CHANNELS + index, 0, 0.0, 0.0);
+                self.meters.publish(index, 0.0, 0.0);
+                if index == MASTER_BUS as usize {
+                    master_peak = (0.0, 0.0);
+                }
+                continue;
+            }
+            // Anything below may leave audio in the buffer -- a chain with a
+            // tail writes into one nothing fed -- so the next block empties it.
+            strip.dirty = true;
+            strip.sleeping = false;
             // The bus head's input meter reads what the bus received this
             // block, before its own chain touches it.
             let (input_l, input_r) = strip.bus.peak(frames);

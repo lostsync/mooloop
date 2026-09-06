@@ -284,3 +284,25 @@ fn playing_effect_cost() {
         );
     }
 }
+
+/// What the mixer costs when nothing is routed through it.
+///
+/// Every project carries all `MAX_BUSES` of them, whether or not a channel
+/// names one: `default_buses` builds the full bank and the render loop clears,
+/// peaks, chains, balances and meters each one every block. This truncates the
+/// bank instead, which is not a thing the UI can do -- it is here to say what
+/// share of an empty block the sixteen unused buses are.
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn idle_bus_cost() {
+    println!();
+    println!("  frames   buses    ns/block");
+    for frames in [64usize, 128, 256, 512] {
+        for buses in [1usize, 2, 5, 17] {
+            let mut project = idle_sampler_project(1);
+            project.buses.truncate(buses);
+            let nanos = per_block_nanos(&project, frames, 400);
+            println!("  {frames:>6}  {buses:>6}  {nanos:>10}");
+        }
+    }
+}

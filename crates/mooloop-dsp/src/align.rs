@@ -45,6 +45,15 @@ impl IntegerDelay {
         })
     }
 
+    /// The ring's length, which is also the delay it applies.
+    ///
+    /// A caller that has fed it silence for at least this many frames knows
+    /// every slot holds a zero, and so knows that freezing it changes
+    /// nothing — which is what lets a resting bus stop running it.
+    pub fn len(&self) -> usize {
+        self.left.len()
+    }
+
     /// Empty the ring without changing its length.
     ///
     /// For a producer that stopped producing — a muted channel renders
