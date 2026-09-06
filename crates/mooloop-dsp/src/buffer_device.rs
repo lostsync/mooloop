@@ -511,6 +511,10 @@ fn ms_to_frames(ms: f32, sample_rate: u32) -> u32 {
     (ms.max(0.0) * sample_rate as f32 / 1_000.0).round() as u32
 }
 
+/// Deliberately no `is_at_rest` or `tail_frames`: a retained-audio buffer
+/// plays back what it captured, so it is the one device in the rack that
+/// makes sound out of a silent input by design. It keeps the default — never
+/// skipped — and that is a decision rather than an omission.
 impl AudioNode for BufferDevice {
     fn buffer_collisions(&self) -> u64 {
         self.collision_count

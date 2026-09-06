@@ -37,6 +37,15 @@ const LIMITER_ATTACK_MS: f32 = 0.05;
 /// (which smooths the *level*, not these).
 const PARAM_SMOOTH_S: f32 = 0.005;
 
+/// Milliseconds of settling, in frames, rounded up and never zero.
+///
+/// A tail of zero would let the host skip the device on its first silent
+/// block, which is the one thing none of these three may do.
+fn settling_frames(ms: f32, sample_rate: u32) -> u32 {
+    let frames = ms.max(0.0) * 0.001 * sample_rate.max(1) as f32;
+    frames.ceil().clamp(1.0, u32::MAX as f32) as u32
+}
+
 /// Level of the louder channel, which is what every effect here detects on.
 fn linked_peak(l: f32, r: f32) -> f32 {
     l.abs().max(r.abs())
@@ -173,6 +182,25 @@ impl GateEffect {
 }
 
 impl AudioNode for GateEffect {
+    /// Nothing here stores audio: the output is the input times a gain, so a
+    /// silent block comes out silent whatever the gain computer is doing. What
+    /// has to settle before the device can be left alone is the *state*, and
+    /// for a reason that is easy to miss — a node frozen mid-release wakes up
+    /// still holding the reduction it had when the music stopped, and applies
+    /// it to the next transient. Running until the detector has released is
+    /// what makes waking up indistinguishable from never having slept.
+    ///
+    /// For the gate that is the hold, and then the shut ramp: ten time
+    /// constants take it within a thousandth of a dB of `range_db` from
+    /// anywhere in the 80 dB range, and a gate frozen open would pass exactly
+    /// the transient it exists to stop.
+    fn tail_frames(&self) -> u32 {
+        settling_frames(
+            self.params.hold_ms + 10.0 * self.params.release_ms,
+            self.sample_rate,
+        )
+    }
+
     fn dynamics_frame(&self) -> Option<DynamicsFrame> {
         Some(self.block.frame())
     }
@@ -285,6 +313,21 @@ impl CompressorEffect {
 }
 
 impl AudioNode for CompressorEffect {
+    /// Nothing here stores audio: the output is the input times a gain, so a
+    /// silent block comes out silent whatever the gain computer is doing. What
+    /// has to settle before the device can be left alone is the *state*, and
+    /// for a reason that is easy to miss — a node frozen mid-release wakes up
+    /// still holding the reduction it had when the music stopped, and applies
+    /// it to the next transient. Running until the detector has released is
+    /// what makes waking up indistinguishable from never having slept.
+    ///
+    /// The detector is what settles here, and it is smoothing a *level*: from
+    /// the loudest thing the range admits down under the lowest threshold is
+    /// about ten time constants, so fifteen is the margin.
+    fn tail_frames(&self) -> u32 {
+        settling_frames(15.0 * self.params.release_ms, self.sample_rate)
+    }
+
     fn dynamics_frame(&self) -> Option<DynamicsFrame> {
         Some(self.block.frame())
     }
@@ -412,6 +455,21 @@ impl LimiterEffect {
 }
 
 impl AudioNode for LimiterEffect {
+    /// Nothing here stores audio: the output is the input times a gain, so a
+    /// silent block comes out silent whatever the gain computer is doing. What
+    /// has to settle before the device can be left alone is the *state*, and
+    /// for a reason that is easy to miss — a node frozen mid-release wakes up
+    /// still holding the reduction it had when the music stopped, and applies
+    /// it to the next transient. Running until the detector has released is
+    /// what makes waking up indistinguishable from never having slept.
+    ///
+    /// The same fifteen release time constants as the compressor, for the same
+    /// detector. Its attack is fixed and instantaneous, so it contributes
+    /// nothing to how long the device takes to let go.
+    fn tail_frames(&self) -> u32 {
+        settling_frames(15.0 * self.params.release_ms, self.sample_rate)
+    }
+
     fn dynamics_frame(&self) -> Option<DynamicsFrame> {
         Some(self.block.frame())
     }

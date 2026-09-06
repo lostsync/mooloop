@@ -11,7 +11,7 @@ use mooloop_core::{
 
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
-use crate::node::{AudioNode, ProcessContext};
+use crate::node::{AudioNode, ProcessContext, REST_EPSILON};
 use crate::smooth::Smoothed;
 
 /// Mix is the only continuous, audible parameter here: bit depth and
@@ -184,6 +184,29 @@ fn quantize(sample: f32, step: f32) -> f32 {
 }
 
 impl AudioNode for BitcrushEffect {
+    /// The sample-and-hold latches are the only state, so the crusher settles
+    /// as soon as they have latched silence — with one exception that matters
+    /// more than the rest of this file.
+    ///
+    /// **`Dither` makes noise out of nothing.** Its TPDF spans a whole
+    /// quantiser step, so `quantize(0 + dither, step)` lands on `+/-step` about
+    /// half the time; at four bits that step is -18 dBFS. That is not a tail
+    /// decaying, it is the device's noise floor, and it is audible on a
+    /// channel that has stopped playing. A dithering crusher therefore never
+    /// reports rest while any of its wet signal is being mixed in, and the
+    /// host keeps running it.
+    fn is_at_rest(&self) -> bool {
+        let dithering = self.params.style == BitcrushStyle::Dither;
+        let wet = self.params.mix > 0.0 || self.mix.value() > 0.0;
+        if dithering && wet {
+            return false;
+        }
+        self.held_l.abs() <= REST_EPSILON
+            && self.held_r.abs() <= REST_EPSILON
+            && self.prev_held_l.abs() <= REST_EPSILON
+            && self.prev_held_r.abs() <= REST_EPSILON
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,

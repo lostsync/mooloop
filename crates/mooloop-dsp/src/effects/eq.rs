@@ -27,7 +27,7 @@ use mooloop_core::{EqBand, EqBandKind, EqParams, EQ_MAX_BANDS};
 
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
-use crate::node::{AudioNode, ProcessContext};
+use crate::node::{AudioNode, ProcessContext, REST_EPSILON};
 
 const PASS_STAGES: usize = 6;
 
@@ -44,6 +44,11 @@ impl Biquad {
         self.z1 = self.b1 * input - self.a1 * out + self.z2;
         self.z2 = self.b2 * input - self.a2 * out;
         out
+    }
+    /// With no input, `process` returns `z1`, so a stage whose two stored
+    /// samples are both below [`REST_EPSILON`] can only emit values below it.
+    fn is_at_rest(&self) -> bool {
+        self.z1.abs() <= REST_EPSILON && self.z2.abs() <= REST_EPSILON
     }
     fn set_normalized(&mut self, b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) {
         let inv = a0.max(1e-12).recip();
@@ -202,6 +207,17 @@ impl EqEffect {
 }
 
 impl AudioNode for EqEffect {
+    /// Only the stages that are switched on carry state: a disabled one is
+    /// [`Biquad::identity`], whose `z1`/`z2` never leave zero. So this walks
+    /// the same `active` list the sample loop does, which on a working band
+    /// count of three or four is a dozen comparisons rather than seventy-six.
+    fn is_at_rest(&self) -> bool {
+        self.active[..self.active_len].iter().all(|&stage| {
+            let stage = stage as usize;
+            self.left[stage].is_at_rest() && self.right[stage].is_at_rest()
+        })
+    }
+
     fn process(&mut self, ctx: &ProcessContext, bus: &mut StereoBus, events_in: &EventList, _events_out: Option<&mut EventList>) {
         let frames = ctx.frames.min(bus.capacity());
         let mut pos = 0;

@@ -913,6 +913,21 @@ impl Chorus {
         self.gain.set_target(f32::from(u8::from(reached)));
         self.active == MlP8Chorus::Off && self.gain.value() <= CHORUS_SILENT
     }
+
+    /// Frames of wet this stage can still produce after the voices stop.
+    ///
+    /// Zero once it has settled at `Off`, because settling there clears the
+    /// line rather than leaving it to be written through — the same fact the
+    /// skip in `settle` rests on. Otherwise the delay line's own answer,
+    /// which covers a mode change in flight as well, since the outgoing mode
+    /// is not swapped out until its gain has already run down.
+    fn tail_frames(&self) -> u32 {
+        if self.active == MlP8Chorus::Off && self.gain.value() <= CHORUS_SILENT {
+            0
+        } else {
+            self.effect.tail_frames()
+        }
+    }
 }
 
 /// The four fixed policies, as settings of the shared modulation effect.
@@ -2428,6 +2443,23 @@ impl MlP8 {
 }
 
 impl AudioNode for MlP8 {
+    /// A generator's rest is voice bookkeeping it already does: a voice that
+    /// has finished its release is marked inactive and its render is skipped
+    /// outright, so with no voice active nothing is written into the bus.
+    ///
+    /// The chorus is the exception and the reason this device has a tail at
+    /// all: it is a delay line on the output of the voice sum, so it keeps
+    /// producing after the last voice has gone. Its own node knows how long
+    /// for, and `Off` clears the line rather than writing silence through it,
+    /// so the answer there is nothing.
+    fn is_at_rest(&self) -> bool {
+        !self.voices.iter().any(|voice| voice.active)
+    }
+
+    fn tail_frames(&self) -> u32 {
+        self.chorus.tail_frames()
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,

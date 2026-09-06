@@ -543,6 +543,19 @@ fn predelay_capacity(sample_rate: u32) -> usize {
 }
 
 impl AudioNode for ReverbEffect {
+    /// `decay_s` is an RT60, and it is an *upper* bound on the real one: the
+    /// per-line gain is computed to hit it and then clamped down by
+    /// `FEEDBACK_MAX`, and the damping filter inside the loop has gain at most
+    /// one, so both can only make the tail shorter. Falling below
+    /// `SILENCE_PEAK` is 140 dB, or 2.34 RT60s; three is the margin, and the
+    /// quarter second on top covers the pre-delay ring, whose read head
+    /// `predelay_ms` can move by up to 200 ms.
+    fn tail_frames(&self) -> u32 {
+        let seconds = 3.0 * self.params.decay_s.clamp(0.2, 20.0) + 0.25;
+        let frames = seconds * self.sample_rate.max(1) as f32;
+        frames.ceil().min(u32::MAX as f32) as u32
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,

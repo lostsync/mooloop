@@ -1811,6 +1811,20 @@ impl Ds01 {
 }
 
 impl AudioNode for Ds01 {
+    /// A generator's rest is voice bookkeeping it already does: a voice that
+    /// has finished its release is marked inactive and its render is skipped
+    /// outright, so with no voice active nothing is written into the bus. The one
+    /// piece of device-level state, the output high-pass, is already reset by
+    /// `render_range` on the block it finds no voice active, so there is no
+    /// tail behind the last voice either.
+    fn is_at_rest(&self) -> bool {
+        !self.voices.iter().any(|voice| voice.active)
+    }
+
+    fn tail_frames(&self) -> u32 {
+        0
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,

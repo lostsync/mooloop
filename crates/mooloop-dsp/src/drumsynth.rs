@@ -400,6 +400,17 @@ impl DrumSynth {
 }
 
 impl AudioNode for DrumSynth {
+    /// A generator's rest is voice bookkeeping it already does: a voice that
+    /// has finished its release is marked inactive and its render is skipped
+    /// outright, so with no voice active nothing is written into the bus.
+    fn is_at_rest(&self) -> bool {
+        !self.voices.iter().any(|voice| voice.active)
+    }
+
+    fn tail_frames(&self) -> u32 {
+        0
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,

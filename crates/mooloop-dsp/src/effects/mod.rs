@@ -75,7 +75,152 @@ pub fn build_effect_at_tempo(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mooloop_core::EffectKind;
+    use crate::bus::StereoBus;
+    use crate::event::EventList;
+    use crate::node::{ProcessContext, SILENCE_PEAK};
+    use mooloop_core::{BitcrushParams, BitcrushStyle, EffectKind, EffectParams};
+
+    const SAMPLE_RATE: u32 = 48_000;
+    const BLOCK: usize = 512;
+
+    fn context(frames: usize) -> ProcessContext {
+        ProcessContext {
+            sample_rate: SAMPLE_RATE,
+            frames,
+            playing: true,
+            bpm: 120.0,
+            position_ticks: 0.0,
+            position_frames: 0,
+        }
+    }
+
+    /// Deterministic broadband noise at -6 dBFS. Broadband because a tone
+    /// leaves most of an EQ's or a reverb's structure untouched, and loud
+    /// because a gate has to open before its release means anything.
+    fn fill_burst(bus: &mut StereoBus, frames: usize, state: &mut u32) {
+        for index in 0..frames {
+            let mut next = || {
+                *state ^= *state << 13;
+                *state ^= *state >> 17;
+                *state ^= *state << 5;
+                ((*state >> 8) as f32 / 8_388_608.0 - 1.0) * 0.5
+            };
+            bus.l[index] = next();
+            bus.r[index] = next();
+        }
+    }
+
+    /// The host's own decision, written once so the test and `EffectChain`
+    /// cannot drift: a slot may be skipped when its input is silent and
+    /// either the node's state has settled or it has been fed silence for
+    /// longer than the tail it declared.
+    fn may_skip(node: &dyn AudioNode, silent_frames: u32) -> bool {
+        silent_frames > 0 && (node.is_at_rest() || silent_frames > node.tail_frames())
+    }
+
+    /// The contract step 02 rests on, checked against each device rather than
+    /// derived from it: **once a node says it can be left alone, leaving it
+    /// alone is inaudible.** A device that under-reports here is a chopped
+    /// reverb tail, which is the one way this whole mechanism can be heard.
+    ///
+    /// Ten seconds is the cap. It is not an assertion about any device's
+    /// tail -- a delay at full feedback honestly reports minutes -- only a
+    /// bound on how long this test will run before it accepts that a device
+    /// with default settings has decided to stay awake.
+    #[test]
+    fn every_effect_kind_is_silent_once_it_says_it_can_be_skipped() {
+        const CAP_BLOCKS: usize = 10 * SAMPLE_RATE as usize / BLOCK;
+        // The one device that makes sound out of a silent input by design,
+        // and so declines the whole mechanism. Named here so removing the
+        // decision from `buffer_device.rs` fails this test rather than
+        // quietly starting to skip a playing buffer.
+        let never_sleeps = [EffectKind::Buffer];
+
+        for kind in EffectKind::ALL {
+            let mut node = build_effect_at_tempo(kind.default_params(), SAMPLE_RATE, 120.0);
+            let mut bus = StereoBus::with_capacity(BLOCK);
+            let events = EventList::empty();
+            let mut state = 0x1234_5678;
+
+            // Half a second of noise, so every ring in every device is
+            // carrying something when the input stops.
+            for _ in 0..(SAMPLE_RATE as usize / 2 / BLOCK) {
+                fill_burst(&mut bus, BLOCK, &mut state);
+                node.process(&context(BLOCK), &mut bus, &events, None);
+            }
+
+            let mut silent_frames = 0u32;
+            let mut slept_at = None;
+            for block in 0..CAP_BLOCKS {
+                if may_skip(node.as_ref(), silent_frames) {
+                    slept_at = Some(block);
+                    break;
+                }
+                bus.clear(BLOCK);
+                node.process(&context(BLOCK), &mut bus, &events, None);
+                silent_frames = silent_frames.saturating_add(BLOCK as u32);
+            }
+
+            let Some(slept_at) = slept_at else {
+                assert!(
+                    never_sleeps.contains(&kind),
+                    "{kind:?} never reported itself skippable in ten seconds of silence,                      and is not one of the devices that deliberately never does"
+                );
+                continue;
+            };
+            assert!(
+                !never_sleeps.contains(&kind),
+                "{kind:?} is declared as a device that never sleeps, but reported                  itself skippable after {slept_at} blocks"
+            );
+
+            // Keep processing past the point the host would have stopped. If
+            // anything was still coming, this is where it shows up.
+            for block in 0..64 {
+                bus.clear(BLOCK);
+                node.process(&context(BLOCK), &mut bus, &events, None);
+                let (left, right) = bus.peak(BLOCK);
+                assert!(
+                    left.max(right) <= SILENCE_PEAK,
+                    "{kind:?} said it could be skipped after {slept_at} blocks of                      silence, then produced {} on block {block} after that",
+                    left.max(right)
+                );
+            }
+        }
+    }
+
+    /// The exception the crusher's `is_at_rest` is written around, held here
+    /// so it cannot be simplified away. TPDF dither spans a whole quantiser
+    /// step, so it lands on `+/-step` about half the time whatever the input
+    /// was; at four bits that is -18 dBFS of hiss on a channel that has
+    /// stopped playing, and it is the device's noise floor rather than a tail.
+    #[test]
+    fn a_dithering_crusher_never_reports_rest_while_its_wet_is_heard() {
+        let params = BitcrushParams {
+            bits: 4.0,
+            style: BitcrushStyle::Dither,
+            mix: 1.0,
+            ..BitcrushParams::default()
+        };
+        let mut node = build_effect(EffectParams::Bitcrush(params), SAMPLE_RATE);
+        let mut bus = StereoBus::with_capacity(BLOCK);
+        let events = EventList::empty();
+
+        let mut loudest = 0.0f32;
+        for _ in 0..16 {
+            bus.clear(BLOCK);
+            node.process(&context(BLOCK), &mut bus, &events, None);
+            let (left, right) = bus.peak(BLOCK);
+            loudest = loudest.max(left.max(right));
+            assert!(
+                !may_skip(node.as_ref(), BLOCK as u32),
+                "a dithering crusher reported itself skippable"
+            );
+        }
+        assert!(
+            loudest > SILENCE_PEAK,
+            "the premise of this test is that dither makes noise out of silence;              it produced at most {loudest}"
+        );
+    }
 
     /// A device's latency is written down twice: as a declaration in
     /// `mooloop-core`, which the control thread reads to size a compensation

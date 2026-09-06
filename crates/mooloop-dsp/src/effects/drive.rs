@@ -152,6 +152,21 @@ impl AudioNode for DriveEffect {
         OVERSAMPLER_LATENCY_FRAMES as u32
     }
 
+    /// Three things hold audio here after the input stops: the oversampler's
+    /// two 32-tap FIR histories, which between them span about 32 base-rate
+    /// frames; the internal ring that realigns the dry path against them,
+    /// which is exactly `OVERSAMPLER_LATENCY_FRAMES`; and the 1.5 kHz tilt
+    /// one-pole, whose free response needs `ln(REST_EPSILON) / ln(e^(-2 pi f
+    /// / fs))` samples — about 106 at 48 kHz, and proportional to the rate.
+    ///
+    /// Twenty milliseconds is over five times their sum at every supported
+    /// rate. Nothing here is worth deriving to the frame: the whole tail is a
+    /// fraction of a millisecond of audio, and the cost of over-reporting it
+    /// is one extra block of a cheap effect.
+    fn tail_frames(&self) -> u32 {
+        (self.sample_rate / 50).saturating_add(OVERSAMPLER_LATENCY_FRAMES as u32)
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,

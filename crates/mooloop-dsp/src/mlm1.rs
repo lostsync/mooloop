@@ -548,6 +548,20 @@ impl MlM1 {
 }
 
 impl AudioNode for MlM1 {
+    /// A generator's rest is voice bookkeeping it already does: a voice that
+    /// has finished its release is marked inactive and its render is skipped
+    /// outright, so with no voice active nothing is written into the bus. Held
+    /// notes are not a reason to stay awake: an untriggered held note makes no
+    /// sound, and the note-off that would retrigger from it is an event, which
+    /// is what wakes the channel.
+    fn is_at_rest(&self) -> bool {
+        !self.voice.active
+    }
+
+    fn tail_frames(&self) -> u32 {
+        0
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,

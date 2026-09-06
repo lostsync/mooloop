@@ -15,7 +15,7 @@ use crate::bus::StereoBus;
 use crate::delayline::{DelayLine, ReadHead, MIN_READ_OFFSET};
 use crate::event::{Event, EventList};
 use crate::filter::OnePoleLp;
-use crate::node::{AudioNode, ProcessContext};
+use crate::node::{feedback_tail_frames, AudioNode, ProcessContext};
 use crate::smooth::Smoothed;
 
 /// Crossfade applied when the head jumps: a digital time change, or a reverse
@@ -207,6 +207,33 @@ fn tone_coeff(tone: f32, sample_rate: u32) -> f32 {
 }
 
 impl AudioNode for DelayEffect {
+    /// The repeats decay by `feedback` once per trip round the line, so the
+    /// bound is however many trips take the loop below audibility times the
+    /// trip length. Damping only ever removes more, and `feedback` is clamped
+    /// to 0.98, so this over-reports rather than under-reports — at the top of
+    /// the range it reports minutes, which is the honest answer for a delay
+    /// that is still repeating.
+    ///
+    /// Floored at the ring's own capacity for the reason the trait documents:
+    /// a sleeping node's ring stops advancing, and `time_ms` can be swept up
+    /// to [`DELAY_MAX_TIME_MS`] at any moment. Waiting until the whole ring
+    /// holds silence is what stops that sweep uncovering pre-sleep audio.
+    fn tail_frames(&self) -> u32 {
+        // Both the resolved target and where the head actually is, because a
+        // glide in flight can be reading further back than the target.
+        let trip = self
+            .head
+            .offset()
+            .max(self.target_offset)
+            .max(MIN_READ_OFFSET);
+        // Likewise both ends of the feedback ramp: a knob on its way down has
+        // not finished paying for where it has been.
+        let gain = self.feedback.value().abs().max(self.params.feedback.abs());
+        feedback_tail_frames(gain, trip)
+            .max(self.line.max_read_offset().ceil() as u32)
+            .saturating_add(FADE_FRAMES)
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,

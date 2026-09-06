@@ -81,8 +81,106 @@ impl DynamicsFrame {
     };
 }
 
+/// Peak below which a block of audio counts as silence for the purpose of
+/// letting a node sleep.
+///
+/// This is a statement about audibility, not about float performance —
+/// `enable_flush_to_zero()` in `mooloop-engine`'s graph already deals with
+/// denormals, and this sits twenty-odd orders of magnitude above them. The
+/// line is drawn one bit below a 24-bit render's least significant step
+/// (`2^-23`, about `1.2e-7`): anything quieter than this cannot survive an
+/// export at the deepest integer depth the application writes, so discarding
+/// it cannot change a rendered file. Played back at a level that puts full
+/// scale at 100 dB SPL it is -40 dB SPL, which is below the noise floor of a
+/// room, let alone of the converter.
+///
+/// Deliberately not looser. A reverb tail crossing -100 dBFS is still a
+/// reverb tail, and the whole risk in this mechanism is cutting one off.
+pub const SILENCE_PEAK: f32 = 1.0e-7;
+
+/// Magnitude below which a node's own internal state counts as settled.
+///
+/// Two orders of magnitude under [`SILENCE_PEAK`], because state is not
+/// output: a filter's stored sample passes through the rest of its own
+/// recurrence before it is heard, and the free response of a resonant stage
+/// can grow slightly for a sample or two before it decays. The margin is what
+/// makes "the state is this small" imply "nothing audible can come out of
+/// it".
+pub const REST_EPSILON: f32 = 1.0e-9;
+
+/// Frames for a feedback loop of per-trip gain `gain` and trip length
+/// `trip_frames` to decay below [`SILENCE_PEAK`], as a [`AudioNode::tail_frames`]
+/// answer.
+///
+/// One shared derivation because three devices need the same one — the delay's
+/// repeats, the modulation line's regeneration, and anything else built on a
+/// ring that feeds itself. A gain of one or more never decays and returns
+/// `u32::MAX`, which is the trait's "never skip me".
+pub fn feedback_tail_frames(gain: f32, trip_frames: f32) -> u32 {
+    let trip = trip_frames.max(1.0);
+    let gain = gain.abs();
+    if !gain.is_finite() || gain >= 1.0 {
+        return u32::MAX;
+    }
+    // One pass through the line even with no feedback at all, then however
+    // many further trips the gain needs to fall below audibility. Rounded up
+    // twice over: the extra trip, and the ceiling.
+    let trips = if gain <= 0.0 {
+        1.0
+    } else {
+        SILENCE_PEAK.ln() / gain.ln() + 1.0
+    };
+    let frames = trips * trip;
+    if !frames.is_finite() || frames >= u32::MAX as f32 {
+        u32::MAX
+    } else {
+        frames.ceil() as u32
+    }
+}
+
 /// A realtime audio node (instrument or effect).
 pub trait AudioNode {
+    /// Frames of audible output this node can still produce after its input
+    /// goes silent.
+    ///
+    /// `u32::MAX` — the default — means "unbounded or unknown" and tells the
+    /// host it may never let this node sleep on the strength of a tail alone.
+    /// Any other value is a promise the node has to be able to defend: once
+    /// the host has fed it this many frames of silence, continuing to call
+    /// `process` would produce nothing above [`SILENCE_PEAK`]. Over-report
+    /// rather than under-report. A tail that is too long costs a little CPU;
+    /// a tail that is too short is an audibly truncated reverb.
+    ///
+    /// **A ring counts even when nothing is reading it yet.** The host stops
+    /// calling `process` when it sleeps a node, so the node's delay lines
+    /// stop advancing and their contents freeze. If a parameter can later
+    /// move a read head further back than the reported tail — a delay time
+    /// swept up, a reverb's pre-delay lengthened — it would read audio from
+    /// before the silence. So a tail must also cover the capacity of every
+    /// ring whose read offset a parameter can move, not just the time the
+    /// device takes to go quiet at its current settings.
+    ///
+    /// Queried once per block, never from a sample loop.
+    fn tail_frames(&self) -> u32 {
+        u32::MAX
+    }
+
+    /// True when the node's internal state has settled, so that silent input
+    /// from here on produces silent output *immediately*.
+    ///
+    /// This is a statement about the node's own state, not about the audio it
+    /// was last handed: the host tracks how long its input has been silent
+    /// and combines the two. A memoryless effect is therefore always at rest,
+    /// and it is still only skipped once its input goes quiet. The default is
+    /// `false`, so a node that has not opted in is never skipped.
+    ///
+    /// Must be cheap — a field read or a handful of comparisons. It is called
+    /// once per node per block on the audio thread, and it must never scan a
+    /// buffer.
+    fn is_at_rest(&self) -> bool {
+        false
+    }
+
     /// Processing latency of the active path in base-rate frames. The value is
     /// queried while a graph is prepared, never from a hot inner sample loop.
     /// Nodes with internal parallel paths must align them before reporting the
@@ -129,4 +227,198 @@ pub trait AudioNode {
         events_in: &EventList,
         events_out: Option<&mut EventList>,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arc_swap::ArcSwapOption;
+    use mooloop_core::{
+        DrumSynthParams, Ds01Params, MlM1Params, MlP8Chorus, MlP8Params, MonoSynthParams,
+        PolySynthParams, SamplerParams,
+    };
+
+    use super::*;
+    use crate::bus::StereoBus;
+    use crate::drumsynth::DrumSynth;
+    use crate::ds01::Ds01;
+    use crate::event::{Event, EventList, TimedEvent};
+    use crate::mlm1::MlM1;
+    use crate::mlp8::MlP8;
+    use crate::monosynth::MonoSynth;
+    use crate::polysynth::PolySynth;
+    use crate::sampler::{SampleData, Sampler};
+
+    const SAMPLE_RATE: u32 = 48_000;
+    const BLOCK: usize = 512;
+
+    fn context(frames: usize) -> ProcessContext {
+        ProcessContext {
+            sample_rate: SAMPLE_RATE,
+            frames,
+            playing: true,
+            bpm: 120.0,
+            position_ticks: 0.0,
+            position_frames: 0,
+        }
+    }
+
+    fn one(event: Event) -> EventList {
+        let mut list = EventList::empty();
+        list.push(TimedEvent { offset: 0, event });
+        list
+    }
+
+    fn sampler() -> Sampler {
+        let sample = Arc::new(ArcSwapOption::from(Some(SampleData::default_kick(
+            SAMPLE_RATE,
+        ))));
+        Sampler::new(
+            sample,
+            Arc::new(ArcSwapOption::empty()),
+            SamplerParams::default(),
+            SAMPLE_RATE,
+        )
+    }
+
+    fn generators() -> Vec<(&'static str, Box<dyn AudioNode + Send>)> {
+        vec![
+            ("Sampler", Box::new(sampler())),
+            (
+                "DrumSynth",
+                Box::new(DrumSynth::new(DrumSynthParams::default(), SAMPLE_RATE)),
+            ),
+            (
+                "MonoSynth",
+                Box::new(MonoSynth::new(MonoSynthParams::default(), SAMPLE_RATE)),
+            ),
+            (
+                "PolySynth",
+                Box::new(PolySynth::new(PolySynthParams::default(), SAMPLE_RATE)),
+            ),
+            (
+                "MlM1",
+                Box::new(MlM1::new(MlM1Params::default(), SAMPLE_RATE)),
+            ),
+            (
+                "MlP8",
+                Box::new(MlP8::new(MlP8Params::default(), SAMPLE_RATE)),
+            ),
+            (
+                "MlP8 with its chorus on",
+                Box::new(MlP8::new(
+                    MlP8Params {
+                        chorus: MlP8Chorus::Ensemble,
+                        ..MlP8Params::default()
+                    },
+                    SAMPLE_RATE,
+                )),
+            ),
+            (
+                "Ds01",
+                Box::new(Ds01::new(Ds01Params::default(), SAMPLE_RATE)),
+            ),
+        ]
+    }
+
+    /// Play a note, let go of it, and keep rendering until the device says it
+    /// has nothing left; then keep rendering anyway.
+    ///
+    /// The engine skips a whole channel strip on this answer, so a generator
+    /// that says it is at rest while a voice is still fading takes its own
+    /// release off the end of the note. The cap is twenty seconds -- long
+    /// enough for any release the default patches can ask for, short enough
+    /// that a device which never rests fails rather than hangs.
+    #[test]
+    fn every_generator_is_silent_once_it_says_it_is_at_rest() {
+        const CAP_BLOCKS: usize = 20 * SAMPLE_RATE as usize / BLOCK;
+
+        for (name, mut node) in generators() {
+            let mut bus = StereoBus::with_capacity(BLOCK);
+            let silence = EventList::empty();
+
+            bus.clear(BLOCK);
+            node.process(
+                &context(BLOCK),
+                &mut bus,
+                &one(Event::NoteOn {
+                    id: 1,
+                    note: 60,
+                    velocity: 110,
+                }),
+                None,
+            );
+            let (left, right) = bus.peak(BLOCK);
+            assert!(
+                left.max(right) > SILENCE_PEAK,
+                "{name} made no sound at all, so this test proves nothing about it"
+            );
+            for _ in 0..4 {
+                bus.clear(BLOCK);
+                node.process(&context(BLOCK), &mut bus, &silence, None);
+            }
+            bus.clear(BLOCK);
+            node.process(
+                &context(BLOCK),
+                &mut bus,
+                &one(Event::NoteOff { id: 1, note: 60 }),
+                None,
+            );
+
+            // The engine's own rule, in miniature: no events to answer, the
+            // device's state settled, and its output quiet for longer than
+            // the tail it declared.
+            let mut silent_frames = 0u32;
+            let mut rested_at = None;
+            for block in 0..CAP_BLOCKS {
+                if node.is_at_rest() && silent_frames > node.tail_frames() {
+                    rested_at = Some(block);
+                    break;
+                }
+                bus.clear(BLOCK);
+                node.process(&context(BLOCK), &mut bus, &silence, None);
+                let (left, right) = bus.peak(BLOCK);
+                if left.max(right) <= SILENCE_PEAK {
+                    silent_frames = silent_frames.saturating_add(BLOCK as u32);
+                } else {
+                    silent_frames = 0;
+                }
+            }
+            let rested_at =
+                rested_at.unwrap_or_else(|| panic!("{name} never came to rest in twenty seconds"));
+
+            for block in 0..64 {
+                bus.clear(BLOCK);
+                node.process(&context(BLOCK), &mut bus, &silence, None);
+                let (left, right) = bus.peak(BLOCK);
+                assert!(
+                    left.max(right) <= SILENCE_PEAK,
+                    "{name} came to rest after {rested_at} blocks, then produced {} \
+                     on block {block} after that",
+                    left.max(right)
+                );
+            }
+        }
+    }
+
+    /// A feedback loop that does not lose anything never goes quiet, and
+    /// saying so is what stops a host from cutting one off. Anything below
+    /// unity has to answer with a finite number of frames.
+    #[test]
+    fn a_lossless_feedback_loop_reports_an_unbounded_tail() {
+        assert_eq!(feedback_tail_frames(1.0, 480.0), u32::MAX);
+        assert_eq!(feedback_tail_frames(1.5, 480.0), u32::MAX);
+        assert_eq!(feedback_tail_frames(f32::NAN, 480.0), u32::MAX);
+        // No feedback is still one trip through the line.
+        assert_eq!(feedback_tail_frames(0.0, 480.0), 480);
+        // Half per trip is 23.3 trips to fall below `SILENCE_PEAK`; the
+        // helper adds one and rounds up, so the answer is never short.
+        assert_eq!(feedback_tail_frames(0.5, 100.0), 2426);
+        // Sign is irrelevant: a phase-inverting loop decays at the same rate.
+        assert_eq!(
+            feedback_tail_frames(-0.5, 100.0),
+            feedback_tail_frames(0.5, 100.0)
+        );
+    }
 }

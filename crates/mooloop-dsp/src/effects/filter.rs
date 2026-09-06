@@ -149,6 +149,15 @@ impl FilterEffect {
 }
 
 impl AudioNode for FilterEffect {
+    /// Rest is decided from the cascade's own state rather than from a tail
+    /// in frames, because there is no honest fixed number here: the settling
+    /// time of a state-variable filter runs from a few samples at low
+    /// resonance to effectively forever as it approaches self-oscillation.
+    /// Reading the four stages is four pairs of comparisons and is exact.
+    fn is_at_rest(&self) -> bool {
+        self.left.iter().all(Svf::is_at_rest) && self.right.iter().all(Svf::is_at_rest)
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,

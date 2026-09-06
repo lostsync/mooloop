@@ -364,6 +364,17 @@ impl PlateEffect {
 }
 
 impl AudioNode for PlateEffect {
+    /// The same derivation as the FDN's: `decay_s` is the RT60 the comb gains
+    /// are solved for and `FEEDBACK_MAX` can only shorten it, 140 dB is 2.34
+    /// RT60s, three is the margin, and the quarter second covers the
+    /// pre-delay ring that `predelay_ms` moves a head inside. The Schroeder
+    /// allpasses run at a fixed 0.5 and settle inside the combs' own tail.
+    fn tail_frames(&self) -> u32 {
+        let seconds = 3.0 * self.params.decay_s.clamp(0.2, 10.0) + 0.25;
+        let frames = seconds * self.sample_rate.max(1) as f32;
+        frames.ceil().min(u32::MAX as f32) as u32
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,

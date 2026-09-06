@@ -39,6 +39,14 @@ impl Svf {
         self.band = 0.0;
     }
 
+    /// Whether the stage's stored energy has decayed far enough that silent
+    /// input produces silent output. At high resonance this stays false for
+    /// a long time, which is the honest answer: a nearly self-oscillating
+    /// SVF is still ringing.
+    pub fn is_at_rest(&self) -> bool {
+        self.low.abs() <= crate::node::REST_EPSILON && self.band.abs() <= crate::node::REST_EPSILON
+    }
+
     /// Process one sample. `cutoff_hz` is clamped to a safe range;
     /// `resonance` in `[0, 1]` approaches self-oscillation at the top.
     pub fn next_sample(
@@ -186,6 +194,11 @@ impl OnePoleLp {
 
     pub fn reset(&mut self) {
         self.state = 0.0;
+    }
+
+    /// Whether the pole's stored sample has decayed below audibility.
+    pub fn is_at_rest(&self) -> bool {
+        self.state.abs() <= crate::node::REST_EPSILON
     }
 
     pub fn next_sample(&mut self, input: f32) -> f32 {

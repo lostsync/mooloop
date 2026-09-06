@@ -136,6 +136,11 @@ impl AuxIn {
     }
 }
 
+/// Deliberately no `is_at_rest`: this is the one generator whose output is
+/// somebody else's audio, and it can start sounding without an event on its
+/// own channel. Letting the host sleep it on the strength of its own quiet
+/// would drop the first block of whatever it is subscribed to. The default —
+/// never at rest — is the right answer here rather than an unconverted one.
 impl AudioNode for AuxIn {
     /// An Aux In outside a channel strip has no edge to read, so it renders
     /// silence. The engine calls [`Self::process_from`] instead; this exists

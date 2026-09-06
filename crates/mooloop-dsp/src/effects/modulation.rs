@@ -17,7 +17,7 @@ use crate::delayline::{DelayLine, MIN_READ_OFFSET};
 use crate::event::{Event, EventList};
 use crate::filter::{AllPass, OnePoleLp};
 use crate::lfo::Lfo;
-use crate::node::{AudioNode, ProcessContext};
+use crate::node::{feedback_tail_frames, AudioNode, ProcessContext};
 use crate::smooth::Smoothed;
 
 const MAX_DELAY_MS: f32 = 64.0;
@@ -287,6 +287,18 @@ fn allpass_coefficient(hz: f32, sample_rate: u32) -> f32 {
 }
 
 impl AudioNode for ModulationEffect {
+    /// Measured against the longest tap the device can be asked for rather
+    /// than the one the mode is currently using: `MAX_DELAY_MS` is both the
+    /// ring's capacity and the furthest back `depth`, `spread` and the LFO can
+    /// put a read head, and a sleeping ring stops advancing. The phaser mode
+    /// has no line at all — its all-pass cascade settles in a handful of
+    /// samples — so the same number covers it many times over.
+    fn tail_frames(&self) -> u32 {
+        let trip = MAX_DELAY_MS * 0.001 * self.sample_rate.max(1) as f32;
+        let gain = self.feedback.value().abs().max(self.params.feedback.abs());
+        feedback_tail_frames(gain, trip)
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,

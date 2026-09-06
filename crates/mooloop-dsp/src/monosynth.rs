@@ -282,6 +282,19 @@ impl MonoSynth {
 }
 
 impl AudioNode for MonoSynth {
+    /// A generator's rest is voice bookkeeping it already does: a voice that
+    /// has finished its release is marked inactive and its render is skipped
+    /// outright, so with no voice active nothing is written into the bus. The LFO
+    /// free-runs across the gap but only ever scales or detunes a voice, so
+    /// it has nothing of its own to contribute.
+    fn is_at_rest(&self) -> bool {
+        !self.voice.active
+    }
+
+    fn tail_frames(&self) -> u32 {
+        0
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,
