@@ -486,6 +486,61 @@ about a slot that declares latency is being paid for on a channel that is
 asleep. That is written here as a measurement without a cause rather than a
 guess with one, and it is the first thing to pick up next.
 
+## Sep 6 (later) — the unexplained fifty-four microseconds was an integer division
+
+Yesterday's table left one row without a cause: Drive cost 54 microseconds a
+block on sixteen *sleeping* channels, has no `skip_block` of its own, and
+slept for every measured block, so the awake path was not being reached. It
+was written down as a measurement without an explanation rather than a guess
+with one.
+
+The measurement that cracked it took ten minutes and asked one question: does
+the cost scale with the block, and does it scale with the channel count. It
+scales with the block — 106 nanoseconds a frame at every buffer size — and it
+does **not** scale with the channels. One Drive costs the same as sixteen.
+So it was never per-channel work, which is why looking at the sleeping path
+found nothing.
+
+Drive is the only effect in the program that declares latency. `MAX_BUSES` is
+seventeen, and one Drive anywhere gives every bus a compensation ring. Each
+ring ends its per-sample loop with
+
+```rust
+self.write = (self.write + 1) % frames;
+```
+
+where `frames` is the ring's length — a runtime value, so the compiler cannot
+turn the remainder into a multiply. That is a hardware integer division, tens
+of cycles, once a sample, seventeen times over, the moment a single Drive
+exists anywhere in the project.
+
+The same line was in five hot loops, and the codebase already knew better:
+`Ring::write` in both the reverb and the plate wrap by comparison. Only the
+`read` paths were left, and those are the expensive ones — `DelayLine::read`
+does **four** remainders per sample for its four-point kernel, and the
+reverb's eight lines and four diffusers read at least once a sample each.
+
+Every one is exactly replaceable, because the operands are already known to
+sit within a lap or two of the ring: the heads are kept inside it and the
+offsets are clamped into it. `DelayLine::read` is the only fiddly one, biased
+by two whole laps so a negative position converts cleanly, so it needs two
+subtractions rather than one; it has a test walking every head position and
+forty-one offsets against the remainder arithmetic it replaces.
+
+**Resting**, sixteen channels at 512 frames: Drive 54 microseconds to 11, and
+its per-frame figure 106 nanoseconds to 21. **Playing**, eight ML-P8 channels
+at 512 frames: reverb 1,106 microseconds to 924 and plate 1,113 to 925 — both
+sixteen per cent — delay 333 to 305, and Drive 79 to 10. `playing_effect_cost`
+is new and exists because that second table was a claim before it was a
+measurement: the ring reads are the *working* loop, not the resting one, and
+saying so without checking would have been the same mistake as yesterday's
+reverb.
+
+What is left in those rows is arithmetic that does something. The reverb at
+924 microseconds for eight channels is a feedback delay network actually
+running, and the honest next question about it is whether eight channels of
+hall is a thing anyone does rather than whether the loop can be shaved.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.
@@ -526,7 +581,6 @@ Refreshed 2026-09-02, with the September documentation audit's threads merged in
 
 - ~~The v1 drum synth is still the only generator that cannot be modulated~~ — it has a table as of 2026-09-05 (`FOCUS.md` step 2). DS-01 is done and archived: nine steps, a six-page face, a seventeen-patch bank, played and signed off on 2026-09-04, and step 07's audio outlets closed on 2026-09-05.
 - ~~ML-P8 stops inside step 06~~ — closed 2026-09-05, along with DS-01's step 07 and `typed-audio-edges/` itself. All three directories are archived. What is *not* built is the rest of `AUDIO_ARCHITECTURE.md`'s step 6: parallel sends (a channel still feeds exactly one bus) and sidechain key inputs (they need a dependency edge that schedules a producer without summing it in). Both now extend a compiled edge model rather than needing one built first.
-- Drive costs 54 microseconds a block over bare on sixteen *sleeping* channels, with no `skip_block` of its own and the awake path unreached. Every other effect that costs anything at rest has a per-sample loop to point at; this one does not. `resting_effect_cost` in `block_cost.rs` is the measurement.
 - A note-off landing on the pattern's last tick moves by one sample depending on the host's buffer size, so an export does not match a take for any generator still sounding there. Narrowed to `Sequencer::schedule_edge_once` rounding a delta off `Transport::position_ticks`, which accumulates per block where `frames_played` does not; recorded as an `#[ignore]`d test in `idle_skip_tests.rs`. The fix needs a tempo anchor, not a substitution.
 - Buffer Stage 1's acceptance test 8 — no allocations or locks in the callback — is still unverified. It needs an allocation-tracking harness, not a reading of the code.
 - The sampler's four-voice stretching polyphony cap is not enforced anywhere: `StretchPool::new` builds a reader for all sixteen voices.

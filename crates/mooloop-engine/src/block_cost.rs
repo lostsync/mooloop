@@ -219,3 +219,68 @@ fn resting_effect_cost() {
         );
     }
 }
+
+/// Drive is the only effect in the program that declares latency, and the
+/// only one whose cost at rest has no per-sample loop to point at. This says
+/// which of the two shapes that cost has: work per frame scales with the
+/// block, work per block does not.
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn resting_drive_shape() {
+    let warmup = SAMPLE_RATE as usize * 12;
+    println!();
+    println!("  channels  frames   bare ns   drive ns   over bare   per frame");
+    for channels in [1usize, 16] {
+        for frames in [64usize, 128, 256, 512] {
+            let (bare, _) = timed_after(&idle_sampler_project(channels), frames, 400, warmup);
+            let (drive, slept) = timed_after(
+                &resting_effect_project(channels, EffectKind::Drive),
+                frames,
+                400,
+                warmup,
+            );
+            let over = drive as i128 - bare as i128;
+            println!(
+                "  {channels:>8}  {frames:>6}  {bare:>8}  {drive:>9}  {over:>10}  {:>10.2}  ({slept:.0}% slept)",
+                over as f64 / frames as f64
+            );
+        }
+    }
+}
+
+/// The same effects with audio actually going through them.
+///
+/// `resting_effect_cost` says what a rack costs between the parts, which is
+/// the question the rest-and-tail mechanism is about. This is the other half:
+/// the delay, chorus, reverb and plate read their rings once or many times a
+/// sample while they are working, so anything done to that arithmetic shows
+/// up here rather than there.
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn playing_effect_cost() {
+    let channels = 8;
+    let frames = 512;
+    println!();
+    println!("  {channels} ML-P8 channels holding a note, {frames}-frame block");
+    println!("  effect         ns/block   over bare");
+    let bare = per_block_nanos(&loaded_project(channels), frames, 400);
+    println!("  {:<12}  {bare:>9}", "(none)");
+    for kind in [
+        EffectKind::Modulation,
+        EffectKind::Delay,
+        EffectKind::Reverb,
+        EffectKind::Plate,
+        EffectKind::Drive,
+    ] {
+        let mut project = loaded_project(channels);
+        for channel in &mut project.channels {
+            channel.setup.effects.push(EffectSlotState::of_kind(kind));
+        }
+        let nanos = per_block_nanos(&project, frames, 400);
+        println!(
+            "  {:<12}  {nanos:>9}  {:>10}",
+            format!("{kind:?}"),
+            nanos as i128 - bare as i128
+        );
+    }
+}

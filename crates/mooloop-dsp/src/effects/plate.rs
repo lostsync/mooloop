@@ -123,7 +123,10 @@ impl Ring {
         let delay = delay.clamp(1.0, capacity as f32 - 2.0);
         let base = delay.floor();
         let fraction = delay - base;
-        let index = (self.write + capacity - base as usize) % capacity;
+        // One subtraction rather than a division: see `Ring::read` in
+        // `reverb.rs`, which this mirrors.
+        let raw = self.write + capacity - base as usize;
+        let index = if raw >= capacity { raw - capacity } else { raw };
         let previous = if index == 0 { capacity - 1 } else { index - 1 };
         self.buffer[index] * (1.0 - fraction) + self.buffer[previous] * fraction
     }

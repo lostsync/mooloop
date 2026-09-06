@@ -165,7 +165,12 @@ impl Ring {
         let base = delay.floor();
         let frac = delay - base;
         let back = base as usize;
-        let index = (self.write + capacity - back) % capacity;
+        // `back` is clamped inside the ring and the head is too, so the sum
+        // is under two laps and one subtraction reduces it. The eight lines
+        // and four diffusers read at least once a sample each, so this is
+        // twelve integer divisions a frame that do not happen.
+        let raw = self.write + capacity - back;
+        let index = if raw >= capacity { raw - capacity } else { raw };
         let previous = if index == 0 { capacity - 1 } else { index - 1 };
         self.buffer[index] * (1.0 - frac) + self.buffer[previous] * frac
     }

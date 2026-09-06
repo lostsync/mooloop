@@ -64,7 +64,12 @@ impl DelayLine {
         let capacity = self.capacity();
         self.left[self.write] = l;
         self.right[self.write] = r;
-        self.write = (self.write + 1) % capacity;
+        // See `IntegerDelay::process`: a remainder by a runtime length is a
+        // division, and the head can only ever be one past the end.
+        self.write += 1;
+        if self.write == capacity {
+            self.write = 0;
+        }
     }
 
     /// Append `frames` silent frames, advancing the write head exactly as
@@ -123,10 +128,22 @@ impl DelayLine {
         let bias = (capacity * 2) as f32;
         let index = (base + bias) as usize;
 
-        let xm1 = self.frame((index + capacity - 1) % capacity);
-        let x0 = self.frame(index % capacity);
-        let x1 = self.frame((index + 1) % capacity);
-        let x2 = self.frame((index + 2) % capacity);
+        // Four divisions become one fold and three compares. `index` is
+        // biased by two whole laps above and `base` is greater than
+        // `-capacity`, so it is under three laps and two subtractions reduce
+        // it; the other three taps are consecutive from there.
+        let mut i0 = index - capacity;
+        if i0 >= capacity {
+            i0 -= capacity;
+        }
+        let im1 = if i0 == 0 { capacity - 1 } else { i0 - 1 };
+        let i1 = if i0 + 1 == capacity { 0 } else { i0 + 1 };
+        let i2 = if i1 + 1 == capacity { 0 } else { i1 + 1 };
+
+        let xm1 = self.frame(im1);
+        let x0 = self.frame(i0);
+        let x1 = self.frame(i1);
+        let x2 = self.frame(i2);
 
         (
             hermite(xm1.0, x0.0, x1.0, x2.0, t),
@@ -255,6 +272,45 @@ mod tests {
             line.write(v, -v);
         }
         line
+    }
+
+    /// The read index is folded by subtraction rather than by `%`, which is
+    /// only allowed because `index` is under three laps. This walks a ring
+    /// through every head position and every legal offset, against the
+    /// remainder the fold replaced, so an off-by-one lap is a failure rather
+    /// than a quiet wrong sample.
+    #[test]
+    fn folding_the_read_index_agrees_with_the_remainder_it_replaces() {
+        let capacity = 16;
+        // A ramp, so every slot holds a distinguishable value and reading the
+        // wrong one cannot look like reading the right one.
+        for head in 0..capacity {
+            let mut line = DelayLine::with_capacity_frames(capacity);
+            for i in 0..head {
+                let v = i as f32 + 1.0;
+                line.write(v, -v);
+            }
+            let max = line.max_read_offset();
+            for step in 0..=40 {
+                let offset = MIN_READ_OFFSET + (max - MIN_READ_OFFSET) * step as f32 / 40.0;
+
+                // The arithmetic the fold stands in for, spelled out.
+                let position = line.write as f32 - 1.0 - offset;
+                let base = position.floor();
+                let t = position - base;
+                let index = (base + (capacity * 2) as f32) as usize;
+                let expected = hermite(
+                    line.left[(index + capacity - 1) % capacity],
+                    line.left[index % capacity],
+                    line.left[(index + 1) % capacity],
+                    line.left[(index + 2) % capacity],
+                    t,
+                );
+
+                let (got, _) = line.read(offset);
+                assert_eq!(got, expected, "head {head}, offset {offset}");
+            }
+        }
     }
 
     /// `write_silence` is an optimisation, so the only interesting question

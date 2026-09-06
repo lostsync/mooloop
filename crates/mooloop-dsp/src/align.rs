@@ -69,7 +69,15 @@ impl IntegerDelay {
             self.right[self.write] = *r;
             *l = delayed_l;
             *r = delayed_r;
-            self.write = (self.write + 1) % frames;
+            // Wrapped by comparison rather than by `%`. The head is always
+            // inside the ring, so one past the end is the only case there is,
+            // and a remainder by a length the compiler cannot see is an
+            // integer division -- tens of cycles, per sample, on every bus
+            // carrying compensation.
+            self.write += 1;
+            if self.write == frames {
+                self.write = 0;
+            }
         }
     }
 }
