@@ -34,6 +34,8 @@ impl Lfo {
     }
 
     /// Restart the cycle. Called on note-on when the LFO is set to retrigger.
+    pub fn debug_phase(&self) -> f32 { self.phase }
+
     pub fn retrigger(&mut self) {
         self.phase = 0.0;
         self.hold = self.noise.next_sample();

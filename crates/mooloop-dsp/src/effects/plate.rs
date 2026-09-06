@@ -370,6 +370,14 @@ impl AudioNode for PlateEffect {
     /// pre-delay ring that `predelay_ms` moves a head inside. The Schroeder
     /// allpasses run at a fixed 0.5 and settle inside the combs' own tail.
     fn tail_frames(&self) -> u32 {
+        // Same reason as the hall's: a lag frozen halfway stays halfway.
+        // Nothing else in this device runs on the clock -- there is no
+        // modulation oscillator here -- so once these have settled, freezing
+        // the network is exact.
+        if !self.predelay_samples.is_settled() || !self.wet1.is_settled() || !self.wet2.is_settled()
+        {
+            return u32::MAX;
+        }
         let seconds = 3.0 * self.params.decay_s.clamp(0.2, 10.0) + 0.25;
         let frames = seconds * self.sample_rate.max(1) as f32;
         frames.ceil().min(u32::MAX as f32) as u32

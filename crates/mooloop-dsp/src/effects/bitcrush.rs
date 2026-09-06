@@ -201,10 +201,25 @@ impl AudioNode for BitcrushEffect {
         if dithering && wet {
             return false;
         }
-        self.held_l.abs() <= REST_EPSILON
+        self.mix.is_settled()
+            && self.held_l.abs() <= REST_EPSILON
             && self.held_r.abs() <= REST_EPSILON
             && self.prev_held_l.abs() <= REST_EPSILON
             && self.prev_held_r.abs() <= REST_EPSILON
+    }
+
+    /// The sample-and-hold counter runs on the clock: where it sits decides
+    /// which sample of the next note gets latched, so a crusher that slept
+    /// through a bar has to come back on the same grid it would have been on.
+    fn skip_block(&mut self, ctx: &ProcessContext) {
+        let hold = self.params.downsample.max(1.0);
+        for _ in 0..ctx.frames {
+            self.phase += 1.0;
+            if !self.primed || self.phase >= hold {
+                self.phase = if self.primed { self.phase - hold } else { 0.0 };
+                self.primed = true;
+            }
+        }
     }
 
     fn process(

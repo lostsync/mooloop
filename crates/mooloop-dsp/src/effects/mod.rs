@@ -188,6 +188,72 @@ mod tests {
         }
     }
 
+    /// The other half of the contract, and the half that is easy to forget:
+    /// a device that slept has to come back where it would have been.
+    ///
+    /// A chorus's LFO, a reverb's line modulation and a crusher's
+    /// sample-and-hold counter all run on the clock rather than on the input,
+    /// so freezing them would make a device sound different after a rest —
+    /// and would make *how* different depend on the host's buffer size, which
+    /// would take block-size-independent rendering with it. `skip_block` is
+    /// what the host calls instead of `process` for a block it skips, and
+    /// this drives every kind through burst, sleep and burst twice over to
+    /// see that using it changes nothing.
+    ///
+    /// The tolerance is `SILENCE_PEAK`: a device falling asleep with its
+    /// input sitting exactly on the threshold is entitled to differ by the
+    /// threshold, and by nothing more.
+    #[test]
+    fn every_effect_kind_comes_back_where_it_would_have_been() {
+        const SILENT_BLOCKS: usize = 10 * SAMPLE_RATE as usize / BLOCK;
+
+        for kind in EffectKind::ALL {
+            let render = |skip: bool| {
+                let mut node = build_effect_at_tempo(kind.default_params(), SAMPLE_RATE, 120.0);
+                let mut bus = StereoBus::with_capacity(BLOCK);
+                let events = EventList::empty();
+                let mut state = 0x0bad_c0de;
+                let mut out = Vec::with_capacity((SILENT_BLOCKS + 100) * BLOCK);
+                let mut silent_frames = 0u32;
+                let burst_blocks = SAMPLE_RATE as usize / 2 / BLOCK;
+                for block in 0..(burst_blocks * 2 + SILENT_BLOCKS) {
+                    bus.clear(BLOCK);
+                    if block < burst_blocks || block >= burst_blocks + SILENT_BLOCKS {
+                        fill_burst(&mut bus, BLOCK, &mut state);
+                    }
+                    let context = context(BLOCK);
+                    let peak = bus.peak(BLOCK);
+                    silent_frames = if peak.0.max(peak.1) <= SILENCE_PEAK {
+                        silent_frames.saturating_add(BLOCK as u32)
+                    } else {
+                        0
+                    };
+                    if skip && may_skip(node.as_ref(), silent_frames) {
+                        node.skip_block(&context);
+                    } else {
+                        node.process(&context, &mut bus, &events, None);
+                    }
+                    out.extend_from_slice(&bus.l[..BLOCK]);
+                }
+                out
+            };
+            let slept = render(true);
+            let ran = render(false);
+            let mut worst = 0.0f32;
+            let mut worst_at = 0;
+            for (index, (a, b)) in slept.iter().zip(&ran).enumerate() {
+                if (a - b).abs() > worst {
+                    worst = (a - b).abs();
+                    worst_at = index;
+                }
+            }
+            assert!(
+                worst <= SILENCE_PEAK,
+                "{kind:?} came back somewhere else: {worst} at frame {worst_at}"
+            );
+        }
+    }
+
     /// The exception the crusher's `is_at_rest` is written around, held here
     /// so it cannot be simplified away. TPDF dither spans a whole quantiser
     /// step, so it lands on `+/-step` about half the time whatever the input

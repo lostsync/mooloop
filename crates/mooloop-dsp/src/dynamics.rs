@@ -72,6 +72,16 @@ impl EnvelopeFollower {
         self.envelope = 0.0;
     }
 
+    /// Whether the envelope has finished releasing.
+    ///
+    /// Exactly zero rather than nearly, because `process` snaps the last of
+    /// the gap rather than decaying through it forever: a follower fed
+    /// silence reaches this state and then holds it, which is what lets a
+    /// host stop calling the device without changing where it comes back.
+    pub fn is_at_rest(&self) -> bool {
+        self.envelope == 0.0
+    }
+
     /// Feed one rectified sample and return the smoothed envelope. Rising
     /// input uses the attack time, falling input the release time.
     pub fn process(&mut self, input: f32) -> f32 {

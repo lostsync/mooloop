@@ -1087,7 +1087,11 @@ impl AudioNode for Sampler {
     /// output trim is a multiply on top of that, and a stretch reader only
     /// runs for a voice that owns it.
     fn is_at_rest(&self) -> bool {
-        !self.voices.iter().any(|voice| voice.active)
+        // The trim advances once a range whether or not anything sounded, so
+        // a trim still travelling is a reason to keep rendering: freezing it
+        // halfway would leave it there, and the next note would start at a
+        // level nobody dialled.
+        self.output_gain.is_settled() && !self.voices.iter().any(|voice| voice.active)
     }
 
     fn tail_frames(&self) -> u32 {

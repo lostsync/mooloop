@@ -295,6 +295,15 @@ impl AudioNode for MonoSynth {
         0
     }
 
+    /// Exactly what `render_range` does with no voice active: keep the
+    /// free-running LFO where the transport says it should be, so a note
+    /// landing after a rest finds it there rather than where the last note
+    /// left it.
+    fn skip_block(&mut self, ctx: &ProcessContext) {
+        self.lfo
+            .skip(ctx.frames, self.params.lfo.rate_hz, ctx.sample_rate);
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,

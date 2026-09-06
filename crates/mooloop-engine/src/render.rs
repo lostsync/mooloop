@@ -25,7 +25,7 @@ use mooloop_dsp::{
     AudioTaps, AuxIn, IntegerDelay, Event, EventList, ModulatorRack, MonoSynth, MlM1, MlP8,
     NoteGateEvents, PolySynth,
     ProcessContext, SampleData, Sampler, SpectrumAnalyzer, StereoBus, StretchPool, TimedEvent,
-    CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE,
+    CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE, SILENCE_PEAK,
 };
 
 use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
@@ -341,6 +341,13 @@ pub struct EffectSlot {
     wet_dry: f32,
     input_trim: f32,
     output_trim: f32,
+    /// Consecutive frames of silent input this slot has seen.
+    ///
+    /// Here rather than in a `[u32; MAX_EFFECTS_PER_CHANNEL]` beside the
+    /// nodes for the reason this whole struct exists: an addressable-but-empty
+    /// slot should cost a pointer, and there are 256 of them on each of 272
+    /// chains. A slot that has never held a device never counts anything.
+    silent_frames: u32,
 }
 
 impl EffectSlot {
@@ -355,6 +362,7 @@ impl EffectSlot {
             wet_dry: 1.0,
             input_trim: 1.0,
             output_trim: 1.0,
+            silent_frames: 0,
         }
     }
 }
@@ -751,6 +759,78 @@ impl EffectChain {
         }
     }
 
+    /// Record how loud this slot's input was, and return how many
+    /// consecutive frames of silence it has now seen.
+    ///
+    /// Resets to zero the moment anything audible arrives, which is what
+    /// makes waking up a property of the audio rather than of a timer.
+    fn note_input_level(&mut self, slot: usize, peak: f32, frames: usize) -> u32 {
+        let Some(state) = self.slot_mut(slot) else {
+            return 0;
+        };
+        state.silent_frames = if peak <= SILENCE_PEAK {
+            state.silent_frames.saturating_add(frames as u32)
+        } else {
+            0
+        };
+        state.silent_frames
+    }
+
+    /// Whether this slot's device can be left uncalled this block.
+    ///
+    /// Three conditions, and each one is load-bearing:
+    ///
+    /// - **Its input is silent.** `silent` is zero on any block that carried
+    ///   audio, so this is the clause that makes waking instant.
+    /// - **Its dry-path aligner has emptied.** The host stops feeding a
+    ///   sleeping slot's ring, so a ring still holding pre-silence audio would
+    ///   emit it on the wet/dry blend when the slot wakes. Only the
+    ///   oversampled drive has one at all, and its tail is sixty times longer,
+    ///   but this is stated rather than assumed.
+    /// - **Its state has settled, or its tail has run out.** The two are
+    ///   different answers to the same question and a device may give either:
+    ///   a filter reads its own state exactly, a reverb declares how long its
+    ///   decay takes. `>` rather than `>=` so a device that never converted
+    ///   -- `u32::MAX`, which `silent` saturates at -- is never skipped.
+    fn may_sleep(&self, slot: usize, silent: u32) -> bool {
+        let Some(node) = self.nodes[slot].as_ref() else {
+            return false;
+        };
+        silent > 0
+            && silent >= node.dry_path_latency_frames()
+            && (node.is_at_rest() || silent > node.tail_frames())
+    }
+
+    /// Whether every occupied slot in this chain would be skipped this
+    /// block.
+    ///
+    /// Test-only for now: this is the condition a whole idle channel strip
+    /// has to satisfy before it can be skipped, which is the next step in
+    /// `docs/plans/auto-offline-idle-devices/`. Until then it is what the
+    /// equivalence tests use to check that a chain fed silence really did go
+    /// to sleep, rather than passing by never having tried.
+    ///
+    /// A bypassed slot runs no device, so the only thing it can still be
+    /// holding is its dry-path aligner, and that is empty once the slot has
+    /// seen silence for as long as the ring is. An empty slot is trivially
+    /// at rest.
+    #[cfg(test)]
+    fn is_at_rest(&self) -> bool {
+        (0..self.bound).all(|slot| {
+            let Some(node) = self.nodes[slot].as_ref() else {
+                return true;
+            };
+            let silent = self.slot(slot).map_or(0, |state| state.silent_frames);
+            if silent == 0 {
+                return false;
+            }
+            if silent < node.dry_path_latency_frames() {
+                return false;
+            }
+            self.bypassed(slot) || node.is_at_rest() || silent > node.tail_frames()
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn process(
         &mut self,
@@ -760,6 +840,7 @@ impl EffectChain {
         device_display: Option<(&DeviceMeters, &DeviceTelemetry, usize)>,
         modulation: Option<&ModulationBlock<'_>>,
         automation: Option<&AutomationBlock<'_>>,
+        skip_idle: bool,
     ) {
         for slot in 0..self.bound {
             if let Some((_, telemetry, target)) = device_display {
@@ -799,14 +880,52 @@ impl EffectChain {
                         &mut bus.r[..context.frames],
                     );
                 }
+                // Measured *after* the aligner on purpose. A bypassed slot
+                // is its ring and nothing else, so the level coming out of
+                // the ring is exactly the level the slot still has to offer,
+                // and counting that is what lets `is_at_rest` above know the
+                // ring has emptied without looking inside it.
+                let (left, right) = bus.peak(context.frames);
+                self.note_input_level(slot, left.max(right), context.frames);
                 if let Some((meters, _, target)) = device_display {
-                    let (left, right) = bus.peak(context.frames);
                     meters.publish_input(target, slot + 1, left, right);
                     meters.publish_output(target, slot + 1, left, right);
                 }
                 continue;
             }
             if self.nodes[slot].is_some() {
+                // Taken once, before the trim, and used twice: for the
+                // decision below and for this slot's input meter. Peak is
+                // linear in a non-negative gain, so scaling it by the trim is
+                // exactly what a second scan after the trim would have found.
+                // Silence detection therefore costs nothing the meters were
+                // not already paying, and the chain does one scan a slot
+                // rather than two.
+                let (peak_l, peak_r) = bus.peak(context.frames);
+                let silent = self.note_input_level(slot, peak_l.max(peak_r), context.frames);
+                if skip_idle && self.may_sleep(slot, silent) {
+                    // The one thing a sleeping node is still owed: whatever
+                    // it runs on the clock rather than on its input. A
+                    // reverb's line modulation and a chorus's LFO have to
+                    // arrive where the transport says, or the device would
+                    // sound different after a gap and *how* different would
+                    // depend on the host's buffer size.
+                    if let Some(node) = self.nodes[slot].as_mut() {
+                        node.skip_block(context);
+                    }
+                    // Nothing is published and nothing is cleared. The device
+                    // meters are peak-hold cells the GUI empties as it reads
+                    // them, so not writing one *is* publishing silence; and
+                    // the queued parameter events stay queued exactly as they
+                    // do under bypass, so a knob turned while a channel was
+                    // quiet still lands when it wakes.
+                    //
+                    // Nothing else here touches the node, which is what makes
+                    // waking instant: the first block with audio in it
+                    // processes normally, from the state the node had when it
+                    // stopped, with no ramp and no reset.
+                    continue;
+                }
                 let input_trim = self.input_trim(slot);
                 for frame in 0..context.frames {
                     bus.l[frame] *= input_trim;
@@ -821,8 +940,7 @@ impl EffectChain {
                     );
                 }
                 if let Some((meters, _, target)) = device_display {
-                    let (left, right) = bus.peak(context.frames);
-                    meters.publish_input(target, slot + 1, left, right);
+                    meters.publish_input(target, slot + 1, peak_l * input_trim, peak_r * input_trim);
                 }
                 self.event_scratch.clear();
                 if let Some(state) = self.slots[slot].as_mut() {
@@ -1524,6 +1642,14 @@ pub(crate) struct RenderState {
     /// straight into one would be thrown away before anything read it. A
     /// fixed array, so filling it allocates nothing.
     auditions: [Option<Audition>; MAX_AUDITIONS_PER_BLOCK],
+    /// Whether devices and strips with nothing to do may be left uncalled.
+    ///
+    /// On by default and not exposed as a user setting. It exists so the
+    /// equivalence tests can render the same project both ways and compare
+    /// the two sample for sample, which is the only way to hold a skip
+    /// honest: a mechanism whose whole claim is that it changes nothing has
+    /// to be checkable against the thing it claims not to change.
+    skip_idle: bool,
 }
 
 /// One-shot straight to the master output: no envelope, no channel strip.
@@ -1547,6 +1673,7 @@ impl RenderState {
         let slice_slots_for_growth = slice_slots.clone();
         let mut state = Self {
             transport: Transport::new(sample_rate),
+            skip_idle: true,
             sequencer: Sequencer::new(1, 1, DEFAULT_STEPS as usize, mooloop_core::Ppq::DEFAULT),
             strips,
             sample_slots: slots_for_growth,
@@ -2788,6 +2915,7 @@ impl RenderState {
 
     fn process_block_inner(&mut self, frames: usize, looping: bool) -> RenderReport {
         let frames = frames.min(MAX_BLOCK_SIZE);
+        let skip_idle = self.skip_idle;
         let ticks_per_sample = self.transport.ticks_per_sample();
         let position_frames = self.transport.frames_played();
         let (start_tick, end_tick) = self.transport.advance(frames);
@@ -3106,6 +3234,7 @@ impl RenderState {
                 Some((&self.device_meters, &self.device_telemetry, index)),
                 Some(&modulation),
                 automation.as_ref(),
+                skip_idle,
             );
             strip
                 .output
@@ -3147,6 +3276,7 @@ impl RenderState {
                 )),
                 None,
                 automation.as_ref(),
+                skip_idle,
             );
             strip.output.apply_balance(&mut strip.bus, frames);
             // Before the meter and before the mute check on purpose: from here
@@ -5882,7 +6012,7 @@ mod tests {
         let mut bus = StereoBus::with_capacity(MAX_BLOCK_SIZE);
         bus.l[0] = 1.0;
         bus.r[0] = 1.0;
-        chain.process(&context, &mut bus, EffectTarget::Channel(0), None, None, None);
+        chain.process(&context, &mut bus, EffectTarget::Channel(0), None, None, None, true);
 
         assert!(
             bus.l[..LATENCY].iter().all(|s| *s == 0.0),
@@ -6122,6 +6252,165 @@ mod tests {
             slot: 3,
         });
         assert!(reclaimed.is_some());
+    }
+
+    /// A four-device chain with a long tail in it, built the way the engine
+    /// builds one so the aligners and slot state match a real project's.
+    fn tailed_chain() -> EffectChain {
+        let mut chain = EffectChain::new();
+        let kinds = [
+            mooloop_core::EffectKind::Reverb,
+            mooloop_core::EffectKind::Delay,
+            mooloop_core::EffectKind::Drive,
+            mooloop_core::EffectKind::Eq,
+        ];
+        for (slot, kind) in kinds.into_iter().enumerate() {
+            let node = build_effect(kind.default_params(), 48_000);
+            let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
+            let displaced = chain.install(
+                slot,
+                kind,
+                None,
+                node,
+                align,
+                Box::new(SpectrumAnalyzer::new()),
+                Box::new(EffectSlot::new()),
+            );
+            assert!(displaced.is_empty());
+        }
+        chain
+    }
+
+    fn chain_context(frames: usize) -> ProcessContext {
+        ProcessContext {
+            sample_rate: 48_000,
+            frames,
+            playing: true,
+            bpm: 120.0,
+            position_ticks: 0.0,
+            position_frames: 0,
+        }
+    }
+
+    /// Play `blocks` blocks through a fresh chain, with a burst of noise at
+    /// the start and another after `wake_at`, and return everything it
+    /// produced. `skip_idle` is the only thing that differs between the two
+    /// runs the tests below compare.
+    fn render_chain(blocks: usize, wake_at: usize, skip_idle: bool) -> Vec<f32> {
+        const FRAMES: usize = 512;
+        let mut chain = tailed_chain();
+        let mut bus = StereoBus::with_capacity(MAX_BLOCK_SIZE);
+        let mut out = Vec::with_capacity(blocks * FRAMES);
+        let mut noise = 0x1234_5678u32;
+        for block in 0..blocks {
+            bus.clear(FRAMES);
+            if block == 0 || block == wake_at {
+                for index in 0..FRAMES {
+                    noise ^= noise << 13;
+                    noise ^= noise >> 17;
+                    noise ^= noise << 5;
+                    let sample = ((noise >> 8) as f32 / 8_388_608.0 - 1.0) * 0.5;
+                    bus.l[index] = sample;
+                    bus.r[index] = sample;
+                }
+            }
+            chain.process(
+                &chain_context(FRAMES),
+                &mut bus,
+                EffectTarget::Channel(0),
+                None,
+                None,
+                None,
+                skip_idle,
+            );
+            out.extend_from_slice(&bus.l[..FRAMES]);
+        }
+        out
+    }
+
+    /// The plainest form of the claim: a chain that is handed nothing renders
+    /// nothing, sample for sample, whether or not it is allowed to sleep.
+    #[test]
+    fn a_chain_fed_silence_renders_identically_with_and_without_skipping() {
+        let mut chain = tailed_chain();
+        let mut bus = StereoBus::with_capacity(MAX_BLOCK_SIZE);
+        // Long enough for the reverb in the chain to run out its declared
+        // tail, which is what the chain waits on before any of it sleeps.
+        for _ in 0..(10 * 48_000 / 512) {
+            bus.clear(512);
+            chain.process(
+                &chain_context(512),
+                &mut bus,
+                EffectTarget::Channel(0),
+                None,
+                None,
+                None,
+                true,
+            );
+            assert!(
+                bus.l[..512].iter().all(|sample| *sample == 0.0),
+                "a sleeping chain must pass exact zeros, not nearly-zeros"
+            );
+        }
+        assert!(
+            chain.is_at_rest(),
+            "a chain handed nothing for ten seconds should have gone to sleep;              if it has not, this test proves nothing"
+        );
+    }
+
+    /// The one way this mechanism can be *heard*: a device that under-reports
+    /// its tail gets cut off mid-decay. So render the same reverb-and-delay
+    /// chain twice — once allowed to sleep and once forced to run every block
+    /// — and hold the two against each other for the whole tail, across the
+    /// sleep, and through the note that wakes it again.
+    ///
+    /// The tolerance is `SILENCE_PEAK` with room for the gain of whatever
+    /// stands after the device that fell asleep. A slot going to sleep with
+    /// its input sitting on the threshold hands the rest of the chain a
+    /// signal up to `SILENCE_PEAK` different from what it would have had, and
+    /// an EQ band may put 24 dB on that. Sixteen times the threshold is
+    /// -116 dBFS, still under one step of a 20-bit render. A truncated tail
+    /// would miss by five orders of magnitude, which is the distance this
+    /// test is really measuring.
+    #[test]
+    fn skipping_never_changes_what_a_tail_sounds_like() {
+        const BLOCKS: usize = 12 * 48_000 / 512;
+        const WAKE_AT: usize = 10 * 48_000 / 512;
+        let slept = render_chain(BLOCKS, WAKE_AT, true);
+        let ran = render_chain(BLOCKS, WAKE_AT, false);
+        assert_eq!(slept.len(), ran.len());
+
+        let mut worst = 0.0f32;
+        let mut worst_at = 0;
+        for (index, (a, b)) in slept.iter().zip(&ran).enumerate() {
+            let difference = (a - b).abs();
+            if difference > worst {
+                worst = difference;
+                worst_at = index;
+            }
+        }
+        assert!(
+            worst <= SILENCE_PEAK * 16.0,
+            "letting the chain sleep changed its output by {worst} at frame              {worst_at} ({:.3} s in)",
+            worst_at as f32 / 48_000.0
+        );
+
+        // The premise: there has to be a tail there to truncate, and the
+        // chain has to actually wake up for the second burst.
+        let tail: f32 = ran[48_000..2 * 48_000]
+            .iter()
+            .fold(0.0f32, |peak, s| peak.max(s.abs()));
+        assert!(tail > 1.0e-3, "no audible tail a second in: {tail}");
+        // Half a second after the second burst rather than the block it
+        // landed in: the reverb runs at full wet with a 12 ms pre-delay, so
+        // the first block after a burst is genuinely almost empty.
+        let woken: f32 = slept[WAKE_AT * 512..(WAKE_AT * 512 + 24_000).min(slept.len())]
+            .iter()
+            .fold(0.0f32, |peak, s| peak.max(s.abs()));
+        assert!(
+            woken > 1.0e-2,
+            "the chain did not wake for the second burst: {woken}"
+        );
     }
 
     /// Render `blocks` blocks of a one-buffer-insert project, optionally

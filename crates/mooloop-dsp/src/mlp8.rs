@@ -914,19 +914,20 @@ impl Chorus {
         self.active == MlP8Chorus::Off && self.gain.value() <= CHORUS_SILENT
     }
 
-    /// Frames of wet this stage can still produce after the voices stop.
+    /// Whether the stage is genuinely out of the path, rather than merely
+    /// quiet — the same condition `settle` returns, asked without moving
+    /// anything.
     ///
-    /// Zero once it has settled at `Off`, because settling there clears the
-    /// line rather than leaving it to be written through — the same fact the
-    /// skip in `settle` rests on. Otherwise the delay line's own answer,
-    /// which covers a mode change in flight as well, since the outgoing mode
-    /// is not swapped out until its gain has already run down.
-    fn tail_frames(&self) -> u32 {
-        if self.active == MlP8Chorus::Off && self.gain.value() <= CHORUS_SILENT {
-            0
-        } else {
-            self.effect.tail_frames()
-        }
+    /// This is what decides whether ML-P8 may be left uncalled between notes,
+    /// and it is deliberately the strict answer. A chorus that is *on* has a
+    /// delay line and an LFO of its own, both of which run on the clock, and
+    /// keeping them in step through a sleep would mean reproducing the
+    /// finisher's whole state machine outside it. So a patch with the chorus
+    /// switched on keeps rendering, and one with it off — which is `Off`'s
+    /// promise of a true bypass, and seven of the eight factory patches —
+    /// sleeps between notes like every other instrument.
+    fn is_bypassed(&self) -> bool {
+        self.active == MlP8Chorus::Off && self.gain.value() <= CHORUS_SILENT
     }
 }
 
@@ -2453,11 +2454,25 @@ impl AudioNode for MlP8 {
     /// for, and `Off` clears the line rather than writing silence through it,
     /// so the answer there is nothing.
     fn is_at_rest(&self) -> bool {
-        !self.voices.iter().any(|voice| voice.active)
+        self.chorus.is_bypassed() && !self.voices.iter().any(|voice| voice.active)
     }
 
     fn tail_frames(&self) -> u32 {
-        self.chorus.tail_frames()
+        0
+    }
+
+    /// The instrument's own LFO is advanced once per sample whether or not
+    /// anything is sounding — that is written into `render_chunk` as the
+    /// reason it sits outside the voice loop — so it is advanced the same way
+    /// here. Nothing else in the device runs on the clock: an inactive voice
+    /// touches none of its own state, and the chorus is only ever frozen
+    /// while it is off, which is when its line is cleared and its processor
+    /// genuinely does not run.
+    fn skip_block(&mut self, ctx: &ProcessContext) {
+        let lfo = self.params.lfo;
+        for _ in 0..ctx.frames {
+            self.lfo.next_sample(&lfo, ctx.bpm, ctx.sample_rate);
+        }
     }
 
     fn process(

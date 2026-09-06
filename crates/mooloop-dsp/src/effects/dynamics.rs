@@ -37,15 +37,6 @@ const LIMITER_ATTACK_MS: f32 = 0.05;
 /// (which smooths the *level*, not these).
 const PARAM_SMOOTH_S: f32 = 0.005;
 
-/// Milliseconds of settling, in frames, rounded up and never zero.
-///
-/// A tail of zero would let the host skip the device on its first silent
-/// block, which is the one thing none of these three may do.
-fn settling_frames(ms: f32, sample_rate: u32) -> u32 {
-    let frames = ms.max(0.0) * 0.001 * sample_rate.max(1) as f32;
-    frames.ceil().clamp(1.0, u32::MAX as f32) as u32
-}
-
 /// Level of the louder channel, which is what every effect here detects on.
 fn linked_peak(l: f32, r: f32) -> f32 {
     l.abs().max(r.abs())
@@ -190,15 +181,31 @@ impl AudioNode for GateEffect {
     /// it to the next transient. Running until the detector has released is
     /// what makes waking up indistinguishable from never having slept.
     ///
-    /// For the gate that is the hold, and then the shut ramp: ten time
-    /// constants take it within a thousandth of a dB of `range_db` from
-    /// anywhere in the 80 dB range, and a gate frozen open would pass exactly
-    /// the transient it exists to stop.
-    fn tail_frames(&self) -> u32 {
-        settling_frames(
-            self.params.hold_ms + 10.0 * self.params.release_ms,
-            self.sample_rate,
-        )
+    /// For the gate that is the hold and the shut ramp, and the question is
+    /// asked in the strictest form there is: **would another sample of
+    /// silence move the ramp at all?**
+    ///
+    /// Not "is it close to shut". A one-pole ramp in `f32` does not reach its
+    /// target — it reaches a fixed point of its own recurrence and stops,
+    /// which for the default gate is a fiftieth of a dB short of the full
+    /// range. Asking whether the next step is a step, rather than how far it
+    /// still has to go, gets the exact answer for nothing: two `exp` calls
+    /// once a block, against a gate that would otherwise never sleep.
+    fn is_at_rest(&self) -> bool {
+        if self.hold_remaining != 0 {
+            return false;
+        }
+        let shut = gate_gain_db(
+            lin_to_db(0.0),
+            self.params.threshold_db,
+            self.params.range_db,
+        );
+        let coeff = if shut > self.gain_db {
+            time_coeff(self.params.attack_ms, self.sample_rate)
+        } else {
+            time_coeff(self.params.release_ms, self.sample_rate)
+        };
+        shut + coeff * (self.gain_db - shut) == self.gain_db
     }
 
     fn dynamics_frame(&self) -> Option<DynamicsFrame> {
@@ -324,8 +331,15 @@ impl AudioNode for CompressorEffect {
     /// The detector is what settles here, and it is smoothing a *level*: from
     /// the loudest thing the range admits down under the lowest threshold is
     /// about ten time constants, so fifteen is the margin.
-    fn tail_frames(&self) -> u32 {
-        settling_frames(15.0 * self.params.release_ms, self.sample_rate)
+    fn is_at_rest(&self) -> bool {
+        // The detector, and the three lags feeding the gain computer. A knob
+        // still travelling would be frozen where it was, and a detector still
+        // releasing would come back holding reduction the music has already
+        // stopped asking for.
+        self.detector.is_at_rest()
+            && self.threshold_db.is_settled()
+            && self.ratio.is_settled()
+            && self.makeup_db.is_settled()
     }
 
     fn dynamics_frame(&self) -> Option<DynamicsFrame> {
@@ -466,8 +480,8 @@ impl AudioNode for LimiterEffect {
     /// The same fifteen release time constants as the compressor, for the same
     /// detector. Its attack is fixed and instantaneous, so it contributes
     /// nothing to how long the device takes to let go.
-    fn tail_frames(&self) -> u32 {
-        settling_frames(15.0 * self.params.release_ms, self.sample_rate)
+    fn is_at_rest(&self) -> bool {
+        self.detector.is_at_rest() && self.ceiling_db.is_settled() && self.gain_db.is_settled()
     }
 
     fn dynamics_frame(&self) -> Option<DynamicsFrame> {

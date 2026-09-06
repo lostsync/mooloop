@@ -196,6 +196,12 @@ impl Diffuser {
         self.target_len = len.clamp(1.0, self.ring.buffer.len() as f32 - 2.0);
     }
 
+    /// The part of `process` that runs on the clock rather than on the
+    /// input, for a block the host skipped. See `AudioNode::skip_block`.
+    fn step_silent(&mut self, glide: f32) {
+        self.len += (self.target_len - self.len) * glide;
+    }
+
     fn process(&mut self, input: f32, gain: f32, glide: f32) -> f32 {
         self.len += (self.target_len - self.len) * glide;
         let delayed = self.ring.read(self.len);
@@ -252,6 +258,17 @@ impl Line {
     /// The modulator is a triangle rather than a sine: it costs an absolute
     /// value instead of a `sin`, and at these depths and rates the difference
     /// is a slightly different distribution of the same small pitch drift.
+    /// The part of `read` that runs on the clock rather than on the input.
+    /// Written as the same four lines rather than as a closed form, because
+    /// a phase that arrived by a different route is a different phase.
+    fn step_silent(&mut self, glide: f32) {
+        self.len += (self.target_len - self.len) * glide;
+        self.phase += self.mod_step;
+        if self.phase >= 1.0 {
+            self.phase -= 1.0;
+        }
+    }
+
     fn read(&mut self, glide: f32) -> f32 {
         self.len += (self.target_len - self.len) * glide;
         self.phase += self.mod_step;
@@ -551,9 +568,38 @@ impl AudioNode for ReverbEffect {
     /// quarter second on top covers the pre-delay ring, whose read head
     /// `predelay_ms` can move by up to 200 ms.
     fn tail_frames(&self) -> u32 {
+        // A knob still travelling is a reason to keep running, whatever the
+        // decay says: freezing a lag halfway would leave it there, and the
+        // device would arrive at the next note somewhere its own parameters
+        // do not describe. All three settle in tens of milliseconds against
+        // a tail measured in seconds, so this costs nothing in practice and
+        // makes the freeze exact rather than nearly so.
+        if !self.predelay_samples.is_settled()
+            || !self.diffusion.is_settled()
+            || !self.width.is_settled()
+        {
+            return u32::MAX;
+        }
         let seconds = 3.0 * self.params.decay_s.clamp(0.2, 20.0) + 0.25;
         let frames = seconds * self.sample_rate.max(1) as f32;
         frames.ceil().min(u32::MAX as f32) as u32
+    }
+
+    /// The eight lines' modulation never stops, and neither does the size
+    /// glide underneath it. Both are advanced here exactly as the sample loop
+    /// would have, which is what keeps a hall sounding the same after a bar
+    /// of silence as it does without one — and keeps a bounce at 1024 frames
+    /// a block identical to a take at 64.
+    fn skip_block(&mut self, ctx: &ProcessContext) {
+        let glide = self.size_glide;
+        for _ in 0..ctx.frames {
+            for diffuser in self.diffusers.iter_mut() {
+                diffuser.step_silent(glide);
+            }
+            for line in self.lines.iter_mut() {
+                line.step_silent(glide);
+            }
+        }
     }
 
     fn process(

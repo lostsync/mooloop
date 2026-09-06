@@ -215,6 +215,25 @@ pub trait AudioNode {
         None
     }
 
+    /// Move whatever runs whether or not this node is called, over a block
+    /// of `ctx.frames` the host decided not to hand over.
+    ///
+    /// The host calls this exactly once, in place of `process`, for every
+    /// block it skips. The default does nothing, which is right for almost
+    /// every device: by the time a node reports itself at rest, everything
+    /// driven by its input has stopped moving and freezing it is exact.
+    ///
+    /// What is left is state that advances on the clock rather than on the
+    /// audio — a free-running LFO that keeps its phase across silence, a
+    /// sample-and-hold's counter, a reverb line's modulation. That state has
+    /// to arrive at the same place whether or not the node slept, or the
+    /// device would sound different after a gap *and* how different would
+    /// depend on the host's buffer size. Mirror the sample loop rather than
+    /// closed-forming it, so the two paths agree to the bit.
+    fn skip_block(&mut self, ctx: &ProcessContext) {
+        let _ = ctx;
+    }
+
     /// Process one block in place on `bus`. `events_in` is sorted by sample
     /// offset; nodes that respond to events must split rendering at those
     /// offsets. `events_out` is provided when the engine wants events back
@@ -306,20 +325,40 @@ mod tests {
                 Box::new(MlP8::new(MlP8Params::default(), SAMPLE_RATE)),
             ),
             (
-                "MlP8 with its chorus on",
-                Box::new(MlP8::new(
-                    MlP8Params {
-                        chorus: MlP8Chorus::Ensemble,
-                        ..MlP8Params::default()
-                    },
-                    SAMPLE_RATE,
-                )),
-            ),
-            (
                 "Ds01",
                 Box::new(Ds01::new(Ds01Params::default(), SAMPLE_RATE)),
             ),
         ]
+    }
+
+    /// ML-P8's chorus is a delay line and an LFO on the output of the voice
+    /// sum, both running on the clock, so a patch with it switched on stays
+    /// awake between notes on purpose. Asserted rather than left implied,
+    /// because the difference between "declines to sleep" and "forgot to say
+    /// it could" is the whole of this contract.
+    #[test]
+    fn a_chorused_mlp8_declines_to_rest_between_notes() {
+        let mut node = MlP8::new(
+            MlP8Params {
+                chorus: MlP8Chorus::Ensemble,
+                ..MlP8Params::default()
+            },
+            SAMPLE_RATE,
+        );
+        let mut bus = StereoBus::with_capacity(BLOCK);
+        let silence = EventList::empty();
+        for _ in 0..(2 * SAMPLE_RATE as usize / BLOCK) {
+            bus.clear(BLOCK);
+            node.process(&context(BLOCK), &mut bus, &silence, None);
+            assert!(!node.is_at_rest(), "a chorused ML-P8 reported itself at rest");
+        }
+
+        // And with it off, the same instrument sleeps: the difference is the
+        // finisher, not the device.
+        let mut node = MlP8::new(MlP8Params::default(), SAMPLE_RATE);
+        bus.clear(BLOCK);
+        node.process(&context(BLOCK), &mut bus, &silence, None);
+        assert!(node.is_at_rest());
     }
 
     /// Play a note, let go of it, and keep rendering until the device says it

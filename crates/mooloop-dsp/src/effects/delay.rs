@@ -219,6 +219,26 @@ impl AudioNode for DelayEffect {
     /// to [`DELAY_MAX_TIME_MS`] at any moment. Waiting until the whole ring
     /// holds silence is what stops that sweep uncovering pre-sleep audio.
     fn tail_frames(&self) -> u32 {
+        // Reverse walks its head backwards forever and restarts the window
+        // when it runs out, so there is no state for it to settle into and it
+        // is never a candidate for sleeping. Said here rather than left for
+        // the head check below to notice, because it is a property of the
+        // mode rather than of this moment.
+        if self.params.mode == DelayMode::Reverse {
+            return u32::MAX;
+        }
+        // A head still travelling and a knob still lagging are both reasons
+        // to keep running. Freezing either would leave it where it was, and
+        // the delay would come back at a time nobody dialled -- a tape glide
+        // in particular takes twenty times longer than this tail does.
+        if self.head.is_fading()
+            || (self.head.offset() - self.target_offset).abs() > 0.5
+            || !self.feedback.is_settled()
+            || !self.damp_coeff.is_settled()
+            || !self.mix.is_settled()
+        {
+            return u32::MAX;
+        }
         // Both the resolved target and where the head actually is, because a
         // glide in flight can be reading further back than the target.
         let trip = self
@@ -232,6 +252,20 @@ impl AudioNode for DelayEffect {
         feedback_tail_frames(gain, trip)
             .max(self.line.max_read_offset().ceil() as u32)
             .saturating_add(FADE_FRAMES)
+    }
+
+    /// Keep the ring advancing through a sleep.
+    ///
+    /// Not for its contents -- the tail above guarantees the whole ring is
+    /// silent before any of this happens -- but because `DelayLine::read`
+    /// takes its interpolation fraction from `write - 1 - offset`, so the
+    /// write head's position is part of the answer. Everything else about
+    /// this device has to have stopped moving before it may sleep at all,
+    /// which is what `tail_frames` spends its first two checks on.
+    fn skip_block(&mut self, ctx: &ProcessContext) {
+        for _ in 0..ctx.frames {
+            self.line.write(0.0, 0.0);
+        }
     }
 
     fn process(

@@ -70,6 +70,8 @@ impl ModulationEffect {
         }
     }
 
+    pub fn debug_phase(&self) -> f32 { self.lfo.debug_phase() }
+
     pub fn params(&self) -> ModulationParams {
         self.params
     }
@@ -294,9 +296,40 @@ impl AudioNode for ModulationEffect {
     /// has no line at all — its all-pass cascade settles in a handful of
     /// samples — so the same number covers it many times over.
     fn tail_frames(&self) -> u32 {
+        // A knob still travelling keeps the device awake: freezing a lag
+        // halfway would leave it there, and the stage would come back with
+        // values its own parameters do not describe.
+        if !self.depth.is_settled()
+            || !self.feedback.is_settled()
+            || !self.spread.is_settled()
+            || !self.tone.is_settled()
+            || !self.color.is_settled()
+        {
+            return u32::MAX;
+        }
         let trip = MAX_DELAY_MS * 0.001 * self.sample_rate.max(1) as f32;
         let gain = self.feedback.value().abs().max(self.params.feedback.abs());
         feedback_tail_frames(gain, trip)
+    }
+
+    /// The LFO is the whole device: it runs on the clock, not on the input,
+    /// so it has to arrive at the same phase whether or not the stage was
+    /// called. One `skip` per frame rather than one for the block, because
+    /// that is what the sample loop does and the two do not land in the same
+    /// place.
+    fn skip_block(&mut self, ctx: &ProcessContext) {
+        for _ in 0..ctx.frames {
+            self.lfo.skip(1, self.params.rate_hz, self.sample_rate);
+            // The line is written too, and not because of what is in it --
+            // it is silent either way. `DelayLine::read` derives its
+            // interpolation fraction from `write - 1 - offset`, so where the
+            // write head sits changes the last few bits of that fraction.
+            // A frozen ring would come back reading between different
+            // samples than a running one, and a chorus's read head moves fast
+            // enough over noisy material for that to show. Keeping ring time
+            // and wall time the same thing costs two stores a frame.
+            self.line.write(0.0, 0.0);
+        }
     }
 
     fn process(

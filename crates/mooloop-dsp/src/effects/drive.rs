@@ -164,6 +164,16 @@ impl AudioNode for DriveEffect {
     /// fraction of a millisecond of audio, and the cost of over-reporting it
     /// is one extra block of a cheap effect.
     fn tail_frames(&self) -> u32 {
+        // Twenty milliseconds is shorter than a knob's lag takes to snap from
+        // one end of the drive range to the other, so a smoother in flight is
+        // its own reason to keep running.
+        if !self.drive.is_settled()
+            || !self.tone.is_settled()
+            || !self.mix.is_settled()
+            || !self.output.is_settled()
+        {
+            return u32::MAX;
+        }
         (self.sample_rate / 50).saturating_add(OVERSAMPLER_LATENCY_FRAMES as u32)
     }
 

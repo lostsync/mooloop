@@ -369,6 +369,17 @@ impl AudioNode for PolySynth {
         0
     }
 
+    /// The LFO advances a sample at a time inside the render loop whether or
+    /// not a voice is sounding, so this mirrors that rather than taking one
+    /// stride over the block: a sample-and-hold shape resolves per cycle, and
+    /// the two do not land in the same place.
+    fn skip_block(&mut self, ctx: &ProcessContext) {
+        let (rate, wave) = (self.params.lfo.rate_hz, self.params.lfo.wave);
+        for _ in 0..ctx.frames {
+            self.lfo.next_sample(rate, wave, ctx.sample_rate);
+        }
+    }
+
     fn process(
         &mut self,
         ctx: &ProcessContext,

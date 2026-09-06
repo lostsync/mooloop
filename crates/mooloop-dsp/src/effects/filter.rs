@@ -155,7 +155,11 @@ impl AudioNode for FilterEffect {
     /// resonance to effectively forever as it approaches self-oscillation.
     /// Reading the four stages is four pairs of comparisons and is exact.
     fn is_at_rest(&self) -> bool {
-        self.left.iter().all(Svf::is_at_rest) && self.right.iter().all(Svf::is_at_rest)
+        self.cutoff.is_settled()
+            && self.resonance.is_settled()
+            && self.drive.is_settled()
+            && self.left.iter().all(Svf::is_at_rest)
+            && self.right.iter().all(Svf::is_at_rest)
     }
 
     fn process(

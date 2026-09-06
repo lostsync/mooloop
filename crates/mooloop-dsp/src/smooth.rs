@@ -90,6 +90,16 @@ impl Smoothed {
     pub fn value(&self) -> f32 {
         self.current
     }
+
+    /// Whether the lag has reached its target and stopped moving.
+    ///
+    /// Exact rather than approximate: `advance` snaps once the remaining gap
+    /// is under `SNAP_EPSILON`, so a settled smoother really does hold still,
+    /// and a device can tell a host it has nothing left to do without the
+    /// answer depending on how many samples it is asked about.
+    pub fn is_settled(&self) -> bool {
+        self.current == self.target
+    }
 }
 
 #[cfg(test)]
