@@ -113,7 +113,8 @@ pub use gain::{
 };
 pub use effect::{
     BitcrushParams, BitcrushStyle, BufferParams, CompressorParams, DelayMode, DelayParams,
-    DelayTimeDivision, DriveCurve, DriveParams, EffectKind, EffectParams, EffectSlotState, EqBand,
+    DelayTimeDivision, DeviceId, DriveCurve, DriveParams, EffectKind, EffectParams,
+    EffectSlotState, EqBand,
     EqBandKind, EqParams, EqPassFilter, EqQProfile, EqSlope, FilterMode, FilterParams, FilterSlope,
     GateParams, LimiterParams, ModulationMode, ModulationParams, ParamCurve, ParamDescriptor,
     PlateParams, ReverbParams, BITCRUSH_PARAM_BITS, BITCRUSH_PARAM_DOWNSAMPLE, BITCRUSH_PARAM_MIX,
@@ -164,8 +165,8 @@ pub use sampler::{
     MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO, MIN_STRETCH_BARS, MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
 };
 pub use structure::{
-    insert_effect, move_effect, remove_effect, rescope_lanes, retarget_lanes, ChannelEdit,
-    SlotRemap,
+    assign_device_ids, device_slot, drop_lanes_for_device, insert_effect, mint_device_id, move_effect, remove_effect,
+    rescope_lanes, slot_of, ChannelEdit,
 };
 pub use synth::{
     DrumMode, DrumSynthParams, HatCharacter, KickCharacter, LfoParams, LfoWave, MonoSynthParams,

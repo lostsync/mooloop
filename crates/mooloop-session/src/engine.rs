@@ -518,7 +518,7 @@ mod tests {
         assert_eq!(session.latency_plan(), mooloop_core::CompiledLatency::default());
 
         // One latent device on channel 0 and its neighbour has to wait.
-        session.channels[0].effects.push(transparent_drive());
+        session.channels[0].effects.push(transparent_drive().with_id(mooloop_core::DeviceId(0)));
         let plan = session.latency_plan();
         assert_eq!(plan.channel(0), 0, "the longest path must not move");
         assert_eq!(plan.channel(1), latency);
@@ -543,7 +543,7 @@ mod tests {
         let mut session = Session::default();
         session.add_channel(mooloop_core::DeviceKind::Sampler);
         session.channels[0].bus = 1;
-        session.buses[1].effects.push(transparent_drive());
+        session.buses[1].effects.push(transparent_drive().with_id(mooloop_core::DeviceId(0)));
 
         let plan = session.latency_plan();
         assert_eq!(plan.channel(0), 0, "nothing else feeds bus 1");

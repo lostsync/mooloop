@@ -560,8 +560,12 @@ land on its own when it starts to matter:
   ring primitive with cubic-Hermite fractional reads and crossfaded head
   jumps. The delay effect is its first consumer; the retained-audio buffer
   device is meant to be the second rather than growing its own ring.
-- `ParamAddr` addresses parameters owned by a source, effect slot, modulator
-  slot, or strip within its channel-or-bus scope. The per-channel `ModRack` and clip
+- `ParamAddr` addresses parameters owned by a source, a rack device, a
+  modulator slot, or the strip, within its channel-or-bus scope. A rack device
+  is named by a durable `DeviceId` minted when it is inserted, so reordering,
+  inserting into or deleting from a chain changes no saved address at all; the
+  position is derived from the chain on each read. A modulator is still named
+  by slot inside the rack, and a channel by index. The per-channel `ModRack` and clip
   automation resolve through it. They compose rather than compete: a lane
   supplies the base a knob would otherwise supply, and the matrix adds its
   offsets on top, so an LFO wobbles around a drawn curve. Both resolve at the

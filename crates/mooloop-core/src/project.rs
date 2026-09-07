@@ -298,6 +298,13 @@ pub struct ChannelSetup {
     /// projects written before modulation was added completely compatible.
     #[serde(default)]
     pub modulation: ModRack,
+    /// Next device identity to mint for `effects`. Monotonic, so removing a
+    /// device and adding another never hands the newcomer the departed
+    /// device's routes. Defaults to zero and is raised past whatever the
+    /// chain already holds by [`Self::assign_device_ids`], which is what
+    /// makes a project written before this field loads correctly.
+    #[serde(default)]
+    pub next_device_id: u32,
 }
 
 impl ChannelSetup {
@@ -307,6 +314,7 @@ impl ChannelSetup {
             source: ChannelSource::default(),
             effects: Vec::new(),
             modulation: ModRack::default(),
+            next_device_id: 0,
         }
     }
 
@@ -320,6 +328,7 @@ impl ChannelSetup {
             source: ChannelSource::DrumSynth(DrumSynthState { params }),
             effects: Vec::new(),
             modulation: ModRack::default(),
+            next_device_id: 0,
         }
     }
 
@@ -333,6 +342,7 @@ impl ChannelSetup {
             source: ChannelSource::MonoSynth(MonoSynthState { params }),
             effects: Vec::new(),
             modulation: ModRack::default(),
+            next_device_id: 0,
         }
     }
 
@@ -346,6 +356,7 @@ impl ChannelSetup {
             source: ChannelSource::MlM1(MlM1State { params }),
             effects: Vec::new(),
             modulation: ModRack::default(),
+            next_device_id: 0,
         }
     }
 
@@ -359,6 +370,7 @@ impl ChannelSetup {
             source: ChannelSource::MlP8(MlP8State { params }),
             effects: Vec::new(),
             modulation: ModRack::default(),
+            next_device_id: 0,
         }
     }
 
@@ -372,6 +384,7 @@ impl ChannelSetup {
             source: ChannelSource::Ds01(Ds01State { params }),
             effects: Vec::new(),
             modulation: ModRack::default(),
+            next_device_id: 0,
         }
     }
 
@@ -385,6 +398,7 @@ impl ChannelSetup {
             source: ChannelSource::AuxIn(AuxInState { params }),
             effects: Vec::new(),
             modulation: ModRack::default(),
+            next_device_id: 0,
         }
     }
 
@@ -398,6 +412,7 @@ impl ChannelSetup {
             source: ChannelSource::PolySynth(PolySynthState { params }),
             effects: Vec::new(),
             modulation: ModRack::default(),
+            next_device_id: 0,
         }
     }
 
@@ -415,6 +430,24 @@ impl ChannelSetup {
     /// business claiming a channel number. Wherever a setup lands somewhere
     /// new is where the rewrite belongs. Bus-scoped routes are left alone: a
     /// bus exists independently of which channel loaded the setup.
+    /// Append `effect` to the chain, minting it an identity.
+    ///
+    /// The way to add a device to a chain in code. Pushing onto `effects`
+    /// directly produces a device with no identity, which no route and no
+    /// lane can then name.
+    pub fn push_effect(&mut self, effect: crate::EffectSlotState) -> Option<crate::DeviceId> {
+        let at = self.effects.len();
+        crate::insert_effect(&mut self.effects, &mut self.next_device_id, at, effect)?;
+        Some(self.effects[at].id)
+    }
+
+    /// Give this chain's devices their identities and put the mint past them.
+    /// See [`crate::assign_device_ids`] for why this is a no-op on a project
+    /// that has never seen it rather than a migration.
+    pub fn assign_device_ids(&mut self) {
+        crate::assign_device_ids(&mut self.effects, &mut self.next_device_id);
+    }
+
     pub fn rescope_modulation(&mut self, channel: u8) {
         for route in self.modulation.routes.iter_mut().flatten() {
             if matches!(route.destination.scope, EffectTarget::Channel(_)) {
@@ -694,6 +727,22 @@ impl Default for Project {
 }
 
 impl Project {
+    /// Give every device in every chain -- channels and buses -- its
+    /// identity, and put each chain's mint past it.
+    ///
+    /// The one place a loaded song gets this done. Called after decode and
+    /// before anything resolves an address, because until it has run a chain
+    /// written by an older version holds `DeviceId::UNASSIGNED` in every row
+    /// and every route in the song resolves to nothing.
+    pub fn assign_device_ids(&mut self) {
+        for channel in &mut self.channels {
+            channel.setup.assign_device_ids();
+        }
+        for bus in &mut self.buses {
+            bus.assign_device_ids();
+        }
+    }
+
     /// Delete the channel at `index`, closing the gap. Every route and lane
     /// in the song that named a later channel is renumbered to follow it,
     /// and anything that named the deleted channel is dropped with it: a
@@ -982,7 +1031,7 @@ mod tests {
                 0,
                 crate::ParamAddr::effect(
                     crate::EffectTarget::Channel(0),
-                    0,
+                    crate::DeviceId(0),
                     crate::FILTER_PARAM_CUTOFF_HZ,
                 ),
                 0.3,

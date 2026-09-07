@@ -53,8 +53,11 @@ export struct ModulationOutletRow {
 
 // A route remains explicit even when it is currently parked at zero depth or
 // aimed at a destination that later becomes unavailable. The owner token is
-// an adapter for Slint: -1 means the source device, -2 the channel strip, and
-// a non-negative value is an effect slot.
+// an adapter for Slint: -1 means the source device, -2 the channel strip, a
+// non-negative value is a *position* in the rack this shelf is drawing, and
+// the minimum int means the destination is not on this chain at all. That
+// last case exists because a route names a device by durable id and the token
+// is a model index, so a destination on another chain has no row here.
 export struct ModulationRouteRow {
     route-index: int,
     source-slot: int,

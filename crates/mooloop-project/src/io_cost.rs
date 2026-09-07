@@ -39,7 +39,7 @@ fn song(channels: usize, notes: usize) -> Project {
             mooloop_core::EffectKind::Delay,
             mooloop_core::EffectKind::Reverb,
         ] {
-            channel.setup.effects.push(EffectSlotState::of_kind(kind));
+            channel.setup.push_effect(EffectSlotState::of_kind(kind));
         }
         for pattern in 0..4 {
             for note in 0..notes {

@@ -766,6 +766,73 @@ empty case worth reporting — `IntegerDelay::new` returns `None` instead of
 building a ring of no frames, and a history with nothing in it is what
 `can_undo` already answers. `frames()` and `retained()` say what they return.
 
+## Sep 6 (the container brief) — a position is not an identity, for the fourth time, and this one was on purpose
+
+`reference/CONTAINERS.md` asked for a design brief to be checked against the
+source and turned into a plan. Three of its claims did not survive the check,
+and the largest is the one worth writing down: **the brief opens by saying
+there is no wet/dry control on an effect.** There has been one on every rack
+row since the gain-structure work — `EffectSlotState.wet_dry`, a preallocated
+dry copy in `EffectChain`, a per-slot `IntegerDelay` keeping the blend from
+combing, and a `MiniKnob` on the rail. What is actually missing is wet/dry
+across *a run of several devices*, which is a real gap and a much narrower
+one, and it means the container step generalises an existing mechanism from
+one slot to a span rather than inventing one. A brief written from the outside
+described the absence correctly and the reason for it wrongly, and the reason
+was where all the cost estimates hung.
+
+The other two: there is no "open device face" whose index could go stale,
+because every rack row draws its full face inline; and a container's latency
+cannot be declared by its kind, because `latency_frames` is a method on
+`EffectKind` and a container's latency is a function of its contents.
+
+Then the prerequisite, which is this journal's fourth entry on the same theme
+and the first where the position-to-identity move was planned rather than
+found. `ParamOwner::Effect { slot }` was an index into a flat array, persisted
+into every modulation route and every automation lane, so a drag was an edit
+to the song's saved wiring. `SlotRemap` was the machinery that rewrote them,
+and it worked — it just cannot survive a device that contains other devices,
+where an edit inside one box renumbers everything after it at every enclosing
+level.
+
+`structure.rs` carried a comment arguing explicitly *against* durable device
+ids: that they were what modulator sources needed "because a route names a
+source from elsewhere", and that nothing outside a chain names an effect slot
+except through `ParamAddr`, which travelled through that module. Sound
+reasoning, correctly recorded, and now false. It has been rewritten rather
+than left to contradict the code.
+
+What replaced `SlotRemap` is smaller than what it replaced. A `DeviceId`
+minted on insertion, a `#[serde(alias = "slot")]` that reads every older
+project exactly (because in such a project a device's position *was* its
+identity — the same trick `SavedModulatorSlot.id` used), one derivation from
+id to position on the control path, and one verb, `forget_device`, spelled the
+same at each layer and called only on removal. `SlotRemap` itself, its
+`address`, four `retarget_lanes`/`retarget_effect_slots` methods across four
+crates, and five in-memory fixups in the session are gone. Nothing replaced
+them because there was nothing left for them to do.
+
+Two things the doing turned up. A preset had to be **stripped** of identity on
+the way out and had to **refuse** to bring one in: `load_effect_preset` was
+`*effect = *preset`, which would have silently deleted the row's id and
+orphaned every route pointing at it. And `DeviceId` had to be `u32`, which is
+what forced the wire-format change — not the nesting, as the brief assumed.
+Identity has to be monotonic and never reused, and `ParamOwner`'s `u8` would
+exhaust on a 256-slot chain and hand a departed device's routes to a newcomer.
+
+The price was measured rather than assumed, which is what the capacity plan
+asks of anything that widens a stored type: `ParamAddr` 12 bytes to 16,
+`ModRoute` 28 to 32, 16 KiB across the reserved channel count. The command
+ring did not move — `EngineCommand` is still 136 bytes, still floored by the
+poly synth's parameter block.
+
+The acceptance case is the one that could not be written before: snapshot a
+project's saved routes and lanes, reorder the rack, insert a device, reorder
+again, and assert the saved addresses are **byte-identical**. Under the slot
+scheme every one of those edits had to change them, so the only available test
+was "the permutation ran correctly" — which cannot tell a correct remap from
+no remap at all.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.

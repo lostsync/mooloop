@@ -38,8 +38,7 @@ fn sparse_project() -> Project {
     }
     drums
         .setup
-        .effects
-        .push(EffectSlotState::new(mooloop_core::EffectParams::Reverb(
+        .push_effect(EffectSlotState::new(mooloop_core::EffectParams::Reverb(
             ReverbParams {
                 decay_s: 3.0,
                 ..ReverbParams::default()
@@ -47,12 +46,10 @@ fn sparse_project() -> Project {
         )));
     drums
         .setup
-        .effects
-        .push(EffectSlotState::of_kind(EffectKind::Delay));
+        .push_effect(EffectSlotState::of_kind(EffectKind::Delay));
     drums
         .setup
-        .effects
-        .push(EffectSlotState::of_kind(EffectKind::Eq));
+        .push_effect(EffectSlotState::of_kind(EffectKind::Eq));
 
     let mut keys = ProjectChannel::poly_synth(1, 1);
     keys.setup.channel.volume = 0.7;
@@ -61,15 +58,13 @@ fn sparse_project() -> Project {
         keys.notes[0].push(NoteEvent::new(index as u32 + 20, 384, 48, note + 5, 100));
     }
     keys.setup
-        .effects
-        .push(EffectSlotState::of_kind(EffectKind::Compressor));
+        .push_effect(EffectSlotState::of_kind(EffectKind::Compressor));
 
     let mut silent = ProjectChannel::sampler(2, 1);
     silent.setup.channel.volume = 0.8;
     silent
         .setup
-        .effects
-        .push(EffectSlotState::of_kind(EffectKind::Plate));
+        .push_effect(EffectSlotState::of_kind(EffectKind::Plate));
 
     Project {
         channels: vec![drums, keys, silent],
@@ -327,16 +322,14 @@ fn bussed_project() -> Project {
         ..Project::default()
     };
     project.buses[1]
-        .effects
-        .push(EffectSlotState::new(mooloop_core::EffectParams::Reverb(
+        .push_effect(EffectSlotState::new(mooloop_core::EffectParams::Reverb(
             ReverbParams {
                 decay_s: 2.0,
                 ..ReverbParams::default()
             },
         )));
     project.buses[MASTER_BUS as usize]
-        .effects
-        .push(EffectSlotState::of_kind(EffectKind::Compressor));
+        .push_effect(EffectSlotState::of_kind(EffectKind::Compressor));
     project
 }
 

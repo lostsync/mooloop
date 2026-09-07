@@ -10,7 +10,6 @@ use mooloop_core::{
     Ds01Params, DrumSynthParams, EffectTarget, EngineCommand, GeneratorParams,
     ModDestinationDescriptor,
     ModRack, MonoSynthParams, MlM1Params, MlP8Params, ParamAddr, ParamOwner, PolySynthParams,
-    SlotRemap,
     Project,
     SamplerParams, SliceMap,
     chain_latency, clamp_bus, compile_latency, DEFAULT_STEPS, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
@@ -332,7 +331,15 @@ impl PendingEffectParams {
 ///
 /// Allocated on the control thread and installed, like the node beside it.
 pub struct EffectSlot {
-    /// The slot's persisted device identity, tracked independently of the
+    /// Which device this is, as routes and lanes name it.
+    ///
+    /// The engine keeps indexing by position -- that is what makes the inner
+    /// loop cheap -- and this is the one field that lets a position be turned
+    /// back into an address without a table. `control_events_for_slot` reads
+    /// it once per slot per block to build the address it looks a route up
+    /// by; `EffectChain::slot_of` walks it the other way, on removal only.
+    device: mooloop_core::DeviceId,
+    /// The slot's persisted device kind, tracked independently of the
     /// trait object so prepared resource replacements can refuse stale work.
     kind: Option<mooloop_core::EffectKind>,
     /// The authoritative knob value. Nodes retain only the resolved value they
@@ -363,6 +370,7 @@ impl EffectSlot {
     /// A fresh slot, allocated on the control thread to be installed.
     pub fn new() -> Self {
         Self {
+            device: mooloop_core::DeviceId::UNASSIGNED,
             kind: None,
             base_params: None,
             resource_key: None,
@@ -372,6 +380,19 @@ impl EffectSlot {
             input_trim: 1.0,
             output_trim: 1.0,
             silent_frames: 0,
+        }
+    }
+}
+
+impl EffectSlot {
+    /// A fresh slot that already knows which device it is about to hold.
+    ///
+    /// Every install goes through this rather than `new`, because a slot that
+    /// does not know its identity is a slot no route can find.
+    pub fn for_device(device: mooloop_core::DeviceId) -> Self {
+        Self {
+            device,
+            ..Self::new()
         }
     }
 }
@@ -422,6 +443,22 @@ impl EffectChain {
             analyzers: std::array::from_fn(|_| None),
             dry: StereoBus::with_capacity(MAX_BLOCK_SIZE),
         }
+    }
+
+    /// Where `device` currently sits in this chain.
+    ///
+    /// Identity resolved to position, on the control-command drain rather
+    /// than in a sample loop -- the same bargain `ModRack::slot_for` makes
+    /// for modulator sources. Bounded by `bound` rather than by the 256
+    /// addressable slots, so an empty chain answers in no time at all.
+    fn slot_of(&self, device: mooloop_core::DeviceId) -> Option<usize> {
+        if !device.is_assigned() {
+            return None;
+        }
+        (0..self.bound).find(|slot| {
+            self.slot(*slot)
+                .is_some_and(|state| state.device == device)
+        })
     }
 
     /// One slot's host and control state, if it has any.
@@ -662,6 +699,11 @@ impl EffectChain {
         let (Some(kind), Some(params)) = (state.kind, state.base_params) else {
             return;
         };
+        // The address a route or lane could be naming this device by. Read
+        // from the slot rather than derived from its position, which is the
+        // whole of what durable identity costs the realtime path: one field
+        // read per slot per block, in place of a cast.
+        let device = state.device;
         let ticks = modulation
             .map(|modulation| modulation.ticks)
             .into_iter()
@@ -670,7 +712,7 @@ impl EffectChain {
             .unwrap_or(0);
 
         for descriptor in kind.descriptors() {
-            let destination = ParamAddr::effect(scope, slot as u8, descriptor.id);
+            let destination = ParamAddr::effect(scope, device, descriptor.id);
             // The destination's own declaration decides whether modulation is
             // legal here at all -- a stepped mode selector refuses it, so an
             // LFO cannot flap an algorithm switch. Automation is unaffected: a
@@ -751,6 +793,15 @@ impl EffectChain {
         reclaim: &mut Reclaim,
     ) {
         self.clear(reclaim);
+        // A chain arriving without identities is a project that skipped
+        // `Project::assign_device_ids`, and the symptom would be every route
+        // and lane on it quietly resolving to nothing. Caught here, on the
+        // control thread, rather than found by ear.
+        debug_assert!(
+            slots.iter().all(|effect| effect.id.is_assigned()),
+            "a chain reached the engine with unassigned device identities; \
+             `Project::assign_device_ids` did not run over it"
+        );
         for (slot, effect) in slots.iter().take(MAX_EFFECTS_PER_CHANNEL).enumerate() {
             let node = build_effect_at_tempo(effect.params, sample_rate, bpm);
             let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
@@ -761,7 +812,7 @@ impl EffectChain {
                 node,
                 align,
                 Box::new(SpectrumAnalyzer::new()),
-                Box::new(EffectSlot::new()),
+                Box::new(EffectSlot::for_device(effect.id)),
             );
             if !displaced.is_empty() {
                 reclaim.push(displaced);
@@ -2228,30 +2279,35 @@ impl RenderState {
         Self::chain_for(&mut self.strips, &mut self.buses, target)
     }
 
-    /// Run one chain edit's permutation over everything on this side that
-    /// names a slot in `target`'s chain: the matrix routes and the automation
-    /// lanes. The devices themselves have already moved with their base
-    /// values, event queues and host controls, so nothing needs restoring;
-    /// only the addresses had fallen behind.
+    /// Drop every route and every lane driving `device` in `target`, because
+    /// that device has just been removed.
+    ///
+    /// All that is left of what used to run on every chain edit. A reorder is
+    /// no longer an addressing event on either side: the devices move with
+    /// their base values, event queues and host controls, and the addresses
+    /// naming them were never positions to begin with.
     ///
     /// A channel's routes can only address that channel, so a channel edit
     /// touches one rack. A bus chain can be addressed from any channel's
     /// clip, so a bus edit walks them all -- a few thousand comparisons, on a
     /// gesture that happens by hand.
-    fn retarget_effect_slots(&mut self, target: EffectTarget, remap: &SlotRemap) {
+    fn forget_device(&mut self, target: EffectTarget, device: mooloop_core::DeviceId) {
+        if !device.is_assigned() {
+            return;
+        }
         match target {
             EffectTarget::Channel(channel) => {
                 if let Some(rack) = self.modulation.get_mut(channel as usize) {
-                    rack.retarget_effect_slots(target, remap);
+                    rack.forget_device(target, device);
                 }
             }
             EffectTarget::Bus(_) => {
                 for rack in self.modulation.iter_mut() {
-                    rack.retarget_effect_slots(target, remap);
+                    rack.forget_device(target, device);
                 }
             }
         }
-        self.sequencer.retarget_lanes(target, remap);
+        self.sequencer.forget_device(target, device);
     }
 
     fn chain(&self, target: EffectTarget) -> Option<&EffectChain> {
@@ -2328,12 +2384,15 @@ impl RenderState {
     /// control signal last resolved, until someone happens to touch that knob.
     fn restore_base_param(&mut self, destination: ParamAddr) {
         match destination.owner {
-            ParamOwner::Effect { slot } => {
+            ParamOwner::Effect { device } => {
                 let Some(chain) = self.chain_mut(destination.scope) else {
                     return;
                 };
-                if let Some(base) = chain.base_param(slot as usize, destination.param) {
-                    chain.queue_param(slot as usize, destination.param, base);
+                let Some(slot) = chain.slot_of(device) else {
+                    return;
+                };
+                if let Some(base) = chain.base_param(slot, destination.param) {
+                    chain.queue_param(slot, destination.param, base);
                 }
             }
             // A generator has no queue between blocks; its base is applied
@@ -2375,17 +2434,17 @@ impl RenderState {
         let EffectTarget::Channel(channel) = target else {
             return false;
         };
-        let Some(descriptor) = self
-            .chain(target)
-            .and_then(|chain| chain.slot(slot as usize).and_then(|state| state.kind))
-            .and_then(|kind| kind.descriptor(id))
-        else {
+        let Some(state) = self.chain(target).and_then(|chain| chain.slot(slot as usize)) else {
+            return false;
+        };
+        let device = state.device;
+        let Some(descriptor) = state.kind.and_then(|kind| kind.descriptor(id)) else {
             return false;
         };
         let policy = ModDestinationDescriptor::for_param(descriptor);
         self.modulation
             .get(channel as usize)
-            .is_some_and(|rack| rack.modulates(ParamAddr::effect(target, slot, id), &policy))
+            .is_some_and(|rack| rack.modulates(ParamAddr::effect(target, device, id), &policy))
     }
 
     /// Change the stored base, then immediately queue it only if a control
@@ -2565,12 +2624,18 @@ impl RenderState {
                     .map(StructuralReclaim::Effect)
             }
             StructuralCommand::RemoveEffect { target, slot } => {
-                let displaced = Self::chain_for(&mut self.strips, &mut self.buses, target)
-                    .map(|chain| chain.remove(slot as usize));
+                let chain = Self::chain_for(&mut self.strips, &mut self.buses, target);
+                // Read the departing device's identity before it goes, since
+                // it is what the routes and lanes that drove it are named by.
+                let device = chain
+                    .as_ref()
+                    .and_then(|chain| chain.slot(slot as usize))
+                    .map_or(mooloop_core::DeviceId::UNASSIGNED, |state| state.device);
+                let displaced = chain.map(|chain| chain.remove(slot as usize));
                 // The routes and lanes that drove the departed device go with
-                // it, and everything above it closes up -- the same table the
-                // model applied when it took the slot out of its `Vec`.
-                self.retarget_effect_slots(target, &SlotRemap::for_remove(slot as usize));
+                // it. Nothing else has to be told: what closed up behind it
+                // was positions, and no address is one.
+                self.forget_device(target, device);
                 displaced
                     .filter(|displaced| !displaced.is_empty())
                     .map(StructuralReclaim::Effect)
@@ -2885,11 +2950,11 @@ impl RenderState {
                 }
             }
             EngineCommand::MoveEffect { target, from, to } => {
-                let moved = self
-                    .chain_mut(target)
-                    .is_some_and(|chain| chain.move_slot(from as usize, to as usize));
-                if moved {
-                    self.retarget_effect_slots(target, &SlotRemap::for_move(from as usize, to as usize));
+                // The devices move; nothing else has to. This used to run a
+                // permutation over every route in the rack and every lane in
+                // every pattern.
+                if let Some(chain) = self.chain_mut(target) {
+                    chain.move_slot(from as usize, to as usize);
                 }
             }
             EngineCommand::SetEffectBypassed {
@@ -3959,9 +4024,13 @@ mod tests {
     #[test]
     fn project_load_installs_the_last_addressable_effect_slot() {
         let mut project = Project::default();
-        project.channels[0].setup.effects = (0..MAX_EFFECTS_PER_CHANNEL)
-            .map(|_| mooloop_core::EffectSlotState::of_kind(mooloop_core::EffectKind::Filter))
-            .collect();
+        for _ in 0..MAX_EFFECTS_PER_CHANNEL {
+            project.channels[0]
+                .setup
+                .push_effect(mooloop_core::EffectSlotState::of_kind(
+                    mooloop_core::EffectKind::Filter,
+                ));
+        }
 
         let render = RenderState::from_project(48_000, &project, &[]);
         assert!(render.strips[0].effects.nodes[MAX_EFFECTS_PER_CHANNEL - 1].is_some());
@@ -4402,19 +4471,23 @@ mod tests {
     #[test]
     fn a_route_on_a_stepped_parameter_neither_moves_nor_blocks_its_knob() {
         let mut channel = ProjectChannel::sampler(0, 1);
-        channel
+        let eq = channel
             .setup
-            .effects
-            .push(mooloop_core::EffectSlotState::of_kind(
+            .push_effect(mooloop_core::EffectSlotState::of_kind(
                 mooloop_core::EffectKind::Eq,
-            ));
+            ))
+            .expect("pushed");
         channel.setup.modulation.install(0, mooloop_core::ModulatorParams::Lfo(
             mooloop_core::ModLfoParams {
                 rate_hz: 375.0,
                 ..mooloop_core::ModLfoParams::default()
             },
         ));
-        let stepped = ParamAddr::effect(EffectTarget::Channel(0), 0, mooloop_core::EQ_PARAM_TARGET);
+        let stepped = ParamAddr::effect(
+            EffectTarget::Channel(0),
+            eq,
+            mooloop_core::EQ_PARAM_TARGET,
+        );
         assert!(channel
             .setup
             .modulation
@@ -4459,8 +4532,7 @@ mod tests {
         let mut channel = ProjectChannel::sampler(0, 1);
         channel
             .setup
-            .effects
-            .push(mooloop_core::EffectSlotState::filter(
+            .push_effect(mooloop_core::EffectSlotState::filter(
                 mooloop_core::FilterParams {
                     cutoff_hz: 1_000.0,
                     resonance: 0.0,
@@ -4483,7 +4555,7 @@ mod tests {
                 0,
                 ParamAddr::effect(
                     EffectTarget::Channel(0),
-                    0,
+                    mooloop_core::DeviceId(0),
                     mooloop_core::FILTER_PARAM_CUTOFF_HZ,
                 ),
                 0.25,
@@ -4563,8 +4635,7 @@ mod tests {
         let mut channel = ProjectChannel::sampler(0, 1);
         channel
             .setup
-            .effects
-            .push(mooloop_core::EffectSlotState::filter(
+            .push_effect(mooloop_core::EffectSlotState::filter(
                 mooloop_core::FilterParams {
                     cutoff_hz,
                     resonance: 0.0,
@@ -4575,9 +4646,11 @@ mod tests {
         channel
     }
 
+    /// The filter added first by `filter_channel`, so its identity is the
+    /// first one minted on that chain.
     const CUTOFF: ParamAddr = ParamAddr::effect(
         EffectTarget::Channel(0),
-        0,
+        mooloop_core::DeviceId(0),
         mooloop_core::FILTER_PARAM_CUTOFF_HZ,
     );
 
@@ -4806,10 +4879,15 @@ mod tests {
         ));
     }
 
-    /// The defect this guards: a route and a lane name their destination by
-    /// slot, and reordering the chain used to leave both pointing at the old
-    /// number -- so the LFO that was on the filter's cutoff started driving
-    /// whatever device slid into that slot, and the filter went dry.
+    /// The defect this guards used to be that a route and a lane named their
+    /// destination by *slot*, so reordering the chain left both pointing at
+    /// the old number and the LFO on the filter's cutoff started driving
+    /// whatever slid into that slot.
+    ///
+    /// It is now guarding something stronger and simpler: **the addresses do
+    /// not change at all.** `CUTOFF` is built once, before the reorder, and
+    /// still resolves afterwards -- there is no `moved` address, because
+    /// there is nothing for the reorder to move.
     #[test]
     fn a_route_and_a_lane_follow_their_device_through_a_reorder_and_die_with_it() {
         let (project, _source) = lfo_on_cutoff(0.25);
@@ -4835,7 +4913,6 @@ mod tests {
             from: 0,
             to: 1,
         });
-        let moved = ParamAddr::effect(channel, 1, mooloop_core::FILTER_PARAM_CUTOFF_HZ);
         assert!(
             !render.effect_is_modulated(channel, 0, mooloop_core::FILTER_PARAM_CUTOFF_HZ),
             "the drive inherited the filter's route"
@@ -4844,10 +4921,12 @@ mod tests {
             render.effect_is_modulated(channel, 1, mooloop_core::FILTER_PARAM_CUTOFF_HZ),
             "the route did not follow the filter"
         );
-        assert!(render.sequencer.automation_lane_at(CUTOFF, 0.0).is_none());
+        // The address built before the reorder is the address after it. This
+        // is the assertion the slot scheme could not make: there, `CUTOFF`
+        // would now name the drive and the lane would have been rewritten.
         assert!(
-            render.sequencer.automation_lane_at(moved, 0.0).is_some(),
-            "the lane did not follow the filter"
+            render.sequencer.automation_lane_at(CUTOFF, 0.0).is_some(),
+            "the lane stopped resolving even though its device is still there"
         );
         assert_eq!(
             render.strips[0].effects.slot(1).and_then(|slot| slot.kind),
@@ -4872,7 +4951,7 @@ mod tests {
             slot: 1,
         });
         assert_eq!(render.modulation[0].routes.iter().flatten().count(), 0);
-        assert!(render.sequencer.automation_lane_at(moved, 0.0).is_none());
+        assert!(render.sequencer.automation_lane_at(CUTOFF, 0.0).is_none());
     }
 
     /// Emptying a slot is the same fact stated once for every route it drove.
@@ -5116,8 +5195,7 @@ mod tests {
         let mut channel = ProjectChannel::sampler(0, 1);
         channel
             .setup
-            .effects
-            .push(mooloop_core::EffectSlotState::new(
+            .push_effect(mooloop_core::EffectSlotState::new(
                 mooloop_core::EffectParams::Buffer(mooloop_core::BufferParams {
                     bars: 1,
                     ..mooloop_core::BufferParams::default()
@@ -5126,7 +5204,7 @@ mod tests {
         let project = synth_project(channel);
         let target = ParamAddr::effect(
             EffectTarget::Channel(0),
-            0,
+            mooloop_core::DeviceId(0),
             mooloop_core::BUFFER_PARAM_OFFSET_BEATS,
         );
 
@@ -5462,7 +5540,7 @@ mod tests {
     fn hit_channel(index: usize, latent: bool) -> ProjectChannel {
         let mut channel = ProjectChannel::drum_synth(index, 1);
         if latent {
-            channel.setup.effects.push(transparent_drive());
+            channel.setup.push_effect(transparent_drive());
         }
         channel.notes[0].push(NoteEvent::new(index as u32 + 1, 0, 24, 60, 127));
         channel
@@ -5536,7 +5614,7 @@ mod tests {
         // Channel 0 through bus 1, which carries the cost; channel 1 straight
         // to the master with nothing.
         project.channels[0].setup.channel.bus = 1;
-        project.buses[1].effects.push(transparent_drive());
+        project.buses[1].push_effect(transparent_drive());
 
         let master = render_master(&project, FRAMES);
         assert!(
@@ -5881,6 +5959,17 @@ mod tests {
         slot: u8,
         node: Box<dyn AudioNode + Send>,
     ) -> StructuralCommand {
+        // A slot number the model would never mint, so a test device cannot
+        // be mistaken for one the project loaded.
+        install_effect_as(target, slot, mooloop_core::DeviceId(900 + slot as u32), node)
+    }
+
+    fn install_effect_as(
+        target: EffectTarget,
+        slot: u8,
+        device: mooloop_core::DeviceId,
+        node: Box<dyn AudioNode + Send>,
+    ) -> StructuralCommand {
         let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
         StructuralCommand::InstallEffect {
             target,
@@ -5890,7 +5979,7 @@ mod tests {
             node,
             align,
             analyzer: Box::new(SpectrumAnalyzer::new()),
-            state: Box::new(EffectSlot::new()),
+            state: Box::new(EffectSlot::for_device(device)),
         }
     }
 
@@ -7084,7 +7173,14 @@ mod footprint {
 
         // An occupied effect slot's state is half a kilobyte; an empty one is
         // the pointer that would otherwise have reserved it.
-        assert_eq!(size_of::<EffectSlot>(), 496);
+        //
+        // It grew by eight when the slot started carrying its device's
+        // durable `DeviceId` (`docs/plans/containers/01`) -- four for the id
+        // and four of padding. That is paid per *occupied* slot only, so a
+        // project with twenty devices on it pays 160 bytes, and what it buys
+        // is that the engine can answer "which device is this" without a
+        // side table. Worth paying.
+        assert_eq!(size_of::<EffectSlot>(), 504);
         assert_eq!(size_of::<Option<Box<EffectSlot>>>(), 8);
         assert_eq!(size_of::<EffectChain>(), 20_544);
         // A strip holds one node of every generator kind, so a new device is
@@ -7212,9 +7308,17 @@ mod footprint {
         // the same way and for the same kind of reason: its source became a
         // `ModSourceRef`, because a generator outlet is not a rack module and
         // has no identity the rack could mint for it.
+        //
+        // And another sixteen for the third instance of that same trade
+        // (`docs/plans/containers/01`): `ParamOwner::Effect` stopped naming a
+        // `u8` slot and started naming a `u32` `DeviceId`, so a route's
+        // destination no longer moves when the rack is reordered. Four bytes
+        // an address, 64 a channel's rack, 16 KiB across the reserved count.
+        // The same price and the same argument as the two above, and it buys
+        // the thing they bought one level out.
         let fixed = (size_of::<ModRack>() + size_of::<ModulatorRack>()) * MAX_CHANNELS
             + MAX_CHANNELS * size_of::<usize>() * 3;
-        assert_eq!(fixed / 1024, 471);
+        assert_eq!(fixed / 1024, 487);
 
         // Paid per channel the project actually has.
         let per_live =
@@ -7261,7 +7365,11 @@ mod footprint {
         // channel instead -- 7 MB across a full bank for something switched
         // off -- which is the design `03-materialized-taps.md` exists to
         // avoid, and this is the measurement that says it was avoided.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_414);
+        // Durable device identity added 16 KiB of the reserved figure and
+        // nothing per live channel: the slot's own eight bytes fall inside
+        // `ChannelStrip`'s existing arrangement, so a sixteen-channel project
+        // pays only the reserved rack growth.
+        assert_eq!((fixed + per_live * 16) / 1024, 1_430);
     }
 }
 

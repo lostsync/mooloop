@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use mooloop_core::{
-    sanitize_route, strip_descriptor, BusSetup, ChannelSetup, ChannelSource, DeviceKind,
+    sanitize_route, strip_descriptor, BusSetup, ChannelSetup, ChannelSource, DeviceId, DeviceKind,
     ds01, Ds01Params, DrumSynthParams, EffectKind, EffectSlotState, EffectTarget, MlM1Params,
     MlP8Params, ModRack,
     ModulatorKind, MonoSynthParams, NoteId, ParamAddr, ParamOwner, PolySynthParams, Project,
@@ -551,10 +551,15 @@ fn check_project(doctor: &mut Doctor, project: &mut Project) {
     }
     // After the chains and racks are themselves sound, so an address is
     // checked against what will actually be there.
-    let buses: Vec<Vec<EffectKind>> = project
+    let buses: Vec<Vec<(DeviceId, EffectKind)>> = project
         .buses
         .iter()
-        .map(|bus| bus.effects.iter().map(EffectSlotState::kind).collect())
+        .map(|bus| {
+            bus.effects
+                .iter()
+                .map(|effect| (effect.id, effect.kind()))
+                .collect()
+        })
         .collect();
     for (index, channel) in project.channels.iter_mut().enumerate() {
         let who = channel_name(index, &channel.setup);
@@ -1170,6 +1175,15 @@ fn check_effect(doctor: &mut Doctor, who: &str, slot: usize, effect: &mut Effect
     }
 }
 
+/// Where `device` sits on `chain`, and what it is. The whole of "resolve an
+/// address to a device" on this side: an id is looked up, never indexed.
+fn find_device(chain: &[(DeviceId, EffectKind)], device: DeviceId) -> Option<(usize, EffectKind)> {
+    chain
+        .iter()
+        .position(|(id, _)| *id == device)
+        .map(|slot| (slot, chain[slot].1))
+}
+
 /// What one channel's devices can be addressed as: the shape a route or lane
 /// is resolved against. Copied out so the routes and lanes can be edited
 /// while it is consulted.
@@ -1179,7 +1193,10 @@ struct ChainShape {
     /// Empty for every device that authors none, which is all of them but
     /// the ML-P8.
     source_routes: Vec<u16>,
-    effects: Vec<EffectKind>,
+    /// The chain's devices as `(identity, kind)`, in rack order. An address
+    /// names the identity; the position is only ever used to say *where* in
+    /// a message a human reads.
+    effects: Vec<(DeviceId, EffectKind)>,
     modulators: Vec<Option<ModulatorKind>>,
 }
 
@@ -1192,7 +1209,11 @@ impl ChainShape {
                 .mlp8_state()
                 .map(|state| state.params.routes.iter().map(|route| route.id).collect())
                 .unwrap_or_default(),
-            effects: setup.effects.iter().map(EffectSlotState::kind).collect(),
+            effects: setup
+                .effects
+                .iter()
+                .map(|effect| (effect.id, effect.kind()))
+                .collect(),
             modulators: setup
                 .modulation
                 .slots
@@ -1238,13 +1259,12 @@ impl ChainShape {
             ParamOwner::Strip => strip_descriptor(id)
                 .is_none()
                 .then(|| format!("it drives strip control {id}, which does not exist")),
-            ParamOwner::Effect { slot } => match self.effects.get(slot as usize) {
+            ParamOwner::Effect { device } => match find_device(&self.effects, device) {
                 None => Some(format!(
-                    "it drives effect slot {}, but the chain holds {} effects",
-                    slot + 1,
+                    "it drives a device that is not on this channel's chain, which holds {}",
                     self.effects.len()
                 )),
-                Some(kind) => kind.descriptor(id).is_none().then(|| {
+                Some((slot, kind)) => kind.descriptor(id).is_none().then(|| {
                     format!(
                         "it drives control {id} of the {} in slot {}, which has no such control",
                         kind.label(),
@@ -1273,8 +1293,10 @@ impl ChainShape {
 fn address_problem(
     address: ParamAddr,
     own: &ChainShape,
-    buses: Option<&[Vec<EffectKind>]>,
+    buses: Option<&[Vec<(DeviceId, EffectKind)>]>,
 ) -> Option<String> {
+
+
     match address.scope {
         EffectTarget::Channel(_) => own.problem_with(address),
         EffectTarget::Bus(bus) => {
@@ -1288,13 +1310,12 @@ fn address_problem(
                 ParamOwner::Strip => strip_descriptor(id)
                     .is_none()
                     .then(|| format!("it drives strip control {id}, which does not exist")),
-                ParamOwner::Effect { slot } => match chain.get(slot as usize) {
+                ParamOwner::Effect { device } => match find_device(chain, device) {
                     None => Some(format!(
-                        "it drives effect slot {} of bus {bus}, but that chain holds {} effects",
-                        slot + 1,
+                        "it drives a device that is not on bus {bus}'s chain, which holds {}",
                         chain.len()
                     )),
-                    Some(kind) => kind.descriptor(id).is_none().then(|| {
+                    Some((slot, kind)) => kind.descriptor(id).is_none().then(|| {
                         format!(
                             "it drives control {id} of the {} in slot {} of bus {bus}, which has no such control",
                             kind.label(),
@@ -1333,7 +1354,7 @@ fn check_route_addresses(
     who: &str,
     own: &ChainShape,
     own_index: Option<u8>,
-    buses: Option<&[Vec<EffectKind>]>,
+    buses: Option<&[Vec<(DeviceId, EffectKind)>]>,
     rack: &mut ModRack,
 ) {
     for (index, entry) in rack.routes.iter_mut().enumerate() {
@@ -1373,7 +1394,7 @@ fn check_lane_addresses(
     where_: &str,
     own: &ChainShape,
     own_index: u8,
-    buses: &[Vec<EffectKind>],
+    buses: &[Vec<(DeviceId, EffectKind)>],
     lanes: &mut Vec<mooloop_core::AutomationLane>,
 ) {
     let mut drop: Vec<usize> = Vec::new();
@@ -2640,20 +2661,19 @@ mod tests {
         project.channels[0].setup = lfo_channel("Lead");
         project.channels[0]
             .setup
-            .effects
-            .push(EffectSlotState::of_kind(EffectKind::Filter));
+            .push_effect(EffectSlotState::of_kind(EffectKind::Filter));
         let rack = &mut project.channels[0].setup.modulation;
-        // Slot 2 does not exist; slot 1's filter has no control 99.
+        // Device 1 was never minted; device 0's filter has no control 99.
         rack.add_route(mooloop_core::ModRoute::to_slot(
             0,
-            ParamAddr::effect(EffectTarget::Channel(0), 1, 0),
+            ParamAddr::effect(EffectTarget::Channel(0), DeviceId(1), 0),
             0.5,
             mooloop_core::ModPolarity::Bipolar,
         ))
         .unwrap();
         rack.add_route(mooloop_core::ModRoute::to_slot(
             0,
-            ParamAddr::effect(EffectTarget::Channel(0), 0, 99),
+            ParamAddr::effect(EffectTarget::Channel(0), DeviceId(0), 99),
             0.5,
             mooloop_core::ModPolarity::Bipolar,
         ))
@@ -2662,7 +2682,7 @@ mod tests {
             0,
             ParamAddr::effect(
                 EffectTarget::Channel(0),
-                0,
+                DeviceId(0),
                 mooloop_core::FILTER_PARAM_CUTOFF_HZ,
             ),
             0.5,
@@ -2674,7 +2694,18 @@ mod tests {
             codes(&diagnosis),
             ["modulation.route.destination", "modulation.route.destination"]
         );
-        assert!(diagnosis.issues[0].problem.contains("slot 2"), "{}", diagnosis.issues[0].problem);
+        // The first problem names a *device*, not a position, because an
+        // address that resolves to nothing has no position to report.
+        assert!(
+            diagnosis.issues[0]
+                .problem
+                .contains("a device that is not on this channel's chain"),
+            "{}",
+            diagnosis.issues[0].problem
+        );
+        // The second still names a slot, because that address does resolve
+        // and the slot is how a human finds the row.
+        assert!(diagnosis.issues[1].problem.contains("slot 1"), "{}", diagnosis.issues[1].problem);
         let surviving: Vec<_> = project.channels[0]
             .setup
             .modulation
@@ -2699,7 +2730,7 @@ mod tests {
             param: mooloop_core::STRIP_PARAM_PAN,
         }));
         project.channels[0].automation[0].push(mooloop_core::AutomationLane::new(
-            ParamAddr::effect(EffectTarget::Bus(0), 4, 0),
+            ParamAddr::effect(EffectTarget::Bus(0), DeviceId(4), 0),
         ));
         let diagnosis = repair_project(&mut project);
         assert_eq!(

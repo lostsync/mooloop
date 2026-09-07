@@ -6,7 +6,7 @@
 
 use mooloop_core::{
     AutomationLane, AutomationPoint, EffectTarget, NoteEvent, NoteId, ParamAddr, Pattern,
-    PatternPlacement, PlaybackMode, PointId, Ppq, Project, SlotRemap,
+    DeviceId, PatternPlacement, PlaybackMode, PointId, Ppq, Project,
     DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MAX_CHANNELS,
     MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_SWING_PERCENT,
     MIN_SWING_PERCENT, TICKS_PER_BAR, TICKS_PER_STEP,
@@ -285,11 +285,14 @@ impl Sequencer {
             .is_some()
     }
 
-    /// Run one chain edit's permutation over every lane that addresses
-    /// `scope`'s effect chain, in every pattern. A channel's chain is only
-    /// ever addressed from that channel's clips; a bus chain can be addressed
-    /// from any of them.
-    pub fn retarget_lanes(&mut self, scope: EffectTarget, remap: &SlotRemap) {
+    /// Drop every lane driving `device` in `scope`, in every pattern, because
+    /// that device has been removed. A channel's chain is only ever addressed
+    /// from that channel's clips; a bus chain can be addressed from any of
+    /// them.
+    ///
+    /// A reorder needs no equivalent any more. A lane names a device
+    /// identity, and an identity does not move.
+    pub fn forget_device(&mut self, scope: EffectTarget, device: DeviceId) {
         let channels = self.active_channels;
         // Bounded by what the song actually holds. The bank is preallocated
         // to its ceiling, and this runs on the realtime command drain.
@@ -298,13 +301,13 @@ impl Sequencer {
             match scope {
                 EffectTarget::Channel(channel) => {
                     if let Some(channel) = pattern.channel_mut(channel as usize) {
-                        channel.retarget_lanes(scope, remap);
+                        channel.forget_device(scope, device);
                     }
                 }
                 EffectTarget::Bus(_) => {
                     for channel in 0..channels {
                         if let Some(channel) = pattern.channel_mut(channel) {
-                            channel.retarget_lanes(scope, remap);
+                            channel.forget_device(scope, device);
                         }
                     }
                 }

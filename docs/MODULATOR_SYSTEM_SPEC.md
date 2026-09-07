@@ -160,7 +160,11 @@ struct ModSourceDescriptor {
 }
 ```
 
-`ModSourceId` is the durable source identity, and it landed. It is minted when
+`ModSourceId` is the durable source identity, and it landed. Rack devices have
+since been given the same treatment for the same reasons — `DeviceId`, minted
+on insertion, named by every route and lane, with the chain position derived —
+so a modulation destination is now as reorder-proof as a modulation source.
+See `docs/plans/containers/01-a-device-is-an-identity.md`. It is minted when
 a module is added, carried through reorders, and never reused. `source_slot`
 survives only as the bounded runtime locator the realtime path indexes; it is
 derived from `source` whenever the rack changes and is never authored. Legacy

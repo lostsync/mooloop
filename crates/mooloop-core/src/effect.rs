@@ -2263,9 +2263,52 @@ where
     })
 }
 
+/// A rack device's identity, stable within one chain.
+///
+/// Minted when the device is inserted, carried through reorders, and never
+/// reused, so a route outlives a slot number. The same shape and the same
+/// argument as [`crate::ModSourceId`]: routes and lanes name the id, and the
+/// position is derived from the chain rather than persisted.
+///
+/// [`Self::UNASSIGNED`] is what a slot state carries before it has joined a
+/// chain -- a factory patch, a preset on disk, a value under construction.
+/// Nothing addressable ever holds it: [`crate::insert_effect`] mints a real
+/// one on the way in.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct DeviceId(pub u32);
+
+impl DeviceId {
+    /// Not yet part of a chain. Deliberately the top of the space rather than
+    /// zero, so a value that escapes without being minted addresses nothing
+    /// instead of addressing the first device.
+    pub const UNASSIGNED: Self = Self(u32::MAX);
+
+    pub const fn is_assigned(self) -> bool {
+        self.0 != Self::UNASSIGNED.0
+    }
+}
+
+impl Default for DeviceId {
+    fn default() -> Self {
+        Self::UNASSIGNED
+    }
+}
+
 /// Persisted state of one slot in a channel's effect chain.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EffectSlotState {
+    /// This device's durable identity.
+    ///
+    /// Absent in every project written before devices had one, and in a
+    /// preset, which carries no identity of its own. A chain decoded without
+    /// ids takes its positions as its ids -- see
+    /// `ChannelSetup::assign_device_ids` -- which is exactly what the routes
+    /// in such a project already mean by `slot`.
+    #[serde(default, skip_serializing_if = "id_is_unassigned")]
+    pub id: DeviceId,
     #[serde(deserialize_with = "deserialize_effect_params")]
     pub params: EffectParams,
     pub bypassed: bool,
@@ -2275,6 +2318,10 @@ pub struct EffectSlotState {
     pub input_trim: f32,
     #[serde(default = "default_output_trim")]
     pub output_trim: f32,
+}
+
+fn id_is_unassigned(id: &DeviceId) -> bool {
+    !id.is_assigned()
 }
 
 fn default_wet_dry() -> f32 {
@@ -2290,6 +2337,7 @@ fn default_output_trim() -> f32 {
 impl EffectSlotState {
     pub fn new(params: EffectParams) -> Self {
         Self {
+            id: DeviceId::UNASSIGNED,
             params,
             bypassed: false,
             wet_dry: 1.0,
@@ -2348,6 +2396,17 @@ impl EffectSlotState {
 
     pub fn kind(&self) -> EffectKind {
         self.params.kind()
+    }
+
+    /// The same device wearing `id`.
+    ///
+    /// A preset arrives without an identity and must not bring one: loading
+    /// one over a live row keeps the row's id, because the routes and lanes
+    /// pointing at that row are pointing at the *device*, and a preset load
+    /// changes what it sounds like rather than which one it is.
+    pub fn with_id(mut self, id: DeviceId) -> Self {
+        self.id = id;
+        self
     }
 }
 

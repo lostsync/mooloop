@@ -327,8 +327,15 @@ impl Session {
         let effect = match target {
             PresetSaveTarget::Effect {
                 target: chain,
-                slot,
-            } => Some(*self.effect_chain_of(chain)?.get(slot as usize)?),
+                device,
+            } => {
+                let chain = self.effect_chain_of(chain)?;
+                let slot = mooloop_core::device_slot(chain, device)?;
+                // Stripped of its identity on the way out: a preset is what a
+                // device sounds like, and identity belongs to the chain it
+                // was taken from rather than to the patch.
+                Some(chain[slot].with_id(mooloop_core::DeviceId::UNASSIGNED))
+            }
             _ => None,
         };
         Some(PresetSource {

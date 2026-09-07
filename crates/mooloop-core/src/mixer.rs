@@ -86,6 +86,10 @@ pub struct BusSetup {
     pub bus: MixerBus,
     #[serde(default)]
     pub effects: Vec<EffectSlotState>,
+    /// Next device identity to mint for `effects`, for the same reason and
+    /// with the same defaulting as `ChannelSetup::next_device_id`.
+    #[serde(default)]
+    pub next_device_id: u32,
 }
 
 impl BusSetup {
@@ -93,7 +97,21 @@ impl BusSetup {
         Self {
             bus: MixerBus::new(index),
             effects: Vec::new(),
+            next_device_id: 0,
         }
+    }
+
+    /// Append `effect` to the chain, minting it an identity. See
+    /// `ChannelSetup::push_effect`.
+    pub fn push_effect(&mut self, effect: EffectSlotState) -> Option<crate::DeviceId> {
+        let at = self.effects.len();
+        crate::insert_effect(&mut self.effects, &mut self.next_device_id, at, effect)?;
+        Some(self.effects[at].id)
+    }
+
+    /// Give this chain's devices their identities and put the mint past them.
+    pub fn assign_device_ids(&mut self) {
+        crate::assign_device_ids(&mut self.effects, &mut self.next_device_id);
     }
 }
 

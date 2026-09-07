@@ -917,6 +917,10 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
     let mut warnings = Vec::new();
     let diagnosis = match &mut document {
         LoadedDocument::Song(project) => {
+            // Before the repair pass, because that pass judges every route
+            // and lane against the chain it names, and until this has run a
+            // chain written by an older version holds no identities at all.
+            project.assign_device_ids();
             for (index, channel) in project.channels.iter_mut().enumerate() {
                 resolve_setup_asset(path, index, &mut channel.setup.source, &mut warnings)?;
                 channel.normalize_automation();
@@ -926,11 +930,13 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
         }
         LoadedDocument::Kit(kit) => {
             for (index, setup) in kit.channels.iter_mut().enumerate() {
+                setup.assign_device_ids();
                 resolve_setup_asset(path, index, &mut setup.source, &mut warnings)?;
             }
             integrity::repair_setups(DocumentKind::Kit, &mut kit.channels)
         }
         LoadedDocument::Channel(setup) => {
+            setup.assign_device_ids();
             resolve_setup_asset(path, 0, &mut setup.source, &mut warnings)?;
             integrity::repair_setups(DocumentKind::Channel, std::slice::from_mut(setup.as_mut()))
         }
@@ -1315,7 +1321,11 @@ mod tests {
     #[test]
     fn two_lanes_on_one_destination_are_rejected() {
         let mut project = Project::default();
-        let target = ParamAddr::effect(mooloop_core::EffectTarget::Channel(0), 0, 1);
+        let target = ParamAddr::effect(
+            mooloop_core::EffectTarget::Channel(0),
+            mooloop_core::DeviceId(0),
+            1,
+        );
         project.channels[0].automation[0].push(AutomationLane::new(target));
         project.channels[0].automation[0].push(AutomationLane::new(target));
         assert!(matches!(validate_project(&project), Err(Error::InvalidDocument(_))));
@@ -1839,16 +1849,12 @@ id = "default_kick"
         project.buses[4].bus.name = "Drums".into();
         project.buses[4].bus.output = 2;
         project.buses[4].bus.volume = 0.5;
-        project.buses[4]
-            .effects
-            .push(mooloop_core::EffectSlotState::of_kind(
-                mooloop_core::EffectKind::Compressor,
-            ));
-        project.buses[mooloop_core::MASTER_BUS as usize]
-            .effects
-            .push(mooloop_core::EffectSlotState::of_kind(
-                mooloop_core::EffectKind::Limiter,
-            ));
+        project.buses[4].push_effect(mooloop_core::EffectSlotState::of_kind(
+            mooloop_core::EffectKind::Compressor,
+        ));
+        project.buses[mooloop_core::MASTER_BUS as usize].push_effect(
+            mooloop_core::EffectSlotState::of_kind(mooloop_core::EffectKind::Limiter),
+        );
 
         save_song(&bundle, &project, AssetMode::Referenced).unwrap();
         let LoadedDocument::Song(loaded) = load_bundle(&bundle).unwrap().document else {
@@ -1865,6 +1871,7 @@ id = "default_kick"
         let effect = mooloop_core::EffectSlotState::of_kind(mooloop_core::EffectKind::Filter);
         project.channels[0].setup.effects = vec![effect; mooloop_core::MAX_EFFECTS_PER_CHANNEL];
         project.buses[0].effects = vec![effect; mooloop_core::MAX_EFFECTS_PER_CHANNEL];
+        project.buses[0].assign_device_ids();
 
         validate_project(&project).expect("the complete realtime address space is supported");
     }
@@ -2312,8 +2319,7 @@ id = "default_kick"
         let mut project = Project::default();
         project.channels[0]
             .setup
-            .effects
-            .push(mooloop_core::EffectSlotState::filter(
+            .push_effect(mooloop_core::EffectSlotState::filter(
                 mooloop_core::FilterParams {
                     cutoff_hz: 1_250.0,
                     resonance: 0.6,
@@ -2344,7 +2350,7 @@ id = "default_kick"
                 slot.params.set(descriptor.id, shifted);
             }
             slot.bypassed = kind == mooloop_core::EffectKind::Drive;
-            project.channels[0].setup.effects.push(slot);
+            project.channels[0].setup.push_effect(slot);
         }
 
         save_song(&bundle, &project, AssetMode::Embedded).unwrap();
@@ -2363,8 +2369,7 @@ id = "default_kick"
         let mut project = Project::default();
         project.channels[0]
             .setup
-            .effects
-            .push(mooloop_core::EffectSlotState::filter(
+            .push_effect(mooloop_core::EffectSlotState::filter(
                 mooloop_core::FilterParams {
                     cutoff_hz: 1_250.0,
                     resonance: 0.6,

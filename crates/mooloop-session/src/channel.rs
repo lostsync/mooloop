@@ -58,6 +58,11 @@ pub struct ChannelState {
     pub automation: Vec<Vec<AutomationLane>>,
     pub next_note_id: NoteId,
     pub effects: Vec<EffectSlotState>,
+    /// Next device identity to mint for `effects`. Mirrors
+    /// `ChannelSetup::next_device_id`, and travels with the chain in both
+    /// directions so a mint is never rewound by a round trip through the
+    /// document.
+    pub next_device_id: u32,
     pub modulation: ModRack,
     /// Mixer bus this channel feeds; 0 is the master.
     pub bus: u8,
@@ -124,6 +129,7 @@ impl ChannelState {
             automation: vec![Vec::new()],
             next_note_id: 1,
             effects: Vec::new(),
+            next_device_id: 0,
             modulation: ModRack::default(),
             bus: MASTER_BUS,
         }

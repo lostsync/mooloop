@@ -73,7 +73,7 @@ fn resting_effect_project(count: usize, kind: EffectKind) -> Project {
     project.channels.clear();
     for index in 0..count {
         let mut channel = ProjectChannel::sampler(index, 1);
-        channel.setup.effects.push(EffectSlotState::of_kind(kind));
+        channel.setup.push_effect(EffectSlotState::of_kind(kind));
         project.channels.push(channel);
     }
     project
@@ -274,7 +274,7 @@ fn playing_effect_cost() {
     ] {
         let mut project = loaded_project(channels);
         for channel in &mut project.channels {
-            channel.setup.effects.push(EffectSlotState::of_kind(kind));
+            channel.setup.push_effect(EffectSlotState::of_kind(kind));
         }
         let nanos = per_block_nanos(&project, frames, 400);
         println!(

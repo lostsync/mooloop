@@ -312,7 +312,7 @@ fn reverb_wet_path_is_level_matched_now() {
                 let mut channel = one_note_channel(kind);
                 let mut slot = EffectSlotState::new(effect.1);
                 slot.wet_dry = wet_dry;
-                channel.setup.effects.push(slot);
+                channel.setup.push_effect(slot);
                 single_channel_project(channel)
             };
             let bypass = peak_dbfs(&single_channel_project(one_note_channel(kind)), 3.0);
@@ -397,7 +397,7 @@ fn equal_power_blend_preserves_energy_when_decorrelated() {
         },
     ));
     slot.wet_dry = 1.0;
-    channel.setup.effects.push(slot);
+    channel.setup.push_effect(slot);
     let energy = |wet_dry: f32| {
         let mut channel = channel.clone();
         channel.setup.effects[0].wet_dry = wet_dry;
@@ -590,8 +590,12 @@ fn drum_contribution_db(
 ) -> f32 {
     let chain = |pad_muted, drums_muted| {
         let mut project = pad_and_drums(pad_volume, pad_muted, drums_muted);
-        project.buses[0].effects = master.to_vec();
-        project.channels[0].setup.effects = pad_channel.to_vec();
+        for effect in master {
+            project.buses[0].push_effect(*effect);
+        }
+        for effect in pad_channel {
+            project.channels[0].setup.push_effect(*effect);
+        }
         project
     };
     // The kick lands on beat 2: tick 96 at 120 BPM.
@@ -747,7 +751,7 @@ fn steady_state_wet_path_is_level_matched() {
                 channel.notes[0].push(NoteEvent::new(1, 0, 96 * 8, 60, 127));
                 let mut slot = EffectSlotState::new(params);
                 slot.wet_dry = mix;
-                channel.setup.effects.push(slot);
+                channel.setup.push_effect(slot);
                 single_channel_project(channel)
             };
             let dry = window_rms_dbfs(&build(0.0), 1.0, 2.0);

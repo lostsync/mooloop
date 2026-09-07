@@ -2177,7 +2177,7 @@ impl UiState {
                     effect,
                     &self.session.effect_presets,
                     self.session
-                        .effect_preset_name(self.session.effect_target, slot as u8),
+                        .effect_preset_name(self.session.effect_target, effect.id),
                 ),
             );
         }
@@ -2225,14 +2225,13 @@ impl UiState {
                     state
                         .effects
                         .iter()
-                        .enumerate()
-                        .map(|(slot, effect)| {
+                        .map(|effect| {
                             let mut row = effect_slot_row(
                                 effect,
                                 &self.session.effect_presets,
                                 self.session.effect_preset_name(
                                     EffectTarget::Channel(channel),
-                                    slot as u8,
+                                    effect.id,
                                 ),
                             );
                             let descriptors = effect.kind().descriptors();
@@ -2240,13 +2239,13 @@ impl UiState {
                                 self.destination_depths(armed, descriptors, |param| {
                                     ParamAddr::effect(
                                         EffectTarget::Channel(channel),
-                                        slot as u8,
+                                        effect.id,
                                         param,
                                     )
                                 });
                             row.modulation_allowed = descriptor_policies(descriptors);
                             row.modulation_offsets = self.destination_offsets(descriptors, |param| {
-                                ParamAddr::effect(EffectTarget::Channel(channel), slot as u8, param)
+                                ParamAddr::effect(EffectTarget::Channel(channel), effect.id, param)
                             });
                             row.modulation_route_counts = descriptor_route_counts(
                                 &state.modulation,
@@ -2254,7 +2253,7 @@ impl UiState {
                                 |param| {
                                     ParamAddr::effect(
                                         EffectTarget::Channel(channel),
-                                        slot as u8,
+                                        effect.id,
                                         param,
                                     )
                                 },
@@ -2271,12 +2270,11 @@ impl UiState {
                     .map(|effects| {
                         effects
                             .iter()
-                            .enumerate()
-                            .map(|(slot, effect)| {
+                            .map(|effect| {
                                 effect_slot_row(
                                     effect,
                                     &self.session.effect_presets,
-                                    self.session.effect_preset_name(target, slot as u8),
+                                    self.session.effect_preset_name(target, effect.id),
                                 )
                             })
                             .collect()
@@ -2383,7 +2381,7 @@ impl UiState {
             };
             row.modulation_offsets =
                 self.destination_offsets(effect.kind().descriptors(), |param| {
-                    ParamAddr::effect(scope, slot as u8, param)
+                    ParamAddr::effect(scope, effect.id, param)
                 });
             self.effect_slot_model.set_row_data(slot, row);
         }
@@ -2539,7 +2537,23 @@ impl UiState {
                 let owner = match route.destination.owner {
                     ParamOwner::Source => -1,
                     ParamOwner::Strip => -2,
-                    ParamOwner::Effect { slot } => slot as i32,
+                    // The row this route points at, as a *position*: this
+                    // token is a Slint model index, not an address, so the
+                    // device id has to be resolved against the chain the
+                    // shelf is drawing. A destination on another chain -- a
+                    // bus device, which the shelf already labels as
+                    // unavailable -- resolves to nothing and takes the
+                    // no-row token rather than colliding with `Source`.
+                    ParamOwner::Effect { device } => self
+                        .session
+                        .channels
+                        .get(self.session.selected)
+                        .filter(|_| {
+                            route.destination.scope
+                                == EffectTarget::Channel(self.session.selected as u8)
+                        })
+                        .and_then(|state| mooloop_core::device_slot(&state.effects, device))
+                        .map_or(i32::MIN, |slot| slot as i32),
                     ParamOwner::Modulator { slot } => -3 - slot as i32,
                     // Just past the modulator band, derived rather than
                     // written out, so growing the rack cannot collide with
@@ -3901,9 +3915,9 @@ impl AppUi {
                 // The device now wears the name it was saved under, the
                 // same way it wears the name of a preset loaded into it.
                 match source.target {
-                    PresetSaveTarget::Effect { target, slot } => {
+                    PresetSaveTarget::Effect { target, device } => {
                         let mut state = st.borrow_mut();
-                        state.session.set_effect_preset_name(target, slot, &name);
+                        state.session.set_effect_preset_name(target, device, &name);
                         state.sync_effects();
                     }
                     PresetSaveTarget::Generator => {
@@ -6457,11 +6471,16 @@ impl AppUi {
                         .session.channels
                         .get(state.session.selected)
                         .and_then(|channel| channel.effects.get(slot))
-                        .and_then(|effect| effect.kind().descriptor(param))
-                        .map(|descriptor| {
+                        .and_then(|effect| {
+                            effect
+                                .kind()
+                                .descriptor(param)
+                                .map(|descriptor| (effect.id, descriptor))
+                        })
+                        .map(|(device, descriptor)| {
                             ParamAddr::effect(
                                 EffectTarget::Channel(channel),
-                                slot as u8,
+                                device,
                                 descriptor.id,
                             )
                         }),
@@ -6541,7 +6560,9 @@ impl AppUi {
                         analyzer: Box::new(SpectrumAnalyzer::new()),
                         // Allocated here with the node: an empty addressable slot
                         // costs a pointer rather than its full host state.
-                        state: Box::new(EffectSlot::new()),
+                        // It carries the identity the model just minted, which
+                        // is what lets a route find this device again.
+                        state: Box::new(EffectSlot::for_device(added.device)),
                     });
                     if added.slot != added.tail {
                         let _ = tx.send(EngineCommand::MoveEffect {
@@ -6682,14 +6703,18 @@ impl AppUi {
                 };
                 let mut st = st.borrow_mut();
                 let target = st.session.effect_target;
-                if st
+                // The row is named by the device sitting in it, resolved once
+                // here, so the dialog cannot land on whatever takes that
+                // position while it is open.
+                let Some(device) = st
                     .session
                     .effect_chain()
-                    .is_none_or(|chain| chain.get(slot as usize).is_none())
-                {
+                    .and_then(|chain| chain.get(slot as usize))
+                    .map(|effect| effect.id)
+                else {
                     return;
-                }
-                st.session.pending_preset_save = Some(PresetSaveTarget::Effect { target, slot });
+                };
+                st.session.pending_preset_save = Some(PresetSaveTarget::Effect { target, device });
                 if let Some(window) = weak.upgrade() {
                     window.set_save_preset_title("Save Effect Preset".into());
                     window.set_save_preset_name("".into());

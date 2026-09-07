@@ -14,7 +14,8 @@ use crate::values::descriptor_slots;
 use mooloop_core::{
     compile_bus_graph, default_buses, sanitize_route, would_create_cycle, DEFAULT_STEPS,
     MASTER_BUS, MAX_BUSES, MAX_PLAYLIST_PLACEMENTS,
-    retarget_lanes, strip_descriptor, AutomationLane, BusSetup, Channel, ChannelSetup,
+    drop_lanes_for_device, strip_descriptor, AutomationLane, BusSetup, Channel, ChannelSetup,
+    DeviceId,
     AuxInParams, AuxInState, ChannelSource, DeviceKind, DrumSynthParams, DrumSynthState, Ds01Params, Ds01State,
     EffectParams, EffectSlotState, EffectTarget, MlM1Params, MlM1State, MlP8Params, MlP8State,
     ModDestinationDescriptor, ModEnvelopeParams, ModPolarity, ModRoute, ModulatorParams,
@@ -22,7 +23,7 @@ use mooloop_core::{
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
     PolySynthState, Project, ProjectChannel, SampleReference, SamplerParams, SamplerState,
     modulation::CONTROL_SOURCE_SLOTS,
-    SlotRemap, MAX_MODULATORS_PER_CHANNEL, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_BAR,
+    MAX_MODULATORS_PER_CHANNEL, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_BAR,
     TICKS_PER_STEP,
 };
 use mooloop_dsp::SampleData;
@@ -37,12 +38,14 @@ use std::sync::Arc;
 pub enum PresetSaveTarget {
     Generator,
     Channel,
-    /// One rack row of `target`'s chain. The slot is carried rather than
-    /// re-derived, and it follows the row through a reorder made while the
-    /// dialog is open (see `retarget_effect_slots`): a save that landed on
+    /// One rack row of `target`'s chain, by the device's durable id.
+    ///
+    /// This used to carry the slot number and be rewritten whenever the rack
+    /// was reordered under an open dialog, because a save that landed on
     /// whichever device now sits in position 3 would be a bug that is very
-    /// hard to find later.
-    Effect { target: EffectTarget, slot: u8 },
+    /// hard to find later. An id cannot land on the wrong device: it either
+    /// resolves to the one the dialog was opened from or to nothing at all.
+    Effect { target: EffectTarget, device: DeviceId },
 }
 
 pub struct Session {
@@ -146,7 +149,7 @@ pub struct Session {
     /// to these settings, not part of what the settings are. It follows the
     /// row through a reorder and is dropped with a removal, like every other
     /// thing on this side that names a slot.
-    pub effect_preset_names: HashMap<(EffectTarget, u8), String>,
+    pub effect_preset_names: HashMap<(EffectTarget, DeviceId), String>,
     /// The preset each channel's generator was last loaded from or saved as,
     /// for the source device's header. The generator half of
     /// `effect_preset_names`, keyed by channel because a channel has exactly
@@ -445,6 +448,7 @@ impl Session {
                         source,
                         effects: channel.effects.clone(),
                         modulation: channel.modulation,
+                        next_device_id: channel.next_device_id,
                     },
                     notes: channel.notes.clone(),
                     automation: channel.automation.clone(),
@@ -548,7 +552,7 @@ impl Session {
                 let device = format!("{} {}", kind.label(), slot + 1);
                 for descriptor in kind.descriptors() {
                     rows.push((
-                        ParamAddr::effect(channel, slot as u8, descriptor.id),
+                        ParamAddr::effect(channel, effect.id, descriptor.id),
                         device.clone(),
                         descriptor,
                     ));
@@ -563,7 +567,7 @@ impl Session {
                     rows.push((
                         ParamAddr::effect(
                             EffectTarget::Bus(index as u8),
-                            slot as u8,
+                            effect.id,
                             descriptor.id,
                         ),
                         device.clone(),
@@ -627,12 +631,13 @@ impl Session {
                     .kind()
                     .route_descriptor(target.param)
             }
-            ParamOwner::Effect { slot } => {
+            ParamOwner::Effect { device } => {
                 let effects = match target.scope {
                     EffectTarget::Channel(channel) => &self.channels.get(channel as usize)?.effects,
                     EffectTarget::Bus(bus) => &self.buses.get(bus as usize)?.effects,
                 };
-                effects.get(slot as usize)?.kind().descriptor(target.param)
+                let slot = mooloop_core::device_slot(effects, device)?;
+                effects[slot].kind().descriptor(target.param)
             }
             ParamOwner::Modulator { .. } | ParamOwner::Strip => None,
         }
@@ -708,21 +713,38 @@ impl Session {
 
 
     pub fn effect_chain_mut(&mut self) -> Option<&mut Vec<EffectSlotState>> {
+        Some(self.effect_chain_parts_mut()?.0)
+    }
+
+    /// The chain the rack is pointed at, together with its identity mint.
+    ///
+    /// The pair rather than the chain alone, because inserting a device is
+    /// two facts -- where it goes and which device it is -- and they live in
+    /// two fields of the same owner.
+    pub fn effect_chain_parts_mut(
+        &mut self,
+    ) -> Option<(&mut Vec<EffectSlotState>, &mut u32)> {
         match self.effect_target {
             EffectTarget::Channel(index) => self
                 .channels
                 .get_mut(index as usize)
-                .map(|c| &mut c.effects),
-            EffectTarget::Bus(index) => self.buses.get_mut(index as usize).map(|b| &mut b.effects),
+                .map(|c| (&mut c.effects, &mut c.next_device_id)),
+            EffectTarget::Bus(index) => self
+                .buses
+                .get_mut(index as usize)
+                .map(|b| (&mut b.effects, &mut b.next_device_id)),
         }
     }
 
-    /// Run one chain edit's permutation over everything on this side that
-    /// names a slot in `target`'s chain: the channel's routes, every lane in
-    /// every pattern, and the lane the editor is showing. The engine runs the
-    /// same table for the same command, which is what keeps a route meaning
-    /// the same knob on both sides after the rack is reordered.
-    pub fn retarget_effect_slots(&mut self, target: EffectTarget, remap: &SlotRemap) {
+    /// Let go of `device` everywhere on this side that could still be naming
+    /// it: the channel's routes, every lane in every pattern, the lane the
+    /// editor is showing, a save dialog left open on it, and the preset label
+    /// its row was wearing.
+    ///
+    /// Called on removal and on nothing else. A reorder or an insert used to
+    /// run a permutation over all five; none of them can observe one now,
+    /// because none of them holds a position.
+    pub fn forget_device(&mut self, target: EffectTarget, device: DeviceId) {
         let channels: &mut [ChannelState] = match target {
             EffectTarget::Channel(channel) => match self.channels.get_mut(channel as usize) {
                 Some(channel) => std::slice::from_mut(channel),
@@ -732,61 +754,46 @@ impl Session {
             EffectTarget::Bus(_) => &mut self.channels,
         };
         for channel in channels {
-            channel.modulation.retarget_effect_slots(target, remap);
+            channel.modulation.forget_device(target, device);
             for lanes in &mut channel.automation {
-                retarget_lanes(lanes, target, remap);
+                drop_lanes_for_device(lanes, target, device);
             }
         }
-        self.automation_target.set(
-            self.automation_target
-                .get()
-                .and_then(|shown| remap.address(target, shown)),
-        );
-        // A save dialog opened from a row names that row's device, not its
-        // position; it follows the device through the edit and is dropped
-        // with it.
-        if let Some(PresetSaveTarget::Effect {
-            target: pending_target,
-            slot,
-        }) = self.pending_preset_save
+        if self.automation_target.get().is_some_and(|shown| {
+            shown.scope == target && shown.device() == Some(device)
+        }) {
+            self.automation_target.set(None);
+        }
+        if self.pending_preset_save
+            == Some(PresetSaveTarget::Effect { target, device })
         {
-            if pending_target == target {
-                self.pending_preset_save = remap
-                    .slot(slot)
-                    .map(|slot| PresetSaveTarget::Effect { target, slot });
-            }
+            self.pending_preset_save = None;
         }
-        // And so does the label a row is wearing.
-        self.effect_preset_names = std::mem::take(&mut self.effect_preset_names)
-            .into_iter()
-            .filter_map(|((owner, slot), name)| {
-                if owner != target {
-                    return Some(((owner, slot), name));
-                }
-                remap.slot(slot).map(|slot| ((target, slot), name))
-            })
-            .collect();
+        self.effect_preset_names.remove(&(target, device));
     }
 
-    /// The preset `slot` of `target` was last loaded from or saved as.
+    /// The preset `device` of `target` was last loaded from or saved as.
     ///
     /// Deliberately kept through a knob move: the label says where these
     /// settings came from, which stays true after they are adjusted. It does
     /// not survive undo, which restores the project but not this map.
-    pub fn effect_preset_name(&self, target: EffectTarget, slot: u8) -> Option<&str> {
+    ///
+    /// Keyed by identity rather than by position, so a reorder no longer has
+    /// to rebuild the whole map to keep a row wearing its own label.
+    pub fn effect_preset_name(&self, target: EffectTarget, device: DeviceId) -> Option<&str> {
         self.effect_preset_names
-            .get(&(target, slot))
+            .get(&(target, device))
             .map(String::as_str)
     }
 
-    /// Names `slot` of `target` after a preset, or clears it when `name` is
+    /// Names `device` of `target` after a preset, or clears it when `name` is
     /// empty.
-    pub fn set_effect_preset_name(&mut self, target: EffectTarget, slot: u8, name: &str) {
+    pub fn set_effect_preset_name(&mut self, target: EffectTarget, device: DeviceId, name: &str) {
         if name.is_empty() {
-            self.effect_preset_names.remove(&(target, slot));
+            self.effect_preset_names.remove(&(target, device));
         } else {
             self.effect_preset_names
-                .insert((target, slot), name.to_string());
+                .insert((target, device), name.to_string());
         }
     }
 
@@ -855,19 +862,16 @@ impl Session {
                 .kind()
                 .descriptor(address.param)
                 .map(|descriptor| (state.name.clone(), descriptor)),
-            ParamOwner::Effect { slot } => state
-                .effects
-                .get(slot as usize)
-                .and_then(|effect| effect.kind().descriptor(address.param))
-                .map(|descriptor| {
-                    (
-                        format!(
-                            "{} {}",
-                            state.effects[slot as usize].kind().label(),
-                            slot + 1
-                        ),
-                        descriptor,
-                    )
+            ParamOwner::Effect { device } => mooloop_core::device_slot(&state.effects, device)
+                .and_then(|slot| {
+                    let effect = &state.effects[slot];
+                    effect
+                        .kind()
+                        .descriptor(address.param)
+                        .map(|descriptor| (slot, effect.kind(), descriptor))
+                })
+                .map(|(slot, kind, descriptor)| {
+                    (format!("{} {}", kind.label(), slot + 1), descriptor)
                 }),
             ParamOwner::Strip => strip_descriptor(address.param)
                 .map(|descriptor| ("Channel strip".to_string(), descriptor)),
@@ -1124,6 +1128,7 @@ impl Session {
                     automation: project_channel.automation.clone(),
                     next_note_id: project_channel.next_note_id,
                     effects: setup.effects.clone(),
+                    next_device_id: setup.next_device_id,
                     modulation: setup.modulation,
                     bus: setup.channel.bus,
                 }

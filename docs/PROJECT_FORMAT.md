@@ -223,7 +223,12 @@ before any of them existed still loads:
 
 - `channels[].setup.effects` is the ordered insert chain: one
   `EffectSlotState` per slot, each a tagged `EffectParams` enum. The
-  pre-tag untagged filter shape still decodes.
+  pre-tag untagged filter shape still decodes. Each row also carries a
+  durable `id`, and `channels[].setup.next_device_id` is the mint it comes
+  from; buses carry the same pair. Both default, and a chain decoded without
+  ids takes its **positions** as its ids — which is exactly what the routes
+  and lanes in such a project already mean by `slot`, so an older song loads
+  pointing where it pointed.
 - `channels[].setup.modulation` is that channel's `ModRack`. Only occupied
   slots are written, each with its slot index, its durable `id`, and its
   module parameters. Routes persist their durable `source` id alone; the
@@ -237,11 +242,16 @@ before any of them existed still loads:
   (pattern, channel), at most one lane per destination — and address a
   `ParamAddr`, which may name a bus.
 
-Because all three name positions (`slot`, channel index) rather than
-identities, loading runs an integrity pass: a route or lane stranded on
-another channel's index is pointed back at its own channel, and one naming a
-device or control that is not present is dropped. Addresses on a generator
-that has no descriptor table yet are left untouched.
+A `ParamAddr` naming a rack device writes `owner.effect.device`, the device's
+durable id. Older projects wrote `owner.effect.slot`, a position, and decode
+through a serde alias onto the same field — see the paragraph above for why
+the two numbers agree. A channel is still named by *index*, so a route or lane
+scoped to a channel is still renumbered when the channel list changes.
+
+Because a channel index is a position, loading runs an integrity pass: a route
+or lane stranded on another channel's index is pointed back at its own
+channel, and one naming a device or control that is not present is dropped.
+Addresses on a generator that has no descriptor table yet are left untouched.
 
 ## Kit And Channel Documents
 
