@@ -233,6 +233,68 @@ pub fn move_effect(effects: &mut Vec<EffectSlotState>, from: usize, to: usize) -
     true
 }
 
+/// Move the device at `from` -- and its whole run, when it is a container --
+/// to be the first thing inside the container at `container`.
+///
+/// **Separate from [`move_effect`] for the reason
+/// [`insert_into_container`] is separate from [`insert_effect`]**, and it is
+/// the same ambiguity: the position just after a container's own row means
+/// both "the first device inside it" and "the next device after it", and for
+/// an *empty* container those are one integer. An index cannot say which, so
+/// the gesture does.
+///
+/// This is the operation a drop lands on. Dragging a device onto a row that
+/// is already inside a box put it in the box from the day the drag existed,
+/// because `move_effect`'s index fell inside that box's span -- but emptying
+/// a box left it with no rows to aim at and a span containing nothing, so
+/// there was no index anywhere that meant "back inside this". The box became
+/// a one-way door: unwrap or delete were the only ways out of it.
+///
+/// Returns `false` when `container` does not hold one, or when the run being
+/// moved contains it -- a box cannot be put inside itself.
+pub fn move_effect_into_container(
+    effects: &mut Vec<EffectSlotState>,
+    from: usize,
+    container: usize,
+) -> bool {
+    if from >= effects.len() || container >= effects.len() || from == container {
+        return false;
+    }
+    if !matches!(
+        effects.get(container).map(|effect| effect.params),
+        Some(EffectParams::Chain(_))
+    ) {
+        return false;
+    }
+    let run = run_of(effects, from);
+    if run.contains(&container) {
+        return false;
+    }
+    let len = run.len();
+    resize_enclosing(effects, from, -(len as isize));
+    let moved: Vec<EffectSlotState> = effects.drain(run.clone()).collect();
+    // Lifting the run out from before the box slides the box back by its
+    // length. Worked out here rather than by searching for the box again,
+    // because the box may be one of several identical empty ones.
+    let container = if run.start < container {
+        container - len
+    } else {
+        container
+    };
+    // Every box *around* this one grows, and then this one does. The second
+    // half is what `resize_enclosing` alone cannot do: for an empty box its
+    // own span covers nothing, so it is not in its own enclosing set.
+    resize_enclosing(effects, container, len as isize);
+    if let EffectParams::Chain(chain) = &mut effects[container].params {
+        chain.children = chain.children.saturating_add(len.min(u8::MAX as usize) as u8);
+    }
+    let at = container + 1;
+    let tail = effects.split_off(at);
+    effects.extend(moved);
+    effects.extend(tail);
+    true
+}
+
 /// The single-row moves that turn `before` into `after`.
 ///
 /// The engine mirrors a reorder with one `MoveEffect` per row, which was
@@ -865,6 +927,126 @@ mod tests {
             EffectSlotState::of_kind(EffectKind::Delay)
         )
         .is_none());
+    }
+
+    /// Emptying a box must not seal it.
+    ///
+    /// The case Adam hit: wrap a device, drag it out, and the box is left
+    /// with a span covering no index -- so under `move_effect` alone there is
+    /// no `to` anywhere on the chain that puts anything back in. The box
+    /// could only be refilled from its own `+`, or thrown away.
+    #[test]
+    fn a_device_can_be_dragged_back_into_a_box_it_was_dragged_out_of() {
+        let mut effects = Vec::new();
+        let mut next = 0;
+        insert_effect(
+            &mut effects,
+            &mut next,
+            0,
+            EffectSlotState::of_kind(EffectKind::Filter),
+        )
+        .expect("room");
+        wrap_in_container(&mut effects, &mut next, 0..1, container()).expect("wrapped");
+        assert_eq!(
+            shape(&effects),
+            [(0, EffectKind::Chain), (1, EffectKind::Filter)],
+            "the filter did not start inside the box"
+        );
+
+        // Out: the filter lands after the box, which empties it.
+        assert!(move_effect(&mut effects, 1, 0));
+        assert_eq!(
+            shape(&effects),
+            [(0, EffectKind::Filter), (0, EffectKind::Chain)],
+            "dragging the filter out did not empty the box"
+        );
+
+        // And back in. There is no index that expresses this -- the box's
+        // span is empty -- so the drop names the box.
+        assert!(move_effect_into_container(&mut effects, 0, 1));
+        assert_eq!(
+            shape(&effects),
+            [(0, EffectKind::Chain), (1, EffectKind::Filter)],
+            "the filter did not go back inside the box"
+        );
+        assert_eq!(span_problem(&effects), None);
+    }
+
+    /// Moving a run into a box counts every row of it, and the boxes around
+    /// that box count them too.
+    #[test]
+    fn a_whole_run_moves_into_a_box_and_every_enclosing_span_grows() {
+        let mut effects = Vec::new();
+        let mut next = 0;
+        // An empty outer box, an empty inner box beside it, then a container
+        // holding a filter to move as a run.
+        insert_effect(&mut effects, &mut next, 0, container()).expect("room");
+        insert_into_container(&mut effects, &mut next, 0, container()).expect("room");
+        insert_effect(
+            &mut effects,
+            &mut next,
+            2,
+            EffectSlotState::of_kind(EffectKind::Filter),
+        )
+        .expect("room");
+        insert_effect(
+            &mut effects,
+            &mut next,
+            3,
+            EffectSlotState::of_kind(EffectKind::Drive),
+        )
+        .expect("room");
+        wrap_in_container(&mut effects, &mut next, 3..4, container()).expect("wrapped");
+        assert_eq!(
+            shape(&effects),
+            [
+                (0, EffectKind::Chain),
+                (1, EffectKind::Chain),
+                (0, EffectKind::Filter),
+                (0, EffectKind::Chain),
+                (1, EffectKind::Drive),
+            ],
+            "the fixture is not the shape the test is about"
+        );
+
+        // The drive's box, two rows, into the empty inner box at 1.
+        assert!(move_effect_into_container(&mut effects, 3, 1));
+        assert_eq!(
+            shape(&effects),
+            [
+                (0, EffectKind::Chain),
+                (1, EffectKind::Chain),
+                (2, EffectKind::Chain),
+                (3, EffectKind::Drive),
+                (0, EffectKind::Filter),
+            ],
+            "the run did not land two levels in"
+        );
+        assert_eq!(span_problem(&effects), None);
+    }
+
+    /// A box cannot be put inside itself.
+    #[test]
+    fn a_container_refuses_to_be_dropped_into_its_own_run() {
+        let mut effects = Vec::new();
+        let mut next = 0;
+        insert_effect(
+            &mut effects,
+            &mut next,
+            0,
+            EffectSlotState::of_kind(EffectKind::Filter),
+        )
+        .expect("room");
+        wrap_in_container(&mut effects, &mut next, 0..1, container()).expect("wrapped");
+        insert_into_container(&mut effects, &mut next, 0, container()).expect("room");
+        let before = shape(&effects);
+
+        assert!(
+            !move_effect_into_container(&mut effects, 0, 1),
+            "the outer box was allowed inside a box it contains"
+        );
+        assert_eq!(before, shape(&effects), "the refused move still edited the chain");
+        assert_eq!(span_problem(&effects), None);
     }
 
     /// The position just after an empty box is *outside* it, which is what

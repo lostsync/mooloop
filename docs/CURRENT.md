@@ -170,6 +170,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - Every gain trim — device input/output, the rack-row volume knob, the source
   output trim — is the same dB knob class: −60 dB (−∞) to +12 dB from unity,
   double-click to 0 dB. Project files and the engine wire keep linear gain.
+- The generator at the head of a chain is selectable, by clicking its header
+  the way a device row is selected, and wears the same border. It is the one
+  rack row a click could not name. What it does not do is take part in
+  copy, cut, duplicate or paste: those move rows of an effect chain, and a
+  generator is not one -- moving a patch between channels is what its
+  presets are for.
 - Every effect face inherits one shared shell (`EffectDeviceShell`): the
   identity header and drag-to-reorder live there, so a face file holds only
   its working controls and a new effect kind adds no chrome of its own. The
@@ -595,12 +601,17 @@ land on its own when it starts to matter:
   skips its run without moving the channel in time. **Nothing in the
   interface**: a device's left rail wraps it in a container, a container's
   right rail unwraps it, and dragging a device onto a row already inside a box
-  puts it in that box. **The run is drawn as a box**: every row inside a
-  container sits on a lit tray with an accent rail above and below it, closed
-  by a left cap at the container's own face and a right cap after the last
-  row inside, and nested one level in per level of nesting. An empty
-  container caps itself, so an empty box still looks like a box. A container
-  wider than the viewport has no collapsed form yet.
+  puts it in that box, and **dropping onto an emptied box puts it back
+  inside** -- an empty container's span covers no index, so its own row is
+  the only thing there is to aim at and a drop on it means "into this".
+  Dropping on a container that still holds something keeps meaning "before
+  it". **The run is drawn as a box**: the container's own frame -- the same
+  surface, border and corner radius any device has -- is extended across its
+  whole run, and the devices inside draw no frame of their own, so they sit
+  on the container's surface rather than as separate cards under a wash.
+  Nesting steps up the surface ramp one level at a time. An empty container
+  caps itself, so an empty box still looks like a box. A container wider than
+  the viewport has no collapsed form yet.
 - A container's face draws the **parallel split** the box cannot show: the
   signal entering, a dry lane straight across, a wet lane through a chip per
   device in the run, and the sum taken between them at a node that rides to

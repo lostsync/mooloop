@@ -311,6 +311,40 @@ The constraint the bars were also carrying still holds and is not affected:
 **vertical adjacency means the chain continues.** A layer's branches, if they
 are ever built, need a treatment that is not adjacency.
 
+### The box was drawn twice, and the first one was wrong
+
+The first version drew the run as an accent-coloured tray under the rows,
+with rails above and below. It read as green everywhere and still did not
+read as containment, which is the verdict Adam gave it after a day. The
+reason is worth keeping: **a wash under a row of opaque cards is a backdrop,
+and a backdrop says "these are related", not "these are inside".** The cards
+stayed cards.
+
+So the cards went instead. `DeviceFrame::contained` turns off a row's own
+background and border, and `ContainerEnclosure` draws the one that used to be
+theirs, once, around the whole run -- the container's own chrome, extended.
+What is left inside is rails, headers and faces sitting directly on the
+container's surface, which is what a device inside a device looks like.
+Nesting steps up the surface ramp rather than through a colour per level,
+because the ramp is already the depth vocabulary and does not run out.
+
+### An emptied box was a sealed box
+
+Dragging the last device out of a container left something that could not be
+refilled by dragging anything back in. Not an oversight in the drag: an empty
+container's span is `c+1..c+1`, which contains no index at all, so
+`resize_enclosing` had nothing to grow and there was no `to` anywhere on the
+chain that meant "inside this box".
+
+It is the same ambiguity `insert_into_container` exists for, and it has the
+same answer: the *gesture* says what the index cannot.
+`move_effect_into_container` is the drop's version of that operation, and
+`Session::move_effect_to` routes to it when the row dropped on is an empty
+container. Deliberately only when it is empty -- for a box that still holds
+something, its own row goes on meaning "before this box", because its
+children are there to be aimed at and taking that index away would leave
+"just before a container" with no gesture of its own.
+
 ### What the box needed from Rust: nothing
 
 `EffectSlotRow` already carried `children` and `depth` — step 02 sent them

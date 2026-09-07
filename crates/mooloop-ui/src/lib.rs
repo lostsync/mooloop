@@ -3179,6 +3179,9 @@ impl UiState {
         window.set_selected_channel_name(ch.name.as_str().into());
         window.set_selected_channel_volume_db(linear_to_db(ch.volume));
         window.set_source_kind(device_kind_to_int(ch.kind));
+        // Derived rather than remembered per channel: the selection names one
+        // chain, so switching chains unselects without anything being cleared.
+        window.set_source_selected(self.session.source_is_selected());
         window.set_source_preset_name(
             self.session
                 .source_preset_name(self.session.selected as u8)
@@ -6728,6 +6731,26 @@ impl AppUi {
         {
             let st = state.clone();
             let weak = window.as_weak();
+            window.on_source_select_toggled(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let mut st = st.borrow_mut();
+                // Clicking the selected generator again clears it, the same
+                // way clicking a selected effect row does.
+                let want = !st.session.source_is_selected();
+                let selected = st.session.select_source(want);
+                st.sync_effects();
+                window.set_source_selected(selected);
+                window.set_status_message(if selected {
+                    "Instrument selected".into()
+                } else {
+                    "".into()
+                });
+            });
+        }
+
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
             window.on_device_selected(move |slot| {
                 let Some(window) = weak.upgrade() else { return };
                 let mut st = st.borrow_mut();
@@ -6741,6 +6764,7 @@ impl AppUi {
                 };
                 st.session.select_device(next);
                 st.sync_effects();
+                window.set_source_selected(st.session.source_is_selected());
                 window.set_status_message(match next {
                     Some(_) => "Device selected".into(),
                     None => "".into(),

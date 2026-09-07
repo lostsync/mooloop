@@ -6,7 +6,8 @@
 use crate::session::Session;
 use mooloop_core::gain::{db_to_linear, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::{
-    insert_effect, insert_into_container, move_effect, remove_effect, unwrap_container,
+    insert_effect, insert_into_container, move_effect, move_effect_into_container, remove_effect,
+    unwrap_container,
     wrap_in_container,
     DelayTimeDivision, DeviceId, EffectKind, EffectParams, EffectRun, EffectSlotState,
     EffectTarget, EngineCommand,
@@ -285,6 +286,31 @@ impl Session {
         self.selected_device = slot
             .and_then(|slot| self.effect_chain()?.get(slot))
             .map(|effect| (target, effect.id));
+        // One selection, not two. A rack that could show a lit generator and
+        // a lit effect at once would have no answer to "what does Copy act
+        // on", which is the only question the selection exists to answer.
+        self.selected_source = None;
+    }
+
+    /// Selects the generator at the head of the chain the rack is pointed at,
+    /// or clears that selection.
+    ///
+    /// Refused for a bus, which has no generator. Returns whether anything is
+    /// selected afterwards, which is what the caller reports.
+    pub fn select_source(&mut self, selected: bool) -> bool {
+        let target = self.effect_target;
+        if !selected || !matches!(target, EffectTarget::Channel(_)) {
+            self.selected_source = None;
+            return false;
+        }
+        self.selected_device = None;
+        self.selected_source = Some(target);
+        true
+    }
+
+    /// Whether the generator of the chain now being edited is the selection.
+    pub fn source_is_selected(&self) -> bool {
+        self.selected_source == Some(self.effect_target)
     }
 
     /// Where the selected device is now, or `None` when nothing is selected,
@@ -374,7 +400,26 @@ impl Session {
         let target = self.effect_target;
         let effects = self.effect_chain_mut()?;
         let before: Vec<DeviceId> = effects.iter().map(|effect| effect.id).collect();
-        if !move_effect(effects, from, to) {
+        // Dropping onto an *empty* container means dropping into it. Nothing
+        // else can be meant: an empty box has no rows to aim at, and its span
+        // covers no index, so under the plain index rule there was no gesture
+        // anywhere that put a device back inside one. Emptying a box made it
+        // unfillable except by its own `+`.
+        //
+        // Deliberately only when it is empty. For a box that still holds
+        // something, its own row keeps meaning "before this box" -- its
+        // children are there to be aimed at, and taking that index away would
+        // make "just before a container" the thing that had no gesture.
+        let into_empty_box = matches!(
+            effects.get(to).map(|effect| effect.params),
+            Some(EffectParams::Chain(chain)) if chain.children == 0
+        );
+        let moved = if into_empty_box {
+            move_effect_into_container(effects, from, to)
+        } else {
+            move_effect(effects, from, to)
+        };
+        if !moved {
             return None;
         }
         let after: Vec<DeviceId> = effects.iter().map(|effect| effect.id).collect();
@@ -787,6 +832,81 @@ mod tests {
     }
 
     /// The dialog names a device, and after this step it does so literally.
+    /// Dropping a device onto an emptied box puts it back in the box.
+    ///
+    /// The rack reports a drop as "the row the pointer was over", and for an
+    /// empty container that row is the box itself. Under the plain index rule
+    /// that meant "before the box", so a box you had just dragged the last
+    /// device out of could not be refilled by dragging one back.
+    #[test]
+    fn a_drop_on_an_emptied_container_lands_inside_it() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Filter, 0).expect("room");
+        session.wrap_effects_in_container(0..1).expect("wrapped");
+        let depths = |session: &Session| -> Vec<(usize, EffectKind)> {
+            let effects = session.effect_chain().expect("a chain");
+            (0..effects.len())
+                .map(|slot| (mooloop_core::depth_at(effects, slot), effects[slot].kind()))
+                .collect()
+        };
+        assert_eq!(
+            depths(&session),
+            [(0, EffectKind::Chain), (1, EffectKind::Filter)]
+        );
+
+        session.move_effect_to(1, 0).expect("in range");
+        assert_eq!(
+            depths(&session),
+            [(0, EffectKind::Filter), (0, EffectKind::Chain)],
+            "dragging the filter out did not empty the box"
+        );
+
+        session.move_effect_to(0, 1).expect("in range");
+        assert_eq!(
+            depths(&session),
+            [(0, EffectKind::Chain), (1, EffectKind::Filter)],
+            "a drop on the emptied box landed beside it instead of inside it"
+        );
+    }
+
+    /// A box that still holds something keeps meaning "before this box" when
+    /// it is dropped on, because its children are there to be aimed at and
+    /// the position before it would otherwise have no gesture at all.
+    #[test]
+    fn a_drop_on_a_container_that_holds_something_still_lands_before_it() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Filter, 0).expect("room");
+        session.wrap_effects_in_container(0..1).expect("wrapped");
+        session.insert_effect_at(EffectKind::Drive, 2).expect("room");
+        let depths = |session: &Session| -> Vec<(usize, EffectKind)> {
+            let effects = session.effect_chain().expect("a chain");
+            (0..effects.len())
+                .map(|slot| (mooloop_core::depth_at(effects, slot), effects[slot].kind()))
+                .collect()
+        };
+        assert_eq!(
+            depths(&session),
+            [
+                (0, EffectKind::Chain),
+                (1, EffectKind::Filter),
+                (0, EffectKind::Drive)
+            ],
+            "the fixture is not the shape the test is about"
+        );
+
+        session.move_effect_to(2, 0).expect("in range");
+        assert_eq!(
+            depths(&session),
+            [
+                (0, EffectKind::Drive),
+                (0, EffectKind::Chain),
+                (1, EffectKind::Filter)
+            ],
+            "a drop on an occupied box swallowed the device instead of \
+             landing before it"
+        );
+    }
+
     /// Reordering the rack while it is open cannot move the pending save,
     /// because there is no position in it to move; removing that row drops it.
     #[test]

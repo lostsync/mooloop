@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-07
-- Sessions: 66
+- Sessions: 67
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -100,7 +100,10 @@ Alphabetical by model name, then by harness.
   device rather than replacing one, and the device clipboard whose selection
   is an identity rather than a seat, and the container box that replaced the
   nesting bars once the rack turned out not to wrap after all, with the
-  reorder drag that finally shows itself. Longer accounts of most of this are in
+  reorder drag that finally shows itself, and then that box again as the
+  container's own chrome once the coloured tray turned out to be a backdrop
+  rather than an enclosure, the emptied container that could not be refilled,
+  and the generator that could not be selected. Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
 ### Claude Sonnet 5 — Claude Code

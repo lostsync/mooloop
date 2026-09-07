@@ -19,7 +19,7 @@ export global DeviceRackMetrics {
     // Vertical room around a face, and the height of the strip that holds
     // one. A container's box is drawn in this padding: it has to enclose the
     // faces rather than sit inside them, and four levels of nesting step
-    // inward 4px each. `enclosure-reach` is short of the padding on purpose,
+    // inward 5px each. `enclosure-reach` is short of the padding on purpose,
     // so the outermost box has a margin instead of running flush into the
     // rack panel's own edges and reading as a clip.
     out property <length> rack-padding: 20px;
@@ -72,9 +72,22 @@ export global RackDrag {
     }
 }
 
-// One nesting level of a container's box, drawn behind a row's face and
-// spilling into the rack's vertical padding so a run reads as one continuous
-// well rather than as a stripe per row.
+// One nesting level of a container's box, drawn behind a row's face.
+//
+// This is the container's *own chrome, extended* -- the same surface, border
+// and corner radius a device frame has, stretched across the whole run --
+// rather than a separate coloured tray laid under it. The first cut was a
+// tray in the accent colour and Adam's verdict on it was that it put green
+// everywhere and still did not read as containment. It did not, and the
+// reason is that a wash under a row of opaque cards is a *backdrop*: the
+// cards stay cards, and a backdrop behind them says "these are related", not
+// "these are inside".
+//
+// So the cards go instead. A contained `DeviceFrame` draws no background and
+// no border (`DeviceFrame::contained`), and this draws the one that used to
+// be theirs, once, around all of them. What is left inside is rails, headers
+// and faces sitting directly on the container's surface -- which is what a
+// device inside a device looks like.
 //
 // Each row draws its own slice and the caps close themselves: a row is the
 // box's *head* when it is the container, and its right edge when the row
@@ -86,31 +99,33 @@ export component ContainerEnclosure inherits Rectangle {
     in property <int> level;          // 1..4, outermost first
     in property <bool> head;          // this row is the container itself
     in property <bool> cap-right;     // the run ends here
-    property <length> inset: (root.level - 1) * 4px;
-    property <length> rail: 3px;
-    property <color> line: Theme.accent.with-alpha(0.55);
+    property <length> inset: (root.level - 1) * 5px;
 
     y: -DeviceRackMetrics.enclosure-reach + root.inset;
     height: DeviceRackMetrics.face-height
         + DeviceRackMetrics.enclosure-reach * 2 - root.inset * 2;
-    // A tray the run sits on, not a hole it sits in: `Theme.panel` behind the
-    // rack is already near black, so a darker well would read as nothing.
-    background: Theme.surface.with-alpha(0.55);
-    border-top-left-radius: root.head ? 4px : 0;
-    border-bottom-left-radius: root.head ? 4px : 0;
-    border-top-right-radius: root.cap-right ? 4px : 0;
-    border-bottom-right-radius: root.cap-right ? 4px : 0;
+    // Nesting steps up the surface ramp rather than through a colour per
+    // level: the ramp is already the app's depth vocabulary, and it does not
+    // run out the way a palette of container colours would.
+    background: root.level == 1 ? Theme.surface
+        : root.level == 2 ? Theme.surface-raised
+        : Theme.surface-active;
+    property <color> line: Theme.text-faint;
+    border-top-left-radius: root.head ? Theme.radius-md : 0;
+    border-bottom-left-radius: root.head ? Theme.radius-md : 0;
+    border-top-right-radius: root.cap-right ? Theme.radius-md : 0;
+    border-bottom-right-radius: root.cap-right ? Theme.radius-md : 0;
 
-    Rectangle { y: 0; width: parent.width; height: root.rail; background: root.line; }
+    Rectangle { y: 0; width: parent.width; height: 1px; background: root.line; }
     Rectangle {
-        y: parent.height - root.rail; width: parent.width;
-        height: root.rail; background: root.line;
+        y: parent.height - 1px; width: parent.width;
+        height: 1px; background: root.line;
     }
     if root.head : Rectangle {
-        x: 0; width: root.rail; height: parent.height; background: root.line;
+        x: 0; width: 1px; height: parent.height; background: root.line;
     }
     if root.cap-right : Rectangle {
-        x: parent.width - root.rail; width: root.rail;
+        x: parent.width - 1px; width: 1px;
         height: parent.height; background: root.line;
     }
 }
@@ -232,8 +247,13 @@ export component DeviceFrame inherits Rectangle {
     in property <bool> duplicate-enabled: false;
     callback duplicate-requested();
 
-    background: Theme.surface;
-    border-width: root.selected ? 2px : 1px;
+    // A contained device has no card of its own: the container's chrome is
+    // already drawn around it, so a second background and border inside that
+    // one reads as a box in a box rather than a device in a container.
+    in property <bool> contained: false;
+
+    background: root.contained ? transparent : Theme.surface;
+    border-width: root.selected ? 2px : (root.contained ? 0px : 1px);
     border-color: root.selected ? Theme.accent : Theme.border;
     border-radius: Theme.radius-md;
     clip: true;
@@ -371,6 +391,27 @@ export component DeviceFrame inherits Rectangle {
                 changed(v) => { root.output-trim-changed(v); }
             }
         }
+    }
+
+    // Click-to-select on the header, for a device whose face is not an
+    // `EffectDeviceShell` and so has no drag handle doing it already. That is
+    // the generator: it heads the chain rather than sitting in it, so it can
+    // be neither reordered nor contained -- but it is still the thing a rack
+    // gesture can be *about*, and it was the one row a click could not name.
+    //
+    // Opt-in, because for an effect the shell's drag handle owns this press,
+    // and two areas over the same pixels would mean one of them silently lost
+    // it.
+    in property <bool> header-select-enabled: false;
+    callback header-clicked();
+    if root.header-select-enabled : TouchArea {
+        x: DeviceRackMetrics.rail-width;
+        y: 0px;
+        z: 90;
+        width: root.width - DeviceRackMetrics.rail-width * 2 - 52px;
+        height: DeviceRackMetrics.header-height;
+        mouse-cursor: pointer;
+        clicked => { root.header-clicked(); }
     }
 
     // Host controls live in the header, exactly where they can be compared

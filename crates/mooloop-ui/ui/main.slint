@@ -587,6 +587,12 @@ export component MainWindow inherits Window {
     callback browser-tab-changed(int);
     callback browser-preset-loaded(string);
     callback device-selected(int);
+    // The generator at the head of the chain, selected or unselected by
+    // clicking its header. Separate from `device-selected` because a
+    // generator has no rack index to name it by -- there is only ever one,
+    // and it is the one belonging to the chain now being edited.
+    callback source-select-toggled();
+    in property <bool> source-selected: false;
     callback duplicate-effect-clicked(int);
     // 0 copy, 1 cut, 2 paste, 3 duplicate -- all acting on the selected
     // device. One callback rather than four, because the shortcut dispatcher
@@ -2714,6 +2720,12 @@ export component MainWindow inherits Window {
                                                     preset-options: root.generator-preset-options;
                                                     preset-selected(i) => { root.generator-preset-selected(i); }
                                                     save-preset-requested => { root.save-generator-preset-requested(); }
+                                                    // The generator can be selected like any rack row,
+                                                    // and wears the same border for it. A bus's output
+                                                    // stage cannot: it is not a device anything acts on.
+                                                    header-select-enabled: !root.editing-bus;
+                                                    header-clicked => { root.source-select-toggled(); }
+                                                    selected: root.source-selected;
 
                                                     if root.editing-bus : BusDeviceFace {
                                                         x: DeviceRackMetrics.rail-width;
@@ -3264,6 +3276,10 @@ export component MainWindow inherits Window {
                                                     }
 
                                                     DeviceFrame {
+                                                        // A row in a box, or a box's own head, draws no card:
+                                                        // `ContainerEnclosure` behind it is that card, drawn
+                                                        // once around the whole run.
+                                                        contained: slot.depth > 0 || slot.kind == 12;
                                                         // Tracks the pointer directly rather than through an
                                                         // animation: an eased `x` lags the hand and reads as
                                                         // the interface being slow. The rows it displaces are

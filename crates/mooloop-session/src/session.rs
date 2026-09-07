@@ -86,6 +86,20 @@ pub struct Session {
     /// a different channel or bus clears it, because a device id is only
     /// unique within one chain.
     pub selected_device: Option<(EffectTarget, DeviceId)>,
+    /// The generator at the head of a channel's chain, when *it* is what the
+    /// selection names.
+    ///
+    /// A separate field rather than a variant of `selected_device`, because a
+    /// generator has no `DeviceId`: it is not a row of the effect chain, it
+    /// is the thing the chain runs after. Holding it here keeps every
+    /// existing reader of `selected_device` -- copy, cut, duplicate, the
+    /// rack's selected border -- meaning exactly what it meant, and the two
+    /// are kept mutually exclusive by `select_device` and `select_source`,
+    /// which is the invariant that makes "what is selected" answerable.
+    ///
+    /// Scoped to an `EffectTarget` for the same reason the device selection
+    /// is, and only ever a `Channel`: a bus has no generator.
+    pub selected_source: Option<EffectTarget>,
     pub modulation_armed_slot: Cell<Option<u8>>,
     /// The selected channel's latest modulator outputs, refreshed from the
     /// engine on the pump tick. Held here rather than recomputed per knob
@@ -185,6 +199,7 @@ impl Default for Session {
             modulation_shelf_open: false,
             modulation_selected_slot: Cell::new(None),
             selected_device: None,
+            selected_source: None,
             modulation_armed_slot: Cell::new(None),
             modulation_outputs: Cell::new([0.0; CONTROL_SOURCE_SLOTS]),
             modulation_ui_channel: Cell::new(None),
