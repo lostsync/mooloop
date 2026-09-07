@@ -277,7 +277,9 @@ work instead of folding it into the current branch.
 ## Deliberately not now
 
 **More effect kinds or a broad effect-polish pass.** The 2026 effects-feedback
-pass is complete and archived. The rack has twelve effects and a common host. A
+pass is complete and archived. The rack has twelve effects, a common host, and
+a thirteenth kind that is not an effect at all -- the container from
+`docs/plans/containers/`, which holds a run of the other twelve. A
 step may fix a concrete defect it exposes; the suite does not need more
 breadth.
 
@@ -303,6 +305,17 @@ audio edges rather than the other way round, and it landed on 2026-09-05 in
 `docs/plans/archive/latency-compensation/`. Sends and sidechains themselves
 wait for a product task that wants them, and are no longer untrustworthy when
 one arrives.
+
+**One has now arrived and been priced rather than taken.** A *layer* -- a
+container whose branches run in parallel and sum -- is the product task that
+wants them, and `docs/plans/containers/06-layers-and-selectors.md` says what it
+would cost: N branch buffers instead of one dry copy, branch alignment to the
+longest, a second representation in `EffectSlotState` because a contiguous span
+cannot describe parallel paths, and a visual treatment that is not vertical
+adjacency (step 04 spent that on "the chain continues"). Chain containers
+landed 2026-09-07 and are most of the value; whether layers are worth
+un-parking parallel routing is a decision to make after living with them, and
+it is Adam's.
 
 **Broad arrangement and recovery work.** Playlist clip manipulation, explicit
 loop ranges, autosave, crash recovery, and richer missing-sample relinking
