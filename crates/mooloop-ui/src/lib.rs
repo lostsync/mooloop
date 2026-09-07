@@ -4012,14 +4012,20 @@ impl AppUi {
                         "Channel preset saved",
                     ),
                     // The row's own kind picks the directory, so a delay
-                    // preset can only ever be offered to a delay row.
-                    PresetSaveTarget::Effect { .. } => match source.effect {
-                        Some(effect) => (
+                    // preset can only ever be offered to a delay row -- and a
+                    // container's run only to another container.
+                    PresetSaveTarget::Effect { .. } => match (&source.run, source.effect) {
+                        (Some(_), _) => (
+                            settings::effect_presets_dir(EffectKind::Chain),
+                            "mooloop-effect-run",
+                            "Container preset saved",
+                        ),
+                        (None, Some(effect)) => (
                             settings::effect_presets_dir(effect.kind()),
                             "mooloop-effect",
                             "Effect preset saved",
                         ),
-                        None => return,
+                        (None, None) => return,
                     },
                 };
                 let path = dir.join(format!("{file_stem}.{extension}"));
@@ -4040,14 +4046,23 @@ impl AppUi {
                             info,
                             AssetMode::Embedded,
                         ),
-                        PresetSaveTarget::Effect { .. } => match source.effect {
-                            Some(effect) => mooloop_project::save_effect_preset(
+                        PresetSaveTarget::Effect { .. } => match (&source.run, source.effect) {
+                            // A container saves as its run: the box and
+                            // everything in it, which is the whole point of
+                            // there being a box.
+                            (Some(run), _) => mooloop_project::save_effect_run_preset(
+                                &path,
+                                run,
+                                info,
+                                AssetMode::Embedded,
+                            ),
+                            (None, Some(effect)) => mooloop_project::save_effect_preset(
                                 &path,
                                 &effect,
                                 info,
                                 AssetMode::Embedded,
                             ),
-                            None => return,
+                            (None, None) => return,
                         },
                     };
                     let result = result
@@ -6831,9 +6846,13 @@ impl AppUi {
                     return;
                 };
                 let (path, name) = chosen;
-                let effect = match mooloop_project::load_bundle(&path) {
+                // A container's rail offers run presets, so what comes back
+                // is one row or a whole run. Both replace what is in the
+                // slot; a run replaces the box and everything in it.
+                let loaded = match mooloop_project::load_bundle(&path) {
                     Ok(report) => match report.document {
-                        LoadedDocument::Effect(effect) => *effect,
+                        LoadedDocument::Effect(effect) => Ok(*effect),
+                        LoadedDocument::EffectRun(run) => Err(*run),
                         _ => {
                             log_warn!("project", "{} is not an effect preset", path.display());
                             window.set_status_message(
@@ -6854,11 +6873,17 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut state = st.borrow_mut();
-                    if state.session.load_effect_preset(slot, &effect, &name).is_none() {
+                    let landed = match &loaded {
+                        Ok(effect) => state
+                            .session
+                            .load_effect_preset(slot, effect, &name)
+                            .is_some(),
+                        Err(run) => state.session.load_effect_run(slot, run, &name).is_some(),
+                    };
+                    if !landed {
                         log_warn!(
                             "project",
-                            "{name} is a {:?} preset; slot {slot} holds something else",
-                            effect.kind()
+                            "{name} does not fit slot {slot} on this chain"
                         );
                         drop(state);
                         window.set_status_message(

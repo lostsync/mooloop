@@ -5,7 +5,9 @@
 
 use crate::audio_file;
 use crate::session::{PresetSaveTarget, Session};
-use mooloop_core::{log_error, log_warn, ChannelSetup, EffectSlotState, Project, SampleReference};
+use mooloop_core::{
+    log_error, log_warn, ChannelSetup, EffectKind, EffectSlotState, Project, SampleReference,
+};
 use mooloop_dsp::SampleData;
 use mooloop_engine::{ExportFormat, Mp3Bitrate, RenderScope, WavEncoding};
 use mooloop_project::{AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, SaveReport};
@@ -179,8 +181,9 @@ pub fn resolve_document(path: &Path) -> Result<ResolvedDocument, DocumentProblem
         LoadedDocument::Generator(source) => {
             vec![source.sampler_state().map(|sampler| sampler.sample.clone())]
         }
-        // An effect references no audio; there is nothing to decode.
-        LoadedDocument::Effect(_) => Vec::new(),
+        // Neither an effect nor a run of them references audio; there is
+        // nothing to decode.
+        LoadedDocument::Effect(_) | LoadedDocument::EffectRun(_) => Vec::new(),
     };
     let mut samples = Vec::with_capacity(sample_references.len());
     for (channel, reference) in sample_references.into_iter().enumerate() {
@@ -274,6 +277,11 @@ pub struct PresetSource {
     /// save writes and `setup` is only what the selected channel happens to
     /// be.
     pub effect: Option<EffectSlotState>,
+    /// The container's whole run, when the row an effect save was started
+    /// from is a container. `effect` still carries its first row, so a caller
+    /// that does not know about containers writes the box on its own rather
+    /// than something wrong.
+    pub run: Option<mooloop_core::EffectRun>,
 }
 
 impl Session {
@@ -338,10 +346,30 @@ impl Session {
             }
             _ => None,
         };
+        // A container saves as its run: the box, and everything in it, with
+        // every identity stripped. `load_effect_run` mints fresh ones,
+        // because which devices these are belongs to the chain they land on.
+        let run = match target {
+            PresetSaveTarget::Effect {
+                target: chain,
+                device,
+            } if effect.is_some_and(|effect| effect.kind() == EffectKind::Chain) => {
+                let chain = self.effect_chain_of(chain)?;
+                let slot = mooloop_core::device_slot(chain, device)?;
+                Some(mooloop_core::EffectRun {
+                    effects: chain[mooloop_core::run_of(chain, slot)]
+                        .iter()
+                        .map(|effect| effect.with_id(mooloop_core::DeviceId::UNASSIGNED))
+                        .collect(),
+                })
+            }
+            _ => None,
+        };
         Some(PresetSource {
             target,
             setup,
             effect,
+            run,
         })
     }
 

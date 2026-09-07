@@ -570,7 +570,11 @@ land on its own when it starts to matter:
   right rail unwraps it, and dragging a device onto a row already inside a box
   puts it in that box. Every row inside a container wears one bar per level of
   nesting across its top edge. A container wider than the viewport has no
-  collapsed form yet.
+  collapsed form yet. A container **saves and loads as one preset** — the box
+  and everything in it, from the same rail every other device's presets live
+  on. The modulation driving a run does not travel with it, because a route's
+  source lives in the channel's rack rather than in the container; see
+  `docs/plans/containers/00-status.md`.
 - `ParamAddr` addresses parameters owned by a source, a rack device, a
   modulator slot, or the strip, within its channel-or-bus scope. A rack device
   is named by a durable `DeviceId` minted when it is inserted, so reordering,

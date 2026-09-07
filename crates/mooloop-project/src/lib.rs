@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mooloop_core::{
-    ChannelSetup, ChannelSource, DeviceKind, EffectKind, EffectSlotState, Kit, Project,
+    ChannelSetup, ChannelSource, DeviceKind, EffectKind, EffectRun, EffectSlotState, Kit, Project,
     SampleReference,
 };
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,8 @@ pub enum DocumentKind {
     Generator,
     /// One rack row: an [`EffectSlotState`] and nothing else.
     Effect,
+    /// A container and everything inside it, in rack order.
+    EffectRun,
 }
 
 impl DocumentKind {
@@ -51,6 +53,7 @@ impl DocumentKind {
             Self::Channel => "channel",
             Self::Generator => "generator",
             Self::Effect => "effect",
+            Self::EffectRun => "effect_run",
         }
     }
 }
@@ -64,6 +67,19 @@ impl DocumentKind {
 /// format can tell a one-row preset from a run of rows by reading this,
 /// instead of guessing from the document type.
 pub const EFFECT_PRESET_CONTAINS: &[&str] = &["effect_params"];
+
+/// What a *container* preset holds.
+///
+/// It **adds** an entry rather than redefining `effect_params`, which is the
+/// condition `docs/plans/preset-system/00-status.md` set on having built the
+/// one-row preset first: a reader can tell a run from a row by reading this
+/// instead of guessing from the document type, and a reader that predates
+/// runs meets `effect_run`, does not know it, and refuses the bundle rather
+/// than loading the first device and silently dropping the box.
+///
+/// The modulation a run drives is not in here, and the list is where it would
+/// go if a modulator ever gets to live in a container.
+pub const EFFECT_RUN_PRESET_CONTAINS: &[&str] = &["effect_params", "effect_run"];
 
 /// Indexable metadata for a saved preset, carried alongside the document so
 /// a future preset browser can list/group/filter without opening every
@@ -124,6 +140,7 @@ pub enum LoadedDocument {
     Channel(Box<ChannelSetup>),
     Generator(Box<ChannelSource>),
     Effect(Box<EffectSlotState>),
+    EffectRun(Box<EffectRun>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -455,6 +472,61 @@ pub fn save_effect_preset(
         |_| Vec::new(),
     )?;
     report.repairs = diagnosis.issues;
+    Ok(report)
+}
+
+/// Save a container and its run as one preset.
+///
+/// Identities are stripped on the way out: a preset is what a group of
+/// devices sounds like, and which devices they *are* belongs to the chain
+/// they were lifted from. `load_effect_run` mints fresh ones on the way in.
+pub fn save_effect_run_preset(
+    path: &Path,
+    run: &EffectRun,
+    info: PresetInfo,
+    mode: AssetMode,
+) -> Result<SaveReport, Error> {
+    let mut run = EffectRun {
+        effects: run
+            .effects
+            .iter()
+            .map(|effect| effect.with_id(mooloop_core::DeviceId::UNASSIGNED))
+            .collect(),
+    };
+    if run.effects.is_empty() {
+        return Err(Error::Invalid("an effect run preset holds no devices".into()));
+    }
+    if run.effects[0].kind() != EffectKind::Chain {
+        return Err(Error::Invalid(
+            "an effect run preset must start with the container".into(),
+        ));
+    }
+    if let Some(problem) = mooloop_core::span_problem(&run.effects) {
+        return Err(Error::Invalid(problem));
+    }
+    let mut diagnosis = None;
+    for effect in &mut run.effects {
+        let found = integrity::repair_effect(DocumentKind::EffectRun, effect);
+        if !found.is_usable() {
+            return Err(found.into());
+        }
+        let repairs = found.issues;
+        let entry = diagnosis.get_or_insert_with(Vec::new);
+        entry.extend(repairs);
+    }
+    let mut report = save_with_assets(
+        path,
+        DocumentKind::EffectRun,
+        run,
+        mode,
+        Some(info),
+        EFFECT_RUN_PRESET_CONTAINS
+            .iter()
+            .map(|entry| (*entry).to_string())
+            .collect(),
+        |_| Vec::new(),
+    )?;
+    report.repairs = diagnosis.unwrap_or_default();
     Ok(report)
 }
 
@@ -906,6 +978,15 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
                 envelope.asset_mode,
             )
         }
+        "effect_run" => {
+            validate_contains(&header.contains, EFFECT_RUN_PRESET_CONTAINS)?;
+            let envelope: Envelope<EffectRun> = table.try_into()?;
+            validate_envelope(&envelope, "effect_run")?;
+            (
+                LoadedDocument::EffectRun(Box::new(envelope.document)),
+                envelope.asset_mode,
+            )
+        }
         other => return Err(Error::UnsupportedDocument(other.into())),
     };
 
@@ -946,6 +1027,7 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
         }
         // Nothing to resolve: an effect carries no sample reference.
         LoadedDocument::Effect(effect) => integrity::repair_effect(DocumentKind::Effect, effect),
+        LoadedDocument::EffectRun(run) => integrity::repair_effect_run(run),
     };
     if !diagnosis.is_usable() {
         return Err(diagnosis.into());
@@ -1002,6 +1084,17 @@ fn summarize_preset(path: &Path) -> Option<PresetSummary> {
             validate_contains(&header.contains, EFFECT_PRESET_CONTAINS).ok()?;
             let envelope: Envelope<EffectSlotState> = toml::from_str(&manifest).ok()?;
             PresetKind::Effect(envelope.document.kind())
+        }
+        "effect_run" => {
+            validate_contains(&header.contains, EFFECT_RUN_PRESET_CONTAINS).ok()?;
+            let envelope: Envelope<EffectRun> = toml::from_str(&manifest).ok()?;
+            // A run preset belongs to the container it starts with, so it
+            // lists on that container's rail beside any other Chain preset.
+            // Nothing else can be at the head of a well-formed run, and a
+            // bundle whose head is something else is left out rather than
+            // offered and then refused.
+            (envelope.document.effects.first()?.kind() == EffectKind::Chain)
+                .then_some(PresetKind::Effect(EffectKind::Chain))?
         }
         _ => return None,
     };

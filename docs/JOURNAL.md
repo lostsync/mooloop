@@ -958,6 +958,42 @@ red at once. The fix is that the new button goes last: three positions that
 something already depends on are worth more than a container gesture being at
 the top of the stack.
 
+## Sep 7 (the preset) — half a step, and the half is the point
+
+A container saves as one preset now: the box, everything in it, in rack order,
+with every host control. It loads onto any container on any chain, and loading
+it twice onto one chain gives two independent runs — which is the test worth
+having, because two copies carrying the preset's own identities would be two
+rows that no route and no lane could tell apart.
+
+The other half of the step does not exist, and writing down why is more useful
+than the code would have been.
+
+Step 05 asked for *"a container holding two devices and a modulator route
+between them"*. A route's source is a module in the **channel's** modulation
+rack, not in the container. A run saved with its routes loads onto a channel
+whose rack has no such module, so the route resolves to nothing: the preset
+would carry a promise it cannot keep. Making it keep the promise means the
+container carries the modules too — which means deciding that a modulator can
+live in a container, and `reference/CONTAINERS.md` puts that under "what this
+brief deliberately does not decide": *"Adam has not settled this and it does
+not block the container work. Design containers so that becomes possible; do
+not build it."*
+
+So the run travels and the modulation waits. `EffectRun` is a struct with one
+field for that reason and `contains` is a list for that reason: when the
+question is answered, both grow rather than change. The ML-M1 bank's complaint
+— that a device preset cannot carry the modulation that makes the patch mean
+anything — is not closed by this. It is one *decision* away from closable
+instead of one architecture away, which is the whole of what containers were
+supposed to buy it.
+
+One small thing worth keeping. `repair_effect_run` **refuses** a headless or
+straddling run where the same check on a *song* flattens the containers and
+carries on. That asymmetry is deliberate: a song with a malformed span still
+holds a musician's work in the right order and is worth recovering, and a
+preset that cannot describe a box is just a file.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.

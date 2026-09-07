@@ -31,6 +31,26 @@ pub struct EffectInserted {
     pub params: EffectParams,
 }
 
+/// A container preset that replaced a run.
+///
+/// The engine mirror is the removal it did and the insertion it did, in that
+/// order, because the chain there is a flat array of installed nodes and this
+/// changed both which nodes are in it and how many.
+pub struct EffectRunLoaded {
+    pub target: EffectTarget,
+    /// Where the old container was, and where the new one now is.
+    pub slot: usize,
+    /// How many rows the old run had.
+    pub removed: usize,
+    /// The last index of the chain before the removal; step `i` of the engine
+    /// mirror moves `slot` to `removed_tail - i` and drops it.
+    pub removed_tail: usize,
+    /// The identities minted for the preset's devices, in rack order.
+    pub devices: Vec<mooloop_core::DeviceId>,
+    /// How many rows the preset brought.
+    pub landed: usize,
+}
+
 /// A reorder, and how the engine's flat chain gets to the same order.
 pub struct EffectMoved {
     pub target: EffectTarget,
@@ -151,6 +171,68 @@ impl Session {
             slot,
             tail: before - 1,
             devices: vec![device],
+        })
+    }
+
+    /// Replace the container in `slot` and its whole run with `run`.
+    ///
+    /// Every device in the preset is minted a fresh identity here. A preset
+    /// carries none of its own -- `save_effect_run_preset` strips them -- and
+    /// it must not: which devices these are belongs to the chain they land
+    /// on, so loading the same preset twice onto one chain has to give two
+    /// independent runs rather than two rows claiming the same id. The same
+    /// argument `install_with_id` makes for a modulator arriving with one.
+    ///
+    /// Routes and lanes pointing at the *old* run are dropped, because the
+    /// devices they named are gone. Nothing is re-aimed: a preset load
+    /// replaces what a group of devices is, and a lane drawn on the delay
+    /// that used to be in slot 2 has no claim on whatever the preset put
+    /// there.
+    ///
+    /// `None` when `slot` does not hold a container, when the preset is not a
+    /// well-formed run, or when the chain has no room for it.
+    pub fn load_effect_run(
+        &mut self,
+        slot: usize,
+        run: &mooloop_core::EffectRun,
+        name: &str,
+    ) -> Option<EffectRunLoaded> {
+        let target = self.effect_target;
+        if run.effects.first().map(EffectSlotState::kind) != Some(EffectKind::Chain) {
+            return None;
+        }
+        if mooloop_core::span_problem(&run.effects).is_some() {
+            return None;
+        }
+        let (removed, devices, removed_tail) = {
+            let (effects, next_id) = self.effect_chain_parts_mut()?;
+            if effects.get(slot)?.kind() != EffectKind::Chain {
+                return None;
+            }
+            let before = effects.len();
+            // One call, because the boxes around this one lose the run that
+            // left and gain the run that arrived, and those are two different
+            // numbers.
+            let removed = mooloop_core::replace_run(effects, next_id, slot, &run.effects)?;
+            let devices: Vec<mooloop_core::DeviceId> = effects
+                [slot..slot + run.effects.len()]
+                .iter()
+                .map(|effect| effect.id)
+                .collect();
+            (removed, devices, before - 1)
+        };
+        for effect in &removed {
+            self.forget_device(target, effect.id);
+        }
+        self.set_effect_preset_name(target, devices[0], name);
+        self.mark_dirty();
+        Some(EffectRunLoaded {
+            target,
+            slot,
+            removed: removed.len(),
+            removed_tail,
+            landed: devices.len(),
+            devices,
         })
     }
 
@@ -725,6 +807,120 @@ mod tests {
         // than removing a device the user did not ask to remove.
         assert!(session.unwrap_container_at(0).is_none());
         assert_eq!(session.channels[0].effects.len(), 4);
+    }
+
+    /// **The step 05 acceptance case.** A container saves as one preset,
+    /// loads onto a different chain, and the run comes back whole.
+    ///
+    /// Loaded twice onto the same chain on purpose: that is the test that the
+    /// identities are actually re-minted rather than carried, because two
+    /// copies claiming the same ids would be two rows that every route and
+    /// every lane could not tell apart.
+    #[test]
+    fn a_container_saves_as_one_preset_and_lands_twice_independently() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("run.mooloop-effect-run");
+
+        let mut session = Session::default();
+        for kind in [EffectKind::Delay, EffectKind::Filter, EffectKind::Drive] {
+            session.insert_effect_at(kind, usize::MAX).expect("room");
+        }
+        // A box around the filter and the drive, with a dialled-in mix.
+        session.wrap_effects_in_container(1..3).expect("wrapped");
+        if let mooloop_core::EffectParams::Chain(chain) =
+            &mut session.channels[0].effects[1].params
+        {
+            chain.mix = 0.4;
+        }
+        session.channels[0].effects[2].bypassed = true;
+        session.channels[0].effects[3].wet_dry = 0.25;
+
+        let container = session.channels[0].effects[1].id;
+        session.pending_preset_save = Some(PresetSaveTarget::Effect {
+            target: EffectTarget::Channel(0),
+            device: container,
+        });
+        let source = session.take_preset_save(120, 50).expect("a save was pending");
+        let run = source.run.expect("a container save carries its run");
+        assert_eq!(run.effects.len(), 3, "the box did not bring its contents");
+        assert!(
+            run.effects.iter().all(|effect| !effect.id.is_assigned()),
+            "the preset carried identities out of the chain it was lifted from"
+        );
+
+        mooloop_project::save_effect_run_preset(&path, &run, info("Boxed"), AssetMode::Embedded)
+            .unwrap();
+        let mooloop_project::LoadedDocument::EffectRun(loaded) =
+            load_bundle(&path).unwrap().document
+        else {
+            panic!("not a run");
+        };
+
+        // Onto a bus, which is a different chain entirely.
+        let mut destination = Session::default();
+        destination.effect_target = EffectTarget::Bus(1);
+        destination
+            .insert_effect_at(EffectKind::Chain, 0)
+            .expect("room");
+        destination
+            .insert_effect_at(EffectKind::Chain, 1)
+            .expect("room");
+
+        let first = destination
+            .load_effect_run(0, &loaded, "Boxed")
+            .expect("a container is there");
+        let second_slot = first.landed;
+        let second = destination
+            .load_effect_run(second_slot, &loaded, "Boxed")
+            .expect("the second container is there");
+
+        let chain = &destination.buses[1].effects;
+        assert_eq!(
+            chain.iter().map(EffectSlotState::kind).collect::<Vec<_>>(),
+            [
+                EffectKind::Chain,
+                EffectKind::Filter,
+                EffectKind::Drive,
+                EffectKind::Chain,
+                EffectKind::Filter,
+                EffectKind::Drive,
+            ]
+        );
+        assert_eq!(mooloop_core::span_problem(chain), None);
+        // The settings came with it, host controls included -- those default
+        // on load, so a restore that dropped them would be silent.
+        assert!(chain[1].bypassed && chain[4].bypassed);
+        assert!((chain[2].wet_dry - 0.25).abs() < 1.0e-6);
+        assert!((chain[5].wet_dry - 0.25).abs() < 1.0e-6);
+
+        // Two copies, six distinct identities.
+        let mut ids: Vec<_> = chain.iter().map(|effect| effect.id).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 6, "the two copies share identities");
+        assert!(first.devices.iter().all(|id| !second.devices.contains(id)));
+    }
+
+    /// A run that does not start with its container is not a container
+    /// preset, and a chain row that is not a container has nothing to replace.
+    /// Both are refused rather than half-applied.
+    #[test]
+    fn a_malformed_run_is_refused_and_the_chain_is_unchanged() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Delay, 0).expect("room");
+        let before = session.channels[0].effects.clone();
+
+        let headless = mooloop_core::EffectRun {
+            effects: vec![EffectSlotState::of_kind(EffectKind::Filter)],
+        };
+        assert!(session.load_effect_run(0, &headless, "No").is_none());
+
+        let fine = mooloop_core::EffectRun {
+            effects: vec![EffectSlotState::of_kind(EffectKind::Chain)],
+        };
+        // Slot 0 holds a delay, not a container.
+        assert!(session.load_effect_run(0, &fine, "No").is_none());
+        assert_eq!(session.channels[0].effects, before);
     }
 
     fn kinds(session: &Session) -> Vec<EffectKind> {

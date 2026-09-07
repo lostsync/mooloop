@@ -316,8 +316,74 @@ this machine's headless path is a separate setup; the drop-target behaviour in
 particular is an interaction, and a musician should put a box round something
 before anyone claims it feels right.
 
-## Steps 05–06
+## Step 05 — a container is a preset
 
-Not started. 05 is the container preset — `contains = ["effect_run"]`, and the
-re-minting and rescoping its own step file works out. 06 builds nothing and
-closes on Adam's ruling about layers.
+Landed on `feat/containers` (2026-09-07), **with half of it blocked and the
+reason recorded rather than worked around.**
+
+A container saves as one preset: the box, everything in it, in rack order,
+with every host control. It loads onto any other container on any chain in any
+project, and loading it twice onto the same chain gives two independent runs.
+`contains = ["effect_params", "effect_run"]` — an entry **added** rather than
+`effect_params` redefined, which is the condition
+`docs/plans/preset-system/00-status.md` set on having built the one-row preset
+first, and it holds: a reader that predates runs meets `effect_run`, does not
+know it, and refuses the bundle instead of loading the first device and
+silently dropping the box.
+
+### What is blocked, and why it is not a shortcut
+
+The step asked for *"a container holding two devices and a modulator route
+between them"*. **The route cannot travel, and building it would mean deciding
+something the brief explicitly reserves.**
+
+A route's source is a module in the *channel's* modulation rack, not in the
+container. A run saved with its routes would load onto a channel whose rack
+has no such module, so the route would resolve to nothing — the preset would
+carry a promise it could not keep. Making it keep the promise means the
+container carries the modulator modules too, which means a modulator can live
+in a container, which `reference/CONTAINERS.md` records under "what this brief
+deliberately does not decide": *"Adam has not settled this and it does not
+block the container work. Design containers so that becomes possible; do not
+build it."*
+
+So the run travels and the modulation does not. `EffectRun` is a struct with
+one field for exactly this reason, and `contains` is a list for exactly this
+reason: when the modulator question is answered, both grow rather than change.
+The ML-M1 bank's complaint — that a device preset cannot carry the modulation
+that makes the patch mean anything — is therefore **not closed by this step**.
+It is now one decision away from being closable, rather than one architecture
+away.
+
+### Where it is
+
+- `EffectRun` — `crates/mooloop-core/src/effect.rs`
+- `replace_run` — `crates/mooloop-core/src/structure.rs`, one function
+  because the boxes around a replaced run lose one length and gain another
+- `save_effect_run_preset`, `EFFECT_RUN_PRESET_CONTAINS`,
+  `DocumentKind::EffectRun` — `crates/mooloop-project/src/lib.rs`
+- `repair_effect_run` — refuses a headless or straddling run rather than
+  flattening it, which is the opposite of what a *song* gets and deliberate:
+  a song with a malformed span still holds work in the right order, and a
+  preset that cannot describe a box is just a file
+- `Session::load_effect_run` — `crates/mooloop-session/src/effects.rs`
+
+### Acceptance
+
+`a_container_saves_as_one_preset_and_lands_twice_independently`: a box holding
+a bypassed filter and a dialled-in drive, saved, reloaded, and loaded **twice**
+onto a bus — six devices, six distinct identities, host controls intact. Twice
+on purpose: two copies sharing identities would be two rows no route or lane
+could tell apart, and that is exactly what carrying the preset's own ids would
+produce. Beside it, a headless run and a non-container target are both refused
+with the chain unchanged.
+
+## Step 06 — layers and selectors
+
+**Cannot be executed by an agent, and that is what the step says.** It builds
+nothing; it closes when chain containers have been lived in and Adam has ruled
+on whether layers are worth un-parking parallel routing. The page prices them:
+N branch buffers instead of one dry copy, branch alignment to the longest,
+a second representation in `EffectSlotState` because a span cannot describe
+parallel paths, and a drawing problem step 04 closed off by making vertical
+adjacency mean "the chain continues".

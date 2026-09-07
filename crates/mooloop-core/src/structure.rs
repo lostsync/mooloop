@@ -311,6 +311,40 @@ pub fn remove_effect(
     Some(effects.drain(run).collect())
 }
 
+/// Replace the run at `at` with `rows`, minting each an identity.
+///
+/// Returns what went, in rack order. `None` when `at` names nothing or the
+/// chain has no room for the exchange.
+///
+/// The reason this is one function rather than a remove and an insert at the
+/// call site: the boxes *around* `at` lose the run that left and gain the run
+/// that arrived, and those are two different numbers. Doing it in two steps
+/// means writing that arithmetic twice, and getting it wrong in the second
+/// place is a container whose `children` no longer describes the rows it
+/// holds -- which the invariants call a straddle and the integrity pass
+/// flattens.
+pub fn replace_run(
+    effects: &mut Vec<EffectSlotState>,
+    next_id: &mut u32,
+    at: usize,
+    rows: &[EffectSlotState],
+) -> Option<Vec<EffectSlotState>> {
+    if at >= effects.len() {
+        return None;
+    }
+    let run = run_of(effects, at);
+    if effects.len() - run.len() + rows.len() > MAX_EFFECTS_PER_CHANNEL {
+        return None;
+    }
+    resize_enclosing(effects, at, -(run.len() as isize));
+    let removed: Vec<EffectSlotState> = effects.drain(run).collect();
+    resize_enclosing(effects, at, rows.len() as isize);
+    for (offset, row) in rows.iter().enumerate() {
+        effects.insert(at + offset, row.with_id(mint_device_id(next_id)));
+    }
+    Some(removed)
+}
+
 /// Take the container in `at` out of the chain, leaving its children where
 /// they are. Returns whether it was a container at all.
 ///

@@ -241,6 +241,52 @@ pub fn repair_effect(document: DocumentKind, effect: &mut EffectSlotState) -> Di
     }
 }
 
+/// Correct a container preset in place: every row's settings, and the shape
+/// of the run itself.
+///
+/// A run that does not start with its container, or whose spans do not nest,
+/// is not a container preset at all -- there is no correction that keeps what
+/// the author meant, so it is refused rather than flattened. That is the
+/// opposite of what a *song* gets, and deliberately: a song with a malformed
+/// span still holds a musician's work in the right order, and a preset that
+/// cannot describe a box is just a file.
+pub fn repair_effect_run(run: &mut mooloop_core::EffectRun) -> Diagnosis {
+    let mut doctor = Doctor::new(true);
+    if run.effects.is_empty() {
+        doctor.refuse(
+            "effect_run.empty",
+            "This preset",
+            "it holds no devices at all".into(),
+            "there is nothing to load".into(),
+        );
+    } else if run.effects[0].kind() != EffectKind::Chain {
+        doctor.refuse(
+            "effect_run.headless",
+            "This preset",
+            format!(
+                "it starts with a {} rather than with the container it belongs to",
+                run.effects[0].kind().label()
+            ),
+            "save the container itself rather than a device inside it".into(),
+        );
+    } else if let Some(problem) = mooloop_core::span_problem(&run.effects) {
+        doctor.refuse(
+            "effect_run.span",
+            "This preset",
+            problem,
+            "save the container again from a chain that is well formed".into(),
+        );
+    }
+    for (slot, effect) in run.effects.iter_mut().enumerate() {
+        check_effect(&mut doctor, "This preset", slot, effect);
+    }
+    Diagnosis {
+        document: DocumentKind::EffectRun,
+        issues: doctor.issues,
+        context: vec![("devices:", run.effects.len().to_string())],
+    }
+}
+
 /// Correct a lone generator's parameters in place.
 pub fn repair_source(document: DocumentKind, source: &mut ChannelSource) -> Diagnosis {
 

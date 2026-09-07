@@ -262,6 +262,17 @@ or lane stranded on another channel's index is pointed back at its own
 channel, and one naming a device or control that is not present is dropped.
 Addresses on a generator that has no descriptor table yet are left untouched.
 
+A container also saves as a preset of its own: an `effect_run` document
+holding the container and everything inside it, in rack order, with
+`contains = ["effect_params", "effect_run"]`. The entry is **added** rather
+than replacing `effect_params`, so a reader that predates run presets refuses
+the bundle instead of loading its first device and dropping the box. Device
+ids are stripped on save and minted fresh on load, because identity belongs to
+the chain a device is on rather than to the patch. The modulation that drives
+a run is not carried — a route's source is a module in the channel's rack, not
+in the container — and `docs/plans/containers/00-status.md` records why that
+is a deferred decision rather than an omission.
+
 ## Kit And Channel Documents
 
 A kit document contains `document.channels`, an array of channel setups. It

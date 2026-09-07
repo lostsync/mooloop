@@ -1893,6 +1893,26 @@ impl Default for ChainParams {
     }
 }
 
+/// A container and everything inside it: what a container preset is.
+///
+/// The rows are in rack order with the container first, exactly as they sit
+/// on the chain, and they carry no identities -- the ids are stripped on the
+/// way out and minted fresh on the way in, because identity belongs to the
+/// chain a device is on rather than to the patch. See
+/// `docs/plans/containers/05-a-container-is-a-preset.md`.
+///
+/// **The modulation that drives the run is deliberately not here.** A route's
+/// source is a module in the *channel's* rack, not in the container, so a run
+/// saved with its routes would load onto a channel whose rack has no such
+/// module. Carrying the modules too would mean deciding that a modulator can
+/// live in a container, which `reference/CONTAINERS.md` records as Adam's
+/// undecided call and explicitly does not block this work. The field this
+/// would grow is the reason `contains` is a list.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct EffectRun {
+    pub effects: Vec<EffectSlotState>,
+}
+
 /// `Event::ParamValue` ids for [`ChainParams`].
 ///
 /// `children` is deliberately absent, for the same reason `BufferParams.bars`
