@@ -72,6 +72,20 @@ pub struct Session {
     /// separate from assignment: looking at an LFO must not hijack knob
     /// gestures throughout the rack.
     pub modulation_selected_slot: Cell<Option<u8>>,
+    /// The rack device the keyboard acts on, as an identity rather than a
+    /// position.
+    ///
+    /// This is the first thing to *use* what `containers/` step 01 built.
+    /// A selection kept as a slot number would have to be rewritten by every
+    /// reorder -- which is exactly the class of bug `SlotRemap` existed for
+    /// and was deleted for -- so the selection names the device and the slot
+    /// is derived when it is needed. Dragging a row therefore does not change
+    /// what is selected, and neither does inserting one above it.
+    ///
+    /// Scoped to `effect_target` like the chain itself: pointing the rack at
+    /// a different channel or bus clears it, because a device id is only
+    /// unique within one chain.
+    pub selected_device: Option<(EffectTarget, DeviceId)>,
     pub modulation_armed_slot: Cell<Option<u8>>,
     /// The selected channel's latest modulator outputs, refreshed from the
     /// engine on the pump tick. Held here rather than recomputed per knob
@@ -170,6 +184,7 @@ impl Default for Session {
             slice_audition: None,
             modulation_shelf_open: false,
             modulation_selected_slot: Cell::new(None),
+            selected_device: None,
             modulation_armed_slot: Cell::new(None),
             modulation_outputs: Cell::new([0.0; CONTROL_SOURCE_SLOTS]),
             modulation_ui_channel: Cell::new(None),
@@ -770,6 +785,9 @@ impl Session {
             self.pending_preset_save = None;
         }
         self.effect_preset_names.remove(&(target, device));
+        if self.selected_device == Some((target, device)) {
+            self.selected_device = None;
+        }
     }
 
     /// The preset `device` of `target` was last loaded from or saved as.

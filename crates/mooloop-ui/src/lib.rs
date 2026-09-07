@@ -830,6 +830,7 @@ fn effect_slot_row(
     presets: &[PresetSummary],
     preset_name: Option<&str>,
     depth: i32,
+    selected: bool,
 ) -> EffectSlotRow {
     let kind = slot.kind();
     let preset_options: Vec<slint::SharedString> = effect_presets_of_kind(presets, kind)
@@ -913,6 +914,7 @@ fn effect_slot_row(
             _ => 0,
         },
         depth,
+        selected,
     }
 }
 
@@ -2245,6 +2247,7 @@ impl UiState {
                     self.session
                         .effect_preset_name(self.session.effect_target, effect.id),
                     depth,
+                    self.session.selected_device_slot() == Some(slot),
                 ),
             );
         }
@@ -2374,6 +2377,7 @@ impl UiState {
 
     fn sync_effects(&self) {
         let armed = self.session.modulation_armed_slot.get();
+        let selected = self.session.selected_device_slot();
         let rows: Vec<EffectSlotRow> = match self.session.effect_target {
             // Modulation state belongs to the selected channel, so an insert
             // rack pointed at a bus -- or at another channel -- renders its
@@ -2395,6 +2399,7 @@ impl UiState {
                                     effect.id,
                                 ),
                                 mooloop_core::depth_at(&state.effects, slot) as i32,
+                                selected == Some(slot),
                             );
                             let descriptors = effect.kind().descriptors();
                             row.modulation_depths =
@@ -2439,6 +2444,7 @@ impl UiState {
                                     &self.session.effect_presets,
                                     self.session.effect_preset_name(target, effect.id),
                                     mooloop_core::depth_at(effects, slot) as i32,
+                                    selected == Some(slot),
                                 )
                             })
                             .collect()
@@ -4344,6 +4350,10 @@ impl AppUi {
                         let sign = if action_id == "notes.nudge-up" { 1 } else { -1 };
                         window.invoke_piano_notes_nudged(0, sign);
                     }
+                    "device.copy" => window.invoke_device_clipboard_action(0),
+                    "device.cut" => window.invoke_device_clipboard_action(1),
+                    "device.paste" => window.invoke_device_clipboard_action(2),
+                    "device.duplicate" => window.invoke_device_clipboard_action(3),
                     "channel.clone" => window.invoke_edit_command_requested(5, channel),
                     "channel.remove" => window.invoke_edit_command_requested(6, channel),
                     "channel.add" => window.invoke_add_channel_clicked(0),
@@ -6712,6 +6722,51 @@ impl AppUi {
                     st.install_added_effect(&added, window.get_bpm() as f64, sample_rate, &tx, &stx);
                 }
                 record_project_history(&commands, before, &st, &window, "Effect added");
+            });
+        }
+
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_device_selected(move |slot| {
+                let Some(window) = weak.upgrade() else { return };
+                let mut st = st.borrow_mut();
+                let slot = usize::try_from(slot).ok();
+                // Clicking the selected device again clears it, so there is a
+                // way back to "nothing selected" without a second gesture.
+                let next = if slot.is_some() && st.session.selected_device_slot() == slot {
+                    None
+                } else {
+                    slot
+                };
+                st.session.select_device(next);
+                st.sync_effects();
+                window.set_status_message(match next {
+                    Some(_) => "Device selected".into(),
+                    None => "".into(),
+                });
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = project_edit_tx.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_duplicate_effect_clicked(move |slot| {
+                let Some(window) = weak.upgrade() else { return };
+                let Ok(slot) = usize::try_from(slot) else { return };
+                apply_device_clipboard(&st, &window, &tx, &commands, DeviceClipboardVerb::Duplicate, Some(slot));
+            });
+        }
+        {
+            let st = state.clone();
+            let tx = project_edit_tx.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_device_clipboard_action(move |verb| {
+                let Some(window) = weak.upgrade() else { return };
+                let Some(verb) = DeviceClipboardVerb::from_int(verb) else { return };
+                apply_device_clipboard(&st, &window, &tx, &commands, verb, None);
             });
         }
 
@@ -10953,6 +11008,129 @@ fn append_effect_preset(
     let after = project_snapshot(&st.borrow(), window);
     window.set_status_message(format!("Added {name}").into());
     Some((before, after))
+}
+
+/// The four things the device clipboard can do.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DeviceClipboardVerb {
+    Copy,
+    Cut,
+    Paste,
+    Duplicate,
+}
+
+impl DeviceClipboardVerb {
+    fn from_int(value: i32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Copy),
+            1 => Some(Self::Cut),
+            2 => Some(Self::Paste),
+            3 => Some(Self::Duplicate),
+            _ => None,
+        }
+    }
+}
+
+/// Runs a clipboard verb against `slot`, or against the selected device when
+/// `slot` is `None` -- which is the difference between the rail's own button
+/// and a keyboard shortcut.
+///
+/// Copy is not an edit and does not touch history. The other three go through
+/// the project-edit path, which reinstalls the project and so carries the
+/// structural change without a separate engine command; that is the same
+/// route a loaded effect preset takes.
+fn apply_device_clipboard(
+    st: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    tx: &ProjectEditSender,
+    commands: &Rc<RefCell<CommandState>>,
+    verb: DeviceClipboardVerb,
+    slot: Option<usize>,
+) {
+    let slot = match slot.or_else(|| st.borrow().session.selected_device_slot()) {
+        Some(slot) => slot,
+        None if verb == DeviceClipboardVerb::Paste => {
+            // A paste with nothing selected still has somewhere to go: the
+            // end of the chain. That makes the first paste onto a fresh
+            // channel work without a selection gesture first.
+            st.borrow().session.effect_chain().map(Vec::len).unwrap_or(0)
+        }
+        None => {
+            window.set_status_message("Select a device first".into());
+            return;
+        }
+    };
+
+    if verb == DeviceClipboardVerb::Copy || verb == DeviceClipboardVerb::Cut {
+        let Some(run) = st.borrow().session.copy_device(slot) else {
+            window.set_status_message("Select a device first".into());
+            return;
+        };
+        let rows = run.effects.len();
+        commands.borrow_mut().device_clipboard = Some(run);
+        if verb == DeviceClipboardVerb::Copy {
+            window.set_status_message(copied_message(rows).into());
+            return;
+        }
+    }
+
+    let before = project_snapshot(&st.borrow(), window);
+    let status = {
+        let mut state = st.borrow_mut();
+        match verb {
+            DeviceClipboardVerb::Copy => unreachable!("copy returned above"),
+            DeviceClipboardVerb::Cut => {
+                if state.session.remove_effect_at(slot).is_none() {
+                    return;
+                }
+                "Device cut"
+            }
+            DeviceClipboardVerb::Paste | DeviceClipboardVerb::Duplicate => {
+                let landed = if verb == DeviceClipboardVerb::Duplicate {
+                    state.session.duplicate_device(slot)
+                } else {
+                    let Some(run) = commands.borrow().device_clipboard.clone() else {
+                        drop(state);
+                        window.set_status_message("Nothing to paste".into());
+                        return;
+                    };
+                    state.session.paste_device(&run, slot)
+                };
+                if landed.is_none() {
+                    drop(state);
+                    window.set_status_message("This chain is full".into());
+                    return;
+                }
+                if verb == DeviceClipboardVerb::Duplicate {
+                    "Device duplicated"
+                } else {
+                    "Device pasted"
+                }
+            }
+        }
+    };
+    {
+        let st = st.borrow();
+        st.sync_effects();
+        st.refresh_automation(window);
+        st.refresh_modulation(window);
+    }
+    let after = project_snapshot(&st.borrow(), window);
+    if queue_project_edit(tx, before, after, status) {
+        commands.borrow_mut().project_edit_pending = true;
+        sync_command_availability(window, &commands.borrow());
+    }
+}
+
+/// What a copy says it took. A container takes its run, and saying so is the
+/// difference between "I copied the box" and "I copied the box and the three
+/// devices in it" -- which is what the musician needs to know before pasting.
+fn copied_message(rows: usize) -> String {
+    if rows > 1 {
+        format!("Copied a container and the {} devices in it", rows - 1)
+    } else {
+        "Device copied".to_string()
+    }
 }
 
 /// Rebuilds the visible tree from the session's locations and expansion set.

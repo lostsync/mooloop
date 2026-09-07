@@ -143,6 +143,15 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
         ctrl + "delete"
     ),
     action!("channel.clone", "Clone Channel", "Channel", ctrl + "d"),
+    // Device clipboard. Deliberately its own chords rather than making
+    // Ctrl+C mean different things in different places: a context-sensitive
+    // clipboard needs the dispatcher to know what has focus, and that is
+    // `interface-iteration/` step 04's question. These work today and can be
+    // rebound to the bare chords the day it is answered.
+    action!("device.copy", "Copy Device", "Device", ctrl + shift + "c"),
+    action!("device.cut", "Cut Device", "Device", ctrl + shift + "x"),
+    action!("device.paste", "Paste Device", "Device", ctrl + shift + "v"),
+    action!("device.duplicate", "Duplicate Device", "Device", ctrl + shift + "d"),
     action!("pattern.add", "Add Pattern", "Pattern", ctrl + shift + "p"),
     action!(
         "pattern.remove",

@@ -18,6 +18,16 @@ pub struct CommandState {
     pub history: History<ProjectSnapshot>,
     pub project_edit_pending: bool,
     pub pane: Pane,
+    /// A device cut or copied from a rack, with its whole run when it is a
+    /// container, and with every identity stripped -- so a paste is a new
+    /// device that sounds the same, not the same device twice.
+    ///
+    /// It does **not** carry the modulation routes or automation lanes that
+    /// drove the original: a route's source is a module in the *channel's*
+    /// rack, so it cannot follow a device onto another channel. That is the
+    /// question `docs/plans/containers/` reserved rather than answered, and
+    /// this inherits its answer instead of making a second one.
+    pub device_clipboard: Option<mooloop_core::EffectRun>,
     /// Notes cut or copied from the roll, kept relative to the earliest one
     /// so a paste lands as a phrase rather than at absolute ticks.
     pub note_clipboard: Vec<NoteEvent>,

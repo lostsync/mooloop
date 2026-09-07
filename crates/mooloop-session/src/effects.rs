@@ -8,8 +8,8 @@ use mooloop_core::gain::{db_to_linear, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::{
     insert_effect, insert_into_container, move_effect, remove_effect, unwrap_container,
     wrap_in_container,
-    DelayTimeDivision, DeviceId, EffectKind, EffectParams, EffectSlotState, EffectTarget,
-    EngineCommand,
+    DelayTimeDivision, DeviceId, EffectKind, EffectParams, EffectRun, EffectSlotState,
+    EffectTarget, EngineCommand,
 };
 
 /// Trim knobs work in dB from unity and stop at the container's headroom; the
@@ -67,6 +67,20 @@ pub struct EffectMoved {
 ///
 /// More than one row when the removed device was a container: a box goes with
 /// its contents.
+/// A run that arrived from the device clipboard.
+///
+/// Simpler than [`EffectRunLoaded`] because nothing left to make room for it:
+/// a paste is an insertion, so the engine mirror is the rows that arrived and
+/// nothing else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectRunInserted {
+    pub target: EffectTarget,
+    /// Where the run's head landed.
+    pub slot: usize,
+    /// The identities minted for it, in rack order.
+    pub devices: Vec<DeviceId>,
+}
+
 pub struct EffectRemoved {
     pub target: EffectTarget,
     pub slot: usize,
@@ -261,6 +275,93 @@ impl Session {
             landed: devices.len(),
             devices,
         })
+    }
+
+    /// Selects the device in `slot`, by identity.
+    ///
+    /// `None` clears the selection, and so does a slot that names nothing.
+    pub fn select_device(&mut self, slot: Option<usize>) {
+        let target = self.effect_target;
+        self.selected_device = slot
+            .and_then(|slot| self.effect_chain()?.get(slot))
+            .map(|effect| (target, effect.id));
+    }
+
+    /// Where the selected device is now, or `None` when nothing is selected,
+    /// the rack is pointed somewhere else, or it has been removed.
+    ///
+    /// Derived rather than stored, which is the whole reason the selection is
+    /// an identity: a reorder moves the device and this answer follows it
+    /// without anything having been rewritten.
+    pub fn selected_device_slot(&self) -> Option<usize> {
+        let (target, device) = self.selected_device?;
+        if target != self.effect_target {
+            return None;
+        }
+        mooloop_core::device_slot(self.effect_chain()?, device)
+    }
+
+    /// The device in `slot` -- and, when it is a container, its whole run --
+    /// as a clipboard payload.
+    ///
+    /// Identity is stripped, for the reason `take_preset_save` gives about a
+    /// preset: which devices these are belongs to the chain they were taken
+    /// from, and `insert_run` mints fresh ones on the way back in. A
+    /// clipboard holds a design, not a device.
+    ///
+    /// Read-only, so a copy is not an edit and does not touch history.
+    pub fn copy_device(&self, slot: usize) -> Option<EffectRun> {
+        let effects = self.effect_chain()?;
+        if slot >= effects.len() {
+            return None;
+        }
+        let effects = effects[mooloop_core::run_of(effects, slot)]
+            .iter()
+            .map(|effect| effect.with_id(DeviceId::UNASSIGNED))
+            .collect();
+        Some(EffectRun { effects })
+    }
+
+    /// Puts `run` into the chain immediately after the run at `after`, or at
+    /// the head of an empty chain.
+    ///
+    /// **A paste lands beside the row you pasted onto, not inside it.**
+    /// `run_of(after).end` is a run's end boundary, and `insert_run` treats
+    /// that boundary the way `insert_effect` documents -- as *after* the
+    /// container rather than in it -- so pasting onto a container's last
+    /// child puts the arrival after the box. That is one rule at every
+    /// depth, and it is the same rule the rack's own `+` follows.
+    ///
+    /// `None` when `after` names nothing, the run is malformed, or the chain
+    /// has no room.
+    pub fn paste_device(&mut self, run: &EffectRun, after: usize) -> Option<EffectRunInserted> {
+        let target = self.effect_target;
+        let (effects, next_id) = self.effect_chain_parts_mut()?;
+        let at = if effects.is_empty() {
+            0
+        } else {
+            mooloop_core::run_of(effects, after.min(effects.len() - 1)).end
+        };
+        let slot = mooloop_core::insert_run(effects, next_id, at, &run.effects)?;
+        let devices = effects[slot..slot + run.effects.len()]
+            .iter()
+            .map(|effect| effect.id)
+            .collect();
+        self.mark_dirty();
+        Some(EffectRunInserted {
+            target,
+            slot,
+            devices,
+        })
+    }
+
+    /// Copies the run at `slot` and pastes it straight after itself.
+    ///
+    /// Deliberately not "copy then paste": it must not disturb the clipboard,
+    /// the same way `channel.clone` does not disturb the channel clipboard.
+    pub fn duplicate_device(&mut self, slot: usize) -> Option<EffectRunInserted> {
+        let run = self.copy_device(slot)?;
+        self.paste_device(&run, slot)
     }
 
     /// Reorders the chain, returning what the rack is pointed at and the
@@ -760,6 +861,195 @@ mod tests {
     /// made around a device, and the box taken away without its contents.
     ///
     /// Wrapping a *container* wraps its whole run, which is what makes
+    /// The selection is an identity, so a reorder moves the device and the
+    /// answer follows it. Under the slot scheme this assertion could not have
+    /// been written -- there, the selection would have had to be rewritten.
+    #[test]
+    fn the_selected_device_survives_a_reorder_and_dies_with_its_device() {
+        let mut session = Session::default();
+        for kind in [EffectKind::Delay, EffectKind::Filter, EffectKind::Drive] {
+            session.insert_effect_at(kind, usize::MAX).expect("room");
+        }
+        session.select_device(Some(2));
+        assert_eq!(session.selected_device_slot(), Some(2));
+
+        session.move_effect_to(2, 0).expect("a reorder");
+        assert_eq!(
+            session.selected_device_slot(),
+            Some(0),
+            "the drive is still selected, and it is now first"
+        );
+        assert_eq!(kinds(&session)[0], EffectKind::Drive);
+
+        // An insert above it moves it again, and still changes nothing.
+        session.insert_effect_at(EffectKind::Gate, 0).expect("room");
+        assert_eq!(session.selected_device_slot(), Some(1));
+
+        session.remove_effect_at(1).expect("the drive");
+        assert_eq!(
+            session.selected_device_slot(),
+            None,
+            "a removed device is not selected, it is gone"
+        );
+        assert_eq!(session.selected_device, None);
+    }
+
+    /// The point of the whole step: a device copied out of one chain lands in
+    /// another as a *different* device that sounds the same.
+    #[test]
+    fn a_pasted_device_is_a_new_device_with_the_same_sound() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Delay, 0).expect("room");
+        // Any parameter will do; what matters is that the copy carries it.
+        session.set_effect_param(0, 1, 0.75).expect("slot 0 is a delay");
+        let original = session.channels[0].effects[0];
+
+        let run = session.copy_device(0).expect("slot 0 is occupied");
+        assert_eq!(
+            run.effects[0].id,
+            DeviceId::UNASSIGNED,
+            "a clipboard holds a design, not a device"
+        );
+
+        let pasted = session.paste_device(&run, 0).expect("chain has room");
+        assert_eq!(kinds(&session), [EffectKind::Delay, EffectKind::Delay]);
+        assert_eq!(pasted.slot, 1, "a paste lands after the row it was taken from");
+
+        let copy = session.channels[0].effects[1];
+        assert_ne!(copy.id, original.id, "two rows no route could tell apart");
+        assert_eq!(copy.id, pasted.devices[0]);
+        assert_eq!(
+            copy.params, original.params,
+            "and it must still sound like what was copied"
+        );
+    }
+
+    /// A container is copied as its whole run, the same unit it is deleted
+    /// and saved as.
+    #[test]
+    fn copying_a_container_takes_everything_in_it() {
+        let mut session = Session::default();
+        for kind in [EffectKind::Delay, EffectKind::Filter, EffectKind::Drive] {
+            session.insert_effect_at(kind, usize::MAX).expect("room");
+        }
+        session.wrap_effects_in_container(1..2).expect("wrapped");
+        // Delay, [Chain, Filter], Drive
+        let run = session.copy_device(1).expect("the container");
+        assert_eq!(
+            run.effects.iter().map(|e| e.kind()).collect::<Vec<_>>(),
+            [EffectKind::Chain, EffectKind::Filter],
+            "the box and what is in it, and nothing after it"
+        );
+
+        session.paste_device(&run, 1).expect("room");
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Delay,
+                EffectKind::Chain,
+                EffectKind::Filter,
+                EffectKind::Chain,
+                EffectKind::Filter,
+                EffectKind::Drive,
+            ]
+        );
+        assert_eq!(
+            depths(&session),
+            [0, 0, 1, 0, 1, 0],
+            "the pasted box encloses its own child and nothing else"
+        );
+        assert_eq!(
+            mooloop_core::span_problem(&session.channels[0].effects),
+            None,
+            "and the chain is still well formed"
+        );
+    }
+
+    /// The boundary rule, which is the only thing about paste that is not
+    /// obvious: pasting onto a container's last child lands *after* the box,
+    /// because a run's end boundary is outside it -- the same rule
+    /// `insert_effect` follows for the rack's own `+`.
+    #[test]
+    fn pasting_onto_a_containers_last_child_lands_outside_the_box() {
+        let mut session = Session::default();
+        for kind in [EffectKind::Delay, EffectKind::Filter] {
+            session.insert_effect_at(kind, usize::MAX).expect("room");
+        }
+        session.wrap_effects_in_container(1..2).expect("wrapped");
+        // Delay, [Chain, Filter]
+        assert_eq!(depths(&session), [0, 0, 1]);
+
+        let run = session.copy_device(0).expect("the delay");
+        session.paste_device(&run, 2).expect("room");
+
+        assert_eq!(
+            depths(&session),
+            [0, 0, 1, 0],
+            "the paste landed beside the box, not inside it"
+        );
+        assert_eq!(
+            session.channels[0].effects[1].params,
+            EffectParams::Chain(mooloop_core::ChainParams {
+                children: 1,
+                ..Default::default()
+            }),
+            "and the box did not grow a child it never gained"
+        );
+    }
+
+    /// Duplicate is copy-and-paste that does not touch the clipboard, the
+    /// same relationship `channel.clone` has to channel copy/paste.
+    #[test]
+    fn duplicate_leaves_the_clipboard_alone() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Reverb, 0).expect("room");
+        session.insert_effect_at(EffectKind::Gate, 1).expect("room");
+
+        let held = session.copy_device(0).expect("the reverb");
+        session.duplicate_device(1).expect("room");
+
+        assert_eq!(
+            kinds(&session),
+            [EffectKind::Reverb, EffectKind::Gate, EffectKind::Gate]
+        );
+        assert_eq!(
+            held.effects.iter().map(|e| e.kind()).collect::<Vec<_>>(),
+            [EffectKind::Reverb],
+            "duplicating something else must not overwrite what was copied"
+        );
+    }
+
+    #[test]
+    fn a_paste_refuses_what_it_cannot_take() {
+        let mut session = Session::default();
+        assert!(session.copy_device(0).is_none(), "nothing to copy yet");
+
+        session.insert_effect_at(EffectKind::Delay, 0).expect("room");
+        let run = session.copy_device(0).expect("the delay");
+
+        assert!(
+            session.paste_device(&EffectRun { effects: Vec::new() }, 0).is_none(),
+            "an empty run is not a paste"
+        );
+
+        // A headless run -- a child with no box in front of it -- must not be
+        // able to straddle its way into a well-formed chain.
+        let mut headless = run.clone();
+        headless.effects[0].params = EffectParams::Chain(mooloop_core::ChainParams {
+            children: 4,
+            ..Default::default()
+        });
+        assert!(
+            session.paste_device(&headless, 0).is_none(),
+            "a container claiming children it did not bring is a straddle"
+        );
+        assert_eq!(
+            mooloop_core::span_problem(&session.channels[0].effects),
+            None,
+            "and the refusal left the chain untouched"
+        );
+    }
+
     /// nesting reachable from a single button rather than needing a selection
     /// model to exist first.
     #[test]

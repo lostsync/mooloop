@@ -351,6 +351,42 @@ pub fn remove_effect(
     Some(effects.drain(run).collect())
 }
 
+/// Insert `rows` -- a whole run -- before slot `at`, minting each an identity.
+///
+/// The paste half of [`remove_effect`]'s "a box goes with its contents": a
+/// clipboard holds a run, and a run arrives all at once or not at all.
+///
+/// `rows` must be a well-formed run in its own right, which is what stops a
+/// straddle entering a chain that was fine before. A run lifted by
+/// [`run_of`] always is; one read off disk may not be, which is why this
+/// checks rather than trusts.
+///
+/// Returns where the run landed. `None` when `rows` is empty, malformed, or
+/// will not fit.
+pub fn insert_run(
+    effects: &mut Vec<EffectSlotState>,
+    next_id: &mut u32,
+    at: usize,
+    rows: &[EffectSlotState],
+) -> Option<usize> {
+    if rows.is_empty() || span_problem(rows).is_some() {
+        return None;
+    }
+    if effects.len() + rows.len() > MAX_EFFECTS_PER_CHANNEL {
+        return None;
+    }
+    let at = at.min(effects.len());
+    // One resize for the whole run, for the reason `replace_run` gives about
+    // doing this arithmetic once: the boxes around `at` gain every row that
+    // arrives, and counting them one at a time means re-deriving the
+    // enclosing set against a chain that is already moving.
+    resize_enclosing(effects, at, rows.len() as isize);
+    for (offset, row) in rows.iter().enumerate() {
+        effects.insert(at + offset, row.with_id(mint_device_id(next_id)));
+    }
+    Some(at)
+}
+
 /// Replace the run at `at` with `rows`, minting each an identity.
 ///
 /// Returns what went, in rack order. `None` when `at` names nothing or the

@@ -875,6 +875,20 @@ land on its own when it starts to matter:
   parameter of every effect on the selected channel and on every bus, but
   several lanes cannot be shown at once, and the velocity lane is a separate
   fixed lane rather than one entry in that list.
+- A rack device can be selected, copied, cut, pasted and duplicated. The
+  selection is a `DeviceId` rather than a slot, so it follows its device
+  through a reorder and clears when the device is removed; clicking a device's
+  header selects it and clicking it again clears. Copy takes a container's
+  whole run, the same unit it is deleted and saved as, and strips identity, so
+  a paste is a new device that sounds the same rather than the same device
+  twice. A paste lands after the run it was dropped on, and a run's end
+  boundary is outside a container, so pasting onto a box's last child lands
+  beside the box rather than in it. Duplicate is on every rack row's left
+  rail; all four are on Ctrl+Shift+C/X/V/D, and all but copy are undoable.
+  **The clipboard does not carry modulation routes or automation lanes**: a
+  route's source is a module in the channel's own rack, so it cannot follow a
+  device to another channel. That is the question `docs/plans/containers/`
+  reserved rather than answered, and this inherits its answer.
 - A canonical action registry drives the menu bar and rebindable shortcuts.
   Note multi-selection supports Select All and bulk deletion; channel,
   pattern, note, and modulation edits feed a project-snapshot undo/redo stack.

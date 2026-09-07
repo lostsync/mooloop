@@ -32,16 +32,35 @@ the command layer, and applies equally to any future console/MCP command.
 ## What's registered today
 
 `actions.rs`'s `ACTIONS` table is the source of truth; read it rather than
-this document for the current list. As of this writing it holds 39 actions in
-seven categories: Transport, File, Edit, Notes (arrow-key nudge and
+this document for the current list. As of this writing it holds 43 actions in
+eight categories: Transport, File, Edit, Notes (arrow-key nudge and
 transpose, the five pointer tools on keys 1-5, and the snap toggle on 6),
-View (pane switching and piano-roll zoom), Channel, and Pattern. That is what
+View (pane switching and piano-roll zoom), Channel, Pattern, and Device
+(copy, cut, paste and duplicate the selected rack device, on
+Ctrl+Shift+C/X/V/D). That is what
 `docs/archive/SHORTCUTS.md` asked for, plus the shortcuts that already
 existed before this registry (Ctrl+O/S/Z/etc.), migrated in so the
 Preferences > Shortcuts page is a complete, reassignable list rather than a
 partial one. One entry, `pattern.clear`, is registered with no default chord:
 every nearby Pattern action already claims a Ctrl+modifier combination, and
 it is still listed so it can be bound.
+
+### Why the Device actions are not on the bare chords
+
+`Ctrl+C`/`X`/`V` are `edit.copy-channel` and friends, unconditionally,
+whatever has focus. The obviously-right binding for a device clipboard is the
+same three chords resolved against what is selected -- and that needs the
+dispatcher to know what has focus, which is a thing it does not know.
+
+There are three clipboards now (channel, notes, and as of 2026-09-07 devices)
+and one set of chords, so a context-sensitive `Ctrl+V` is really two changes:
+**one clipboard**, tagged by what it holds, and **a focus model** that says
+which pane a keypress belongs to.
+`docs/plans/interface-iteration/04-the-keyboard-pass.md` owns the second and
+names the first. Until both land, the Device actions ship on their own chords,
+which work today and can be rebound to the bare ones the day they are free --
+the registry makes that a preferences change rather than a code change, which
+is the point of it.
 
 ## How a new action is added
 

@@ -126,10 +126,17 @@ export component DeviceFrame inherits Rectangle {
     in property <bool> unwrap-enabled: false;
     callback wrap-requested();
     callback unwrap-requested();
+    // The device the keyboard's copy/cut/paste/duplicate act on. Drawn as the
+    // frame's own border rather than as an overlay: the border is already
+    // here, it is the one line that reads at a glance across a wrapped sheet
+    // of devices, and it costs no layout.
+    in property <bool> selected: false;
+    in property <bool> duplicate-enabled: false;
+    callback duplicate-requested();
 
     background: Theme.surface;
-    border-width: 1px;
-    border-color: Theme.border;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? Theme.accent : Theme.border;
     border-radius: Theme.radius-md;
     clip: true;
 
@@ -205,6 +212,16 @@ export component DeviceFrame inherits Rectangle {
                 text: "❏"; size: 24px; enabled: root.wrap-enabled;
                 tooltip: "Wrap this device in a container";
                 clicked => { root.wrap-requested(); }
+            }
+            // Fifth, under wrap, for the reason wrap is fourth: the preset
+            // rail test drives this column by computed coordinates, so new
+            // buttons go at the bottom.
+            IconButton {
+                text: "⧉"; size: 24px; enabled: root.duplicate-enabled;
+                tooltip: root.is-container
+                    ? "Duplicate this container and the " + root.container-children + " devices in it"
+                    : "Duplicate this device";
+                clicked => { root.duplicate-requested(); }
             }
 
             Rectangle { vertical-stretch: 1; }
@@ -466,6 +483,11 @@ export component EffectDeviceShell inherits Rectangle {
     // gets the preset label without knowing anything about presets.
     in property <string> preset-name;
     callback reorder-requested(int);  // target slot index
+    // A press on the header that did not move far enough to be a reorder.
+    // Selection rides on the drag handle rather than getting a TouchArea of
+    // its own because the two gestures start identically, and a second area
+    // over the same pixels would have to win or lose the press outright.
+    callback select-requested();
 
     // Modulation state for every effect face, indexed by descriptor id so a
     // knob reads its own overlay with the same stable number it already uses
@@ -514,6 +536,8 @@ export component EffectDeviceShell inherits Rectangle {
                 let target = clamp(root.slot-index + delta, 0, root.slot-count - 1);
                 if target != root.slot-index {
                     root.reorder-requested(target);
+                } else {
+                    root.select-requested();
                 }
             }
         }

@@ -1,5 +1,93 @@
 # Interface iteration status
 
+## Step 02 — a device can be copied
+
+Landed on `feat/device-clipboard` (2026-09-07). A rack device -- or a
+container and everything in it -- can be copied, cut, pasted and duplicated,
+within a chain or across channels, with fresh identities and undoably.
+
+### What it had to build first, and why that is the news
+
+**The selected device.** Step 01 found that no such concept existed: only the
+modulation rack had a selection, because every effect rail button belongs to a
+row and already knows its own index. A keyboard shortcut does not, so this
+step had to make one.
+
+`Session.selected_device` is an `Option<(EffectTarget, DeviceId)>` -- an
+identity, not a position -- and `selected_device_slot()` derives the slot when
+it is wanted. **This is the first thing in the tree to actually spend
+`containers/` step 01.** The test that says so is
+`the_selected_device_survives_a_reorder_and_dies_with_its_device`, and under
+the slot scheme it could not have been written: there, a selection would have
+had to be rewritten by every reorder, which is precisely the class of bug
+`SlotRemap` existed for and was deleted for.
+
+Scoped to `effect_target`, because a `DeviceId` is only unique within one
+chain, and cleared by `forget_device`, because a departed device is not
+selected -- it is gone.
+
+### The three verbs and the one new core primitive
+
+`copy_device` lifts the run at a slot with every identity stripped, for the
+reason `take_preset_save` gives: a clipboard holds a design, not a device.
+`paste_device` inserts it after the run it was dropped on. `duplicate_device`
+is copy-then-paste that deliberately does not disturb the clipboard, the same
+relationship `channel.clone` has to channel copy and paste.
+
+`mooloop_core::insert_run` is the one thing that had to be written.
+`replace_run` existed -- built so a container preset could replace a run --
+and insertion did not. It refuses a malformed run rather than trusting one,
+which is what stops a straddle entering a chain that was fine before.
+
+### The boundary rule, which is the only non-obvious thing about paste
+
+**A paste lands beside a container's last child, not inside it.** `run_of`'s
+end is a run's end *boundary*, and `insert_run` treats that boundary the way
+`insert_effect` already documents for the rack's own `+`: landing on it is
+landing after the container, not in it. One rule at every depth, and
+`pasting_onto_a_containers_last_child_lands_outside_the_box` is it as a test.
+
+### What does not travel
+
+Modulation routes and automation lanes. A route's source is a module in the
+*channel's* rack, so it cannot follow a device to another channel. This step
+does not re-solve that: it is the question `containers/` reserved, and
+`CommandState.device_clipboard`'s doc comment says so where someone will read
+it. Recorded in `CURRENT.md` as a limit rather than left to be discovered.
+
+### The chords, and the clipboard question Adam raised
+
+Ctrl+Shift+C/X/V/D rather than the bare chords, which are the channel
+clipboard's and unconditionally so. Adam asked, while this was in flight,
+whether the clipboard should be unified with a history. The answer this step
+records rather than acts on:
+
+- **It is not the system clipboard, and nothing in the tree ever was.** No
+  `arboard`, no `copypasta`, no clipboard crate in any manifest, and Slint
+  1.17.1 exposes none to `.slint`. All three clipboards are in-memory Rust on
+  `CommandState`.
+- **Unifying is a tagged enum, not arbitrary bytes**, because paste has to
+  know what it is pasting -- a note phrase pasted into a rack is nonsense.
+- **The payoff is bare `Ctrl+V`**, which needs a focus model, which is step
+  04's. So the two are one piece of work and should be sequenced together.
+- **A history has a substrate already**: `EffectRun` is both the device
+  clipboard payload and the container preset payload, and a preset bundle is
+  a versioned, typed, serialized clipboard item. Two of the three clipboards
+  are `serde` types; the third holds `Arc<SampleData>` on purpose, so a
+  history of channel copies pins decoded audio and needs a bound from the
+  first commit -- the lesson `5eb6e07` already paid for once.
+
+### Acceptance
+
+Six tests in `mooloop-session`, run in 0.12s on the laptop, which is the
+whole argument for having built this half first:
+`a_pasted_device_is_a_new_device_with_the_same_sound` is the step's headline,
+`copying_a_container_takes_everything_in_it` is the container unit,
+`pasting_onto_a_containers_last_child_lands_outside_the_box` is the boundary
+rule, `duplicate_leaves_the_clipboard_alone` is the one behaviour that would
+otherwise be a surprise, and `a_paste_refuses_what_it_cannot_take` covers the
+empty and straddling runs.
+
 ## Step 01 — the browser browses presets
 
 Landed on `feat/preset-browsing` (2026-09-07). The browser sidebar has two

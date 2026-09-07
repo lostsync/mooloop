@@ -639,6 +639,7 @@ fn effect_slot(kind: i32, units: i32) -> EffectSlotRow {
         gain_reduction_db: 0.0,
         children: 0,
         depth: 0,
+        selected: false,
     }
 }
 

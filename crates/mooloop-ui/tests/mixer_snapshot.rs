@@ -167,6 +167,7 @@ fn render_mixer_pane_with_a_bus_chain() {
             gain_reduction_db: 0.0,
             children: 0,
             depth: 0,
+            selected: false,
         },
         EffectSlotRow {
             kind: 6,
@@ -201,6 +202,7 @@ fn render_mixer_pane_with_a_bus_chain() {
             gain_reduction_db: -6.0,
             children: 0,
             depth: 0,
+            selected: false,
         },
     ]))));
 

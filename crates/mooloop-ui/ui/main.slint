@@ -164,6 +164,12 @@ struct EffectSlotRow {
     // Rack units this device's face occupies. Devices with more working
     // controls get more width rather than compressing their controls.
     units: int,
+    // Whether the keyboard's clipboard actions act on this row. Carried on
+    // the row rather than as a window property holding a slot index: Rust
+    // keeps the selection as a `DeviceId` and rebuilds these rows on every
+    // structural edit, so this follows a reorder for free and there is no
+    // second thing to keep in step.
+    selected: bool,
     // The presets saved for this row's kind, as menu labels, in the order
     // the Rust side resolves an index back to a bundle.
     preset-options: [string],
@@ -579,6 +585,13 @@ export component MainWindow inherits Window {
     in-out property <int> browser-tab;
     callback browser-tab-changed(int);
     callback browser-preset-loaded(string);
+    callback device-selected(int);
+    callback duplicate-effect-clicked(int);
+    // 0 copy, 1 cut, 2 paste, 3 duplicate -- all acting on the selected
+    // device. One callback rather than four, because the shortcut dispatcher
+    // is the only caller and the verb is already an integer by the time it
+    // gets here.
+    callback device-clipboard-action(int);
     // Preview voice controls: the toggle arms click-to-play, the knob is
     // the preview's own gain in dB (the callback carries linear gain). It
     // starts at the operating level, matching the engine's preview cell:
@@ -3213,6 +3226,9 @@ export component MainWindow inherits Window {
                                                         unwrap-enabled: slot.kind == 12;
                                                         wrap-requested => { root.wrap-effect-clicked(index); }
                                                         unwrap-requested => { root.unwrap-effect-clicked(index); }
+                                                        selected: slot.selected;
+                                                        duplicate-enabled: true;
+                                                        duplicate-requested => { root.duplicate-effect-clicked(index); }
                                                         // `+` on a container means insert *into*
                                                         // it; on a leaf it means insert before
                                                         // that row. Two callbacks rather than an
@@ -3262,6 +3278,7 @@ export component MainWindow inherits Window {
                                                             slope-changed(v) => { root.effect-param-changed(index, 3, v * 1.0); }
                                                             drive-changed(v) => { root.effect-param-changed(index, 4, v); }
                                                             reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                            select-requested => { root.device-selected(index); }
                                                         }
                                                         if slot.kind == 1 : DriveDeviceFace {
                                                             modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
@@ -3291,6 +3308,7 @@ export component MainWindow inherits Window {
                                                             mix-changed(v) => { root.effect-param-changed(index, 3, v); }
                                                             output-changed(v) => { root.effect-param-changed(index, 4, v); }
                                                             reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                            select-requested => { root.device-selected(index); }
                                                         }
                                                         if slot.kind == 2 : BitcrushDeviceFace {
                                                             modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
@@ -3318,6 +3336,7 @@ export component MainWindow inherits Window {
                                                             downsample-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                             mix-changed(v) => { root.effect-param-changed(index, 2, v); }
                                                             reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                            select-requested => { root.device-selected(index); }
                                                         }
                                                         if slot.kind == 3 : DelayDeviceFace {
                                                             modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
@@ -3358,6 +3377,7 @@ export component MainWindow inherits Window {
                                                             tone-changed(v) => { root.effect-param-changed(index, 4, v); }
                                                             mix-changed(v) => { root.effect-param-changed(index, 5, v); }
                                                             reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                            select-requested => { root.device-selected(index); }
                                                         }
                                                         if slot.kind == 4 : GateDeviceFace {
                                                             modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
@@ -3389,6 +3409,7 @@ export component MainWindow inherits Window {
                                                             release-changed(v) => { root.effect-param-changed(index, 3, v); }
                                                             range-changed(v) => { root.effect-param-changed(index, 4, v); }
                                                             reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                            select-requested => { root.device-selected(index); }
                                                         }
                                                         if slot.kind == 5 : CompressorDeviceFace {
                                                             modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
@@ -3423,6 +3444,7 @@ export component MainWindow inherits Window {
                                                             makeup-changed(v) => { root.effect-param-changed(index, 5, v); }
                                                             hover-hint <=> root.hover-hint;
                                                             reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                            select-requested => { root.device-selected(index); }
                                                         }
                                                         if slot.kind == 6 : LimiterDeviceFace {
                                                             modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
@@ -3450,6 +3472,7 @@ export component MainWindow inherits Window {
                                                             release-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                             gain-changed(v) => { root.effect-param-changed(index, 2, v); }
                                                             reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                            select-requested => { root.device-selected(index); }
                                                         }
                                                         if slot.kind == 7 : EqDeviceFace {
                                                             modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
@@ -3485,6 +3508,7 @@ export component MainWindow inherits Window {
                                                             character-changed(v) => { root.effect-param-changed(index, 5, v); }
                                                             analyzer-toggled(v) => { root.eq-analyzer-changed(index, v); }
                                                             reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                            select-requested => { root.device-selected(index); }
                                                         }
                                                         if slot.kind == 8 : ReverbDeviceFace {
                                                             modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
@@ -3520,6 +3544,7 @@ export component MainWindow inherits Window {
                                                             modulation-changed(v) => { root.effect-param-changed(index, 6, v); }
                                                             low-cut-changed(v) => { root.effect-param-changed(index, 7, v); }
                                                             reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                            select-requested => { root.device-selected(index); }
                                                         }
                                                         if slot.kind == 9 : ModulationDeviceFace {
                                                             modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
@@ -3557,6 +3582,7 @@ export component MainWindow inherits Window {
                                                             stages-changed(v) => { root.effect-param-changed(index, 7, v); }
                                                             wet-dry-changed(v) => { root.effect-wet-dry-changed(index, v); }
                                                             reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                            select-requested => { root.device-selected(index); }
                                                         }
                                                         if slot.kind == 10 : PlateDeviceFace {
                                                             modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
@@ -3586,6 +3612,7 @@ export component MainWindow inherits Window {
                                                             width-changed(v) => { root.effect-param-changed(index, 3, v); }
                                                             predelay-changed(v) => { root.effect-param-changed(index, 4, v); }
                                                             reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                            select-requested => { root.device-selected(index); }
                                                         }
                                                         if slot.kind == 11 : BufferDeviceFace {
                                                             modulation-armed: !root.editing-bus && root.modulation-armed-slot >= 0;
@@ -3613,6 +3640,7 @@ export component MainWindow inherits Window {
                                                             reverse-pressed() => { root.effect-buffer-reverse-pressed(index); }
                                                             reverse-released() => { root.effect-buffer-reverse-released(index); }
                                                             reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                            select-requested => { root.device-selected(index); }
                                                         }
                                                         if slot.kind == 12 : ContainerDeviceFace {
                                                             x: DeviceRackMetrics.rail-width;
@@ -3627,6 +3655,7 @@ export component MainWindow inherits Window {
                                                             mix: slot.p0;
                                                             mix-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                             reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                            select-requested => { root.device-selected(index); }
                                                         }
                                                     }
                                                     DeviceJoin { x: parent.face-width + DeviceRackMetrics.rail-width * 2; y: 0px; }
