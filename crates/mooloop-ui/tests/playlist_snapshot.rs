@@ -131,6 +131,141 @@ fn render_playlist_snapshot() {
         pixel(SECOND_CELL_X, VELOCITY_Y)
     );
 
+    // Where the playlist canvas sits vertically, measured rather than
+    // assumed: it is found by walking down the column that crosses the clip
+    // at tick 0 until the clip's colour appears. That clip is inset 2px
+    // inside a row that begins 30px into the canvas, so the first such row is
+    // canvas y 32.
+    //
+    // Measured because the alternative is a constant that silently means the
+    // wrong thing the next time anything above the canvas changes height, and
+    // every gesture below is aimed by it. The horizontal offset needs no such
+    // care: the assertions above already pin the canvas's left edge 8px in.
+    let canvas_top = {
+        // Scanned from below the work surface, because the accent this is
+        // looking for is also the colour of an active tab and a lit meter.
+        let column = 120;
+        let first = (300..snapshot.height() as usize)
+            .find(|y| pixel(column, *y) == clip_color.as_slice())
+            .expect("the clip at tick 0 should be somewhere in the column");
+        assert!(
+            first > 340,
+            "the clip was found at y {first}, which is above the editor dock"
+        );
+        first as f32 - 32.0
+    };
+    // The two header strips, in window coordinates: the loop strip occupies
+    // the canvas's first 10px and the bar numbers the 20px below it.
+    let loop_strip_y = canvas_top + 5.0;
+    let bar_ruler_y = canvas_top + 20.0;
+    // Snap is 1/2 bar (192 ticks) in this fixture, and the timeline starts
+    // 104px into the canvas at 24px per bar, so window x 160 is tick 768 and
+    // window x 244 is tick 2112.
+    const TICK_768_X: f32 = 160.0;
+    const TICK_2112_X: f32 = 244.0;
+
+    let drag = |from: LogicalPosition, to: LogicalPosition, button| {
+        ui.window()
+            .dispatch_event(WindowEvent::PointerMoved { position: from });
+        ui.window()
+            .dispatch_event(WindowEvent::PointerPressed {
+                position: from,
+                button,
+            });
+        ui.window()
+            .dispatch_event(WindowEvent::PointerMoved { position: to });
+        ui.window()
+            .dispatch_event(WindowEvent::PointerReleased {
+                position: to,
+                button,
+            });
+    };
+
+    // A loop drag runs from where it started to the end of the snap unit it
+    // released on, which is what makes a click loop the unit clicked.
+    let loop_set = Rc::new(Cell::new(None));
+    ui.on_playlist_loop_set({
+        let loop_set = loop_set.clone();
+        move |from, to| loop_set.set(Some((from, to)))
+    });
+    drag(
+        LogicalPosition::new(TICK_768_X, loop_strip_y),
+        LogicalPosition::new(TICK_2112_X, loop_strip_y),
+        PointerEventButton::Left,
+    );
+    assert_eq!(loop_set.get(), Some((768, 2304)));
+
+    // Dragged the other way is the same section.
+    loop_set.set(None);
+    drag(
+        LogicalPosition::new(TICK_2112_X, loop_strip_y),
+        LogicalPosition::new(TICK_768_X, loop_strip_y),
+        PointerEventButton::Left,
+    );
+    assert_eq!(loop_set.get(), Some((768, 2304)));
+
+    let loop_cleared = Rc::new(Cell::new(false));
+    ui.on_playlist_loop_cleared({
+        let loop_cleared = loop_cleared.clone();
+        move || loop_cleared.set(true)
+    });
+    drag(
+        LogicalPosition::new(TICK_768_X, loop_strip_y),
+        LogicalPosition::new(TICK_768_X, loop_strip_y),
+        PointerEventButton::Right,
+    );
+    assert!(loop_cleared.get(), "right-click on the loop strip clears it");
+
+    // The playhead is grabbed on the bar numbers, and follows the pointer
+    // rather than jumping once per click.
+    let seeks = Rc::new(std::cell::RefCell::new(Vec::new()));
+    ui.on_playlist_seek({
+        let seeks = seeks.clone();
+        move |tick| seeks.borrow_mut().push(tick)
+    });
+    drag(
+        LogicalPosition::new(TICK_768_X, bar_ruler_y),
+        LogicalPosition::new(TICK_2112_X, bar_ruler_y),
+        PointerEventButton::Left,
+    );
+    assert_eq!(
+        seeks.borrow().first().copied(),
+        Some(768),
+        "the press should seek where it landed"
+    );
+    assert_eq!(
+        seeks.borrow().last().copied(),
+        Some(2112),
+        "and the drag should carry the playhead with it"
+    );
+
+    // A live loop tints the lanes it covers; the same loop switched off does
+    // not, because the points are kept and the tint is what says it is
+    // running.
+    let untinted = pixel(150, 426).to_vec();
+    ui.set_playlist_loop_start_ticks(384);
+    ui.set_playlist_loop_end_ticks(1152);
+    ui.set_playlist_loop_enabled(true);
+    let looped = ui.window().take_snapshot().unwrap();
+    let looped_pixel = |x: usize, y: usize| {
+        let offset = (y * looped.width() as usize + x) * 4;
+        looped.as_bytes()[offset..offset + 3].to_vec()
+    };
+    assert_ne!(looped_pixel(150, 426), untinted, "a live loop tints its lanes");
+    ui.set_playlist_loop_enabled(false);
+    let unlooped = ui.window().take_snapshot().unwrap();
+    let unlooped_pixel = |x: usize, y: usize| {
+        let offset = (y * unlooped.width() as usize + x) * 4;
+        unlooped.as_bytes()[offset..offset + 3].to_vec()
+    };
+    assert_eq!(
+        unlooped_pixel(150, 426),
+        untinted,
+        "a loop switched off should stop tinting"
+    );
+    ui.set_playlist_loop_start_ticks(0);
+    ui.set_playlist_loop_end_ticks(0);
+
     let added = Rc::new(Cell::new(None));
     ui.on_playlist_placement_added({
         let added = added.clone();

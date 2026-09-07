@@ -450,6 +450,16 @@ export component MainWindow inherits Window {
     in-out property <int> playlist-snap-index: 0;
     in-out property <int> piano-snap-index: 6;
 
+    // The section of the arrangement the transport repeats, in absolute PPQ
+    // ticks. The points survive being switched off, so the toggle has
+    // something to switch back on and the strip keeps drawing the section
+    // that will come back.
+    in-out property <int> playlist-loop-start-ticks;
+    in-out property <int> playlist-loop-end-ticks;
+    in-out property <bool> playlist-loop-enabled;
+    property <bool> playlist-has-loop:
+        root.playlist-loop-end-ticks > root.playlist-loop-start-ticks;
+
     // Transport position, computed engine-side because it depends on PPQ and
     // on whether the playlist or the pattern is driving.
     in-out property <int> position-bar: 1;
@@ -488,6 +498,21 @@ export component MainWindow inherits Window {
             : index == 9 ? 8 : 6
     }
 
+    // Playlist timeline geometry. The timeline starts 104px into the canvas,
+    // past the pattern-name gutter, and every one of these is measured from
+    // its left edge rather than the canvas's.
+    pure function playlist-tick-at(x: length) -> int {
+        clamp(floor(x * root.playlist-bar-ticks / root.playlist-bar-width),
+            0, root.playlist-bars * root.playlist-bar-ticks - 1)
+    }
+    pure function playlist-snapped-tick-at(x: length) -> int {
+        floor(root.playlist-tick-at(x) / root.playlist-snap-ticks)
+            * root.playlist-snap-ticks
+    }
+    pure function playlist-tick-x(tick: int) -> length {
+        tick * root.playlist-bar-width / root.playlist-bar-ticks
+    }
+
     callback step-clicked(int, int);       // channel, step
     callback step-removed(int, int);       // channel, step
     callback step-velocity-edited(int, int, float); // channel, step, normalised velocity
@@ -515,6 +540,10 @@ export component MainWindow inherits Window {
     callback playback-mode-changed(bool);
     callback playlist-placement-added(int, int);   // pattern, absolute start tick
     callback playlist-placement-removed(int, int); // pattern, tick covered by clip
+    callback playlist-seek(int);                   // absolute tick to play from
+    callback playlist-loop-set(int, int);          // two ticks, in either order
+    callback playlist-loop-enabled-changed(bool);
+    callback playlist-loop-cleared();
 
     // ---- mixer ----
     // The work surface shows either the step grid or the mixer; the bottom
@@ -2384,6 +2413,43 @@ export component MainWindow inherits Window {
                                                 width: 92px;
                                                 height: 24px;
                                             }
+                                            Rectangle { width: 4px; }
+                                            FlatButton {
+                                                text: "Loop";
+                                                tooltip: "Repeat the marked section (L)";
+                                                active: root.playlist-loop-enabled;
+                                                enabled: root.playlist-has-loop;
+                                                clicked => {
+                                                    root.playlist-loop-enabled-changed(
+                                                        !root.playlist-loop-enabled);
+                                                }
+                                            }
+                                            // Reads the section rather than
+                                            // explaining the strip: the strip
+                                            // above the ruler is where a loop
+                                            // is made, and this row is where
+                                            // it can be read back without
+                                            // scrolling to find the brackets.
+                                            Text {
+                                                text: root.playlist-has-loop
+                                                    // The last bar the loop
+                                                    // touches, counted from
+                                                    // the tick before its
+                                                    // exclusive end so a
+                                                    // section ending mid-bar
+                                                    // still names that bar,
+                                                    // and so the arithmetic
+                                                    // reads the same whether
+                                                    // the division truncates
+                                                    // or not.
+                                                    ? "bar " + (floor(root.playlist-loop-start-ticks / 384) + 1)
+                                                        + " – " + (floor((root.playlist-loop-end-ticks - 1) / 384) + 1)
+                                                    : "drag the strip above the bar numbers";
+                                                color: root.playlist-has-loop
+                                                    ? Theme.text-muted : Theme.text-faint;
+                                                font-size: 9px;
+                                                vertical-alignment: center;
+                                            }
                                             Rectangle { horizontal-stretch: 1; }
                                             Text { text: "↔"; color: Theme.text-faint; vertical-alignment: center; }
                                             FlatButton {
@@ -2421,10 +2487,104 @@ export component MainWindow inherits Window {
                                                 vertical-alignment: center;
                                             }
 
-                                            Rectangle {
+                                            // The header is two strips over
+                                            // one timeline, and they are
+                                            // separate because the two
+                                            // gestures are. A loop is a
+                                            // section and is dragged out; the
+                                            // playhead is a position and is
+                                            // dragged along. Sharing one
+                                            // strip would have made every
+                                            // drag ambiguous and forced a
+                                            // modifier onto one of them.
+                                            loop-strip := Rectangle {
+                                                // Which tick the current drag
+                                                // started on. -1 while no
+                                                // drag is in progress, so a
+                                                // release with no press
+                                                // behind it -- the pointer
+                                                // entering mid-gesture --
+                                                // sets nothing.
+                                                property <int> drag-anchor-tick: -1;
                                                 x: 104px; y: 0px;
                                                 width: root.playlist-bars * root.playlist-bar-width;
-                                                height: 28px;
+                                                height: 10px;
+                                                // Darker than the bar numbers
+                                                // below it rather than the
+                                                // same tone: with no loop set
+                                                // this strip is empty, and an
+                                                // empty strip that matches
+                                                // its neighbour reads as
+                                                // padding rather than as
+                                                // somewhere to drag.
+                                                background: Theme.panel;
+
+                                                if root.playlist-has-loop : Rectangle {
+                                                    x: root.playlist-tick-x(root.playlist-loop-start-ticks);
+                                                    width: root.playlist-tick-x(
+                                                        root.playlist-loop-end-ticks
+                                                            - root.playlist-loop-start-ticks);
+                                                    height: parent.height;
+                                                    // Drawn whether or not it
+                                                    // is live, dimmed when it
+                                                    // is not: the points are
+                                                    // kept when looping is
+                                                    // switched off, and a
+                                                    // strip that went blank
+                                                    // would say they were not.
+                                                    background: root.playlist-loop-enabled
+                                                        ? Theme.accent : Theme.text-faint;
+                                                    opacity: root.playlist-loop-enabled ? 1 : 0.5;
+                                                }
+
+                                                TouchArea {
+                                                    mouse-cursor: col-resize;
+                                                    pointer-event(e) => {
+                                                        if (e.kind == PointerEventKind.down
+                                                            && e.button == PointerEventButton.right) {
+                                                            root.playlist-loop-cleared();
+                                                        } else if (e.kind == PointerEventKind.down
+                                                            && e.button == PointerEventButton.left) {
+                                                            loop-strip.drag-anchor-tick =
+                                                                root.playlist-snapped-tick-at(self.mouse-x);
+                                                        } else if (e.kind == PointerEventKind.up
+                                                            && e.button == PointerEventButton.left
+                                                            && loop-strip.drag-anchor-tick >= 0) {
+                                                            // Both ends snap
+                                                            // down and the
+                                                            // range runs to
+                                                            // the end of the
+                                                            // last unit
+                                                            // touched, so a
+                                                            // click loops the
+                                                            // bar clicked
+                                                            // rather than
+                                                            // nothing, and a
+                                                            // drag loops
+                                                            // everything it
+                                                            // crossed.
+                                                            let released =
+                                                                root.playlist-snapped-tick-at(self.mouse-x);
+                                                            root.playlist-loop-set(
+                                                                min(loop-strip.drag-anchor-tick, released),
+                                                                max(loop-strip.drag-anchor-tick, released)
+                                                                    + root.playlist-snap-ticks);
+                                                            loop-strip.drag-anchor-tick = -1;
+                                                        }
+                                                    }
+                                                    changed has-hover => {
+                                                        root.hover-hint = self.has-hover
+                                                            ? "Drag to loop a section. Right-click clears the loop."
+                                                            : root.hover-hint == "Drag to loop a section. Right-click clears the loop."
+                                                                ? "" : root.hover-hint;
+                                                    }
+                                                }
+                                            }
+
+                                            Rectangle {
+                                                x: 104px; y: 10px;
+                                                width: root.playlist-bars * root.playlist-bar-width;
+                                                height: 20px;
                                                 background: Theme.surface;
                                                 for bar in root.playlist-bars : Rectangle {
                                                     x: bar * root.playlist-bar-width;
@@ -2438,6 +2598,34 @@ export component MainWindow inherits Window {
                                                         font-size: 8px;
                                                         horizontal-alignment: center;
                                                         vertical-alignment: center;
+                                                    }
+                                                }
+
+                                                TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    pointer-event(e) => {
+                                                        if (e.kind == PointerEventKind.down
+                                                            && e.button == PointerEventButton.left) {
+                                                            root.playlist-seek(
+                                                                root.playlist-snapped-tick-at(self.mouse-x));
+                                                        }
+                                                    }
+                                                    // The grab: the playhead
+                                                    // follows the pointer for
+                                                    // as long as the button
+                                                    // is down, rather than
+                                                    // jumping once per click.
+                                                    moved => {
+                                                        if (self.pressed) {
+                                                            root.playlist-seek(
+                                                                root.playlist-snapped-tick-at(self.mouse-x));
+                                                        }
+                                                    }
+                                                    changed has-hover => {
+                                                        root.hover-hint = self.has-hover
+                                                            ? "Drag to move the playhead."
+                                                            : root.hover-hint == "Drag to move the playhead."
+                                                                ? "" : root.hover-hint;
                                                     }
                                                 }
                                             }
@@ -2554,14 +2742,6 @@ export component MainWindow inherits Window {
                                                         }
                                                     }
 
-                                                    if root.playing && root.song-mode : Rectangle {
-                                                        x: root.playlist-position-ticks * root.playlist-bar-width
-                                                            / root.playlist-bar-ticks;
-                                                        width: 1px;
-                                                        height: parent.height;
-                                                        background: Theme.text;
-                                                    }
-
                                                     Rectangle {
                                                         x: root.playlist-song-length-ticks * root.playlist-bar-width
                                                             / root.playlist-bar-ticks - 1px;
@@ -2597,6 +2777,56 @@ export component MainWindow inherits Window {
                                                                     ? "" : root.hover-hint;
                                                         }
                                                     }
+                                                }
+                                            }
+
+                                            // Last in the canvas, so both
+                                            // draw over the clips rather than
+                                            // under them, and neither takes a
+                                            // pointer: the strips above own
+                                            // those gestures.
+                                            if root.playlist-has-loop
+                                                && root.playlist-loop-enabled : Rectangle {
+                                                x: 104px + root.playlist-tick-x(root.playlist-loop-start-ticks);
+                                                // Below the header, not
+                                                // across it: the band in the
+                                                // loop strip already says
+                                                // where the section is, and a
+                                                // tint over the bar numbers
+                                                // only makes them harder to
+                                                // read.
+                                                y: 30px;
+                                                width: root.playlist-tick-x(
+                                                    root.playlist-loop-end-ticks
+                                                        - root.playlist-loop-start-ticks);
+                                                height: parent.height - 30px;
+                                                background: Theme.accent;
+                                                opacity: 0.08;
+                                            }
+
+                                            // Always drawn in song mode, not
+                                            // only while playing: it is a
+                                            // position that can be set now,
+                                            // and a playhead that vanished on
+                                            // stop would be one there was no
+                                            // way to aim.
+                                            if root.song-mode : Rectangle {
+                                                x: 104px + root.playlist-tick-x(root.playlist-position-ticks);
+                                                y: 10px;
+                                                width: 1px;
+                                                height: parent.height - 10px;
+                                                background: Theme.text;
+                                                // The grip. Centred on the
+                                                // line and sitting in the bar
+                                                // ruler, which is the strip
+                                                // that moves it.
+                                                Rectangle {
+                                                    x: -4px;
+                                                    y: 0px;
+                                                    width: 9px;
+                                                    height: 8px;
+                                                    border-radius: 2px;
+                                                    background: Theme.text;
                                                 }
                                             }
                                         }

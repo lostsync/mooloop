@@ -33,6 +33,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   The playlist is a lower-pane tab, supports layered tick-addressed pattern
   instances, and remains editable while either mode plays. Clip width follows
   each pattern's natural length.
+- A song loop repeats a marked section of the arrangement. The section is
+  dragged out on a strip above the playlist's bar numbers, the Loop button and
+  the L key switch it on and off without discarding its points, and the
+  playhead is dragged along the bar numbers themselves.
 - Tick-addressed notes with stable IDs, start, duration, MIDI pitch, and
   velocity. Starts snap to 64ths in the piano roll while retaining PPQ tick
   precision internally.
@@ -235,7 +239,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   Every enabled shortcut shown on a menu row is one entry in the action
   registry (`ACTIONS.md`, `mooloop-ui/src/actions.rs`), which a single
   keyboard dispatcher in `main.slint` resolves and reassigns from the
-  Shortcuts preferences page — 39 actions across transport, file, edit, note
+  Shortcuts preferences page — 44 actions across transport, file, edit, note
   editing and pointer tools, pane switching and piano-roll zoom, channel, and
   pattern operations. The File
   menu covers song, kit, and selected-channel save/load, the sample-embed
@@ -436,13 +440,21 @@ land on its own when it starts to matter:
 
 - Pattern mode loops the selected pattern. Song mode layers playlist placements
   on the shared absolute clock and loops at the bar after the furthest clip end.
+- A song loop repeats a section of the arrangement instead. It is stored with
+  the song in absolute PPQ ticks, applies in Song mode only, and never applies
+  to an offline render, which walks the arrangement once from the top. A loop
+  reaching past the song's own end plays the part of it that exists, so
+  shortening a song under a loop stops the loop rather than being refused.
+  Every sounding voice is released at the loop point and at a seek, because
+  the note-off it was waiting for is no longer on the way.
+- The playhead can be moved with the transport running or stopped, snapped to
+  the playlist's own musical snap. Stop still returns it to the start.
 - Playlist starts use the shared musical snap while retaining absolute PPQ
   ticks and are bounded to a 64-bar start canvas. The timeline is horizontally
   zoomable. Global swing delays alternate sixteenth notes from 50% (straight)
   through 75% (strong shuffle), preserving note duration in realtime and
-  offline rendering. There is no clip dragging, explicit song loop range,
-  time-signature model, groove template, per-pattern swing override, or
-  per-channel timing offset.
+  offline rendering. There is no clip dragging, time-signature model, groove
+  template, per-pattern swing override, or per-channel timing offset.
 
 ### State And Persistence
 

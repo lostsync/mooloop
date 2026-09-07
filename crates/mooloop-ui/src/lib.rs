@@ -2078,6 +2078,19 @@ impl UiState {
         let song_length = self.session.song_length_ticks();
         window.set_playlist_song_length_ticks(song_length as i32);
         window.set_playlist_bars(song_length.div_ceil(TICKS_PER_BAR).max(MAX_PLAYLIST_BARS) as i32);
+        self.sync_loop_range(window);
+    }
+
+    /// Publish the loop's points and whether it is live.
+    ///
+    /// Separate from the clips because the toggle changes it without touching
+    /// them, and called from `sync_playlist` because the song's length is
+    /// derived from the clips and a loop is drawn against that length.
+    fn sync_loop_range(&self, window: &MainWindow) {
+        let range = self.session.loop_range;
+        window.set_playlist_loop_start_ticks(range.start_tick as i32);
+        window.set_playlist_loop_end_ticks(range.end_tick as i32);
+        window.set_playlist_loop_enabled(range.enabled);
     }
 
     fn refresh_note_editor(&self, window: &MainWindow) {
@@ -4334,6 +4347,9 @@ impl AppUi {
                 let channel = window.get_selected_channel();
                 match action_id {
                     "transport.play-pause" => window.invoke_toggle_play(),
+                    "transport.loop-toggle" => window.invoke_playlist_loop_enabled_changed(
+                        !window.get_playlist_loop_enabled(),
+                    ),
                     "file.open" => window.invoke_open_song(),
                     "file.save" => window.invoke_save_song(),
                     "file.save-as" => window.invoke_save_song_as(),
@@ -5035,6 +5051,80 @@ impl AppUi {
                     start_tick: placement.start_tick,
                     on: false,
                 });
+            });
+        }
+
+        // Playhead and loop. The playhead is a transport position and not
+        // document state, so it goes straight to the engine; the loop is part
+        // of the song and goes through the session first.
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_playlist_seek(move |tick| {
+                let command = st.borrow_mut().session.seek_playlist(tick);
+                // The playhead follows the drag rather than waiting for the
+                // engine to report back. A stopped transport still emits a
+                // position every block, so this only covers the gesture
+                // itself -- but the gesture is where the lag would be seen.
+                if let Some(window) = weak.upgrade() {
+                    window.set_playlist_position_ticks(tick.max(0));
+                }
+                let _ = tx.send(command);
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_playlist_loop_set(move |from_tick, to_tick| {
+                let mut st = st.borrow_mut();
+                let Some(command) = st.session.set_loop_range(from_tick, to_tick) else {
+                    return;
+                };
+                if let Some(window) = weak.upgrade() {
+                    st.sync_loop_range(&window);
+                    st.update_document_title(&window);
+                }
+                let _ = tx.send(command);
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_playlist_loop_enabled_changed(move |enabled| {
+                let mut st = st.borrow_mut();
+                let Some(command) = st.session.set_loop_enabled(enabled) else {
+                    // Put the toggle back: it drives the callback rather than
+                    // being driven by it, so a refused change would otherwise
+                    // leave the button lit over a loop that is not running.
+                    if let Some(window) = weak.upgrade() {
+                        st.sync_loop_range(&window);
+                    }
+                    return;
+                };
+                if let Some(window) = weak.upgrade() {
+                    st.sync_loop_range(&window);
+                    st.update_document_title(&window);
+                }
+                let _ = tx.send(command);
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_playlist_loop_cleared(move || {
+                let mut st = st.borrow_mut();
+                let Some(command) = st.session.clear_loop_range() else {
+                    return;
+                };
+                if let Some(window) = weak.upgrade() {
+                    st.sync_loop_range(&window);
+                    st.update_document_title(&window);
+                }
+                let _ = tx.send(command);
             });
         }
 

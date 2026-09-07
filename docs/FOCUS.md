@@ -356,10 +356,22 @@ landed 2026-09-07 and are most of the value; whether layers are worth
 un-parking parallel routing is a decision to make after living with them, and
 it is Adam's.
 
-**Broad arrangement and recovery work.** Playlist clip manipulation, explicit
-loop ranges, autosave, crash recovery, and richer missing-sample relinking
-remain important. They do not interrupt this sequence unless one becomes
-necessary to preserve its work.
+**Broad arrangement and recovery work.** Playlist clip manipulation, autosave,
+crash recovery, and richer missing-sample relinking remain important. They do
+not interrupt this sequence unless one becomes necessary to preserve its work.
+
+**The song loop was on that list and came off it, by Adam, on 2026-09-07**,
+in his words: *"kinda hilarious for an app named mooloop but there's no loop
+mode."* Which is the argument. Everything else on this list is a convenience
+the application can be judged without; a loop is how a section of music gets
+worked on at all, and its absence was reachable from the product's name. It
+landed the same day, on `feat/song-loop`, with the draggable playhead the same
+gesture wanted -- the two are one mechanism, a transport that can jump, and
+building either alone would have been building half of it twice.
+
+It is not a fifth step of `interface-iteration/` and should not be read as
+one: that plan's rule is that every step exposes a mechanism already built,
+and this built the mechanism.
 
 **A curated factory bank.** Every device that ships presets ships them to prove
 its architecture reaches its range from the controls, and that is the only bar

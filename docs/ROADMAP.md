@@ -75,8 +75,11 @@ Scope:
   placement works.
 - Rack cells summarize substeps while the piano roll edits full events.
 - Parameter lanes edit selected note data without inventing separate state.
-- Dragging the playhead should move transport position in the rack, piano
-  roll, and playlist without creating a separate timeline concept.
+- ~~Dragging the playhead should move transport position in the rack, piano
+  roll, and playlist without creating a separate timeline concept.~~ Landed in
+  the playlist on 2026-09-07 as one `Seek` command against the shared
+  transport, so no separate timeline concept was created. The rack and the
+  piano roll still have no playhead to drag.
 
 Exit criteria:
 
@@ -102,7 +105,11 @@ Scope:
   not one-off handlers hidden in individual widgets.
 - Extend the initial layered, tick-addressed playlist with clip dragging,
   selection, duplication, and keyboard editing on the shared musical grid.
-- Add independent loop ranges to the existing Pattern and Song transport modes.
+- ~~Add independent loop ranges to the existing Pattern and Song transport
+  modes.~~ Song mode has one, landed 2026-09-07 and folded in the transport
+  rather than the sequencer. Pattern mode deliberately does not: it already
+  folds into the pattern on screen, and a second range over the top of that
+  would be a loop inside a loop.
 - Extend global swing with per-pattern overrides and groove templates built on
   explicit timing displacement.
 - Extract the render graph from JACK and render offline to WAV.
@@ -122,15 +129,17 @@ reassignable action registry driving both the menu bar and shortcuts
 (`ACTIONS.md`); and right-click context menus.
 
 Remaining work in this phase is autosave/recovery, richer missing-sample
-relinking, pattern management, playlist clip manipulation, explicit loop
-ranges, per-pattern swing and groove templates, and realtime/offline
-comparison tolerances.
+relinking, pattern management, playlist clip manipulation, per-pattern swing
+and groove templates, and realtime/offline comparison tolerances. The song
+loop range came off this list on 2026-09-07.
 
 Different pattern lengths:
 
 A placement has a start time and references a pattern. Its default duration is
 that pattern's natural tick length. Placements may cross bars and overlap.
 The song loop is a separate range and never changes a pattern's own length.
+It is stored with the song, applies in Song mode only, and is never taken by
+an offline render.
 
 Exit criteria:
 

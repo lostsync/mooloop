@@ -97,6 +97,11 @@ pattern_lengths = [16]
 pattern = 0
 start_tick = 0
 
+[document.loop_range]
+start_tick = 0
+end_tick = 0
+enabled = false
+
 [[document.channels]]
 next_note_id = 2
 notes = [[{ id = 1, start_tick = 0, duration_ticks = 24, note = 60, velocity = 100 }]]
@@ -196,6 +201,15 @@ added later reads as its default rather than failing the load.
 and noise layers, the body resonators, the burst schedule, four envelopes and
 its eight-row modulation matrix — under the same envelope and the same
 defaulting rule.
+
+`loop_range` is the section of the arrangement the transport repeats: two
+absolute PPQ ticks on the same grid as a playlist start, and a flag. Every
+field defaults and the whole table does, so a version 1 manifest written
+before the song loop existed opens with looping off. `enabled` is stored
+apart from the points because switching a loop off keeps its section, which
+is what makes the toggle worth having. A range reaching past the end of the
+song is not rejected on load: the transport plays the part of it that exists,
+so a song shortened outside the editor loads rather than failing.
 
 `aux_in` is the smallest of them and the only one that names another channel.
 Its `state.params` is three fields: `source_channel` (the producing channel's
@@ -333,7 +347,8 @@ audio file.
 - 1 to 256 channels and 1 to 256 patterns. Channel count follows the complete
   `u8` realtime-address space, not a small product cap.
 - Pattern lengths from 1 to 256 sixteenth-note steps.
-- Playlist starts within the 64-bar playlist canvas.
+- Playlist starts within the 64-bar playlist canvas, and a loop range within
+  the same canvas.
 - Tempo from 1 to 999 BPM.
 - Swing from 50 to 75 percent.
 - Unique nonzero note IDs, nonzero durations, MIDI notes `0..=127`, and

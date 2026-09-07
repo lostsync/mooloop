@@ -266,6 +266,35 @@ tinting the notes themselves, with no frame drawn around them: a frame has to
 be drawn somewhere, and where it was drawn was on top of the notes at the
 selection's edges.
 
+### Playlist gestures
+
+The playlist's canvas header is two strips over one timeline, and they are
+separate because the two gestures are: a loop is a **section** and is dragged
+out, a playhead is a **position** and is dragged along. One strip for both
+would have made every drag ambiguous and forced a modifier onto whichever of
+them lost the argument.
+
+| Strip | Gesture | Result |
+| --- | --- | --- |
+| Loop strip (thin, top) | Drag | Loops every snap unit the drag crossed |
+| Loop strip | Click | Loops the one unit clicked |
+| Loop strip | Right-click | Clears the loop, points and all |
+| Bar numbers | Click or drag | Moves the playhead, snapped |
+
+Both ends of a loop drag snap down and the range runs to the end of the last
+unit touched. That is what makes a click loop the bar clicked rather than
+nothing, and it is why the strip needs no separate handles: the section is
+re-dragged rather than resized.
+
+The section is drawn in the strip whether or not looping is live, dimmed when
+it is not, because switching a loop off keeps its points and a strip that went
+blank would say otherwise. Only a live loop tints the lanes below.
+
+The playhead is drawn whenever the playlist is in song mode, running or not.
+It used to appear only while playing, which was defensible when there was no
+way to move it and is not now: a position that can be aimed has to be visible
+to aim.
+
 ### Channel modulation shelf
 
 **Its location is under review as of 2026-09-05.** Adam wants the modulation

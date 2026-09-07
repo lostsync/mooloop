@@ -105,7 +105,8 @@ Alphabetical by model name, then by harness.
   rather than an enclosure, the emptied container that could not be refilled,
   and the generator that could not be selected, and the song loop the
   application was named after and did not have, folded into the transport so
-  nothing below it had to learn that looping exists. Longer accounts of most of this are in
+  nothing below it had to learn that looping exists, with the grabbable
+  playhead that turned out to be the same mechanism. Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
 ### Claude Sonnet 5 — Claude Code

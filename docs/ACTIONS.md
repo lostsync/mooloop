@@ -32,8 +32,9 @@ the command layer, and applies equally to any future console/MCP command.
 ## What's registered today
 
 `actions.rs`'s `ACTIONS` table is the source of truth; read it rather than
-this document for the current list. As of this writing it holds 43 actions in
-eight categories: Transport, File, Edit, Notes (arrow-key nudge and
+this document for the current list. As of this writing it holds 44 actions in
+eight categories: Transport (play/pause on Space and the song loop on L),
+File, Edit, Notes (arrow-key nudge and
 transpose, the five pointer tools on keys 1-5, and the snap toggle on 6),
 View (pane switching and piano-roll zoom), Channel, Pattern, and Device
 (copy, cut, paste and duplicate the selected rack device, on

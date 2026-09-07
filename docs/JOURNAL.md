@@ -994,6 +994,77 @@ carries on. That asymmetry is deliberate: a song with a malformed span still
 holds a musician's work in the right order and is worth recovering, and a
 preset that cannot describe a box is just a file.
 
+## Sep 7 (the loop) — the thing the application is named after
+
+Adam, arriving: *"kinda hilarious for an app named mooloop but there's no loop
+mode."* It was on `FOCUS.md`'s deliberately-not-now list, under broad
+arrangement work, in the same breath as autosave and clip dragging. That was
+the wrong company to have put it in. Everything else on that list is a
+convenience the application can be judged without; a loop is how a section of
+music gets worked on at all, and its absence was reachable from the product's
+name.
+
+He asked for a grabbable playhead in the same sentence, and the two turned out
+to be one mechanism rather than two features: a transport that can jump.
+Building either alone would have been building half of it twice.
+
+**Where the loop lives was the whole decision.** The obvious place is the
+sequencer, which is already the thing that turns a monotonic transport tick
+into a position inside a pattern or inside the arrangement. But that is
+exactly the argument against it: the sequencer folds a position into a period
+already, so a loop expressed there is a second fold layered on the first, and
+every reader of a position — `has_automation_at`, `automation_lane_at`,
+`schedule_song`, the session's `transport_position` — has to learn about both
+and agree about the order. The loop went into `transport.rs` instead, and
+nothing below that file learns that looping exists at all. The sequencer, the
+automation resolver and the bar/beat readout are untouched; what they are
+handed is an ordinary arrangement tick that happens to be inside the loop.
+
+The price is paid in one place and it is a real one: **a process block is no
+longer one stretch of musical time.** A block that reaches the loop end has to
+be cut there and resumed at the loop start, so `advance_looped` returns an
+ordered list of spans rather than a `(start, end)` pair, and the scheduler
+grew a `FrameWindow` so each span's events land in its own part of the block's
+event list rather than all of them measuring from frame zero. The list is
+capped at eight, because the audio thread cannot grow one; past the cap the
+block plays straight on and lands past the loop end, which the next block's
+opening fold recovers from. A loop that short under a block that long
+degrades to a slower loop rather than to a fault.
+
+Two things fell out of it that were not obvious going in.
+
+**A jump owes every sounding voice a release.** The note-off a voice is
+waiting for sits at a position the transport is no longer travelling towards —
+past the loop end, or before the tick that was seeked to — so without one, a
+pad held across a loop point is joined by another copy of itself every pass,
+forever. `Event::Choke` already existed for channel choke groups and already
+sorts ahead of note-ons at the same offset, so the release lands before the
+notes the new pass starts on rather than instead of them.
+
+**A position past the loop end has to be brought back at the top of the next
+block, not caught on the way past.** "Jump when you cross the end" is the
+obvious rule and it is silently wrong: a playhead that is already past the end
+never crosses it again, so dragging the loop end back behind a running
+playhead, or seeking past it, would run to infinity. The fold-in is two lines
+and it is the reason those two gestures recover.
+
+The offline render never takes the loop. `looping` was already the flag
+separating the realtime path from the export path — `process_once_block` was
+sitting there for exactly this kind of question — and a loop is a way of
+listening to a section rather than a property of the song.
+
+On the surface, the header became two strips over one timeline, and that is
+not tidiness. A loop is a *section* and is dragged out; a playhead is a
+*position* and is dragged along. Sharing one strip makes every drag ambiguous
+and forces a modifier onto whichever gesture loses the argument. Both ends of
+a loop drag snap down and the range runs to the end of the last unit touched,
+which is what makes a click loop the bar clicked rather than nothing.
+
+One small thing the change forced, which is the kind of thing that only shows
+up once something moves: the playhead used to be drawn `if playing`. That was
+defensible while there was no way to move it and stopped being defensible the
+moment there was. A position you can aim has to be visible to aim.
+
 ## Sep 7 (the keyboard) — the scope was standing beside the interface
 
 Adam opened the week by changing the method rather than the target: *"we were
