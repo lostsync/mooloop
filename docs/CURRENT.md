@@ -562,10 +562,13 @@ land on its own when it starts to matter:
   device is meant to be the second rather than growing its own ring.
 - A rack device may be a **container**: `EffectKind::Chain` holds an ordered
   run of the devices after it, appears in the rack exactly where a device
-  would, and nests. It has one control, a mix across its run, and **that
-  control is inert** — a container is currently transparent to the sample,
-  which is what step 03 of `docs/plans/containers/` changes. Nothing in the
-  interface makes one yet; the model verbs exist and are tested.
+  would, and nests four deep. Its one control is a dry/wet mix across the
+  whole run, delayed to match that run's latency — the wet/dry that a
+  *single* device has always had, applied to a group. Bypassing a container
+  skips its run without moving the channel in time. **Nothing in the
+  interface makes one yet**: the model verbs (`wrap_effects_in_container`,
+  `unwrap_container_at`) exist and are tested, and step 04 of
+  `docs/plans/containers/` is the frame and the gestures.
 - `ParamAddr` addresses parameters owned by a source, a rack device, a
   modulator slot, or the strip, within its channel-or-bus scope. A rack device
   is named by a durable `DeviceId` minted when it is inserted, so reordering,

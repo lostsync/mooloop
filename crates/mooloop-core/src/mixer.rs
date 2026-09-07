@@ -295,6 +295,23 @@ pub fn chain_latency(effects: &[EffectSlotState]) -> u32 {
         .sum()
 }
 
+/// Declared latency of the run the container in `slot` encloses.
+///
+/// What a container's dry copy has to be delayed by before it is crossfaded
+/// back in, or the blend combs. Zero when `slot` holds a leaf, or a container
+/// whose run holds nothing that declares a latency -- which is every run
+/// without a Drive in it, and so most of them.
+///
+/// This is `chain_latency` over a sub-range and it is deliberately not the
+/// container's *own* declared latency, which is zero: the mixer's plan sums
+/// the whole chain and already counts these rows, so declaring the run here
+/// too would compensate the channel twice. See question 4 in
+/// `docs/plans/containers/README.md`.
+pub fn run_latency(effects: &[EffectSlotState], slot: usize) -> u32 {
+    let run = crate::span_of(effects, slot);
+    effects[run].iter().map(|e| e.kind().latency_frames()).sum()
+}
+
 /// What each producer must be delayed by so that everything summing at a
 /// point arrives from the same moment.
 ///

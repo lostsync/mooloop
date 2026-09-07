@@ -50,7 +50,7 @@ mod idle_skip_tests;
 
 use graph::{AsyncClient, Graph};
 use render::{ReclaimedEffect, RenderState};
-pub use render::{AudioTapBank, ChannelStorage, EffectSlot};
+pub use render::{AudioTapBank, ChannelStorage, ContainerScratch, EffectSlot};
 
 pub use driver::{AudioConfig, DriverStatus, OutputTarget};
 pub use meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
@@ -97,6 +97,26 @@ pub enum StructuralCommand {
         resource_key: u64,
         node: Box<dyn AudioNode + Send>,
         align: Option<Box<IntegerDelay>>,
+    },
+    /// Tell a container how far it reaches, and hand it the ring that delays
+    /// its dry copy by that run's declared latency.
+    ///
+    /// A span is *structure*, not a control: a curve drawn on it would
+    /// rewrite the shape of the chain from the audio thread, which is why
+    /// `children` has no descriptor id and travels here instead. Structural
+    /// for the same reason [`Self::SetCompensation`] is -- the ring is
+    /// allocated on the control thread and the displaced one is reclaimed
+    /// there, because the audio thread may do neither.
+    ///
+    /// `scratch` is the chain's per-depth dry buffers, sent once with the
+    /// first container a chain ever holds and `None` thereafter; a chain that
+    /// already has them hands the arrival straight back.
+    SetContainerSpan {
+        target: EffectTarget,
+        slot: u8,
+        children: u8,
+        align: Option<Box<IntegerDelay>>,
+        scratch: Option<Box<ContainerScratch>>,
     },
     /// Remove whatever is at `slot`, if anything. Also reclaimed, not dropped.
     RemoveEffect { target: EffectTarget, slot: u8 },
@@ -186,6 +206,13 @@ pub(crate) enum StructuralReclaim {
     /// The audio-edge plan a newer one replaced. Its buffers are 64 KB each
     /// and must not be freed on the audio thread.
     AudioGraph(Box<AudioTapBank>),
+    /// A container's dry-path ring displaced by a resize, or the per-depth
+    /// scratch handed to a chain that already had it. Same rule as every
+    /// other box that reaches the audio thread: it comes back to be dropped.
+    Container {
+        align: Option<Box<IntegerDelay>>,
+        scratch: Option<Box<ContainerScratch>>,
+    },
 }
 
 /// A project that has already been instantiated and allocated off the audio
@@ -464,6 +491,10 @@ impl EngineHandle {
                 StructuralReclaim::SamplerStretch(pool) => drop(pool),
                 StructuralReclaim::Compensation(delay) => drop(delay),
                 StructuralReclaim::AudioGraph(bank) => drop(bank),
+                StructuralReclaim::Container { align, scratch } => {
+                    drop(align);
+                    drop(scratch);
+                }
             }
         }
         loop {

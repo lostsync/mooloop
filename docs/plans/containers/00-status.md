@@ -178,6 +178,87 @@ there is no gesture to make one — `Session::wrap_effects_in_container` and
 them yet. `EffectSlotRow` already carries `children` and `depth` so that the
 face contract crosses `main.slint` once rather than twice. That is step 04.
 
-## Steps 03–06
+## Step 03 — the chain mixes
 
-Not started.
+Landed on `feat/containers` (2026-09-07). **A container now has a dry path.**
+It keeps a copy of what goes into it, runs its devices, and crossfades the two
+on the way out — delaying the copy by the run's declared latency so the blend
+does not comb.
+
+In plain terms: this is the wet/dry knob that did not exist. Every device has
+had one for a while, but it blends that *one* device against its own input. A
+container blends a whole **run** — Drive into Delay into Reverb, mixed once,
+against the signal that went in. That is the thing the brief opens by asking
+for, stated correctly.
+
+### Where it is
+
+- the run's latency — `mooloop_core::run_latency` (`mixer.rs`)
+- the realtime pass — the open-run stack and `EffectChain::close_run` in
+  `crates/mooloop-engine/src/render.rs`
+- the state it needs — `EffectSlot::container_children` /
+  `container_align`, and `EffectChain::container_dry`
+- how it gets there — `StructuralCommand::SetContainerSpan`, published by
+  `UiState::publish_container_spans` after every structural edit
+
+### One dry buffer per open box, not per box
+
+The plan said one preallocated copy per container, hung on the container's
+slot. It is one per **nesting depth**, hung on the chain, and that is strictly
+better: what a chain needs at once is a copy per box it is currently *inside*,
+not one per box it holds. Ten sibling containers share one buffer; four nested
+ones need four. The cap (`MAX_CONTAINER_DEPTH`, four) therefore bounds a real
+allocation rather than a data structure, which is the distinction
+`CAPACITY_POLICY.md` is about.
+
+A chain that holds no container pays one pointer. The buffers arrive with the
+first container a chain is ever given and stay, the way channel storage does.
+
+### Two things the doing turned up
+
+- **The generic bypass branch ran before the container branch**, so a
+  bypassed box delayed its own row and then let its run play anyway. Bypassing
+  a container has to skip the *run*, so the container branch had to come
+  first. Caught by the acceptance test rather than by reading, which is the
+  argument for that test being a render comparison rather than a unit check.
+
+- **A container moves a run, and the engine mirrors a reorder one row at a
+  time.** One `MoveEffect` could not express it. Rather than invent a
+  run-move command, `move_effect_to` now reports the single-row sequence that
+  gets the engine's flat chain to the model's order — an insertion sort over
+  device identities (`mooloop_core::move_sequence`), which is correct for any
+  rearrangement rather than for the ones a container happens to produce, and
+  which only reads because step 01 gave devices identities to sort by.
+
+### What it cost
+
+`EffectSlot` 504 bytes to 512 — a byte of span that falls in padding, and the
+`Option<Box<IntegerDelay>>` for the dry ring, `None` on every leaf. Per
+*occupied* slot. `ChannelStrip` gained eight, the pointer to the dry buffers.
+128 bytes across a sixteen-channel project, which does not move the graph
+figure at all.
+
+### Acceptance
+
+`crates/mooloop-engine/src/container_tests.rs`, and the two that matter are a
+pair:
+
+- `a_container_at_full_wet_is_its_devices` — bit-identical to the same
+  devices with no box, at three block sizes. Without this every other claim
+  about the control is a claim about nothing.
+- `a_container_at_zero_mix_is_its_input_delayed_by_its_run` — identical to the
+  same run *bypassed*, which the compensation work already made time
+  transparent. The run holds a Drive, the only kind that declares a latency,
+  so an unaligned dry path would comb rather than cancel.
+
+Beside them: the mix lands on neither end at 50%, nesting composes, bypassing
+a box skips its run without moving the chain in time, and — the one that
+states the gap rather than the mechanism —
+`a_run_blended_once_is_not_two_devices_blended_in_turn`.
+
+## Steps 04–06
+
+Not started. 04 is the rack frame and the gestures that make a container;
+`Session::wrap_effects_in_container` and `unwrap_container_at` exist and are
+tested but nothing calls them. 05 is the container preset. 06 builds nothing
+and closes on Adam's ruling about layers.

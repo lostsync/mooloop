@@ -119,7 +119,7 @@ pub use effect::{
     GateParams, LimiterParams, ModulationMode, ModulationParams, ParamCurve, ParamDescriptor,
     PlateParams, ReverbParams, BITCRUSH_PARAM_BITS, BITCRUSH_PARAM_DOWNSAMPLE, BITCRUSH_PARAM_MIX,
     BITCRUSH_PARAM_STYLE,
-    BUFFER_PARAM_CROSSFADE_MS, BUFFER_PARAM_OFFSET_BEATS,
+    BUFFER_PARAM_CROSSFADE_MS, BUFFER_PARAM_OFFSET_BEATS, CHAIN_PARAM_MIX,
     COMP_PARAM_ATTACK_MS, COMP_PARAM_KNEE_DB, COMP_PARAM_MAKEUP_DB, COMP_PARAM_RATIO,
     COMP_PARAM_RELEASE_MS, COMP_PARAM_THRESHOLD_DB, DELAY_MAX_TIME_MS, DELAY_PARAM_CROSS,
     DELAY_PARAM_FEEDBACK, DELAY_PARAM_MIX, DELAY_PARAM_MODE, DELAY_PARAM_TIME_MS, DELAY_PARAM_TONE,
@@ -138,7 +138,7 @@ pub use effect::{
     REVERB_PARAM_PREDELAY_MS, REVERB_PARAM_SIZE, REVERB_PARAM_WIDTH,
 };
 pub use mixer::{
-    chain_latency, clamp_bus, compile_audio_graph, compile_bus_graph, compile_latency,
+    chain_latency, run_latency, clamp_bus, compile_audio_graph, compile_bus_graph, compile_latency,
     compile_render_order, default_buses, default_render_order, is_legal_route, sanitize_route,
     would_create_cycle, AudioEdge, AudioOrder, BusSetup, CompiledAudioGraph, CompiledBusGraph,
     CompiledLatency, EdgeRefusal, EffectTarget, MixerBus, RenderOrder, INSERT_BUSES, MASTER_BUS,
@@ -166,7 +166,7 @@ pub use sampler::{
 };
 pub use structure::{
     assign_device_ids, depth_at, device_slot, drop_lanes_for_device, insert_effect,
-    mint_device_id, parent_of, run_of, span_of, span_problem, unwrap_container, wrap_in_container,
+    mint_device_id, move_sequence, parent_of, run_of, span_of, span_problem, unwrap_container, wrap_in_container,
     MAX_CONTAINER_DEPTH, move_effect, remove_effect,
     rescope_lanes, slot_of, ChannelEdit,
 };

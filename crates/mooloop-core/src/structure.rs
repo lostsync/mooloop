@@ -235,6 +235,38 @@ pub fn move_effect(effects: &mut Vec<EffectSlotState>, from: usize, to: usize) -
     true
 }
 
+/// The single-row moves that turn `before` into `after`.
+///
+/// The engine mirrors a reorder with one `MoveEffect` per row, which was
+/// enough while a reorder moved one row. A container moves its whole run, so
+/// the model now has to say *how* rather than just that something moved.
+///
+/// An insertion sort over identities rather than a permutation: for each
+/// position in turn, find the device that belongs there and move it there.
+/// At most one move per row, on a gesture made by hand, and correct for any
+/// rearrangement rather than for the ones a container happens to produce.
+/// Each pair is `(from, to)` in the same remove-then-insert sense
+/// [`move_effect`] uses, applied in order.
+pub fn move_sequence(before: &[DeviceId], after: &[DeviceId]) -> Vec<(u8, u8)> {
+    let mut working: Vec<DeviceId> = before.to_vec();
+    let mut moves = Vec::new();
+    for (target, device) in after.iter().enumerate() {
+        let Some(from) = working.iter().position(|id| id == device) else {
+            continue;
+        };
+        if from == target {
+            continue;
+        }
+        let (Ok(from_index), Ok(to_index)) = (u8::try_from(from), u8::try_from(target)) else {
+            continue;
+        };
+        let device = working.remove(from);
+        working.insert(target, device);
+        moves.push((from_index, to_index));
+    }
+    moves
+}
+
 /// Insert `effect` at `at` (clamped to the end of the chain), minting it an
 /// identity from `next_id`. Returns the slot it landed in, or `None` when the
 /// chain is full.
@@ -611,6 +643,35 @@ mod tests {
         )
         .unwrap();
         assert_eq!(slot, 1, "an insert past the end lands at the end");
+    }
+
+    /// The engine mirrors a reorder one row at a time, so a run that moves
+    /// has to be spelled out. Applying the sequence to the before-order has
+    /// to give the after-order exactly, whatever moved.
+    #[test]
+    fn a_move_sequence_reproduces_the_order_it_was_derived_from() {
+        let apply = |before: &[u32], moves: &[(u8, u8)]| {
+            let mut working: Vec<u32> = before.to_vec();
+            for (from, to) in moves {
+                let device = working.remove(*from as usize);
+                working.insert(*to as usize, device);
+            }
+            working
+        };
+        let ids = |raw: &[u32]| raw.iter().map(|id| DeviceId(*id)).collect::<Vec<_>>();
+
+        for (before, after) in [
+            (vec![0u32, 1, 2, 3], vec![0u32, 1, 2, 3]),
+            (vec![0, 1, 2, 3], vec![3, 0, 1, 2]),
+            // A container and its two children moved past a leaf: the case a
+            // single `MoveEffect` could not express.
+            (vec![0, 1, 2, 3], vec![3, 0, 1, 2]),
+            (vec![0, 1, 2, 3, 4], vec![4, 1, 2, 0, 3]),
+            (vec![0, 1, 2], vec![2, 1, 0]),
+        ] {
+            let moves = move_sequence(&ids(&before), &ids(&after));
+            assert_eq!(apply(&before, &moves), after, "from {before:?} to {after:?}");
+        }
     }
 
     // --- Containers ---------------------------------------------------

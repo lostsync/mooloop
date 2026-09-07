@@ -31,6 +31,14 @@ pub struct EffectInserted {
     pub params: EffectParams,
 }
 
+/// A reorder, and how the engine's flat chain gets to the same order.
+pub struct EffectMoved {
+    pub target: EffectTarget,
+    /// `(from, to)` pairs in the same remove-then-insert sense
+    /// `EngineCommand::MoveEffect` uses, applied in order.
+    pub moves: Vec<(u8, u8)>,
+}
+
 /// The devices that were removed. The engine mirrors it the other way round:
 /// move the device to the vacated `tail`, then drop the tail -- repeated once
 /// per row, always from `slot`, because after each removal the next row of
@@ -146,12 +154,24 @@ impl Session {
         })
     }
 
-    /// Reorders the chain, returning what the rack is pointed at.
-    pub fn move_effect_to(&mut self, from: usize, to: usize) -> Option<EffectTarget> {
+    /// Reorders the chain, returning what the rack is pointed at and the
+    /// single-row moves the engine has to make to match.
+    ///
+    /// The moves are spelled out because a container takes its whole run with
+    /// it, and the engine mirrors a reorder one row at a time. For a leaf the
+    /// sequence is the one move it always was.
+    pub fn move_effect_to(&mut self, from: usize, to: usize) -> Option<EffectMoved> {
         let target = self.effect_target;
-        self.effect_chain_mut()
-            .is_some_and(|effects| move_effect(effects, from, to))
-            .then_some(target)
+        let effects = self.effect_chain_mut()?;
+        let before: Vec<DeviceId> = effects.iter().map(|effect| effect.id).collect();
+        if !move_effect(effects, from, to) {
+            return None;
+        }
+        let after: Vec<DeviceId> = effects.iter().map(|effect| effect.id).collect();
+        Some(EffectMoved {
+            target,
+            moves: mooloop_core::move_sequence(&before, &after),
+        })
     }
 
     /// Flips an effect's bypass.

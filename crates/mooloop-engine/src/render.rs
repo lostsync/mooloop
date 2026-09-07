@@ -12,7 +12,7 @@ use mooloop_core::{
     ModRack, MonoSynthParams, MlM1Params, MlP8Params, ParamAddr, ParamOwner, PolySynthParams,
     Project,
     SamplerParams, SliceMap,
-    chain_latency, clamp_bus, compile_latency, DEFAULT_STEPS, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
+    chain_latency, clamp_bus, compile_latency, DEFAULT_STEPS, MAX_CONTAINER_DEPTH, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
     MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS, STRIP_PARAM_VOLUME,
 };
 use mooloop_core::modulation::{CONTROL_SOURCE_SLOTS, MAX_GENERATOR_OUTLETS};
@@ -357,6 +357,17 @@ pub struct EffectSlot {
     wet_dry: f32,
     input_trim: f32,
     output_trim: f32,
+    /// For a container: how many of the rows after this one are inside it,
+    /// and the ring that delays its dry copy by that run's declared latency.
+    ///
+    /// Both arrive on [`StructuralCommand::SetContainerSpan`] rather than on
+    /// the value ring, for the reason `SetCompensation` is structural: the
+    /// ring is allocated on the control thread and the displaced one is
+    /// reclaimed there, because the audio thread may do neither. Zero and
+    /// `None` on every leaf, which costs a byte and a pointer in a struct
+    /// that is only allocated for occupied slots anyway.
+    container_children: u8,
+    container_align: Option<Box<IntegerDelay>>,
     /// Consecutive frames of silent input this slot has seen.
     ///
     /// Here rather than in a `[u32; MAX_EFFECTS_PER_CHANNEL]` beside the
@@ -379,6 +390,8 @@ impl EffectSlot {
             wet_dry: 1.0,
             input_trim: 1.0,
             output_trim: 1.0,
+            container_children: 0,
+            container_align: None,
             silent_frames: 0,
         }
     }
@@ -430,6 +443,51 @@ struct EffectChain {
     /// Keeping this per-chain rather than per-slot makes the full 256-slot
     /// addressable chain practical.
     dry: StereoBus,
+    /// One dry copy per *open* container, allocated the first time a
+    /// container is installed on this chain and kept thereafter.
+    ///
+    /// Indexed by nesting depth rather than by slot, which is the whole
+    /// saving: what a chain needs at once is one buffer per box it is
+    /// currently inside, not one per box it holds. Ten sibling containers
+    /// need one of these; four nested ones need four. A chain with no
+    /// container at all pays a pointer.
+    ///
+    /// The graph only grows, in the same way and for the same reason channel
+    /// storage does: freeing this would be a deallocation reached from a
+    /// structural edit, and a chain that held a container once is likely to
+    /// again.
+    container_dry: Option<Box<ContainerScratch>>,
+}
+
+/// The dry copies a chain needs while it is inside containers.
+///
+/// Allocated on the control thread and installed, like every other piece of
+/// chain state that owns heap.
+pub struct ContainerScratch {
+    dry: [StereoBus; MAX_CONTAINER_DEPTH],
+}
+
+impl ContainerScratch {
+    pub fn new() -> Self {
+        Self {
+            dry: std::array::from_fn(|_| StereoBus::with_capacity(MAX_BLOCK_SIZE)),
+        }
+    }
+}
+
+impl Default for ContainerScratch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// One container the chain is currently inside.
+#[derive(Clone, Copy)]
+struct OpenRun {
+    /// One past the last row of the run: the index at which it closes.
+    end: usize,
+    /// The container's own row, which owns the mix and the dry-path ring.
+    slot: usize,
 }
 
 impl EffectChain {
@@ -442,6 +500,7 @@ impl EffectChain {
             dry_align: std::array::from_fn(|_| None),
             analyzers: std::array::from_fn(|_| None),
             dry: StereoBus::with_capacity(MAX_BLOCK_SIZE),
+            container_dry: None,
         }
     }
 
@@ -484,6 +543,12 @@ impl EffectChain {
         self.slot(slot)
             .and_then(|state| state.kind)
             .is_some_and(|kind| kind == mooloop_core::EffectKind::Chain)
+    }
+
+    /// How many rows the container in `slot` encloses. Zero for a leaf, and
+    /// zero for an empty container, which is the same thing to this loop.
+    fn container_children(&self, slot: usize) -> usize {
+        self.slot(slot).map_or(0, |state| state.container_children as usize)
     }
 
     fn wet_dry(&self, slot: usize) -> f32 {
@@ -827,6 +892,17 @@ impl EffectChain {
             if !displaced.is_empty() {
                 reclaim.push(displaced);
             }
+            // A container's span and the ring that delays its dry copy.
+            // Allocated here rather than sent, because `load` already runs on
+            // the control thread inside `install_project`.
+            let children = match effect.params {
+                mooloop_core::EffectParams::Chain(chain) => chain.children,
+                _ => 0,
+            };
+            let align = (children > 0)
+                .then(|| IntegerDelay::new(mooloop_core::run_latency(slots, slot)))
+                .flatten()
+                .map(Box::new);
             // `install` seeds the kind's defaults; a saved chain overrides
             // them with what was persisted.
             if let Some(state) = self.slot_mut(slot) {
@@ -835,7 +911,16 @@ impl EffectChain {
                 state.wet_dry = effect.wet_dry.clamp(0.0, 1.0);
                 state.input_trim = effect.input_trim.clamp(0.0, MAX_LINEAR_GAIN);
                 state.output_trim = effect.output_trim.clamp(0.0, MAX_LINEAR_GAIN);
+                state.container_children = children;
+                state.container_align = align;
             }
+        }
+        // One allocation for the whole chain, and only for a chain that
+        // actually holds a box.
+        if self.container_dry.is_none()
+            && slots.iter().any(|effect| effect.kind() == mooloop_core::EffectKind::Chain)
+        {
+            self.container_dry = Some(Box::new(ContainerScratch::new()));
         }
     }
 
@@ -945,7 +1030,26 @@ impl EffectChain {
         automation: Option<&AutomationBlock<'_>>,
         skip_idle: bool,
     ) {
+        // The containers this chain is currently inside, innermost last.
+        // Fixed at the depth cap and never grown, so nothing here allocates.
+        let mut open = [OpenRun { end: 0, slot: 0 }; MAX_CONTAINER_DEPTH];
+        let mut depth = 0usize;
+        // Set past the end of a bypassed container's run: a bypassed box
+        // skips its whole run rather than its own row.
+        let mut skip_until = 0usize;
+
         for slot in 0..self.bound {
+            // Close every run that ends here, innermost first. A `while`
+            // rather than an `if` because several boxes can end on the same
+            // row, and they nest, so the innermost is always on top.
+            while depth > 0 && open[depth - 1].end == slot {
+                depth -= 1;
+                let run = open[depth];
+                self.close_run(run, depth, bus, context);
+            }
+            if slot < skip_until {
+                continue;
+            }
             if let Some((_, telemetry, target)) = device_display {
                 if self.nodes[slot].is_some() && telemetry.spectrum_enabled(target, slot + 1) {
                     if let Some(analyzer) = &mut self.analyzers[slot] {
@@ -956,6 +1060,65 @@ impl EffectChain {
                         }
                     }
                 }
+            }
+            if self.is_container(slot) {
+                // **A container never processes audio.** Its children are
+                // rows of this same chain and the loop is about to run them;
+                // all it does here is keep a copy of what is going in, so the
+                // crossfade at the end of its run has something to blend.
+                //
+                // It also does not take the *slot's* leaf wet/dry, which
+                // would be meaningless (there is no node to be wet with) and,
+                // through the equal-power crossfade, not even bit-exact -- a
+                // transparent node blended at unity still leaks a cos(pi/2)
+                // of the dry.
+                let (left, right) = bus.peak(context.frames);
+                self.note_input_level(slot, left.max(right), context.frames);
+                if let Some((meters, _, target)) = device_display {
+                    meters.publish_input(target, slot + 1, left, right);
+                    meters.publish_output(target, slot + 1, left, right);
+                }
+                if let Some(state) = self.slots[slot].as_mut() {
+                    state.events.clear();
+                }
+                let children = self.container_children(slot);
+                if children == 0 || depth >= MAX_CONTAINER_DEPTH {
+                    // An empty box, or one nested past the cap, is a row that
+                    // does nothing. Deeper than the cap is unreachable
+                    // through the interface and loadable from a file, so it
+                    // has to mean *something* rather than panic.
+                    continue;
+                }
+                let open_run = OpenRun {
+                    end: (slot + 1 + children).min(self.bound),
+                    slot,
+                };
+                if self.bypassed(slot) {
+                    // **Bypassing a box bypasses the run**, and costs exactly
+                    // the frames that run declares. Same argument as a
+                    // bypassed device: a bypass that shortened the path would
+                    // move the channel in time against every other one, so
+                    // A/B-ing the box would also A/B the timing.
+                    if let Some(state) = self.slots[slot].as_mut() {
+                        if let Some(align) = &mut state.container_align {
+                            align.process(
+                                &mut bus.l[..context.frames],
+                                &mut bus.r[..context.frames],
+                            );
+                        }
+                    }
+                    skip_until = open_run.end;
+                    continue;
+                }
+                if let Some(scratch) = self.container_dry.as_mut() {
+                    scratch.dry[depth].l[..context.frames]
+                        .copy_from_slice(&bus.l[..context.frames]);
+                    scratch.dry[depth].r[..context.frames]
+                        .copy_from_slice(&bus.r[..context.frames]);
+                    open[depth] = open_run;
+                    depth += 1;
+                }
+                continue;
             }
             if self.bypassed(slot) {
                 // A bypassed slot keeps its queued events until re-enabled, so
@@ -993,28 +1156,6 @@ impl EffectChain {
                 if let Some((meters, _, target)) = device_display {
                     meters.publish_input(target, slot + 1, left, right);
                     meters.publish_output(target, slot + 1, left, right);
-                }
-                continue;
-            }
-            if self.is_container(slot) {
-                // **A container is transparent, and not approximately.** Its
-                // `mix` is a blend across its whole run, which the chain host
-                // learns to apply in step 03 of
-                // `docs/plans/containers/`; running the *slot's* leaf
-                // wet/dry over it instead would be both meaningless and, on
-                // account of the equal-power crossfade, not bit-exact -- a
-                // transparent node blended at unity still leaks a
-                // cos(pi/2) of the dry. Passing the bus straight through is
-                // what lets step 03's null test have something to null
-                // against.
-                let (left, right) = bus.peak(context.frames);
-                self.note_input_level(slot, left.max(right), context.frames);
-                if let Some((meters, _, target)) = device_display {
-                    meters.publish_input(target, slot + 1, left, right);
-                    meters.publish_output(target, slot + 1, left, right);
-                }
-                if let Some(state) = self.slots[slot].as_mut() {
-                    state.events.clear();
                 }
                 continue;
             }
@@ -1111,6 +1252,73 @@ impl EffectChain {
             if let Some(state) = self.slots[slot].as_mut() {
                 state.events.clear();
             }
+        }
+        // A run whose span reaches the end of the populated chain closes
+        // here. `bound` clamps `end` on the way in, so this is the same
+        // arithmetic rather than a second rule.
+        while depth > 0 {
+            depth -= 1;
+            let run = open[depth];
+            self.close_run(run, depth, bus, context);
+        }
+    }
+
+    /// Crossfade a container's run back against the dry copy taken when it
+    /// opened, delayed by the run's declared latency.
+    ///
+    /// The per-slot dry path generalised from one device to a span, and
+    /// deliberately the same crossfade: equal-power, because the runs people
+    /// will actually blend are the decorrelated ones a linear fade dips 3 dB
+    /// in the middle of. `docs/GAIN_STRUCTURE.md` records the trade.
+    fn close_run(
+        &mut self,
+        run: OpenRun,
+        depth: usize,
+        bus: &mut StereoBus,
+        context: &ProcessContext,
+    ) {
+        let mix = self
+            .slot(run.slot)
+            .and_then(|state| state.base_params)
+            .and_then(|params| params.get(mooloop_core::CHAIN_PARAM_MIX))
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0);
+        // Two disjoint fields at once: the ring lives on the container's slot
+        // and the copy it delays lives on the chain.
+        let Self {
+            slots,
+            container_dry,
+            ..
+        } = self;
+        let Some(scratch) = container_dry.as_mut() else {
+            return;
+        };
+        // Aligned before the blend, not after: the wet path came out of the
+        // run's devices `run_latency` frames late, so the copy has to wait
+        // the same amount or the two comb. Run unconditionally, including at
+        // full wet, because the ring has to keep advancing or the mix would
+        // read stale audio the first time it moved off unity.
+        if let Some(state) = slots[run.slot].as_mut() {
+            if let Some(align) = &mut state.container_align {
+                align.process(
+                    &mut scratch.dry[depth].l[..context.frames],
+                    &mut scratch.dry[depth].r[..context.frames],
+                );
+            }
+        }
+        // Nothing to add at full wet, and skipping it is correctness rather
+        // than an optimisation: the equal-power crossfade leaves a
+        // `cos(pi/2)` of the dry -- about 6e-8 -- so *running* it would leak
+        // a fraction of the dry into a run the user asked to hear whole, and
+        // step 02's bit-exact null is what would break.
+        if mix >= 1.0 {
+            return;
+        }
+        let blend = mix * core::f32::consts::FRAC_PI_2;
+        let (dry_gain, wet_gain) = (blend.cos(), blend.sin());
+        for frame in 0..context.frames {
+            bus.l[frame] = scratch.dry[depth].l[frame] * dry_gain + bus.l[frame] * wet_gain;
+            bus.r[frame] = scratch.dry[depth].r[frame] * dry_gain + bus.r[frame] * wet_gain;
         }
     }
 }
@@ -2654,6 +2862,38 @@ impl RenderState {
                         channel: Some(storage),
                     })
                     .map(StructuralReclaim::Effect)
+            }
+            StructuralCommand::SetContainerSpan {
+                target,
+                slot,
+                children,
+                align,
+                scratch,
+            } => {
+                let Some(chain) = Self::chain_for(&mut self.strips, &mut self.buses, target)
+                else {
+                    return Some(StructuralReclaim::Container { align, scratch });
+                };
+                // A chain keeps the first scratch it is given and hands every
+                // later one straight back, the way the graph keeps the first
+                // storage a channel index is ever given.
+                let scratch = match (chain.container_dry.is_some(), scratch) {
+                    (false, Some(scratch)) => {
+                        chain.container_dry = Some(scratch);
+                        None
+                    }
+                    (_, scratch) => scratch,
+                };
+                let displaced = chain.slot_mut(slot as usize).and_then(|state| {
+                    state.container_children = children;
+                    std::mem::replace(&mut state.container_align, align)
+                });
+                (displaced.is_some() || scratch.is_some()).then_some(
+                    StructuralReclaim::Container {
+                        align: displaced,
+                        scratch,
+                    },
+                )
             }
             StructuralCommand::RemoveEffect { target, slot } => {
                 let chain = Self::chain_for(&mut self.strips, &mut self.buses, target);
@@ -7221,13 +7461,27 @@ mod footprint {
         //
         // It grew by eight when the slot started carrying its device's
         // durable `DeviceId` (`docs/plans/containers/01`) -- four for the id
-        // and four of padding. That is paid per *occupied* slot only, so a
-        // project with twenty devices on it pays 160 bytes, and what it buys
-        // is that the engine can answer "which device is this" without a
-        // side table. Worth paying.
-        assert_eq!(size_of::<EffectSlot>(), 504);
+        // and four of padding -- and by eight more for a container's span and
+        // the pointer to the ring that delays its dry copy
+        // (`docs/plans/containers/03`). The span is a byte and falls in
+        // padding; the eight is the `Option<Box<IntegerDelay>>`, and it is
+        // `None` on every leaf.
+        //
+        // Both are paid per *occupied* slot only, so a project with twenty
+        // devices on it pays 320 bytes for the pair. A per-container box
+        // instead of a per-slot pointer was the alternative and it is worse:
+        // it would need a second lookup on the realtime path to find the
+        // container's ring from its slot, which is the table the identity
+        // work exists to avoid.
+        assert_eq!(size_of::<EffectSlot>(), 512);
         assert_eq!(size_of::<Option<Box<EffectSlot>>>(), 8);
-        assert_eq!(size_of::<EffectChain>(), 20_544);
+        // Eight of this is the pointer to the per-depth dry buffers a chain
+        // needs while it is *inside* containers. One pointer, not four
+        // buffers: what a chain needs at once is one copy per box it is
+        // currently in, not one per box it holds, so ten sibling containers
+        // share what four nested ones would need. A chain with no container
+        // pays only the pointer.
+        assert_eq!(size_of::<EffectChain>(), 20_552);
         // A strip holds one node of every generator kind, so a new device is
         // paid for on every live channel whether or not anything uses it.
         // The ML-P8 is 5,776 bytes of it. Its eight voices are the bulk -- a
@@ -7343,7 +7597,10 @@ mod footprint {
         // free -- a `u32` fits in `EffectSlot`'s existing padding, which is
         // why the assertion above did not move, and an addressable-but-empty
         // slot still costs a pointer.
-        assert_eq!(size_of::<ChannelStrip>(), 41_928);
+        // Containers added the eight above and nothing else: the dry buffers
+        // themselves are behind the pointer and only allocated for a chain
+        // that holds a box.
+        assert_eq!(size_of::<ChannelStrip>(), 41_936);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -7368,7 +7625,7 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 60_368);
+        assert_eq!(per_live, 60_376);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -7411,9 +7668,12 @@ mod footprint {
         // off -- which is the design `03-materialized-taps.md` exists to
         // avoid, and this is the measurement that says it was avoided.
         // Durable device identity added 16 KiB of the reserved figure and
-        // nothing per live channel: the slot's own eight bytes fall inside
-        // `ChannelStrip`'s existing arrangement, so a sixteen-channel project
-        // pays only the reserved rack growth.
+        // nothing per live channel: an effect slot is heap-allocated, so its
+        // own growth is per *occupied* slot rather than per channel.
+        // Containers added eight bytes a live channel -- one pointer to the
+        // dry buffers a chain needs while it is inside a box -- and the
+        // buffers themselves only exist on a chain that holds one. 128 bytes
+        // across sixteen channels, which does not move the figure below.
         assert_eq!((fixed + per_live * 16) / 1024, 1_430);
     }
 }

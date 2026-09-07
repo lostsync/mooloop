@@ -874,6 +874,50 @@ no signal path was meaningless before it was inexact. A tolerance would have
 hidden that, and would have left step 03 asserting "close enough" about the
 one thing it exists to make exact.
 
+## Sep 7 (the mix) — the wet/dry that did not exist, and the one that did
+
+The container blends now, and the thing worth writing down is what the gap
+actually was.
+
+`reference/CONTAINERS.md` opens by saying there is no wet/dry control on an
+effect. There has been one on every rack row since the gain-structure work —
+persisted, latency-compensated, with a knob on the rail. What is missing is
+wet/dry across a *run*: Drive into Delay into Reverb, blended once against the
+signal that went in, rather than each blended against its own input in turn.
+Those are different sounds, and `a_run_blended_once_is_not_two_devices_blended
+_in_turn` is the test that says so rather than describing it.
+
+That correction is why this step was cheap. The mechanism — a preallocated dry
+copy, an `IntegerDelay` sized to the wet path's latency, an equal-power
+crossfade — already existed one level down. This generalises it from one slot
+to a span. Nothing was invented.
+
+Two things the doing turned up.
+
+**The dry buffers are per depth, not per container.** The plan said one copy
+per box, hung on the box's slot. What a chain needs at once is a copy per box
+it is currently *inside*, which is its nesting depth: ten sibling containers
+share one buffer, four nested ones need four. So the depth cap bounds a real
+allocation rather than a data structure, which is the distinction
+`CAPACITY_POLICY.md` spends a section on, and a chain with no container in it
+pays one pointer.
+
+**A bypassed box played its run anyway**, because the generic bypass branch
+ran before the container branch and returned early. Bypassing a container has
+to skip the run, not the row. It was caught by the acceptance test rather than
+by reading the loop, which is the argument for that test comparing whole
+renders instead of checking a container's own output: a unit test of the
+container would have agreed with the bug.
+
+The second one had a partner. A container moves its whole run, and the engine
+mirrors a reorder one row at a time, so a single `MoveEffect` could not say
+what happened. Rather than invent a run-move command, the model now reports
+the *sequence* of single-row moves that gets the engine's flat chain to its
+own order — an insertion sort over device identities, correct for any
+rearrangement rather than for the ones a container happens to produce. It only
+reads because step 01 gave devices identities to sort by, which is the second
+time that change has paid for something it was not built for.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.

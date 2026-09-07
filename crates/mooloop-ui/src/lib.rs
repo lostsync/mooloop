@@ -61,7 +61,8 @@ use mooloop_dsp::{
     SpectrumAnalyzer, StretchPool,
 };
 use mooloop_engine::{
-    EffectSlot, EngineHandle, ExportSpec, OfflineRenderer, PreviewCommand, StructuralCommand,
+    ContainerScratch, EffectSlot, EngineHandle, ExportSpec, OfflineRenderer, PreviewCommand,
+    StructuralCommand,
 };
 use mooloop_project::{
     AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, PresetInfo, PresetKind,
@@ -2227,6 +2228,54 @@ impl UiState {
     /// Rebuild the edited chain's rows. The model itself is installed on the
     /// window once; this refreshes its contents after structural changes
     /// (add/remove/reorder) and after the rack is pointed somewhere else.
+    /// Tell the engine how far every container on `target`'s chain reaches,
+    /// and hand each one a ring sized to its run's declared latency.
+    ///
+    /// Every container, every time, rather than a diff. A chain holds a
+    /// handful of boxes and this runs on a hand gesture, so the cost is
+    /// nothing and the alternative -- working out which spans an edit moved --
+    /// is exactly the class of bookkeeping `docs/plans/containers/01` deleted.
+    ///
+    /// A span is structure, not a control: it has no descriptor id and cannot
+    /// arrive on the value ring, because a curve drawn on it would reshape
+    /// the chain from the audio thread.
+    fn publish_container_spans(
+        &self,
+        target: EffectTarget,
+        stx: &StructuralCommandSender,
+    ) {
+        let Some(effects) = self.session.effect_chain_of(target) else {
+            return;
+        };
+        let mut scratch = effects
+            .iter()
+            .any(|effect| effect.kind() == EffectKind::Chain)
+            .then(|| Box::new(ContainerScratch::new()));
+        for (slot, effect) in effects.iter().enumerate() {
+            let mooloop_core::EffectParams::Chain(chain) = effect.params else {
+                continue;
+            };
+            let Ok(slot_index) = u8::try_from(slot) else {
+                continue;
+            };
+            // Allocated here, off the audio thread, for the same reason the
+            // node beside it is.
+            let align = (chain.children > 0)
+                .then(|| IntegerDelay::new(mooloop_core::run_latency(effects, slot)))
+                .flatten()
+                .map(Box::new);
+            stx.send(StructuralCommand::SetContainerSpan {
+                target,
+                slot: slot_index,
+                children: chain.children,
+                align,
+                // Rides the first container's command; the chain keeps the
+                // first one it is given and hands every later one back.
+                scratch: scratch.take(),
+            });
+        }
+    }
+
     fn sync_effects(&self) {
         let armed = self.session.modulation_armed_slot.get();
         let rows: Vec<EffectSlotRow> = match self.session.effect_target {
@@ -6590,6 +6639,10 @@ impl AppUi {
                             to: added.slot as u8,
                         });
                     }
+                    // Inserting inside a box grew that box, and every box
+                    // around it, and may have changed what its dry path has
+                    // to wait for.
+                    st.publish_container_spans(added.target, &stx);
                 }
                 record_project_history(&commands, before, &st, &window, "Effect added");
             });
@@ -6635,6 +6688,7 @@ impl AppUi {
                             slot: tail as u8,
                         });
                     }
+                    st.publish_container_spans(removed.target, &stx);
                 }
                 record_project_history(&commands, before, &st, &window, "Effect removed");
             });
@@ -6896,6 +6950,7 @@ impl AppUi {
 
         {
             let tx = cmd_tx.clone();
+            let stx = structural_tx.clone();
             let st = state.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
@@ -6907,17 +6962,25 @@ impl AppUi {
                 let before = project_snapshot(&st.borrow(), &window);
                 {
                     let mut st = st.borrow_mut();
-                    let Some(target) = st.session.move_effect_to(from, to) else {
+                    let Some(moved) = st.session.move_effect_to(from, to) else {
                         return;
                     };
                     st.sync_effects();
                     st.refresh_automation(&window);
                     st.refresh_modulation(&window);
-                    let _ = tx.send(EngineCommand::MoveEffect {
-                        target,
-                        from: from as u8,
-                        to: to as u8,
-                    });
+                    // One command per row, because a container takes its run
+                    // with it and the engine's chain moves one row at a time.
+                    // For a leaf this is the single move it always was.
+                    for (from, to) in &moved.moves {
+                        let _ = tx.send(EngineCommand::MoveEffect {
+                            target: moved.target,
+                            from: *from,
+                            to: *to,
+                        });
+                    }
+                    // A run that moved may have landed inside a different box,
+                    // or taken its own devices out of one.
+                    st.publish_container_spans(moved.target, &stx);
                 }
                 record_project_history(&commands, before, &st, &window, "Effect moved");
             });
