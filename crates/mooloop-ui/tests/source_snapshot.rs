@@ -684,14 +684,6 @@ fn render_effect_header_comparison() {
     write_snapshot(&snapshot, "MOOLOOP_EFFECT_HEADERS_SNAPSHOT");
 }
 
-/// The rack is wider than the window once a few devices are in the chain, so
-/// it has to scroll horizontally to reach them.
-///
-/// This regressed because the viewport width was a constant sized for an
-/// empty chain: every device past it was laid out but unreachable, and the
-/// view could not scroll at all because the viewport never exceeded the
-/// visible width.
-#[test]
 /// A container is a rack row like any other, and the rows inside it wear one
 /// nesting bar each.
 ///
@@ -745,6 +737,14 @@ fn a_container_draws_its_run_and_its_nesting() {
     );
 }
 
+/// The rack is wider than the window once a few devices are in the chain, so
+/// it has to scroll horizontally to reach them.
+///
+/// This regressed because the viewport width was a constant sized for an
+/// empty chain: every device past it was laid out but unreachable, and the
+/// view could not scroll at all because the viewport never exceeded the
+/// visible width.
+#[test]
 fn effect_rack_scrolls_horizontally_to_reach_a_long_chain() {
     slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
         i_slint_backend_testing::TestingBackendOptions {

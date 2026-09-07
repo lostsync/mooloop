@@ -96,7 +96,8 @@ Alphabetical by model name, then by harness.
   shipped with, the root focus scope that was standing beside the interface
   instead of around it, and the interface-iteration plan that replaced the
   one-push mockup, and the verification note about what a piped exit code is
-  actually reporting. Longer accounts of most of this are in
+  actually reporting, and the browser tab that browses presets and adds a
+  device rather than replacing one. Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
 ### Claude Sonnet 5 — Claude Code

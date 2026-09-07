@@ -155,6 +155,17 @@ their own passes; nobody has decided whether they should match.
 
 ## Housekeeping
 
+**`mooloop-ui` had never been linted, and two things had ridden in on that.**
+Fixed 2026-09-07, recorded because the *shape* of it will recur: `cargo
+clippy` walks the dependency graph, `mooloop-core` had been failing since
+`df52933`, and a run that dies there never reaches the crate you were asking
+about. The two it was hiding were a redundant rebinding and — the one that
+mattered — a `#[test]` attribute that had come adrift from its function, so
+`effect_rack_scrolls_horizontally_to_reach_a_long_chain` had stopped being a
+test. **A disabled test does not fail; it stops existing**, and `dead_code`
+was the only thing that could have said so. When clippy is red anywhere,
+nothing downstream of it is being checked at all.
+
 **The README hero screenshot predates effects.** `mooloop-screenshot.png`,
 captioned "channel rack and Mono Synth" — accurate, but no longer showing the
 most interesting part of the app. A fresh one can be rendered headlessly.

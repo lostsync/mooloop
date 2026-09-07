@@ -126,12 +126,26 @@ struct PlaylistClip {
 // expanded folder immediately following their parent.
 struct BrowserRow {
     depth: int,
-    // 0 = folder, 1 = sample file.
+    // 0 = folder, 1 = sample file, 2 = preset group, 3 = preset.
+    //
+    // One model serves both tabs. A group behaves like a folder (it expands)
+    // and a preset behaves like a sample (it is the leaf you act on), so the
+    // tree needs no second shape -- only a second vocabulary.
     kind: int,
     name: string,
-    // Absolute path; toggling and removal hand it back to Rust verbatim.
+    // Absolute path; toggling, removal and loading hand it back to Rust
+    // verbatim. A preset group's path is its directory, which is what lets
+    // the sample tree's expansion set hold one without knowing what it is.
     path: string,
     expanded: bool,
+    // Right-aligned trailing text: a preset's category and tags when they say
+    // something its group does not, or a group's preset count. Empty for
+    // samples and folders.
+    detail: string,
+    // Whether acting on this row would do anything. False only for a
+    // generator preset whose device is not the selected channel's; an effect
+    // preset is always loadable because loading one *adds* a device.
+    loadable: bool,
 }
 
 // One effect slot in the selected channel's chain, in signal order.
@@ -559,6 +573,12 @@ export component MainWindow inherits Window {
     // as-is, or into a fresh sampler channel.
     callback browser-sample-loaded(string);
     callback browser-sample-loaded-new-channel(string);
+    // Which half of the browser panel is showing: 0 samples, 1 presets.
+    // Rust owns the rows, so it has to be told; the property is the view's
+    // and the callback is what makes the model match it.
+    in-out property <int> browser-tab;
+    callback browser-tab-changed(int);
+    callback browser-preset-loaded(string);
     // Preview voice controls: the toggle arms click-to-play, the knob is
     // the preview's own gain in dB (the callback carries linear gain). It
     // starts at the operating level, matching the engine's preview cell:
@@ -4362,16 +4382,42 @@ export component MainWindow inherits Window {
                                 padding-top: 2px;
                                 padding-bottom: 2px;
                                 spacing: 4px;
-                                Text {
-                                    text: "SAMPLES";
-                                    color: Theme.text-faint;
-                                    font-size: 9px;
-                                    vertical-alignment: center;
+                                // Two tabs over one row model. A text tab
+                                // rather than a ToolButton: these sit in a
+                                // 24px header beside 18px squares, and a
+                                // button's minimum height is larger than the
+                                // bar they live in.
+                                for tab[i] in ["SAMPLES", "PRESETS"] : Rectangle {
+                                    width: browser-tab-label.preferred-width + 10px;
+                                    border-radius: Theme.radius-sm;
+                                    background: root.browser-tab == i
+                                        ? Theme.surface-active
+                                        : browser-tab-touch.has-hover
+                                            ? Theme.surface-raised : transparent;
+                                    browser-tab-label := Text {
+                                        text: tab;
+                                        color: root.browser-tab == i
+                                            ? Theme.text : Theme.text-faint;
+                                        font-size: 9px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    browser-tab-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.browser-tab = i;
+                                            root.browser-tab-changed(i);
+                                        }
+                                    }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
                                 // Autoplay arm: when tinted, clicking a sample
-                                // row plays it.
-                                Rectangle {
+                                // row plays it. Sample-side only, along with
+                                // the preview trim and the add-folder button:
+                                // none of the three means anything to a
+                                // preset, and a control that is present but
+                                // inert is worse than one that is absent.
+                                if root.browser-tab == 0 : Rectangle {
                                     width: 18px;
                                     border-radius: Theme.radius-sm;
                                     background: root.browser-autoplay
@@ -4394,7 +4440,7 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
-                                TrimKnob {
+                                if root.browser-tab == 0 : TrimKnob {
                                     label: "Preview volume";
                                     diameter: 20px;
                                     value <=> root.browser-preview-gain-db;
@@ -4402,7 +4448,7 @@ export component MainWindow inherits Window {
                                         root.browser-preview-gain-changed(GainMath.db-to-linear(v));
                                     }
                                 }
-                                Rectangle {
+                                if root.browser-tab == 0 : Rectangle {
                                     width: 18px;
                                     border-radius: Theme.radius-sm;
                                     background: browser-add-touch.pressed
@@ -4425,7 +4471,9 @@ export component MainWindow inherits Window {
                         }
 
                         if root.browser-rows.length == 0 : Text {
-                            text: "Click + to add a folder of samples";
+                            text: root.browser-tab == 0
+                                ? "Click + to add a folder of samples"
+                                : "No presets saved yet";
                             color: Theme.text-faint;
                             font-size: 9px;
                             wrap: word-wrap;
@@ -4449,18 +4497,35 @@ export component MainWindow inherits Window {
                                         spacing: 5px;
                                         Text {
                                             width: 10px;
-                                            text: row.kind == 0
-                                                ? (row.expanded ? "▾" : "▸") : "♪";
-                                            color: row.kind == 0
-                                                ? Theme.text-muted : Theme.accent;
+                                            // A group expands like a folder; a
+                                            // preset is a leaf like a sample.
+                                            text: (row.kind == 0 || row.kind == 2)
+                                                ? (row.expanded ? "▾" : "▸")
+                                                : row.kind == 1 ? "♪" : "◈";
+                                            color: (row.kind == 0 || row.kind == 2)
+                                                ? Theme.text-muted
+                                                : row.loadable ? Theme.accent : Theme.text-faint;
                                             font-size: 9px;
                                             vertical-alignment: center;
                                         }
                                         Text {
                                             text: row.name;
-                                            color: row.kind == 0
-                                                ? Theme.text-muted : Theme.text;
+                                            color: (row.kind == 0 || row.kind == 2)
+                                                ? Theme.text-muted
+                                                : row.loadable ? Theme.text : Theme.text-faint;
                                             font-size: 10px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                        // A preset's category and tags, or a
+                                        // group's count. Takes what is left
+                                        // after the name rather than a fixed
+                                        // column, so a long name wins.
+                                        Rectangle { horizontal-stretch: 1; }
+                                        if row.detail != "" : Text {
+                                            text: row.detail;
+                                            color: Theme.text-faint;
+                                            font-size: 9px;
                                             vertical-alignment: center;
                                             overflow: elide;
                                         }
@@ -4468,16 +4533,24 @@ export component MainWindow inherits Window {
                                     browser-row-touch := TouchArea {
                                         mouse-cursor: pointer;
                                         clicked => {
-                                            if (row.kind == 0) {
+                                            if (row.kind == 0 || row.kind == 2) {
                                                 root.browser-row-toggled(row.path);
-                                            } else {
+                                            } else if (row.kind == 1) {
                                                 root.browser-row-previewed(row.path);
+                                            } else if (row.loadable) {
+                                                root.browser-preset-loaded(row.path);
                                             }
                                         }
                                         pointer-event(e) => {
                                             if (e.kind == PointerEventKind.down
                                                     && e.button == PointerEventButton.right) {
-                                                if (row.depth == 0) {
+                                                // Only a sample *location* can
+                                                // be removed. A preset group is
+                                                // also at depth 0 and is not a
+                                                // location, so the kind has to
+                                                // be checked and not just the
+                                                // depth.
+                                                if (row.kind == 0 && row.depth == 0) {
                                                     root.browser-location-removed(row.path);
                                                 } else if (row.kind == 1) {
                                                     browser-sample-context-menu.show();

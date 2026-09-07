@@ -174,14 +174,25 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   which is a dockable-pane system: an always-visible docked status bar
   carrying hover hints and the panel toggles, a draggable splitter that
   resizes and collapses the lower editor dock, and a right-hand browser
-  sidebar on a resize grip. The sidebar is a sample browser: persisted
-  locations added through a folder picker and removed from a right-click,
-  a tree flattened to one row per visible entry, filtering to playable
-  formats, an autoplay arm and a preview-gain trim feeding a dedicated engine
-  preview voice, an info pane with waveform, name, and format stats, and
-  loading either into the selected channel or into a new one. It cannot be
-  driven from the keyboard, and it browses samples only — presets are reached
-  from the device rail, not from here.
+  sidebar on a resize grip. The sidebar browser has two tabs over one row
+  model, SAMPLES and PRESETS. **Samples**: persisted locations added through
+  a folder picker and removed from a right-click, a tree flattened to one row
+  per visible entry, filtering to playable formats, an autoplay arm and a
+  preview-gain trim feeding a dedicated engine preview voice, an info pane
+  with waveform, name, and format stats, and loading either into the selected
+  channel or into a new one. **Presets**: every well-known preset directory
+  scanned on entry to the tab and grouped — Channels, then one group per
+  device kind, then one per effect kind, empty groups omitted — each group
+  expanding to its presets with a count beside it, and a preset's category
+  and tags shown when they say something its group does not. Clicking a
+  preset loads it. A channel preset replaces the selected channel and a
+  generator preset replaces its source device, which is why a generator
+  preset is offered only on a channel already holding that kind and is drawn
+  greyed otherwise. **An effect preset appends a device to the end of the
+  selected channel's chain rather than replacing one**, so it is always
+  loadable; the rack row's own rail is still where a preset replaces what is
+  already in a row. Loading is one undoable edit either way. Neither tab can
+  be driven from the keyboard.
 - A two-pane Preferences dialog with General, Audio, MIDI, Appearance, and
   Shortcuts pages; General persists developer mode and reveals the presently
   empty Developer page, and the MIDI page is a placeholder with no controls
@@ -855,7 +866,8 @@ land on its own when it starts to matter:
   button.
 - Keyboard navigation exists in the piano roll and nowhere else. The arrow
   keys move an existing note selection but cannot build one, and the browser
-  tree cannot be reached or driven from the keyboard at all.
+  tree — either tab of it — cannot be reached or driven from the keyboard at
+  all. `docs/plans/interface-iteration/04-the-keyboard-pass.md` owns this.
 - Channels have no colour. There is no track-colour field in the UI, the
   session model, or the project format, so nothing in the rack, mixer, or
   playlist is colour-coded by channel.

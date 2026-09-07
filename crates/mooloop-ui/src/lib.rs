@@ -1005,6 +1005,41 @@ fn device_kind_to_int(kind: DeviceKind) -> i32 {
     }
 }
 
+/// The name a device kind wears in the interface.
+///
+/// `main.slint`'s source picker holds the same eight strings, because a
+/// picker row is markup; this is the Rust-side copy the preset browser needs
+/// to title a group. Keep them in step -- these are product names, not
+/// on-disk identifiers, and `settings::kind_slug` is the frozen thing.
+fn device_kind_label(kind: DeviceKind) -> &'static str {
+    match kind {
+        DeviceKind::Sampler => "Sampler",
+        DeviceKind::DrumSynth => "Drum Synth",
+        DeviceKind::MonoSynth => "Mono Synth",
+        DeviceKind::PolySynth => "Poly Synth",
+        DeviceKind::MlM1 => "ML-M1",
+        DeviceKind::MlP8 => "ML-P8",
+        DeviceKind::Ds01 => "DS-01",
+        DeviceKind::AuxIn => "Aux In",
+    }
+}
+
+/// Every device kind that can hold a generator preset, in picker order.
+///
+/// `DeviceKind` has no `ALL` of its own and this is the only place that wants
+/// one; adding it to `mooloop-core` for one caller would be putting a UI
+/// concern in the model.
+const PRESET_DEVICE_KINDS: [DeviceKind; 8] = [
+    DeviceKind::Sampler,
+    DeviceKind::DrumSynth,
+    DeviceKind::MonoSynth,
+    DeviceKind::PolySynth,
+    DeviceKind::MlM1,
+    DeviceKind::MlP8,
+    DeviceKind::Ds01,
+    DeviceKind::AuxIn,
+];
+
 fn osc_wave_from_int(value: i32) -> OscWave {
     match value {
         0 => OscWave::Sine,
@@ -1839,6 +1874,22 @@ struct UiState {
     /// Flattened sample-browser tree, rebuilt whenever locations or folder
     /// expansion change.
     browser_rows: Rc<VecModel<BrowserRow>>,
+    /// Which tab the browser panel is showing. View state rather than session
+    /// state: it is not a fact about the song, so it has no business in a
+    /// project file or in undo.
+    browser_tab: BrowserTab,
+    /// The preset catalogue behind the PRESETS tab, rescanned when the tab is
+    /// opened rather than held live. Presets change on disk only when this
+    /// application writes one, and it rescans then too.
+    preset_catalog: Vec<PresetGroup>,
+}
+
+/// The browser panel's two halves.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum BrowserTab {
+    #[default]
+    Samples,
+    Presets,
 }
 
 impl UiState {
@@ -3596,6 +3647,8 @@ impl AppUi {
             modulation_route_model,
             mixer_strip_model,
             browser_rows: browser_row_model,
+            browser_tab: BrowserTab::default(),
+            preset_catalog: Vec::new(),
             automation_point_model,
             automation_target_model,
         }));
@@ -3938,29 +3991,13 @@ impl AppUi {
                 }) else {
                     return;
                 };
-                if let Some(window) = weak.upgrade() {
-                    window.set_document_busy(true);
-                    window.set_status_message(format!("Loading {label}...").into());
-                }
-                let tx = tx.clone();
+                let Some(window) = weak.upgrade() else { return };
                 let target = if generator {
                     LoadTarget::Generator { preset_name }
                 } else {
                     LoadTarget::Channel
                 };
-                std::thread::spawn(move || {
-                    let result = resolve_document(&path)
-                        .map(|document| DocumentResult::Loaded {
-                            path,
-                            target,
-                            document,
-                        })
-                        .unwrap_or_else(|problem| DocumentResult::Failed {
-                            action: "open this preset",
-                            problem,
-                        });
-                    let _ = tx.send(result);
-                });
+                load_preset_document(&tx, &window, path, target, label);
             };
             if generator {
                 window.on_generator_preset_selected(callback);
@@ -6771,7 +6808,6 @@ impl AppUi {
             let st = state.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
-            let sample_rate = sample_rate;
             window.on_wrap_effect_clicked(move |slot| {
                 let Some(window) = weak.upgrade() else { return };
                 let Ok(slot) = usize::try_from(slot) else {
@@ -9157,6 +9193,110 @@ impl AppUi {
         }
         {
             let st = state.clone();
+            window.on_browser_tab_changed(move |tab| {
+                let mut st = st.borrow_mut();
+                st.browser_tab = if tab == 1 {
+                    BrowserTab::Presets
+                } else {
+                    BrowserTab::Samples
+                };
+                // Rescanned on entry rather than kept live. A watcher over
+                // four directory trees would be the only way to be sure, and
+                // the only writer that matters is this application saving a
+                // preset -- which lands here too, by way of the tab being
+                // re-entered.
+                if st.browser_tab == BrowserTab::Presets {
+                    st.preset_catalog = scan_preset_catalog();
+                }
+                refresh_browser(&st);
+            });
+        }
+        {
+            let st = state.clone();
+            // Two senders, because the two halves of "load a preset" are two
+            // different mechanisms. A generator or channel preset is a whole
+            // document and goes down the asynchronous document path; an
+            // effect preset is a rack edit and goes down the project-edit
+            // path, which reinstalls the project and so carries the inserted
+            // row's structure without a separate engine command.
+            let doc_tx = document_tx.clone();
+            let edit_tx = project_edit_tx.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_browser_preset_loaded(move |path| {
+                let Some(window) = weak.upgrade() else { return };
+                let path = PathBuf::from(path.to_string());
+                let Some((slot, name)) = ({
+                    let st = st.borrow();
+                    st.preset_catalog
+                        .iter()
+                        .find_map(|group| {
+                            let preset = group
+                                .presets
+                                .iter()
+                                .find(|preset| preset.path == path)?;
+                            Some((group.slot, preset.name.clone()))
+                        })
+                }) else {
+                    return;
+                };
+
+                match slot {
+                    // The generator and channel halves are documents, and
+                    // they already have a load path that runs off the UI
+                    // thread. Reuse it rather than growing a second one.
+                    PresetSlot::Generator(kind) => {
+                        let channel_kind = {
+                            let st = st.borrow();
+                            st.session.channels.get(st.session.selected).map(|c| c.kind)
+                        };
+                        if channel_kind != Some(kind) {
+                            window.set_status_message(
+                                format!(
+                                    "Select a {} channel to load this preset",
+                                    device_kind_label(kind)
+                                )
+                                .into(),
+                            );
+                            return;
+                        }
+                        load_preset_document(
+                            &doc_tx,
+                            &window,
+                            path,
+                            LoadTarget::Generator { preset_name: name },
+                            "generator preset",
+                        );
+                    }
+                    PresetSlot::Channel => {
+                        load_preset_document(
+                            &doc_tx,
+                            &window,
+                            path,
+                            LoadTarget::Channel,
+                            "channel preset",
+                        );
+                    }
+                    // An effect preset *adds* a device. See `PresetSlot`.
+                    PresetSlot::Effect(kind) => {
+                        let landed = append_effect_preset(&st, &window, &path, kind, &name);
+                        if let Some((before, after)) = landed {
+                            if queue_project_edit(
+                                &edit_tx,
+                                before,
+                                after,
+                                "Effect preset added",
+                            ) {
+                                commands.borrow_mut().project_edit_pending = true;
+                                sync_command_availability(&window, &commands.borrow());
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        {
+            let st = state.clone();
             let settings = ui_settings.clone();
             let weak = window.as_weak();
             window.on_browser_location_removed(move |path| {
@@ -10409,6 +10549,12 @@ fn refresh_preset_menus(state: &Rc<RefCell<UiState>>, window: &MainWindow) {
     st.sync_generator_preset_menu(window);
     st.sync_channel_preset_menu(window);
     st.sync_effects();
+    // Whether a generator preset is loadable depends on the selected
+    // channel's device, so the browser's rows go stale on exactly the
+    // switches this function already exists to catch. Cheap: it rebuilds a
+    // row list from a catalogue that is already in memory, and does nothing
+    // at all while the SAMPLES tab is showing.
+    refresh_browser(&st);
 }
 
 
@@ -10528,6 +10674,8 @@ fn push_browser_rows(
         name: browser_display_name(path).into(),
         path: path.to_string_lossy().to_string().into(),
         expanded: is_expanded,
+        detail: Default::default(),
+        loadable: true,
     });
     if !is_expanded {
         return;
@@ -10546,17 +10694,402 @@ fn push_browser_rows(
                 name: browser_display_name(&child).into(),
                 path: child.to_string_lossy().to_string().into(),
                 expanded: false,
+                detail: Default::default(),
+                loadable: true,
             });
         }
     }
 }
 
+/// What loading a preset from the browser lands on.
+///
+/// This is the whole of the browser's half of `preset-system/`'s rule that a
+/// preset's unit is a device: the taxonomy on disk already says which device,
+/// so the slot follows from the directory rather than from anything read out
+/// of the bundle.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PresetSlot {
+    /// Replaces the selected channel's source device. Offered only when that
+    /// channel already holds this kind -- loading a DS-01 patch onto an ML-P8
+    /// would have to change what the channel *is*, which is a different
+    /// gesture and belongs to the source picker.
+    Generator(DeviceKind),
+    /// Replaces the selected channel outright.
+    Channel,
+    /// **Appends** a device to the selected channel's chain, rather than
+    /// replacing one.
+    ///
+    /// This is the browser's one real departure from the rack rail, and it is
+    /// deliberate: the rail button belongs to a row and so can only mean
+    /// "make this row sound like that", while the browser belongs to no row.
+    /// Appending is also the gesture that makes an effect preset worth
+    /// browsing -- it is how you audition a reverb you do not already have.
+    /// It is why an effect preset is always loadable and a generator preset
+    /// is not.
+    Effect(EffectKind),
+}
+
+/// One group of presets in the browser's PRESETS tab.
+struct PresetGroup {
+    /// The directory the presets came from, which doubles as the group row's
+    /// identity for expansion -- which is how the sample tree's
+    /// `browser_expanded` set carries preset groups without knowing what a
+    /// preset is.
+    dir: PathBuf,
+    label: String,
+    slot: PresetSlot,
+    presets: Vec<PresetSummary>,
+}
+
+/// Reads every well-known preset directory.
+///
+/// `refresh_preset_menus` scans three of these for the rail menus and keeps
+/// only the selected channel's generator kind; the browser wants all of them,
+/// which is the whole difference between a menu and a browser. The cost
+/// argument that function records still holds -- these are small TOML
+/// manifests, and there are ninety-nine of them on a seeded machine.
+fn scan_preset_catalog() -> Vec<PresetGroup> {
+    let mut groups = Vec::new();
+
+    let dir = settings::channel_presets_dir();
+    let presets = mooloop_project::list_presets(&dir);
+    if !presets.is_empty() {
+        groups.push(PresetGroup {
+            dir,
+            label: "Channels".to_string(),
+            slot: PresetSlot::Channel,
+            presets,
+        });
+    }
+
+    for kind in PRESET_DEVICE_KINDS {
+        let dir = settings::generator_presets_dir(kind);
+        let presets = mooloop_project::list_presets(&dir);
+        if !presets.is_empty() {
+            groups.push(PresetGroup {
+                dir,
+                label: device_kind_label(kind).to_string(),
+                slot: PresetSlot::Generator(kind),
+                presets,
+            });
+        }
+    }
+
+    for kind in EffectKind::ALL {
+        let dir = settings::effect_presets_dir(kind);
+        let presets = mooloop_project::list_presets(&dir);
+        if !presets.is_empty() {
+            groups.push(PresetGroup {
+                dir,
+                label: kind.label().to_string(),
+                slot: PresetSlot::Effect(kind),
+                presets,
+            });
+        }
+    }
+
+    groups
+}
+
+/// The line a preset row shows to the right of its name.
+///
+/// Deliberately not the raw `category`. Of the ninety-nine presets a seeded
+/// machine ships, sixty-six are categorised `"Factory"` and seventeen
+/// `"DS-01"` -- restatements of the group they are already filed under. A
+/// category earns the space only when it says something the group does not,
+/// which is why this is a filter rather than a format.
+fn preset_detail(summary: &PresetSummary, group_label: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    let category = summary.category.trim();
+    if !category.is_empty()
+        && !category.eq_ignore_ascii_case("factory")
+        && !category.eq_ignore_ascii_case(group_label)
+    {
+        parts.push(category);
+    }
+    parts.extend(summary.tags.iter().map(|tag| tag.as_str()).filter(|tag| !tag.is_empty()));
+    parts.join(" · ")
+}
+
+/// Flattens the preset catalogue into rows: every group, then the presets
+/// inside the expanded ones.
+///
+/// `channel_kind` is the selected channel's device, and it decides only
+/// whether a *generator* row is loadable -- see [`PresetSlot::Effect`] for
+/// why an effect row is always offered. An unloadable row is still drawn,
+/// because a browser you cannot look through is a menu.
+fn build_preset_rows(
+    groups: &[PresetGroup],
+    expanded: &HashSet<PathBuf>,
+    channel_kind: Option<DeviceKind>,
+) -> Vec<BrowserRow> {
+    let mut rows = Vec::new();
+    for group in groups {
+        let is_expanded = expanded.contains(&group.dir);
+        rows.push(BrowserRow {
+            depth: 0,
+            kind: 2,
+            name: group.label.as_str().into(),
+            path: group.dir.to_string_lossy().to_string().into(),
+            expanded: is_expanded,
+            detail: group.presets.len().to_string().into(),
+            loadable: true,
+        });
+        if !is_expanded {
+            continue;
+        }
+        let loadable = match group.slot {
+            PresetSlot::Generator(kind) => channel_kind == Some(kind),
+            PresetSlot::Channel | PresetSlot::Effect(_) => true,
+        };
+        for preset in &group.presets {
+            rows.push(BrowserRow {
+                depth: 1,
+                kind: 3,
+                name: preset.name.as_str().into(),
+                path: preset.path.to_string_lossy().to_string().into(),
+                expanded: false,
+                detail: preset_detail(preset, &group.label).into(),
+                loadable,
+            });
+        }
+    }
+    rows
+}
+
+/// Opens a generator or channel preset off the UI thread.
+///
+/// Shared by the device rail's preset menus and the browser panel, which
+/// differ only in how they choose the path: both of these presets are whole
+/// documents, and a document load is already asynchronous because it can
+/// touch a sample on disk.
+fn load_preset_document(
+    tx: &std::sync::mpsc::Sender<DocumentResult>,
+    window: &MainWindow,
+    path: PathBuf,
+    target: LoadTarget,
+    label: &str,
+) {
+    window.set_document_busy(true);
+    window.set_status_message(format!("Loading {label}...").into());
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+        let result = resolve_document(&path)
+            .map(|document| DocumentResult::Loaded {
+                path,
+                target,
+                document,
+            })
+            .unwrap_or_else(|problem| DocumentResult::Failed {
+                action: "open this preset",
+                problem,
+            });
+        let _ = tx.send(result);
+    });
+}
+
+/// Adds the effect preset at `path` to the end of the selected channel's
+/// chain, and returns the before/after snapshots that make it one undoable
+/// edit.
+///
+/// Two steps, because a preset carries what a device *sounds like* and not
+/// which device it is: insert a row of the right kind to mint an identity,
+/// then load the preset over it. A run preset does the same through a
+/// container, since `load_effect_run` will only replace a `Chain`.
+///
+/// `None` when the bundle will not open, is not an effect preset, or does not
+/// fit -- each of which has already been reported to the status bar.
+fn append_effect_preset(
+    st: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    path: &Path,
+    kind: EffectKind,
+    name: &str,
+) -> Option<(ProjectSnapshot, ProjectSnapshot)> {
+    let loaded = match mooloop_project::load_bundle(path) {
+        Ok(report) => match report.document {
+            LoadedDocument::Effect(effect) => Ok(*effect),
+            LoadedDocument::EffectRun(run) => Err(*run),
+            _ => {
+                log_warn!("project", "{} is not an effect preset", path.display());
+                window.set_status_message("That bundle is not an effect preset".into());
+                return None;
+            }
+        },
+        Err(error) => {
+            log_warn!("project", "could not open {}: {error}", path.display());
+            window.set_status_message(format!("Could not open this preset: {error}").into());
+            return None;
+        }
+    };
+
+    let before = project_snapshot(&st.borrow(), window);
+    {
+        let mut state = st.borrow_mut();
+        let tail = state.session.effect_chain().map(Vec::len)?;
+        // The row the preset lands on has to exist before it can be loaded
+        // over, and it has to be the preset's own kind -- a run always starts
+        // with the container that `load_effect_run` insists on.
+        if state.session.insert_effect_at(kind, tail).is_none() {
+            drop(state);
+            window.set_status_message("This chain is full".into());
+            return None;
+        }
+        let landed = match &loaded {
+            Ok(effect) => state.session.load_effect_preset(tail, effect, name).is_some(),
+            Err(run) => state.session.load_effect_run(tail, run, name).is_some(),
+        };
+        if !landed {
+            // Take the row back out rather than leaving an empty device the
+            // musician did not ask for.
+            let _ = state.session.remove_effect_at(tail);
+            drop(state);
+            log_warn!("project", "{name} does not fit the end of this chain");
+            window.set_status_message("That preset is for a different kind of device".into());
+            return None;
+        }
+        state.sync_effects();
+    }
+    let after = project_snapshot(&st.borrow(), window);
+    window.set_status_message(format!("Added {name}").into());
+    Some((before, after))
+}
+
 /// Rebuilds the visible tree from the session's locations and expansion set.
+///
+/// One row model serves both tabs, so this is also what switches them.
 fn refresh_browser(st: &UiState) {
+    if st.browser_tab == BrowserTab::Presets {
+        let channel_kind = st.session.channels.get(st.session.selected).map(|c| c.kind);
+        st.browser_rows.set_vec(build_preset_rows(
+            &st.preset_catalog,
+            &st.session.browser_expanded,
+            channel_kind,
+        ));
+        return;
+    }
     st.browser_rows.set_vec(build_browser_rows(
         &st.session.browser_locations,
         &st.session.browser_expanded,
     ));
+}
+
+#[cfg(test)]
+mod preset_browser_tests {
+    use super::*;
+    use mooloop_project::PresetKind;
+
+    fn summary(name: &str, category: &str, tags: &[&str]) -> PresetSummary {
+        PresetSummary {
+            path: PathBuf::from(format!("/presets/{name}.mooloop-effect")),
+            name: name.to_string(),
+            category: category.to_string(),
+            tags: tags.iter().map(|tag| tag.to_string()).collect(),
+            kind: PresetKind::Effect(EffectKind::Delay),
+        }
+    }
+
+    fn group(label: &str, slot: PresetSlot, presets: Vec<PresetSummary>) -> PresetGroup {
+        PresetGroup {
+            dir: PathBuf::from(format!("/presets/{label}")),
+            label: label.to_string(),
+            slot,
+            presets,
+        }
+    }
+
+    #[test]
+    fn a_group_lists_its_presets_only_when_expanded() {
+        let groups = vec![group(
+            "Delay",
+            PresetSlot::Effect(EffectKind::Delay),
+            vec![summary("Slapback", "Factory", &[])],
+        )];
+
+        let collapsed = build_preset_rows(&groups, &HashSet::new(), None);
+        assert_eq!(collapsed.len(), 1, "a collapsed group is one row");
+        assert_eq!(collapsed[0].kind, 2);
+        assert_eq!(collapsed[0].detail, "1", "a group shows what it holds");
+
+        let expanded = HashSet::from([PathBuf::from("/presets/Delay")]);
+        let open = build_preset_rows(&groups, &expanded, None);
+        assert_eq!(open.len(), 2);
+        assert_eq!(open[1].kind, 3);
+        assert_eq!(open[1].name, "Slapback");
+    }
+
+    /// The rule that makes an effect preset worth browsing: loading one adds
+    /// a device, so there is no row for it to have to match.
+    #[test]
+    fn an_effect_preset_is_loadable_whatever_the_channel_holds() {
+        let groups = vec![group(
+            "Delay",
+            PresetSlot::Effect(EffectKind::Delay),
+            vec![summary("Slapback", "Factory", &[])],
+        )];
+        let expanded = HashSet::from([PathBuf::from("/presets/Delay")]);
+
+        for channel in [None, Some(DeviceKind::Sampler), Some(DeviceKind::Ds01)] {
+            let rows = build_preset_rows(&groups, &expanded, channel);
+            assert!(rows[1].loadable, "an effect preset appends, so it always fits");
+        }
+    }
+
+    /// A generator preset replaces the channel's source, so it is offered
+    /// only where it would mean something.
+    #[test]
+    fn a_generator_preset_is_loadable_only_on_its_own_kind() {
+        let groups = vec![group(
+            "DS-01",
+            PresetSlot::Generator(DeviceKind::Ds01),
+            vec![summary("Deep Kick", "DS-01", &[])],
+        )];
+        let expanded = HashSet::from([PathBuf::from("/presets/DS-01")]);
+
+        let matching = build_preset_rows(&groups, &expanded, Some(DeviceKind::Ds01));
+        assert!(matching[1].loadable);
+
+        let mismatched = build_preset_rows(&groups, &expanded, Some(DeviceKind::MlP8));
+        assert!(!mismatched[1].loadable, "a DS-01 patch does not fit an ML-P8");
+
+        let empty = build_preset_rows(&groups, &expanded, None);
+        assert!(!empty[1].loadable, "and fits nothing at all with no channel");
+    }
+
+    /// Sixty-six of the ninety-nine presets a seeded machine ships are
+    /// categorised "Factory" and seventeen "DS-01", both of which restate the
+    /// group the row is already filed under. Showing them would spend the
+    /// only spare column in the panel on saying nothing.
+    #[test]
+    fn a_category_that_restates_its_group_is_not_shown() {
+        assert_eq!(preset_detail(&summary("A", "Factory", &[]), "Delay"), "");
+        assert_eq!(preset_detail(&summary("B", "DS-01", &[]), "DS-01"), "");
+        assert_eq!(preset_detail(&summary("C", "ds-01", &[]), "DS-01"), "");
+        assert_eq!(preset_detail(&summary("D", "", &[]), "Delay"), "");
+    }
+
+    #[test]
+    fn a_category_that_says_something_is_shown_with_the_tags() {
+        assert_eq!(preset_detail(&summary("A", "Pad", &[]), "ML-P8"), "Pad");
+        assert_eq!(
+            preset_detail(&summary("B", "Pad", &["warm", "wide"]), "ML-P8"),
+            "Pad · warm · wide"
+        );
+        assert_eq!(
+            preset_detail(&summary("C", "Factory", &["bright"]), "Delay"),
+            "bright",
+            "tags survive a category that does not"
+        );
+    }
+
+    #[test]
+    fn an_empty_group_contributes_only_its_own_row() {
+        let groups = vec![group("Reverb", PresetSlot::Effect(EffectKind::Reverb), vec![])];
+        let expanded = HashSet::from([PathBuf::from("/presets/Reverb")]);
+        let rows = build_preset_rows(&groups, &expanded, None);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].detail, "0");
+    }
 }
 
 #[cfg(test)]
