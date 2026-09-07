@@ -299,6 +299,41 @@ answer: **vertical adjacency means the chain continues.** A layer's branches,
 if they are ever built, need a treatment that is not adjacency — which is now
 a constraint written down rather than one discovered by whoever builds them.
 
+### Shipped unreachable, and fixed the same day
+
+**The first cut of this step had no way to add a container at all**, which
+Adam found by looking for one. Three faults, and they compound:
+
+- `EffectTypeMenu` is a hand-written list in `device-rack.slint` and
+  `EffectKind::ALL` is a list in Rust, with nothing holding them together. The
+  thirteenth kind was never added to the menu, so the obvious route did not
+  offer a container -- and on a chain with no devices there was nothing to
+  wrap either, so there was no route at all.
+- `+` on a container inserted *before* the box rather than into it, so even a
+  container made by wrapping could not be filled from its own button.
+- An empty container's span was empty, so no index counted as inside it. An
+  inserted container was a dead end.
+
+The third one took two attempts and the first was wrong in an instructive way.
+Making `resize_enclosing` treat "the position just after a container's row" as
+inside it fixed the symptom and left two rules disagreeing: `span_of`,
+`depth_at` and `parent_of` still called that position outside, so wrapping the
+row after an empty box silently pulled an unrelated device two levels into a
+box it had never been in. The ambiguity is inherent -- position `N+1` means
+both "first device inside the box at `N`" and "next device after the box", and
+for an empty box those are one integer -- so it is an *operation* now rather
+than an index: `insert_into_container` names the box, and the span rule stays
+strict everywhere. `the_row_after_an_empty_container_is_not_inside_it` fails
+on the version that did not.
+
+The guard is `the_insert_menu_offers_every_kind`
+(`crates/mooloop-ui/tests/effect_preset_menu.rs`), which clicks the menu's
+last row and asserts it reports `EffectKind::ALL.len() - 1`. It fails for any
+kind that exists in Rust and cannot be put on a chain, which is the class of
+bug rather than the instance. The lesson is the one this repository keeps
+learning: a hand-written list that mirrors an enum needs a test that says so,
+because every other test in the suite passes while the feature is unreachable.
+
 ### Acceptance
 
 `wrapping_and_unwrapping_leave_every_device_where_it_was`

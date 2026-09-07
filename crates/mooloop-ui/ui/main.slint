@@ -597,6 +597,8 @@ export component MainWindow inherits Window {
     // EffectKind index, then the slot it must precede. `effect-slots.length`
     // means append; every device shell can therefore insert into the chain.
     callback add-effect-clicked(int, int);
+    // Insert a device as the first thing inside the container in this slot.
+    callback add-effect-into-container(int, int);   // kind, container slot
     callback remove-effect-clicked(int);            // slot
     // Wrap the device in `slot` -- and its run, when it is already a
     // container -- in a new container. Unwrap takes a container out and
@@ -3185,7 +3187,21 @@ export component MainWindow inherits Window {
                                                     unwrap-enabled: slot.kind == 12;
                                                     wrap-requested => { root.wrap-effect-clicked(index); }
                                                     unwrap-requested => { root.unwrap-effect-clicked(index); }
-                                                    effect-kind-selected(kind) => { root.add-effect-clicked(kind, index); }
+                                                    // `+` on a container means insert *into*
+                                                    // it; on a leaf it means insert before
+                                                    // that row. Two callbacks rather than an
+                                                    // adjusted index, because the position
+                                                    // just after a container is also the
+                                                    // position just after its first child --
+                                                    // for an empty box those are the same
+                                                    // number, and no index can mean both.
+                                                    effect-kind-selected(kind) => {
+                                                        if (slot.kind == 12) {
+                                                            root.add-effect-into-container(kind, index);
+                                                        } else {
+                                                            root.add-effect-clicked(kind, index);
+                                                        }
+                                                    }
                                                     remove-requested => { root.remove-effect-clicked(index); }
                                                     preset-enabled: true;
                                                     preset-options: slot.preset-options;

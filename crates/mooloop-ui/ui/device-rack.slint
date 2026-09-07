@@ -62,6 +62,11 @@ component EffectTypeMenu inherits VerticalLayout {
     EffectTypeRow { text: "Plate"; tooltip: "Insert a lightweight comb/allpass reverb"; selected => { root.kind-selected(10); } }
     EffectTypeRow { text: "Mod"; tooltip: "Insert chorus, flange, phaser, ensemble, or ADT"; selected => { root.kind-selected(9); } }
     EffectTypeRow { text: "Buffer"; tooltip: "Insert a retained-audio buffer"; selected => { root.kind-selected(11); } }
+    // Not an effect: a container holds a run of the others and mixes it
+    // against what went in. Last in the list because it is a different kind
+    // of thing, and in the list at all because inserting one is how a chain
+    // that has no devices yet gets its first box.
+    EffectTypeRow { text: "Chain"; tooltip: "Insert a container to hold and blend a run of devices"; selected => { root.kind-selected(12); } }
 }
 
 export component DeviceFrame inherits Rectangle {

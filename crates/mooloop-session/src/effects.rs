@@ -6,7 +6,8 @@
 use crate::session::Session;
 use mooloop_core::gain::{db_to_linear, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::{
-    insert_effect, move_effect, remove_effect, unwrap_container, wrap_in_container,
+    insert_effect, insert_into_container, move_effect, remove_effect, unwrap_container,
+    wrap_in_container,
     DelayTimeDivision, DeviceId, EffectKind, EffectParams, EffectSlotState, EffectTarget,
     EngineCommand,
 };
@@ -119,6 +120,32 @@ impl Session {
             slot,
             tail: before - 1,
             devices,
+        })
+    }
+
+    /// Inserts `kind` as the first device inside the container in `slot`.
+    ///
+    /// What a container's own rail `+` means. Separate from
+    /// `insert_effect_at` because an index cannot say "into this box": the
+    /// position just after a container's row is also the position just after
+    /// the container, and for an empty one those are the same number.
+    pub fn insert_effect_into_container(
+        &mut self,
+        kind: EffectKind,
+        slot: usize,
+    ) -> Option<EffectInserted> {
+        let target = self.effect_target;
+        let (effects, next_id) = self.effect_chain_parts_mut()?;
+        let tail = effects.len();
+        let effect = EffectSlotState::of_kind(kind);
+        let landed = insert_into_container(effects, next_id, slot, effect)?;
+        Some(EffectInserted {
+            target,
+            slot: landed,
+            tail,
+            device: effects[landed].id,
+            kind,
+            params: effect.params,
         })
     }
 

@@ -562,7 +562,14 @@ land on its own when it starts to matter:
   device is meant to be the second rather than growing its own ring.
 - A rack device may be a **container**: `EffectKind::Chain` holds an ordered
   run of the devices after it, appears in the rack exactly where a device
-  would, and nests four deep. Its one control is a dry/wet mix across the
+  would, and nests four deep. It is made either from the insert menu, like any
+  other device, or by wrapping a device that is already there (the fourth
+  button on its left rail). Inserting from a container's own `+` puts the new
+  device *inside* it; inserting from a leaf's `+` puts it before that leaf.
+  Appending to the end of a box is a drag rather than an insert, because the
+  end of a run has to stay addressable as "after the container" -- for an
+  empty box, "just inside" and "just after" are the same position, so which
+  one is meant has to come from the gesture rather than from the index. Its one control is a dry/wet mix across the
   whole run, delayed to match that run's latency — the wet/dry that a
   *single* device has always had, applied to a group. Bypassing a container
   skips its run without moving the channel in time. **Nothing in the

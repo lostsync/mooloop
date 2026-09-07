@@ -27,7 +27,7 @@ slint::slint! {
 
     export component PresetHarness inherits Window {
         width: 320px;
-        height: 320px;
+        height: 460px;
         background: #101010;
         in property <[string]> options;
         callback preset-selected(int);
@@ -62,7 +62,7 @@ const SECOND_ENTRY: (f32, f32) = (120.0, 117.0);
 fn harness() -> PresetHarness {
     i_slint_backend_testing::init_no_event_loop();
     let ui = PresetHarness::new().unwrap();
-    ui.window().set_size(LogicalSize::new(320.0, 320.0));
+    ui.window().set_size(LogicalSize::new(320.0, 460.0));
     ui.set_options(ModelRc::from(Rc::new(VecModel::from(vec![
         SharedString::from("Factory — Telephone"),
         SharedString::from("Factory — Warm Low-Pass"),
@@ -116,6 +116,40 @@ fn the_save_button_asks_for_a_save() {
 
     click(ui.window(), (BUTTON_X, SAVE_Y));
     assert_eq!(*asked.borrow(), 1, "the save rail button did nothing");
+}
+
+/// **Every effect kind is reachable from the insert menu.**
+///
+/// `EffectTypeMenu` is a hand-written list in `device-rack.slint` and
+/// `EffectKind::ALL` is a list in Rust, and nothing but this holds them
+/// together. A kind added to the enum and forgotten here is a device that
+/// exists, saves, loads and renders, and that a musician has no way to put on
+/// a chain -- which is exactly what happened when the container kind landed
+/// and shipped unreachable.
+///
+/// Driven by clicking the last row rather than by counting, because the count
+/// is the thing in question: a menu one entry short would still have a last
+/// row, and it would report the wrong kind.
+#[test]
+fn the_insert_menu_offers_every_kind() {
+    let ui = harness();
+    let picked: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
+    let seen = picked.clone();
+    ui.on_kind_selected(move |kind| seen.borrow_mut().push(kind));
+
+    let kinds = mooloop_core::EffectKind::ALL.len();
+    // The menu opens below the insert button; its rows are 22px on a 23px
+    // pitch from a 4px inset, and the first row's middle is at 43.
+    let last_row_y = 43.0 + (kinds - 1) as f32 * 23.0;
+    click(ui.window(), (BUTTON_X, 14.0));
+    click(ui.window(), (36.0, last_row_y));
+
+    assert_eq!(
+        *picked.borrow(),
+        vec![kinds as i32 - 1],
+        "the insert menu has fewer entries than EffectKind::ALL, so at least \
+         one kind cannot be put on a chain at all"
+    );
 }
 
 /// The control experiment. The insert menu is the same shape -- a

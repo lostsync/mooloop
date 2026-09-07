@@ -2276,6 +2276,51 @@ impl UiState {
         }
     }
 
+    /// Mirror a freshly inserted device onto the engine.
+    ///
+    /// Installed into the vacant tail and moved into place, which is what
+    /// lets the realtime chain reach the model's order without allocating in
+    /// its callback. Shared by the two ways of inserting -- before a row, and
+    /// into a container -- because only the model verb differs.
+    fn install_added_effect(
+        &self,
+        added: &mooloop_session::effects::EffectInserted,
+        bpm: f64,
+        sample_rate: u32,
+        tx: &EngineCommandSender,
+        stx: &StructuralCommandSender,
+    ) {
+        // The node and its dry-align ring are built here because construction
+        // allocates: off the audio thread, riding the same structural command
+        // as the slot they belong to.
+        let node = build_effect_at_tempo(added.params, sample_rate, bpm);
+        let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
+        stx.send(StructuralCommand::InstallEffect {
+            target: added.target,
+            slot: added.tail as u8,
+            kind: added.kind,
+            resource_key: added.params.buffer().copied().map(buffer_allocation_key),
+            node,
+            align,
+            analyzer: Box::new(SpectrumAnalyzer::new()),
+            // Allocated here with the node: an empty addressable slot costs a
+            // pointer rather than its full host state. It carries the identity
+            // the model just minted, which is what lets a route find this
+            // device again.
+            state: Box::new(EffectSlot::for_device(added.device)),
+        });
+        if added.slot != added.tail {
+            let _ = tx.send(EngineCommand::MoveEffect {
+                target: added.target,
+                from: added.tail as u8,
+                to: added.slot as u8,
+            });
+        }
+        // Inserting inside a box grew that box, and every box around it, and
+        // may have changed what its dry path has to wait for.
+        self.publish_container_spans(added.target, stx);
+    }
+
     fn sync_effects(&self) {
         let armed = self.session.modulation_armed_slot.get();
         let rows: Vec<EffectSlotRow> = match self.session.effect_target {
@@ -6627,37 +6672,39 @@ impl AppUi {
                     st.sync_effects();
                     st.refresh_automation(&window);
                     st.refresh_modulation(&window);
-                    // The node and its dry-align ring are built here because
-                    // construction allocates: off the audio thread, riding the same
-                    // structural command as the slot they belong to.
-                    let bpm = window.get_bpm() as f64;
-                    let node = build_effect_at_tempo(added.params, sample_rate, bpm);
-                    let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
-                    let _ = stx.send(StructuralCommand::InstallEffect {
-                        target: added.target,
-                        slot: added.tail as u8,
-                        kind: added.kind,
-                        resource_key: added.params.buffer().copied().map(buffer_allocation_key),
-                        node,
-                        align,
-                        analyzer: Box::new(SpectrumAnalyzer::new()),
-                        // Allocated here with the node: an empty addressable slot
-                        // costs a pointer rather than its full host state.
-                        // It carries the identity the model just minted, which
-                        // is what lets a route find this device again.
-                        state: Box::new(EffectSlot::for_device(added.device)),
-                    });
-                    if added.slot != added.tail {
-                        let _ = tx.send(EngineCommand::MoveEffect {
-                            target: added.target,
-                            from: added.tail as u8,
-                            to: added.slot as u8,
-                        });
-                    }
-                    // Inserting inside a box grew that box, and every box
-                    // around it, and may have changed what its dry path has
-                    // to wait for.
-                    st.publish_container_spans(added.target, &stx);
+                    st.install_added_effect(&added, window.get_bpm() as f64, sample_rate, &tx, &stx);
+                }
+                record_project_history(&commands, before, &st, &window, "Effect added");
+            });
+        }
+
+        // A container's own `+`. Same mirror as an ordinary insert; only the
+        // model verb differs, because an index cannot say "into this box".
+        {
+            let tx = cmd_tx.clone();
+            let stx = structural_tx.clone();
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_add_effect_into_container(move |kind_index, container| {
+                let Some(kind) = effect_kind_from_index(kind_index) else {
+                    return;
+                };
+                let Some(window) = weak.upgrade() else { return };
+                let Ok(container) = usize::try_from(container) else {
+                    return;
+                };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
+                    let mut st = st.borrow_mut();
+                    let Some(added) = st.session.insert_effect_into_container(kind, container)
+                    else {
+                        return;
+                    };
+                    st.sync_effects();
+                    st.refresh_automation(&window);
+                    st.refresh_modulation(&window);
+                    st.install_added_effect(&added, window.get_bpm() as f64, sample_rate, &tx, &stx);
                 }
                 record_project_history(&commands, before, &st, &window, "Effect added");
             });

@@ -289,6 +289,48 @@ pub fn insert_effect(
     Some(at)
 }
 
+/// Insert `effect` as the first device inside the container at `container`,
+/// minting it an identity. Returns the slot it landed in, or `None` when
+/// `container` does not hold one or the chain is full.
+///
+/// **Separate from [`insert_effect`] on purpose.** The position just after a
+/// container's own row means two different things -- "the first device inside
+/// it" and "the next device after it" -- and for an *empty* container those
+/// are the same index, so no index can express both. Rather than pick a
+/// winner and make the other unreachable, the two are different operations:
+/// an index says "before this row", and this says "into this box".
+///
+/// Getting that wrong is not a near miss. An earlier cut resolved the
+/// ambiguity inside `resize_enclosing`, which made the position *count* as
+/// inside for the purpose of growing spans while `span_of` still said it was
+/// outside -- so wrapping the row after an empty box quietly pulled an
+/// unrelated device into it.
+pub fn insert_into_container(
+    effects: &mut Vec<EffectSlotState>,
+    next_id: &mut u32,
+    container: usize,
+    effect: EffectSlotState,
+) -> Option<usize> {
+    if !matches!(
+        effects.get(container).map(|effect| effect.params),
+        Some(EffectParams::Chain(_))
+    ) {
+        return None;
+    }
+    if effects.len() >= MAX_EFFECTS_PER_CHANNEL {
+        return None;
+    }
+    let at = container + 1;
+    // The box itself and every box around it, rather than only the ones whose
+    // span already covers `at` -- which for an empty box is none of them.
+    resize_enclosing(effects, container, 1);
+    if let EffectParams::Chain(chain) = &mut effects[container].params {
+        chain.children = chain.children.saturating_add(1);
+    }
+    effects.insert(at, effect.with_id(mint_device_id(next_id)));
+    Some(at)
+}
+
 /// Remove the device at `at`, and its whole run when it is a container.
 /// Returns what went, in rack order, container first. `None` when there is
 /// nothing there.
@@ -721,6 +763,107 @@ mod tests {
         (0..effects.len())
             .map(|slot| (depth_at(effects, slot), effects[slot].kind()))
             .collect()
+    }
+
+    /// An empty container is not a dead end.
+    ///
+    /// Inserting a container and then filling it is the obvious way to make
+    /// one -- it is what the rail's insert menu offers, and the only route
+    /// available on a chain with no devices to wrap yet. An empty box has an
+    /// empty span, so no *index* is inside it; `insert_into_container` names
+    /// the box instead, which is why it exists.
+    #[test]
+    fn a_device_can_be_inserted_into_an_empty_container() {
+        let mut effects = Vec::new();
+        let mut next = 0;
+        insert_effect(&mut effects, &mut next, 0, container()).expect("room");
+        assert_eq!(span_of(&effects, 0), 1..1, "a fresh box holds nothing");
+
+        insert_into_container(
+            &mut effects,
+            &mut next,
+            0,
+            EffectSlotState::of_kind(EffectKind::Filter),
+        )
+        .expect("room");
+        assert_eq!(
+            shape(&effects),
+            [(0, EffectKind::Chain), (1, EffectKind::Filter)],
+            "the filter landed beside the box rather than in it"
+        );
+
+        // A second one joins it at the head of the run.
+        insert_into_container(
+            &mut effects,
+            &mut next,
+            0,
+            EffectSlotState::of_kind(EffectKind::Drive),
+        )
+        .expect("room");
+        assert_eq!(
+            shape(&effects),
+            [
+                (0, EffectKind::Chain),
+                (1, EffectKind::Drive),
+                (1, EffectKind::Filter)
+            ]
+        );
+        assert_eq!(span_problem(&effects), None);
+
+        // And it grows every box around it, not just the one named.
+        let mut next = effects.len() as u32;
+        wrap_in_container(&mut effects, &mut next, 0..3, container()).expect("outer");
+        insert_into_container(
+            &mut effects,
+            &mut next,
+            1,
+            EffectSlotState::of_kind(EffectKind::Gate),
+        )
+        .expect("room");
+        assert_eq!(depth_at(&effects, 2), 2, "the gate is inside both boxes");
+        assert_eq!(span_problem(&effects), None);
+
+        // A leaf is not a box, so there is nothing to insert into.
+        assert!(insert_into_container(
+            &mut effects,
+            &mut next,
+            2,
+            EffectSlotState::of_kind(EffectKind::Delay)
+        )
+        .is_none());
+    }
+
+    /// The position just after an empty box is *outside* it, which is what
+    /// leaves room to put anything after a container at all.
+    ///
+    /// An earlier cut made that position count as inside for the purpose of
+    /// growing spans, while `span_of` still said it was outside -- so this
+    /// wrap silently pulled the filter two boxes deep having been in none.
+    #[test]
+    fn the_row_after_an_empty_container_is_not_inside_it() {
+        let mut effects = Vec::new();
+        let mut next = 0;
+        insert_effect(&mut effects, &mut next, 0, container()).expect("room");
+        insert_effect(
+            &mut effects,
+            &mut next,
+            1,
+            EffectSlotState::of_kind(EffectKind::Filter),
+        )
+        .expect("room");
+        assert_eq!(depth_at(&effects, 1), 0, "the filter fell into the box");
+
+        wrap_in_container(&mut effects, &mut next, 1..2, container()).expect("wrapped");
+        assert_eq!(
+            shape(&effects),
+            [
+                (0, EffectKind::Chain),
+                (0, EffectKind::Chain),
+                (1, EffectKind::Filter),
+            ],
+            "wrapping the row after an empty box changed what that box holds"
+        );
+        assert_eq!(span_problem(&effects), None);
     }
 
     /// Wrapping does not move anything. It adds one row and gives it a reach.
