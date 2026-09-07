@@ -13,6 +13,28 @@ use mooloop_core::{
 };
 use mooloop_dsp::{Event, EventList, TimedEvent};
 
+/// The stretch of a process block one scheduling pass may write into.
+///
+/// A block is one window until a song loop cuts it in two, and the halves
+/// carry different musical ranges into different frames of the same event
+/// list, so the frame arithmetic cannot be left implicit at `0..frames`.
+#[derive(Debug, Clone, Copy)]
+struct FrameWindow {
+    offset: usize,
+    frames: usize,
+}
+
+impl FrameWindow {
+    /// The block-absolute frame an event `tick_delta` ticks into this window
+    /// lands on, clamped so a rounding error at either edge cannot escape the
+    /// window it belongs to.
+    fn offset_for(self, tick_delta: f64, ticks_per_sample: f64) -> u32 {
+        let frame = (tick_delta / ticks_per_sample).round() as i64;
+        let last = self.offset as i64 + self.frames as i64 - 1;
+        frame.saturating_add(self.offset as i64).clamp(self.offset as i64, last) as u32
+    }
+}
+
 pub struct Sequencer {
     patterns: Vec<Pattern>,
     active_patterns: usize,
@@ -457,10 +479,18 @@ impl Sequencer {
 
     /// Schedule note starts and ends in `[start_tick, end_tick)`. Equal-time
     /// events are ordered NoteOff before NoteOn by `EventList::push_ordered`.
+    ///
+    /// `frame_offset` and `frames` describe the stretch of the process block
+    /// this musical range occupies, which is the whole block except when a
+    /// song loop cuts it: a block spanning the loop point is scheduled twice,
+    /// each half against its own ticks and its own frames. Offsets are
+    /// produced absolute within the block either way, since that is what the
+    /// event list holds.
     pub fn schedule(
         &self,
         start_tick: f64,
         end_tick: f64,
+        frame_offset: usize,
         frames: usize,
         ticks_per_sample: f64,
         events: &mut [Box<EventList>],
@@ -474,14 +504,24 @@ impl Sequencer {
         {
             return;
         }
+        let window = FrameWindow {
+            offset: frame_offset,
+            frames,
+        };
         match self.playback_mode {
             PlaybackMode::Pattern => {
-                self.schedule_pattern(start_tick, end_tick, frames, ticks_per_sample, events)
+                self.schedule_pattern(start_tick, end_tick, window, ticks_per_sample, events)
             }
             PlaybackMode::Song => {
-                self.schedule_song(start_tick, end_tick, frames, ticks_per_sample, events)
+                self.schedule_song(start_tick, end_tick, window, ticks_per_sample, events)
             }
         }
+    }
+
+    /// Which playback mode is installed. The render layer asks because a song
+    /// loop is an arrangement feature and must not fold a pattern's own.
+    pub fn playback_mode(&self) -> PlaybackMode {
+        self.playback_mode
     }
 
     /// Schedule a finite pass without wrapping at the pattern/song boundary.
@@ -640,7 +680,7 @@ impl Sequencer {
         &self,
         start_tick: f64,
         end_tick: f64,
-        frames: usize,
+        window: FrameWindow,
         ticks_per_sample: f64,
         events: &mut [Box<EventList>],
     ) {
@@ -671,7 +711,7 @@ impl Sequencer {
                     0,
                     start_tick,
                     end_tick,
-                    frames,
+                    window,
                     ticks_per_sample,
                     event_list,
                 );
@@ -684,7 +724,7 @@ impl Sequencer {
                     0,
                     start_tick,
                     end_tick,
-                    frames,
+                    window,
                     ticks_per_sample,
                     event_list,
                 );
@@ -696,7 +736,7 @@ impl Sequencer {
         &self,
         start_tick: f64,
         end_tick: f64,
-        frames: usize,
+        window: FrameWindow,
         ticks_per_sample: f64,
         events: &mut [Box<EventList>],
     ) {
@@ -737,7 +777,7 @@ impl Sequencer {
                         instance_offset,
                         start_tick,
                         end_tick,
-                        frames,
+                        window,
                         ticks_per_sample,
                         event_list,
                     );
@@ -753,7 +793,7 @@ impl Sequencer {
                         instance_offset,
                         start_tick,
                         end_tick,
-                        frames,
+                        window,
                         ticks_per_sample,
                         event_list,
                     );
@@ -772,7 +812,7 @@ impl Sequencer {
         instance_offset: u64,
         start_tick: f64,
         end_tick: f64,
-        frames: usize,
+        window: FrameWindow,
         ticks_per_sample: f64,
         event_list: &mut EventList,
     ) {
@@ -784,8 +824,7 @@ impl Sequencer {
 
         while absolute_tick < end_tick {
             if absolute_tick >= start_tick {
-                let offset = ((absolute_tick - start_tick) / ticks_per_sample).round() as i64;
-                let offset = offset.clamp(0, frames as i64 - 1) as u32;
+                let offset = window.offset_for(absolute_tick - start_tick, ticks_per_sample);
                 let instance = (cycle as u64)
                     .wrapping_mul(instance_stride)
                     .wrapping_add(instance_offset);
@@ -845,7 +884,7 @@ mod tests {
         let ticks_per_sample = ticks_per_sample(120.0, 48_000, Ppq::DEFAULT);
         let frames = ((end_tick - start_tick) / ticks_per_sample).ceil() as usize;
         let mut events = [Box::new(EventList::empty())];
-        sequencer.schedule(start_tick, end_tick, frames, ticks_per_sample, &mut events);
+        sequencer.schedule(start_tick, end_tick, 0, frames, ticks_per_sample, &mut events);
         events[0].iter().copied().collect()
     }
 

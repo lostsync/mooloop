@@ -6,7 +6,7 @@ use crate::structure::{rescope_lanes, ChannelEdit};
 use crate::{
     default_buses, BusSetup, Channel, DeviceKind, Ds01Params, DrumMode, DrumSynthParams,
     EffectTarget,
-    KickCharacter, AutomationLane, ModRack, MAX_CHANNELS, MonoSynthParams, MlM1Params, MlP8Params, NoteEvent, NoteId,
+    KickCharacter, AutomationLane, LoopRange, ModRack, MAX_CHANNELS, MonoSynthParams, MlM1Params, MlP8Params, NoteEvent, NoteId,
     PatternPlacement,
     PlaybackMode, PolySynthParams,
     SampleCommit, SamplerParams, SliceMap, SnareCharacter, DEFAULT_STEPS,
@@ -706,6 +706,11 @@ pub struct Project {
     pub buses: Vec<BusSetup>,
     pub pattern_lengths: Vec<u16>,
     pub playlist: Vec<PatternPlacement>,
+    /// The repeating section of the arrangement. Defaulted on load, so a song
+    /// written before looping existed opens with the loop off and its points
+    /// at the origin rather than failing to decode.
+    #[serde(default)]
+    pub loop_range: LoopRange,
 }
 
 impl Default for Project {
@@ -722,6 +727,7 @@ impl Default for Project {
             buses: default_buses(),
             pattern_lengths: vec![DEFAULT_STEPS],
             playlist: Vec::new(),
+            loop_range: LoopRange::default(),
         }
     }
 }

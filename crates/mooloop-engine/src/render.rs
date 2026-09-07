@@ -8,7 +8,7 @@ use mooloop_core::{
     audio_tap_index, compile_bus_graph, AutomationLane, AuxInParams, ChannelSource,
     CompiledAudioGraph, CompiledBusGraph, DeviceKind, OutletDescriptor, PublishesOutlets,
     Ds01Params, DrumSynthParams, EffectTarget, EngineCommand, GeneratorParams,
-    ModDestinationDescriptor,
+    LoopRange, ModDestinationDescriptor, PlaybackMode,
     ModRack, MonoSynthParams, MlM1Params, MlP8Params, ParamAddr, ParamOwner, PolySynthParams,
     Project,
     SamplerParams, SliceMap,
@@ -1996,6 +1996,20 @@ fn inject_choke_events(choke_groups: &[u8], events: &mut [Box<EventList>]) {
     }
 }
 
+/// Release every voice on every live channel at `offset`.
+///
+/// Sorted ahead of any note-on at the same offset by `push_ordered`, so the
+/// notes a loop pass or a seek lands on start after the previous ones have
+/// been let go rather than instead of them.
+fn release_all_voices(offset: u32, channels: usize, events: &mut [Box<EventList>]) {
+    for event_list in events.iter_mut().take(channels) {
+        event_list.push_ordered(TimedEvent {
+            offset,
+            event: Event::Choke,
+        });
+    }
+}
+
 /// 4/4 throughout, matching the sequencer's grid.
 const BEATS_PER_BAR: f32 = 4.0;
 
@@ -2117,6 +2131,20 @@ pub(crate) struct RenderState {
     /// straight into one would be thrown away before anything read it. A
     /// fixed array, so filling it allocates nothing.
     auditions: [Option<Audition>; MAX_AUDITIONS_PER_BLOCK],
+    /// The section of the arrangement the transport repeats.
+    ///
+    /// Held unclamped, as the project stores it, and resolved against the
+    /// song's own length once per block: the length is derived from the clips
+    /// on the playlist and so changes under the loop without the loop being
+    /// edited at all.
+    loop_range: LoopRange,
+    /// Whether the transport moved discontinuously since the last block.
+    ///
+    /// Set by a seek and consumed by the next block, for the same reason
+    /// `auditions` is: the command drain runs before the event lists are
+    /// cleared, so the release this owes every sounding voice cannot be
+    /// pushed at the moment the seek arrives.
+    seeked: bool,
     /// How many channel-blocks have been skipped since this state was built.
     ///
     /// One `u64` for the whole engine and one add per skipped strip. It is
@@ -2186,6 +2214,8 @@ impl RenderState {
             playhead_meters: PlayheadMeters::new(),
             modulator_meters: ModulatorMeters::new(),
             auditions: [None; MAX_AUDITIONS_PER_BLOCK],
+            loop_range: LoopRange::default(),
+            seeked: false,
             preview: None,
             preview_retired: Vec::new(),
             preview_gain: Arc::new(AtomicU32::new(mooloop_core::gain::db_to_linear(mooloop_core::gain::REFERENCE_PEAK_DBFS).to_bits())),
@@ -2406,6 +2436,7 @@ impl RenderState {
         self.grow_channels(project.channels.len());
         self.transport.stop();
         self.transport.set_tempo(project.bpm.into());
+        self.loop_range = project.loop_range;
         self.sequencer.load_project(project);
         for (index, strip) in self.strips.iter_mut().enumerate() {
             if let Some(channel) = project.channels.get(index) {
@@ -2972,6 +3003,11 @@ impl RenderState {
                 self.sequencer.add_pattern();
             }
             EngineCommand::SetPlaybackMode(mode) => self.sequencer.set_playback_mode(mode),
+            EngineCommand::Seek { tick } => {
+                self.transport.seek(tick);
+                self.seeked = true;
+            }
+            EngineCommand::SetLoopRange(range) => self.loop_range = range,
             EngineCommand::SetPatternLength {
                 pattern,
                 length_steps,
@@ -3477,20 +3513,39 @@ impl RenderState {
         let skip_idle = self.skip_idle;
         let ticks_per_sample = self.transport.ticks_per_sample();
         let position_frames = self.transport.frames_played();
-        let (start_tick, end_tick) = self.transport.advance(frames);
+        // A song loop belongs to the realtime path only. An offline render
+        // walks the arrangement once from the top -- `looping` is already the
+        // flag that says so -- and a loop is a way of listening to a section
+        // rather than a property of the song, so an export must not take one.
+        // Pattern mode declines it for a different reason: it folds into the
+        // pattern on screen already, and a second fold over the top of that
+        // would be a loop inside a loop.
+        let loop_range = (looping && self.sequencer.playback_mode() == PlaybackMode::Song)
+            .then(|| self.loop_range.active(self.sequencer.song_length_ticks()))
+            .flatten()
+            .map(|(start, end)| (f64::from(start), f64::from(end)));
+        let (spans, span_count) = self.transport.advance_looped(frames, loop_range);
+        let start_tick = spans[0].start_tick;
+        let end_tick = spans[span_count - 1].end_tick;
+        let seeked = std::mem::take(&mut self.seeked);
 
         for events in &mut self.events {
             events.clear();
         }
         if self.transport.playing {
             if looping {
-                self.sequencer.schedule(
-                    start_tick,
-                    end_tick,
-                    frames,
-                    ticks_per_sample,
-                    &mut self.events,
-                );
+                // One pass per stretch of musical time in the block. Without
+                // a loop that is the single stretch this has always been.
+                for span in &spans[..span_count] {
+                    self.sequencer.schedule(
+                        span.start_tick,
+                        span.end_tick,
+                        span.frame,
+                        span.frames,
+                        ticks_per_sample,
+                        &mut self.events,
+                    );
+                }
             } else {
                 self.sequencer.schedule_once(
                     start_tick,
@@ -3515,6 +3570,22 @@ impl RenderState {
                 &choke_groups[..self.live_channels()],
                 &mut self.events,
             );
+        }
+        // Everything sounding at a discontinuity has to be let go of. The
+        // note-off that would have ended it sits at a position the transport
+        // is no longer travelling towards -- past the loop end, or before the
+        // tick that was seeked to -- so without this a pad held across a loop
+        // point would be joined by another one every pass, forever. A choke
+        // rather than a hard mute: this is a release, and it should sound
+        // like the end of a note rather than like the audio stopping.
+        //
+        // Outside the `playing` arm because a seek while stopped still owes
+        // the release, for auditioned notes if nothing else.
+        for span in spans[..span_count].iter().filter(|span| span.jumped) {
+            release_all_voices(span.frame as u32, self.live_channels(), &mut self.events);
+        }
+        if seeked {
+            release_all_voices(0, self.live_channels(), &mut self.events);
         }
         self.dispatch_auditions();
 
@@ -4186,6 +4257,93 @@ mod tests {
         assert!(
             render.strips[0].sampler.voice_positions()[0].is_nan(),
             "stopping the transport must still release what is sounding"
+        );
+    }
+
+    /// The acceptance case for the song loop: a two-bar arrangement with a
+    /// note in its first bar, looped over that bar, plays the note every bar
+    /// instead of every two, and never leaves the section.
+    ///
+    /// Asserted on scheduled events rather than on the transport, because the
+    /// transport folding correctly and the sequencer being handed the folded
+    /// span are two different things and only the second one is audible.
+    #[test]
+    fn a_song_loop_replays_its_section_and_stays_inside_it() {
+        use mooloop_core::{PatternPlacement, TICKS_PER_BAR, TICKS_PER_STEP};
+
+        let mut project = Project::default();
+        // Two one-bar patterns. The second is empty and exists to make the
+        // song two bars long, so that a loop over the first bar has something
+        // to be shorter than.
+        project.pattern_lengths.push(DEFAULT_STEPS);
+        project.channels[0].notes.push(Vec::new());
+        project.channels[0].automation.push(Vec::new());
+        project.channels[0].notes[0].push(NoteEvent::new(1, 0, TICKS_PER_STEP, 60, 100));
+        project.playlist = vec![
+            PatternPlacement::new(0, 0),
+            PatternPlacement::new(1, TICKS_PER_BAR),
+        ];
+        project.playback_mode = PlaybackMode::Song;
+
+        let slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>> = Arc::new(
+            (0..MAX_CHANNELS)
+                .map(|_| Arc::new(ArcSwapOption::empty()))
+                .collect(),
+        );
+        let slice_slots: Arc<Vec<Arc<ArcSwapOption<SliceMap>>>> = Arc::new(
+            (0..MAX_CHANNELS)
+                .map(|_| Arc::new(ArcSwapOption::empty()))
+                .collect(),
+        );
+
+        // Two bars of elapsed time, in blocks big enough to keep the count
+        // down and to make a block that straddles the loop point likely.
+        let two_bars = |render: &mut RenderState| {
+            let mut hits = Vec::new();
+            for _ in 0..48 {
+                let before = render.transport.position_ticks;
+                render.process_block(4_096);
+                if render.events[0]
+                    .iter()
+                    .any(|event| matches!(event.event, Event::NoteOn { .. }))
+                {
+                    hits.push(before);
+                }
+            }
+            hits
+        };
+
+        let mut render = RenderState::new(48_000, slots.clone(), slice_slots.clone());
+        render.load_project(&project);
+        render.transport.play();
+        let straight = two_bars(&mut render);
+        assert_eq!(
+            straight.len(),
+            2,
+            "an unlooped two-bar song should sound its one note once a bar \
+             pair, not {straight:?}"
+        );
+
+        project.loop_range = LoopRange {
+            start_tick: 0,
+            end_tick: TICKS_PER_BAR,
+            enabled: true,
+        };
+        let mut render = RenderState::new(48_000, slots, slice_slots);
+        render.load_project(&project);
+        render.transport.play();
+        let looped = two_bars(&mut render);
+
+        assert_eq!(
+            looped.len(),
+            3,
+            "a one-bar loop over the same span should sound the note once a \
+             bar rather than once every two, not {looped:?}"
+        );
+        assert!(
+            render.transport.position_ticks < f64::from(TICKS_PER_BAR),
+            "the transport left the loop: {}",
+            render.transport.position_ticks
         );
     }
 

@@ -11,7 +11,8 @@
 
 use crate::{
     AutomationPoint, BufferEvent, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
-    MlP8Route, ModRoute, ModSourceId, ModSourceRef, ModulatorParams, MonoSynthParams, MlM1Params,
+    LoopRange, MlP8Route, ModRoute, ModSourceId, ModSourceRef, ModulatorParams, MonoSynthParams,
+    MlM1Params,
     NoteEvent,
     NoteId,
     ParamAddr, PlaybackMode, PointId, PolySynthParams, SamplerParams,
@@ -53,6 +54,18 @@ pub enum EngineCommand {
     AddPattern,
     /// Switch transport scheduling between the selected pattern and playlist.
     SetPlaybackMode(PlaybackMode),
+    /// Move the transport to an absolute PPQ tick without starting or
+    /// stopping it.
+    ///
+    /// Fractional because the transport's own clock is: a seek that rounded
+    /// to whole ticks would quantise the position the playhead was dragged
+    /// to, and dragging a playhead is the gesture this exists for. Every
+    /// sounding voice is released at the jump, since the note-offs the old
+    /// position was heading for are no longer on the way.
+    Seek { tick: f64 },
+    /// Install the section of the arrangement the transport repeats, or a
+    /// disabled range to play straight through.
+    SetLoopRange(LoopRange),
     /// Set one pattern's logical length. Storage is pre-allocated, so this is
     /// a bounded mutation on the realtime thread.
     SetPatternLength { pattern: u8, length_steps: u16 },

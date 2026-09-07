@@ -149,8 +149,8 @@ pub use pattern::{
     MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERN_STEPS, TICKS_PER_64TH, TICKS_PER_STEP,
 };
 pub use playlist::{
-    PatternPlacement, PlaybackMode, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS,
-    STEPS_PER_BAR, TICKS_PER_BAR,
+    LoopRange, PatternPlacement, PlaybackMode, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,
+    MAX_PLAYLIST_TICKS, STEPS_PER_BAR, TICKS_PER_BAR,
 };
 pub use project::{
     AuxInState, ChannelPreset, ChannelSetup, ChannelSource, Ds01State, DrumSynthState, Kit,

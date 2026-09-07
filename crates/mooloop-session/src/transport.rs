@@ -7,7 +7,7 @@
 
 use crate::session::Session;
 use mooloop_core::{
-    EngineCommand, PatternPlacement, PlaybackMode, DEFAULT_STEPS, DELAY_PARAM_TIME_MS,
+    EngineCommand, LoopRange, PatternPlacement, PlaybackMode, DEFAULT_STEPS, DELAY_PARAM_TIME_MS,
     MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS,
     MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_STEP,
 };
@@ -138,6 +138,60 @@ impl Session {
         Some(PatternLength { pattern, length })
     }
 
+    /// Moves the transport to `tick` along the arrangement.
+    ///
+    /// Clamped to the editable canvas rather than refused: this is the
+    /// playhead being dragged, and a drag that runs off the end of the
+    /// timeline means the end of the timeline. Not a document edit -- where
+    /// the transport is playing from is not something a song should have to
+    /// be saved to keep.
+    pub fn seek_playlist(&mut self, tick: i32) -> EngineCommand {
+        let tick = tick.clamp(0, MAX_PLAYLIST_TICKS as i32 - 1);
+        EngineCommand::Seek { tick: tick.into() }
+    }
+
+    /// Sets the section the transport repeats, enabling the loop.
+    ///
+    /// `None` clears the loop and leaves the points where they were, so the
+    /// toggle has something to switch back on. Ticks arrive snapped by the
+    /// editor, and a drag with no width in it is a click rather than a loop.
+    pub fn set_loop_range(&mut self, from_tick: i32, to_tick: i32) -> Option<EngineCommand> {
+        let range = LoopRange::from_drag(from_tick.max(0) as u32, to_tick.max(0) as u32)?;
+        if self.loop_range == range {
+            return None;
+        }
+        self.loop_range = range;
+        self.mark_dirty();
+        Some(EngineCommand::SetLoopRange(range))
+    }
+
+    /// Turns looping on or off without disturbing the points.
+    ///
+    /// Refuses to enable a loop that has no section in it: the button would
+    /// otherwise light up and change nothing, which reads as a broken button
+    /// rather than as an empty loop.
+    pub fn set_loop_enabled(&mut self, enabled: bool) -> Option<EngineCommand> {
+        if self.loop_range.enabled == enabled {
+            return None;
+        }
+        if enabled && self.loop_range.end_tick <= self.loop_range.start_tick {
+            return None;
+        }
+        self.loop_range.enabled = enabled;
+        self.mark_dirty();
+        Some(EngineCommand::SetLoopRange(self.loop_range))
+    }
+
+    /// Removes the loop entirely, points and all.
+    pub fn clear_loop_range(&mut self) -> Option<EngineCommand> {
+        if self.loop_range == LoopRange::default() {
+            return None;
+        }
+        self.loop_range = LoopRange::default();
+        self.mark_dirty();
+        Some(EngineCommand::SetLoopRange(self.loop_range))
+    }
+
     /// Places `pattern` on the playlist at `start_tick`.
     ///
     /// Refuses silently when the tick is past the end of the arrangement, the
@@ -192,6 +246,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mooloop_core::TICKS_PER_BAR;
 
     /// Shortening a pattern must not leave the roll highlighting notes it has
     /// stopped drawing.
@@ -292,5 +347,90 @@ mod tests {
         assert_eq!(session.select_pattern(0), Some(0));
         assert_eq!(session.select_pattern(2), None);
         assert_eq!(session.select_pattern(-1), None);
+    }
+
+    /// A loop is a section, so a drag with no width in it is not one, and the
+    /// points survive being switched off so the toggle has something to
+    /// switch back on.
+    #[test]
+    fn a_loop_needs_a_section_and_keeps_its_points_when_off() {
+        let mut session = Session::default();
+        assert!(session.set_loop_range(0, 0).is_none(), "a click is not a loop");
+        assert!(
+            !session.loop_range.enabled,
+            "a refused drag must not enable an empty loop"
+        );
+        assert!(session.set_loop_enabled(true).is_none(), "nothing to enable yet");
+
+        // Dragged right to left, which is the same section.
+        let command = session.set_loop_range(4 * TICKS_PER_BAR as i32, TICKS_PER_BAR as i32);
+        assert!(matches!(
+            command,
+            Some(EngineCommand::SetLoopRange(range))
+                if range.start_tick == TICKS_PER_BAR
+                    && range.end_tick == 4 * TICKS_PER_BAR
+                    && range.enabled
+        ));
+        assert!(session.dirty);
+        assert!(session.set_loop_range(TICKS_PER_BAR as i32, 4 * TICKS_PER_BAR as i32).is_none());
+
+        assert!(session.set_loop_enabled(false).is_some());
+        assert_eq!(
+            (session.loop_range.start_tick, session.loop_range.end_tick),
+            (TICKS_PER_BAR, 4 * TICKS_PER_BAR),
+            "switching a loop off threw its points away"
+        );
+        assert!(session.set_loop_enabled(false).is_none());
+        assert!(session.set_loop_enabled(true).is_some());
+
+        assert!(session.clear_loop_range().is_some());
+        assert_eq!(session.loop_range, LoopRange::default());
+        assert!(session.clear_loop_range().is_none());
+    }
+
+    /// A loop past the end of the song is inert rather than a position the
+    /// transport can be asked for, and shortening a song under a loop stops
+    /// it without editing it.
+    #[test]
+    fn a_loop_is_clamped_to_the_song_it_sits_in() {
+        let range = LoopRange {
+            start_tick: 2 * TICKS_PER_BAR,
+            end_tick: 6 * TICKS_PER_BAR,
+            enabled: true,
+        };
+        assert_eq!(
+            range.active(8 * TICKS_PER_BAR),
+            Some((2 * TICKS_PER_BAR, 6 * TICKS_PER_BAR))
+        );
+        assert_eq!(
+            range.active(4 * TICKS_PER_BAR),
+            Some((2 * TICKS_PER_BAR, 4 * TICKS_PER_BAR)),
+            "a loop overhanging the song end plays the part of it that exists"
+        );
+        assert_eq!(
+            range.active(TICKS_PER_BAR),
+            None,
+            "a loop entirely past the song end is inert"
+        );
+        assert_eq!(
+            LoopRange { enabled: false, ..range }.active(8 * TICKS_PER_BAR),
+            None
+        );
+    }
+
+    /// The playhead can be dragged past the end of the timeline; the timeline
+    /// end is where it lands.
+    #[test]
+    fn a_seek_lands_inside_the_canvas() {
+        let mut session = Session::default();
+        assert!(matches!(
+            session.seek_playlist(-10),
+            EngineCommand::Seek { tick } if tick == 0.0
+        ));
+        assert!(matches!(
+            session.seek_playlist(i32::MAX),
+            EngineCommand::Seek { tick } if tick == f64::from(MAX_PLAYLIST_TICKS - 1)
+        ));
+        assert!(!session.dirty, "moving the playhead is not a document edit");
     }
 }

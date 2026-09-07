@@ -18,7 +18,7 @@ use mooloop_core::{
     DeviceId,
     AuxInParams, AuxInState, ChannelSource, DeviceKind, DrumSynthParams, DrumSynthState, Ds01Params, Ds01State,
     EffectParams, EffectSlotState, EffectTarget, MlM1Params, MlM1State, MlP8Params, MlP8State,
-    ModDestinationDescriptor, ModEnvelopeParams, ModPolarity, ModRoute, ModulatorParams,
+    LoopRange, ModDestinationDescriptor, ModEnvelopeParams, ModPolarity, ModRoute, ModulatorParams,
     MonoSynthParams, MonoSynthState, NoteId, ParamAddr,
     ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
     PolySynthState, Project, ProjectChannel, SampleReference, SamplerParams, SamplerState,
@@ -138,6 +138,10 @@ pub struct Session {
     pub pattern_lengths: Vec<usize>,
     pub pattern_names: Vec<String>,
     pub playlist: Vec<PatternPlacement>,
+    /// The section of the arrangement the transport repeats. Document state,
+    /// not a session gesture: a loop is set around the part being worked on
+    /// and is worth reopening the song to.
+    pub loop_range: LoopRange,
     pub song_mode: bool,
     pub current_pattern: usize,
     pub selected: usize,
@@ -216,6 +220,7 @@ impl Default for Session {
             pattern_lengths: vec![DEFAULT_STEPS as usize],
             pattern_names: vec![String::new()],
             playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
+            loop_range: LoopRange::default(),
             song_mode: false,
             current_pattern: 0,
             selected: 0,
@@ -507,6 +512,7 @@ impl Session {
                 .map(|length| *length as u16)
                 .collect(),
             playlist: self.playlist.clone(),
+            loop_range: self.loop_range,
         }
     }
 
@@ -1176,6 +1182,7 @@ impl Session {
             .collect();
         self.pattern_names = vec![String::new(); self.pattern_lengths.len()];
         self.playlist = project.playlist.clone();
+        self.loop_range = project.loop_range;
         self.song_mode = project.playback_mode == PlaybackMode::Song;
         self.current_pattern = project.current_pattern as usize;
         self.selected = project.selected_channel as usize;
