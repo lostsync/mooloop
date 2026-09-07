@@ -328,6 +328,37 @@ container's surface, which is what a device inside a device looks like.
 Nesting steps up the surface ramp rather than through a colour per level,
 because the ramp is already the depth vocabulary and does not run out.
 
+### And then a third time, which is the one that is right
+
+The second version dissolved the contained devices' cards and drew the
+container's frame around them, which was closer and still not it: the
+container's *output rail* was still standing against its own face, in the
+middle of the run, so the box read as a surround drawn around the devices
+rather than as a device holding them.
+
+Adam settled it with a mock-up. The container's chrome is one object: its
+input rail at the head, its output rail **past everything it holds**, and the
+recessed space between them. Both rails take the box's colour rather than a
+device's, the fill is darker than a device rather than the same, and the top
+and bottom borders hug the faces instead of standing clear.
+
+What that needs, and it is the one thing the flat list could not answer from a
+single row: **which boxes end here.** `depth` and `children` say what a row is
+inside, not what closes at it, and a repeater item cannot walk the model. So
+`EffectSlotRow` gains `closing: [int]` -- the rack indices of the containers
+whose run ends at this row, innermost first, computed by
+`containers_closing_at` in `mooloop-ui`. Each entry draws one
+`DeviceOutputRail` after the row, wired to the *container's* index rather than
+the row's, because it is that device's control standing at the far end of its
+own run.
+
+`DeviceFrame::tail-rail` is what lets a container not draw one against its own
+face, and it shortens `content-width` by a rail so the face keeps the space.
+The drag had to give something up for it too: `EffectDeviceShell` used to
+work out the pitch of the row it was grabbing as "face plus two rails plus a
+join", and no row is reliably that any more, so the *cell* publishes its own
+width when it sees the grab land on it.
+
 ### An emptied box was a sealed box
 
 Dragging the last device out of a container left something that could not be

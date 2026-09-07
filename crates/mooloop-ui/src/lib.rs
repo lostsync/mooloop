@@ -825,11 +825,42 @@ fn effect_presets_of_kind(
         .filter(move |preset| preset.kind == PresetKind::Effect(kind))
 }
 
+/// The containers whose run ends at `slot`, innermost first.
+///
+/// The rack draws each one's output rail here, past everything it holds. An
+/// empty container closes on its own row: its span covers nothing, so there
+/// is no later row for it to end at.
+///
+/// Innermost first is the greatest index first, because containers nest: the
+/// rails then read outwards from the device, which is the order the boxes
+/// close in.
+fn containers_closing_at(effects: &[EffectSlotState], slot: usize) -> Vec<i32> {
+    (0..=slot)
+        .rev()
+        .filter(|container| {
+            matches!(
+                effects.get(*container).map(|effect| effect.params),
+                Some(mooloop_core::EffectParams::Chain(_))
+            )
+        })
+        .filter(|container| {
+            let span = mooloop_core::span_of(effects, *container);
+            if span.is_empty() {
+                *container == slot
+            } else {
+                span.end == slot + 1
+            }
+        })
+        .map(|container| container as i32)
+        .collect()
+}
+
 fn effect_slot_row(
     slot: &EffectSlotState,
     presets: &[PresetSummary],
     preset_name: Option<&str>,
     depth: i32,
+    closing: Vec<i32>,
     selected: bool,
 ) -> EffectSlotRow {
     let kind = slot.kind();
@@ -914,6 +945,7 @@ fn effect_slot_row(
             _ => 0,
         },
         depth,
+        closing: ModelRc::from(Rc::new(VecModel::from(closing))),
         selected,
     }
 }
@@ -2247,6 +2279,7 @@ impl UiState {
                     self.session
                         .effect_preset_name(self.session.effect_target, effect.id),
                     depth,
+                    containers_closing_at(chain, slot),
                     self.session.selected_device_slot() == Some(slot),
                 ),
             );
@@ -2399,6 +2432,7 @@ impl UiState {
                                     effect.id,
                                 ),
                                 mooloop_core::depth_at(&state.effects, slot) as i32,
+                                containers_closing_at(&state.effects, slot),
                                 selected == Some(slot),
                             );
                             let descriptors = effect.kind().descriptors();
@@ -2444,6 +2478,7 @@ impl UiState {
                                     &self.session.effect_presets,
                                     self.session.effect_preset_name(target, effect.id),
                                     mooloop_core::depth_at(effects, slot) as i32,
+                                    containers_closing_at(effects, slot),
                                     selected == Some(slot),
                                 )
                             })

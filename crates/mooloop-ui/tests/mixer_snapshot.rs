@@ -167,6 +167,7 @@ fn render_mixer_pane_with_a_bus_chain() {
             gain_reduction_db: 0.0,
             children: 0,
             depth: 0,
+            closing: Vec::<i32>::new().as_slice().into(),
             selected: false,
         },
         EffectSlotRow {
@@ -202,6 +203,7 @@ fn render_mixer_pane_with_a_bus_chain() {
             gain_reduction_db: -6.0,
             children: 0,
             depth: 0,
+            closing: Vec::<i32>::new().as_slice().into(),
             selected: false,
         },
     ]))));

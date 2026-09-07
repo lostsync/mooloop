@@ -110,6 +110,7 @@ fn effect_slot(kind: i32) -> EffectSlotRow {
         gain_reduction_db: 0.0,
         children: 0,
         depth: 0,
+        closing: Vec::<i32>::new().as_slice().into(),
         selected: false,
     }
 }

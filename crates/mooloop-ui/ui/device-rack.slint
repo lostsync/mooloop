@@ -19,11 +19,13 @@ export global DeviceRackMetrics {
     // Vertical room around a face, and the height of the strip that holds
     // one. A container's box is drawn in this padding: it has to enclose the
     // faces rather than sit inside them, and four levels of nesting step
-    // inward 5px each. `enclosure-reach` is short of the padding on purpose,
+    // inward 2px each. `enclosure-reach` is short of the padding on purpose,
     // so the outermost box has a margin instead of running flush into the
-    // rack panel's own edges and reading as a clip.
-    out property <length> rack-padding: 20px;
-    out property <length> enclosure-reach: 14px;
+    // rack panel's own edges and reading as a clip. It is deliberately tight:
+    // a box that stands well clear of the faces reads as a region they happen
+    // to be in, and one that hugs them reads as the thing they are inside.
+    out property <length> rack-padding: 14px;
+    out property <length> enclosure-reach: 8px;
     out property <length> rack-height: root.face-height + root.rack-padding * 2;
 }
 
@@ -99,17 +101,16 @@ export component ContainerEnclosure inherits Rectangle {
     in property <int> level;          // 1..4, outermost first
     in property <bool> head;          // this row is the container itself
     in property <bool> cap-right;     // the run ends here
-    property <length> inset: (root.level - 1) * 5px;
+    property <length> inset: (root.level - 1) * 2px;
 
     y: -DeviceRackMetrics.enclosure-reach + root.inset;
     height: DeviceRackMetrics.face-height
         + DeviceRackMetrics.enclosure-reach * 2 - root.inset * 2;
-    // Nesting steps up the surface ramp rather than through a colour per
-    // level: the ramp is already the app's depth vocabulary, and it does not
-    // run out the way a palette of container colours would.
-    background: root.level == 1 ? Theme.surface
-        : root.level == 2 ? Theme.surface-raised
-        : Theme.surface-active;
+    // Darker than a device, which is the whole cue: the box is a recess and
+    // the faces sit in it. One colour at every level rather than a ramp --
+    // nesting reads from the stacked border lines, which do not run out the
+    // way a palette of container colours would.
+    background: Theme.background;
     property <color> line: Theme.text-faint;
     border-top-left-radius: root.head ? Theme.radius-md : 0;
     border-bottom-left-radius: root.head ? Theme.radius-md : 0;
@@ -185,6 +186,70 @@ component EffectTypeMenu inherits VerticalLayout {
     EffectTypeRow { text: "Chain"; tooltip: "Insert a container to hold and blend a run of devices"; selected => { root.kind-selected(12); } }
 }
 
+// A device's output rail: remove, unwrap, and the outgoing meter and trim.
+//
+// A component rather than markup inside `DeviceFrame` because a *container's*
+// output rail does not sit against its own face. It sits past everything the
+// container holds, so that the box's chrome is the thing its devices are
+// inside of rather than a surround drawn around them. `DeviceFrame` draws its
+// own unless `tail-rail` is off, and the rack draws the detached ones at the
+// end of the run.
+export component DeviceOutputRail inherits Rectangle {
+    in property <bool> removal-enabled: false;
+    in property <bool> unwrap-enabled: false;
+    in property <bool> is-container: false;
+    in property <int> container-children: 0;
+    in property <bool> output-trim-enabled: false;
+    in-out property <float> output-trim: 0;
+    in property <float> output-left-db: -60;
+    in property <float> output-right-db: -60;
+    // A container's chrome is one colour, and it is not the colour of the
+    // devices it holds: the rails at both ends and the space around the run
+    // read as the box, and the faces read as what is in it.
+    in property <bool> container-chrome: false;
+    callback remove-requested();
+    callback unwrap-requested();
+    callback output-trim-changed(float);
+
+    width: DeviceRackMetrics.rail-width;
+    background: root.container-chrome ? Theme.background : Theme.surface-raised;
+    VerticalLayout {
+        padding: 2px;
+        spacing: 3px;
+        IconButton {
+            text: "✕"; size: 24px; enabled: root.removal-enabled;
+            tooltip: root.is-container
+                ? "Remove this container and the " + root.container-children + " devices in it"
+                : "Remove device";
+            clicked => { root.remove-requested(); }
+        }
+        // Only a container has one, and it is what makes "removing a box
+        // removes its contents" safe to have: getting the devices back
+        // out is one click rather than N drags.
+        if root.unwrap-enabled : IconButton {
+            text: "⇱"; size: 24px;
+            tooltip: "Remove the container, keep what is inside it";
+            clicked => { root.unwrap-requested(); }
+        }
+        Rectangle { vertical-stretch: 1; }
+        Text { text: "OUT"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+        ChannelMeter {
+            width: 22px; height: 58px; segments: 12;
+            left-db: root.output-left-db; right-db: root.output-right-db;
+            held-left-db: root.output-left-db; held-right-db: root.output-right-db;
+        }
+        if root.output-trim-enabled : Text { text: "TRIM"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+        if root.output-trim-enabled : TrimKnob {
+            width: 22px;
+            height: 22px;
+            diameter: 22px;
+            label: "Output trim";
+            value <=> root.output-trim;
+            changed(v) => { root.output-trim-changed(v); }
+        }
+    }
+}
+
 export component DeviceFrame inherits Rectangle {
     in property <bool> insertion-enabled: true;
     in property <bool> removal-enabled: false;
@@ -225,7 +290,16 @@ export component DeviceFrame inherits Rectangle {
     in property <float> input-right-db: -60;
     in property <float> output-left-db: -60;
     in property <float> output-right-db: -60;
-    out property <length> content-width: root.width - DeviceRackMetrics.rail-width * 2;
+    // Whether this frame draws its own output rail against its own face. A
+    // container's does not: it is drawn past the last device in the run, so
+    // the box encloses what it holds rather than sitting beside it.
+    in property <bool> tail-rail: true;
+    // The frame's own chrome is the container's rather than a device's: one
+    // colour for both rails and the space around the run, so the box reads as
+    // the thing the faces are inside of.
+    in property <bool> container-chrome: false;
+    out property <length> content-width: root.width
+        - DeviceRackMetrics.rail-width * (root.tail-rail ? 2 : 1);
 
     // --- Containers -------------------------------------------------------
     //
@@ -265,7 +339,7 @@ export component DeviceFrame inherits Rectangle {
         x: 0px;
         width: DeviceRackMetrics.rail-width;
         height: parent.height;
-        background: Theme.surface-raised;
+        background: root.container-chrome ? Theme.background : Theme.surface-raised;
         Rectangle { x: parent.width - 1px; width: 1px; height: 100%; background: Theme.border; }
         VerticalLayout {
             padding: 2px;
@@ -351,46 +425,20 @@ export component DeviceFrame inherits Rectangle {
         }
     }
 
-    Rectangle {
+    if root.tail-rail : DeviceOutputRail {
         x: parent.width - DeviceRackMetrics.rail-width;
-        width: DeviceRackMetrics.rail-width;
         height: parent.height;
-        background: Theme.surface-raised;
-        VerticalLayout {
-            padding: 2px;
-            spacing: 3px;
-            IconButton {
-                text: "✕"; size: 24px; enabled: root.removal-enabled;
-                tooltip: root.is-container
-                    ? "Remove this container and the " + root.container-children + " devices in it"
-                    : "Remove device";
-                clicked => { root.remove-requested(); }
-            }
-            // Only a container has one, and it is what makes "removing a box
-            // removes its contents" safe to have: getting the devices back
-            // out is one click rather than N drags.
-            if root.unwrap-enabled : IconButton {
-                text: "⇱"; size: 24px;
-                tooltip: "Remove the container, keep what is inside it";
-                clicked => { root.unwrap-requested(); }
-            }
-            Rectangle { vertical-stretch: 1; }
-            Text { text: "OUT"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-            ChannelMeter {
-                width: 22px; height: 58px; segments: 12;
-                left-db: root.output-left-db; right-db: root.output-right-db;
-                held-left-db: root.output-left-db; held-right-db: root.output-right-db;
-            }
-            if root.output-trim-enabled : Text { text: "TRIM"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
-            if root.output-trim-enabled : TrimKnob {
-                width: 22px;
-                height: 22px;
-                diameter: 22px;
-                label: "Output trim";
-                value <=> root.output-trim;
-                changed(v) => { root.output-trim-changed(v); }
-            }
-        }
+        removal-enabled: root.removal-enabled;
+        unwrap-enabled: root.unwrap-enabled;
+        is-container: root.is-container;
+        container-children: root.container-children;
+        output-trim-enabled: root.output-trim-enabled;
+        output-trim <=> root.output-trim;
+        output-left-db: root.output-left-db;
+        output-right-db: root.output-right-db;
+        remove-requested => { root.remove-requested(); }
+        unwrap-requested => { root.unwrap-requested(); }
+        output-trim-changed(v) => { root.output-trim-changed(v); }
     }
 
     // Click-to-select on the header, for a device whose face is not an
@@ -408,7 +456,7 @@ export component DeviceFrame inherits Rectangle {
         x: DeviceRackMetrics.rail-width;
         y: 0px;
         z: 90;
-        width: root.width - DeviceRackMetrics.rail-width * 2 - 52px;
+        width: root.content-width - 52px;
         height: DeviceRackMetrics.header-height;
         mouse-cursor: pointer;
         clicked => { root.header-clicked(); }
@@ -417,7 +465,7 @@ export component DeviceFrame inherits Rectangle {
     // Host controls live in the header, exactly where they can be compared
     // across a horizontal chain without stealing working area from a face.
     if root.bypass-enabled : IconButton {
-        x: root.width - DeviceRackMetrics.rail-width - 52px;
+        x: root.width - (root.tail-rail ? DeviceRackMetrics.rail-width : 0px) - 52px;
         // IconButton's size property only sets its layout constraints.  This
         // control is absolutely positioned, so give the Rectangle a real box
         // as well; otherwise its active background fills the remaining face.
@@ -428,7 +476,7 @@ export component DeviceFrame inherits Rectangle {
         clicked => { root.bypass-toggled(); }
     }
     if root.wet-dry-enabled : MiniKnob {
-        x: root.width - DeviceRackMetrics.rail-width - 26px;
+        x: root.width - (root.tail-rail ? DeviceRackMetrics.rail-width : 0px) - 26px;
         y: 3px;
         z: 100;
         width: 22px;
@@ -648,11 +696,11 @@ export component EffectDeviceShell inherits Rectangle {
                 // position before this one has moved at all.
                 RackDrag.grab-x = self.absolute-position.x + self.mouse-x;
                 RackDrag.pointer-x = RackDrag.grab-x;
-                // Face, both rails and the join: the pitch of a whole row,
-                // which is the width of the gap the rows in between open.
-                RackDrag.source-width = root.width
-                    + DeviceRackMetrics.rail-width * 2
-                    + DeviceRackMetrics.join-width;
+                // `source-width` is not set here. A row's pitch is no longer
+                // "face plus two rails plus a join": a container's frame has
+                // one rail, and any row can carry the output rails of the
+                // boxes that end on it. Only the cell knows, and it publishes
+                // its own width when it sees the grab land on it.
                 RackDrag.active = true;
             }
             if event.kind == PointerEventKind.up {

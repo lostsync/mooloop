@@ -36,6 +36,14 @@ slint::slint! {
     export component ReorderHarness inherits Window {
         width: 1700px;
         height: 320px;
+        // The rack's own numbers, so the coordinates below are derived from
+        // the layout rather than from a copy of it that can drift.
+        out property <length> unit-width: DeviceRackMetrics.unit-width;
+        out property <length> half-gap: DeviceRackMetrics.half-gap;
+        out property <length> rail-width: DeviceRackMetrics.rail-width;
+        out property <length> join-width: DeviceRackMetrics.join-width;
+        out property <length> rack-padding: DeviceRackMetrics.rack-padding;
+        out property <length> header-height: DeviceRackMetrics.header-height;
         background: #101010;
         in property <[HarnessRow]> rows;
         callback reordered(int, int);
@@ -106,18 +114,33 @@ slint::slint! {
     }
 }
 
-/// Rack-unit geometry, spelled out so the expectations below are readable
-/// rather than magic. A cell is a face, both rails and the join.
-const UNIT: f32 = 220.0;
-const HALF_GAP: f32 = 4.0;
-const RAIL: f32 = 30.0;
-const JOIN: f32 = 20.0;
-/// The drag handle covers the header, which starts at the top of the face --
-/// itself `rack-padding` below the top of the rack.
-const HEADER_Y: f32 = 20.0 + 14.0;
+/// Rack-unit geometry, read off the harness rather than restated here: this
+/// file is about which row a drop lands on, and it should not also be a
+/// second copy of the rack's measurements that can quietly disagree with the
+/// first one. It did disagree once, when `rack-padding` moved.
+struct Geometry {
+    unit: f32,
+    half_gap: f32,
+    rail: f32,
+    join: f32,
+    header_y: f32,
+}
 
-fn cell_width(units: f32) -> f32 {
-    UNIT * units + HALF_GAP * (units - 1.0) + RAIL * 2.0 + JOIN
+impl Geometry {
+    fn of(ui: &ReorderHarness) -> Self {
+        Self {
+            unit: ui.get_unit_width(),
+            half_gap: ui.get_half_gap(),
+            rail: ui.get_rail_width(),
+            join: ui.get_join_width(),
+            header_y: ui.get_rack_padding() + ui.get_header_height() / 2.0,
+        }
+    }
+
+    /// A row's full pitch: face, both rails and the join.
+    fn cell(&self, units: f32) -> f32 {
+        self.unit * units + self.half_gap * (units - 1.0) + self.rail * 2.0 + self.join
+    }
 }
 
 fn row(units: i32) -> HarnessRow {
@@ -146,8 +169,8 @@ fn harness() -> ReorderHarness {
 
 /// Press on a device header at `from`, travel to `to` the way a real pointer
 /// would, and release there.
-fn drag(window: &slint::Window, from: f32, to: f32) {
-    let at = |x: f32| LogicalPosition::new(x, HEADER_Y);
+fn drag(window: &slint::Window, from: f32, to: f32, header_y: f32) {
+    let at = |x: f32| LogicalPosition::new(x, header_y);
     window.dispatch_event(WindowEvent::PointerMoved { position: at(from) });
     window.dispatch_event(WindowEvent::PointerPressed {
         position: at(from),
@@ -164,18 +187,30 @@ fn drag(window: &slint::Window, from: f32, to: f32) {
     });
 }
 
+/// One test rather than two, and one harness rather than two, on purpose.
+///
+/// `RackDrag` is a Slint global and the testing backend is process-wide, so
+/// two of these running as separate `#[test]`s share state the moment cargo
+/// runs them on different threads -- which it does by default. That is not
+/// hypothetical: as a pair they reported one drag's grab against the other
+/// drag's landing, and the reversed tuple `(1, 2)` for a drop that was
+/// `(2, 1)`. Sequenced here, there is nothing to interleave.
 #[test]
-fn a_drag_lands_on_the_row_it_was_dropped_on_however_wide_the_ones_it_crossed() {
+fn a_drop_lands_on_the_row_it_was_made_on() {
     let ui = harness();
+    let g = Geometry::of(&ui);
     let moves: Rc<RefCell<Vec<(i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
+    let picks: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
     let seen = moves.clone();
+    let chosen = picks.clone();
     ui.on_reordered(move |from, to| seen.borrow_mut().push((from, to)));
+    ui.on_selected(move |index| chosen.borrow_mut().push(index));
 
     // Row 2 sits past the 3U row. Grab its header and drop it on row 1.
-    let row_two_x = cell_width(1.0) + cell_width(3.0);
-    let grab = row_two_x + RAIL + 30.0;
-    let drop_on_row_one = cell_width(1.0) + 300.0;
-    drag(ui.window(), grab, drop_on_row_one);
+    let row_two_x = g.cell(1.0) + g.cell(3.0);
+    let grab = row_two_x + g.rail + 30.0;
+    let drop_on_row_one = g.cell(1.0) + 300.0;
+    drag(ui.window(), grab, drop_on_row_one, g.header_y);
 
     assert_eq!(
         *moves.borrow(),
@@ -186,22 +221,17 @@ fn a_drag_lands_on_the_row_it_was_dropped_on_however_wide_the_ones_it_crossed() 
          row and three pitches wide.",
         grab - drop_on_row_one
     );
-}
-
-#[test]
-fn a_press_that_stays_on_its_own_row_is_a_selection() {
-    let ui = harness();
-    let moves: Rc<RefCell<Vec<(i32, i32)>>> = Rc::new(RefCell::new(Vec::new()));
-    let picks: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
-    let seen = moves.clone();
-    let chosen = picks.clone();
-    ui.on_reordered(move |from, to| seen.borrow_mut().push((from, to)));
-    ui.on_selected(move |index| chosen.borrow_mut().push(index));
+    assert!(
+        picks.borrow().is_empty(),
+        "a drag that moved a device also selected something: {:?}",
+        picks.borrow()
+    );
 
     // A wander of 120px, well past the old half-pitch threshold, but entirely
     // inside the 3U row's own bounds. A row is not a distance.
-    let grab = cell_width(1.0) + RAIL + 20.0;
-    drag(ui.window(), grab, grab + 120.0);
+    moves.borrow_mut().clear();
+    let inside_row_one = g.cell(1.0) + g.rail + 20.0;
+    drag(ui.window(), inside_row_one, inside_row_one + 120.0, g.header_y);
 
     assert!(
         moves.borrow().is_empty(),

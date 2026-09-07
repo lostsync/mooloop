@@ -605,13 +605,16 @@ land on its own when it starts to matter:
   inside** -- an empty container's span covers no index, so its own row is
   the only thing there is to aim at and a drop on it means "into this".
   Dropping on a container that still holds something keeps meaning "before
-  it". **The run is drawn as a box**: the container's own frame -- the same
-  surface, border and corner radius any device has -- is extended across its
-  whole run, and the devices inside draw no frame of their own, so they sit
-  on the container's surface rather than as separate cards under a wash.
-  Nesting steps up the surface ramp one level at a time. An empty container
-  caps itself, so an empty box still looks like a box. A container wider than
-  the viewport has no collapsed form yet.
+  it". **The run is drawn as a box, and the box is the container's own
+  chrome**: its input rail stands at the head, its *output* rail stands past
+  the last device it holds, and the recessed space between them is what its
+  devices sit in. Both rails and that space are one colour, darker than a
+  device, so the container reads as the thing the faces are inside of; the
+  devices themselves draw no card. The border hugs the faces rather than
+  standing clear of them, and nesting reads from the stacked border lines
+  rather than a colour per level. An empty container caps itself, so an empty
+  box still looks like a box. A container wider than the viewport has no
+  collapsed form yet.
 - A container's face draws the **parallel split** the box cannot show: the
   signal entering, a dry lane straight across, a wet lane through a chip per
   device in the run, and the sum taken between them at a node that rides to

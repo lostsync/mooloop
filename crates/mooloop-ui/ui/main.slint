@@ -21,8 +21,8 @@ import { ExportDialog } from "export-dialog.slint";
 import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
 import { PianoGrid, NoteCell, NoteHit, GestureMod, PianoGestures } from "piano-grid.slint";
 import {
-    ContainerEnclosure, DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DevicePageButton,
-    DeviceRackMetrics, RackDrag
+    ContainerEnclosure, DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DeviceOutputRail,
+    DevicePageButton, DeviceRackMetrics, RackDrag
 } from "device-rack.slint";
 import { DrumDeviceFace } from "drum-device.slint";
 import { FilterDeviceFace } from "filter-device.slint";
@@ -220,6 +220,15 @@ struct EffectSlotRow {
     // once rather than twice.
     children: int,
     depth: int,
+    // The containers whose run *ends* at this row, innermost first, as rack
+    // indices. Each one draws its output rail here, past everything it holds,
+    // so a container's chrome encloses its devices instead of sitting beside
+    // them. Usually empty; an empty container closes on its own row.
+    //
+    // Derived in Rust rather than in the rack, because "the last row of this
+    // box" cannot be read off one row: `depth` and `children` say what a row
+    // is inside, not what ends at it.
+    closing: [int],
 }
 
 // One selectable destination inside the automation lane picker.
@@ -2281,10 +2290,10 @@ export component MainWindow inherits Window {
                             // when the modulation shelf expands, so the rack
                             // (`DeviceRackMetrics.rack-height` + shelf) keeps fitting
                             // without a vertical scroll clipping the shelf's bottom
-                            // row. 454 rather than 430 since the rack took another
-                            // 24px of padding for a container's box to be drawn in.
+                            // row. 442 rather than 430 since the rack took another
+                            // 12px of padding for a container's box to be drawn in.
                             : root.editor-page == 0
-                                ? 454px + (root.modulation-shelf-open && !root.editing-bus
+                                ? 442px + (root.modulation-shelf-open && !root.editing-bus
                                     ? ModulationShelfMetrics.open-height
                                         - ModulationShelfMetrics.closed-height
                                     : 0px)
@@ -3211,8 +3220,24 @@ export component MainWindow inherits Window {
                                                     property <length> face-width:
                                                         DeviceRackMetrics.unit-width * slot.units
                                                         + DeviceRackMetrics.half-gap * (slot.units - 1);
-                                                    property <length> frame-width:
-                                                        self.face-width + DeviceRackMetrics.rail-width * 2;
+                                                    // A container draws no output rail against its
+                                                    // own face -- it draws one past the last device
+                                                    // it holds -- so its frame is a rail narrower.
+                                                    property <bool> is-container: slot.kind == 12;
+                                                    property <length> frame-width: self.face-width
+                                                        + DeviceRackMetrics.rail-width
+                                                            * (self.is-container ? 1 : 2);
+                                                    // The rails the boxes ending here contribute,
+                                                    // innermost first, between this row and the join.
+                                                    property <length> tail-width:
+                                                        slot.closing.length * DeviceRackMetrics.rail-width;
+                                                    // The level of the innermost box closing here.
+                                                    // An empty container closes itself, one level in
+                                                    // from its own depth; everything else closes the
+                                                    // boxes it is the last row of.
+                                                    property <int> innermost-close:
+                                                        self.is-container && slot.children == 0
+                                                            ? slot.depth + 1 : slot.depth;
                                                     // The row after this one, which is what says where a
                                                     // container's box closes. A repeater item can index its
                                                     // own model, so the box needs nothing from Rust that
@@ -3227,6 +3252,16 @@ export component MainWindow inherits Window {
                                                         && RackDrag.pointer-x >= self.absolute-position.x
                                                         && RackDrag.pointer-x < self.absolute-position.x + self.width;
                                                     changed hot => { if (self.hot) { RackDrag.target = index; } }
+                                                    // The pitch of this row, published when the grab
+                                                    // lands on it. The device shell owns the gesture
+                                                    // but not the geometry: a container's frame is a
+                                                    // rail narrower than a leaf's and any row may
+                                                    // carry the output rails of the boxes ending on
+                                                    // it, so only the cell can say how wide a gap
+                                                    // taking it out leaves behind.
+                                                    changed dragging => {
+                                                        if (self.dragging) { RackDrag.source-width = self.width; }
+                                                    }
                                                     // The rows between the grab and the landing slide aside.
                                                     // The gap *is* the drop indicator: it opens exactly one
                                                     // row's pitch, where the dragged face is about to sit, so
@@ -3244,7 +3279,8 @@ export component MainWindow inherits Window {
                                                         : 0px;
                                                     animate shift { duration: Motion.duration; easing: Motion.curve; }
 
-                                                    width: self.frame-width + DeviceRackMetrics.join-width;
+                                                    width: self.frame-width + self.tail-width
+                                                        + DeviceRackMetrics.join-width;
                                                     height: DeviceRackMetrics.face-height;
 
                                                     // The box, behind the face. One slice per level per row;
@@ -3260,7 +3296,16 @@ export component MainWindow inherits Window {
                                                         cap-right: (self.is-head && slot.children == 0)
                                                             || (self.inside && cell.next-depth < lvl);
                                                         x: cell.shift;
-                                                        width: cell.width;
+                                                        // A box that closes here ends after its own
+                                                        // rail and before the join arrow, which is
+                                                        // leading out of it. A box that carries on
+                                                        // spans the arrow too, because that arrow is
+                                                        // inside it.
+                                                        width: self.cap-right
+                                                            ? cell.frame-width
+                                                                + (cell.innermost-close - lvl + 1)
+                                                                    * DeviceRackMetrics.rail-width
+                                                            : cell.width;
                                                     }
 
                                                     // What the dragged row left behind, so the grab has a
@@ -3279,7 +3324,9 @@ export component MainWindow inherits Window {
                                                         // A row in a box, or a box's own head, draws no card:
                                                         // `ContainerEnclosure` behind it is that card, drawn
                                                         // once around the whole run.
-                                                        contained: slot.depth > 0 || slot.kind == 12;
+                                                        contained: slot.depth > 0 || cell.is-container;
+                                                        tail-rail: !cell.is-container;
+                                                        container-chrome: cell.is-container;
                                                         // Tracks the pointer directly rather than through an
                                                         // animation: an eased `x` lags the hand and reads as
                                                         // the interface being slow. The rows it displaces are
@@ -3753,7 +3800,35 @@ export component MainWindow inherits Window {
                                                             select-requested => { root.device-selected(index); }
                                                         }
                                                     }
-                                                    DeviceJoin { x: cell.shift + cell.frame-width; y: 0px; }
+                                                    // The output rail of each box ending here, past
+                                                    // everything that box holds. Wired to the
+                                                    // container's own row rather than this one: it is
+                                                    // that device's control, standing at the far end
+                                                    // of its own run.
+                                                    for container[tail] in slot.closing : DeviceOutputRail {
+                                                        x: cell.shift + cell.frame-width
+                                                            + tail * DeviceRackMetrics.rail-width;
+                                                        y: 0px;
+                                                        height: DeviceRackMetrics.face-height;
+                                                        container-chrome: true;
+                                                        removal-enabled: true;
+                                                        unwrap-enabled: true;
+                                                        is-container: true;
+                                                        container-children: root.effect-slots[container].children;
+                                                        output-trim-enabled: true;
+                                                        output-trim: root.effect-slots[container].output-trim-db;
+                                                        output-left-db: root.effect-slots[container].output-left-db;
+                                                        output-right-db: root.effect-slots[container].output-right-db;
+                                                        remove-requested => { root.remove-effect-clicked(container); }
+                                                        unwrap-requested => { root.unwrap-effect-clicked(container); }
+                                                        output-trim-changed(v) => {
+                                                            root.effect-output-trim-changed(container, v);
+                                                        }
+                                                    }
+                                                    DeviceJoin {
+                                                        x: cell.shift + cell.frame-width + cell.tail-width;
+                                                        y: 0px;
+                                                    }
                                                 }
 
                                                 Rectangle {

@@ -48,6 +48,16 @@ depth a drop at index N would produce -- one `int` property and a callback on
 each target change, not a redesign. Everything else about the drag is visible;
 this one case still asks for trust.
 
+**Dragging a container opens a one-row gap, not a run-sized one.** The rack's
+drop gap is the width of the row being dragged, and dragging a container
+moves its whole run -- so the gap it opens is right for a leaf and too small
+for a box, and the devices inside the box do not travel with its face while
+the pointer is down. `move_effect` does the right thing on release; it is the
+picture during the gesture that is wrong. The cell publishes its own width
+into `RackDrag.source-width` (`main.slint`), and a run-sized figure would have
+to come from the session, which is the only thing that knows where the run
+ends.
+
 ## Wired but unreachable
 
 **Buses cannot be renamed.** `MixerBus.name` is in the project format, saves
