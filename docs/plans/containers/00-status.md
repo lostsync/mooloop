@@ -256,9 +256,68 @@ a box skips its run without moving the chain in time, and — the one that
 states the gap rather than the mechanism —
 `a_run_blended_once_is_not_two_devices_blended_in_turn`.
 
-## Steps 04–06
+## Step 04 — the rack draws the box
 
-Not started. 04 is the rack frame and the gestures that make a container;
-`Session::wrap_effects_in_container` and `unwrap_container_at` exist and are
-tested but nothing calls them. 05 is the container preset. 06 builds nothing
-and closes on Adam's ruling about layers.
+Landed on `feat/containers` (2026-09-07). **Containers are reachable.** A
+device's left rail has a wrap button and a container's right rail has an
+unwrap button, and every row inside a container wears one bar per level of
+nesting across its top edge.
+
+### Two gestures, not five
+
+The plan listed wrap, unwrap, collapse, and a drop target with an inside
+edge. Two of those turned out to be enough to make containers usable, and one
+of them turned out to already work:
+
+- **Wrap** puts a box around the clicked row's *run*. Around a leaf that is
+  one device; around a container it is that whole container, which is how
+  nesting is reachable from a single button without a selection model having
+  to exist first.
+- **Unwrap** takes the box away and leaves what was inside where it is. It is
+  what makes `remove_effect`'s "a box goes with its contents" safe to have.
+- **Dropping into a run needed nothing.** The existing drag reports a landing
+  index, and `move_effect` already decides what that index falls inside — so
+  dragging a device onto a row that is already in a box puts it in the box,
+  and dragging it past the run's end takes it out. The plan expected a new
+  drop target; the model had already answered the question.
+- **Collapse is not built.** It is for a container wider than the viewport,
+  and until a musician has made one that wide there is no evidence about what
+  it should collapse *to*. Recorded rather than guessed.
+
+### Bars, not a box
+
+`docs/plans/containers/04` asked for a frame around the run. It is one accent
+bar per enclosing container across the top of each row instead, and the reason
+is in the rack's own shape: it is a horizontal sheet that wraps, so a run can
+begin on one line and end on the next, and a rectangle around it would have to
+be *two* rectangles that read as two containers. Counting bars works on either
+side of a wrap. Their colour is not asked to mean anything, because a colour
+per container would run out.
+
+That also settles the question the prototypes raised and step 04 was asked to
+answer: **vertical adjacency means the chain continues.** A layer's branches,
+if they are ever built, need a treatment that is not adjacency — which is now
+a constraint written down rather than one discovered by whoever builds them.
+
+### Acceptance
+
+`wrapping_and_unwrapping_leave_every_device_where_it_was`
+(`crates/mooloop-session/src/effects.rs`) is the round trip: wrap a device,
+wrap the container that made, check every original device is still on the
+chain in order and at the depth it should be, then unwrap the inner box and
+check its child stayed. `a_container_draws_its_run_and_its_nesting`
+(`crates/mooloop-ui/tests/source_snapshot.rs`) renders a real rack holding a
+nested pair, which is what fails if `main.slint` stops passing `children` and
+`depth` or the container branch stops matching its kind — a container that
+drew as an empty frame would pass every other test in that file.
+
+Not verified in the live window. `scripts/mooloop-mcp` needs a real window and
+this machine's headless path is a separate setup; the drop-target behaviour in
+particular is an interaction, and a musician should put a box round something
+before anyone claims it feels right.
+
+## Steps 05–06
+
+Not started. 05 is the container preset — `contains = ["effect_run"]`, and the
+re-minting and rescoping its own step file works out. 06 builds nothing and
+closes on Adam's ruling about layers.

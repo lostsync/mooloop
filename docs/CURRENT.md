@@ -566,9 +566,11 @@ land on its own when it starts to matter:
   whole run, delayed to match that run's latency — the wet/dry that a
   *single* device has always had, applied to a group. Bypassing a container
   skips its run without moving the channel in time. **Nothing in the
-  interface makes one yet**: the model verbs (`wrap_effects_in_container`,
-  `unwrap_container_at`) exist and are tested, and step 04 of
-  `docs/plans/containers/` is the frame and the gestures.
+  interface**: a device's left rail wraps it in a container, a container's
+  right rail unwraps it, and dragging a device onto a row already inside a box
+  puts it in that box. Every row inside a container wears one bar per level of
+  nesting across its top edge. A container wider than the viewport has no
+  collapsed form yet.
 - `ParamAddr` addresses parameters owned by a source, a rack device, a
   modulator slot, or the strip, within its channel-or-bus scope. A rack device
   is named by a durable `DeviceId` minted when it is inserted, so reordering,

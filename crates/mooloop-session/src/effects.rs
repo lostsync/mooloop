@@ -647,6 +647,101 @@ mod tests {
         );
     }
 
+    /// The two gestures step 04 puts on the rail, through the session: a box
+    /// made around a device, and the box taken away without its contents.
+    ///
+    /// Wrapping a *container* wraps its whole run, which is what makes
+    /// nesting reachable from a single button rather than needing a selection
+    /// model to exist first.
+    #[test]
+    fn wrapping_and_unwrapping_leave_every_device_where_it_was() {
+        let mut session = Session::default();
+        for kind in [EffectKind::Delay, EffectKind::Filter, EffectKind::Drive] {
+            session.insert_effect_at(kind, usize::MAX).expect("room");
+        }
+        let ids: Vec<DeviceId> = session.channels[0]
+            .effects
+            .iter()
+            .map(|effect| effect.id)
+            .collect();
+
+        // A box around the filter alone.
+        let inner = session
+            .wrap_effects_in_container(1..2)
+            .expect("wrapped")
+            .device;
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Delay,
+                EffectKind::Chain,
+                EffectKind::Filter,
+                EffectKind::Drive
+            ]
+        );
+
+        // A box around that box, which is what clicking wrap on a container
+        // does: it wraps the run, not the row.
+        let run = mooloop_core::run_of(&session.channels[0].effects, 1);
+        assert_eq!(run, 1..3, "the container's run is itself and its child");
+        session.wrap_effects_in_container(run).expect("wrapped");
+        assert_eq!(
+            depths(&session),
+            [0, 0, 1, 2, 0],
+            "the second box did not enclose the first"
+        );
+        assert_eq!(
+            mooloop_core::span_problem(&session.channels[0].effects),
+            None
+        );
+
+        // Every original device is still on the chain, in order.
+        for (position, id) in ids.iter().enumerate() {
+            let slot = mooloop_core::device_slot(&session.channels[0].effects, *id);
+            assert!(slot.is_some(), "device {position} left the chain");
+        }
+
+        // Unwrapping the inner box leaves its child where it is and costs the
+        // outer box exactly the one row.
+        let inner_slot =
+            mooloop_core::device_slot(&session.channels[0].effects, inner).expect("still there");
+        session.unwrap_container_at(inner_slot).expect("a container");
+        assert_eq!(
+            kinds(&session),
+            [
+                EffectKind::Delay,
+                EffectKind::Chain,
+                EffectKind::Filter,
+                EffectKind::Drive
+            ]
+        );
+        assert_eq!(depths(&session), [0, 0, 1, 0]);
+        assert_eq!(
+            mooloop_core::span_problem(&session.channels[0].effects),
+            None
+        );
+
+        // And a leaf is not a container, so the gesture refuses it rather
+        // than removing a device the user did not ask to remove.
+        assert!(session.unwrap_container_at(0).is_none());
+        assert_eq!(session.channels[0].effects.len(), 4);
+    }
+
+    fn kinds(session: &Session) -> Vec<EffectKind> {
+        session.channels[0]
+            .effects
+            .iter()
+            .map(EffectSlotState::kind)
+            .collect()
+    }
+
+    fn depths(session: &Session) -> Vec<usize> {
+        let effects = &session.channels[0].effects;
+        (0..effects.len())
+            .map(|slot| mooloop_core::depth_at(effects, slot))
+            .collect()
+    }
+
     #[test]
     fn an_empty_effect_presets_directory_lists_nothing() {
         let temp = tempfile::tempdir().unwrap();

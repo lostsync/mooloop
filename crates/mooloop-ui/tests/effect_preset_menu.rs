@@ -47,7 +47,8 @@ slint::slint! {
 }
 
 /// The left rail stacks its buttons from the top with 2px of padding and 2px
-/// between them, each 24px square: insert, save preset, load preset.
+/// between them, each 24px square: insert, save preset, load preset, and --
+/// added last so these three keep their coordinates -- wrap in a container.
 const BUTTON_X: f32 = 14.0;
 const SAVE_Y: f32 = 40.0;
 const LOAD_Y: f32 = 66.0;

@@ -17,9 +17,7 @@ export component ContainerDeviceFace inherits EffectDeviceShell {
     in-out property <float> mix;
     // How many rows of the rack are inside this one.
     in property <int> children;
-    // Cleared by step 03. While it is set the knob still moves and still
-    // saves; what it does not yet do is change the sound.
-    in property <bool> mix-inert: true;
+    in property <bool> mix-inert: false;
     callback mix-changed(float);
 
     VerticalLayout {

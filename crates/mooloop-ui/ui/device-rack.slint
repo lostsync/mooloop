@@ -106,11 +106,41 @@ export component DeviceFrame inherits Rectangle {
     in property <float> output-right-db: -60;
     out property <length> content-width: root.width - DeviceRackMetrics.rail-width * 2;
 
+    // --- Containers -------------------------------------------------------
+    //
+    // How many containers enclose this row, and whether this row is one. A
+    // container's run is drawn as a coloured edge on every row inside it
+    // rather than as a box around the group: the rack is a horizontal sheet
+    // that wraps, so a run can start on one line and finish on the next, and
+    // a rectangle around it would have to be two rectangles that look like
+    // two containers.
+    in property <int> depth: 0;
+    in property <bool> is-container: false;
+    in property <int> container-children: 0;
+    in property <bool> wrap-enabled: false;
+    in property <bool> unwrap-enabled: false;
+    callback wrap-requested();
+    callback unwrap-requested();
+
     background: Theme.surface;
     border-width: 1px;
     border-color: Theme.border;
     border-radius: Theme.radius-md;
     clip: true;
+
+    // One stripe per enclosing container, stacked inward from the left edge.
+    // Reading the *number* of stripes is how a musician sees what is inside
+    // what; reading their colour is not asked to mean anything, because a
+    // colour per container would run out.
+    for level[nesting] in [0, 1, 2, 3] : Rectangle {
+        x: 2px + nesting * 3px;
+        y: 0px;
+        width: 2px;
+        height: parent.height;
+        visible: nesting < root.depth;
+        background: Theme.accent;
+        opacity: 0.55;
+    }
 
     // These are deliberately a shell rather than a per-effect header: source,
     // inserts, and future buffer devices all get stable insertion/preset/mix
@@ -162,6 +192,15 @@ export component DeviceFrame inherits Rectangle {
                     : "No presets saved for this device yet";
                 clicked => { preset-menu.show(); }
             }
+            // Fourth deliberately, under the three that were here first:
+            // `tests/effect_preset_menu.rs` drives this rail by computed
+            // coordinates, and insert/save/load keeping theirs is worth more
+            // than a container gesture being at the top.
+            IconButton {
+                text: "❏"; size: 24px; enabled: root.wrap-enabled;
+                tooltip: "Wrap this device in a container";
+                clicked => { root.wrap-requested(); }
+            }
 
             Rectangle { vertical-stretch: 1; }
             Text { text: "IN"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
@@ -196,8 +235,18 @@ export component DeviceFrame inherits Rectangle {
             spacing: 3px;
             IconButton {
                 text: "✕"; size: 24px; enabled: root.removal-enabled;
-                tooltip: "Remove device";
+                tooltip: root.is-container
+                    ? "Remove this container and the " + root.container-children + " devices in it"
+                    : "Remove device";
                 clicked => { root.remove-requested(); }
+            }
+            // Only a container has one, and it is what makes "removing a box
+            // removes its contents" safe to have: getting the devices back
+            // out is one click rather than N drags.
+            if root.unwrap-enabled : IconButton {
+                text: "⇱"; size: 24px;
+                tooltip: "Remove the container, keep what is inside it";
+                clicked => { root.unwrap-requested(); }
             }
             Rectangle { vertical-stretch: 1; }
             Text { text: "OUT"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
@@ -302,6 +351,29 @@ export component DeviceFrame inherits Rectangle {
                 }
             }
         }
+    }
+
+    // One bar per enclosing container, stacked down from the top edge.
+    //
+    // Bars rather than a box around the group, because the rack is a
+    // horizontal sheet that wraps: a run can start on one line and finish on
+    // the next, and a rectangle around it would have to be two rectangles
+    // that look like two containers. Counting bars is how a musician sees
+    // what is inside what; their colour is not asked to mean anything,
+    // because a colour per container would run out.
+    //
+    // Declared last so it paints over the rails and the face, and spanning
+    // the whole frame rather than its content, so a row's nesting reads at
+    // the same glance as the row beside it.
+    for level[nesting] in [0, 1, 2, 3] : Rectangle {
+        x: 0px;
+        y: nesting * 5px;
+        width: parent.width;
+        height: 2px;
+        visible: nesting < root.depth;
+        background: Theme.accent;
+        opacity: 0.7;
+        z: 30;
     }
 }
 

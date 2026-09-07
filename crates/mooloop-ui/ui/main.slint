@@ -598,6 +598,11 @@ export component MainWindow inherits Window {
     // means append; every device shell can therefore insert into the chain.
     callback add-effect-clicked(int, int);
     callback remove-effect-clicked(int);            // slot
+    // Wrap the device in `slot` -- and its run, when it is already a
+    // container -- in a new container. Unwrap takes a container out and
+    // leaves what was inside it where it is.
+    callback wrap-effect-clicked(int);              // slot
+    callback unwrap-effect-clicked(int);            // slot
     callback effect-bypass-toggled(int);            // slot
     // Slot, then an index into that row's preset-options.
     callback effect-preset-selected(int, int);
@@ -3170,6 +3175,16 @@ export component MainWindow inherits Window {
                                                     wet-dry-text: round(slot.wet-dry * 100) + "% wet";
                                                     wet-dry-changed(v) => { root.effect-wet-dry-changed(index, v); }
                                                     removal-enabled: true;
+                                                    depth: slot.depth;
+                                                    is-container: slot.kind == 12;
+                                                    container-children: slot.children;
+                                                    // Wrapping a container in
+                                                    // another is legal, so this
+                                                    // is on every row.
+                                                    wrap-enabled: true;
+                                                    unwrap-enabled: slot.kind == 12;
+                                                    wrap-requested => { root.wrap-effect-clicked(index); }
+                                                    unwrap-requested => { root.unwrap-effect-clicked(index); }
                                                     effect-kind-selected(kind) => { root.add-effect-clicked(kind, index); }
                                                     remove-requested => { root.remove-effect-clicked(index); }
                                                     preset-enabled: true;

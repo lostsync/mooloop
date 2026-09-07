@@ -692,6 +692,59 @@ fn render_effect_header_comparison() {
 /// view could not scroll at all because the viewport never exceeded the
 /// visible width.
 #[test]
+/// A container is a rack row like any other, and the rows inside it wear one
+/// nesting bar each.
+///
+/// The face contract rather than a picture: the row model carries `children`
+/// and `depth`, and this is what fails if `main.slint` stops passing them or
+/// the container branch stops matching kind 12 -- a container that drew as an
+/// empty frame would otherwise pass every other test in this file.
+#[test]
+fn a_container_draws_its_run_and_its_nesting() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            mock_time: true,
+            threading: false,
+            renderer_name: Some(SharedString::from("software")),
+        },
+    )))
+    .expect("initialize headless renderer");
+
+    let ui = MainWindow::new().unwrap();
+    ui.window().set_size(LogicalSize::new(960.0, 760.0));
+    ui.set_channels(rack_rows());
+    ui.set_selected_channel_name(SharedString::from("Kick"));
+    ui.set_editor_page(0);
+    ui.set_source_kind(0);
+
+    // A container holding two devices, one of which is another container
+    // holding one: the shape the depth bars have to distinguish.
+    let container = |children: i32, depth: i32| {
+        let mut row = effect_slot(12, 1);
+        row.children = children;
+        row.depth = depth;
+        row.p0 = 0.6;
+        row
+    };
+    let mut inner_child = effect_slot(1, 1);
+    inner_child.depth = 2;
+    let mut outer_child = effect_slot(0, 1);
+    outer_child.depth = 1;
+    ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
+        container(3, 0),
+        outer_child,
+        container(1, 1),
+        inner_child,
+        effect_slot(3, 2),
+    ]))));
+
+    let shot = ui.window().take_snapshot().unwrap();
+    assert!(
+        shot.width() > 0 && shot.height() > 0,
+        "the rack did not render with a container in it"
+    );
+}
+
 fn effect_rack_scrolls_horizontally_to_reach_a_long_chain() {
     slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
         i_slint_backend_testing::TestingBackendOptions {

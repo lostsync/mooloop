@@ -6694,6 +6694,108 @@ impl AppUi {
             });
         }
 
+        // --- Containers: wrap a device in a box, or take the box away ---
+        //
+        // Wrapping is the gesture that makes containers, because one is far
+        // more often made around a device that already exists than inserted
+        // empty. It wraps the clicked row's *run*, so wrapping a container
+        // puts a box around that whole box; devices join it afterwards by
+        // being dragged onto a row already inside it, which the existing
+        // reorder already handles -- the model decides what a landing index
+        // falls inside, so the drag needed nothing new.
+        {
+            let tx = cmd_tx.clone();
+            let stx = structural_tx.clone();
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            let sample_rate = sample_rate;
+            window.on_wrap_effect_clicked(move |slot| {
+                let Some(window) = weak.upgrade() else { return };
+                let Ok(slot) = usize::try_from(slot) else {
+                    return;
+                };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
+                    let mut st = st.borrow_mut();
+                    let run = match st.session.effect_chain() {
+                        Some(effects) => mooloop_core::run_of(effects, slot),
+                        None => return,
+                    };
+                    let Some(added) = st.session.wrap_effects_in_container(run) else {
+                        return;
+                    };
+                    st.sync_effects();
+                    st.refresh_automation(&window);
+                    st.refresh_modulation(&window);
+                    // Installed at the tail and moved into place, exactly as
+                    // an inserted device is: the rows it now encloses do not
+                    // move, so nothing else has to be told they were wrapped.
+                    let bpm = window.get_bpm() as f64;
+                    let node = build_effect_at_tempo(added.params, sample_rate, bpm);
+                    let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
+                    stx.send(StructuralCommand::InstallEffect {
+                        target: added.target,
+                        slot: added.tail as u8,
+                        kind: added.kind,
+                        resource_key: None,
+                        node,
+                        align,
+                        analyzer: Box::new(SpectrumAnalyzer::new()),
+                        state: Box::new(EffectSlot::for_device(added.device)),
+                    });
+                    if added.slot != added.tail {
+                        let _ = tx.send(EngineCommand::MoveEffect {
+                            target: added.target,
+                            from: added.tail as u8,
+                            to: added.slot as u8,
+                        });
+                    }
+                    st.publish_container_spans(added.target, &stx);
+                }
+                record_project_history(&commands, before, &st, &window, "Devices wrapped");
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let stx = structural_tx.clone();
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.on_unwrap_effect_clicked(move |slot| {
+                let Some(window) = weak.upgrade() else { return };
+                let Ok(slot) = usize::try_from(slot) else {
+                    return;
+                };
+                let before = project_snapshot(&st.borrow(), &window);
+                {
+                    let mut st = st.borrow_mut();
+                    let Some(removed) = st.session.unwrap_container_at(slot) else {
+                        return;
+                    };
+                    st.sync_effects();
+                    st.refresh_automation(&window);
+                    st.refresh_modulation(&window);
+                    // One row leaves and its children stay, so the engine
+                    // mirror is an ordinary single removal.
+                    if removed.slot != removed.tail {
+                        let _ = tx.send(EngineCommand::MoveEffect {
+                            target: removed.target,
+                            from: removed.slot as u8,
+                            to: removed.tail as u8,
+                        });
+                    }
+                    stx.send(StructuralCommand::RemoveEffect {
+                        target: removed.target,
+                        slot: removed.tail as u8,
+                    });
+                    st.publish_container_spans(removed.target, &stx);
+                }
+                record_project_history(&commands, before, &st, &window, "Container removed");
+            });
+        }
+
         // --- Effect presets: one rack row, replaced in place ---
         //
         // Loaded on this thread and queued as an ordinary project edit,

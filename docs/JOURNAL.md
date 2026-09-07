@@ -918,6 +918,46 @@ rearrangement rather than for the ones a container happens to produce. It only
 reads because step 01 gave devices identities to sort by, which is the second
 time that change has paid for something it was not built for.
 
+## Sep 7 (the box) — two gestures, and one that was already there
+
+Containers are reachable: a wrap button on a device's rail, an unwrap button
+on a container's, and one accent bar per level of nesting across the top of
+every row inside a box.
+
+The plan asked for four things and two of them turned out to be unnecessary.
+
+**Dropping a device into a box needed no code at all.** The drag already
+reports a landing index, and `move_effect` already decides what that index
+falls inside — so dragging a device onto a row that is in a container puts it
+in the container, and dragging it past the run's end takes it out. The plan
+expected a new drop target with an inside edge; the model had answered the
+question when it learned about runs, and nobody noticed until the gesture was
+tried.
+
+**Collapse is not built**, on purpose. It is for a container wider than the
+viewport, and until a musician has made one that wide there is no evidence
+about what it should collapse to. Guessing would have produced a control that
+had to be redesigned by whoever first hit the case.
+
+The frame became bars, and the reason is the rack's own shape. `04` asked for
+a rectangle around the run. The rack is a horizontal sheet that wraps, so a
+run can begin on one line and end on the next, and a rectangle around it would
+have to be *two* rectangles that read as two containers. One bar per enclosing
+box, across the top of each row, is countable on either side of a wrap. That
+also settles the question the prototypes raised and the step was asked to
+answer: vertical adjacency means the chain continues, so a layer's branches
+would need a treatment that is not adjacency — a constraint now written down
+rather than discovered by whoever builds them.
+
+One thing broke, and it is the kind that only a test catches. The wrap button
+went at the top of the left rail, which pushed insert, save-preset and
+load-preset down 26px each — and `tests/effect_preset_menu.rs` drives that
+rail by *computed coordinates*, because the `ElementHandle` search API needs a
+build with debug info and those controls have fixed geometry. Three tests went
+red at once. The fix is that the new button goes last: three positions that
+something already depends on are worth more than a container gesture being at
+the top of the stack.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.
