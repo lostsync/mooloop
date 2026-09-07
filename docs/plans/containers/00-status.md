@@ -284,20 +284,42 @@ of them turned out to already work:
   and until a musician has made one that wide there is no evidence about what
   it should collapse *to*. Recorded rather than guessed.
 
-### Bars, not a box
+### Bars, not a box — and then a box after all
 
-`docs/plans/containers/04` asked for a frame around the run. It is one accent
-bar per enclosing container across the top of each row instead, and the reason
-is in the rack's own shape: it is a horizontal sheet that wraps, so a run can
-begin on one line and end on the next, and a rectangle around it would have to
-be *two* rectangles that read as two containers. Counting bars works on either
-side of a wrap. Their colour is not asked to mean anything, because a colour
-per container would run out.
+`docs/plans/containers/04` asked for a frame around the run. It shipped as one
+accent bar per enclosing container across the top of each row instead, and the
+reason given was the rack's own shape: that it is a horizontal sheet which
+*wraps*, so a run could begin on one line and end on the next, and a rectangle
+around it would have to be two rectangles reading as two containers.
 
-That also settles the question the prototypes raised and step 04 was asked to
-answer: **vertical adjacency means the chain continues.** A layer's branches,
-if they are ever built, need a treatment that is not adjacency — which is now
-a constraint written down rather than one discovered by whoever builds them.
+**The rack does not wrap.** `rack-row` is a single `HorizontalLayout` with
+`alignment: start` inside a horizontally scrolling viewport
+(`device-chain-scroll`), and it has never been anything else. A run is always
+contiguous, so a box is always one box. The argument was sound and its premise
+was not checked against the layout it described — which is the same shape of
+mistake as the unreachable insert menu above it, and it survived longer
+because the drawing it justified *worked*, so nothing failed.
+
+Adam found it the way the other one was found: by using the thing and saying
+the containment did not read. Superseded on `feat/container-ui`
+(2026-09-07) by `ContainerEnclosure` in `device-rack.slint` — a real box,
+drawn one slice per row, with the head capping the left, the row before a
+shallower one capping the right, and an empty container capping itself. The
+bars and the left-edge stripes are gone.
+
+The constraint the bars were also carrying still holds and is not affected:
+**vertical adjacency means the chain continues.** A layer's branches, if they
+are ever built, need a treatment that is not adjacency.
+
+### What the box needed from Rust: nothing
+
+`EffectSlotRow` already carried `children` and `depth` — step 02 sent them
+across `main.slint` early, for the frame step 04 was going to build. The one
+extra fact a box needs is where a run *ends*, and a Slint repeater item can
+index its own model: `effect-slots[index + 1].depth` says whether the row
+after this one is shallower, which is exactly the right cap. So the drawing
+that step 04 called too expensive to be worth it cost one component and no
+change to the face contract at all.
 
 ### Shipped unreachable, and fixed the same day
 

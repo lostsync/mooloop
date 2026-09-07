@@ -2,14 +2,16 @@ import { Theme } from "theme.slint";
 import { ParameterKnob } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
-// Container face. A container is a device that holds an ordered run of the
-// devices after it, so its own face is small: what it is, how many devices
-// are inside, and the mix across the whole run.
+// Container face. A container is the one device whose signal is not a line
+// through a box: it splits, sends one copy through a whole *run* of other
+// devices, and blends the two back together once at the end. The run is
+// already visible -- the rack draws a box around it, immediately to the
+// right of this face. The dry path is not visible anywhere else, and neither
+// is where the blend is taken, so that is what this face draws.
 //
-// The *frame* around the run -- the indent, the collapse, the drop target on
-// its inside edge -- is step 04 of `docs/plans/containers/`. This face is
-// what makes the row visible and its one control reachable in the meantime;
-// until step 03 the mix is inert and says so.
+// The mix knob is the control; the diagram is a readout of it. The sum node
+// rides between the two lanes at the blend position, so the picture answers
+// "how much of this is the run?" before the percentage is read.
 export component ContainerDeviceFace inherits EffectDeviceShell {
     name: "Chain";
     kind: "FX / 1U";
@@ -20,37 +22,121 @@ export component ContainerDeviceFace inherits EffectDeviceShell {
     in property <bool> mix-inert: false;
     callback mix-changed(float);
 
+    // A lane at its own end of the blend is drawn at full strength and the
+    // other is held at a floor rather than taken to zero: a path that is
+    // carrying nothing still exists, and a diagram that erases it stops
+    // being a diagram of the routing.
+    property <float> dry-weight: 0.16 + 0.84 * (1.0 - root.mix);
+    property <float> wet-weight: 0.16 + 0.84 * root.mix;
+
     VerticalLayout {
         padding: 6px;
         padding-top: DeviceRackMetrics.header-height + 6px;
-        spacing: 4px;
+        spacing: 6px;
 
-        Rectangle {
-            height: 104px;
+        split := Rectangle {
+            height: 150px;
             background: Theme.panel;
             border-radius: Theme.radius-sm;
-            VerticalLayout {
-                padding: 8px;
-                spacing: 2px;
-                alignment: center;
-                Text {
-                    text: root.children == 1 ? "1 device" : root.children + " devices";
-                    color: Theme.text;
-                    font-size: 13px;
-                    horizontal-alignment: center;
-                }
-                Text {
-                    text: root.children == 0 ? "empty" : "inside";
-                    color: Theme.text-muted;
-                    font-size: 11px;
-                    horizontal-alignment: center;
-                }
-                if root.mix-inert : Text {
-                    text: "mix pending";
-                    color: Theme.text-muted;
-                    font-size: 10px;
-                    horizontal-alignment: center;
-                }
+
+            property <length> dry-y: 30px;
+            property <length> wet-y: 100px;
+            property <length> left-x: 24px;
+            property <length> right-x: parent.width - 24px;
+            property <length> run-x: split.left-x + 6px;
+            property <length> run-w: split.right-x - split.left-x - 12px;
+            // Laid out by arithmetic rather than by a HorizontalLayout: a
+            // hidden child still takes layout space, so the eight-slot
+            // repeater below would leave a three-device run bunched into the
+            // left three-eighths of its lane.
+            property <length> chip-w: root.children > 0
+                ? (split.run-w - (root.children - 1) * 3px) / root.children
+                : 0px;
+
+            // In, to the split point.
+            Rectangle {
+                x: 6px; y: (split.dry-y + split.wet-y) / 2;
+                width: split.left-x - 6px; height: 1px;
+                background: Theme.text-faint;
+            }
+            Rectangle {
+                x: split.left-x - 3px; y: (split.dry-y + split.wet-y) / 2 - 3px;
+                width: 6px; height: 6px; border-radius: 3px;
+                background: Theme.text-muted;
+            }
+            Rectangle {
+                x: split.left-x; y: split.dry-y; width: 1px;
+                height: split.wet-y - split.dry-y; background: Theme.text-faint;
+            }
+            Rectangle {
+                x: split.right-x; y: split.dry-y; width: 1px;
+                height: split.wet-y - split.dry-y; background: Theme.text-faint;
+            }
+
+            // The dry lane: straight across, touched by nothing.
+            Rectangle {
+                x: split.left-x; y: split.dry-y - (root.mix < 0.5 ? 1px : 0px);
+                width: split.right-x - split.left-x;
+                height: root.mix < 0.5 ? 2px : 1px;
+                background: Theme.text; opacity: root.dry-weight;
+            }
+            Text {
+                x: split.left-x + 4px; y: split.dry-y - 17px;
+                text: "DRY"; color: Theme.text-faint;
+                font-size: 8px; letter-spacing: 0.5px;
+            }
+
+            // The wet lane: through the run.
+            Rectangle {
+                x: split.left-x; y: split.wet-y - (root.mix >= 0.5 ? 1px : 0px);
+                width: split.right-x - split.left-x;
+                height: root.mix >= 0.5 ? 2px : 1px;
+                background: Theme.accent; opacity: root.wet-weight;
+            }
+            for slot[i] in [0, 1, 2, 3, 4, 5, 6, 7] : Rectangle {
+                visible: i < root.children;
+                x: split.run-x + i * (split.chip-w + 3px);
+                y: split.wet-y - 12px;
+                width: split.chip-w;
+                height: 24px;
+                border-radius: Theme.radius-sm;
+                background: Theme.surface-raised;
+                opacity: root.wet-weight;
+                Rectangle { y: 0; width: parent.width; height: 2px; background: Theme.accent; }
+            }
+            // An empty box says what fills it, and points at the control that
+            // does: the rail's `+` inserts *into* a container rather than
+            // before it. A blank rectangle here is what read as a drop target
+            // that was not one.
+            if root.children == 0 : Text {
+                x: split.run-x; y: split.wet-y - 8px;
+                width: split.run-w;
+                text: "empty — + to fill";
+                color: Theme.text-faint; font-size: 9px;
+                horizontal-alignment: center;
+            }
+            if root.children > 0 : Text {
+                x: split.left-x + 4px; y: split.wet-y + 17px;
+                text: root.children == 1 ? "1 DEVICE" : root.children + " DEVICES";
+                color: Theme.text-faint; font-size: 8px; letter-spacing: 0.5px;
+            }
+
+            // The sum, taken at the blend position.
+            Rectangle {
+                x: split.right-x - 4px;
+                y: split.dry-y + (split.wet-y - split.dry-y) * root.mix - 4px;
+                width: 9px; height: 9px; border-radius: 5px;
+                background: Theme.panel;
+                border-width: 2px;
+                border-color: root.mix >= 0.5 ? Theme.accent : Theme.text;
+                animate y { duration: 60ms; easing: ease-out; }
+            }
+            Rectangle {
+                x: split.right-x + 5px;
+                y: split.dry-y + (split.wet-y - split.dry-y) * root.mix;
+                width: parent.width - split.right-x - 11px; height: 1px;
+                background: Theme.text-faint;
+                animate y { duration: 60ms; easing: ease-out; }
             }
         }
 
@@ -66,6 +152,14 @@ export component ContainerDeviceFace inherits EffectDeviceShell {
                 value-text: round(root.mix * 100) + " %";
                 changed(v) => { root.mix-changed(v); }
             }
+            if root.mix-inert : Text {
+                text: "mix pending";
+                color: Theme.text-faint;
+                font-size: 9px;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
         }
+        Rectangle { vertical-stretch: 1; }
     }
 }

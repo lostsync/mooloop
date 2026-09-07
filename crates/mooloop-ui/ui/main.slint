@@ -21,7 +21,8 @@ import { ExportDialog } from "export-dialog.slint";
 import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
 import { PianoGrid, NoteCell, NoteHit, GestureMod, PianoGestures } from "piano-grid.slint";
 import {
-    DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DevicePageButton, DeviceRackMetrics
+    ContainerEnclosure, DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DevicePageButton,
+    DeviceRackMetrics, RackDrag
 } from "device-rack.slint";
 import { DrumDeviceFace } from "drum-device.slint";
 import { FilterDeviceFace } from "filter-device.slint";
@@ -2271,11 +2272,13 @@ export component MainWindow inherits Window {
                         height: !root.bottom-pane-visible ? 0px
                             : root.editor-page == 1 ? root.piano-dock-height
                             // The Source page grows by the shelf's own open delta
-                            // when the modulation shelf expands, so the rack (284px
-                            // face + shelf) keeps fitting without a vertical scroll
-                            // clipping the shelf's bottom row.
+                            // when the modulation shelf expands, so the rack
+                            // (`DeviceRackMetrics.rack-height` + shelf) keeps fitting
+                            // without a vertical scroll clipping the shelf's bottom
+                            // row. 454 rather than 430 since the rack took another
+                            // 24px of padding for a container's box to be drawn in.
                             : root.editor-page == 0
-                                ? 430px + (root.modulation-shelf-open && !root.editing-bus
+                                ? 454px + (root.modulation-shelf-open && !root.editing-bus
                                     ? ModulationShelfMetrics.open-height
                                         - ModulationShelfMetrics.closed-height
                                     : 0px)
@@ -2643,7 +2646,7 @@ export component MainWindow inherits Window {
                                         // and faces are width-quantized in rack units, so a
                                         // fixed figure leaves later devices unreachable.
                                         viewport-width: max(self.visible-width, rack-row.preferred-width);
-                                        viewport-height: max(self.visible-height, 284px);
+                                        viewport-height: max(self.visible-height, DeviceRackMetrics.rack-height);
 
                                         Rectangle {
                                             width: max(device-chain-scroll.visible-width, rack-row.preferred-width);
@@ -2653,14 +2656,19 @@ export component MainWindow inherits Window {
                                             // 268px face height. A short vertical
                                             // scroll is preferable to clipped
                                             // controls on compact windows.
-                                            height: root.editing-bus ? 284px
-                                                : 284px + (root.modulation-shelf-open
+                                            height: root.editing-bus ? DeviceRackMetrics.rack-height
+                                                : DeviceRackMetrics.rack-height + (root.modulation-shelf-open
                                                     ? ModulationShelfMetrics.open-height
                                                     : ModulationShelfMetrics.closed-height);
                                             background: Theme.panel;
 
                                             rack-row := HorizontalLayout {
-                                                padding: 8px;
+                                                padding-left: 8px;
+                                                padding-right: 8px;
+                                                // Vertical room for a container's box, which is
+                                                // drawn around the faces rather than inside them.
+                                                padding-top: DeviceRackMetrics.rack-padding;
+                                                padding-bottom: DeviceRackMetrics.rack-padding;
                                                 spacing: 0px;
                                                 alignment: start;
 
@@ -3187,17 +3195,89 @@ export component MainWindow inherits Window {
 
                                                 DeviceJoin { }
 
-                                                for slot[index] in root.effect-slots : Rectangle {
+                                                for slot[index] in root.effect-slots : cell := Rectangle {
                                                     property <length> face-width:
                                                         DeviceRackMetrics.unit-width * slot.units
                                                         + DeviceRackMetrics.half-gap * (slot.units - 1);
-                                                    width: self.face-width + DeviceRackMetrics.rail-width * 2 + 20px;
+                                                    property <length> frame-width:
+                                                        self.face-width + DeviceRackMetrics.rail-width * 2;
+                                                    // The row after this one, which is what says where a
+                                                    // container's box closes. A repeater item can index its
+                                                    // own model, so the box needs nothing from Rust that
+                                                    // `children` and `depth` were not already carrying.
+                                                    property <int> next-depth: index + 1 < root.effect-slots.length
+                                                        ? root.effect-slots[index + 1].depth : 0;
+                                                    property <bool> dragging: RackDrag.source == index;
+                                                    // Which row the pointer is over, answered by the row
+                                                    // itself from its own bounds. One row is hot at a time
+                                                    // because the cells tile the rack without gaps.
+                                                    property <bool> hot: RackDrag.active
+                                                        && RackDrag.pointer-x >= self.absolute-position.x
+                                                        && RackDrag.pointer-x < self.absolute-position.x + self.width;
+                                                    changed hot => { if (self.hot) { RackDrag.target = index; } }
+                                                    // The rows between the grab and the landing slide aside.
+                                                    // The gap *is* the drop indicator: it opens exactly one
+                                                    // row's pitch, where the dragged face is about to sit, so
+                                                    // there is nothing to reconcile between a marker and the
+                                                    // result -- and it opens inside a container's box when the
+                                                    // drop lands inside one.
+                                                    property <length> shift:
+                                                        !RackDrag.active || RackDrag.target < 0 || self.dragging ? 0px
+                                                        : (RackDrag.source < RackDrag.target
+                                                            && index > RackDrag.source
+                                                            && index <= RackDrag.target) ? -RackDrag.source-width
+                                                        : (RackDrag.target < RackDrag.source
+                                                            && index >= RackDrag.target
+                                                            && index < RackDrag.source) ? RackDrag.source-width
+                                                        : 0px;
+                                                    animate shift { duration: Motion.duration; easing: Motion.curve; }
+
+                                                    width: self.frame-width + DeviceRackMetrics.join-width;
                                                     height: DeviceRackMetrics.face-height;
+
+                                                    // The box, behind the face. One slice per level per row;
+                                                    // the head draws the left cap and a row whose successor
+                                                    // is shallower draws the right one. An empty container
+                                                    // caps itself, so an empty box still looks like a box.
+                                                    for level[lvl] in [1, 2, 3, 4] : ContainerEnclosure {
+                                                        property <bool> inside: slot.depth >= lvl;
+                                                        property <bool> is-head: slot.kind == 12 && slot.depth == lvl - 1;
+                                                        visible: self.inside || self.is-head;
+                                                        level: lvl;
+                                                        head: self.is-head;
+                                                        cap-right: (self.is-head && slot.children == 0)
+                                                            || (self.inside && cell.next-depth < lvl);
+                                                        x: cell.shift;
+                                                        width: cell.width;
+                                                    }
+
+                                                    // What the dragged row left behind, so the grab has a
+                                                    // visible origin to snap back to when nothing moves.
+                                                    if cell.dragging : Rectangle {
+                                                        x: cell.shift;
+                                                        width: cell.frame-width;
+                                                        height: parent.height;
+                                                        border-width: 1px;
+                                                        border-color: Theme.accent.with-alpha(0.45);
+                                                        border-radius: Theme.radius-md;
+                                                        background: Theme.background.with-alpha(0.5);
+                                                    }
+
                                                     DeviceFrame {
-                                                        x: 0px;
-                                                        y: 0px;
-                                                        width: parent.face-width + DeviceRackMetrics.rail-width * 2;
+                                                        // Tracks the pointer directly rather than through an
+                                                        // animation: an eased `x` lags the hand and reads as
+                                                        // the interface being slow. The rows it displaces are
+                                                        // where the animation belongs, because that motion is
+                                                        // explaining a change rather than following a finger.
+                                                        x: cell.shift + (cell.dragging ? RackDrag.dx : 0px);
+                                                        y: cell.dragging ? -8px : 0px;
+                                                        width: cell.frame-width;
                                                         height: DeviceRackMetrics.face-height;
+                                                        // Lifted off the rack while it is carried.
+                                                        drop-shadow-blur: cell.dragging ? 20px : 0px;
+                                                        drop-shadow-color: #000000dd;
+                                                        drop-shadow-offset-y: cell.dragging ? 8px : 0px;
+                                                        opacity: cell.dragging ? 0.95 : 1.0;
                                                         input-left-db: slot.input-left-db;
                                                         input-right-db: slot.input-right-db;
                                                         output-left-db: slot.output-left-db;
@@ -3216,7 +3296,6 @@ export component MainWindow inherits Window {
                                                         wet-dry-text: round(slot.wet-dry * 100) + "% wet";
                                                         wet-dry-changed(v) => { root.effect-wet-dry-changed(index, v); }
                                                         removal-enabled: true;
-                                                        depth: slot.depth;
                                                         is-container: slot.kind == 12;
                                                         container-children: slot.children;
                                                         // Wrapping a container in
@@ -3658,7 +3737,7 @@ export component MainWindow inherits Window {
                                                             select-requested => { root.device-selected(index); }
                                                         }
                                                     }
-                                                    DeviceJoin { x: parent.face-width + DeviceRackMetrics.rail-width * 2; y: 0px; }
+                                                    DeviceJoin { x: cell.shift + cell.frame-width; y: 0px; }
                                                 }
 
                                                 Rectangle {
@@ -3672,7 +3751,7 @@ export component MainWindow inherits Window {
                                             }
                                             if !root.editing-bus : ModulationShelf {
                                                 x: 8px;
-                                                y: 284px;
+                                                y: DeviceRackMetrics.rack-height;
                                                 width: parent.width - 16px;
                                                 open: root.modulation-shelf-open;
                                                 sources: root.modulation-sources;

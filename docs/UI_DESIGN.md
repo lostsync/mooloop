@@ -193,7 +193,11 @@ alignment, and height contract as effects.
   The host's bypass and wet/dry controls occupy the header's right edge;
   a device face must not add a second copy. Effect faces inherit the shared
   `EffectDeviceShell`, which owns that header and the drag-to-reorder handle;
-  a face file contains only its working controls. Controls unique to that device
+  a face file contains only its working controls. A reorder drag is visible
+  while it happens: the face follows the pointer, its origin stays as an
+  outline, and the rows in between animate aside to open the gap it will land
+  in. The landing is the row under the pointer, taken from that row's own
+  bounds rather than from a nominal one-unit pitch. Controls unique to that device
   begin below the header. The common frame also owns a compact `MOD n` route
   summary for routes terminating in the device. It can show source pills where
   a count is too opaque and opens the channel's modulation shelf or a

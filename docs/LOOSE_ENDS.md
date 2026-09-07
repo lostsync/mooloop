@@ -36,6 +36,18 @@ went grey.
 
 ---
 
+**The drop gap cannot show which side of a container's edge it lands on.**
+The rack opens a one-row gap where a dragged device will land, and the gap
+falls inside a container's box when the landing is inside it -- except at a
+run's last row, where "just inside the box" and "just after the box" are the
+same index and the gap is drawn in the same place either way. Which one a drop
+means is decided by `move_effect` in `mooloop-session`, and the rack does not
+know that rule: `main.slint`'s cell works the box out from `depth` and
+`children` alone. Showing the resolved answer needs the session to publish the
+depth a drop at index N would produce -- one `int` property and a callback on
+each target change, not a redesign. Everything else about the drag is visible;
+this one case still asks for trust.
+
 ## Wired but unreachable
 
 **Buses cannot be renamed.** `MixerBus.name` is in the project format, saves

@@ -12,6 +12,107 @@ export global DeviceRackMetrics {
     // their working controls in the central rectangle, so future devices get
     // the same chain affordances without duplicating chrome.
     out property <length> rail-width: 30px;
+    // The arrow between two rack rows. A constant here rather than a literal
+    // in `main.slint` because the drag has to know a row's full pitch --
+    // face, rails and join -- to open a gap the dragged row fits in.
+    out property <length> join-width: 20px;
+    // Vertical room around a face, and the height of the strip that holds
+    // one. A container's box is drawn in this padding: it has to enclose the
+    // faces rather than sit inside them, and four levels of nesting step
+    // inward 4px each. `enclosure-reach` is short of the padding on purpose,
+    // so the outermost box has a margin instead of running flush into the
+    // rack panel's own edges and reading as a clip.
+    out property <length> rack-padding: 20px;
+    out property <length> enclosure-reach: 14px;
+    out property <length> rack-height: root.face-height + root.rack-padding * 2;
+}
+
+// Live state of a rack reorder, written by the dragged row's header handle
+// and read by every row.
+//
+// A global rather than properties threaded through the rack, because the two
+// halves of a drag sit in different places and neither contains the other:
+// the *grab* is in the device shell, which knows which row it is and nothing
+// about the rack's geometry, and the *landing* is worked out by whichever row
+// the pointer is currently over, which knows its own bounds and nothing about
+// the grab.
+export global RackDrag {
+    // Rack index of the row being dragged, or -1.
+    in-out property <int> source: -1;
+    // Rack index the pointer is currently over. Set by the row itself from
+    // its own bounds, so a four-unit face counts as four units wide -- the
+    // reorder used to divide the pointer's travel by a nominal one-unit
+    // pitch, which meant a drag past a wide device landed short of it.
+    in-out property <int> target: -1;
+    // Pointer travel since the grab, applied to the dragged row's face.
+    //
+    // Derived from window coordinates rather than from the handle's own
+    // `mouse-x`, and that is not a preference. `mouse-x` is relative to the
+    // touch area, the touch area rides on the face, and the face is what this
+    // value moves -- so `mouse-x - pressed-x` measures the pointer against a
+    // ruler the previous frame already slid, and reports each move's
+    // increment instead of the travel. The face would twitch and stay put.
+    // `absolute-position + mouse-x` is the pointer in window coordinates
+    // whatever the element under it is doing.
+    in-out property <length> dx: 0px;
+    // Where the grab started and where the pointer is now, both in window
+    // coordinates -- the frame every row's `absolute-position` is already in.
+    in-out property <length> grab-x: 0px;
+    in-out property <length> pointer-x: 0px;
+    // Full pitch of the dragged row, which is the width of the gap the rows
+    // between the grab and the landing open up.
+    in-out property <length> source-width: 0px;
+    in-out property <bool> active: false;
+
+    public function end() {
+        active = false;
+        source = -1;
+        target = -1;
+        dx = 0px;
+    }
+}
+
+// One nesting level of a container's box, drawn behind a row's face and
+// spilling into the rack's vertical padding so a run reads as one continuous
+// well rather than as a stripe per row.
+//
+// Each row draws its own slice and the caps close themselves: a row is the
+// box's *head* when it is the container, and its right edge when the row
+// after it is shallower. `docs/plans/containers/04` argued for stripes over a
+// frame because "the rack is a horizontal sheet that wraps" -- it does not.
+// `rack-row` is one `HorizontalLayout` in a horizontally scrolling viewport,
+// so a run is always contiguous and a box is always one box.
+export component ContainerEnclosure inherits Rectangle {
+    in property <int> level;          // 1..4, outermost first
+    in property <bool> head;          // this row is the container itself
+    in property <bool> cap-right;     // the run ends here
+    property <length> inset: (root.level - 1) * 4px;
+    property <length> rail: 3px;
+    property <color> line: Theme.accent.with-alpha(0.55);
+
+    y: -DeviceRackMetrics.enclosure-reach + root.inset;
+    height: DeviceRackMetrics.face-height
+        + DeviceRackMetrics.enclosure-reach * 2 - root.inset * 2;
+    // A tray the run sits on, not a hole it sits in: `Theme.panel` behind the
+    // rack is already near black, so a darker well would read as nothing.
+    background: Theme.surface.with-alpha(0.55);
+    border-top-left-radius: root.head ? 4px : 0;
+    border-bottom-left-radius: root.head ? 4px : 0;
+    border-top-right-radius: root.cap-right ? 4px : 0;
+    border-bottom-right-radius: root.cap-right ? 4px : 0;
+
+    Rectangle { y: 0; width: parent.width; height: root.rail; background: root.line; }
+    Rectangle {
+        y: parent.height - root.rail; width: parent.width;
+        height: root.rail; background: root.line;
+    }
+    if root.head : Rectangle {
+        x: 0; width: root.rail; height: parent.height; background: root.line;
+    }
+    if root.cap-right : Rectangle {
+        x: parent.width - root.rail; width: root.rail;
+        height: parent.height; background: root.line;
+    }
 }
 
 // One row in the effect-type picker (see EffectTypeMenu). Left-aligned,
@@ -113,13 +214,10 @@ export component DeviceFrame inherits Rectangle {
 
     // --- Containers -------------------------------------------------------
     //
-    // How many containers enclose this row, and whether this row is one. A
-    // container's run is drawn as a coloured edge on every row inside it
-    // rather than as a box around the group: the rack is a horizontal sheet
-    // that wraps, so a run can start on one line and finish on the next, and
-    // a rectangle around it would have to be two rectangles that look like
-    // two containers.
-    in property <int> depth: 0;
+    // Whether this row is a container, and how many rows are inside it.
+    // Only the wording of three tooltips: the box around the run is drawn by
+    // the rack cell, which is the only thing wide enough to hold it and the
+    // only thing that can see the row after this one.
     in property <bool> is-container: false;
     in property <int> container-children: 0;
     in property <bool> wrap-enabled: false;
@@ -139,20 +237,6 @@ export component DeviceFrame inherits Rectangle {
     border-color: root.selected ? Theme.accent : Theme.border;
     border-radius: Theme.radius-md;
     clip: true;
-
-    // One stripe per enclosing container, stacked inward from the left edge.
-    // Reading the *number* of stripes is how a musician sees what is inside
-    // what; reading their colour is not asked to mean anything, because a
-    // colour per container would run out.
-    for level[nesting] in [0, 1, 2, 3] : Rectangle {
-        x: 2px + nesting * 3px;
-        y: 0px;
-        width: 2px;
-        height: parent.height;
-        visible: nesting < root.depth;
-        background: Theme.accent;
-        opacity: 0.55;
-    }
 
     // These are deliberately a shell rather than a per-effect header: source,
     // inserts, and future buffer devices all get stable insertion/preset/mix
@@ -375,28 +459,6 @@ export component DeviceFrame inherits Rectangle {
         }
     }
 
-    // One bar per enclosing container, stacked down from the top edge.
-    //
-    // Bars rather than a box around the group, because the rack is a
-    // horizontal sheet that wraps: a run can start on one line and finish on
-    // the next, and a rectangle around it would have to be two rectangles
-    // that look like two containers. Counting bars is how a musician sees
-    // what is inside what; their colour is not asked to mean anything,
-    // because a colour per container would run out.
-    //
-    // Declared last so it paints over the rails and the face, and spanning
-    // the whole frame rather than its content, so a row's nesting reads at
-    // the same glance as the row beside it.
-    for level[nesting] in [0, 1, 2, 3] : Rectangle {
-        x: 0px;
-        y: nesting * 5px;
-        width: parent.width;
-        height: 2px;
-        visible: nesting < root.depth;
-        background: Theme.accent;
-        opacity: 0.7;
-        z: 30;
-    }
 }
 
 
@@ -519,9 +581,15 @@ export component EffectDeviceShell inherits Rectangle {
     }
 
     // Drag-to-reorder handle: covers the header left of the host frame's
-    // bypass/wet-dry controls. On release, a horizontal delta past half a
-    // slot pitch (device + join) moves the device; smaller movements are
-    // ignored.
+    // bypass/wet-dry controls.
+    //
+    // This publishes the grab into `RackDrag` and reads the landing back out
+    // of it. It does not work the landing out itself, and that is the fix
+    // rather than an indirection: it used to divide the pointer's travel by
+    // `unit-width + 20px`, a *nominal* one-unit pitch, so dragging across a
+    // four-unit EQ or a two-unit compressor landed short of it by the
+    // difference. The rack's rows now report which one the pointer is over
+    // from their own bounds, which is right for any width.
     drag := TouchArea {
         x: 0px;
         y: 0px;
@@ -530,16 +598,38 @@ export component EffectDeviceShell inherits Rectangle {
         height: DeviceRackMetrics.header-height;
         mouse-cursor: move;
         pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                RackDrag.source = root.slot-index;
+                RackDrag.target = root.slot-index;
+                RackDrag.dx = 0px;
+                // Seeded here as well as in `moved`, so the rows do not
+                // decide who is under the pointer from the last drag's
+                // position before this one has moved at all.
+                RackDrag.grab-x = self.absolute-position.x + self.mouse-x;
+                RackDrag.pointer-x = RackDrag.grab-x;
+                // Face, both rails and the join: the pitch of a whole row,
+                // which is the width of the gap the rows in between open.
+                RackDrag.source-width = root.width
+                    + DeviceRackMetrics.rail-width * 2
+                    + DeviceRackMetrics.join-width;
+                RackDrag.active = true;
+            }
             if event.kind == PointerEventKind.up {
-                let pitch = DeviceRackMetrics.unit-width + 20px;
-                let delta = round((self.mouse-x - self.pressed-x) / pitch);
-                let target = clamp(root.slot-index + delta, 0, root.slot-count - 1);
-                if target != root.slot-index {
-                    root.reorder-requested(target);
+                // A press that never left this row is a selection. No
+                // distance threshold: the row under the pointer *is* the
+                // answer, so staying on your own row already means "no
+                // move" however far the pointer wandered inside it.
+                if RackDrag.target != root.slot-index && RackDrag.target >= 0 {
+                    root.reorder-requested(clamp(RackDrag.target, 0, root.slot-count - 1));
                 } else {
                     root.select-requested();
                 }
+                RackDrag.end();
             }
+        }
+        moved => {
+            RackDrag.pointer-x = self.absolute-position.x + self.mouse-x;
+            RackDrag.dx = RackDrag.pointer-x - RackDrag.grab-x;
         }
     }
 }

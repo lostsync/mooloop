@@ -685,13 +685,17 @@ fn render_effect_header_comparison() {
     write_snapshot(&snapshot, "MOOLOOP_EFFECT_HEADERS_SNAPSHOT");
 }
 
-/// A container is a rack row like any other, and the rows inside it wear one
-/// nesting bar each.
+/// A container's run is drawn as a box around it, and the box is drawn from
+/// the row model rather than from anything new crossing `main.slint`.
 ///
-/// The face contract rather than a picture: the row model carries `children`
-/// and `depth`, and this is what fails if `main.slint` stops passing them or
-/// the container branch stops matching kind 12 -- a container that drew as an
-/// empty frame would otherwise pass every other test in this file.
+/// The assertion is a comparison rather than a snapshot: the same five
+/// devices are rendered twice, once with the nesting the model describes and
+/// once flat, and the two have to differ. That is what fails if `main.slint`
+/// stops passing `children` and `depth`, if the container branch stops
+/// matching kind 12, or if `ContainerEnclosure` stops being instantiated --
+/// a rack that drew a container as an ordinary row would otherwise pass
+/// every other test in this file, which is how the previous version of this
+/// test (`shot.width() > 0`) let a container render as an empty frame.
 #[test]
 fn a_container_draws_its_run_and_its_nesting() {
     slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
@@ -731,10 +735,36 @@ fn a_container_draws_its_run_and_its_nesting() {
         effect_slot(3, 2),
     ]))));
 
-    let shot = ui.window().take_snapshot().unwrap();
-    assert!(
-        shot.width() > 0 && shot.height() > 0,
-        "the rack did not render with a container in it"
+    let nested = ui.window().take_snapshot().unwrap();
+    write_snapshot(&nested, "MOOLOOP_CONTAINER_SNAPSHOT");
+
+    // The same rack with every row at depth 0 and no container holding
+    // anything. Same devices, same widths, same order: the only thing that
+    // can differ in the pixels is the box.
+    let flat = |kind: i32| {
+        let mut row = effect_slot(kind, 1);
+        row.p0 = 0.6;
+        row
+    };
+    ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
+        flat(12),
+        flat(0),
+        flat(12),
+        flat(1),
+        flat(3),
+    ]))));
+    let unnested = ui.window().take_snapshot().unwrap();
+
+    assert_eq!(
+        (nested.width(), nested.height()),
+        (unnested.width(), unnested.height()),
+        "the two racks have to be the same size for the comparison to mean anything"
+    );
+    assert_ne!(
+        nested.as_bytes(),
+        unnested.as_bytes(),
+        "a nested run rendered identically to a flat one: the rack is not \
+         drawing a container's box"
     );
 }
 
