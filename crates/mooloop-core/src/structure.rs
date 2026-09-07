@@ -68,9 +68,7 @@ pub fn depth_at(effects: &[EffectSlotState], slot: usize) -> usize {
 
 /// The innermost container enclosing `slot`, if any.
 pub fn parent_of(effects: &[EffectSlotState], slot: usize) -> Option<usize> {
-    (0..slot.min(effects.len()))
-        .filter(|outer| span_of(effects, *outer).contains(&slot))
-        .next_back()
+    (0..slot.min(effects.len())).rfind(|outer| span_of(effects, *outer).contains(&slot))
 }
 
 /// Why `effects` is not a well-formed chain, or `None` when it is.
@@ -144,7 +142,7 @@ pub fn run_of(effects: &[EffectSlotState], slot: usize) -> std::ops::Range<usize
 /// The enclosing set is read before anything is written, because resizing an
 /// outer container moves the span that decides whether an inner one encloses
 /// the same slot.
-fn resize_enclosing(effects: &mut Vec<EffectSlotState>, slot: usize, delta: isize) {
+fn resize_enclosing(effects: &mut [EffectSlotState], slot: usize, delta: isize) {
     let enclosing: Vec<usize> = (0..slot.min(effects.len()))
         .filter(|outer| span_of(effects, *outer).contains(&slot))
         .collect();
