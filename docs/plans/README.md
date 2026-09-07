@@ -9,7 +9,10 @@ directory should always contain live work.
 `docs/FOCUS.md` decides which of these is next. This file only says what state
 each one is in.
 
-Last swept 2026-09-07, when `containers/` steps 02-05 landed: a container is a
+Last swept 2026-09-07, when `interface-iteration/` was written and the root
+focus scope was fixed -- it had been standing beside the interface rather than
+around it, which is why a shortcut needed a click on the background first.
+Earlier the same day, when `containers/` steps 02-05 landed: a container is a
 device that holds a run of devices, blends it, and saves as one preset. Before
 that, 2026-09-06, when its step 01 landed: a rack device is now an identity
 rather than a position, and `SlotRemap` is gone. Before that,
@@ -44,6 +47,7 @@ These have steps but no `00-status.md`, because nothing has landed to record.
 
 | Plan | Why it is queued |
 | --- | --- |
+| `interface-iteration/` | Four steps, written 2026-09-07. What `FOCUS.md` step 3 became when Adam decided against building the 1.0 mockup as one push: *"i think we should just keep iterating and let it take shape."* Each step exposes a mechanism that is already built and currently reachable only from a menu, a rail button, or not at all. Presets in the browser first, by Adam's call. Its `README.md` records what the plan deliberately does not decide -- the modulation rack's move, the colour-scheme ramp question, and layers. |
 | `poly-v1-mono-mode/` | One step. The only thing blocking deletion of `DeviceKind::MonoSynth`, which is what lets `MlM1` take the plain name. The held-note stack it needs already exists. |
 | `preset-system/` | **Done: steps 01-04 ran 2026-09-04 and landed on `main` after Adam confirmed the interface.** A preset's unit is a device, with relative addressing. The effect-level preset exists end to end: one rack row, no routes, no absolute addressing, `contains = ["effect_params"]` in the manifest so a later fragment format can supersede it cleanly, `presets/effects/<kind>/` on disk, an undoable load through the session, and the rack row's rail buttons wired. `PresetSummary` names three preset classes. Every effect kind ships a factory bank, seeded like the ML-M1 one. A second pass fixed the load path — an effect preset is a rack edit, not a document load — and put the preset's name in the device header. `00-status.md` records what the run found. A second entry, 2026-09-05, moves the *generator* half onto the device rail beside the effect half and gives the source device a preset label in its header. The browser, the taxonomy surface, and an updatable factory mechanism are unblocked now that DS-01's bank ships. As of 2026-09-05 the browser has a home: Adam wants preset browsing in the sample browser panel, and `FOCUS.md` step 3 carries it. |
 | `adopt-shared-biquad-in-eq/` | `effects/eq.rs:30` still declares its own `Biquad` after the shared one was promoted out of it. |

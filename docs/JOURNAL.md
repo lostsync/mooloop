@@ -994,6 +994,52 @@ carries on. That asymmetry is deliberate: a song with a malformed span still
 holds a musician's work in the right order and is worth recovering, and a
 preset that cannot describe a box is just a file.
 
+## Sep 7 (the keyboard) — the scope was standing beside the interface
+
+Adam opened the week by changing the method rather than the target: *"we were
+supposed to go straight into making the 1.0 mockup a reality but im not sure i
+want to do that anymore. i think we should just keep iterating and let it take
+shape."* `docs/plans/interface-iteration/` is what `FOCUS.md` step 3 became —
+four independent steps, each one exposing something already built, in an order
+that can be rearranged. Presets in the browser first, by his call.
+
+Before any of that, the shortcut bug, which had been on the list since August
+and confirmed in September. Three documents recorded its cause the same way:
+one root `FocusScope`, and anything focusable inside it eats the key before
+the dispatcher runs. Two of the three cited `main.slint:1253`, which by then
+pointed at nothing in particular.
+
+The diagnosis was wrong, and checking it took less time than the sentence had
+survived. Knobs and faders all reject everything but the arrow keys — four
+scopes, all of them already correct. The routing is in
+`i-slint-core-1.17.1/window.rs`: a key goes to the focused item and then walks
+*parent* items toward the window. `builtins.slint` says it from the other
+side, that a FocusScope handles keys when it has focus "or when it surrounds
+another FocusScope that has-focus". `keys` was a **sibling** of the
+`VerticalBox` holding the entire UI. It was never on anybody's parent chain.
+Clicking the background did not "give focus back" so much as give the scope
+the only condition under which it could hear anything at all.
+
+So the fix was to move a closing brace, and the interesting part is what that
+implied. Wrapping every `TouchArea` in the window inside a FocusScope
+reintroduces the two-clicks-per-control bug — a FocusScope without focus
+accepts the press that would focus it, which is what `tests/first_click.rs`
+exists to prevent — so the scope takes `focus-on-click: false`. It does not
+need focus. Surrounding the UI is what gets it the keys, and that is the whole
+difference between the two shapes.
+
+One control really was eating Space: `ToolButton`, which every toggle,
+segmented control, pane tab and mute button is built from. Space is the
+transport; Enter still activates a focused button. `accessible-role: button`
+invites the other answer and does not get it.
+
+Two things worth keeping from this. The first is that a wrong explanation
+written down confidently is worse than no explanation, because it gets copied
+— this one reached three documents and set the size of the job in all of them.
+The second is that the answer was in the vendored source the whole time, and
+`slint-sketch` type-checked the restructured `main.slint` in two seconds where
+believing the docs would have cost a four-minute build to find out.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.
@@ -1047,7 +1093,7 @@ Refreshed 2026-09-02, with the September documentation audit's threads merged in
 - The Buffer's product question is untested. The device is built and is an ordinary insert; whether routing a source into it and sequencing the result beats bouncing to a sample is what `docs/FOCUS.md` step 4 decides.
 - The tooltip audit is unfinished: the status bar exists and about forty sites feed it, but deciding per control which half of the rule it falls under has not happened, and the sampler face is not plumbed in at all.
 - The v1 mono synth cannot be deleted until its channels have somewhere to land, which is the poly mono/legato toggle in `docs/plans/poly-v1-mono-mode/`. Until then the picker lists both mono synths.
-- Keyboard focus is unreliable and it eats shortcuts, spacebar included. One root `FocusScope` reached by `forward-focus`, so anything focusable inside it consumes the key before the dispatcher runs, and the workaround is clicking a neutral background area first. Suspected since August, confirmed by Adam on 2026-09-05.
+- ~~Keyboard focus is unreliable and it eats shortcuts, spacebar included.~~ Fixed 2026-09-07, and this bullet is a good example of the failure it describes: the explanation here was wrong. The root `FocusScope` was a sibling of the UI rather than its ancestor, so keys never bubbled to it at all; the focusable things inside it were mostly innocent. Text fields are the one remaining case, and they are in `LOOSE_ENDS.md` — a caret parked in one still eats Space, because there is no way to leave a field except Enter.
 - Keyboard navigation exists in the piano roll and nowhere else. The browser tree cannot be reached or driven from the keyboard, and the roll's arrow keys move a selection without being able to build one.
 - Channels have no colour — no field in the UI, the session model, or the project format — which is the one genuinely new persisted thing the planned channel sidebar needs.
 - The modulation shelf is about to move. `UI_DESIGN.md`'s shelf section describes a location under review, and the 1.0 mockup draws the modulator as a tracker, which is the same notation `IDEAS.md` proposed for automation events. Whether those are one editor or two is unanswered.

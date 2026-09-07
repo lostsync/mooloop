@@ -49,7 +49,7 @@ no command, action, or Slint field that sets it — grep finds no `RenameBus` or
 just not reachable from the app.
 
 **Solo is a button with nothing behind it.** `SoloButton` exists in
-`controls.slint:1847` with a `soloed` property; `mooloop-core` has no solo
+`controls.slint:1856` with a `soloed` property; `mooloop-core` has no solo
 state at all. `MIXER_PLAN.md` specifies the intended behaviour (an AFL-style
 monitor tap, not a routing change). Also standing in `ENHANCEMENTS.md`.
 

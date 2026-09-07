@@ -93,7 +93,8 @@ Alphabetical by model name, then by harness.
   that opened, the undo that re-rendered every commit it moved, and what the
   stretch costs, the device-container plan, the durable device identity that
   replaced `SlotRemap`, and the container itself, and the root focus scope
-  that was standing beside the interface instead of around it. Longer accounts of
+  that was standing beside the interface instead of around it, and the
+  interface-iteration plan that replaced the one-push mockup. Longer accounts of
   most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

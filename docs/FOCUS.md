@@ -1,6 +1,7 @@
 # Focus
 
-Status: active working sequence, rewritten 2026-09-05.
+Status: active working sequence, rewritten 2026-09-05; step 3 rescoped
+2026-09-07 from one mockup-driven push into `docs/plans/interface-iteration/`.
 
 `ROADMAP.md` orders the whole product by dependency. This document is narrower:
 it names the active sequence and the work that should not interrupt it. Rewrite
@@ -198,11 +199,30 @@ knob comes to disagree with the lane drawn against it, so
 `drum_slint_agreement.rs` holds them together on bounds, resting value, and
 whether the control is drawn in ratio.
 
-### 3. The 1.0 interface shell
+### 3. The interface, iterated
 
-One push, mockup-driven. `reference/img/mooloop-1.0-mockup.png` is the target
-Adam drew; treat it as the argument for the layout, not as a pixel spec. Four
-things, and the first one gates the other three:
+**Rescoped 2026-09-07, by Adam, and the rescope is the point.** This step was
+"one push, mockup-driven", with `reference/img/mooloop-1.0-mockup.png` as the
+target. In his words that morning:
+
+> we were supposed to go straight into making the 1.0 mockup a reality but im
+> not sure i want to do that anymore. i think we should just keep iterating and
+> let it take shape.
+
+So the push became `docs/plans/interface-iteration/`: four independent steps,
+each ending in something usable, in an order that can be rearranged. The
+mockup is demoted from target to reference — a left sidebar, a right-hand
+modulation panel and a browser that earns its panel are still where this is
+heading, but the layout is likelier to be right if it is arrived at than if it
+is declared.
+
+The plan's own rule is this document's rule for interface work, applied: every
+step exposes a mechanism that is **already built** and currently reachable
+only from a menu, a rail button, or not at all. None of them adds engine
+capability.
+
+The four items as they stood follow, because the plan's steps are these and
+the notes are still the argument for them.
 
 - ~~**Keyboard and focus.**~~ *"keyboard is still wonky. you often have to
   click into a background area to make shortcuts work, even spacebar."*
@@ -236,10 +256,18 @@ things, and the first one gates the other three:
   is a device, both instrument banks now ship, and the browser was explicitly
   the thing waiting for them.
 
-Done when: every shortcut in the registry fires from anywhere it sensibly
-should, a channel's name and colour are set and saved from the sidebar,
-modulation is reachable from its new home without losing an existing gesture,
-and the browser can be driven and can load a preset without the mouse.
+Order, set by Adam on 2026-09-07: **presets in the browser first.** The
+modulation rack's move is deliberately *not* one of the plan's steps — it is
+the one piece of the mockup that is a genuine design question rather than a
+relocation, and Adam's own note says the first thing to settle is whether its
+tracker and the modulation panel are one design or two. Settle that before
+planning it.
+
+Done when: `docs/plans/interface-iteration/` has a `00-status.md` recording
+four landed steps — presets browsable and loadable from the panel, a device
+copyable between channels, a channel with a name and a colour that survive a
+save, and the action registry reaching the surfaces it never reached. Each of
+those is done on its own terms, and none waits for the others.
 
 ### 4. Turn Buffer into a composition workflow
 
@@ -291,17 +319,23 @@ breadth.
 **More modulator kinds, or raising the slot count.** Five kinds, eight slots,
 durable identity, and a measured price per slot are enough. Raising
 `MAX_MODULATORS_PER_CHANNEL` is now a one-line decision — which is the point of
-the capacity work, not an invitation to make it. Note that step 3 *moves and
-redesigns* the modulation rack; that is a relocation and a layout, not a
-licence to add kinds while it is open.
+the capacity work, not an invitation to make it. Note that the modulation
+rack's move is still coming; that is a relocation and a layout, not a licence
+to add kinds while it is open — and as of 2026-09-07 it is not a step of
+`interface-iteration/` at all, because whether its modulator is a tracker is
+an unanswered design question rather than a build.
 
 **The text-label-to-icon pass, and colour scheme support.** Both are on Adam's
 list as of 2026-09-05 and both are wanted. Both are also polish over a shell
-that step 3 is about to move, so doing either first means doing it twice. The
+that is still moving, so doing either first means doing it twice — and the
+2026-09-07 rescope does not change that, it only spreads the moving out. The
 colour work in particular has somewhere real to land — Appearance already
 derives the whole palette from three seeds plus roundness and contrast — and
-that is exactly why it can wait for the panes to stop moving. `ENHANCEMENTS.md`
-holds both in Adam's words, including the pywal/wallust half.
+that is exactly why it can wait for the panes to settle. `ENHANCEMENTS.md`
+holds both in Adam's words, including the pywal/wallust half. Note that
+`interface-iteration/` step 03 adds a *channel* colour: that is content in the
+project file, it is independent of the palette question, and it must not be
+allowed to answer it.
 
 **Parallel sends, sidechains, and plugin delay compensation for hosted
 plugins.** Still not now. But the *mixer's own* delay compensation is neither
