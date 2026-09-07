@@ -229,6 +229,15 @@ before any of them existed still loads:
   ids takes its **positions** as its ids — which is exactly what the routes
   and lanes in such a project already mean by `slot`, so an older song loads
   pointing where it pointed.
+- A row of kind `chain` is a **container**: `state.children` says how many of
+  the rows after it are inside it, and `state.mix` is the blend across that
+  run. Both default. A container does not hold its children — they are
+  ordinary rows of the same chain, so a reader that ignored `children`
+  entirely would still play every device in the right order. Two invariants a
+  well-formed chain holds, and the integrity pass reports: a span ends inside
+  the chain, and spans nest rather than straddle. A file that breaks either
+  loads with its containers flattened, because a chain of the right devices in
+  the right order is recoverable and an impossible nesting is not.
 - `channels[].setup.modulation` is that channel's `ModRack`. Only occupied
   slots are written, each with its slot index, its durable `id`, and its
   module parameters. Routes persist their durable `source` id alone; the

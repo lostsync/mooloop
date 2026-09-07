@@ -30,10 +30,131 @@
 //! [`ModRack::forget_device`]: crate::modulation::ModRack::forget_device
 
 use crate::automation::AutomationLane;
-use crate::effect::{DeviceId, EffectSlotState};
+use crate::effect::{DeviceId, EffectParams, EffectSlotState};
 use crate::mixer::EffectTarget;
 use crate::modulation::{ParamAddr, ParamOwner};
 use crate::MAX_EFFECTS_PER_CHANNEL;
+
+/// How deeply containers may nest through the gestures the interface offers.
+///
+/// A limit on the *gesture*, not on the format: a deeper chain loads and is
+/// reported by `integrity.rs` the way an over-long one is. Four, because
+/// step 03 preallocates one dry buffer per open container and the price is
+/// per-container rather than per-slot, so this bounds a real allocation
+/// without bounding anything a musician is likely to reach for.
+pub const MAX_CONTAINER_DEPTH: usize = 4;
+
+/// The run of rows `slot` encloses, as `slot + 1 .. end`.
+///
+/// Empty when `slot` holds a leaf device. Clamped to the length of the chain,
+/// so a malformed span reports what is actually there rather than a range
+/// that would panic on indexing.
+pub fn span_of(effects: &[EffectSlotState], slot: usize) -> std::ops::Range<usize> {
+    let Some(EffectParams::Chain(chain)) = effects.get(slot).map(|effect| effect.params) else {
+        return slot + 1..slot + 1;
+    };
+    let start = slot + 1;
+    start..(start + chain.children as usize).min(effects.len())
+}
+
+/// How many containers enclose `slot`.
+///
+/// Zero for a top-level row. A container is not counted as enclosing itself.
+pub fn depth_at(effects: &[EffectSlotState], slot: usize) -> usize {
+    (0..slot.min(effects.len()))
+        .filter(|outer| span_of(effects, *outer).contains(&slot))
+        .count()
+}
+
+/// The innermost container enclosing `slot`, if any.
+pub fn parent_of(effects: &[EffectSlotState], slot: usize) -> Option<usize> {
+    (0..slot.min(effects.len()))
+        .filter(|outer| span_of(effects, *outer).contains(&slot))
+        .next_back()
+}
+
+/// Why `effects` is not a well-formed chain, or `None` when it is.
+///
+/// Two invariants, and they are the whole correctness argument for holding a
+/// container's children as a span rather than a `Vec`:
+///
+/// 1. **A span ends inside the chain.** `slot + 1 + children <= len`.
+/// 2. **Spans nest.** For any two containers, one run contains the other or
+///    they are disjoint. A straddling pair is unrepresentable in a chain any
+///    edit here could produce, and is exactly what a hand-edited file could
+///    write.
+///
+/// Depth is deliberately not checked: [`MAX_CONTAINER_DEPTH`] bounds what the
+/// interface will build, not what the format may hold.
+pub fn span_problem(effects: &[EffectSlotState]) -> Option<String> {
+    let containers: Vec<(usize, usize)> = effects
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, effect)| match effect.params {
+            EffectParams::Chain(chain) => Some((slot, chain.children as usize)),
+            _ => None,
+        })
+        .collect();
+    for (slot, children) in &containers {
+        if slot + 1 + children > effects.len() {
+            return Some(format!(
+                "the container in slot {} encloses {children} devices, but the chain ends {} rows after it",
+                slot + 1,
+                effects.len() - slot - 1
+            ));
+        }
+    }
+    for (a, _) in &containers {
+        for (b, _) in &containers {
+            if a >= b {
+                continue;
+            }
+            let outer = span_of(effects, *a);
+            let inner = span_of(effects, *b);
+            // `b` starts inside `a`'s run, so `b`'s run has to end inside it
+            // too. Anything else is a straddle.
+            if outer.contains(b) && inner.end > outer.end {
+                return Some(format!(
+                    "the containers in slots {} and {} overlap without one holding the other",
+                    a + 1,
+                    b + 1
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// The rows that move, or go, when the device in `slot` does: itself, and
+/// everything inside it when it is a container.
+///
+/// Contiguous by construction, which is the property the whole representation
+/// rests on -- a container's `children` counts every row in its run at every
+/// depth, because the run is a stretch of one flat list.
+pub fn run_of(effects: &[EffectSlotState], slot: usize) -> std::ops::Range<usize> {
+    slot..span_of(effects, slot).end.max((slot + 1).min(effects.len()))
+}
+
+/// Grow or shrink every container enclosing `slot` by `delta` rows.
+///
+/// The arithmetic behind every structural edit: rows appearing or vanishing
+/// inside a box change that box's reach, and the reach of every box around
+/// it, and nothing else in the project at all.
+///
+/// The enclosing set is read before anything is written, because resizing an
+/// outer container moves the span that decides whether an inner one encloses
+/// the same slot.
+fn resize_enclosing(effects: &mut Vec<EffectSlotState>, slot: usize, delta: isize) {
+    let enclosing: Vec<usize> = (0..slot.min(effects.len()))
+        .filter(|outer| span_of(effects, *outer).contains(&slot))
+        .collect();
+    for outer in enclosing {
+        if let EffectParams::Chain(chain) = &mut effects[outer].params {
+            let grown = (chain.children as isize + delta).clamp(0, u8::MAX as isize);
+            chain.children = grown as u8;
+        }
+    }
+}
 
 /// Hand out the next device identity from `next`, advancing the mint.
 ///
@@ -81,10 +202,17 @@ pub fn assign_device_ids(effects: &mut [EffectSlotState], next_id: &mut u32) {
     }
 }
 
-/// Move the device at `from` to position `to`. Returns whether anything
-/// moved: `false` when either position is out of range, or they are equal.
+/// Move the device at `from` so that it lands at position `to`, taking its
+/// run with it when it is a container. Returns whether anything moved.
 ///
-/// Nothing else happens. This used to return a permutation that every route,
+/// `to` is where the device ends up, which is what the rack's drag reports
+/// and what this has always meant; a container's *head* lands there and its
+/// contents follow. Whether it lands inside another box is then simply where
+/// that index falls, which is why dropping a container into itself needs no
+/// refusal: after its own run is lifted out, none of the remaining positions
+/// is inside it.
+///
+/// No address is touched. This used to return a permutation that every route,
 /// every lane, the visible automation target, an in-flight save dialog and
 /// the engine's mirror all had to run; a reorder is now invisible to all of
 /// them.
@@ -92,8 +220,18 @@ pub fn move_effect(effects: &mut Vec<EffectSlotState>, from: usize, to: usize) -
     if from >= effects.len() || to >= effects.len() || from == to {
         return false;
     }
-    let effect = effects.remove(from);
-    effects.insert(to, effect);
+    let run = run_of(effects, from);
+    let len = run.len();
+    // Out of the boxes it was in, then into the boxes it lands in. Two
+    // separate facts, and doing them in one pass is how a chain ends up
+    // describing a shape it does not have.
+    resize_enclosing(effects, from, -(len as isize));
+    let moved: Vec<EffectSlotState> = effects.drain(run).collect();
+    let at = to.min(effects.len());
+    resize_enclosing(effects, at, len as isize);
+    let tail = effects.split_off(at);
+    effects.extend(moved);
+    effects.extend(tail);
     true
 }
 
@@ -110,19 +248,98 @@ pub fn insert_effect(
         return None;
     }
     let at = at.min(effects.len());
+    // Every container whose run `at` falls inside gains a row. Landing on a
+    // run's end boundary is landing *after* the container, not in it, which
+    // is what makes "insert before slot N" mean the same thing at every
+    // depth.
+    resize_enclosing(effects, at, 1);
     effects.insert(at, effect.with_id(mint_device_id(next_id)));
     Some(at)
 }
 
-/// Remove the device at `at` and return it, identity included. `None` when
-/// there is nothing there.
+/// Remove the device at `at`, and its whole run when it is a container.
+/// Returns what went, in rack order, container first. `None` when there is
+/// nothing there.
 ///
-/// The returned state's `id` is what the caller drops routes and lanes by.
-pub fn remove_effect(effects: &mut Vec<EffectSlotState>, at: usize) -> Option<EffectSlotState> {
+/// **A box is deleted with its contents.** That is what "bypasses as a unit,
+/// saves as one preset" implies about deletion too; emptying the box first is
+/// the user's business, and step 04 gives them an unwrap gesture so it is one
+/// click rather than N drags.
+///
+/// The returned states' `id`s are what the caller drops routes and lanes by.
+pub fn remove_effect(
+    effects: &mut Vec<EffectSlotState>,
+    at: usize,
+) -> Option<Vec<EffectSlotState>> {
     if at >= effects.len() {
         return None;
     }
-    Some(effects.remove(at))
+    let run = run_of(effects, at);
+    resize_enclosing(effects, at, -(run.len() as isize));
+    Some(effects.drain(run).collect())
+}
+
+/// Take the container in `at` out of the chain, leaving its children where
+/// they are. Returns whether it was a container at all.
+///
+/// The escape hatch that makes [`remove_effect`]'s "a box goes with its
+/// contents" safe to have.
+pub fn unwrap_container(effects: &mut Vec<EffectSlotState>, at: usize) -> bool {
+    if !matches!(
+        effects.get(at).map(|effect| effect.params),
+        Some(EffectParams::Chain(_))
+    ) {
+        return false;
+    }
+    // The children stay, so every enclosing container loses exactly the one
+    // row the container itself occupied.
+    resize_enclosing(effects, at, -1);
+    effects.remove(at);
+    true
+}
+
+/// Wrap `run` in a new container, minting it an identity. Returns the slot
+/// the container landed in, or `None` when the range is empty, out of range,
+/// or would split a container's run.
+///
+/// The gesture the interface actually offers: a container is far more often
+/// made around devices that already exist than inserted empty.
+pub fn wrap_in_container(
+    effects: &mut Vec<EffectSlotState>,
+    next_id: &mut u32,
+    run: std::ops::Range<usize>,
+    container: EffectSlotState,
+) -> Option<usize> {
+    if run.is_empty() || run.end > effects.len() || effects.len() >= MAX_EFFECTS_PER_CHANNEL {
+        return None;
+    }
+    // The selection has to be a whole number of complete runs with one
+    // parent between them. Walking it run by run is the check: landing
+    // anywhere but exactly on the end means the range cuts a container in
+    // half, and a straddle is the one shape this representation cannot
+    // describe.
+    let parent = parent_of(effects, run.start);
+    let mut slot = run.start;
+    while slot < run.end {
+        if parent_of(effects, slot) != parent {
+            return None;
+        }
+        slot = run_of(effects, slot).end;
+    }
+    if slot != run.end {
+        return None;
+    }
+    let mut container = container;
+    if let EffectParams::Chain(chain) = &mut container.params {
+        chain.children = u8::try_from(run.len()).ok()?;
+    } else {
+        return None;
+    }
+    // The rows do not move, so nothing enclosing them changes reach except by
+    // the one row the container itself adds.
+    resize_enclosing(effects, run.start, 1);
+    effects.insert(run.start, container.with_id(mint_device_id(next_id)));
+    Some(run.start)
 }
 
 /// Where the device `address` names currently sits in `effects`, or `None`
@@ -318,8 +535,7 @@ mod tests {
         remove_effect(&mut effects, 3);
         assert_eq!(slot_of(&effects, drive), Some(0), "a removal below it");
 
-        let removed = remove_effect(&mut effects, 0).expect("removed");
-        assert_eq!(removed.id, effects.first().map_or(removed.id, |_| removed.id));
+        remove_effect(&mut effects, 0).expect("removed");
         assert_eq!(slot_of(&effects, drive), None, "its own removal");
     }
 
@@ -358,7 +574,8 @@ mod tests {
         assert_eq!(before, after);
 
         let removed = remove_effect(&mut effects, 2).expect("removed");
-        assert!(drop_lanes_for_device(&mut lanes, SCOPE, removed.id));
+        let removed = removed[0].id;
+        assert!(drop_lanes_for_device(&mut lanes, SCOPE, removed));
         assert_eq!(
             lanes.iter().map(|lane| lane.target).collect::<Vec<_>>(),
             [before[0], before[2], before[3]]
@@ -368,7 +585,7 @@ mod tests {
         assert!(!drop_lanes_for_device(
             &mut lanes,
             EffectTarget::Bus(0),
-            removed.id
+            removed
         ));
     }
 
@@ -394,6 +611,225 @@ mod tests {
         )
         .unwrap();
         assert_eq!(slot, 1, "an insert past the end lands at the end");
+    }
+
+    // --- Containers ---------------------------------------------------
+
+    fn container() -> EffectSlotState {
+        EffectSlotState::of_kind(EffectKind::Chain)
+    }
+
+    /// The chain as a shape: each row's kind, indented by how many containers
+    /// enclose it. What a well-formed chain looks like at a glance, and the
+    /// only thing these tests need to compare.
+    fn shape(effects: &[EffectSlotState]) -> Vec<(usize, EffectKind)> {
+        (0..effects.len())
+            .map(|slot| (depth_at(effects, slot), effects[slot].kind()))
+            .collect()
+    }
+
+    /// Wrapping does not move anything. It adds one row and gives it a reach.
+    #[test]
+    fn wrapping_a_run_leaves_every_device_where_it_was() {
+        let mut effects = chain(&[EffectKind::Filter, EffectKind::Drive, EffectKind::Delay]);
+        let mut next = effects.len() as u32;
+        let ids: Vec<DeviceId> = effects.iter().map(|effect| effect.id).collect();
+
+        let at = wrap_in_container(&mut effects, &mut next, 1..3, container()).expect("wrapped");
+        assert_eq!(at, 1);
+        assert_eq!(
+            shape(&effects),
+            [
+                (0, EffectKind::Filter),
+                (0, EffectKind::Chain),
+                (1, EffectKind::Drive),
+                (1, EffectKind::Delay),
+            ]
+        );
+        // Every original device is still on the chain, in order, wearing the
+        // identity it had.
+        assert_eq!(device_slot(&effects, ids[0]), Some(0));
+        assert_eq!(device_slot(&effects, ids[1]), Some(2));
+        assert_eq!(device_slot(&effects, ids[2]), Some(3));
+        assert_eq!(span_problem(&effects), None);
+    }
+
+    /// A selection that would cut a container's run in half is refused rather
+    /// than producing a straddle nothing downstream could interpret.
+    #[test]
+    fn wrapping_half_of_a_run_is_refused() {
+        let mut effects = chain(&[EffectKind::Filter, EffectKind::Drive, EffectKind::Delay]);
+        let mut next = effects.len() as u32;
+        wrap_in_container(&mut effects, &mut next, 1..3, container()).expect("wrapped");
+        let before = shape(&effects);
+        // Slots 1..3 are the container and its first child: half a run.
+        assert!(wrap_in_container(&mut effects, &mut next, 1..3, container()).is_none());
+        // And 2..3 is one child of two, which is the same cut from inside.
+        assert!(wrap_in_container(&mut effects, &mut next, 2..4, container()).is_some());
+        assert_ne!(shape(&effects), before);
+    }
+
+    /// Inserting inside a box grows it, and grows every box around it.
+    /// Inserting at a run's end boundary lands after the container.
+    #[test]
+    fn an_insert_inside_a_container_grows_every_box_around_it() {
+        let mut effects = chain(&[EffectKind::Filter, EffectKind::Drive]);
+        let mut next = effects.len() as u32;
+        wrap_in_container(&mut effects, &mut next, 0..2, container()).expect("outer");
+        wrap_in_container(&mut effects, &mut next, 1..3, container()).expect("inner");
+        assert_eq!(
+            shape(&effects),
+            [
+                (0, EffectKind::Chain),
+                (1, EffectKind::Chain),
+                (2, EffectKind::Filter),
+                (2, EffectKind::Drive),
+            ]
+        );
+
+        insert_effect(&mut effects, &mut next, 3, EffectSlotState::of_kind(EffectKind::Gate));
+        assert_eq!(
+            shape(&effects),
+            [
+                (0, EffectKind::Chain),
+                (1, EffectKind::Chain),
+                (2, EffectKind::Filter),
+                (2, EffectKind::Gate),
+                (2, EffectKind::Drive),
+            ],
+            "the gate did not land inside both boxes"
+        );
+        assert_eq!(span_problem(&effects), None);
+
+        // Past the end of every run is outside every run.
+        insert_effect(&mut effects, &mut next, 5, EffectSlotState::of_kind(EffectKind::Limiter));
+        assert_eq!(depth_at(&effects, 5), 0, "the limiter was swallowed");
+        assert_eq!(span_problem(&effects), None);
+    }
+
+    /// A box is removed with its contents, and the boxes around it close up
+    /// by the whole run rather than by one row.
+    #[test]
+    fn removing_a_container_takes_its_run_and_shrinks_its_parent() {
+        let mut effects = chain(&[
+            EffectKind::Filter,
+            EffectKind::Drive,
+            EffectKind::Delay,
+            EffectKind::Gate,
+        ]);
+        let mut next = effects.len() as u32;
+        wrap_in_container(&mut effects, &mut next, 1..3, container()).expect("inner");
+        wrap_in_container(&mut effects, &mut next, 0..5, container()).expect("outer");
+        assert_eq!(
+            shape(&effects),
+            [
+                (0, EffectKind::Chain),
+                (1, EffectKind::Filter),
+                (1, EffectKind::Chain),
+                (2, EffectKind::Drive),
+                (2, EffectKind::Delay),
+                (1, EffectKind::Gate),
+            ]
+        );
+
+        let removed = remove_effect(&mut effects, 2).expect("removed");
+        assert_eq!(
+            removed.iter().map(EffectSlotState::kind).collect::<Vec<_>>(),
+            [EffectKind::Chain, EffectKind::Drive, EffectKind::Delay],
+            "the box came out without its contents"
+        );
+        assert_eq!(
+            shape(&effects),
+            [
+                (0, EffectKind::Chain),
+                (1, EffectKind::Filter),
+                (1, EffectKind::Gate),
+            ]
+        );
+        assert_eq!(span_problem(&effects), None);
+    }
+
+    /// Unwrapping is the escape hatch that makes deleting-with-contents safe.
+    #[test]
+    fn unwrapping_keeps_the_children_and_costs_the_parent_one_row() {
+        let mut effects = chain(&[EffectKind::Filter, EffectKind::Drive, EffectKind::Delay]);
+        let mut next = effects.len() as u32;
+        wrap_in_container(&mut effects, &mut next, 1..3, container()).expect("inner");
+        wrap_in_container(&mut effects, &mut next, 0..4, container()).expect("outer");
+
+        assert!(unwrap_container(&mut effects, 2));
+        assert_eq!(
+            shape(&effects),
+            [
+                (0, EffectKind::Chain),
+                (1, EffectKind::Filter),
+                (1, EffectKind::Drive),
+                (1, EffectKind::Delay),
+            ]
+        );
+        assert_eq!(span_problem(&effects), None);
+        assert!(!unwrap_container(&mut effects, 1), "a leaf is not a box");
+    }
+
+    /// A container moves as a unit, out of what it was in and into what it
+    /// lands in.
+    #[test]
+    fn moving_a_container_carries_its_run_and_reparents_it() {
+        let mut effects = chain(&[
+            EffectKind::Filter,
+            EffectKind::Drive,
+            EffectKind::Delay,
+            EffectKind::Gate,
+        ]);
+        let mut next = effects.len() as u32;
+        wrap_in_container(&mut effects, &mut next, 0..2, container()).expect("box");
+        // Chain, Filter, Drive, Delay, Gate. The box lands at index 1, which
+        // is after the delay once its own three rows are lifted out.
+        assert!(move_effect(&mut effects, 0, 1));
+        assert_eq!(
+            shape(&effects),
+            [
+                (0, EffectKind::Delay),
+                (0, EffectKind::Chain),
+                (1, EffectKind::Filter),
+                (1, EffectKind::Drive),
+                (0, EffectKind::Gate),
+            ],
+            "the box did not take its contents to its new home"
+        );
+        assert_eq!(span_problem(&effects), None);
+
+        // Dropping a leaf into the run puts it in the box.
+        assert!(move_effect(&mut effects, 4, 2));
+        assert_eq!(depth_at(&effects, 2), 1, "the gate did not go into the box");
+        assert_eq!(span_problem(&effects), None);
+    }
+
+    /// A hand-edited file is a real input, so the two invariants are reported
+    /// rather than asserted.
+    #[test]
+    fn a_malformed_span_is_reported_rather_than_trusted() {
+        let mut effects = chain(&[EffectKind::Chain, EffectKind::Filter]);
+        if let EffectParams::Chain(chain) = &mut effects[0].params {
+            chain.children = 9;
+        }
+        assert!(span_problem(&effects)
+            .is_some_and(|problem| problem.contains("the chain ends")));
+
+        // Two boxes that overlap without one holding the other.
+        let mut effects = chain(&[
+            EffectKind::Chain,
+            EffectKind::Chain,
+            EffectKind::Filter,
+            EffectKind::Drive,
+        ]);
+        if let EffectParams::Chain(chain) = &mut effects[0].params {
+            chain.children = 2;
+        }
+        if let EffectParams::Chain(chain) = &mut effects[1].params {
+            chain.children = 2;
+        }
+        assert!(span_problem(&effects).is_some_and(|problem| problem.contains("overlap")));
     }
 
     #[test]

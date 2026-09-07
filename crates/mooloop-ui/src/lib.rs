@@ -778,6 +778,7 @@ fn effect_kind_index(kind: EffectKind) -> i32 {
         EffectKind::Modulation => 9,
         EffectKind::Plate => 10,
         EffectKind::Buffer => 11,
+        EffectKind::Chain => 12,
     }
 }
 
@@ -796,6 +797,9 @@ fn effect_kind_units(kind: EffectKind) -> i32 {
         EffectKind::Reverb => 3,
         EffectKind::Modulation => 2,
         EffectKind::Eq => 2,
+        // One unit: a name, a mix, and a collapse. The devices it holds are
+        // rows of their own and carry their own width.
+        EffectKind::Chain => 1,
     }
 }
 
@@ -824,6 +828,7 @@ fn effect_slot_row(
     slot: &EffectSlotState,
     presets: &[PresetSummary],
     preset_name: Option<&str>,
+    depth: i32,
 ) -> EffectSlotRow {
     let kind = slot.kind();
     let preset_options: Vec<slint::SharedString> = effect_presets_of_kind(presets, kind)
@@ -902,6 +907,11 @@ fn effect_slot_row(
         buffer_collisions: 0,
         detector_db: METER_FLOOR_DB,
         gain_reduction_db: 0.0,
+        children: match slot.params {
+            mooloop_core::EffectParams::Chain(chain) => chain.children as i32,
+            _ => 0,
+        },
+        depth,
     }
 }
 
@@ -2170,7 +2180,11 @@ impl UiState {
 
     /// Re-draws one device-rack row from the slot behind it.
     fn refresh_effect_row(&self, slot: usize) {
-        if let Some(effect) = self.session.effect_chain().and_then(|chain| chain.get(slot)) {
+        let Some(chain) = self.session.effect_chain() else {
+            return;
+        };
+        if let Some(effect) = chain.get(slot) {
+            let depth = mooloop_core::depth_at(chain, slot) as i32;
             self.effect_slot_model.set_row_data(
                 slot,
                 effect_slot_row(
@@ -2178,6 +2192,7 @@ impl UiState {
                     &self.session.effect_presets,
                     self.session
                         .effect_preset_name(self.session.effect_target, effect.id),
+                    depth,
                 ),
             );
         }
@@ -2225,7 +2240,8 @@ impl UiState {
                     state
                         .effects
                         .iter()
-                        .map(|effect| {
+                        .enumerate()
+                        .map(|(slot, effect)| {
                             let mut row = effect_slot_row(
                                 effect,
                                 &self.session.effect_presets,
@@ -2233,6 +2249,7 @@ impl UiState {
                                     EffectTarget::Channel(channel),
                                     effect.id,
                                 ),
+                                mooloop_core::depth_at(&state.effects, slot) as i32,
                             );
                             let descriptors = effect.kind().descriptors();
                             row.modulation_depths =
@@ -2270,11 +2287,13 @@ impl UiState {
                     .map(|effects| {
                         effects
                             .iter()
-                            .map(|effect| {
+                            .enumerate()
+                            .map(|(slot, effect)| {
                                 effect_slot_row(
                                     effect,
                                     &self.session.effect_presets,
                                     self.session.effect_preset_name(target, effect.id),
+                                    mooloop_core::depth_at(effects, slot) as i32,
                                 )
                             })
                             .collect()
@@ -6598,17 +6617,24 @@ impl AppUi {
                     st.refresh_modulation(&window);
                     // Mirror on the engine: move the device to the vacated tail, then
                     // drop the tail. Its routes and lanes ride along and go with it.
-                    if removed.slot != removed.tail {
-                        let _ = tx.send(EngineCommand::MoveEffect {
+                    // Once per removed row, always from `slot`: after each
+                    // removal the next row of the run has slid into that
+                    // position. More than one row when the device was a
+                    // container, because a box goes with its contents.
+                    for step in 0..removed.devices.len() {
+                        let tail = removed.tail - step;
+                        if removed.slot != tail {
+                            let _ = tx.send(EngineCommand::MoveEffect {
+                                target: removed.target,
+                                from: removed.slot as u8,
+                                to: tail as u8,
+                            });
+                        }
+                        let _ = stx.send(StructuralCommand::RemoveEffect {
                             target: removed.target,
-                            from: removed.slot as u8,
-                            to: removed.tail as u8,
+                            slot: tail as u8,
                         });
                     }
-                    let _ = stx.send(StructuralCommand::RemoveEffect {
-                        target: removed.target,
-                        slot: removed.tail as u8,
-                    });
                 }
                 record_project_history(&commands, before, &st, &window, "Effect removed");
             });

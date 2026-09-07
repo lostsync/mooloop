@@ -53,6 +53,10 @@ pub fn patches(kind: EffectKind) -> Vec<EffectFactoryPatch> {
         EffectKind::Compressor => compressor(),
         EffectKind::Limiter => limiter(),
         EffectKind::Buffer => buffer(),
+        // A container has one control and it is a mix. There is no patch of
+        // it to ship, and a bank of one-knob presets would be noise in the
+        // menu rather than a demonstration of range.
+        EffectKind::Chain => Vec::new(),
     }
 }
 
@@ -704,10 +708,21 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
+    /// A container ships no bank. It has one control and that control is a
+    /// mix, so there is no patch of it to author and a menu of one-knob
+    /// presets would be noise rather than a demonstration of range. Named
+    /// here rather than skipped silently, because "this kind has no bank" is
+    /// a claim about the kind and not a gap in the content.
+    const NO_BANK: [EffectKind; 1] = [EffectKind::Chain];
+
     #[test]
     fn every_kind_has_a_bank_of_its_own_kind() {
         for kind in EffectKind::ALL {
             let bank = patches(kind);
+            if NO_BANK.contains(&kind) {
+                assert!(bank.is_empty(), "{kind:?} grew a bank without a reason");
+                continue;
+            }
             assert!(bank.len() >= 5, "{kind:?} has only {} patches", bank.len());
             for patch in &bank {
                 assert_eq!(patch.effect.kind(), kind, "{} is the wrong kind", patch.name);

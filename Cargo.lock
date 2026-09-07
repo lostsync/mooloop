@@ -3032,9 +3032,11 @@ dependencies = [
  "jack",
  "mooloop-core",
  "mooloop-dsp",
+ "mooloop-project",
  "mp3lame-encoder",
  "rtrb",
  "tempfile",
+ "toml",
 ]
 
 [[package]]

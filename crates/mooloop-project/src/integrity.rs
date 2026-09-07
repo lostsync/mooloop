@@ -677,6 +677,7 @@ fn check_buses(doctor: &mut Doctor, project: &mut Project) {
                 ),
             );
         }
+        check_spans(doctor, &name, &mut setup.effects);
         for (slot, effect) in setup.effects.iter_mut().enumerate() {
             check_effect(doctor, &name, slot, effect);
         }
@@ -1116,11 +1117,36 @@ fn check_setup(doctor: &mut Doctor, index: usize, setup: &mut ChannelSetup) {
             ),
         );
     }
+    check_spans(doctor, &who, &mut setup.effects);
     for (slot, effect) in setup.effects.iter_mut().enumerate() {
         check_effect(doctor, &who, slot, effect);
     }
     check_modulation(doctor, &who, &mut setup.modulation);
     check_source(doctor, &who, &mut setup.source);
+}
+
+/// A malformed container span is damage a hand-edited file can write and no
+/// edit can produce, and there is no correction that keeps what the author
+/// meant -- a straddling pair of boxes does not describe a shape. Flattening
+/// every container is the repair, because a chain of the right devices in the
+/// right order with no boxes is recoverable, and a chain describing an
+/// impossible nesting is not.
+fn check_spans(doctor: &mut Doctor, who: &str, effects: &mut Vec<EffectSlotState>) {
+    let Some(problem) = mooloop_core::span_problem(effects) else {
+        return;
+    };
+    let containers = effects
+        .iter()
+        .filter(|effect| effect.kind() == EffectKind::Chain)
+        .count();
+    if doctor.correct(
+        "effect.container.span",
+        who,
+        problem,
+        format!("remove {containers} container(s), keeping every device inside them"),
+    ) {
+        effects.retain(|effect| effect.kind() != EffectKind::Chain);
+    }
 }
 
 /// Effect settings are bounded by their descriptors on the way in, so this

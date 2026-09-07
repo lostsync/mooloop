@@ -24,6 +24,9 @@ pub enum EffectKind {
     Compressor,
     Limiter,
     Buffer,
+    /// A container: a device that holds an ordered run of the devices after
+    /// it. See `docs/plans/containers/02-the-container-is-a-device.md`.
+    Chain,
 }
 
 /// Base-rate frames of latency the 2x oversampler's interpolate/process/
@@ -63,12 +66,17 @@ impl EffectKind {
             | Self::Gate
             | Self::Compressor
             | Self::Limiter
-            | Self::Buffer => 0,
+            | Self::Buffer
+            // A container declares nothing of its own. Its children are rows
+            // of the same chain, so `chain_latency` already counts them; a
+            // sum here would count them twice. See question 4 in
+            // `docs/plans/containers/README.md`.
+            | Self::Chain => 0,
         }
     }
 
     /// Every kind, in the order the UI offers them when adding an effect.
-    pub const ALL: [EffectKind; 12] = [
+    pub const ALL: [EffectKind; 13] = [
         EffectKind::Eq,
         EffectKind::Modulation,
         EffectKind::Filter,
@@ -81,6 +89,7 @@ impl EffectKind {
         EffectKind::Compressor,
         EffectKind::Limiter,
         EffectKind::Buffer,
+        EffectKind::Chain,
     ];
 
     /// Display name for device headers and the add-effect picker.
@@ -98,6 +107,7 @@ impl EffectKind {
             Self::Compressor => "Comp",
             Self::Limiter => "Limiter",
             Self::Buffer => "Buffer",
+            Self::Chain => "Chain",
         }
     }
 
@@ -117,6 +127,7 @@ impl EffectKind {
             Self::Compressor => &COMPRESSOR_DESCRIPTORS,
             Self::Limiter => &LIMITER_DESCRIPTORS,
             Self::Buffer => &BUFFER_DESCRIPTORS,
+            Self::Chain => &CHAIN_DESCRIPTORS,
         }
     }
 
@@ -140,6 +151,7 @@ impl EffectKind {
             Self::Compressor => EffectParams::Compressor(CompressorParams::default()),
             Self::Limiter => EffectParams::Limiter(LimiterParams::default()),
             Self::Buffer => EffectParams::Buffer(BufferParams::default()),
+            Self::Chain => EffectParams::Chain(ChainParams::default()),
         }
     }
 }
@@ -1843,6 +1855,61 @@ static BUFFER_DESCRIPTORS: [ParamDescriptor; 2] = [
     },
 ];
 
+/// A container's own state.
+///
+/// **A container does not hold its children.** `children` says how many of the
+/// rows *after* this one are inside it, and those rows live in the same
+/// `Vec<EffectSlotState>` as this one does. The tree is derived from the flat
+/// list, exactly as a device's rack position is derived from its identity.
+///
+/// That is what keeps `EffectParams`, [`EffectSlotState`] and
+/// `EngineCommand` `Copy` -- the command ring is preallocated POD and a `Vec`
+/// in here would break all three at once -- and it is what makes "the rack
+/// cannot tell the difference between a container and a leaf device"
+/// structurally true rather than an invariant somebody has to maintain.
+/// `docs/plans/containers/02-the-container-is-a-device.md` states the two
+/// invariants the representation has to hold.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ChainParams {
+    /// How many of the rows following this one are inside it.
+    #[serde(default)]
+    pub children: u8,
+    /// Dry/wet across the whole run. Inert until step 03 gives the container
+    /// its dry path; a container at any mix is currently transparent.
+    #[serde(default = "default_chain_mix")]
+    pub mix: f32,
+}
+
+fn default_chain_mix() -> f32 {
+    1.0
+}
+
+impl Default for ChainParams {
+    fn default() -> Self {
+        Self {
+            children: 0,
+            mix: 1.0,
+        }
+    }
+}
+
+/// `Event::ParamValue` ids for [`ChainParams`].
+///
+/// `children` is deliberately absent, for the same reason `BufferParams.bars`
+/// is: it is structure rather than a control. A curve drawn on it would
+/// rewrite the shape of the chain from the audio thread.
+pub const CHAIN_PARAM_MIX: u32 = 0;
+
+static CHAIN_DESCRIPTORS: [ParamDescriptor; 1] = [ParamDescriptor {
+    id: CHAIN_PARAM_MIX,
+    name: "Mix",
+    unit: "",
+    min: 0.0,
+    max: 1.0,
+    curve: ParamCurve::Linear,
+    default: 1.0,
+}];
+
 impl Default for LimiterParams {
     fn default() -> Self {
         Self {
@@ -1872,6 +1939,7 @@ pub enum EffectParams {
     Compressor(CompressorParams),
     Limiter(LimiterParams),
     Buffer(BufferParams),
+    Chain(ChainParams),
 }
 
 impl EffectParams {
@@ -1889,6 +1957,7 @@ impl EffectParams {
             Self::Compressor(_) => EffectKind::Compressor,
             Self::Limiter(_) => EffectKind::Limiter,
             Self::Buffer(_) => EffectKind::Buffer,
+            Self::Chain(_) => EffectKind::Chain,
         }
     }
 
@@ -2105,6 +2174,10 @@ impl EffectParams {
                 BUFFER_PARAM_CROSSFADE_MS => Some(p.crossfade_ms),
                 _ => None,
             },
+            Self::Chain(p) => match id {
+                CHAIN_PARAM_MIX => Some(p.mix),
+                _ => None,
+            },
         }
     }
 
@@ -2236,6 +2309,10 @@ impl EffectParams {
             Self::Buffer(p) => match id {
                 BUFFER_PARAM_OFFSET_BEATS => p.offset_beats = value,
                 BUFFER_PARAM_CROSSFADE_MS => p.crossfade_ms = value,
+                _ => return None,
+            },
+            Self::Chain(p) => match id {
+                CHAIN_PARAM_MIX => p.mix = value,
                 _ => return None,
             },
         }

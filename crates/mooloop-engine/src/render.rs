@@ -476,6 +476,16 @@ impl EffectChain {
         self.slot(slot).is_some_and(|slot| slot.bypassed)
     }
 
+    /// Whether this slot holds a container rather than a leaf device.
+    ///
+    /// A container has no signal path of its own: its children are rows of
+    /// this same chain, which the loop is already about to run in order.
+    fn is_container(&self, slot: usize) -> bool {
+        self.slot(slot)
+            .and_then(|state| state.kind)
+            .is_some_and(|kind| kind == mooloop_core::EffectKind::Chain)
+    }
+
     fn wet_dry(&self, slot: usize) -> f32 {
         self.slot(slot).map_or(1.0, |slot| slot.wet_dry)
     }
@@ -983,6 +993,28 @@ impl EffectChain {
                 if let Some((meters, _, target)) = device_display {
                     meters.publish_input(target, slot + 1, left, right);
                     meters.publish_output(target, slot + 1, left, right);
+                }
+                continue;
+            }
+            if self.is_container(slot) {
+                // **A container is transparent, and not approximately.** Its
+                // `mix` is a blend across its whole run, which the chain host
+                // learns to apply in step 03 of
+                // `docs/plans/containers/`; running the *slot's* leaf
+                // wet/dry over it instead would be both meaningless and, on
+                // account of the equal-power crossfade, not bit-exact -- a
+                // transparent node blended at unity still leaks a
+                // cos(pi/2) of the dry. Passing the bus straight through is
+                // what lets step 03's null test have something to null
+                // against.
+                let (left, right) = bus.peak(context.frames);
+                self.note_input_level(slot, left.max(right), context.frames);
+                if let Some((meters, _, target)) = device_display {
+                    meters.publish_input(target, slot + 1, left, right);
+                    meters.publish_output(target, slot + 1, left, right);
+                }
+                if let Some(state) = self.slots[slot].as_mut() {
+                    state.events.clear();
                 }
                 continue;
             }
@@ -6068,6 +6100,13 @@ mod tests {
                     // Follow is deliberately transparent until an atomic
                     // buffer event arrives.
                 }
+                mooloop_core::EffectKind::Chain => {
+                    // A container is transparent by construction and stays
+                    // that way: its mix belongs to the chain host, not to the
+                    // node in the slot. `docs/plans/containers/03` gives the
+                    // host that dry path, and this arm is where a container
+                    // that started processing audio itself would be caught.
+                }
             }
 
             let wet = rendered_energy(&project, |render| {
@@ -6077,13 +6116,19 @@ mod tests {
                     build_effect(params, 48_000),
                 ));
             });
-            if kind == mooloop_core::EffectKind::Buffer {
-                // Follow passes audio through untouched; equal-power leaks a
-                // cos(pi/2) ~ 6e-8 of the aligned dry alongside it, which is
-                // inaudible but not bit-exact.
+            // Two kinds are transparent on purpose, for two different
+            // reasons: Follow passes audio through until an atomic buffer
+            // event arrives, and a container has no signal path of its own.
+            // Equal-power leaks a cos(pi/2) ~ 6e-8 of the aligned dry
+            // alongside either, which is inaudible but not bit-exact.
+            if matches!(
+                kind,
+                mooloop_core::EffectKind::Buffer | mooloop_core::EffectKind::Chain
+            ) {
                 assert!(
                     (wet - dry).abs() < dry * 1.0e-5,
-                    "buffer Follow must be transparent: dry {dry}, wet {wet}"
+                    "{} must be transparent: dry {dry}, wet {wet}",
+                    kind.label()
                 );
             } else {
                 assert!(

@@ -40,6 +40,8 @@ mod audio_edge_tests;
 #[cfg(test)]
 mod block_cost;
 #[cfg(test)]
+mod container_tests;
+#[cfg(test)]
 mod ds01_tests;
 #[cfg(test)]
 mod gain_structure_tests;

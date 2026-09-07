@@ -599,6 +599,7 @@ fn effect_kind_slug(kind: EffectKind) -> &'static str {
         EffectKind::Compressor => "compressor",
         EffectKind::Limiter => "limiter",
         EffectKind::Buffer => "buffer",
+        EffectKind::Chain => "chain",
     }
 }
 

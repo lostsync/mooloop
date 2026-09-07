@@ -10,6 +10,7 @@
 //! `docs/MODULATION_PLAN.md` for why the split falls there.
 
 mod bitcrush;
+mod container;
 mod delay;
 mod drive;
 mod dynamics;
@@ -27,6 +28,7 @@ pub use eq::EqEffect;
 pub use filter::FilterEffect;
 pub use modulation::ModulationEffect;
 pub use plate::PlateEffect;
+pub use container::ContainerEffect;
 pub use reverb::ReverbEffect;
 
 use mooloop_core::EffectParams;
@@ -69,6 +71,10 @@ pub fn build_effect_at_tempo(
         EffectParams::Compressor(p) => Box::new(CompressorEffect::new(p, sample_rate)),
         EffectParams::Limiter(p) => Box::new(LimiterEffect::new(p, sample_rate)),
         EffectParams::Buffer(p) => Box::new(crate::BufferDevice::new(p, sample_rate, bpm)),
+        // Transparent, and deliberately so: a container's mix belongs to the
+        // host beside the per-slot dry path, not to a node. See
+        // `container.rs`.
+        EffectParams::Chain(p) => Box::new(ContainerEffect::new(p)),
     }
 }
 

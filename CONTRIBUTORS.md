@@ -91,8 +91,8 @@ Alphabetical by model name, then by harness.
   costs while it rests and while it works, the sleeping mixer, and the undo
   history that had no ceiling, and the double parse in front of every song
   that opened, the undo that re-rendered every commit it moved, and what the
-  stretch costs, the device-container plan, and the durable device identity
-  that replaced `SlotRemap`. Longer accounts of
+  stretch costs, the device-container plan, the durable device identity that
+  replaced `SlotRemap`, and the container itself. Longer accounts of
   most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

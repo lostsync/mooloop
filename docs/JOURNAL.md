@@ -833,6 +833,47 @@ scheme every one of those edits had to change them, so the only available test
 was "the permutation ran correctly" — which cannot tell a correct remap from
 no remap at all.
 
+## Sep 7 — a transparent node is not a transparent slot
+
+The container exists. `EffectKind::Chain` is a device that holds an ordered
+run of the devices after it, and at the end of this step it does nothing at
+all — which is the point, because step 03's mix has to be measured against
+something.
+
+The representation is the interesting part and it fell out of one word.
+`EffectParams`, `EffectSlotState` and `EngineCommand` all derive `Copy`, and
+the last one is load bearing: the command ring is preallocated POD, and
+`bridge.rs` records that it was narrowed precisely to stop a whole rack
+travelling on it. A `Chain(Vec<EffectSlotState>)` variant breaks all three at
+once. So a container **does not hold its children**: it says how many of the
+rows after it are inside it, and those rows are ordinary rows of the same
+chain. The tree is derived from the flat list, exactly as a device's position
+is now derived from its identity.
+
+That buys more than `Copy`. The engine's array of nodes stays flat and its
+loop stays sequential. `chain_latency` needed no edit at all, because the
+children are already rows it sums. And "the rack cannot tell the difference
+between a container and a leaf device" — the whole design rule the brief
+states — stops being an invariant somebody maintains and becomes a fact about
+the data: there is one list of devices, and some of them say how far they
+reach.
+
+Then the null test failed on the first run, and the reason is worth keeping.
+The container had an ordinary rack row with a transparent node in it, and the
+chain host blended it like any other device. **The per-slot wet/dry is an
+equal-power crossfade**, so at unity a transparent node still leaks a
+`cos(pi/2)` of the dry alongside itself: about 6e-8, inaudible, and not
+bit-exact. That fact was already written down — in a comment about the buffer
+device's Follow mode, where it reads as a quirk of that device rather than as
+a property of the blend every slot runs.
+
+The fix is not a tolerance. A container slot now skips the leaf blend
+entirely, which is the correct design and not a workaround: a container's mix
+is a blend across a *span*, and applying a device's dry/wet to a device with
+no signal path was meaningless before it was inexact. A tolerance would have
+hidden that, and would have left step 03 asserting "close enough" about the
+one thing it exists to make exact.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.

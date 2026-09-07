@@ -6,8 +6,9 @@
 use crate::session::Session;
 use mooloop_core::gain::{db_to_linear, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::{
-    insert_effect, move_effect, remove_effect, DelayTimeDivision, DeviceId, EffectKind,
-    EffectParams, EffectSlotState, EffectTarget, EngineCommand,
+    insert_effect, move_effect, remove_effect, unwrap_container, wrap_in_container,
+    DelayTimeDivision, DeviceId, EffectKind, EffectParams, EffectSlotState, EffectTarget,
+    EngineCommand,
 };
 
 /// Trim knobs work in dB from unity and stop at the container's headroom; the
@@ -30,14 +31,21 @@ pub struct EffectInserted {
     pub params: EffectParams,
 }
 
-/// An effect that was removed. The engine mirrors it the other way round:
-/// move the device to the vacated `tail`, then drop the tail.
+/// The devices that were removed. The engine mirrors it the other way round:
+/// move the device to the vacated `tail`, then drop the tail -- repeated once
+/// per row, always from `slot`, because after each removal the next row of
+/// the run has slid into that position.
+///
+/// More than one row when the removed device was a container: a box goes with
+/// its contents.
 pub struct EffectRemoved {
     pub target: EffectTarget,
     pub slot: usize,
+    /// The last index of the chain *before* the removal. Step `i` of the
+    /// engine mirror moves `slot` to `tail - i` and drops it.
     pub tail: usize,
-    /// The identity that has just stopped existing.
-    pub device: DeviceId,
+    /// The identities that have just stopped existing, in rack order.
+    pub devices: Vec<DeviceId>,
 }
 
 impl Session {
@@ -67,18 +75,74 @@ impl Session {
         })
     }
 
-    /// Removes the effect in `slot`, and lets go of everything that named it.
+    /// Removes the effect in `slot` -- and its whole run when it is a
+    /// container -- letting go of everything that named any of them.
     pub fn remove_effect_at(&mut self, slot: usize) -> Option<EffectRemoved> {
         let target = self.effect_target;
         let effects = self.effect_chain_mut()?;
+        let before = effects.len();
         let removed = remove_effect(effects, slot)?;
-        let tail = effects.len();
-        self.forget_device(target, removed.id);
+        let devices: Vec<DeviceId> = removed.iter().map(|effect| effect.id).collect();
+        for device in &devices {
+            self.forget_device(target, *device);
+        }
         Some(EffectRemoved {
             target,
             slot,
+            tail: before - 1,
+            devices,
+        })
+    }
+
+    /// Wraps `run` in a new container, minting it an identity.
+    ///
+    /// The gesture that actually makes containers: one is far more often made
+    /// around devices that already exist than inserted empty. Reported as an
+    /// ordinary insert, because on the engine's side that is exactly what it
+    /// is -- one row installed at the tail and moved into place, with the
+    /// rows it now encloses never moving at all.
+    ///
+    /// `None` when the range is empty, out of range, or would cut a
+    /// container's run in half.
+    pub fn wrap_effects_in_container(
+        &mut self,
+        run: std::ops::Range<usize>,
+    ) -> Option<EffectInserted> {
+        let target = self.effect_target;
+        let (effects, next_id) = self.effect_chain_parts_mut()?;
+        let tail = effects.len();
+        let container = EffectSlotState::of_kind(EffectKind::Chain);
+        let slot = wrap_in_container(effects, next_id, run, container)?;
+        let inserted = effects[slot];
+        Some(EffectInserted {
+            target,
+            slot,
             tail,
-            device: removed.id,
+            device: inserted.id,
+            kind: EffectKind::Chain,
+            params: inserted.params,
+        })
+    }
+
+    /// Takes the container in `slot` out of the chain, leaving its children
+    /// where they are.
+    ///
+    /// The escape hatch that makes "removing a box removes its contents" safe
+    /// to have. Reported as an ordinary removal of one row.
+    pub fn unwrap_container_at(&mut self, slot: usize) -> Option<EffectRemoved> {
+        let target = self.effect_target;
+        let effects = self.effect_chain_mut()?;
+        let before = effects.len();
+        let device = effects.get(slot)?.id;
+        if !unwrap_container(effects, slot) {
+            return None;
+        }
+        self.forget_device(target, device);
+        Some(EffectRemoved {
+            target,
+            slot,
+            tail: before - 1,
+            devices: vec![device],
         })
     }
 

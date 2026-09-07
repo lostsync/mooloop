@@ -28,6 +28,7 @@ import { FilterDeviceFace } from "filter-device.slint";
 import { DriveDeviceFace } from "drive-device.slint";
 import { BitcrushDeviceFace } from "bitcrush-device.slint";
 import { BufferDeviceFace } from "buffer-device.slint";
+import { ContainerDeviceFace } from "container-device.slint";
 import { DelayDeviceFace } from "delay-device.slint";
 import { GateDeviceFace } from "gate-device.slint";
 import { CompressorDeviceFace } from "compressor-device.slint";
@@ -144,7 +145,7 @@ struct BrowserRow {
 struct EffectSlotRow {
     // Matches EffectKind: 0=Filter, 1=Drive, 2=Bitcrush, 3=Delay,
     // 4=Gate, 5=Compressor, 6=Limiter, 7=EQ, 8=Reverb, 9=Mod,
-    // 10=Plate, 11=Buffer.
+    // 10=Plate, 11=Buffer, 12=Chain.
     kind: int,
     // Rack units this device's face occupies. Devices with more working
     // controls get more width rather than compressing their controls.
@@ -190,6 +191,14 @@ struct EffectSlotRow {
     // carry the attack and release the device is actually running.
     detector-db: float,
     gain-reduction-db: float,
+    // Container-only: how many of the rows after this one are inside it, and
+    // how deeply this row is nested. `children` is structure rather than a
+    // parameter, which is why it is not one of the `pN` fields. The frame the
+    // pair is really for is step 04 of `docs/plans/containers/`; `depth` is
+    // carried now so the row model and the face contract cross `main.slint`
+    // once rather than twice.
+    children: int,
+    depth: int,
 }
 
 // One selectable destination inside the automation lane picker.
@@ -3546,6 +3555,20 @@ export component MainWindow inherits Window {
                                                         trigger(id) => { root.effect-buffer-triggered(index, id); }
                                                         reverse-pressed() => { root.effect-buffer-reverse-pressed(index); }
                                                         reverse-released() => { root.effect-buffer-reverse-released(index); }
+                                                        reorder-requested(target) => { root.reorder-effect(index, target); }
+                                                    }
+                                                    if slot.kind == 12 : ContainerDeviceFace {
+                                                        x: DeviceRackMetrics.rail-width;
+                                                        y: 0px;
+                                                        width: parent.content-width;
+                                                        height: parent.height;
+                                                        slot-index: index;
+                                                        slot-count: root.effect-slots.length;
+                                                        bypassed: slot.bypassed;
+                                                        preset-name: slot.preset-name;
+                                                        children: slot.children;
+                                                        mix: slot.p0;
+                                                        mix-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                         reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     }
                                                 }

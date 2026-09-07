@@ -15,4 +15,11 @@ hound = "3"
 mp3lame-encoder = "0.2.4"
 
 [dev-dependencies]
+# The container tests render a project, save it, reload it and render it
+# again; the claim is that the document round trip preserves a nesting the
+# engine can hear, which needs both halves in one test. `mooloop-project`
+# depends only on `mooloop-core`, so this is a dev-only leaf rather than a
+# cycle.
+mooloop-project = { workspace = true }
 tempfile = "3"
+toml = { workspace = true }

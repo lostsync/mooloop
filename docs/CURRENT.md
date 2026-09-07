@@ -560,6 +560,12 @@ land on its own when it starts to matter:
   ring primitive with cubic-Hermite fractional reads and crossfaded head
   jumps. The delay effect is its first consumer; the retained-audio buffer
   device is meant to be the second rather than growing its own ring.
+- A rack device may be a **container**: `EffectKind::Chain` holds an ordered
+  run of the devices after it, appears in the rack exactly where a device
+  would, and nests. It has one control, a mix across its run, and **that
+  control is inert** — a container is currently transparent to the sample,
+  which is what step 03 of `docs/plans/containers/` changes. Nothing in the
+  interface makes one yet; the model verbs exist and are tested.
 - `ParamAddr` addresses parameters owned by a source, a rack device, a
   modulator slot, or the strip, within its channel-or-bus scope. A rack device
   is named by a durable `DeviceId` minted when it is inserted, so reordering,
