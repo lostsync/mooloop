@@ -71,8 +71,10 @@ At this point, minimally, we just need to add the ability to configure some comm
 GUI focus issues:
 
 There seems to be something in slint where there's sort of an input caret. in the first few version of this app, every control had to be clicked once to select and again to use it. that's not really an issue now, thank god, but that select caret can still intercept e.g. spacebar for play/pause in some situations. i should probably note them when they occur. I do think keyboard navigation is important so i see the need for such a caret, but we'll have to be intentional and thoughtful about how we use that so that we aren't blocking key commands that should work wherever you are.
-  CONFIRMED 2026-09-05, and no longer hypothetical — see the first item in the
-  2026-09-05 block below. It is a live defect, not a suspicion.
+  DONE 2026-09-07 — see the first item in the 2026-09-05 block below. The
+  caret you suspected was real, but it was not the whole story: the root
+  scope was a sibling of the UI rather than its ancestor, so keys never
+  bubbled to it. Both halves are fixed.
 
 General application design:
 
@@ -98,13 +100,16 @@ Eight items, in Adam's words, none of which were written down anywhere before
 this. `FOCUS.md` decides which of them are in the active sequence; three are.
 
 keyboard is still wonky. you often have to click into a background area to make shortcuts work, even spacebar
-  IN THE SEQUENCE (`FOCUS.md` step 3, and named as a fix that may interrupt).
-  The cause is structural rather than per-control: the window has one
-  `FocusScope` (`main.slint:1253`) reached by `forward-focus`, so any focusable
-  thing inside it — a text field, a touch area that takes focus — consumes the
-  key before the dispatcher ever runs. Clicking the background works because it
-  hands focus back. This is the same thing the "GUI focus issues" section above
-  guessed at; it is now confirmed and reproducible.
+  DONE 2026-09-07, and it did interrupt, as `FOCUS.md` licensed it to. The
+  cause was structural, but not the one recorded here: the root `FocusScope`
+  sat *beside* the layout holding the UI instead of around it, and Slint only
+  walks *parent* items when a key is rejected, so the dispatcher heard nothing
+  unless that scope personally held focus. Clicking the background worked
+  because it handed focus back. Knobs and faders were never the problem — they
+  already rejected everything but the arrow keys. `ToolButton` was: it accepted
+  Space, and it is what every toggle, segmented control, pane tab and mute
+  button is built from. The scope now surrounds the UI and Space is the
+  transport from anywhere.
 
 og drumsynth was simple but honestly sounded pretty good. why has simply updating it for automation support never been on the table? let's put it up there
   **DONE, 2026-09-05.** It was off the table because of a note on

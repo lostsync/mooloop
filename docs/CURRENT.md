@@ -839,12 +839,20 @@ land on its own when it starts to matter:
 
 - The application is usable but still has interaction and responsive-layout
   edge cases.
-- **Keyboard focus is unreliable, and it costs shortcuts.** The window has one
-  root `FocusScope` reached by `forward-focus` (`main.slint:1253`), so any
-  focusable element inside it — a text field, a touch area that takes focus —
-  consumes the key before the action dispatcher runs. In practice a shortcut
-  often needs a click on a neutral background area first, spacebar for
-  play/stop included. Confirmed 2026-09-05.
+- **A shortcut fires from wherever focus happens to be.** Fixed 2026-09-07;
+  the entry that stood here described the defect and got its cause wrong, so
+  it is worth recording what the cause actually was. Slint delivers a key to
+  the focused item and then walks *parent* items towards the window, and the
+  root `FocusScope` was a **sibling** of the layout holding the UI rather than
+  its ancestor — so it only ever received a key while it personally held
+  focus, which is why clicking a neutral background was what made shortcuts
+  start working. The scope now surrounds the UI, with `focus-on-click: false`
+  so it does not swallow the presses that reach the controls inside it.
+  Separately, `ToolButton` used to accept Space, and `ToggleButton`,
+  `SegmentedControl`, the pane tabs and every mute button are built from it,
+  so clicking any of them left a caret that re-fired that button instead of
+  starting the transport. Space is the transport; Enter activates a focused
+  button.
 - Keyboard navigation exists in the piano roll and nowhere else. The arrow
   keys move an existing note selection but cannot build one, and the browser
   tree cannot be reached or driven from the keyboard at all.

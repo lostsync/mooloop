@@ -121,8 +121,17 @@ export component ToolButton inherits Rectangle {
     button-keyboard := FocusScope {
         enabled: root.enabled;
         focus-on-click: false;
+        // Enter activates a focused button; Space deliberately does not, even
+        // though `accessible-role: button` invites it. Space is the transport,
+        // everywhere, always. Because `tap` takes focus on click, accepting it
+        // here meant that clicking any button in the application -- and this
+        // component is what `ToggleButton`, `SegmentedControl`, the pane tabs
+        // and every mute button are built from -- left a caret that ate the
+        // next Space and re-fired the button instead of starting playback.
+        // Rejecting bubbles the key to the window's root FocusScope, which is
+        // where `main.slint` hands it to the action dispatcher.
         key-pressed(e) => {
-            if (e.text == " " || e.text == "\n") { root.clicked(); accept } else { reject }
+            if (e.text == "\n") { root.clicked(); accept } else { reject }
         }
     }
 

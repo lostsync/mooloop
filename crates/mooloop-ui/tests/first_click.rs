@@ -52,6 +52,32 @@ slint::slint! {
             changed(v) => { root.fader-value = v; }
         }
     }
+
+    // The shape `main.slint` has: one root FocusScope *surrounding* the UI,
+    // not sitting beside it. Slint delivers a key to the focused item and
+    // then walks `parent_item` towards the window
+    // (`i-slint-core/window.rs`, "Deliver key_event ... going up towards the
+    // window"), so a scope that is merely a sibling of the content only ever
+    // sees a key while it personally holds focus. That is what made shortcuts
+    // depend on having clicked a neutral background first.
+    export component KeyHarness inherits Window {
+        width: 200px;
+        height: 200px;
+        callback button-clicked;
+        callback root-key(string);
+
+        forward-focus: keys;
+        keys := FocusScope {
+            focus-on-click: false;
+            key-pressed(e) => { root.root-key(e.text); accept }
+
+            ToolButton {
+                x: 0px; y: 0px; width: 100px; height: 40px;
+                text: "Mute";
+                clicked => { root.button-clicked(); }
+            }
+        }
+    }
 }
 
 const BUTTON_CENTER: (f32, f32) = (50.0, 20.0);
@@ -167,5 +193,93 @@ fn fader_responds_to_the_first_click() {
         ui.get_fader_value() > before,
         "clicking a fader must change its value on the first press (was {before}, now {})",
         ui.get_fader_value()
+    );
+}
+
+/// Press and release a key the way a real keyboard would.
+fn press_key(window: &slint::Window, text: &str) {
+    window.dispatch_event(WindowEvent::KeyPressed { text: text.into() });
+    window.dispatch_event(WindowEvent::KeyReleased { text: text.into() });
+}
+
+fn key_harness() -> KeyHarness {
+    i_slint_backend_testing::init_no_event_loop();
+    KeyHarness::new().unwrap()
+}
+
+/// The bug: Space is play/stop, but `ToolButton` used to accept it, and
+/// `ToolButton` is what every `ToggleButton`, `SegmentedControl`, pane tab and
+/// mute button in the application is built from. Clicking one left a caret on
+/// it, so the next Space re-fired that button instead of reaching the
+/// transport -- which is why a shortcut so often needed a click on a neutral
+/// background first.
+#[test]
+fn space_reaches_the_root_after_clicking_a_button() {
+    let ui = key_harness();
+    let clicks = Rc::new(Cell::new(0u32));
+    let keys: Rc<std::cell::RefCell<Vec<String>>> = Rc::new(std::cell::RefCell::new(Vec::new()));
+    ui.on_button_clicked({
+        let clicks = clicks.clone();
+        move || clicks.set(clicks.get() + 1)
+    });
+    ui.on_root_key({
+        let keys = keys.clone();
+        move |text| keys.borrow_mut().push(text.to_string())
+    });
+
+    click_at(ui.window(), BUTTON_CENTER);
+    assert_eq!(clicks.get(), 1, "the click itself must still fire the button");
+
+    press_key(ui.window(), " ");
+
+    assert_eq!(
+        clicks.get(),
+        1,
+        "Space must not re-fire the button that was just clicked"
+    );
+    assert_eq!(
+        keys.borrow().as_slice(),
+        [" "],
+        "Space must bubble past the focused button to the root scope, which is \
+         where the action dispatcher lives"
+    );
+}
+
+/// The other half of the same contract: a focused button is still operable
+/// from the keyboard, so rejecting Space did not cost keyboard activation.
+#[test]
+fn enter_still_activates_a_focused_button() {
+    let ui = key_harness();
+    let clicks = Rc::new(Cell::new(0u32));
+    ui.on_button_clicked({
+        let clicks = clicks.clone();
+        move || clicks.set(clicks.get() + 1)
+    });
+
+    click_at(ui.window(), BUTTON_CENTER);
+    press_key(ui.window(), "\n");
+
+    assert_eq!(clicks.get(), 2, "Enter must still activate a focused button");
+}
+
+/// A key the button does not want must reach the root from wherever focus
+/// happens to be -- including from a knob, which is the case that used to
+/// work only because the knob was a child of nothing that listened.
+#[test]
+fn an_unclaimed_key_reaches_the_root_without_clicking_the_background() {
+    let ui = key_harness();
+    let keys: Rc<std::cell::RefCell<Vec<String>>> = Rc::new(std::cell::RefCell::new(Vec::new()));
+    ui.on_root_key({
+        let keys = keys.clone();
+        move |text| keys.borrow_mut().push(text.to_string())
+    });
+
+    click_at(ui.window(), BUTTON_CENTER);
+    press_key(ui.window(), "s");
+
+    assert_eq!(
+        keys.borrow().as_slice(),
+        ["s"],
+        "an unclaimed key must bubble to the root scope"
     );
 }

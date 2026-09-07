@@ -55,6 +55,18 @@ monitor tap, not a routing change). Also standing in `ENHANCEMENTS.md`.
 
 ---
 
+## Focus
+
+**A text field is left with Enter, and by nothing else.** The toolbar's search
+and rename fields and the knob/fader numeric entries all call `clear-focus()`
+on `accepted` (`toolbar.slint:316`, `controls.slint:922`,
+`controls.slint:1796`) and have no Escape handler, so clicking into one and
+then clicking away leaves the caret in it. While it is there, Space types a
+space instead of starting the transport — which is correct for a field being
+edited and wrong for a field nobody is editing. The 2026-09-07 focus fix made
+every *control* transparent to shortcuts; text fields are the remaining case,
+and they need a way out rather than a change to what they consume.
+
 ## Edits that do not undo
 
 **Sampler slice and marker edits are not undoable.** `add_slice`,

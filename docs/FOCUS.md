@@ -204,14 +204,20 @@ One push, mockup-driven. `reference/img/mooloop-1.0-mockup.png` is the target
 Adam drew; treat it as the argument for the layout, not as a pixel spec. Four
 things, and the first one gates the other three:
 
-- **Keyboard and focus.** *"keyboard is still wonky. you often have to click
-  into a background area to make shortcuts work, even spacebar."* The window
-  has exactly one `FocusScope` (`main.slint:1253`) reached by
-  `forward-focus`, so anything inside that takes focus — a text field, a
-  focusable touch area — swallows the key before the dispatcher sees it, and
-  the fix is getting focus back that the caret should not have kept. Spacebar
-  is play/stop. **This blocks playing, which makes it the one item here that
-  may also interrupt the sequence** (see below).
+- ~~**Keyboard and focus.**~~ *"keyboard is still wonky. you often have to
+  click into a background area to make shortcuts work, even spacebar."*
+  **Done 2026-09-07**, and it interrupted the sequence exactly as the rule
+  below allows. The diagnosis recorded here was wrong in a way worth keeping:
+  it blamed the caret, and the fix was not to take the caret away. Slint
+  delivers a key to the focused item and then walks *parent* items towards
+  the window, so the root `FocusScope` — a **sibling** of the layout holding
+  the UI — only ever heard a key while it personally held focus. It surrounds
+  the UI now, with `focus-on-click: false` so it swallows no presses, and
+  where focus sits stopped mattering. The one control that was genuinely
+  eating Space was `ToolButton`, which every toggle, segmented control, pane
+  tab and mute button is built from; knobs and faders always rejected
+  correctly. **This unblocks the keyboard navigation the other three items
+  wanted**, which is why it was first.
 - **A left channel sidebar.** Channel name, track colour, input channel, and
   the rest of the per-channel settings that today are scattered across the
   rack row and nowhere. Note that **track colour does not exist at all** — no
@@ -263,10 +269,9 @@ rendering the active step; threatens realtime safety or project compatibility;
 or is a small regression in the surface being touched. Record larger adjacent
 work instead of folding it into the current branch.
 
-- **The focus caret eating shortcuts qualifies on its own terms.** Step 3 owns
-  the proper fix, but spacebar not starting the transport blocks *playing*,
-  which is the first clause of the rule above. If a step-1 or step-2 branch
-  trips over it, fix it there and note where.
+- ~~**The focus caret eating shortcuts qualifies on its own terms.**~~ Taken
+  2026-09-07 on `fix/toolbutton-space`, on exactly the grounds this entry
+  gave: spacebar not starting the transport blocks *playing*.
 - **The stretching-polyphony cap is not enforced anywhere.** `StretchPool::new`
   builds a reader for every one of the sampler's sixteen voices and nothing
   limits how many stretch at once, although the contract in #13 names four.
