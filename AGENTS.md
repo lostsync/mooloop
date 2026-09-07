@@ -167,6 +167,33 @@ there is nothing else to usefully do. That is rarer than it feels: there is
 almost always another file to read, another edit to prepare, or a measurement
 to take.
 
+### Never read a piped run's exit code
+
+**A command piped into `tail` reports `tail`'s exit status, not cargo's.**
+`cargo test ... | tail -40` exits 0 when every test failed, because `tail`
+succeeded at printing the failures. This is the sharper half of the warning
+above: an empty output file at least *looks* uninformative, so it gets
+re-read. A `0` looks like an answer, so it gets believed and reported on.
+
+This is not hypothetical. On 2026-09-07 a `mooloop-ui` suite was reported
+green on a piped exit code and had to be re-run before anyone could say
+whether it was. It was -- which is the point: the claim was true and had not
+been checked, and the same reading would have been made either way.
+
+So when the answer matters, redirect and check:
+
+```sh
+cargo test -p mooloop-ui > /tmp/t.log 2>&1; echo "EXIT: $?"
+grep -E '^test result' /tmp/t.log
+```
+
+Reading the `test result:` lines, or clippy's own summary, is just as good and
+does not depend on remembering this at all. What is never good enough is a
+`[exited with code 0]` from a run with a pipe anywhere in it.
+
+`set -o pipefail` fixes it too, but only where a script owns the whole shell;
+it is not on by default in the harness's shell, so do not assume it.
+
 ### Order device work so the face contract comes last
 
 A device has three parts and they differ by four orders of magnitude:
