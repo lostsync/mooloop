@@ -3287,14 +3287,22 @@ export component MainWindow inherits Window {
                                                     // the head draws the left cap and a row whose successor
                                                     // is shallower draws the right one. An empty container
                                                     // caps itself, so an empty box still looks like a box.
-                                                    for level[lvl] in [1, 2, 3, 4] : ContainerEnclosure {
-                                                        property <bool> inside: slot.depth >= lvl;
-                                                        property <bool> is-head: slot.kind == 12 && slot.depth == lvl - 1;
+                                                    // `depth` is a count of enclosing boxes, so the
+                                                    // levels are 1..4 and the loop iterates the
+                                                    // *values*. Writing `for level[lvl] in [...]`
+                                                    // and then using `lvl` was a bug that shipped:
+                                                    // `lvl` is the index, so the levels ran 0..3, and
+                                                    // `depth >= 0` is true of every row -- every
+                                                    // device in the rack wore a container's band,
+                                                    // whether or not it was in one.
+                                                    for level in [1, 2, 3, 4] : ContainerEnclosure {
+                                                        property <bool> inside: slot.depth >= level;
+                                                        property <bool> is-head: slot.kind == 12 && slot.depth == level - 1;
                                                         visible: self.inside || self.is-head;
-                                                        level: lvl;
+                                                        level: level;
                                                         head: self.is-head;
                                                         cap-right: (self.is-head && slot.children == 0)
-                                                            || (self.inside && cell.next-depth < lvl);
+                                                            || (self.inside && cell.next-depth < level);
                                                         x: cell.shift;
                                                         // A box that closes here ends after its own
                                                         // rail and before the join arrow, which is
@@ -3303,7 +3311,7 @@ export component MainWindow inherits Window {
                                                         // inside it.
                                                         width: self.cap-right
                                                             ? cell.frame-width
-                                                                + (cell.innermost-close - lvl + 1)
+                                                                + (cell.innermost-close - level + 1)
                                                                     * DeviceRackMetrics.rail-width
                                                             : cell.width;
                                                     }

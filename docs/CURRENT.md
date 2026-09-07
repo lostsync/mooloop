@@ -610,7 +610,10 @@ land on its own when it starts to matter:
   the last device it holds, and the recessed space between them is what its
   devices sit in. Both rails and that space are one colour, darker than a
   device, so the container reads as the thing the faces are inside of; the
-  devices themselves draw no card. The border hugs the faces rather than
+  devices inside keep their outline but not their fill, so they stay unified
+  chunks sitting in something rather than cards floating on it. Every device
+  wears the same 1px perimeter, drawn over its own rails and header rather
+  than under them. The border hugs the faces rather than
   standing clear of them, and nesting reads from the stacked border lines
   rather than a colour per level. An empty container caps itself, so an empty
   box still looks like a box. A container wider than the viewport has no

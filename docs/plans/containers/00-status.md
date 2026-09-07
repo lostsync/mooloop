@@ -359,6 +359,32 @@ work out the pitch of the row it was grabbing as "face plus two rails plus a
 join", and no row is reliably that any more, so the *cell* publishes its own
 width when it sees the grab land on it.
 
+### Every device in the rack wore a container's band for three iterations
+
+`for level[lvl] in [1, 2, 3, 4]` binds `level` to the **value** and `lvl` to
+the **index**. The enclosure used `lvl` as the level, so the levels ran 0..3
+instead of 1..4 -- and `depth >= 0` is true of every row, so a level-0
+enclosure was drawn behind *every device in the rack*, in or out of a
+container.
+
+It shipped in the first version of the box and survived two redesigns. It is
+also most of what Adam was reacting to each time: the first complaint was
+"this green stuff everywhere", and it was everywhere because a full-width
+accent band was being drawn across the whole rack. Both redesigns treated
+that as a matter of taste and restyled the band, which made it quieter
+without making it correct.
+
+What let it hide: the band was drawn behind opaque device cards, so all that
+showed of it was a line above and below each row -- which is exactly what the
+correct drawing looks like for a row that *is* in a container. It only became
+unmistakable when a device outside every container still had one, and Adam
+pointed at that line and said it should not be there.
+
+The lesson is narrower than "check your loops": **a wrong thing that looks
+like a plausible thing gets restyled instead of fixed.** Two rounds of
+judgement went on the appearance of a band whose existence nobody had
+questioned.
+
 ### An emptied box was a sealed box
 
 Dragging the last device out of a container left something that could not be

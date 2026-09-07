@@ -213,7 +213,14 @@ export component DeviceOutputRail inherits Rectangle {
 
     width: DeviceRackMetrics.rail-width;
     background: root.container-chrome ? Theme.background : Theme.surface-raised;
+    // Mirrors the input rail, which has always had one: the same 1px between
+    // the face and the rail at both ends of a device.
+    Rectangle { x: 0px; width: 1px; height: 100%; background: Theme.border; }
     VerticalLayout {
+        // Same inset as the input rail's, so a button is the same size and
+        // sits the same 2px off both visible edges at either end of a device.
+        x: 1px;
+        width: parent.width - 2px;
         padding: 2px;
         spacing: 3px;
         IconButton {
@@ -327,8 +334,6 @@ export component DeviceFrame inherits Rectangle {
     in property <bool> contained: false;
 
     background: root.contained ? transparent : Theme.surface;
-    border-width: root.selected ? 2px : (root.contained ? 0px : 1px);
-    border-color: root.selected ? Theme.accent : Theme.border;
     border-radius: Theme.radius-md;
     clip: true;
 
@@ -342,6 +347,14 @@ export component DeviceFrame inherits Rectangle {
         background: root.container-chrome ? Theme.background : Theme.surface-raised;
         Rectangle { x: parent.width - 1px; width: 1px; height: 100%; background: Theme.border; }
         VerticalLayout {
+            // Inset by the frame's border on the left and the divider on the
+            // right, so a button sits the same 2px from both of the rail's
+            // visible edges. Centring in the full 30px put it 2px from the
+            // left and 1px from the right -- invisible while the button and
+            // the rail are the same colour, and obvious the moment a
+            // container's rail goes darker than the buttons on it.
+            x: 1px;
+            width: parent.width - 2px;
             padding: 2px;
             spacing: 2px;
             IconButton {
@@ -439,6 +452,25 @@ export component DeviceFrame inherits Rectangle {
         remove-requested => { root.remove-requested(); }
         unwrap-requested => { root.unwrap-requested(); }
         output-trim-changed(v) => { root.output-trim-changed(v); }
+    }
+
+    // The device's outer border, drawn *over* everything rather than as the
+    // frame's own `border-width`.
+    //
+    // A `Rectangle`'s border paints inside its bounds and its children paint
+    // on top of it, so the rails at x=0 and the header at y=0 covered three
+    // sides of it: a device had a crisp divider between its rail and its face
+    // and no perimeter at all, which is why the rack read as a field of parts
+    // rather than a row of unified chunks. `z` is a literal because Slint
+    // requires one, and 200 clears the bypass and wet/dry controls at 100.
+    Rectangle {
+        z: 200;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        border-width: root.selected ? 2px : 1px;
+        border-color: root.selected ? Theme.accent : Theme.border;
+        border-radius: Theme.radius-md;
     }
 
     // Click-to-select on the header, for a device whose face is not an
