@@ -270,15 +270,19 @@ fn channel_bus_picker_reports_the_selected_destination() {
     assert_eq!(picked.get(), 3);
 }
 
-/// Vertical centre of a strip's name plate, below the menu bar, both toolbar
-/// rows, and the work surface's Steps/Mixer header.
-const NAME_PLATE_Y: f32 = 136.0;
+/// Vertical centre of a strip's name plate, below the menu bar and both
+/// toolbar rows.
+///
+/// Twenty-seven pixels higher than it was on 2026-09-08: the work surface
+/// used to carry a 26px strip and its 1px rule above the pane, holding only
+/// the Steps/Mixer switcher, which now leads the toolbar row above.
+const NAME_PLATE_Y: f32 = 109.0;
 /// Strip width plus the layout gap between two strips.
 const STRIP_PITCH: f32 = 66.0;
 
 /// Centre of the first channel row's bus picker in the normal work surface.
 const CHANNEL_BUS_PICKER_X: f32 = 202.0;
-const CHANNEL_ROW_Y: f32 = 143.0;
+const CHANNEL_ROW_Y: f32 = 116.0;
 /// Centre of Bus 3 in the picker popup. The menu opens directly below its
 /// 22px owner and each option is 21px tall after 4px top padding.
-const CHANNEL_MENU_BUS_3_Y: f32 = 243.0;
+const CHANNEL_MENU_BUS_3_Y: f32 = 216.0;
