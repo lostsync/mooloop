@@ -1029,11 +1029,17 @@ export component MainWindow inherits Window {
             + (root.devices-slot == 0 ? 1 : 0) + (root.notes-slot == 0 ? 1 : 0)
             + (root.playlist-slot == 0 ? 1 : 0);
     }
-    // A slot left holding nothing stops being drawn, and its views' tabs go
-    // with it. `bottom-active` and `split-active` become -1; `main-active`
-    // cannot, by the rule above.
+    // Give a slot back an active view after one has left it.
+    //
+    // Two things this has to get right, and the first version got both wrong.
+    // **The main slot needs this too**: it may not run out of *views*, but the
+    // view it was *showing* can certainly leave, and the pane then draws
+    // nothing with no tab left to click. And it must only act when the active
+    // view has actually gone -- moving some other view out of a three-tab pane
+    // must not throw away the one you were looking at.
     function reseat-slot(s: int) {
-        if (s == 0) { return; }
+        // The active view still lives here. Nothing to do.
+        if (root.slot-active(s) >= 0 && root.slot-of(root.slot-active(s)) == s) { return; }
         if (root.steps-slot == s) { root.set-slot-active(s, PaneViews.steps); }
         else if (root.mixer-slot == s) { root.set-slot-active(s, PaneViews.mixer); }
         else if (root.devices-slot == s) { root.set-slot-active(s, PaneViews.devices); }

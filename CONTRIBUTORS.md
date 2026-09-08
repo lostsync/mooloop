@@ -137,7 +137,9 @@ Alphabetical by model name, then by harness.
   which was a claim made from the absence of submenus in the menu bar and
   three existing `PopupWindow` menus away from being true -- and the pane
   arrangement persisted into settings, sanitized rather than validated so a
-  hand-edited file cannot produce a window with no pane in it.
+  hand-edited file cannot produce a window with no pane in it, and the pane
+  that went blank when the view it was showing was dragged out of it, which
+  had been two bugs in four lines and no test covering pane moves at all.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

@@ -221,6 +221,38 @@ is real -- `settings.toml` is a file a user may edit, and an empty main slot,
 or a slot whose active view lives somewhere else, is a window with no pane in
 it and no way to get one back.
 
+## The bug that reached Adam, and what it says about the rest
+
+Reported 2026-09-08, on the first build he ran:
+
+> if im looking at the mixer in the top left pane and drag it to the top
+> right, the top left pane is then empty and there's no button to make it show
+> something.
+
+`reseat-slot` opened with `if (s == 0) { return; }`, on the reasoning that the
+main slot may not empty so its active view never needs replacing. **That
+conflates a pane running out of views with the view it is showing leaving
+it.** The second happens constantly; the first is prevented. The pane kept
+pointing at a view that now lived somewhere else, matched nothing, and drew
+blank with no tab to click.
+
+Fixing it surfaced a second, independent bug in the same four lines: the
+reseat was *unconditional*, so moving any view out of a three-tab pane would
+have thrown away whichever one you were looking at. Nobody had hit it yet.
+Its test fails against the old code too, which is how we know it was real
+rather than a defensive invention.
+
+**Nothing covered pane moves at all**, which is why this reached a build.
+`tests/panes.rs` covers them now, and its central assertion is an *invariant*
+rather than an outcome -- every pane holding views shows one of them, every
+pane holding none shows nothing -- because that is the property both bugs
+violated and it catches the class rather than the two cases.
+
+The regression check was run the only way it means anything: the original
+line put back, the suite run, both new tests observed to fail with the right
+messages, then the fix restored. A regression test that passes both ways is
+decoration.
+
 ## Decisions taken before any code, so they are not re-litigated
 
 - **A view is in one slot at a time.** The alternative — the mixer visible in
