@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-08
-- Sessions: 73
+- Sessions: 74
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -112,8 +112,9 @@ Alphabetical by model name, then by harness.
   the gigabyte a one-channel project allocates before it holds
   anything, and then what that gigabyte costs every time a drag moves the
   mouse, and the UI consistency pass that found a clip light nothing cleared
-  and a sampler envelope reading 2.5x what it played. Longer accounts of most
-  of this are in
+  and a sampler envelope reading 2.5x what it played, and the test that
+  showed that gigabyte was not what had been interrupting the audio after
+  all. Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
 ### Claude Sonnet 5 — Claude Code

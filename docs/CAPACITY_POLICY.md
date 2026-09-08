@@ -70,14 +70,27 @@ allocate-and-free of a gigabyte, sixty times a second, and the thread
 saturates — measured at 65% of a core sustained across a 46-minute session,
 against 0.8% when idle.
 
-It is also the most likely reason an edit is *audible*. The audio callback
-holds `SCHED_FIFO` and is still not protected from what a gigabyte of
-`mmap`/`munmap` does to the machine underneath it: page faults on fresh pages,
-TLB shootdown IPIs that no scheduling priority defers, and the memory
-bandwidth the churn consumes. That is a hypothesis rather than a measurement,
-and it has a cheap test — `EngineHandle::take_load` reports `late_wakeups`,
-which should spike during a drag and stay at zero during playback that is not
-being edited.
+It was also proposed here as the reason an edit is *audible* — that a
+gigabyte of `mmap`/`munmap` reaches the audio thread through page faults and
+TLB shootdown IPIs, which no scheduling priority defers. **That was tested and
+it is wrong.** `install_churn_disturbs_a_deadline_thread` runs a thread on a
+21.3 ms period beside a thread installing projects at drag rate, and on the
+machine this was reported from — eight cores, `SCHED_FIFO` 55, the priority
+mooloop's own callback holds — ninety-five installs produced *zero* late
+wake-ups, with a worst lateness of 0.02 ms against a 21.3 ms period. The idle
+column was 0.03 ms, so the loaded run was if anything quieter.
+
+What the install cost does explain is the interface. A saturated UI thread
+cannot run the pump on schedule, and the pump is what advances the position
+readout — so the clock reads unevenly for the same reason the drag stutters,
+with no audio fault involved at all.
+
+The dropouts reported alongside this had a complete and separate cause:
+`rtkit` had demoted every realtime thread on the machine, leaving PipeWire's
+data loop at `SCHED_OTHER`. `docs/OPERATIONS.md` records how to recognise it.
+The test above stays because a refuted hypothesis with a measurement behind it
+is worth more than an open question, and because it is the harness for asking
+the same thing again about some other change.
 
 Two independent fixes, either of which helps:
 

@@ -406,3 +406,138 @@ fn project_install_cost() {
         );
     }
 }
+
+/// Whether rebuilding the render state actually disturbs a thread that has a
+/// deadline, which is the claim `CAPACITY_POLICY.md` records as a hypothesis.
+///
+/// `project_install_cost` establishes that an edit allocates and frees about a
+/// gigabyte on the UI thread, and that a drag does it on every move frame.
+/// That the *UI* thread saturates follows arithmetically. That the *audio*
+/// thread suffers for it does not: it holds `SCHED_FIFO`, and scheduling
+/// priority is exactly the mechanism meant to stop one thread's work from
+/// delaying another's.
+///
+/// So this puts the two side by side. A thread wakes on a fixed period and
+/// records how late each wake-up was, first against an idle machine and then
+/// against a main thread installing projects at drag rate. If the second
+/// column matches the first, the hypothesis is wrong and the dropouts are
+/// something else; if it does not, the allocator is reaching the audio thread
+/// through something priority does not defer.
+///
+/// Two honest limits on what this can conclude. It runs wherever the test
+/// suite runs, which is not Adam's laptop, and a machine with more cores and
+/// more memory will show less of the effect rather than more. And it reports
+/// whether it managed to get `SCHED_FIFO` for the waking thread: without it, a
+/// late wake-up might be ordinary scheduling rather than the thing being
+/// looked for, so the run says which it measured.
+#[test]
+#[ignore = "measures wall time under load; run deliberately in release"]
+fn install_churn_disturbs_a_deadline_thread() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// 1024 frames at 48 kHz: the buffer size Adam's settings ask for.
+    const PERIOD: Duration = Duration::from_nanos(21_333_333);
+    const WAKEUPS: usize = 120;
+
+    /// Ask for realtime scheduling on this thread, and say whether it worked.
+    /// The whole question is what happens to a thread that *has* priority.
+    #[cfg(unix)]
+    fn request_realtime() -> bool {
+        let param = libc::sched_param { sched_priority: 55 };
+        // SAFETY: `param` outlives the call and `sched_setscheduler` reads it
+        // without retaining it. Pid 0 is the calling thread.
+        unsafe { libc::sched_setscheduler(0, libc::SCHED_FIFO, &param) == 0 }
+    }
+    #[cfg(not(unix))]
+    fn request_realtime() -> bool {
+        false
+    }
+
+    /// Wake `WAKEUPS` times on `PERIOD`, doing a little work each time, and
+    /// report how many wake-ups were more than half a period late and what
+    /// the worst one was.
+    ///
+    /// Deadlines are absolute rather than a `sleep(PERIOD)` in a loop, because
+    /// a relative sleep silently absorbs the very lateness being measured.
+    fn run_deadline_thread(stop: Arc<AtomicBool>) -> (bool, usize, f64) {
+        let realtime = request_realtime();
+        let mut scratch = vec![0.0f32; 2048];
+        let start = Instant::now();
+        let mut late = 0usize;
+        let mut worst = 0f64;
+        for tick in 1..=WAKEUPS {
+            let deadline = start + PERIOD * tick as u32;
+            loop {
+                let now = Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                std::thread::sleep((deadline - now).min(Duration::from_micros(500)));
+            }
+            let woke = Instant::now();
+            let lateness = woke.saturating_duration_since(deadline).as_secs_f64();
+            if lateness > PERIOD.as_secs_f64() / 2.0 {
+                late += 1;
+            }
+            worst = worst.max(lateness);
+            // A token block of work, so the thread touches memory rather than
+            // only sleeping.
+            for (index, sample) in scratch.iter_mut().enumerate() {
+                *sample = (index as f32).sin();
+            }
+            std::hint::black_box(&scratch);
+        }
+        stop.store(true, Ordering::Relaxed);
+        (realtime, late, worst * 1000.0)
+    }
+
+    let project = {
+        let mut project = idle_sampler_project(15);
+        for channel in &mut project.channels {
+            for _ in 0..3 {
+                channel
+                    .setup
+                    .push_effect(EffectSlotState::of_kind(EffectKind::Reverb));
+            }
+        }
+        project
+    };
+
+    println!();
+    println!("  {WAKEUPS} wake-ups on a 21.3 ms period (1024 frames at 48 kHz)");
+    println!();
+
+    // Baseline: nothing else running.
+    let stop = Arc::new(AtomicBool::new(false));
+    let quiet = std::thread::spawn({
+        let stop = stop.clone();
+        move || run_deadline_thread(stop)
+    })
+    .join()
+    .expect("deadline thread");
+
+    // Under churn: a main thread installing projects the way a drag does.
+    let stop = Arc::new(AtomicBool::new(false));
+    let handle = std::thread::spawn({
+        let stop = stop.clone();
+        move || run_deadline_thread(stop)
+    });
+    let mut installs = 0usize;
+    while !stop.load(Ordering::Relaxed) {
+        drop(RenderState::from_project(SAMPLE_RATE, &project, &[]));
+        installs += 1;
+    }
+    let loaded = handle.join().expect("deadline thread");
+
+    println!(
+        "  realtime scheduling granted: {}",
+        if quiet.0 { "yes (SCHED_FIFO 55)" } else { "NO -- lateness below may be ordinary scheduling" }
+    );
+    println!("  installs performed during the loaded run: {installs}");
+    println!();
+    println!("                     late wake-ups   worst lateness");
+    println!("  idle machine       {:>13}   {:>11.2} ms", quiet.1, quiet.2);
+    println!("  installing         {:>13}   {:>11.2} ms", loaded.1, loaded.2);
+}
