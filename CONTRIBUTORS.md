@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-08
-- Sessions: 76
+- Sessions: 77
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -132,7 +132,12 @@ Alphabetical by model name, then by harness.
   underneath it -- that a device face declares a height and nothing else does,
   and the tab drag that moves a view between panes, whose grab and landing
   live in elements that do not contain each other -- the split of labour the
-  rack's reorder had already had to learn.
+  rack's reorder had already had to learn, and then the tab's own right-click
+  menu -- recorded a commit earlier as wanting machinery that did not exist,
+  which was a claim made from the absence of submenus in the menu bar and
+  three existing `PopupWindow` menus away from being true -- and the pane
+  arrangement persisted into settings, sanitized rather than validated so a
+  hand-edited file cannot produce a window with no pane in it.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

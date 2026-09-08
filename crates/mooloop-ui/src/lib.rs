@@ -109,7 +109,7 @@ use mooloop_session::values::{
 pub use mockup::{load_mockup_layout, wire_mockup};
 #[cfg(feature = "mockup")]
 pub use mockup_ui::MockupCanvas;
-use settings::{AppearanceSettings, ThemePalette, ThemeScheme, UiSettings};
+use settings::{AppearanceSettings, LayoutSettings, ThemePalette, ThemeScheme, UiSettings};
 use slint::{
     CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode,
     VecModel,
@@ -398,6 +398,58 @@ pub mod view {
     pub const DEVICES: i32 = 2;
     pub const NOTES: i32 = 3;
     pub const PLAYLIST: i32 = 4;
+}
+
+/// Restore the pane arrangement. Called once at startup, from a
+/// `LayoutSettings` that `sanitized()` has already made coherent -- so this
+/// only has to hand the numbers over, not defend against them.
+///
+/// Zoom is not restored, because it is not saved: see `LayoutSettings`.
+fn apply_layout(window: &MainWindow, layout: &LayoutSettings) {
+    let slots = &layout.view_slots;
+    window.set_steps_slot(slots[view::STEPS as usize]);
+    window.set_mixer_slot(slots[view::MIXER as usize]);
+    window.set_devices_slot(slots[view::DEVICES as usize]);
+    window.set_notes_slot(slots[view::NOTES as usize]);
+    window.set_playlist_slot(slots[view::PLAYLIST as usize]);
+    window.set_main_active(layout.slot_active[0]);
+    window.set_split_active(layout.slot_active[1]);
+    window.set_bottom_active(layout.slot_active[2]);
+    window.set_split_fraction(layout.split_fraction);
+    window.set_steps_dock_height(layout.steps_dock_height);
+    window.set_mixer_dock_height(layout.mixer_dock_height);
+    window.set_notes_dock_height(layout.notes_dock_height);
+    window.set_playlist_dock_height(layout.playlist_dock_height);
+    window.set_bottom_pane_visible(layout.bottom_pane_visible);
+    window.set_sidebar_visible(layout.sidebar_visible);
+    window.set_sidebar_width(layout.sidebar_width);
+}
+
+/// Read the arrangement back off the window. The window is the live truth
+/// while the app runs; this is only ever called to write that truth down.
+fn read_layout(window: &MainWindow) -> LayoutSettings {
+    LayoutSettings {
+        view_slots: vec![
+            window.get_steps_slot(),
+            window.get_mixer_slot(),
+            window.get_devices_slot(),
+            window.get_notes_slot(),
+            window.get_playlist_slot(),
+        ],
+        slot_active: vec![
+            window.get_main_active(),
+            window.get_split_active(),
+            window.get_bottom_active(),
+        ],
+        split_fraction: window.get_split_fraction(),
+        steps_dock_height: window.get_steps_dock_height(),
+        mixer_dock_height: window.get_mixer_dock_height(),
+        notes_dock_height: window.get_notes_dock_height(),
+        playlist_dock_height: window.get_playlist_dock_height(),
+        bottom_pane_visible: window.get_bottom_pane_visible(),
+        sidebar_visible: window.get_sidebar_visible(),
+        sidebar_width: window.get_sidebar_width(),
+    }
 }
 
 /// The one place `Pane` and the Slint view ids meet.
@@ -4378,6 +4430,7 @@ impl AppUi {
         {
             let settings = ui_settings.borrow();
             apply_appearance(&window, &settings.appearance);
+            apply_layout(&window, &settings.layout);
             sync_preferences_properties(&window, &settings);
             audio_tx.send(AudioAction::ApplyPersisted(settings.audio.engine_config()));
             // The browser opens with every top-level location expanded: the
@@ -7686,6 +7739,25 @@ impl AppUi {
                 if let Some(window) = weak.upgrade() {
                     window.set_preferences_log_to_file(started);
                 }
+            });
+        }
+
+        {
+            // The pane arrangement outlives both the session and the project:
+            // it is how this user works, not what this song is. Fired on
+            // discrete changes and at the end of a drag, never per frame, so
+            // this is a handful of small writes rather than one per pointer
+            // move. A failed save costs the memory of the arrangement and
+            // nothing else, so it is not worth interrupting anyone over.
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_layout_changed(move || {
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                let mut settings = settings.borrow_mut();
+                settings.layout = read_layout(&window);
+                let _ = settings.save();
             });
         }
 

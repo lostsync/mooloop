@@ -35,12 +35,21 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   before that the grip was live on the notes page alone.
 - **Each view remembers its own dock height**, so switching tabs restores the
   height that view was left at rather than sharing one number.
+- **The pane arrangement survives a restart**, in `[ui.layout]` of
+  `settings.toml` beside the palette seeds: which slot each view is in, what
+  each pane is showing, the divider position, each view's dock height, and
+  whether the dock and the browser are open. Zoom is deliberately not saved —
+  it is a glance, not an arrangement. An arrangement that could not be worked
+  in falls back to the default panes and keeps the rest of the file.
 - **A view moves between panes by dragging its tab.** Drop it on another
   pane, or on the right edge of an unsplit top pane to open the split there.
   The pane it would land in is tinted while the drag is live, the dragged tab
   dims at its origin, and the main pane's last view refuses to be dragged out
   — there would be nothing left to drop onto. `View > Move <name> to …` does
-  the same from the menu. This is how the mixer reaches the bottom pane.
+  the same from the menu, and so does right-clicking the tab itself — which
+  is where a tab says what can be done to it, since the drag and the
+  double-click have no affordance of their own. This is how the mixer reaches
+  the bottom pane.
 - **A view is revealed, not navigated to.** `Ctrl+1`..`Ctrl+5` and the `View`
   menu name `Steps`, `Mixer`, `Devices`, `Notes` and `Playlist`, and each
   shows that view wherever it lives. There is no longer an `editor page`: a

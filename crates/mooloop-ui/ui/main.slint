@@ -441,6 +441,11 @@ component PaneTabs inherits Rectangle {
     callback zoom-toggled();
     callback drag-started(int);
     callback drag-dropped(int);
+    callback move-requested(int, int);
+    /// False when this strip's slot would be left with nothing, which the
+    /// main slot is not allowed to be. Greys the move rows rather than
+    /// letting them fail silently.
+    in property <bool> can-leave: true;
 
     height: 24px;
     width: strip.preferred-width + 2px;
@@ -492,7 +497,11 @@ component PaneTabs inherits Rectangle {
                 property <length> grab-y;
                 property <bool> travelled;
                 pointer-event(e) => {
-                    if (e.kind == PointerEventKind.down) {
+                    if (e.kind == PointerEventKind.down
+                            && e.button == PointerEventButton.right) {
+                        root.picked(view);
+                        tab-menu.show();
+                    } else if (e.kind == PointerEventKind.down) {
                         self.grab-x = self.absolute-position.x + self.mouse-x;
                         self.grab-y = self.absolute-position.y + self.mouse-y;
                         self.travelled = false;
@@ -519,6 +528,48 @@ component PaneTabs inherits Rectangle {
                 // Double-click the thing that names the pane to make the pane
                 // the window, which is the maximise gesture a title bar has.
                 double-clicked => { root.picked(view); root.zoom-toggled(); }
+            }
+            // Right-click is where a tab says what can be done to it. Every
+            // row here is otherwise a gesture with no affordance -- a drag,
+            // a double-click -- or a `View` row that acts on the last view
+            // revealed rather than on the tab under the pointer, which
+            // cannot answer "what about *this* one".
+            tab-menu := PopupWindow {
+                x: 0px;
+                y: parent.height + 2px;
+                width: 176px;
+                height: tab-menu-frame.preferred-height;
+                close-policy: close-on-click;
+                tab-menu-frame := Rectangle {
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: Theme.radius-md;
+                    VerticalLayout {
+                        padding: 4px;
+                        MenuRow {
+                            text: "Move to Top Pane";
+                            enabled: root.slot != 0;
+                            selected => { root.move-requested(view, 0); }
+                        }
+                        MenuRow {
+                            text: "Move to Split";
+                            enabled: root.slot != 1 && root.can-leave;
+                            selected => { root.move-requested(view, 1); }
+                        }
+                        MenuRow {
+                            text: "Move to Bottom Pane";
+                            enabled: root.slot != 2 && root.can-leave;
+                            selected => { root.move-requested(view, 2); }
+                        }
+                        MenuSeparator {}
+                        MenuRow {
+                            text: root.zoomed ? "Restore Pane" : "Zoom Pane";
+                            shortcut: "Ctrl+Shift+\\";
+                            selected => { root.picked(view); root.zoom-toggled(); }
+                        }
+                    }
+                }
             }
             accessible-role: tab;
             accessible-label: PaneViews.names[view];
@@ -862,6 +913,11 @@ export component MainWindow inherits Window {
         root.steps-slot, root.mixer-slot, root.devices-slot,
         root.notes-slot, root.playlist-slot,
     ];
+    /// The arrangement changed and is worth remembering. Fired on discrete
+    /// changes and at the *end* of a drag, never per frame: a divider drag
+    /// would otherwise rewrite `settings.toml` on every pointer move.
+    callback layout-changed();
+
     // A tab click.
     callback view-picked(int);
     view-picked(v) => { root.show-view(v); }
@@ -907,6 +963,7 @@ export component MainWindow inherits Window {
     public function show-view(v: int) {
         root.set-slot-active(root.slot-of(v), v);
         root.active-slot = root.slot-of(v);
+        root.layout-changed();
     }
 
     // The main slot's other view -- the one the split opens with, so opening
@@ -940,6 +997,7 @@ export component MainWindow inherits Window {
             root.set-view-slot(root.split-active, 1);
             root.split-fraction = 0.5;
         }
+        root.layout-changed();
     }
     // Which view is active in each slot, or -1 for a slot holding nothing.
     // This is the state now: `editor-page` and `mixer-visible` are gone,
@@ -995,6 +1053,7 @@ export component MainWindow inherits Window {
         root.set-slot-active(s, v);
         root.active-slot = s;
         root.reseat-slot(from);
+        root.layout-changed();
     }
     public function toggle-zoom-active() {
         root.toggle-zoom(root.zoomed >= 0 ? root.zoomed : root.active-slot);
@@ -2419,12 +2478,15 @@ export component MainWindow inherits Window {
                                 PaneTabs {
                                     view-slots: root.view-slots;
                                     slot: root.steps-slot;
+                                    can-leave: root.steps-slot != 0
+                                        || root.main-view-count() > 1;
                                     active: root.slot-active(root.steps-slot);
                                     zoomed: root.zoomed == root.steps-slot;
                                     picked(v) => { root.view-picked(v); }
                                     zoom-toggled() => { root.toggle-zoom(root.steps-slot); }
                                     drag-started(v) => { root.view-drag-started(v); }
                                     drag-dropped(v) => { root.view-drag-dropped(v); }
+                                    move-requested(v, s) => { root.move-view(v, s); }
                                 }
                                 // The rule separates the tab strip from the
                                 // controls the selected view owns. MIXER has
@@ -2864,12 +2926,15 @@ export component MainWindow inherits Window {
                                 PaneTabs {
                                     view-slots: root.view-slots;
                                     slot: root.mixer-slot;
+                                    can-leave: root.mixer-slot != 0
+                                        || root.main-view-count() > 1;
                                     active: root.slot-active(root.mixer-slot);
                                     zoomed: root.zoomed == root.mixer-slot;
                                     picked(v) => { root.view-picked(v); }
                                     zoom-toggled() => { root.toggle-zoom(root.mixer-slot); }
                                     drag-started(v) => { root.view-drag-started(v); }
                                     drag-dropped(v) => { root.view-drag-dropped(v); }
+                                    move-requested(v, s) => { root.move-view(v, s); }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
                             }
@@ -2899,12 +2964,15 @@ export component MainWindow inherits Window {
                                 PaneTabs {
                                     view-slots: root.view-slots;
                                     slot: root.devices-slot;
+                                    can-leave: root.devices-slot != 0
+                                        || root.main-view-count() > 1;
                                     active: root.slot-active(root.devices-slot);
                                     zoomed: root.zoomed == root.devices-slot;
                                     picked(v) => { root.view-picked(v); }
                                     zoom-toggled() => { root.toggle-zoom(root.devices-slot); }
                                     drag-started(v) => { root.view-drag-started(v); }
                                     drag-dropped(v) => { root.view-drag-dropped(v); }
+                                    move-requested(v, s) => { root.move-view(v, s); }
                                 }
                                 ToolbarRule {}
                                 Text {
@@ -4255,12 +4323,15 @@ export component MainWindow inherits Window {
                                 PaneTabs {
                                     view-slots: root.view-slots;
                                     slot: root.notes-slot;
+                                    can-leave: root.notes-slot != 0
+                                        || root.main-view-count() > 1;
                                     active: root.slot-active(root.notes-slot);
                                     zoomed: root.zoomed == root.notes-slot;
                                     picked(v) => { root.view-picked(v); }
                                     zoom-toggled() => { root.toggle-zoom(root.notes-slot); }
                                     drag-started(v) => { root.view-drag-started(v); }
                                     drag-dropped(v) => { root.view-drag-dropped(v); }
+                                    move-requested(v, s) => { root.move-view(v, s); }
                                 }
                                 ToolbarRule {}
                                 SegmentedControl {
@@ -4908,12 +4979,15 @@ export component MainWindow inherits Window {
                                 PaneTabs {
                                     view-slots: root.view-slots;
                                     slot: root.playlist-slot;
+                                    can-leave: root.playlist-slot != 0
+                                        || root.main-view-count() > 1;
                                     active: root.slot-active(root.playlist-slot);
                                     zoomed: root.zoomed == root.playlist-slot;
                                     picked(v) => { root.view-picked(v); }
                                     zoom-toggled() => { root.toggle-zoom(root.playlist-slot); }
                                     drag-started(v) => { root.view-drag-started(v); }
                                     drag-dropped(v) => { root.view-drag-dropped(v); }
+                                    move-requested(v, s) => { root.move-view(v, s); }
                                 }
                                 ToolbarRule {}
                                 // The same pair the piano roll
@@ -5430,6 +5504,7 @@ export component MainWindow inherits Window {
                                         root.toggle-split();
                                         root.split-fraction = 0.5;
                                     }
+                                    root.layout-changed();
                                 }
                             }
                             double-clicked => { root.split-fraction = 0.5; }
@@ -5817,6 +5892,7 @@ export component MainWindow inherits Window {
                             } else if (e.kind == PointerEventKind.up
                                     || e.kind == PointerEventKind.cancel) {
                                 Motion.gesture-active = false;
+                                root.layout-changed();
                             }
                         }
                     }
@@ -5926,9 +6002,15 @@ export component MainWindow inherits Window {
                         enabled: k != 1 || root.split-active >= 0
                             || root.other-main-view() >= 0;
                         clicked => {
-                            if (k == 0) { root.bottom-pane-visible = !root.bottom-pane-visible; }
-                            else if (k == 1) { root.toggle-split(); }
-                            else { root.sidebar-visible = !root.sidebar-visible; }
+                            if (k == 0) {
+                                root.bottom-pane-visible = !root.bottom-pane-visible;
+                                root.layout-changed();
+                            } else if (k == 1) {
+                                root.toggle-split();
+                            } else {
+                                root.sidebar-visible = !root.sidebar-visible;
+                                root.layout-changed();
+                            }
                         }
                     }
                     accessible-role: button;

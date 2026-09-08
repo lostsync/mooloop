@@ -186,18 +186,40 @@ view — "Move Mixer to Bottom Pane" — because a row that does not say what it
 acts on is a row you have to try. Fifteen flat rows (five views by three
 slots) was the alternative and is worse than three.
 
-**Not built: the right-click tab menu.** The plan lists it, and it is the
-discoverable version of gestures that are otherwise only gestures. The three
-`View` rows cover the same operations, and a tab context menu wants menu
-machinery that does not exist yet. Left deliberately, recorded here rather
-than in the step file, which now describes something that is done.
+**The right-click tab menu was recorded as "wants menu machinery that does not
+exist yet". That was wrong, and the correction is the more useful note.**
+`main.slint` already had three right-click menus -- channel, pattern and
+browser sample -- each a `PopupWindow` holding `MenuRow`s in a bordered
+`Rectangle`, and the tab menu is a fourth on the same pattern. The claim was
+made from the absence of *submenus* in the menu bar, which is a different
+thing entirely and was true. **Check for the mechanism before recording that
+it is missing**; the cost of the wrong note was that a twenty-five-line
+addition looked like a project.
 
-**Not built: persisting the arrangement.** The plan reserved this as a
-decision rather than an oversight and the decision is *not yet*: an
-arrangement is UI state, not project state, so `PROJECT_FORMAT.md` is the
-wrong home and a song must not carry a window layout. Where it does belong is
-the settings file that already holds the palette seeds and the shortcut
-bindings. Doing it needs no new mechanism, only the call.
+Built on 2026-09-08, one commit later. Its rows are the operations that are
+otherwise gestures with no affordance -- move to each pane, and zoom -- and it
+is what lets the drag and the double-click stay gestures, since a tab can now
+be asked what it is for. The three `View` rows remain, and remain different:
+they act on the last view revealed, which cannot answer "what about *this*
+tab".
+
+**Persisting the arrangement: Adam's call, 2026-09-08 --** *"layout can
+persist via settings, sure."* Built the same day as `[ui.layout]` in
+`settings.toml`, beside the palette seeds and the shortcut bindings, because
+an arrangement is UI state: a song must not carry a window layout, and the
+panes you work in should greet you whichever song you open.
+
+**Zoom is deliberately not saved.** It is a glance, not an arrangement, and
+starting up with one pane filling the window and no memory of having asked
+would be a worse first second than the fidelity is worth.
+
+**The layout is *sanitized*, not validated**, and the difference is the point.
+A bad palette is worth refusing the whole file over, because the alternative
+is a window that cannot be read. A bad arrangement is not: it falls back to
+the default panes and keeps every other setting in the file. What it guards
+is real -- `settings.toml` is a file a user may edit, and an empty main slot,
+or a slot whose active view lives somewhere else, is a window with no pane in
+it and no way to get one back.
 
 ## Decisions taken before any code, so they are not re-litigated
 

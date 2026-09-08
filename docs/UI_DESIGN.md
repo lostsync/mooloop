@@ -473,6 +473,12 @@ columns with tiny `+` and `-` glyphs.
   outline, and what separates them is **fill, not position** — a docked panel
   appears and disappears and is drawn solid; a split is two editors and is
   drawn as two empty halves. Two rules 2px apart are the same square at 16px.
+- **A gesture with no affordance needs a menu that names it.** The tab drag
+  and the double-click to zoom are both invisible, so a tab's right-click menu
+  lists them: it is where the control says what can be done to it, and it is
+  what lets the gestures stay gestures once they are learned. A menu row
+  elsewhere is not a substitute when it acts on "the current thing" rather
+  than on the thing under the pointer.
 - **A view moves by dragging its tab, and a drop says which pane, not where
   in a sequence.** So the feedback is a tint over the target pane, where the
   device rack animates its rows aside — a reorder has to answer *where in the
