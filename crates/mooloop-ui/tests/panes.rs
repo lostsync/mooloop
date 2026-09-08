@@ -13,7 +13,7 @@
 //! > in the pane.
 
 use mooloop_ui::{view, MainWindow};
-use slint::{ComponentHandle, SharedString};
+use slint::SharedString;
 
 const MAIN: i32 = 0;
 const SPLIT: i32 = 1;
@@ -48,7 +48,7 @@ fn every_occupied_pane_shows_something(ui: &MainWindow) {
         ui.get_bottom_active(),
     ];
     for (slot, shown) in active.iter().enumerate() {
-        let holds_any = slots.iter().any(|&s| s == slot as i32);
+        let holds_any = slots.contains(&(slot as i32));
         if holds_any {
             assert!(
                 *shown >= 0 && slots[*shown as usize] == slot as i32,

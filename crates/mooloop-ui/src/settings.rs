@@ -508,7 +508,7 @@ impl LayoutSettings {
             && self.slot_active.len() == SLOT_COUNT
             // The main slot must hold something, or there is no pane left to
             // move anything back into.
-            && self.view_slots.iter().any(|&s| s == 0)
+            && self.view_slots.contains(&0)
             // A slot's active view must actually live in that slot.
             && self.slot_active.iter().enumerate().all(|(slot, &view)| {
                 view == -1
@@ -518,7 +518,7 @@ impl LayoutSettings {
             // A slot that holds views must have one of them active, and the
             // main slot may never be empty.
             && (0..SLOT_COUNT).all(|slot| {
-                let holds = self.view_slots.iter().any(|&s| s == slot as i32);
+                let holds = self.view_slots.contains(&(slot as i32));
                 holds == (self.slot_active[slot] != -1)
             });
         if !sane {
