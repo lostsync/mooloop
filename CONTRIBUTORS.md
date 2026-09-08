@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-08
-- Sessions: 75
+- Sessions: 76
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -118,7 +118,9 @@ Alphabetical by model name, then by harness.
   left seven source and route controls drawing correctly and doing nothing
   since the day it was written, and the knob wrapper that kept the value
   string to itself, so 85 ML-P8 and DS-01 dials hovered as an empty box,
-  and the sixteen-channel ceiling that only ever existed in the markup.
+  and the sixteen-channel ceiling that only ever existed in the markup, and
+  the pane-layout plan that turned four requests for one surface in one place
+  into a set of views and three slots to put them in.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

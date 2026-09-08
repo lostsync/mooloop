@@ -1,0 +1,31 @@
+# Pane layout status
+
+Written 2026-09-08. **Nothing has landed yet.** `README.md` holds the design
+and the argument for it; this file records what each step changed once it is
+done, and in particular anything the doing proved wrong about the plan.
+
+## Steps
+
+| Step | State |
+| --- | --- |
+| `01-the-pane-model.md` | Not started |
+| `02-the-split.md` | Not started |
+| `03-zoom-and-resize.md` | Not started |
+| `04-moving-a-view.md` | Not started |
+
+## Decisions taken before any code, so they are not re-litigated
+
+- **A view is in one slot at a time.** The alternative — the mixer visible in
+  two slots at once — was considered and rejected: it makes a tab strip stop
+  being a statement about what is on screen, makes a tab drag ambiguous
+  between move and copy, and gives `Ctrl+2` two answers. Nothing in Adam's
+  requirements asks for it.
+- **`SOURCE` is renamed `DEVICES`.** It is the device chain, which is the name
+  `UI_DESIGN.md` and the rest of the interface already use.
+- **The split chip goes in the status bar, not a toolbar.** `panel-left` and
+  `panel-bottom` are already there and already mean exactly this for the other
+  two regions.
+- **Zoom is a double-click on the active tab**, not a button per slot.
+- **Views are instantiated once and positioned**, not instantiated per slot.
+  See `README.md` > The implementation shape. This is what keeps the change
+  off the four-minute rebuild loop for as long as possible.

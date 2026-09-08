@@ -9,7 +9,11 @@ directory should always contain live work.
 `docs/FOCUS.md` decides which of these is next. This file only says what state
 each one is in.
 
-Last swept 2026-09-08, when `ui-consistency-pass/` finished: Adam's standing
+Last swept 2026-09-08, when `pane-layout/` was written: Adam asked for the top
+pane to split, and the four requirements he gave turned out to be one
+requirement -- *this view, in that place, at that size* -- asked about four
+surfaces, so the plan answers it once. Earlier the same day, when
+`ui-consistency-pass/` finished: Adam's standing
 list turned into an audit, and the audit found controls that were saying
 things the engine was not doing -- a clip light nothing could clear, a sampler
 envelope reading 2.5x what it played, a delay whose `1/2` was an eighth note,
@@ -45,6 +49,7 @@ is worth reading before either.
 
 | Plan | State |
 | --- | --- |
+| `pane-layout/` | **Written 2026-09-08, nothing built.** Adam's split-view request, answered as a set of views and three slots rather than a control per requirement. Read its `README.md` before touching the work area: the implementation shape it argues for -- every view instantiated once and *positioned*, rather than once per slot -- is what keeps it off the four-minute rebuild loop. |
 | `buffer-implementation/` | **Stage 1 done, Stage 2 open.** Stage 1's acceptance test 8 (RT allocation hygiene) is still unverified. |
 | `mono-synth-v2/` | **Complete and played**, one finding deliberately left open (Acid's cutoff corner). Kept out of the archive only because that finding needs Adam's ear, not because a step is unbuilt. |
 | `session-layer-extraction/` | **Done, 2026-09-03.** Lifted `mooloop-session` -- the model, the edits, undo, and engine command emission -- out of `mooloop-ui/src/lib.rs`, which is down from 14,157 lines to 9,797. `cargo test -p mooloop-session` is 87 tests in under a second, and is the first coverage the edit logic has ever had. Two departures are recorded in `00-status.md`: `UiState::new` is still long (callback *registration*, no longer decisions), and the pump's meter polling stayed in the view on purpose. |

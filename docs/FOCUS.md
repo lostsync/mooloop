@@ -232,6 +232,19 @@ linear range their own descriptors call exponential, and twenty-six tooltips
 that were sentences. Read its `README.md` before the next interface pass: it
 records the method, so the sweep can be re-run rather than re-invented.
 
+**A third directory joined them on 2026-09-08: `docs/plans/pane-layout/`.**
+It is iteration and it obeys the plan's rule -- the mixer, the playlist and
+the piano roll all already exist, and what it changes is where they can be put
+and how big they can be. Adam's opening was that at 1080p with sixteen steps
+the top pane is mostly negative space, and his four requirements turned out to
+be one requirement asked about four surfaces, so the plan answers it once:
+five views, three slots, and a view in exactly one slot at a time. Read its
+`README.md` before touching the work area. The one thing worth carrying out of
+it here is that the rearrangement does **not** require every view to become a
+component instantiated once per slot; a view is only ever in one place, so it
+is instantiated once and *positioned*, which is what keeps a layout change off
+the four-minute `mooloop-ui` rebuild.
+
 The four items as they stood follow, because the plan's steps are these and
 the notes are still the argument for them.
 
