@@ -1,5 +1,8 @@
 # 04 — Moving a view between panes
 
+**Landed 2026-09-08**, less the tab context menu and layout persistence, both
+recorded in `00-status.md` as deliberate.
+
 **Goal: requirement 4, and the rest of requirements 1 and 2** — the general
 answer, of which "the mixer in the bottom pane" is one case.
 

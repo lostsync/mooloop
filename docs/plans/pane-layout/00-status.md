@@ -10,8 +10,8 @@ done, and in particular anything the doing proved wrong about the plan.
 | --- | --- |
 | `01-the-pane-model.md` | **Landed 2026-09-08** on `feat/pane-split`. See below. |
 | `02-the-split.md` | **Landed 2026-09-08.** See below. |
-| `03-zoom-and-resize.md` | Not started |
-| `04-moving-a-view.md` | Not started |
+| `03-zoom-and-resize.md` | **Landed 2026-09-08.** See below. |
+| `04-moving-a-view.md` | **Landed 2026-09-08**, less the tab context menu. See below. |
 
 ## Step 01 — what the doing changed
 
@@ -112,6 +112,92 @@ empty halves, which is the true distinction and the one VS Code draws too.
 The browser chip had been drawing `panel-left` for a sidebar docked on the
 right since the chip was written; that is fixed here rather than left beside
 a new chip.
+
+## Step 03 — what the doing changed
+
+Any pane fills the window on a double-click of its active tab and comes back
+on another or on `Esc`. The bottom divider is live for any view that does not
+declare its own height, and each view remembers the height it was left at.
+
+**"Resizable except on devices" is one fact, not a condition.** `DEVICES` is
+the only view with an intrinsic height, because a face is a fixed 268px. So
+the grip's test is `!PaneViews.fixed-height[bottom-active]` rather than a
+named page, and the playlist became resizable without anything being written
+for it. The `changed height` clamp -- the one that catches the *window*
+shrinking under a tall dock -- moved to the same test.
+
+**Per-view dock heights were already there, written as a special case.** The
+old binding hardcoded 410px for the playlist, 442-plus-shelf for the source
+page, and a draggable number for notes. Those are three per-view heights in a
+conditional chain; they are now four writable properties and two functions,
+and `STEPS` and `MIXER` have one each because step 04 lets them into the dock.
+
+**`Esc` had to be given a way to lose.** It already routed through
+`shortcut-key` to the action dispatcher, and nothing binds it by default, so
+the zoom branch sits in front of that and only fires when something is zoomed
+*and* no dialog is open. Anything later bound to `Esc` still receives it, and
+the preferences dialog was already rejecting every key above this branch.
+
+**A chord and a menu row have no pointer, so they need to know which pane was
+meant.** `active-slot` is the last slot a view was revealed in, set by
+`show-view`, which every tab, chord and menu row already goes through. It is
+not a focus model and does not pretend to be one -- `interface-iteration/`
+step 04 is where that lives -- but it is an honest answer where the
+alternative was to guess a slot.
+
+**`ACTIONS.md`'s action count was stale before any of this.** It claimed 46
+where the table held 45. It is 47 now and correct, which it reached partly by
+accident; the document already says to read `actions.rs` rather than trust the
+number, and that remains the right instruction.
+
+## Step 04 — what the doing changed
+
+A tab drags between panes, dropping on the right edge of an unsplit top pane
+opens the split, and the `View` menu names the same moves for anyone who has
+not found the gesture. The mixer reaches the bottom pane, which is Adam's
+requirement 4 and the one case of the general answer.
+
+**`PaneDrag` is `RackDrag` again, deliberately.** The two halves of a drag sit
+in different places and neither contains the other: the grab is in a tab strip
+that knows its view and nothing about the work area's bounds, the landing is
+worked out by the work area from its own. The rack learned that the hard way
+-- it used to divide pointer travel by a *nominal* row pitch and land short of
+a wide device -- and the pointer is kept in window coordinates
+(`absolute-position + mouse-x`) for the reason `RackDrag.dx` spells out: a
+touch area's own `mouse-x` measures against a ruler the previous frame already
+slid.
+
+**The landing is a derived property, not something written on every move.**
+`work.drop-slot` is computed from the pointer and the slot bounds, and the
+drop reads it. There is nothing to keep in sync, which is a class of bug the
+rack's `target` has to be careful about.
+
+**The main slot may not empty**, or there is no pane left to drop anything
+back onto. The last view in it refuses at the *grab* rather than accepting the
+drag and snapping back, because a refusal you can see before you commit is
+worth more than one you discover at the end.
+
+**A drop highlight is a tint, not an opening gap.** The rack animates rows
+aside because a reorder must say *where in a sequence*; a pane drop only has
+to say *which pane*.
+
+**The menu bar has no submenus, so `Move To >` is three rows.** They name the
+view — "Move Mixer to Bottom Pane" — because a row that does not say what it
+acts on is a row you have to try. Fifteen flat rows (five views by three
+slots) was the alternative and is worse than three.
+
+**Not built: the right-click tab menu.** The plan lists it, and it is the
+discoverable version of gestures that are otherwise only gestures. The three
+`View` rows cover the same operations, and a tab context menu wants menu
+machinery that does not exist yet. Left deliberately, recorded here rather
+than in the step file, which now describes something that is done.
+
+**Not built: persisting the arrangement.** The plan reserved this as a
+decision rather than an oversight and the decision is *not yet*: an
+arrangement is UI state, not project state, so `PROJECT_FORMAT.md` is the
+wrong home and a song must not carry a window layout. Where it does belong is
+the settings file that already holds the palette seeds and the shortcut
+bindings. Doing it needs no new mechanism, only the call.
 
 ## Decisions taken before any code, so they are not re-litigated
 

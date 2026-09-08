@@ -14,6 +14,11 @@ should live. Every count below was measured against the tree at the audit
 date above; treat them as of that date, not as invariants. Line numbers in
 `main.slint` in particular drift with every edit to that file — prefer the
 `// ===== ... =====` section banners it carries, which are named below.
+`PaneTabs`, `PaneToolbar` and `ViewSlot` in `main.slint` are the pane shell,
+and `PaneDrag` is a second instance of `RackDrag`'s shape — a global holding a
+drag whose grab and landing live in elements that do not contain each other.
+If a third one appears, that is the component this file should be asking for.
+
 Those banners were renamed on 2026-09-08, when the work area became five
 views in three slots: the channel rack, the device rack, the piano roll and
 the playlist each sit under a banner named for their view (`STEPS`, `MIXER`,

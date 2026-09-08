@@ -1,5 +1,7 @@
 # 03 — Zoom, and the bottom divider generalised
 
+**Landed 2026-09-08.** `00-status.md` records what the doing changed.
+
 **Goal: requirements 5 and 6.**
 
 ## Zoom

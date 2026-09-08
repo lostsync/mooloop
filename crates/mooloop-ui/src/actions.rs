@@ -138,6 +138,15 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
     action!("view.pane-notes", "Show Notes", "View", ctrl + "4"),
     action!("view.pane-playlist", "Show Playlist", "View", ctrl + "5"),
     action!("view.split-toggle", "Split Top Pane", "View", ctrl + "\\"),
+    // Same key as the split, because they are the two questions about a
+    // pane's size and answering them from one place is easier to remember
+    // than two unrelated chords.
+    action!(
+        "view.zoom-pane",
+        "Zoom Pane",
+        "View",
+        ctrl + shift + "\\"
+    ),
     action!("view.zoom-in", "Zoom In", "View", ctrl + "="),
     action!("view.zoom-out", "Zoom Out", "View", ctrl + "-"),
     action!("channel.add", "Add Channel", "Channel", ctrl + shift + "n"),

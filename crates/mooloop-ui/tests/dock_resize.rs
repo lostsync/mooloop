@@ -1,4 +1,11 @@
-//! Tests for dragging the piano roll's dock splitter.
+//! Tests for dragging the dock's splitter, on the piano roll.
+//!
+//! The height it sets belongs to the *view*, not to the dock: each view
+//! remembers what it was left at, so switching tabs restores that rather than
+//! a number shared across three editors. `piano_dock_height` became
+//! `notes_dock_height` on 2026-09-08 for that reason, and the grip is live
+//! for any view that does not declare its own height -- which is every view
+//! but `DEVICES`, whose face is a fixed 268px.
 //!
 //! The splitter is a 1px line at the dock's top edge with a 6px grab zone
 //! reaching up into the work surface. These tests dispatch real pointer
@@ -123,7 +130,7 @@ fn splitter_drag_clamps_at_minimum_and_restores_exactly() {
         "dragging past the bound must still resize the dock"
     );
     assert_eq!(
-        ui.get_piano_dock_height(),
+        ui.get_notes_dock_height(),
         140.0,
         "the dock must clamp at its 140px floor"
     );
@@ -137,7 +144,7 @@ fn splitter_drag_clamps_at_minimum_and_restores_exactly() {
         (GRIP_X, GRIP_Y),
     );
     hover_neutral(&ui);
-    let restored = ui.get_piano_dock_height();
+    let restored = ui.get_notes_dock_height();
     assert_eq!(
         restored, 410.0,
         "the dock property must return to the default after the clamped drag"

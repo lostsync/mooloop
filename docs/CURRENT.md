@@ -22,6 +22,25 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   on a double-click, and closes the split when dragged to either bound —
   folding its views back into the main pane rather than losing them. `View >
   Split Top Pane` does the same thing from the menu.
+- **Any pane can fill the window.** Double-click a pane's active tab — the
+  maximise gesture a title bar has, on the control that names the pane — and
+  everything but the menu bar, the transport row and the status bar goes away.
+  Double-click again or press `Esc` to restore; `View > Zoom Pane` and
+  `Ctrl+Shift+\` do the same. Zoom never moves a view, so leaving it puts
+  everything back where it was. The zoomed tab takes the full accent rather
+  than the muted active fill, and the status bar says how to get out.
+- **The bottom pane resizes for any view that does not declare its own
+  height**, which is every view except `DEVICES` — a device face is a fixed
+  268px and does not stretch. The playlist became resizable on 2026-09-08;
+  before that the grip was live on the notes page alone.
+- **Each view remembers its own dock height**, so switching tabs restores the
+  height that view was left at rather than sharing one number.
+- **A view moves between panes by dragging its tab.** Drop it on another
+  pane, or on the right edge of an unsplit top pane to open the split there.
+  The pane it would land in is tinted while the drag is live, the dragged tab
+  dims at its origin, and the main pane's last view refuses to be dragged out
+  — there would be nothing left to drop onto. `View > Move <name> to …` does
+  the same from the menu. This is how the mixer reaches the bottom pane.
 - **A view is revealed, not navigated to.** `Ctrl+1`..`Ctrl+5` and the `View`
   menu name `Steps`, `Mixer`, `Devices`, `Notes` and `Playlist`, and each
   shows that view wherever it lives. There is no longer an `editor page`: a

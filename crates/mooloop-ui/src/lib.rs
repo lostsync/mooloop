@@ -4534,6 +4534,7 @@ impl AppUi {
                     "view.pane-notes" => show_pane(&commands, &window, Pane::Notes),
                     "view.pane-playlist" => show_pane(&commands, &window, Pane::Playlist),
                     "view.split-toggle" => window.invoke_toggle_split(),
+                    "view.zoom-pane" => window.invoke_toggle_zoom_active(),
                     "view.pane-next" => {
                         let pane = cycle_pane(commands.borrow().pane, true);
                         show_pane(&commands, &window, pane);

@@ -126,7 +126,13 @@ Alphabetical by model name, then by harness.
   stacked toolbars folded into the one row per view that made possible, and
   then the split itself, whose divider closes what it is dragged out of
   existence, and the status-bar chip that had been drawing a left-docked panel
-  for a sidebar docked on the right since the day it was written.
+  for a sidebar docked on the right since the day it was written, and the zoom
+  that is a double-click on the thing naming the pane rather than a button per
+  pane, with the dock's divider generalised from a named page to the one fact
+  underneath it -- that a device face declares a height and nothing else does,
+  and the tab drag that moves a view between panes, whose grab and landing
+  live in elements that do not contain each other -- the split of labour the
+  rack's reorder had already had to learn.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

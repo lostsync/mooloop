@@ -473,6 +473,21 @@ columns with tiny `+` and `-` glyphs.
   outline, and what separates them is **fill, not position** — a docked panel
   appears and disappears and is drawn solid; a split is two editors and is
   drawn as two empty halves. Two rules 2px apart are the same square at 16px.
+- **A view moves by dragging its tab, and a drop says which pane, not where
+  in a sequence.** So the feedback is a tint over the target pane, where the
+  device rack animates its rows aside — a reorder has to answer *where in the
+  order*, a pane drop only *which pane*. A drag that is not allowed refuses at
+  the grab rather than snapping back at the end.
+- **A pane fills the window on a double-click of its active tab.** The
+  maximise gesture a title bar has, on the control that names the pane, which
+  costs no chrome at all — a button per slot would be three buttons for a mode
+  entered rarely and left immediately. The state is not hidden: the zoomed tab
+  takes the full accent, the other slots are gone from the screen, and the
+  status bar says how to get back. `Esc` leaves, and loses to every dialog.
+- **A view declares an intrinsic height or it stretches.** A device face is a
+  fixed 268px, so `DEVICES` declares one and nothing else does; that single
+  fact is what makes the dock's divider live on some views and not others.
+  Do not write a condition naming a view where the view can state a fact.
 - **A divider closes what it is dragged out of existence.** Both dividers use
   one idiom: a 1px line taking `Theme.focus` on hover, a grab zone beside it,
   moving-origin drag arithmetic because the grip travels with the edge it

@@ -349,6 +349,33 @@ global PaneViews {
     out property <[bool]> fixed-height: [false, false, true, false, false];
 }
 
+// Live state of a pane-tab drag.
+//
+// A global for the reason `RackDrag` is one, and in the same shape: the two
+// halves of the drag sit in different places and neither contains the other.
+// The **grab** is in a tab strip, which knows which view it is holding and
+// nothing about the work area's geometry; the **landing** is worked out by
+// the work area, which knows its own bounds and nothing about the grab.
+//
+// The pointer is kept in *window* coordinates, `absolute-position + mouse-x`,
+// which is the lesson `RackDrag.dx` records at length: a touch area's
+// `mouse-x` is measured against a ruler that the previous frame already slid,
+// so it reports each move's increment rather than the travel.
+global PaneDrag {
+    // The view being dragged, or -1 for no drag in progress.
+    in-out property <int> view: -1;
+    // The slot it would land in, or -1 for "nowhere it may go".
+    in-out property <int> target: -1;
+    in-out property <bool> active;
+    in-out property <length> pointer-x;
+    in-out property <length> pointer-y;
+    public function end() {
+        root.view = -1;
+        root.target = -1;
+        root.active = false;
+    }
+}
+
 // One slot's computed rectangle, plus whether the slot is on screen at all.
 struct PaneRect {
     x: length,
@@ -407,7 +434,13 @@ component PaneTabs inherits Rectangle {
     in property <[int]> view-slots;
     in property <int> slot;
     in property <int> active;
+    // Drawn on the active tab, because the gesture that sets it is on the
+    // active tab: the full accent rather than the muted active fill.
+    in property <bool> zoomed;
     callback picked(int);
+    callback zoom-toggled();
+    callback drag-started(int);
+    callback drag-dropped(int);
 
     height: 24px;
     width: strip.preferred-width + 2px;
@@ -431,21 +464,61 @@ component PaneTabs inherits Rectangle {
             width: home == root.slot ? 66px : 0px;
             visible: home == root.slot;
             border-radius: Theme.radius-sm;
-            background: root.active == view ? Theme.accent-active
+            // The tab being dragged stays where it is, dimmed, the way the
+            // rack leaves an outline at a dragged device's origin.
+            opacity: PaneDrag.view == view ? 0.4 : 1.0;
+            background: root.active == view
+                ? (root.zoomed ? Theme.accent : Theme.accent-active)
                 : tab-touch.has-hover ? Theme.surface-active : transparent;
             Text {
                 text: PaneViews.names[view];
                 font-size: 9px;
                 letter-spacing: 0.5px;
-                color: root.active == view ? Theme.text : Theme.text-muted;
+                color: root.active == view
+                    ? (root.zoomed ? Theme.background : Theme.text)
+                    : Theme.text-muted;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 width: 100%;
                 height: 100%;
             }
+            // A press is a pick; a press that travels is a move. The
+            // threshold is what keeps a slightly wobbly click from becoming a
+            // drag, and the pick is resolved on *release* so a drag that ends
+            // where it started still just selects the tab.
             tab-touch := TouchArea {
-                mouse-cursor: pointer;
-                clicked => { root.picked(view); }
+                mouse-cursor: PaneDrag.view == view ? MouseCursor.grabbing : MouseCursor.pointer;
+                property <length> grab-x;
+                property <length> grab-y;
+                property <bool> travelled;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) {
+                        self.grab-x = self.absolute-position.x + self.mouse-x;
+                        self.grab-y = self.absolute-position.y + self.mouse-y;
+                        self.travelled = false;
+                        PaneDrag.pointer-x = self.grab-x;
+                        PaneDrag.pointer-y = self.grab-y;
+                    } else if (e.kind == PointerEventKind.move && self.pressed) {
+                        PaneDrag.pointer-x = self.absolute-position.x + self.mouse-x;
+                        PaneDrag.pointer-y = self.absolute-position.y + self.mouse-y;
+                        if (!self.travelled
+                                && (abs(PaneDrag.pointer-x - self.grab-x) > 5px
+                                 || abs(PaneDrag.pointer-y - self.grab-y) > 5px)) {
+                            self.travelled = true;
+                            root.drag-started(view);
+                        }
+                    } else if (e.kind == PointerEventKind.up) {
+                        if (self.travelled) { root.drag-dropped(view); }
+                        else { root.picked(view); }
+                        self.travelled = false;
+                    } else if (e.kind == PointerEventKind.cancel) {
+                        self.travelled = false;
+                        PaneDrag.end();
+                    }
+                }
+                // Double-click the thing that names the pane to make the pane
+                // the window, which is the maximise gesture a title bar has.
+                double-clicked => { root.picked(view); root.zoom-toggled(); }
             }
             accessible-role: tab;
             accessible-label: PaneViews.names[view];
@@ -738,12 +811,32 @@ export component MainWindow inherits Window {
     in property <float> editing-bus-input-right-db: -60;
 
     // ---- lower editor ----
-    // Dock height the piano roll restores. Only the notes page drives the
-    // splitter today. Source starts at 430px so a fixed device face and the
-    // compact modulation shelf fit without an initial vertical scroll, and
-    // grows by the shelf's open delta while the shelf is expanded;
-    // Playlist retains the established 410px geometry.
-    in-out property <length> piano-dock-height: 410px;
+    //
+    // **Each view remembers its own dock height**, so switching tabs restores
+    // the height that view was left at rather than sharing one number across
+    // three editors. This used to be a conditional chain that hardcoded three
+    // of them; they are the same three, now said once each and writable.
+    //
+    // `DEVICES` is absent on purpose: it is the one view with an intrinsic
+    // height, since a face is a fixed 268px and does not stretch. That single
+    // fact is the whole of "the bottom pane resizes except on the devices
+    // page" -- the grip is live unless the bottom view declares its own size.
+    in-out property <length> notes-dock-height: 410px;
+    in-out property <length> playlist-dock-height: 376px;
+    in-out property <length> steps-dock-height: 300px;
+    in-out property <length> mixer-dock-height: 300px;
+    function dock-height(v: int) -> length {
+        return v == PaneViews.notes ? root.notes-dock-height
+            : v == PaneViews.playlist ? root.playlist-dock-height
+            : v == PaneViews.steps ? root.steps-dock-height
+            : root.mixer-dock-height;
+    }
+    function set-dock-height(v: int, h: length) {
+        if (v == PaneViews.notes) { root.notes-dock-height = h; }
+        else if (v == PaneViews.playlist) { root.playlist-dock-height = h; }
+        else if (v == PaneViews.steps) { root.steps-dock-height = h; }
+        else if (v == PaneViews.mixer) { root.mixer-dock-height = h; }
+    }
     // Where the top pane's divider sits, as a fraction of the work area's
     // width. Nothing drives it until step 02 opens the split.
     in-out property <float> split-fraction: 0.5;
@@ -773,6 +866,24 @@ export component MainWindow inherits Window {
     callback view-picked(int);
     view-picked(v) => { root.show-view(v); }
 
+    // A tab drag. The tab publishes the grab, the work area publishes the
+    // landing, and these two resolve it.
+    callback view-drag-started(int);
+    view-drag-started(v) => {
+        // The last view in the main slot is not draggable out; refusing at
+        // the grab is clearer than accepting the drag and snapping it back.
+        if (root.slot-of(v) == 0 && root.main-view-count() <= 1) { return; }
+        PaneDrag.view = v;
+        PaneDrag.active = true;
+    }
+    callback view-drag-dropped(int);
+    view-drag-dropped(v) => {
+        if (PaneDrag.active && work.drop-slot >= 0) {
+            root.move-view(v, work.drop-slot);
+        }
+        PaneDrag.end();
+    }
+
     function slot-of(v: int) -> int {
         return v == PaneViews.steps ? root.steps-slot
             : v == PaneViews.mixer ? root.mixer-slot
@@ -795,6 +906,7 @@ export component MainWindow inherits Window {
     // Reveal a view where it lives. Rust calls this; so does every tab.
     public function show-view(v: int) {
         root.set-slot-active(root.slot-of(v), v);
+        root.active-slot = root.slot-of(v);
     }
 
     // The main slot's other view -- the one the split opens with, so opening
@@ -834,6 +946,60 @@ export component MainWindow inherits Window {
     // because a page index cannot name a view that has moved to another pane.
     // Rust reveals a view with `show-view` and asks after one with the
     // `showing-*` properties below.
+    // Which slot fills the window, or -1 for the ordinary arrangement.
+    //
+    // Zoom does not *move* a view: leaving it puts everything back exactly
+    // where it was, which is what makes it safe to reach for at a glance.
+    // Entered and left by double-clicking a pane's active tab -- the gesture
+    // a title bar has, on the control that names the pane -- and by Esc,
+    // `View > Zoom Pane`, and the `view.zoom-pane` action.
+    in-out property <int> zoomed: -1;
+    public function toggle-zoom(s: int) {
+        root.zoomed = root.zoomed == s ? -1 : s;
+    }
+    // The last slot a view was revealed in -- by a tab, a chord or a menu
+    // row. It is not a focus model and does not pretend to be one; it is the
+    // only honest answer available to "which pane did you mean" for the
+    // gestures that are not aimed with a pointer. Starts at the dock, which
+    // is where the editors are and what is showing at launch.
+    in-out property <int> active-slot: 2;
+    // How many views the main slot holds. Main is never allowed to empty --
+    // there would be no pane left to drop anything back onto -- so the last
+    // view in it refuses to be dragged out rather than snapping back.
+    function main-view-count() -> int {
+        return (root.steps-slot == 0 ? 1 : 0) + (root.mixer-slot == 0 ? 1 : 0)
+            + (root.devices-slot == 0 ? 1 : 0) + (root.notes-slot == 0 ? 1 : 0)
+            + (root.playlist-slot == 0 ? 1 : 0);
+    }
+    // A slot left holding nothing stops being drawn, and its views' tabs go
+    // with it. `bottom-active` and `split-active` become -1; `main-active`
+    // cannot, by the rule above.
+    function reseat-slot(s: int) {
+        if (s == 0) { return; }
+        if (root.steps-slot == s) { root.set-slot-active(s, PaneViews.steps); }
+        else if (root.mixer-slot == s) { root.set-slot-active(s, PaneViews.mixer); }
+        else if (root.devices-slot == s) { root.set-slot-active(s, PaneViews.devices); }
+        else if (root.notes-slot == s) { root.set-slot-active(s, PaneViews.notes); }
+        else if (root.playlist-slot == s) { root.set-slot-active(s, PaneViews.playlist); }
+        else { root.set-slot-active(s, -1); }
+    }
+    // Move a view to a slot and make it the active one there. Dropping into
+    // slot 1 while there is no split is what opens the split -- the gesture
+    // people arrive already knowing, and the reason the chip is a
+    // convenience rather than the only way in.
+    public function move-view(v: int, s: int) {
+        if (root.slot-of(v) == s) { root.show-view(v); return; }
+        if (root.slot-of(v) == 0 && root.main-view-count() <= 1) { return; }
+        let from = root.slot-of(v);
+        root.set-view-slot(v, s);
+        root.set-slot-active(s, v);
+        root.active-slot = s;
+        root.reseat-slot(from);
+    }
+    public function toggle-zoom-active() {
+        root.toggle-zoom(root.zoomed >= 0 ? root.zoomed : root.active-slot);
+    }
+
     in-out property <int> main-active: PaneViews.steps;
     in-out property <int> split-active: -1;
     in-out property <int> bottom-active: PaneViews.devices;
@@ -847,7 +1013,7 @@ export component MainWindow inherits Window {
             : root.bottom-active;
     }
     function view-showing(v: int, s: int) -> bool {
-        return root.slot-active(s) == v;
+        return root.slot-active(s) == v && (root.zoomed < 0 || root.zoomed == s);
     }
     // What Rust asks instead of comparing a page index. Each is "this view is
     // the active view of whichever slot holds it", which stays true however
@@ -866,8 +1032,7 @@ export component MainWindow inherits Window {
             : 0px);
     property <length> bottom-extent: !root.bottom-pane-visible || root.bottom-active < 0 ? 0px
         : PaneViews.fixed-height[root.bottom-active] ? root.devices-extent
-        : root.bottom-active == PaneViews.notes ? root.piano-dock-height
-        : 376px;
+        : root.dock-height(root.bottom-active);
     // Hide and show ease, as the dock's own height used to. The grip steps
     // the animation aside while it owns the value, which is what
     // `Motion.gesture-active` is for.
@@ -880,9 +1045,9 @@ export component MainWindow inherits Window {
     // itself shrinking under a tall dock. Kept out of the dock's height
     // binding: reading root.height there loops through the layout.
     changed height => {
-        if (root.showing-notes) {
-            root.piano-dock-height = max(140px,
-                min(root.piano-dock-height, root.height - 220px));
+        if (root.bottom-active >= 0 && !PaneViews.fixed-height[root.bottom-active]) {
+            root.set-dock-height(root.bottom-active, max(140px,
+                min(root.dock-height(root.bottom-active), root.height - 220px)));
         }
     }
     // Browser sidebar. Hidden by default; the status bar's panel icon
@@ -1693,6 +1858,15 @@ export component MainWindow inherits Window {
                 root.shortcut-key("delete", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
             } else if (event.text == Key.Backspace) {
                 root.shortcut-key("backspace", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            // Esc leaves zoom and nothing else. It is the least specific
+            // meaning Esc can have here, so it loses to every dialog and does
+            // not consume the key when nothing is zoomed -- whatever else
+            // gets bound to Esc still receives it.
+            } else if (event.text == Key.Escape && root.zoomed >= 0
+                    && !root.save-error-open && !root.export-open
+                    && !root.save-preset-open && !root.about-open) {
+                root.zoomed = -1;
+                accept
             } else if (event.text == Key.Escape) {
                 root.shortcut-key("escape", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
             } else if (event.text == Key.Tab) {
@@ -1970,9 +2144,50 @@ export component MainWindow inherits Window {
                     MenuSeparator {}
                     MenuRow {
                         text: "Split Top Pane";
+                        shortcut: "Ctrl+\\";
                         checked: root.split-active >= 0;
                         enabled: root.split-active >= 0 || root.other-main-view() >= 0;
                         selected => { root.toggle-split(); }
+                    }
+                    MenuRow {
+                        text: "Zoom Pane";
+                        shortcut: "Ctrl+Shift+\\";
+                        checked: root.zoomed >= 0;
+                        selected => { root.toggle-zoom-active(); }
+                    }
+                    MenuSeparator {}
+                    // Moving a view is a tab drag; these are the same
+                    // operation for someone who has not discovered that, and
+                    // the reason the drag is allowed to be a gesture. They
+                    // name the view rather than saying "current view",
+                    // because a row that does not say what it acts on is a
+                    // row you have to try.
+                    //
+                    // A `Move To >` submenu would be the usual shape and the
+                    // menu bar has no submenus; three rows for the view you
+                    // last revealed is smaller than fifteen flat ones.
+                    MenuRow {
+                        text: "Move " + PaneViews.names[root.slot-active(root.active-slot)]
+                            + " to Top Pane";
+                        enabled: root.slot-active(root.active-slot) >= 0
+                            && root.active-slot != 0;
+                        selected => { root.move-view(root.slot-active(root.active-slot), 0); }
+                    }
+                    MenuRow {
+                        text: "Move " + PaneViews.names[root.slot-active(root.active-slot)]
+                            + " to Split";
+                        enabled: root.slot-active(root.active-slot) >= 0
+                            && root.active-slot != 1
+                            && !(root.active-slot == 0 && root.main-view-count() <= 1);
+                        selected => { root.move-view(root.slot-active(root.active-slot), 1); }
+                    }
+                    MenuRow {
+                        text: "Move " + PaneViews.names[root.slot-active(root.active-slot)]
+                            + " to Bottom Pane";
+                        enabled: root.slot-active(root.active-slot) >= 0
+                            && root.active-slot != 2
+                            && !(root.active-slot == 0 && root.main-view-count() <= 1);
+                        selected => { root.move-view(root.slot-active(root.active-slot), 2); }
                     }
                     MenuSeparator {}
                     MenuRow {
@@ -2153,8 +2368,36 @@ export component MainWindow inherits Window {
                     property <length> main-w: root.split-active >= 0
                         ? (self.width - 1px) * root.split-fraction
                         : self.width;
+                    // The landing. Worked out here, from this element's own
+                    // bounds, because the tab that started the drag knows
+                    // nothing about them -- the split of labour `RackDrag`
+                    // records. A plain derived property rather than something
+                    // written into the global on every move: there is nothing
+                    // to keep in sync if the answer is simply computed.
+                    property <length> ptr-x: PaneDrag.pointer-x - self.absolute-position.x;
+                    property <length> ptr-y: PaneDrag.pointer-y - self.absolute-position.y;
+                    // -1 when no drag is live or the pointer is nowhere it may
+                    // land. Dropping on the right edge of an unsplit top pane
+                    // opens the split, which is how the split gets made
+                    // without knowing the chip exists.
+                    property <bool> would-open-split: PaneDrag.active
+                        && root.split-active < 0
+                        && self.ptr-y <= self.top-h
+                        && self.ptr-x > self.width * 0.72;
+                    property <int> drop-slot:
+                        !PaneDrag.active ? -1
+                        : (root.bottom-pane-visible && self.ptr-y > self.top-h) ? 2
+                        : root.split-active >= 0
+                            ? (self.ptr-x < self.main-w ? 0 : 1)
+                        : self.would-open-split ? 1
+                        : 0;
+
                     function slot-rect(s: int) -> PaneRect {
-                        return s == 0
+                        // A zoomed slot is the work area. Everything else is
+                        // not drawn at all, so its rectangle never matters.
+                        return root.zoomed >= 0
+                            ? { x: 0px, y: 0px, width: self.width, height: self.height }
+                            : s == 0
                             ? { x: 0px, y: 0px, width: self.main-w, height: self.top-h }
                             : s == 1
                             ? { x: self.main-w + 1px, y: 0px,
@@ -2177,7 +2420,11 @@ export component MainWindow inherits Window {
                                     view-slots: root.view-slots;
                                     slot: root.steps-slot;
                                     active: root.slot-active(root.steps-slot);
+                                    zoomed: root.zoomed == root.steps-slot;
                                     picked(v) => { root.view-picked(v); }
+                                    zoom-toggled() => { root.toggle-zoom(root.steps-slot); }
+                                    drag-started(v) => { root.view-drag-started(v); }
+                                    drag-dropped(v) => { root.view-drag-dropped(v); }
                                 }
                                 // The rule separates the tab strip from the
                                 // controls the selected view owns. MIXER has
@@ -2618,7 +2865,11 @@ export component MainWindow inherits Window {
                                     view-slots: root.view-slots;
                                     slot: root.mixer-slot;
                                     active: root.slot-active(root.mixer-slot);
+                                    zoomed: root.zoomed == root.mixer-slot;
                                     picked(v) => { root.view-picked(v); }
+                                    zoom-toggled() => { root.toggle-zoom(root.mixer-slot); }
+                                    drag-started(v) => { root.view-drag-started(v); }
+                                    drag-dropped(v) => { root.view-drag-dropped(v); }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
                             }
@@ -2649,7 +2900,11 @@ export component MainWindow inherits Window {
                                     view-slots: root.view-slots;
                                     slot: root.devices-slot;
                                     active: root.slot-active(root.devices-slot);
+                                    zoomed: root.zoomed == root.devices-slot;
                                     picked(v) => { root.view-picked(v); }
+                                    zoom-toggled() => { root.toggle-zoom(root.devices-slot); }
+                                    drag-started(v) => { root.view-drag-started(v); }
+                                    drag-dropped(v) => { root.view-drag-dropped(v); }
                                 }
                                 ToolbarRule {}
                                 Text {
@@ -4001,7 +4256,11 @@ export component MainWindow inherits Window {
                                     view-slots: root.view-slots;
                                     slot: root.notes-slot;
                                     active: root.slot-active(root.notes-slot);
+                                    zoomed: root.zoomed == root.notes-slot;
                                     picked(v) => { root.view-picked(v); }
+                                    zoom-toggled() => { root.toggle-zoom(root.notes-slot); }
+                                    drag-started(v) => { root.view-drag-started(v); }
+                                    drag-dropped(v) => { root.view-drag-dropped(v); }
                                 }
                                 ToolbarRule {}
                                 SegmentedControl {
@@ -4650,7 +4909,11 @@ export component MainWindow inherits Window {
                                     view-slots: root.view-slots;
                                     slot: root.playlist-slot;
                                     active: root.slot-active(root.playlist-slot);
+                                    zoomed: root.zoomed == root.playlist-slot;
                                     picked(v) => { root.view-picked(v); }
+                                    zoom-toggled() => { root.toggle-zoom(root.playlist-slot); }
+                                    drag-started(v) => { root.view-drag-started(v); }
+                                    drag-dropped(v) => { root.view-drag-dropped(v); }
                                 }
                                 ToolbarRule {}
                                 // The same pair the piano roll
@@ -5093,6 +5356,28 @@ export component MainWindow inherits Window {
                     }
 
 
+                    // Where the drag would land. Drawn over the slots and
+                    // under the dividers, and only while a drag is live.
+                    //
+                    // A tint plus an edge rather than an animated gap: the
+                    // rack opens a gap between rows because a reorder has to
+                    // say *where in a sequence*, and a pane drop only has to
+                    // say *which pane*.
+                    if PaneDrag.active && work.drop-slot >= 0 : Rectangle {
+                        property <PaneRect> r: work.would-open-split
+                            ? { x: work.width * 0.72, y: 0px,
+                                width: work.width * 0.28, height: work.top-h }
+                            : work.slot-rect(work.drop-slot);
+                        x: self.r.x;
+                        y: self.r.y;
+                        width: self.r.width;
+                        height: self.r.height;
+                        background: Theme.accent;
+                        opacity: 0.12;
+                        border-width: 1px;
+                        border-color: Theme.focus;
+                    }
+
                     // The divider between the two top slots. Same idiom as the
                     // dock's, turned ninety degrees, and drawn only while
                     // there is a split to divide.
@@ -5101,7 +5386,7 @@ export component MainWindow inherits Window {
                     // its views back into the main slot. That is the same
                     // behaviour as the status bar's chip and the View menu
                     // row, reached by the gesture people already try.
-                    if root.split-active >= 0 : Rectangle {
+                    if root.split-active >= 0 && root.zoomed < 0 : Rectangle {
                         x: work.main-w;
                         y: 0px;
                         width: 1px;
@@ -5161,7 +5446,7 @@ export component MainWindow inherits Window {
                     // is what generalises that to "any view that does not
                     // declare its own height", which is DEVICES and nothing
                     // else.
-                    if root.bottom-pane-visible : Rectangle {
+                    if root.bottom-pane-visible && root.zoomed < 0 : Rectangle {
                         x: 0px;
                         y: work.top-h;
                         width: work.width;
@@ -5177,7 +5462,10 @@ export component MainWindow inherits Window {
                             y: -5px;
                             width: parent.width;
                             height: 6px;
-                            enabled: root.bottom-active == PaneViews.notes;
+                            // Live unless the bottom view declares its own
+                            // height, which only DEVICES does.
+                            enabled: root.zoomed < 0 && root.bottom-active >= 0
+                                && !PaneViews.fixed-height[root.bottom-active];
                             mouse-cursor: ns-resize;
                             property <length> grab-y;
                             pointer-event(e) => {
@@ -5189,7 +5477,7 @@ export component MainWindow inherits Window {
                                     // mouse-y is measured against a moving origin:
                                     // fold each event's offset into the current
                                     // height rather than replaying from the press.
-                                    let target = root.piano-dock-height
+                                    let target = root.dock-height(root.bottom-active)
                                         - (self.mouse-y - self.grab-y);
                                     let clamped = max(140px,
                                         min(target, root.height - 220px));
@@ -5199,7 +5487,7 @@ export component MainWindow inherits Window {
                                         // instead of unwinding the overshoot.
                                         self.grab-y = self.mouse-y;
                                     }
-                                    root.piano-dock-height = clamped;
+                                    root.set-dock-height(root.bottom-active, clamped);
                                 } else if (e.kind == PointerEventKind.up
                                         || e.kind == PointerEventKind.cancel) {
                                     Motion.gesture-active = false;
@@ -5566,6 +5854,12 @@ export component MainWindow inherits Window {
                     height: parent.height;
                     text: root.hover-hint != "" ? root.hover-hint
                         : StatusHint.text != "" ? StatusHint.text
+                        // Below the two hint channels, because a live gesture
+                        // is more urgent than a mode; above the last status
+                        // message, because a pane filling the window is a
+                        // state the user needs a way out of.
+                        : root.zoomed >= 0
+                            ? "Zoomed — double-click the tab or press Esc to restore"
                         : root.status-message;
                     color: Theme.text-muted;
                     font-size: 10px;

@@ -43,12 +43,13 @@ the command layer, and applies equally to any future console/MCP command.
 ## What's registered today
 
 `actions.rs`'s `ACTIONS` table is the source of truth; read it rather than
-this document for the current list. As of this writing it holds 47 actions in
-eight categories: Transport (play/pause on Space and the song loop on L),
+this document for the current list — and mean it: on 2026-09-08 this sentence
+said 46 where the table held 45, and had done for long enough that nobody
+knew when it drifted. It holds 47 in eight categories as of that date: Transport (play/pause on Space and the song loop on L),
 File, Edit, Notes (arrow-key nudge and
 transpose, the five pointer tools on keys 1-5, and the snap toggle on 6),
-View (revealing a view, splitting the top pane on Ctrl+\\, and piano-roll
-zoom), Channel, Pattern (including
+View (revealing a view, splitting the top pane on Ctrl+\\, zooming a pane to
+the window on Ctrl+Shift+\\, and piano-roll zoom), Channel, Pattern (including
 lengthening and shortening the pattern by a beat, on Ctrl+Shift+= and
 Ctrl+Shift+-), and Device
 (copy, cut, paste and duplicate the selected rack device, on
