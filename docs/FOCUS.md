@@ -221,6 +221,17 @@ step exposes a mechanism that is **already built** and currently reachable
 only from a menu, a rail button, or not at all. None of them adds engine
 capability.
 
+**A second directory joined it on 2026-09-08: `docs/plans/ui-consistency-pass/`.**
+It is not iteration and not a feature — it is the audit Adam's standing list
+asked for, and what it found is a different class of problem from anything
+`interface-iteration/` covers. Those steps make a built mechanism easier to
+reach; these were controls saying things the engine was not doing. A clip
+light nothing could clear, a sampler envelope printing 2.5x what it played, a
+delay whose `1/2` was an eighth note, eighteen envelope stages laid across a
+linear range their own descriptors call exponential, and twenty-six tooltips
+that were sentences. Read its `README.md` before the next interface pass: it
+records the method, so the sweep can be re-run rather than re-invented.
+
 The four items as they stood follow, because the plan's steps are these and
 the notes are still the argument for them.
 
