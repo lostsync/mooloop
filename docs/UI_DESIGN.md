@@ -305,7 +305,10 @@ a move must carry with it — one shelf for the whole channel, and no fixed row
 of permanent empty slots.
 
 The channel's modulation shelf lives immediately below the device rack and is
-collapsed by default. Its header is a small `MOD` affordance; opening it shows
+collapsed by default. It is pinned to the bottom of the editor dock rather
+than living inside the rack's horizontal scroll: it is one surface for the
+whole channel, so following the chain's width put its module grid and Assign
+button off-window once the chain grew past a few devices. Its header is a small `MOD` affordance; opening it shows
 existing source chips and an add-source action. It is one shelf for the whole
 channel, so a source can target a source parameter, any insert, and the strip
 at the same time. Do not place a fixed row of permanent empty slots in the

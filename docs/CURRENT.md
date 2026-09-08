@@ -650,9 +650,11 @@ land on its own when it starts to matter:
   offsets on top, so an LFO wobbles around a drawn curve. Both resolve at the
   32-frame control rate into the destination's existing event path, and no
   effect needed a change to receive them.
-- The channel modulation rack is a shelf under the device rack, collapsed by
-  default. Open, it is a module grid beside the selected module's full
-  surface. Five module kinds ship — LFO, Envelope, Step, Random, and Math —
+- The channel modulation rack is a shelf pinned to the bottom of the editor
+  dock, under the device rack and outside its scroll, collapsed by default.
+  It is therefore never wider than the window, however long the device chain
+  grows, and the chain's horizontal scrollbar sits above it. Open, it is a
+  module grid beside the selected module's full surface. Five module kinds ship — LFO, Envelope, Step, Random, and Math —
   each a descriptor table plus a tick, so a module's parameters automate,
   undo, and persist like an effect's. Capacity is eight modules and sixteen
   routes per channel; the eight is a constant with a measured price rather

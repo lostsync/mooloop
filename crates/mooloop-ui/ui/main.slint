@@ -2316,11 +2316,12 @@ export component MainWindow inherits Window {
                         height: !root.bottom-pane-visible ? 0px
                             : root.editor-page == 1 ? root.piano-dock-height
                             // The Source page grows by the shelf's own open delta
-                            // when the modulation shelf expands, so the rack
-                            // (`DeviceRackMetrics.rack-height` + shelf) keeps fitting
-                            // without a vertical scroll clipping the shelf's bottom
-                            // row. 442 rather than 430 since the rack took another
-                            // 12px of padding for a container's box to be drawn in.
+                            // when the modulation shelf expands. The shelf is pinned
+                            // below the chain's scroll, so without this the room it
+                            // takes would come out of the chain's, and a face has a
+                            // fixed 268px height to lose it from. 442 rather than 430
+                            // since the rack took another 12px of padding for a
+                            // container's box to be drawn in.
                             : root.editor-page == 0
                                 ? 442px + (root.modulation-shelf-open && !root.editing-bus
                                     ? ModulationShelfMetrics.open-height
@@ -2895,19 +2896,23 @@ export component MainWindow inherits Window {
 
                                         Rectangle {
                                             width: max(device-chain-scroll.visible-width, rack-row.preferred-width);
-                                            // An opened shelf is part of the rack
-                                            // content, not a sibling that would
-                                            // compress a device below its fixed
-                                            // 268px face height. A short vertical
-                                            // scroll is preferable to clipped
-                                            // controls on compact windows.
-                                            height: root.editing-bus ? DeviceRackMetrics.rack-height
-                                                : DeviceRackMetrics.rack-height + (root.modulation-shelf-open
-                                                    ? ModulationShelfMetrics.open-height
-                                                    : ModulationShelfMetrics.closed-height);
+                                            // The panel fills whatever the scroll shows.
+                                            // The chain itself is one face plus its
+                                            // padding and no longer carries the shelf, so
+                                            // a rectangle sized to the chain alone would
+                                            // leave the window showing through below it.
+                                            height: max(device-chain-scroll.visible-height,
+                                                DeviceRackMetrics.rack-height);
                                             background: Theme.panel;
 
+                                            // Centred in whatever the scroll shows rather
+                                            // than pinned to its top: the shelf used to
+                                            // ride inside this rectangle, and centring is
+                                            // where the chain has always sat, so taking
+                                            // the shelf out does not move a face.
                                             rack-row := HorizontalLayout {
+                                                y: (parent.height - DeviceRackMetrics.rack-height) / 2;
+                                                height: DeviceRackMetrics.rack-height;
                                                 padding-left: 8px;
                                                 padding-right: 8px;
                                                 // Vertical room for a container's box, which is
@@ -4078,47 +4083,55 @@ export component MainWindow inherits Window {
                                                 }
                                                 Rectangle { horizontal-stretch: 1; }
                                             }
-                                            if !root.editing-bus : ModulationShelf {
-                                                x: 8px;
-                                                y: DeviceRackMetrics.rack-height;
-                                                width: parent.width - 16px;
-                                                open: root.modulation-shelf-open;
-                                                sources: root.modulation-sources;
-                                                outlets: root.modulation-outlets;
-                                                routes: root.modulation-routes;
-                                                selected-slot: root.modulation-selected-slot;
-                                                armed-slot: root.modulation-armed-slot;
-                                                selected-kind: root.modulation-selected-kind;
-                                                selected-values: root.modulation-selected-values;
-                                                selected-preview-fade-cycles: root.modulation-selected-preview-fade-cycles;
-                                                selected-preview-smoothing-cycles: root.modulation-selected-preview-smoothing-cycles;
-                                                input-channels: root.modulation-input-channels;
-                                                selected-envelope-input-channel: root.modulation-selected-envelope-input-channel;
-                                                selected-envelope-preview-attack: root.modulation-selected-envelope-preview-attack;
-                                                selected-envelope-preview-decay: root.modulation-selected-envelope-preview-decay;
-                                                selected-envelope-preview-release: root.modulation-selected-envelope-preview-release;
-                                                max-sources: root.modulation-max-sources;
-                                                slot-names: root.modulation-slot-names;
-                                                outlet-device: root.modulation-outlet-device;
-                                                armed-name: root.modulation-armed-name;
-                                                selected-outlet-name: root.modulation-selected-outlet-name;
-                                                selected-outlet-signal: root.modulation-selected-outlet-signal;
-                                                toggled => { root.modulation-shelf-toggled(); }
-                                                source-selected(slot) => { root.modulation-source-selected(slot); }
-                                                source-moved(slot, target) => { root.modulation-source-moved(slot, target); }
-                                                assignment-toggled => { root.modulation-assignment-toggled(); }
-                                                source-added(kind) => { root.modulation-source-added(kind); }
-                                                param-changed(slot, id, value) => { root.modulation-param-changed(slot, id, value); }
-                                                param-edit-started => { root.modulation-param-edit-started(); }
-                                                param-edit-finished => { root.modulation-param-edit-finished(); }
-                                                source-removed(slot) => { root.modulation-source-removed(slot); }
-                                                envelope-input-channel-changed(slot, value) => { root.modulation-envelope-input-channel-changed(slot, value); }
-                                                route-polarity-changed(index, polarity) => {
-                                                    root.modulation-route-polarity-changed(index, polarity);
-                                                }
-                                                route-removed(index) => {
-                                                    root.modulation-route-removed(index);
-                                                }
+                                        }
+                                    }
+                                    // The shelf is pinned to the bottom of the dock rather than
+                                    // scrolling with the rack. It is one surface for the whole
+                                    // channel, but inside the scroll content it inherited the
+                                    // chain's width, so past a few devices its module grid and
+                                    // Assign button sat screens to the right of the window. Out
+                                    // here it is never wider than the frame, and the chain's
+                                    // horizontal scrollbar sits above it rather than below.
+                                    if !root.editing-bus : HorizontalLayout {
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        ModulationShelf {
+                                            open: root.modulation-shelf-open;
+                                            sources: root.modulation-sources;
+                                            outlets: root.modulation-outlets;
+                                            routes: root.modulation-routes;
+                                            selected-slot: root.modulation-selected-slot;
+                                            armed-slot: root.modulation-armed-slot;
+                                            selected-kind: root.modulation-selected-kind;
+                                            selected-values: root.modulation-selected-values;
+                                            selected-preview-fade-cycles: root.modulation-selected-preview-fade-cycles;
+                                            selected-preview-smoothing-cycles: root.modulation-selected-preview-smoothing-cycles;
+                                            input-channels: root.modulation-input-channels;
+                                            selected-envelope-input-channel: root.modulation-selected-envelope-input-channel;
+                                            selected-envelope-preview-attack: root.modulation-selected-envelope-preview-attack;
+                                            selected-envelope-preview-decay: root.modulation-selected-envelope-preview-decay;
+                                            selected-envelope-preview-release: root.modulation-selected-envelope-preview-release;
+                                            max-sources: root.modulation-max-sources;
+                                            slot-names: root.modulation-slot-names;
+                                            outlet-device: root.modulation-outlet-device;
+                                            armed-name: root.modulation-armed-name;
+                                            selected-outlet-name: root.modulation-selected-outlet-name;
+                                            selected-outlet-signal: root.modulation-selected-outlet-signal;
+                                            toggled => { root.modulation-shelf-toggled(); }
+                                            source-selected(slot) => { root.modulation-source-selected(slot); }
+                                            source-moved(slot, target) => { root.modulation-source-moved(slot, target); }
+                                            assignment-toggled => { root.modulation-assignment-toggled(); }
+                                            source-added(kind) => { root.modulation-source-added(kind); }
+                                            param-changed(slot, id, value) => { root.modulation-param-changed(slot, id, value); }
+                                            param-edit-started => { root.modulation-param-edit-started(); }
+                                            param-edit-finished => { root.modulation-param-edit-finished(); }
+                                            source-removed(slot) => { root.modulation-source-removed(slot); }
+                                            envelope-input-channel-changed(slot, value) => { root.modulation-envelope-input-channel-changed(slot, value); }
+                                            route-polarity-changed(index, polarity) => {
+                                                root.modulation-route-polarity-changed(index, polarity);
+                                            }
+                                            route-removed(index) => {
+                                                root.modulation-route-removed(index);
                                             }
                                         }
                                     }
