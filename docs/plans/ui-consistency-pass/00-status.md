@@ -137,9 +137,15 @@ modulator rack's sync knobs, the delay's time, and this.
 
 ## Not in this pass
 
-Laundry-list item 7 — moving the playlist into the pattern pane — is a
-feature rather than a correction.
+**Laundry-list item 7 — moving the playlist into the pattern pane.** A
+feature rather than a correction, and the one that wants a plan of its own
+before any of it is built. In Adam's words: keep the current single-pane
+mode, but with the playlist up there too, *or* split the pane so a pattern
+and the playlist can be read at the same time with the piano roll open
+below. That is a layout question, and `interface-iteration/` is the right
+home for it.
 
-It is worth a plan of its own before any of it is built: Adam wants the pane splittable so a pattern and the playlist can
-be read at once, with an editor below. That is a layout question the
-`interface-iteration/` directory is the right home for.
+Step 04 of this pass is a down payment on it and should be read first: the
+work surface's toolbar already switches on which pane is showing, which is
+the mechanism a third pane would join rather than a thing it would have to
+invent.
