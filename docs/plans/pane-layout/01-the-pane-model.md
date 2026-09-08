@@ -55,6 +55,46 @@ No split, no zoom, no tab drag, no status-bar chip. `split-views` stays empty
 and the code paths that would show it stay unreachable. This is what keeps the
 step verifiable against "looks identical".
 
+## The map, taken 2026-09-08 against `8fa7ceb`
+
+Brace-matched, so it is exact rather than eyeballed. Re-derive it if the file
+has moved under you; do not trust these numbers after any other commit lands.
+
+| Block | Lines | Becomes |
+| --- | --- | --- |
+| Toolbar container, `height: 62px` | 1713-1983 | `height: 33px` -- transport row plus its hairline, nothing else |
+| Transport row | 1721-1822 | unchanged, stays in the toolbar |
+| Hairline, `opacity: 0.6` | 1824 | unchanged; it is what keeps the boundary looking the same |
+| **Work-surface row**, `height: 29px` | 1826-1981 | the `STEPS` view's own toolbar |
+| Standalone `1px` border | 1986 | moves inside each top slot's header as a bottom edge |
+| Work-area `HorizontalLayout` | 1993-5194 | keeps its shape: work container, then sidebar |
+| Main-column `VerticalLayout` | 1996-4868 | **replaced** by the computed work container |
+| `MixerPane` | 1999-2018 | the `MIXER` view |
+| Channel rack `ScrollView` | 2020-2313 | the `STEPS` view's body |
+| Dock splitter | 2315-2356 | the horizontal divider, generalised in step 03 |
+| Bottom dock `Rectangle` | 2364-4866 | dissolved; its geometry becomes the bottom slot's |
+| Dock header, `height: 30px` | 2391-2440 | splits: the switcher becomes the slot's tab strip, the channel name and preset controls go to `DEVICES` and `NOTES` |
+| Playlist page | 2442-2892 | the `PLAYLIST` view |
+| Device rack page | 2894-4215 | the `DEVICES` view |
+| Piano roll page | 4217-4864 | the `NOTES` view |
+| Browser sidebar | 4870-5193 | unchanged |
+
+**The top pane's toolbar is not inside the top pane.** That is the one thing
+the map turned up that the design did not predict: the work-surface row lives
+in the 62px toolbar block, *above* the work area, which is why there can only
+be one of it today. It has to move into the slot before a second slot can have
+a toolbar of its own. The move is invisible -- the rows are adjacent already,
+and keeping the `0.6` hairline above and putting the `1.0` one below the
+header reproduces the boundary exactly.
+
+**The channel identity row is shared by two views.** The dock header carries
+the channel name and the channel preset browser for `editor-page != 2`, which
+is `DEVICES` and `NOTES`. Once those two are independently placeable it cannot
+be one row in one slot, so each gets its own copy. It is the same information
+about the same channel and both views edit a channel; `UI_DESIGN.md`'s "the
+lower editor retains one channel row" survives as "the view that edits a
+channel says which channel", which is the rule it was standing in for.
+
 ## Watch for
 
 - **`editor-page` has readers well outside the dock.** The menu bar's View

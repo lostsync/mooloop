@@ -105,7 +105,17 @@ Do not reach for `cargo build` to find out whether a `.slint` edit is valid or
 what it looks like. `scripts/slint-sketch` type-checks a scratch `.slint`
 against the real widgets in about 0.05s and screenshots it in about 0.2s,
 where `cargo build -p mooloop-ui` is about four minutes for any edit at all.
-Iterate there, then build once. It needs `slint-viewer` installed locally; it
+Iterate there, then build once.
+
+**It also takes `ui/main.slint` itself**, which is not obvious from the name
+and is worth knowing before any structural edit: `scripts/slint-sketch
+crates/mooloop-ui/ui/main.slint` type-checks the whole real window in about
+2.7s, and `--shot` renders it in about 3s with empty models -- enough to see
+the layout, the chrome, the toolbar and the status bar, though not anything
+driven by a Rust-supplied model. For a change that moves markup around rather
+than one that needs live data, that is the check-and-look loop, at roughly a
+hundredth of a `mooloop-ui` build. Found 2026-09-08, restructuring the work
+area. It needs `slint-viewer` installed locally; it
 is deliberately not a workspace dependency, and the build never refers to it.
 See `docs/AGENT_OPERATIONS.md`.
 
