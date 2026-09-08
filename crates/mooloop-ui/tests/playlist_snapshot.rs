@@ -99,12 +99,18 @@ fn render_playlist_snapshot() {
     const FIRST_CELL_LAST_X: usize = 251;
     const CELL_GAP_X: usize = 252;
     const SECOND_CELL_X: usize = 256;
-    // Likewise these y values track the combined height of the menu bar, the
-    // toolbar, and the work surface's Steps/Mixer header, since the rack sits
-    // directly beneath them. FILL_Y crosses both cells' fills; VELOCITY_Y is
-    // high enough that only the louder step reaches it.
-    const FILL_Y: usize = 154;
-    const VELOCITY_Y: usize = 140;
+    // Likewise these y values track the combined height of the menu bar and
+    // the toolbar, since the rack sits directly beneath them. FILL_Y crosses
+    // both cells' fills; VELOCITY_Y is high enough that only the louder step
+    // reaches it.
+    //
+    // Twenty-seven pixels higher than they were on 2026-09-08: the work
+    // surface used to carry a 26px strip and its 1px rule above the rack,
+    // holding only the Steps/Mixer switcher, which now leads the toolbar row
+    // above. The failure was `onset == held == background`, which is what a
+    // y that has fallen off the top of the row looks like.
+    const FILL_Y: usize = 127;
+    const VELOCITY_Y: usize = 113;
     // Cell one covers all four 64ths but is struck only on the first, so its
     // slots render at two different intensities.
     const ONSET_X: usize = FIRST_CELL_X;
