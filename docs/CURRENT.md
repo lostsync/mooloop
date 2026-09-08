@@ -575,7 +575,9 @@ land on its own when it starts to matter:
   compressor, and limiter sharing one detector and gain-computer module; a
   seven-band parametric EQ with optional bounded spectrum telemetry; a
   feedback-delay-network hall reverb; and one five-mode modulation processor
-  (chorus, flange, phaser, ensemble, and ADT). Its delay-based modes share a
+  (chorus, flange, phaser, ensemble, and ADT) whose Rate carries the same
+  sync lamp the delay does, over the same grid, clamped to the 12 Hz its LFO
+  runs to. Its delay-based modes share a
   bounded fractional stereo ring; Phaser uses a stereo all-pass cascade. The
   generic host supplies their dry/wet blend, so the DSP returns the processed
   signal only. The reverb runs eight modulated delay lines through a Hadamard

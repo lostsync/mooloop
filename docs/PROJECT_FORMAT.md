@@ -243,6 +243,20 @@ before any of them existed still loads:
   ids takes its **positions** as its ids — which is exactly what the routes
   and lanes in such a project already mean by `slot`, so an older song loads
   pointing where it pointed.
+- **Two effects follow the transport, and both persist a division rather
+  than its result.** A delay carries `tempo_sync` and `time_division`, and a
+  modulation effect carries `tempo_sync` and `rate_division`; all four
+  default, so a manifest written before either existed loads free-running.
+  The stored value is the musical division, so a project reopened at another
+  tempo plays at that tempo rather than at the milliseconds or hertz it was
+  saved with. Both name the same twenty-one-entry `ModTimeDivision` grid.
+
+  A delay written before 2026-09-08 named the five-entry `DelayTimeDivision`
+  instead, whose serde names are a subset of this one's. Four of the five
+  carry over unchanged. The fifth, `half`, was worth half a beat where the
+  grid it now shares says two — an eighth note under a label that read `1/2`
+  — so a delay saved on that division reopens four times slower, playing the
+  half note its own label always claimed.
 - A row of kind `chain` is a **container**: `state.children` says how many of
   the rows after it are inside it, and `state.mix` is the blend across that
   run. Both default. A container does not hold its children — they are

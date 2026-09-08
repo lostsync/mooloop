@@ -185,6 +185,14 @@ struct EffectSlotRow {
     p5: float,
     p6: float,
     p7: float,
+    // Past the eight a descriptor table fills. These carry what a device
+    // keeps *beside* its parameters: the delay and the modulation effect
+    // each hold a tempo-sync flag and a musical division, which are not
+    // continuous values and are not addressable, so they are not
+    // descriptors. The delay fits inside eight; the modulation effect has
+    // eight parameters of its own and does not.
+    p8: float,
+    p9: float,
     // One entry per descriptor, in descriptor order: the armed source's
     // route depth, and whether that parameter accepts modulation at all.
     // Indexed rather than named so a face exposes every eligible control.
@@ -705,6 +713,8 @@ export component MainWindow inherits Window {
     // covers every parameter of every effect kind.
     callback effect-param-changed(int, int, float);
     callback delay-tempo-sync-changed(int, bool);
+    callback modulation-tempo-sync-changed(int, bool);
+    callback modulation-rate-division-changed(int, int);
     callback delay-time-division-changed(int, int);
     // Slot index and an index into the buffer face's fixed debug event table.
     callback effect-buffer-triggered(int, int);
@@ -3790,8 +3800,8 @@ export component MainWindow inherits Window {
                                                             tone: slot.p4;
                                                             mix: slot.p5;
                                                             bpm: root.bpm;
-                                                            tempo-sync: slot.p6 >= 0.5;
-                                                            time-division: round(slot.p7);
+                                                            tempo-sync: slot.p8 >= 0.5;
+                                                            time-division: round(slot.p9);
                                                             time-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                             tempo-sync-changed(enabled) => {
                                                                 root.delay-tempo-sync-changed(index, enabled);
@@ -3998,6 +4008,9 @@ export component MainWindow inherits Window {
                                                             spread: slot.p5;
                                                             tone: slot.p6;
                                                             stages: slot.p7;
+                                                            tempo-sync: slot.p8 >= 0.5;
+                                                            rate-division: round(slot.p9);
+                                                            bpm: root.bpm;
                                                             wet-dry: slot.wet-dry;
                                                             mode-changed(i) => { root.effect-param-changed(index, 0, i * 1.0 / 4.0); }
                                                             rate-changed(v) => { root.effect-param-changed(index, 1, v); }
@@ -4007,6 +4020,12 @@ export component MainWindow inherits Window {
                                                             spread-changed(v) => { root.effect-param-changed(index, 5, v); }
                                                             tone-changed(v) => { root.effect-param-changed(index, 6, v); }
                                                             stages-changed(v) => { root.effect-param-changed(index, 7, v); }
+                                                            tempo-sync-changed(on) => {
+                                                                root.modulation-tempo-sync-changed(index, on);
+                                                            }
+                                                            rate-division-changed(d) => {
+                                                                root.modulation-rate-division-changed(index, d);
+                                                            }
                                                             wet-dry-changed(v) => { root.effect-wet-dry-changed(index, v); }
                                                             reorder-requested(target) => { root.reorder-effect(index, target); }
                                                             select-requested => { root.device-selected(index); }

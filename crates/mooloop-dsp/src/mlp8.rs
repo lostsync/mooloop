@@ -68,7 +68,8 @@ use mooloop_core::mlp8::{
 };
 use mooloop_core::{
     mlp8::xmod_index, MlP8Chorus, MlP8FilterMode, MlP8LfoParams, MlP8LfoRetrigger, MlP8LfoWave,
-    MlP8ModDest, MlP8ModSource, MlP8Params, ModulationMode, ModulationParams, OscWave, SubWave,
+    MlP8ModDest, MlP8ModSource, MlP8Params, ModTimeDivision, ModulationMode, ModulationParams,
+    OscWave, SubWave,
     MLP8_VOICES,
 };
 
@@ -1015,6 +1016,10 @@ fn mode_params(mode: MlP8Chorus) -> ModulationParams {
             spread: 0.55,
             tone: 0.80,
             stages: 8,
+            // The synth's own fixed voicings, never tempo-synced: this is a
+            // chorus the patch chose, not a device a user is driving.
+            tempo_sync: false,
+            rate_division: ModTimeDivision::Whole,
         },
         // II: faster, deeper, and with a little feedback, so it is a
         // different decision rather than more of the first one.
@@ -1027,6 +1032,10 @@ fn mode_params(mode: MlP8Chorus) -> ModulationParams {
             spread: 0.90,
             tone: 0.70,
             stages: 8,
+            // The synth's own fixed voicings, never tempo-synced: this is a
+            // chorus the patch chose, not a device a user is driving.
+            tempo_sync: false,
+            rate_division: ModTimeDivision::Whole,
         },
         // Ensemble: the wider three-tap algorithm, which is the one that
         // stops sounding like a delay and starts sounding like more players.
@@ -1039,6 +1048,10 @@ fn mode_params(mode: MlP8Chorus) -> ModulationParams {
             spread: 1.0,
             tone: 0.75,
             stages: 8,
+            // The synth's own fixed voicings, never tempo-synced: this is a
+            // chorus the patch chose, not a device a user is driving.
+            tempo_sync: false,
+            rate_division: ModTimeDivision::Whole,
         },
     }
 }

@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { ParameterKnob, SelectorBank } from "controls.slint";
+import { Divisions, ParameterKnob, SelectorBank, SyncLamp } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
 // Parameter-derived LFO traces. This is a compact working display rather
@@ -37,6 +37,13 @@ export component ModulationDeviceFace inherits EffectDeviceShell {
     kind: "FX / 2U";
     in-out property <int> mode;
     in-out property <float> rate;
+    /// Free hertz, or a division of the shared musical grid when the lamp
+    /// beside the Rate knob is lit. The engine only ever sees the resolved
+    /// rate; `Session::update_tempo_synced_effects` restates it on every
+    /// tempo change, exactly as it does the delay's milliseconds.
+    in-out property <bool> tempo-sync;
+    in-out property <int> rate-division: 2;
+    in property <int> bpm: 120;
     in-out property <float> depth;
     in-out property <float> character;
     in-out property <float> feedback;
@@ -46,6 +53,8 @@ export component ModulationDeviceFace inherits EffectDeviceShell {
     in-out property <float> wet-dry: 1;
     callback mode-changed(int);
     callback rate-changed(float);
+    callback tempo-sync-changed(bool);
+    callback rate-division-changed(int);
     callback depth-changed(float);
     callback character-changed(float);
     callback feedback-changed(float);
@@ -54,7 +63,13 @@ export component ModulationDeviceFace inherits EffectDeviceShell {
     callback stages-changed(float);
     callback wet-dry-changed(float);
 
-    private property <float> rate-hz: 0.02 * pow(600, root.rate);
+    // 0.02 Hz to 12 Hz, matching `MODULATION_MIN_RATE_HZ`/`MAX` -- the free
+    // knob's own range. A synced division is clamped to the same ceiling,
+    // because a 64th triplet at 120 BPM asks for 48 Hz.
+    private property <float> free-rate-hz: 0.02 * pow(600, root.rate);
+    private property <float> synced-rate-hz:
+        clamp(max(root.bpm, 1) / (60 * Divisions.beats(root.rate-division)), 0.02, 12);
+    private property <float> rate-hz: root.tempo-sync ? root.synced-rate-hz : root.free-rate-hz;
     private property <int> stage-count: 4 + round(root.stages * 4) * 2;
     private property <string> color-label: root.mode == 2 ? "Center" : root.mode == 4 ? "Age" : "Delay";
     private property <float> lfo-phase;
@@ -96,7 +111,56 @@ export component ModulationDeviceFace inherits EffectDeviceShell {
         width: 240px;
         height: 80px;
         spacing: 0px;
-        ParameterKnob { width: 60px; diameter: 36px; label: "Rate"; tooltip: "LFO speed"; value <=> root.rate; default-value: 0.445; value-text: round(root.rate-hz * 100) / 100 + " Hz"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[1]; modulation-depth: root.modulation-depths[1]; modulation-offset: root.modulation-offsets[1]; modulation-route-count: root.modulation-route-counts[1]; changed(v) => { root.rate-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); } modulation-edit-started => { root.modulation-edit-started(1); } modulation-edit-finished => { root.modulation-edit-finished(1); } }
+        // The Rate cell holds its own sync lamp, in the width the knob was
+        // already given: 60px around a 36px dial leaves room beside it, and
+        // a toggle for the rate belongs against the rate rather than in some
+        // other row of the face.
+        Rectangle {
+            width: 60px;
+            ParameterKnob {
+                // The dial reads a division while synced, so its `value` is
+                // an expression rather than a property it owns.
+                controlled: true;
+                width: 60px;
+                diameter: 36px;
+                label: "Rate";
+                tooltip: "LFO speed";
+                value: root.tempo-sync ? root.rate-division * 1.0 : root.rate;
+                minimum: 0;
+                maximum: root.tempo-sync ? 20 : 1;
+                default-value: root.tempo-sync ? 2 : 0.445;
+                step: root.tempo-sync ? 1 : 0;
+                value-text: root.tempo-sync
+                    ? Divisions.label(root.rate-division)
+                    : round(root.rate-hz * 100) / 100 + " Hz";
+                modulation-armed: root.modulation-armed;
+                // Sweeping a division would step the LFO between musical
+                // rates rather than glide it, the same reason the delay's
+                // time is only a destination while it is free-running.
+                modulation-allowed: root.modulation-allowed[1] && !root.tempo-sync;
+                modulation-depth: root.modulation-depths[1];
+                modulation-offset: root.modulation-offsets[1];
+                modulation-route-count: root.modulation-route-counts[1];
+                changed(v) => {
+                    if (root.tempo-sync) {
+                        root.rate-division-changed(round(v));
+                    } else {
+                        root.rate = v;
+                        root.rate-changed(v);
+                    }
+                }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(1, v); }
+                modulation-edit-started => { root.modulation-edit-started(1); }
+                modulation-edit-finished => { root.modulation-edit-finished(1); }
+            }
+            SyncLamp {
+                x: 1px;
+                y: 32px;
+                on: root.tempo-sync;
+                label: "Rate";
+                toggled(on) => { root.tempo-sync-changed(on); }
+            }
+        }
         ParameterKnob { width: 60px; diameter: 36px; label: "Depth"; tooltip: "Sweep amount"; value <=> root.depth; default-value: 0.45; value-text: round(root.depth * 100) + " %"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[2]; modulation-depth: root.modulation-depths[2]; modulation-offset: root.modulation-offsets[2]; modulation-route-count: root.modulation-route-counts[2]; changed(v) => { root.depth-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); } modulation-edit-started => { root.modulation-edit-started(2); } modulation-edit-finished => { root.modulation-edit-finished(2); } }
         ParameterKnob { width: 60px; diameter: 36px; label: root.color-label; tooltip: "Delay, phase centre, or tape age"; value <=> root.character; default-value: 0.45; value-text: round(root.character * 100) + " %"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[3]; modulation-depth: root.modulation-depths[3]; modulation-offset: root.modulation-offsets[3]; modulation-route-count: root.modulation-route-counts[3]; changed(v) => { root.character-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); } modulation-edit-started => { root.modulation-edit-started(3); } modulation-edit-finished => { root.modulation-edit-finished(3); } }
         ParameterKnob { width: 60px; diameter: 36px; label: "Feedback"; tooltip: "Regeneration or phase resonance"; bipolar: true; value <=> root.feedback; default-value: 0.5; value-text: round((root.feedback * 1.84 - 0.92) * 100) + " %"; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[4]; modulation-depth: root.modulation-depths[4]; modulation-offset: root.modulation-offsets[4]; modulation-route-count: root.modulation-route-counts[4]; changed(v) => { root.feedback-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); } modulation-edit-started => { root.modulation-edit-started(4); } modulation-edit-finished => { root.modulation-edit-finished(4); } }

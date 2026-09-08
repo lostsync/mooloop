@@ -24,7 +24,7 @@ use mooloop_core::{
     PolySynthState, Project, ProjectChannel, SampleReference, SamplerParams, SamplerState,
     modulation::CONTROL_SOURCE_SLOTS,
     MAX_MODULATORS_PER_CHANNEL, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_BAR,
-    TICKS_PER_STEP,
+    TICKS_PER_STEP, DELAY_PARAM_TIME_MS, MODULATION_PARAM_RATE_HZ,
 };
 use mooloop_dsp::SampleData;
 use mooloop_project::PresetSummary;
@@ -942,34 +942,26 @@ impl Session {
             .count()
     }
 
-    /// Retunes every tempo-synced delay to `bpm`, returning the changes the
-    /// engine has to be told about.
-    pub fn update_tempo_synced_delay_times(&mut self, bpm: f64) -> Vec<(EffectTarget, u8, f32)> {
+    /// Retunes every tempo-synced effect to `bpm`, returning the parameter
+    /// changes the engine has to be told about.
+    ///
+    /// The engine only ever receives resolved values -- a delay time in
+    /// milliseconds, an LFO rate in hertz -- so nothing below this layer
+    /// knows that a division exists. Which is why the return type names the
+    /// parameter: two kinds of effect answer to a tempo change now, and a
+    /// caller that assumed one id was writing a rate into a delay time.
+    pub fn update_tempo_synced_effects(&mut self, bpm: f64) -> Vec<(EffectTarget, u8, u32, f32)> {
         let mut changes = Vec::new();
         for (channel, state) in self.channels.iter_mut().enumerate() {
+            let target = EffectTarget::Channel(channel as u8);
             for (slot, effect) in state.effects.iter_mut().enumerate() {
-                let EffectParams::Delay(params) = &mut effect.params else {
-                    continue;
-                };
-                if params.tempo_sync {
-                    params.time_ms = params.time_division.time_ms(bpm);
-                    changes.push((
-                        EffectTarget::Channel(channel as u8),
-                        slot as u8,
-                        params.time_ms,
-                    ));
-                }
+                retune_effect(&mut effect.params, bpm, target, slot as u8, &mut changes);
             }
         }
         for (bus, state) in self.buses.iter_mut().enumerate() {
+            let target = EffectTarget::Bus(bus as u8);
             for (slot, effect) in state.effects.iter_mut().enumerate() {
-                let EffectParams::Delay(params) = &mut effect.params else {
-                    continue;
-                };
-                if params.tempo_sync {
-                    params.time_ms = params.time_division.time_ms(bpm);
-                    changes.push((EffectTarget::Bus(bus as u8), slot as u8, params.time_ms));
-                }
+                retune_effect(&mut effect.params, bpm, target, slot as u8, &mut changes);
             }
         }
         changes
@@ -1475,5 +1467,30 @@ mod commit_reuse_tests {
                 "channel {index} re-rendered its commit after moving one seat along"
             );
         }
+    }
+}
+
+/// One effect's answer to a tempo change, if it has one.
+///
+/// Free with the `EffectParams` match rather than a trait, because there are
+/// two and the third would want to be visible here rather than opted into
+/// somewhere else.
+fn retune_effect(
+    params: &mut EffectParams,
+    bpm: f64,
+    target: EffectTarget,
+    slot: u8,
+    changes: &mut Vec<(EffectTarget, u8, u32, f32)>,
+) {
+    match params {
+        EffectParams::Delay(delay) if delay.tempo_sync => {
+            delay.time_ms = delay.time_division.time_ms(bpm);
+            changes.push((target, slot, DELAY_PARAM_TIME_MS, delay.time_ms));
+        }
+        EffectParams::Modulation(modulation) if modulation.tempo_sync => {
+            modulation.rate_hz = modulation.synced_rate_hz(bpm);
+            changes.push((target, slot, MODULATION_PARAM_RATE_HZ, modulation.rate_hz));
+        }
+        _ => {}
     }
 }

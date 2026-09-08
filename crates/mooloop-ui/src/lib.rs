@@ -766,7 +766,15 @@ fn envelope_seconds(t: f32) -> f32 {
 
 /// Number of positional parameter fields `EffectSlotRow` carries. Raising it
 /// means adding matching `pN` fields to the Slint struct too.
-const EFFECT_ROW_PARAMS: usize = 8;
+const EFFECT_ROW_PARAMS: usize = 10;
+
+/// How many of those a descriptor table may fill. The last two are reserved
+/// for what a device keeps beside its parameters -- a tempo-sync flag and a
+/// musical division, neither of which is a continuous, addressable value.
+/// The delay's pair fits inside its six descriptors; the modulation effect
+/// has eight of its own and does not, which is why the reservation is a
+/// constant rather than "whatever is left".
+const EFFECT_ROW_DESCRIPTOR_PARAMS: usize = EFFECT_ROW_PARAMS - 2;
 
 fn effect_kind_index(kind: EffectKind) -> i32 {
     match kind {
@@ -874,7 +882,7 @@ fn effect_slot_row(
     for (index, descriptor) in kind
         .descriptors()
         .iter()
-        .take(EFFECT_ROW_PARAMS)
+        .take(EFFECT_ROW_DESCRIPTOR_PARAMS)
         .enumerate()
     {
         if let Some(natural) = slot.params.get(descriptor.id) {
@@ -882,13 +890,18 @@ fn effect_slot_row(
         }
     }
     debug_assert!(
-        kind.descriptors().len() <= EFFECT_ROW_PARAMS,
+        kind.descriptors().len() <= EFFECT_ROW_DESCRIPTOR_PARAMS,
         "{} has more parameters than EffectSlotRow can carry",
         kind.label()
     );
+    // The two reserved fields, for the two devices that follow the tempo.
     if let Some(delay) = slot.params.delay() {
-        p[6] = if delay.tempo_sync { 1.0 } else { 0.0 };
-        p[7] = delay.time_division.to_index() as f32;
+        p[8] = if delay.tempo_sync { 1.0 } else { 0.0 };
+        p[9] = delay.time_division.to_index() as f32;
+    }
+    if let mooloop_core::EffectParams::Modulation(modulation) = &slot.params {
+        p[8] = if modulation.tempo_sync { 1.0 } else { 0.0 };
+        p[9] = modulation.rate_division.to_index() as f32;
     }
     let mut eq_band_data = Vec::new();
     if let Some(eq) = slot.params.eq() {
@@ -926,6 +939,8 @@ fn effect_slot_row(
         p5: p[5],
         p6: p[6],
         p7: p[7],
+        p8: p[8],
+        p9: p[9],
         modulation_depths: Vec::<f32>::new().as_slice().into(),
         modulation_allowed: Vec::<bool>::new().as_slice().into(),
         modulation_offsets: Vec::<f32>::new().as_slice().into(),
@@ -7430,6 +7445,47 @@ impl AppUi {
                 if let Some(window) = weak.upgrade() {
                     state.update_document_title(&window);
                 }
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_modulation_tempo_sync_changed(move |slot, enabled| {
+                let Some(window) = weak.upgrade() else { return };
+                let mut state = st.borrow_mut();
+                let bpm = f64::from(window.get_bpm());
+                let Some(command) = state.session.set_modulation_tempo_sync(slot, enabled, bpm)
+                else {
+                    return;
+                };
+                if let Some(command) = command {
+                    let _ = tx.send(command);
+                }
+                state.refresh_effect_row(slot as usize);
+                state.update_document_title(&window);
+            });
+        }
+
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_modulation_rate_division_changed(move |slot, division| {
+                let Some(window) = weak.upgrade() else { return };
+                let mut state = st.borrow_mut();
+                let bpm = f64::from(window.get_bpm());
+                let Some(command) =
+                    state.session.set_modulation_rate_division(slot, division, bpm)
+                else {
+                    return;
+                };
+                if let Some(command) = command {
+                    let _ = tx.send(command);
+                }
+                state.refresh_effect_row(slot as usize);
+                state.update_document_title(&window);
             });
         }
 

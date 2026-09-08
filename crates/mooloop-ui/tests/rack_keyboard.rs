@@ -91,6 +91,8 @@ fn effect_slot(kind: i32) -> EffectSlotRow {
         p5: 0.5,
         p6: 0.0,
         p7: 0.0,
+        p8: 0.0,
+        p9: 0.0,
         modulation_depths: Vec::<f32>::new().as_slice().into(),
         modulation_allowed: Vec::<bool>::new().as_slice().into(),
         modulation_offsets: Vec::<f32>::new().as_slice().into(),

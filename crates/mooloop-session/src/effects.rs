@@ -531,6 +531,43 @@ impl Session {
         true
     }
 
+    /// Turns a modulation effect's tempo sync on or off, resolving the rate
+    /// it should now be running at.
+    ///
+    /// Unlike the delay's, which reports nothing and lets its knob push the
+    /// resolved millisecond value through the ordinary parameter path, this
+    /// returns the command. The mapping from a division to a rate has a
+    /// clamp in it -- a 64th triplet asks for more than the device runs --
+    /// and a clamp written in markup is a second copy of the range.
+    pub fn set_modulation_tempo_sync(
+        &mut self,
+        slot: i32,
+        enabled: bool,
+        bpm: f64,
+    ) -> Option<Option<EngineCommand>> {
+        let target = self.effect_target;
+        let params = self.modulation_params_mut(slot)?;
+        params.tempo_sync = enabled;
+        let command = resolved_modulation_rate(params, target, slot, bpm);
+        self.mark_dirty();
+        Some(command)
+    }
+
+    /// Picks which musical division a synced modulation LFO resolves against.
+    pub fn set_modulation_rate_division(
+        &mut self,
+        slot: i32,
+        division: i32,
+        bpm: f64,
+    ) -> Option<Option<EngineCommand>> {
+        let target = self.effect_target;
+        let params = self.modulation_params_mut(slot)?;
+        params.rate_division = ModTimeDivision::from_index(division);
+        let command = resolved_modulation_rate(params, target, slot, bpm);
+        self.mark_dirty();
+        Some(command)
+    }
+
     /// Replaces the row in `slot` with a loaded effect preset, returning what
     /// the rack is pointed at.
     ///
@@ -575,6 +612,15 @@ impl Session {
         let effect = self.effect_chain_mut()?.get_mut(slot)?;
         match &mut effect.params {
             EffectParams::Delay(params) => Some(params),
+            _ => None,
+        }
+    }
+
+    fn modulation_params_mut(&mut self, slot: i32) -> Option<&mut mooloop_core::ModulationParams> {
+        let slot = usize::try_from(slot).ok()?;
+        let effect = self.effect_chain_mut()?.get_mut(slot)?;
+        match &mut effect.params {
+            EffectParams::Modulation(params) => Some(params),
             _ => None,
         }
     }
@@ -666,6 +712,59 @@ mod tests {
             session.set_effect_wet_dry(0, 9.0),
             Some(EngineCommand::SetEffectWetDry { wet_dry, .. }) if wet_dry == 1.0
         ));
+    }
+
+    /// Both tempo-following effects resolve against the transport, and the
+    /// modulation LFO's resolution has a ceiling in it: a 64th triplet at
+    /// 120 BPM asks for 48 Hz from a device that runs to 12.
+    #[test]
+    fn a_synced_modulation_rate_follows_the_tempo_up_to_what_the_lfo_runs() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Modulation, 0);
+
+        // Free-running: a tempo change moves nothing.
+        let before = session.update_tempo_synced_effects(90.0);
+        assert!(before.is_empty(), "a free-running LFO answered a tempo change");
+
+        assert!(session
+            .set_modulation_tempo_sync(0, true, 120.0)
+            .is_some_and(|command| command.is_some()));
+        // A whole note at 120 BPM is two seconds, so half a hertz.
+        assert!(session
+            .set_modulation_rate_division(0, ModTimeDivision::Whole.to_index(), 120.0)
+            .is_some());
+        let changes = session.update_tempo_synced_effects(120.0);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].2, mooloop_core::MODULATION_PARAM_RATE_HZ);
+        assert!((changes[0].3 - 0.5).abs() < 1.0e-4, "got {}", changes[0].3);
+
+        // Half the tempo, half the rate.
+        let slower = session.update_tempo_synced_effects(60.0);
+        assert!((slower[0].3 - 0.25).abs() < 1.0e-4, "got {}", slower[0].3);
+
+        // And the ceiling holds rather than handing the DSP 48 Hz.
+        session.set_modulation_rate_division(
+            0,
+            ModTimeDivision::SixtyFourthTriplet.to_index(),
+            120.0,
+        );
+        let fast = session.update_tempo_synced_effects(120.0);
+        assert!(
+            (fast[0].3 - mooloop_core::MODULATION_MAX_RATE_HZ).abs() < 1.0e-4,
+            "got {}",
+            fast[0].3
+        );
+    }
+
+    /// A slot that is not a modulation effect is not quietly treated as one,
+    /// the same rule the delay controls already hold to.
+    #[test]
+    fn the_modulation_sync_controls_refuse_a_slot_holding_something_else() {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Filter, 0);
+        assert!(session.set_modulation_tempo_sync(0, true, 120.0).is_none());
+        assert!(session.set_modulation_rate_division(0, 4, 120.0).is_none());
+        assert!(!session.dirty, "a refused edit still marked the document");
     }
 
     /// A slot that is not a delay must not be quietly reinterpreted as one.
@@ -1464,4 +1563,24 @@ mod tests {
         assert_eq!(session.effect_preset_name(EffectTarget::Bus(1), bus_gate), None);
         assert_eq!(session.effect_preset_name(EffectTarget::Bus(1), gate), None);
     }
+}
+
+/// The rate a synced modulation effect should now be running at, as a command,
+/// or `None` while it is free-running and there is nothing to restate.
+fn resolved_modulation_rate(
+    params: &mut mooloop_core::ModulationParams,
+    target: EffectTarget,
+    slot: i32,
+    bpm: f64,
+) -> Option<EngineCommand> {
+    if !params.tempo_sync {
+        return None;
+    }
+    params.rate_hz = params.synced_rate_hz(bpm);
+    Some(EngineCommand::SetEffectParam {
+        target,
+        slot: u8::try_from(slot).ok()?,
+        id: mooloop_core::MODULATION_PARAM_RATE_HZ,
+        value: params.rate_hz,
+    })
 }

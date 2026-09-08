@@ -99,6 +99,37 @@ talking about has no reason to exist."*
   and 16. View state, not persisted, which is how the two snap indices beside
   it are already treated.
 
+## Step 06 — the last control that wanted sync and did not have it
+
+**The modulation effect's Rate.** Chorus, flange, phaser, ensemble and ADT
+all run off one LFO at 0.02-12 Hz, and it was free-running only. Every other
+candidate was checked and does not want sync: a compressor attack, a gate
+hold, a limiter release, a reverb predelay and a buffer crossfade are all
+absolute times, and the sampler's stretch and both modulator racks already
+have it.
+
+Three things had to move, and the shape of each is the interesting part:
+
+- **`update_tempo_synced_delay_times` stopped being about delays.** It is
+  `update_tempo_synced_effects` and returns the *parameter id* alongside the
+  value, because two kinds of effect answer to a tempo change now and a
+  caller that assumed one id would have written a rate into a delay time.
+- **`EFFECT_ROW_PARAMS` went from eight to ten**, and the last two are
+  reserved rather than free. `EFFECT_ROW_DESCRIPTOR_PARAMS` is what a table
+  may fill; `p8` and `p9` carry what a device keeps *beside* its parameters
+  — a sync flag and a division, neither of which is continuous or
+  addressable. The delay's pair fitted inside its six descriptors and had
+  been living at `p6`/`p7`; the modulation effect has eight of its own and
+  could not. The reservation makes that a rule rather than an accident.
+- **The clamp lives in `mooloop-core`.** `synced_rate_hz` resolves a division
+  against `MODULATION_MIN_RATE_HZ`/`MAX`, which the descriptor now reads too,
+  so the ceiling is written once. A 64th triplet at 120 BPM asks for 48 Hz
+  against a 12 Hz device.
+
+`SyncLamp` came out of it: the "O." gesture had two implementations and was
+about to have three, so it is one component with three callers — the
+modulator rack's sync knobs, the delay's time, and this.
+
 ## Not in this pass
 
 Laundry-list item 7 — moving the playlist into the pattern pane — is a

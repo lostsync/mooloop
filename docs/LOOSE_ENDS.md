@@ -27,12 +27,14 @@ own width. Assignment and the audible result are both correct. Fixing it
 properly means giving Level a gain curve, which touches automation and project
 files — which is why it was left.
 
-**Reverse and ping-pong refuse to stretch, and slice mode does too.**
-`mooloop-dsp/src/sampler.rs:495` gates `stretch_is_active` on `!reverse`,
-`loop_mode != Pingpong`, and `play_mode != Slice`. The UI disables the
-combinations, so this is belt-and-braces rather than a silent failure, but the
-reason is only in the source comment — nothing tells a user *why* the control
-went grey.
+**~~Reverse and ping-pong refuse to stretch, and slice mode does too.~~**
+Closed 2026-09-08. `mooloop-dsp/src/sampler.rs:495` still gates
+`stretch_is_active` on `!reverse`, `loop_mode != Pingpong` and
+`play_mode != Slice` — the behaviour is unchanged and correct. What was
+missing was the explanation: the stretch toggle names which of the three it
+is, and says to commit, in the status bar. The recorded fix was a
+`hover-hint` property threaded through `main.slint`; `StatusHint` made it a
+line on the toggle instead.
 
 ---
 

@@ -7,7 +7,7 @@
 
 use crate::session::Session;
 use mooloop_core::{
-    EngineCommand, LoopRange, PatternPlacement, PlaybackMode, DEFAULT_STEPS, DELAY_PARAM_TIME_MS,
+    EngineCommand, LoopRange, PatternPlacement, PlaybackMode, DEFAULT_STEPS,
     MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS,
     MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_STEP,
 };
@@ -42,17 +42,17 @@ impl Session {
     /// Adopts a new tempo.
     ///
     /// The order of the returned commands is load-bearing: the transport takes
-    /// the tempo first, then every synced delay receives its resolved
-    /// millisecond value, so no beat-relative buffer is replaced against the
-    /// old tempo.
+    /// the tempo first, then every synced effect receives its resolved value
+    /// -- a delay its milliseconds, a modulation its hertz -- so no
+    /// beat-relative buffer is replaced against the old tempo.
     pub fn set_tempo(&mut self, bpm: f64) -> Vec<EngineCommand> {
         let mut commands = vec![EngineCommand::SetTempo(bpm)];
-        commands.extend(self.update_tempo_synced_delay_times(bpm).into_iter().map(
-            |(target, slot, time_ms)| EngineCommand::SetEffectParam {
+        commands.extend(self.update_tempo_synced_effects(bpm).into_iter().map(
+            |(target, slot, id, value)| EngineCommand::SetEffectParam {
                 target,
                 slot,
-                id: DELAY_PARAM_TIME_MS,
-                value: time_ms,
+                id,
+                value,
             },
         ));
         self.mark_dirty();

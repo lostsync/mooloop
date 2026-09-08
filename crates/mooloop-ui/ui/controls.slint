@@ -974,6 +974,38 @@ export component LedIndicator inherits Rectangle {
     if root.tooltip != "" : Tooltip { text: @markdown("\{root.tooltip}"); }
 }
 
+// The "O." gesture: a clickable lamp saying whether a control is reading the
+// transport instead of its own value.
+//
+// Shared because there are three of them now -- the modulator rack's sync
+// knobs, the delay's time, and the modulation effect's rate -- and a toggle
+// that means "follow the tempo" should be the same object every time it is
+// met. Each caller keeps its own mapping; only the gesture is here.
+export component SyncLamp inherits Rectangle {
+    in property <bool> on;
+    /// Names the control this belongs to, for the accessible label.
+    in property <string> label;
+    in property <length> size: 13px;
+    callback toggled(bool);
+
+    width: root.size;
+    height: root.size;
+    accessible-role: button;
+    accessible-label: "Tempo sync " + root.label;
+
+    LedIndicator {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        diameter: 9px;
+        on: root.on;
+        tooltip: root.on ? "Sync on" : "Sync off";
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(!root.on); }
+    }
+}
+
 // A delay's time control: free milliseconds, or a division of the shared
 // musical grid when its lamp is lit.
 //
@@ -1047,6 +1079,12 @@ export component TimeDivisionKnob inherits Rectangle {
         spacing: 2px;
         alignment: start;
         ParameterKnob {
+            // `value` here is an expression, not a property this knob owns,
+            // and Slint drops a binding at the first assignment to the
+            // property it feeds. Without this the dial would keep whatever
+            // the first drag left it at and stop following `division` --
+            // which a preset load or a sync toggle changes underneath it.
+            controlled: true;
             width: 64px;
             diameter: 40px;
             label: root.label;
@@ -1081,22 +1119,10 @@ export component TimeDivisionKnob inherits Rectangle {
             spacing: 3px;
             HorizontalLayout {
                 alignment: center;
-                Rectangle {
-                    width: 13px;
-                    height: 13px;
-                    accessible-role: button;
-                    accessible-label: "Tempo sync " + root.label;
-                    LedIndicator {
-                        x: 2px;
-                        y: 2px;
-                        diameter: 9px;
-                        on: root.tempo-sync;
-                        tooltip: root.tempo-sync ? "Sync on" : "Sync off";
-                    }
-                    TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.set-sync(!root.tempo-sync); }
-                    }
+                SyncLamp {
+                    on: root.tempo-sync;
+                    label: root.label;
+                    toggled(on) => { root.set-sync(on); }
                 }
             }
             Text {
@@ -1696,6 +1722,10 @@ export component SyncMiniKnob inherits Rectangle {
         horizontal-alignment: center;
     }
     MiniKnob {
+        // Same reason as `TimeDivisionKnob`'s dial: `value` is an expression
+        // over `division` and `free-value`, and a knob that writes its own
+        // value drops the binding that feeds it.
+        controlled: true;
         x: 9px;
         y: 10px;
         diameter: 22px;
@@ -1717,24 +1747,13 @@ export component SyncMiniKnob inherits Rectangle {
         edit-started => { root.edit-started(); }
         edit-finished => { root.edit-finished(); }
     }
-    sync-light := Rectangle {
+    sync-light := SyncLamp {
         x: 33px;
         y: 17px;
-        width: 11px;
-        height: 11px;
-        accessible-role: button;
-        accessible-label: "Tempo sync " + root.label;
-        LedIndicator {
-            x: 1px;
-            y: 1px;
-            diameter: 9px;
-            on: root.synced;
-            tooltip: root.synced ? "Tempo sync on" : "Tempo sync off";
-        }
-        TouchArea {
-            mouse-cursor: pointer;
-            clicked => { root.sync-changed(!root.synced); }
-        }
+        size: 11px;
+        on: root.synced;
+        label: root.label;
+        toggled(on) => { root.sync-changed(on); }
     }
     Text {
         x: 0px;

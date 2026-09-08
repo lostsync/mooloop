@@ -1096,6 +1096,12 @@ impl Default for DelayParams {
 // --- Modulation ------------------------------------------------------------
 
 /// `Event::ParamValue` ids for [`ModulationParams`].
+/// The one LFO every modulation mode runs from. Named rather than written
+/// into the descriptor, because a synced division has to be clamped to the
+/// same ceiling and a second copy of `12.0` is how the two come to disagree.
+pub const MODULATION_MIN_RATE_HZ: f32 = 0.02;
+pub const MODULATION_MAX_RATE_HZ: f32 = 12.0;
+
 pub const MODULATION_PARAM_MODE: u32 = 0;
 pub const MODULATION_PARAM_RATE_HZ: u32 = 1;
 pub const MODULATION_PARAM_DEPTH: u32 = 2;
@@ -1119,8 +1125,8 @@ static MODULATION_DESCRIPTORS: [ParamDescriptor; 8] = [
         id: MODULATION_PARAM_RATE_HZ,
         name: "Rate",
         unit: "Hz",
-        min: 0.02,
-        max: 12.0,
+        min: MODULATION_MIN_RATE_HZ,
+        max: MODULATION_MAX_RATE_HZ,
         curve: ParamCurve::Exponential,
         default: 0.35,
     },
@@ -1222,6 +1228,14 @@ impl ModulationMode {
 pub struct ModulationParams {
     pub mode: ModulationMode,
     pub rate_hz: f32,
+    /// Whether [`Self::rate_hz`] is derived from [`Self::rate_division`] and
+    /// the project's current BPM. The DSP still receives only the resolved
+    /// rate, exactly as the delay receives only a resolved millisecond value.
+    #[serde(default)]
+    pub tempo_sync: bool,
+    /// Persisted so a synced sweep keeps following the tempo across a save.
+    #[serde(default)]
+    pub rate_division: crate::ModTimeDivision,
     pub depth: f32,
     pub color: f32,
     pub feedback: f32,
@@ -1230,11 +1244,25 @@ pub struct ModulationParams {
     pub stages: u8,
 }
 
+impl ModulationParams {
+    /// The rate a synced division resolves to, clamped to what this device
+    /// can run: a 64th triplet at 120 BPM asks for 48 Hz against a 12 Hz
+    /// ceiling, and the whole grid is offered because the slow end of it is
+    /// where a synced flanger is worth having.
+    pub fn synced_rate_hz(&self, bpm: f64) -> f32 {
+        self.rate_division
+            .rate_hz(bpm)
+            .clamp(MODULATION_MIN_RATE_HZ, MODULATION_MAX_RATE_HZ)
+    }
+}
+
 impl Default for ModulationParams {
     fn default() -> Self {
         Self {
             mode: ModulationMode::default(),
             rate_hz: 0.35,
+            tempo_sync: false,
+            rate_division: crate::ModTimeDivision::Whole,
             depth: 0.45,
             color: 0.45,
             feedback: 0.0,
