@@ -1885,6 +1885,12 @@ export component KnobStack inherits Rectangle {
             step: root.step;
             scale: root.scale;
             bipolar: root.bipolar;
+            // The dial still needs the value even though it does not draw it:
+            // `ParameterKnob`'s tooltip *is* its value, and its
+            // `accessible-value` comes from the same place. Without this the
+            // hover bubble on every ML-P8 and DS-01 knob is an empty box.
+            // `KnobField` forwards it for the same reason.
+            value-text: root.display-text;
             modulation-armed: root.modulation-armed;
             modulation-allowed: root.modulation-allowed;
             modulation-depth <=> root.modulation-depth;

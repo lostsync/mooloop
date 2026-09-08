@@ -2234,16 +2234,22 @@ export component MainWindow inherits Window {
                                                 self.stretch-origin = -1;
                                             }
                                         }
-                                        // @markdown takes a literal, so the per-tool hint
-                                        // is resolved into a property first.
+                                        // A pointer bubble cannot follow a drag across a
+                                        // whole row, and a sentence explaining a gesture is
+                                        // status-bar material rather than tooltip material
+                                        // (`docs/UI_DESIGN.md`). The strip renders plain
+                                        // text, so no markdown here.
                                         property <string> hint: root.tool-mode == 1
-                                            ? "**Paint** Drag to fill. Right-drag to clear."
+                                            ? "Paint: drag to fill, right-drag to clear."
                                             : root.tool-mode == 2
-                                            ? "**Slice** Click to ratchet into \{root.slice-divisions} hits. Right-click clears."
+                                            ? "Slice: click to ratchet into \{root.slice-divisions} hits, right-click clears."
                                             : root.tool-mode == 3
-                                            ? "**Stretch** Drag right to lengthen. Right-click resets."
-                                            : "Click to toggle. **Ctrl-drag** velocity. **Right-click** to clear.";
-                                        Tooltip { text: @markdown("\{parent.hint}"); }
+                                            ? "Stretch: drag right to lengthen, right-click resets."
+                                            : "Click to toggle. Ctrl-drag for velocity, right-click to clear.";
+                                        changed has-hover => {
+                                            root.hover-hint = self.has-hover ? self.hint
+                                                : root.hover-hint == self.hint ? "" : root.hover-hint;
+                                        }
                                     }
                                 }
                             }

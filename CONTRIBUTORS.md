@@ -116,7 +116,9 @@ Alphabetical by model name, then by harness.
   showed that gigabyte was not what had been interrupting the audio after
   all, and the picker chip that closed its menu before it reported, which had
   left seven source and route controls drawing correctly and doing nothing
-  since the day it was written. Longer accounts of most of this are in
+  since the day it was written, and the knob wrapper that kept the value
+  string to itself, so 85 ML-P8 and DS-01 dials hovered as an empty box.
+  Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
 ### Claude Sonnet 5 — Claude Code

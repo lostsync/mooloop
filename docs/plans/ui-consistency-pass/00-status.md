@@ -68,6 +68,24 @@ It also closed a gap `CURRENT.md` was carrying — the stretch toggle that stays
 lit while stretch is bypassed — whose recorded fix was the threading this
 replaced.
 
+**What it did not check, found 2026-09-08.** The sweep asked what each
+`tooltip:` string *said*; it never asked whether the tooltip a widget renders
+resolves to anything at all. `KnobStack` takes the formatted value for its own
+field, turns the inner `ParameterKnob`'s readout off and never hands the
+string back, so all 85 ML-P8 and DS-01 knobs rendered `@markdown("")` — an
+empty bubble, and an empty `accessible-value` with it. It had been that way
+since the component was written; the audit's own component list classified
+`ParameterKnob` as a value-shower to be skipped, which is exactly the class
+this lives in. It also missed `main.slint`'s step-grid prose, because that
+`Tooltip` sits inline on a `TouchArea` rather than on one of the twelve
+components the list enumerated.
+
+Both are fixed on `fix/blank-value-tooltips`, along with the guard that was
+missing: `tests/knob_value_text.rs` requires any component taking a
+`display-text` to pass it on. **A re-run of `README.md`'s sweep should check
+presence as well as content, and should walk `Tooltip` instantiations rather
+than a list of components.**
+
 ## Step 04 — the toolbars
 
 Adam: *"reorganize the toolbars. they're sort of a mess. that one I was just
