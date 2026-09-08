@@ -120,7 +120,10 @@ Alphabetical by model name, then by harness.
   string to itself, so 85 ML-P8 and DS-01 dials hovered as an empty box,
   and the sixteen-channel ceiling that only ever existed in the markup, and
   the pane-layout plan that turned four requests for one surface in one place
-  into a set of views and three slots to put them in.
+  into a set of views and three slots to put them in, and its first step --
+  a work area that computes each slot's rectangle instead of nesting layouts,
+  so a view needs one instance wherever it is drawn, and the bottom pane's two
+  stacked toolbars folded into the one row per view that made possible.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

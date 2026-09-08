@@ -13,16 +13,19 @@ easy to verify: any visible difference is a defect.
 **The view and slot state, on `main.slint`'s root.**
 
 ```
-// 0 STEPS, 1 MIXER, 2 PLAYLIST, 3 NOTES, 4 DEVICES
-in-out property <[int]> main-views: [0, 1];
-in-out property <[int]> split-views: [];
-in-out property <[int]> bottom-views: [4, 3, 2];
-in-out property <int> main-active;
-in-out property <int> split-active;
-in-out property <int> bottom-active;
+// 0 STEPS, 1 MIXER, 2 DEVICES, 3 NOTES, 4 PLAYLIST -- the order Ctrl+1..5
+// already uses in actions.rs, so a chord is Ctrl+(id + 1) and a tab strip
+// renders its members in a stable order without carrying one.
+in-out property <int> steps-slot: 0;      // 0 main, 1 split, 2 bottom
+in-out property <int> mixer-slot: 0;
+in-out property <int> devices-slot: 2;
+in-out property <int> notes-slot: 2;
+in-out property <int> playlist-slot: 2;
 ```
 
-These defaults are today's layout, which is the point.
+These defaults are today's layout, which is the point. **Scalars rather than
+an array per slot**, because Slint cannot assign into an array element and a
+slot is something a view is assigned to.
 
 **Per-view dock heights**, replacing the conditional chain at the bottom
 pane's `height` binding. `DEVICES` keeps its derived `442px + shelf delta`,

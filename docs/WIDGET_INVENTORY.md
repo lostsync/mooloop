@@ -14,6 +14,11 @@ should live. Every count below was measured against the tree at the audit
 date above; treat them as of that date, not as invariants. Line numbers in
 `main.slint` in particular drift with every edit to that file — prefer the
 `// ===== ... =====` section banners it carries, which are named below.
+Those banners were renamed on 2026-09-08, when the work area became five
+views in three slots: the channel rack, the device rack, the piano roll and
+the playlist each sit under a banner named for their view (`STEPS`, `MIXER`,
+`DEVICES`, `NOTES`, `PLAYLIST`) rather than for the dock they used to be a
+page of.
 
 Two entries are live bugs rather than duplication, marked **bug**. They are
 here because the missing component is why they happened.
@@ -65,7 +70,7 @@ is one element per adjacent sample pair, and that workaround is hand-rolled
 | `modulation-shelf.slint` | 1 (`:231`) |
 | `reverb-device.slint` | 1 (`:77`) |
 | `sampler-device.slint` | 1 (`:489`) |
-| `main.slint` | 1 (the automation lane, under the bottom-dock banner) |
+| `main.slint` | 1 (the automation lane, under the `NOTES` banner) |
 
 **bug —** `DisplayPrefs.smooth-curves` is a user preference, and honouring it
 means writing the loop twice: once as Rectangles, once as `Path` segments,
@@ -124,10 +129,10 @@ they would be called:
 
 | Would-be widget | Where |
 | --- | --- |
-| `StepGrid` | under `// ===== Channel rack: one step-grid row per channel =====` |
+| `StepGrid` | under `// ===== STEPS =====` |
 | `PlaylistLane` | `playlist-canvas :=` |
 | `PianoKeyboard` gutter | the `mod(note-number, 12)` black-key test, which duplicates the identical one in `piano-grid.slint` |
-| `VelocityLane` / `AutomationLane` | under `// ===== Bottom dock: sampler and note editors =====`, around `lane-picker :=` |
+| `VelocityLane` / `AutomationLane` | under `// ===== NOTES =====`, around `lane-picker :=` |
 | `BrowserTree` | under `// ===== Browser sidebar =====` |
 
 None of them can be placed in the mockup tool, snapshot-tested in isolation,

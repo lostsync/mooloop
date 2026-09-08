@@ -13,8 +13,13 @@ use std::rc::Rc;
 
 /// Grid geometry in logical pixels, matching `piano_drag.rs`. These move if
 /// the editor's left gutter or the toolbar above it is resized.
+///
+/// `GRID_TOP_Y` moved up 34px on 2026-09-08 with the dock's toolbar merge;
+/// `piano_drag.rs` carries the full account. **Two files hold this number and
+/// nothing holds them together** -- fixing one and running the suite reports
+/// the other as nineteen fresh failures, which is how this copy was found.
 const GRID_ORIGIN_X: f32 = 54.0;
-const GRID_TOP_Y: f32 = 383.0;
+const GRID_TOP_Y: f32 = 349.0;
 const ROW_HEIGHT: f32 = 8.0;
 const STEP_WIDTH: f32 = 32.0;
 const TICKS_PER_STEP: i32 = 24;

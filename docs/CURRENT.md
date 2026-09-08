@@ -7,24 +7,32 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 
 ## Implemented User Surface
 
-- One application window with a two-row toolbar, channel rack, and a lower
-  editor. The transport row carries play/stop, pattern-vs-song mode, a
+- One application window with a transport toolbar, a work surface, and a lower
+  dock. The transport row carries play/stop, pattern-vs-song mode, a
   bar:beat:tick position readout, beat lamps, drag-or-type tempo, global
   sixteenth-note swing, and the master meter, and never changes.
-- **The second row belongs to the work surface, and switches with it.** It
-  opens with the STEPS/MIXER switcher and then carries whatever that pane
-  needs: with the step grid up, pattern selection, the cursor tools and
-  pattern length; with the mixer up, nothing, because the mixer's controls
-  are on its strips. Both halves of that were somewhere else until
-  2026-09-08 -- the switcher on a 26px strip of its own below the toolbar,
-  beside a permanent sentence of chrome, and the pattern controls here
-  whether or not the pattern grid was showing.
-- **Each editor owns its own grid snap**, in its own header: the piano roll a
+- **The work area is five views in slots**, as of 2026-09-08: `STEPS` and
+  `MIXER` in the top pane, `DEVICES`, `NOTES` and `PLAYLIST` in the dock. A
+  view lives in exactly one slot, and a slot's tab strip lists what it holds.
+  The arrangement is fixed for now; what changed is the mechanism under it,
+  which computes each slot's rectangle rather than nesting layouts, so a view
+  needs one instance wherever it is drawn.
+- **A view has exactly one toolbar row, and its slot's tab strip leads it.**
+  With `STEPS` up it carries pattern selection, the cursor tools and pattern
+  length; with `MIXER` up, nothing, because the mixer's controls are on its
+  strips; with `DEVICES` up, the device chain's source picker and, at the far
+  end, the channel name and its preset browser.
+  The dock used to stack **two** rows -- a header with the switcher, the
+  channel name and the preset browser, and a per-page row under it. Merging
+  them returned 34px and removed a `SONG ARRANGEMENT` label that named the
+  pane a tab beside it already named. The preset browser is now on `DEVICES`
+  alone; on the piano roll a whole-channel preset browser was noise.
+  The pattern controls and the `STEPS/MIXER` switcher had already moved once,
+  on 2026-09-07, off a 26px strip of their own.
+- **Each editor owns its own grid snap**, in its own row: the piano roll a
   toggle and a menu, the playlist a menu. A third snap control used to sit in
   the toolbar and ask `editor-page` which of the two indices it was editing.
-- The lower dock switches between SOURCE, NOTES and PLAYLIST with the same
-  segmented control the work surface uses, and the source device is a picker
-  rather than a chip per instrument.
+- The source device is a picker rather than a chip per instrument.
 - Patterns are chosen with a fixed-width stepper plus a jump menu and can be
   named; the selector costs the same width at any pattern count.
 - Pattern length moves a beat at a time with Shift -- on the STEPS field's
@@ -125,7 +133,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   existed load at unity. Voice controls cover one-shot/gated playback, 1-16
   voices, restart/layer retriggering, and 16 cross-channel choke groups.
 - A mixer sharing the work surface with the step grid, behind the toolbar's
-  STEPS/MIXER switcher. It is a strip per bus - master first, then sixteen inserts - with a
+  STEPS/MIXER tab strip. It is a strip per bus - master first, then sixteen inserts - with a
   name plate, live stereo meter, fader, pan, mute, destination, and a count of
   the channels feeding it. Clicking a strip's name plate points the device rack
   below at that bus, so a chain on a group of channels is built with the same

@@ -219,19 +219,27 @@ alignment, and height contract as effects.
   +12 dB, double-click to 0 dB. No gain control reads in percent; dB is the
   unit the values actually mean.
 
-The lower editor retains one channel row:
+The device rack is one of five **views**, and a view has exactly one toolbar
+row, led by its slot's tab strip:
 
-`[Source | Notes | Playlist] [channel name] [channel preset browser/actions]`
+`[DEVICES NOTES PLAYLIST] | [DEVICE CHAIN] [source type] ··· [channel name] [channel preset browser/actions]`
 
-The device-chain row directly below it owns the source type, and nothing else:
+This used to be two stacked rows — a slot header carrying the switcher, the
+channel name and the preset browser, and a device-chain row under it. They
+merged because a slot header cannot hold per-view controls once a view can be
+moved between panes, and because the shared row was already asking which page
+was open in order to know whether to draw the preset browser, which is this
+document's own stated symptom for a control in the wrong place.
 
-`[DEVICE CHAIN] [source type]`
+The channel preset browser is on this view and no other. A channel preset is
+the channel's sound, and this is the view whose subject is the channel's
+sound; on the piano roll it was noise beside a stretch.
 
 ### Piano roll gestures
 
-The roll's header reads left to right as mode, grid, then selection:
+The roll's header reads left to right as pane, mode, grid, then selection:
 
-`[SEL DRAW PAINT SLICE ERASE] [SNAP] [interval] | [tick/note/vel] [length] | [VEL AUTO]`
+`[DEVICES NOTES PLAYLIST] | [SEL DRAW PAINT SLICE ERASE] [SNAP] [interval] | [tick/note/vel] [length] | [VEL AUTO] ··· [channel name]`
 
 Length is a musical division, not a tick count, and setting it applies to the
 whole selection. Beside the picker is a readout of the exact value, because an
@@ -449,10 +457,16 @@ columns with tiny `+` and `-` glyphs.
 
 ## Toolbars
 
-- **A pane's switcher leads the toolbar whose contents it decides.** A strip
-  that exists only to hold a switcher is chrome; a toolbar carrying controls
-  for a pane that is not showing is worse, because it looks like it applies
-  to what is on screen.
+- **A view has exactly one toolbar row, and its slot's tab strip leads it.**
+  A strip that exists only to hold a switcher is chrome; a toolbar carrying
+  controls for a pane that is not showing is worse, because it looks like it
+  applies to what is on screen; and *two* stacked rows, where the upper one
+  has to ask which of the lower one's pages is open, is both at once. The row
+  is 30px on `Theme.surface` with 24px controls, whichever slot the view is
+  in — a pane's toolbar should not change shape when the pane moves.
+- **The tab strip is the part of that row that never clips.** It is the way
+  out of the pane. A dense row clips its own controls at a narrow width
+  instead, which is what the piano roll's already did.
 - **A setting that belongs to a pane lives in that pane's header, once.** A
   control that has to ask which pane is open in order to know which value it
   is editing is in the wrong place -- that question is the symptom.
