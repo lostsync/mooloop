@@ -541,3 +541,61 @@ fn install_churn_disturbs_a_deadline_thread() {
     println!("  idle machine       {:>13}   {:>11.2} ms", quiet.1, quiet.2);
     println!("  installing         {:>13}   {:>11.2} ms", loaded.1, loaded.2);
 }
+
+/// Where the floor in [`prepared_project_memory`] actually is.
+///
+/// That test says a one-channel project allocates about a gigabyte and does
+/// not say what of. This bisects it by bracketing each piece of
+/// `RenderState::new` separately, because the floor is a sum of independently
+/// reasonable decisions and only the total is alarming.
+#[test]
+#[ignore = "measures live allocation; run deliberately in release"]
+fn render_state_floor_by_component() {
+    use mooloop_core::{MAX_BUSES, MAX_CHANNELS};
+
+    fn measure<T>(label: &str, build: impl FnOnce() -> T) {
+        let before = crate::COUNTING.live();
+        let value = build();
+        let after = crate::COUNTING.live();
+        println!(
+            "  {label:<34} {:>10.2} MB",
+            after.saturating_sub(before) as f64 / (1024.0 * 1024.0)
+        );
+        drop(value);
+    }
+
+    println!();
+    println!(
+        "  MAX_CHANNELS {MAX_CHANNELS}, MAX_BUSES {MAX_BUSES}, \
+         MAX_EFFECTS_PER_CHANNEL {}",
+        mooloop_core::MAX_EFFECTS_PER_CHANNEL
+    );
+    println!();
+    measure("BusMeters::new", crate::meters::BusMeters::new);
+    measure("DeviceMeters::new", crate::meters::DeviceMeters::new);
+    measure("DeviceTelemetry::new", crate::meters::DeviceTelemetry::new);
+    measure("PlayheadMeters::new", crate::meters::PlayheadMeters::new);
+    measure("ModulatorMeters::new", crate::meters::ModulatorMeters::new);
+    measure("256x ModRack::default", || {
+        (0..MAX_CHANNELS)
+            .map(|_| mooloop_core::modulation::ModRack::default())
+            .collect::<Vec<_>>()
+    });
+    measure("256x ModulatorRack::new", || {
+        (0..MAX_CHANNELS)
+            .map(|_| mooloop_dsp::ModulatorRack::new())
+            .collect::<Vec<_>>()
+    });
+    measure("Sequencer::new(1,1)", || {
+        crate::sequencer::Sequencer::new(1, 1, 16, mooloop_core::Ppq::DEFAULT)
+    });
+    println!();
+    let empty = idle_sampler_project(0);
+    measure("RenderState::from_project(0ch)", || {
+        RenderState::from_project(SAMPLE_RATE, &empty, &[])
+    });
+    let one = idle_sampler_project(1);
+    measure("RenderState::from_project(1ch)", || {
+        RenderState::from_project(SAMPLE_RATE, &one, &[])
+    });
+}

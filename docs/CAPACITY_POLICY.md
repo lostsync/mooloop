@@ -25,34 +25,47 @@ the thing to avoid. The number was invisible at every individual definition
 and only appeared when they were multiplied, which is why that plan left a
 test measuring the whole graph rather than a paragraph.
 
-## The same lesson, unlearned: the strip bank
+## The same lesson, unlearned: the pattern bank
 
 The paragraph above was written about effect slots and is currently true of
-channel strips, at a much larger scale. `mooloop-engine`'s
-`block_cost::prepared_project_memory` measures it: **a one-channel project
-with no effects allocates about 1.07 GB**, and a fifteen-channel one with a
+patterns, at twenty-five times the scale.
+`block_cost::prepared_project_memory` measures it: **a project with no
+channels at all allocates about 1.07 GB**, and a fifteen-channel one with a
 full chain on every channel allocates 1.10 GB. The song is nearly irrelevant;
 the floor is the number.
 
-It multiplies out the same way the effect slots did, from two decisions that
-each look reasonable alone:
+`block_cost::render_state_floor_by_component` says where it is, and it is one
+line:
 
-- `RenderState` preallocates `MAX_CHANNELS` — 256 — channel strips, whether or
-  not the project has that many channels.
-- `ChannelStrip` holds *every* generator at once — sampler, drum synth, mono,
-  poly, ML-M1, ML-P8, DS-01, aux in — with `active_source` naming which one
-  runs. Switching a channel's generator therefore allocates nothing on the
-  audio thread, which is the point.
+```rust
+// Sequencer::new
+let patterns = (0..MAX_PATTERNS)
+    .map(|_| Pattern::with_steps(MAX_CHANNELS, MAX_PATTERN_STEPS as usize))
+    .collect();
+```
 
-Neither is visible at its own definition. Together they are 256 strips × 8
-generators, of which a fifteen-channel song uses fifteen.
+`MAX_PATTERNS`, `MAX_CHANNELS` and `MAX_PATTERN_STEPS` are 256, 256 and 256.
+That is 65,536 `ChannelPattern`s of 256 steps each — measured at **1051 MB of
+the 1070**, against 13 MB for `DeviceTelemetry`, 1.6 MB for `DeviceMeters` and
+under half a megabyte for all 256 modulator racks together. `Sequencer::new`
+takes `initial_channels` and `active_patterns` and uses neither for sizing:
+they set counters on a bank that was already built at full extent.
 
-Both halves have the same remedy the modulator-capacity plan used, and the
-machinery already exists: strips and generators are prepared off the audio
-thread and installed through the structural-command and reclaim path that
-effects, buffers and whole projects already travel. Making a strip arrive when
-a channel does, and a generator when a channel selects it, keeps every ceiling
-where it is and stops dimensioning by them.
+It is the same product this policy already has a paragraph about — the render
+graph's `MAX_CHANNELS × MAX_EFFECTS_PER_CHANNEL`, which cost 42.8 MiB and was
+fixed — and it was invisible for the same reason: each constant is defensible
+where it is defined, and nothing multiplies them where a reader would look.
+
+The remedy is the one the rest of the engine already uses. `RenderState.strips`
+is documented as "one entry per channel the project actually has, not per
+addressable channel", and `control_outputs` cites
+`docs/plans/archive/modulator-capacity/` for the same move. The pattern bank
+simply never had it done: it should size from the project and grow through the
+structural path the way channels do, leaving every ceiling exactly where it is.
+
+Not yet done. The sequencer is indexed by pattern and channel throughout, so
+this is a real change rather than a one-line one, and the measurements are
+committed so it has a before to point at.
 
 ### What the floor costs per edit, which is the part that hurts
 
