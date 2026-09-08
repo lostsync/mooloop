@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-08
-- Sessions: 77
+- Sessions: 78
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -139,7 +139,9 @@ Alphabetical by model name, then by harness.
   arrangement persisted into settings, sanitized rather than validated so a
   hand-edited file cannot produce a window with no pane in it, and the pane
   that went blank when the view it was showing was dragged out of it, which
-  had been two bugs in four lines and no test covering pane moves at all.
+  had been two bugs in four lines and no test covering pane moves at all, and
+  the drag's own geometry tested at last, led by the check that says the
+  measured tab coordinates still land on tabs.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

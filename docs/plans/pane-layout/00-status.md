@@ -253,6 +253,23 @@ line put back, the suite run, both new tests observed to fail with the right
 messages, then the fix restored. A regression test that passes both ways is
 decoration.
 
+## Coverage, after the fact
+
+Two files, and the split between them is the point. `tests/panes.rs` drives
+`move_view` and asks what a completed move does to the *arrangement*.
+`tests/pane_drag.rs` dispatches real pointer events and asks whether a drag
+reaches that function at all and lands in the pane the pointer was over.
+Neither covers the gesture alone, and the bug that reached Adam lived in the
+half neither had.
+
+`pane_drag.rs` leads with `coordinates_still_land_on_the_tabs`, which clicks
+each measured tab position and asserts the expected view appears. Tab geometry
+is measured off a software render, so it moves when a pane toolbar's height or
+padding does -- and the piano roll's constants had already shown what that
+looks like when nothing guards it: three tests failing for reasons that say
+nothing about the thing being tested. One guard that fails first and says
+"the geometry drifted" is worth more than three confusing failures.
+
 ## Decisions taken before any code, so they are not re-litigated
 
 - **A view is in one slot at a time.** The alternative — the mixer visible in
