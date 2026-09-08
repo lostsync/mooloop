@@ -17,13 +17,17 @@ use std::rc::Rc;
 
 /// Geometry of the first rack row, in logical pixels. The grid begins after
 /// the row's name, mute button, volume/pan knobs and mixer-bus picker, and
-/// each cell is 24px wide with a 3px gap. These move if that prefix is resized
-/// or the chrome above the rack (menu bar, toolbar, Steps/Mixer header)
-/// changes height: the picker pushed the grid 36px right, and the work
-/// surface's own header pushed the row 27px down.
+/// each cell is 24px wide with a 3px gap. These move if that prefix is
+/// resized or the chrome above the rack (menu bar, toolbar) changes height:
+/// the picker pushed the grid 36px right.
+///
+/// The work surface's own 26px header and its rule used to push the row 27px
+/// down and no longer exist, so the row is back where it was. Measured
+/// rather than assumed, at the same 960x760 the snapshot test renders:
+/// the first cell spans y=108..130.
 const GRID_ORIGIN_X: f32 = 228.0;
 const CELL_PITCH: f32 = 27.0;
-const ROW_CENTRE_Y: f32 = 148.0;
+const ROW_CENTRE_Y: f32 = 119.0;
 const STEPS: usize = 8;
 
 /// Centre of the given step cell.
