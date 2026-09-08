@@ -9,6 +9,14 @@ directory should always contain live work.
 `docs/FOCUS.md` decides which of these is next. This file only says what state
 each one is in.
 
+`pattern-bank-floor/` was added 2026-09-08 and is **not started, and not on
+anyone's list**. It fell out of an audio-dropout investigation whose actual
+cause was `rtkit` demoting the machine's realtime threads. What it records is
+that every project reserves 1.00 GiB of pattern storage before it holds
+anything, and that an ordinary edit rebuilds it at 20 ms a time. Whether that
+is worth a step is a `FOCUS.md` question; the measurements to judge it by are
+committed either way.
+
 Last swept 2026-09-08, when `ui-consistency-pass/` finished: Adam's standing
 list turned into an audit, and the audit found controls that were saying
 things the engine was not doing -- a clip light nothing could clear, a sampler
