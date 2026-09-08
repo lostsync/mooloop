@@ -322,9 +322,19 @@ export component PickerChip inherits Rectangle {
                         }
                         row-touch := TouchArea {
                             mouse-cursor: pointer;
+                            // Report first, close second. Closing tears down
+                            // the repeater item whose handler is still
+                            // running, so a `picked` after it never lands and
+                            // the chip looks stuck on its old entry. The same
+                            // bug has been found and fixed twice already --
+                            // `mixer.slint`'s `BusPicker` and
+                            // `device-rack.slint`'s preset menu, which has a
+                            // pointer-event test behind it in
+                            // `tests/effect_preset_menu.rs`. `tests/picker_chip.rs`
+                            // is this one's.
                             clicked => {
-                                menu.close();
                                 root.picked(index);
+                                menu.close();
                             }
                         }
                     }
