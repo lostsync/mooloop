@@ -306,3 +306,52 @@ fn idle_bus_cost() {
         }
     }
 }
+
+/// What a prepared project *holds*, as opposed to what it costs to run.
+///
+/// The song is almost irrelevant to the answer and that is the finding: a
+/// one-channel project with no effects already allocates about a gigabyte,
+/// and fifteen channels with a full chain each add a few tens of megabytes on
+/// top of it. The floor is the number.
+///
+/// It is a floor because [`ChannelStrip`] holds *every* generator at once --
+/// sampler, drum synth, mono, poly, ML-M1, ML-P8, DS-01 and aux in -- with
+/// `active_source` choosing which one runs, and because `RenderState`
+/// preallocates `MAX_CHANNELS` of them whether or not the song has that many
+/// channels. Both halves are deliberate: switching a channel's generator, or
+/// adding a channel, then allocates nothing on the audio thread. The price is
+/// two hundred and fifty-six unused strips holding eight unused generators
+/// each, which is most of this figure.
+///
+/// Recorded here rather than argued about, so that any later decision to make
+/// strips or generators arrive on demand has a before to point at.
+#[test]
+#[ignore = "measures live allocation; run deliberately in release"]
+fn prepared_project_memory() {
+    println!();
+    println!(
+        "  one ChannelStrip is {:.1} KB inline and holds all {} generator kinds",
+        std::mem::size_of::<crate::render::ChannelStrip>() as f64 / 1024.0,
+        8,
+    );
+    println!();
+    println!("  channels   effects each   live MB after RenderState::from_project");
+    for (channels, effects) in [(1usize, 0usize), (15, 3), (15, 10), (32, 10), (64, 10)] {
+        let mut project = idle_sampler_project(channels);
+        for channel in &mut project.channels {
+            for _ in 0..effects {
+                channel
+                    .setup
+                    .push_effect(EffectSlotState::of_kind(EffectKind::Reverb));
+            }
+        }
+        let before = crate::COUNTING.live();
+        let render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        let after = crate::COUNTING.live();
+        println!(
+            "  {channels:>8}   {effects:>12}   {:>8.1} MB",
+            after.saturating_sub(before) as f64 / (1024.0 * 1024.0)
+        );
+        drop(render);
+    }
+}

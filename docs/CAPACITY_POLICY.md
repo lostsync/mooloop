@@ -25,6 +25,38 @@ the thing to avoid. The number was invisible at every individual definition
 and only appeared when they were multiplied, which is why that plan left a
 test measuring the whole graph rather than a paragraph.
 
+## The same lesson, unlearned: the strip bank
+
+The paragraph above was written about effect slots and is currently true of
+channel strips, at a much larger scale. `mooloop-engine`'s
+`block_cost::prepared_project_memory` measures it: **a one-channel project
+with no effects allocates about 1.07 GB**, and a fifteen-channel one with a
+full chain on every channel allocates 1.10 GB. The song is nearly irrelevant;
+the floor is the number.
+
+It multiplies out the same way the effect slots did, from two decisions that
+each look reasonable alone:
+
+- `RenderState` preallocates `MAX_CHANNELS` — 256 — channel strips, whether or
+  not the project has that many channels.
+- `ChannelStrip` holds *every* generator at once — sampler, drum synth, mono,
+  poly, ML-M1, ML-P8, DS-01, aux in — with `active_source` naming which one
+  runs. Switching a channel's generator therefore allocates nothing on the
+  audio thread, which is the point.
+
+Neither is visible at its own definition. Together they are 256 strips × 8
+generators, of which a fifteen-channel song uses fifteen.
+
+Both halves have the same remedy the modulator-capacity plan used, and the
+machinery already exists: strips and generators are prepared off the audio
+thread and installed through the structural-command and reclaim path that
+effects, buffers and whole projects already travel. Making a strip arrive when
+a channel does, and a generator when a channel selects it, keeps every ceiling
+where it is and stops dimensioning by them.
+
+Not yet done, and not a thing to do casually — it is the core of the render
+state. The measurement is committed so the decision has a before to point at.
+
 ## Current boundaries
 
 - The current channel and effect bridges use complete `u8` address spaces:

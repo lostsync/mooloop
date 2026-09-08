@@ -53,6 +53,14 @@ pub struct AutomationLane {
     next_point_id: PointId,
 }
 
+impl AutomationLane {
+    /// The heap this lane owns. `points` is private, so the accounting the
+    /// undo budget needs has to live beside it rather than reach in.
+    pub fn heap_bytes(&self) -> usize {
+        self.points.capacity() * std::mem::size_of::<AutomationPoint>()
+    }
+}
+
 fn default_next_point_id() -> PointId {
     1
 }

@@ -125,6 +125,14 @@ pub struct SliceMap {
     next_id: u64,
 }
 
+impl SliceMap {
+    /// The heap this map owns, for the undo history's memory budget.
+    /// `markers` is private, so this lives beside it.
+    pub fn heap_bytes(&self) -> usize {
+        self.markers.capacity() * std::mem::size_of::<SliceMarker>()
+    }
+}
+
 /// What a `SliceMap` looks like on disk, before the invariant is imposed.
 ///
 /// Deserialization is the one path into the type that does not go through a

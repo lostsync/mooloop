@@ -27,6 +27,42 @@ use mooloop_dsp::{
 };
 use rtrb::{Consumer, Producer};
 
+/// A counting allocator, installed only for this crate's own tests.
+///
+/// Same instrument and same reason as `mooloop-session`'s: `block_cost` asks
+/// what a prepared project *holds*, and resident set size cannot answer it,
+/// because the allocator does not hand freed pages back to the OS.
+#[cfg(test)]
+pub(crate) struct CountingAllocator {
+    live: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(test)]
+impl CountingAllocator {
+    pub(crate) fn live(&self) -> usize {
+        self.live.load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        self.live.fetch_add(layout.size(), Ordering::Relaxed);
+        unsafe { std::alloc::System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        self.live.fetch_sub(layout.size(), Ordering::Relaxed);
+        unsafe { std::alloc::System.dealloc(ptr, layout) }
+    }
+}
+
+#[cfg(test)]
+#[global_allocator]
+pub(crate) static COUNTING: CountingAllocator = CountingAllocator {
+    live: std::sync::atomic::AtomicUsize::new(0),
+};
+
 mod driver;
 mod graph;
 pub mod load;

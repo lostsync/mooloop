@@ -713,6 +713,98 @@ pub struct Project {
     pub loop_range: LoopRange,
 }
 
+impl Project {
+    /// Roughly what one copy of this project occupies, counting the heap it
+    /// owns as well as its own bytes.
+    ///
+    /// An estimate, deliberately: it walks the collections that actually
+    /// scale with a song -- channels, their pattern-indexed note and
+    /// automation lanes, the effect chains, the playlist -- and does not
+    /// chase the last few bytes of a `String` allocator header. The caller
+    /// is the undo history deciding how many snapshots it can afford, and a
+    /// budget wants the shape of the number rather than its exact value.
+    ///
+    /// `Vec::capacity` rather than `len`, because a vector that has grown and
+    /// been drained is still holding the memory.
+    pub fn heap_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.channels.capacity() * std::mem::size_of::<ProjectChannel>()
+            + self.channels.iter().map(ProjectChannel::heap_bytes).sum::<usize>()
+            + self.buses.capacity() * std::mem::size_of::<BusSetup>()
+            + self.buses.iter().map(BusSetup::heap_bytes).sum::<usize>()
+            + self.pattern_lengths.capacity() * std::mem::size_of::<u16>()
+            + self.playlist.capacity() * std::mem::size_of::<PatternPlacement>()
+    }
+}
+
+impl ProjectChannel {
+    /// The heap this channel owns, beyond its own `size_of`.
+    ///
+    /// The pattern-indexed banks are the part that grows: a song with
+    /// twenty-four patterns carries twenty-four note vectors and twenty-four
+    /// automation vectors on every channel, whether or not they hold
+    /// anything, and each automation lane owns its own points.
+    pub fn heap_bytes(&self) -> usize {
+        self.setup.heap_bytes()
+            + self.notes.capacity() * std::mem::size_of::<Vec<NoteEvent>>()
+            + self
+                .notes
+                .iter()
+                .map(|pattern| pattern.capacity() * std::mem::size_of::<NoteEvent>())
+                .sum::<usize>()
+            + self.automation.capacity() * std::mem::size_of::<Vec<AutomationLane>>()
+            + self
+                .automation
+                .iter()
+                .map(|pattern| {
+                    pattern.capacity() * std::mem::size_of::<AutomationLane>()
+                        + pattern.iter().map(AutomationLane::heap_bytes).sum::<usize>()
+                })
+                .sum::<usize>()
+    }
+}
+
+impl ChannelSetup {
+    /// The heap this channel's devices own.
+    ///
+    /// `EffectSlotState` allocates nothing -- every effect's parameters are a
+    /// fixed-size variant and a container names its children by count rather
+    /// than by owning them -- so the chain costs its capacity and no walk.
+    pub fn heap_bytes(&self) -> usize {
+        self.channel.name.capacity()
+            + self.effects.capacity() * std::mem::size_of::<crate::EffectSlotState>()
+            + self.source.heap_bytes()
+    }
+}
+
+impl ChannelSource {
+    /// The heap this generator owns. Only the sampler has any: a sample
+    /// reference is a path, and a slice map is a list of markers.
+    pub fn heap_bytes(&self) -> usize {
+        match self {
+            Self::Sampler(state) => state.sample.heap_bytes() + state.slices.heap_bytes(),
+            _ => 0,
+        }
+    }
+}
+
+impl SampleReference {
+    pub fn heap_bytes(&self) -> usize {
+        match self {
+            Self::Empty => 0,
+            Self::Builtin { id } => id.capacity(),
+            Self::File { path, .. } => path.as_os_str().len(),
+        }
+    }
+}
+
+impl BusSetup {
+    pub fn heap_bytes(&self) -> usize {
+        self.bus.name.capacity()
+            + self.effects.capacity() * std::mem::size_of::<crate::EffectSlotState>()
+    }
+}
+
 impl Default for Project {
     fn default() -> Self {
         Self {

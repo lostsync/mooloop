@@ -16,6 +16,33 @@ pub struct ProjectSnapshot {
     pub samples: Vec<Option<Arc<SampleData>>>,
 }
 
+/// A bare project is a history unit in its own right in a few places -- the
+/// effect-chain tests undo against one directly -- and it already knows what
+/// it occupies.
+impl crate::history::Retained for Project {
+    fn retained_bytes(&self) -> usize {
+        self.heap_bytes()
+    }
+}
+
+impl crate::history::Retained for ProjectSnapshot {
+    /// The project's own heap, plus the sample table's.
+    ///
+    /// The `Arc`s in `samples` are counted as pointers rather than as the
+    /// audio they point at, and that is the honest number for a budget: the
+    /// decoded samples are shared with the engine and every other snapshot,
+    /// so charging one history entry for all of them would say the history
+    /// costs hundreds of megabytes it does not own. What retaining the `Arc`
+    /// *does* cost is keeping a replaced sample alive after the user loaded
+    /// another one, which is a real cost but a bounded and separate one.
+    fn retained_bytes(&self) -> usize {
+        self.project.heap_bytes()
+            + std::mem::size_of::<Self>()
+            + self.samples.capacity()
+                * std::mem::size_of::<Option<std::sync::Arc<SampleData>>>()
+    }
+}
+
 /// Keep every channel's pattern-indexed banks parallel to the project's
 /// pattern list. A clipboard can outlive pattern edits, and old projects may
 /// legitimately arrive without the automation banks introduced later.

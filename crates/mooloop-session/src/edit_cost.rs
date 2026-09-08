@@ -119,7 +119,9 @@ fn allocated_bytes() -> usize {
 #[ignore = "measures resident memory; run deliberately in release"]
 fn undo_entry_memory() {
     println!();
-    println!("  channels  notes/pattern   KB per undo entry   after 500 edits");
+    println!(
+        "  channels  notes/pattern   KB per undo entry   estimated KB   ratio   after 500 edits"
+    );
     for channels in [4usize, 16, 32] {
         for notes in [16usize, 64, 256] {
             let project = song(channels, notes, 1);
@@ -152,14 +154,97 @@ fn undo_entry_memory() {
             let after = allocated_bytes();
             std::hint::black_box(&entries);
             let per_entry = after.saturating_sub(before) as f64 / count as f64;
+            // What the undo budget believes an entry costs, beside what it
+            // actually cost. The budget is only as good as this ratio: an
+            // estimate that reads low would let the history keep more than it
+            // is allowed to, which is the bug it exists to prevent.
+            let snapshot = session.project_snapshot(120, 50);
+            let estimated = (snapshot.heap_bytes() * 2) as f64;
             println!(
-                "  {channels:>8}  {notes:>13}  {:>17.1}  {:>14.1} MB",
+                "  {channels:>8}  {notes:>13}  {:>17.1}  {:>12.1}  {:>5.2}   {:>14.1} MB",
                 per_entry / 1024.0,
+                estimated / 1024.0,
+                estimated / per_entry,
                 per_entry * 500.0 / (1024.0 * 1024.0)
             );
             drop(entries);
         }
     }
+}
+
+/// What the undo history retains for a song shaped like the heaviest one
+/// anybody has actually made: fifteen channels over twenty-four patterns,
+/// with a full effect chain on most of them.
+///
+/// Asserted rather than printed, because this is the case the byte budget
+/// exists for. Before it, the count ceiling alone let this reach most of a
+/// gigabyte -- measured at 844 MB of heap in a running session, on a laptop
+/// with sixteen.
+#[test]
+fn a_heavy_song_is_bounded_by_the_undo_budget() {
+    use crate::history::{Entry, History, MAX_RETAINED_BYTES, MIN_ENTRIES};
+    use mooloop_core::{EffectKind, EffectSlotState};
+
+    let mut project = Project {
+        pattern_lengths: vec![16; 24],
+        ..Project::default()
+    };
+    project.channels.clear();
+    for index in 0..15 {
+        let mut channel = ProjectChannel::mlp8(index, 24);
+        for pattern in 0..24 {
+            for note in 0..24 {
+                channel.notes[pattern].push(NoteEvent::new(
+                    (pattern * 24 + note) as u32 + 1,
+                    (note as u32 % 16) * 24,
+                    24,
+                    36 + (note as u8 % 36),
+                    100,
+                ));
+            }
+        }
+        for kind in [
+            EffectKind::Eq,
+            EffectKind::Compressor,
+            EffectKind::Filter,
+            EffectKind::Reverb,
+        ] {
+            channel.setup.push_effect(EffectSlotState::of_kind(kind));
+        }
+        project.channels.push(channel);
+    }
+
+    let mut session = Session::default();
+    session.replace_project(&project, &[]);
+    let snapshot = session.project_snapshot(120, 50);
+    let per_entry = snapshot.heap_bytes() * 2;
+
+    let mut history: History<Project> = History::default();
+    for _ in 0..512 {
+        history.record(Entry {
+            before: session.project_snapshot(120, 50),
+            after: session.project_snapshot(120, 50),
+            label: "edit",
+            gesture: None,
+        });
+    }
+
+    let retained = history.retained_bytes();
+    println!();
+    println!("  per entry      {:.1} KB", per_entry as f64 / 1024.0);
+    println!("  entries kept   {}", history.retained());
+    println!("  retained       {:.1} MB", retained as f64 / (1024.0 * 1024.0));
+
+    assert!(
+        retained <= MAX_RETAINED_BYTES,
+        "retained {retained} bytes, budget is {MAX_RETAINED_BYTES}"
+    );
+    // The budget must not have cost the history its usefulness.
+    assert!(
+        history.retained() >= MIN_ENTRIES,
+        "only {} entries survived",
+        history.retained()
+    );
 }
 
 /// `seconds` of stereo audio, as a sample a channel could be holding.
