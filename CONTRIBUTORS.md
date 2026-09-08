@@ -141,7 +141,8 @@ Alphabetical by model name, then by harness.
   that went blank when the view it was showing was dragged out of it, which
   had been two bugs in four lines and no test covering pane moves at all, and
   the drag's own geometry tested at last, led by the check that says the
-  measured tab coordinates still land on tabs.
+  measured tab coordinates still land on tabs, and the clippy lint that had
+  been failing CI for two days while a bare `cargo clippy` reported it green.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

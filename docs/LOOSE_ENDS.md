@@ -179,15 +179,6 @@ their own passes; nobody has decided whether they should match.
 
 ## Housekeeping
 
-**`mooloop-session` has one live clippy warning, in a test.**
-`effects.rs:1417` assigns `destination.effect_target` after
-`Session::default()`, which clippy's `field_reassign_with_default` wants
-written as a struct-update expression. Noticed 2026-09-08 during a
-workspace clippy run on `feat/pane-split`, which touches no session file, so
-it is `main`'s. `clippy` still exits 0 -- it is a warning, not a denial --
-but the `mooloop-ui` lint story in the Housekeeping entry below is exactly
-about what a tolerated warning can hide, and this is a one-line fix.
-
 **The piano roll's grid geometry is a constant in two test files and nothing
 holds them together.** `piano_drag.rs:32` and `piano_tools.rs:16` each declare
 `GRID_ORIGIN_X` / `GRID_TOP_Y` / `ROW_HEIGHT` / `STEP_WIDTH` / `HIGH_NOTE`,
