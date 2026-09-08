@@ -12,6 +12,11 @@ pub const DEFAULT_STEPS: u16 = 16;
 /// Maximum pattern length in sixteenth-note cells.
 pub const MAX_PATTERN_STEPS: u16 = 256;
 
+/// Sixteenth-note cells to a quarter-note beat. A pattern length is chosen in
+/// beats and bars far more often than in cells, so the controls that change
+/// one move by this rather than by one.
+pub const STEPS_PER_BEAT: u16 = 4;
+
 /// PPQ 96 has 24 ticks per sixteenth and 6 ticks per sixty-fourth.
 pub const TICKS_PER_STEP: u32 = 24;
 pub const TICKS_PER_64TH: u32 = 6;

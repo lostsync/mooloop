@@ -52,7 +52,7 @@ use mooloop_core::{
     MOD_STEP_MAX_STEPS,
     MAX_SAMPLER_VOICES, MAX_STRETCH_BARS, MAX_STRETCH_GRAIN, MAX_STRETCH_RATIO,
     MIN_STRETCH_BARS, MIN_STRETCH_GRAIN, MIN_STRETCH_RATIO,
-    MAX_PATTERNS, MAX_PLAYLIST_BARS,
+    MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_BARS,
     MAX_POLY_VOICES, STRIP_DESCRIPTORS,
     TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
@@ -4447,6 +4447,25 @@ impl AppUi {
                     "pattern.clone" => window.invoke_pattern_clone_requested(),
                     "pattern.remove" => window.invoke_pattern_remove_requested(),
                     "pattern.clear" => window.invoke_pattern_clear_requested(),
+                    // A beat, not a step: `STEPS_PER_BEAT` is what the grid
+                    // is drawn in and what a pattern length is chosen in.
+                    // The clamp is the field's own range, so a hotkey cannot
+                    // reach a length the control could not.
+                    "pattern.length-grow" | "pattern.length-shrink" => {
+                        let beat = i32::from(mooloop_core::STEPS_PER_BEAT);
+                        let by = if action_id == "pattern.length-grow" {
+                            beat
+                        } else {
+                            -beat
+                        };
+                        let next =
+                            (window.get_pattern_length() + by).clamp(1, i32::from(MAX_PATTERN_STEPS));
+                        if next == window.get_pattern_length() {
+                            return false;
+                        }
+                        window.set_pattern_length(next);
+                        window.invoke_pattern_length_changed(next);
+                    }
                     "edit.select-all" => window.invoke_select_all_requested(),
                     "edit.delete-note" => window.invoke_delete_selected_notes_requested(),
                     // Bare digits, and only while the roll is on screen: a

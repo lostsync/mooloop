@@ -32,11 +32,13 @@ the command layer, and applies equally to any future console/MCP command.
 ## What's registered today
 
 `actions.rs`'s `ACTIONS` table is the source of truth; read it rather than
-this document for the current list. As of this writing it holds 44 actions in
+this document for the current list. As of this writing it holds 46 actions in
 eight categories: Transport (play/pause on Space and the song loop on L),
 File, Edit, Notes (arrow-key nudge and
 transpose, the five pointer tools on keys 1-5, and the snap toggle on 6),
-View (pane switching and piano-roll zoom), Channel, Pattern, and Device
+View (pane switching and piano-roll zoom), Channel, Pattern (including
+lengthening and shortening the pattern by a beat, on Ctrl+Shift+= and
+Ctrl+Shift+-), and Device
 (copy, cut, paste and duplicate the selected rack device, on
 Ctrl+Shift+C/X/V/D). That is what
 `docs/archive/SHORTCUTS.md` asked for, plus the shortcuts that already

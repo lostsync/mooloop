@@ -176,6 +176,23 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
         category: "Pattern",
         default: None,
     },
+    // A beat at a time, which is the unit the grid draws in and the unit
+    // pattern lengths are actually chosen in. Adam: "it would be cool if
+    // there was an easier way to go from 16 steps to 32 -- maybe shift click
+    // moves by 4 or something, or a hotkey to grow it by 4." Both: Shift on
+    // the STEPS field's arrows and wheel, and these.
+    action!(
+        "pattern.length-grow",
+        "Lengthen Pattern By A Beat",
+        "Pattern",
+        ctrl + shift + "="
+    ),
+    action!(
+        "pattern.length-shrink",
+        "Shorten Pattern By A Beat",
+        "Pattern",
+        ctrl + shift + "-"
+    ),
 ];
 
 /// One key combination. `key` is a canonical lowercase identifier: a single

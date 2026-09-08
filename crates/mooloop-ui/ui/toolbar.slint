@@ -57,7 +57,10 @@ export component ToolbarLabel inherits Text {
 component StepperArrow inherits Rectangle {
     in property <string> glyph;
     in property <bool> enabled: true;
-    callback clicked;
+    /// True when the click carried Shift, so the caller can move by its
+    /// coarse step. Reported rather than decided here: an arrow does not
+    /// know what a coarse step is worth.
+    callback clicked(bool);
 
     width: 16px;
     background: touch.pressed && root.enabled ? Theme.surface-active
@@ -76,7 +79,11 @@ component StepperArrow inherits Rectangle {
     touch := TouchArea {
         enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
-        clicked => { root.clicked(); }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.up) {
+                root.clicked(e.modifiers.shift);
+            }
+        }
     }
 }
 
@@ -93,6 +100,10 @@ export component StepperField inherits Rectangle {
     in property <int> minimum: 0;
     in property <int> maximum: 999;
     in property <int> step: 1;
+    /// What Shift moves by, when that is worth more than the ordinary step.
+    /// Adam, of getting a pattern from sixteen steps to thirty-two: "maybe
+    /// shift click moves by 4 or something". Zero leaves Shift alone.
+    in property <int> coarse-step: 0;
     in property <bool> enabled: true;
     in property <string> display-text: root.value;
     in property <length> value-width: 30px;
@@ -109,6 +120,10 @@ export component StepperField inherits Rectangle {
     accessible-role: spinbox;
     accessible-label: root.tooltip;
     accessible-value: root.display-text;
+
+    pure function move(coarse: bool) -> int {
+        return coarse && root.coarse-step > 0 ? root.coarse-step : root.step;
+    }
 
     function apply(next: int) {
         if (!root.enabled) { return; }
@@ -133,7 +148,7 @@ export component StepperField inherits Rectangle {
         StepperArrow {
             glyph: "‹";
             enabled: root.enabled && root.value > root.minimum;
-            clicked => { root.apply(root.value - root.step); }
+            clicked(coarse) => { root.apply(root.value - root.move(coarse)); }
         }
         Rectangle {
             width: root.value-width;
@@ -164,7 +179,8 @@ export component StepperField inherits Rectangle {
                     }
                 }
                 scroll-event(e) => {
-                    root.apply(root.value + (e.delta-y > 0 ? root.step : -root.step));
+                    let by = root.move(e.modifiers.shift);
+                    root.apply(root.value + (e.delta-y > 0 ? by : -by));
                     accept
                 }
             }
@@ -172,7 +188,7 @@ export component StepperField inherits Rectangle {
         StepperArrow {
             glyph: "›";
             enabled: root.enabled && root.value < root.maximum;
-            clicked => { root.apply(root.value + root.step); }
+            clicked(coarse) => { root.apply(root.value + root.move(coarse)); }
         }
     }
     Tooltip { text: @markdown("\{root.tooltip}"); }

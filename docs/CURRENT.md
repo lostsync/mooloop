@@ -27,6 +27,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   rather than a chip per instrument.
 - Patterns are chosen with a fixed-width stepper plus a jump menu and can be
   named; the selector costs the same width at any pattern count.
+- Pattern length moves a beat at a time with Shift -- on the STEPS field's
+  arrows and wheel, and on `pattern.length-grow` / `pattern.length-shrink` --
+  so sixteen steps to thirty-two is four gestures rather than sixteen.
+- The rack grid's accent is a toolbar setting rather than a fixed four: 2, 3,
+  4, 6, 8, 12 or 16 cells between bright ones, which is what makes a triplet
+  or a 6/8 pattern readable on it.
 - Four cursor tools drive the rack grid: Select (click toggles, ctrl-drag sets
   velocity), Paint (drag fills, right-drag clears), Slice (ratchet a step into
   2-4 even hits), and Stretch (drag a step sideways to set note length). The

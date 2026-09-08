@@ -85,13 +85,25 @@ talking about has no reason to exist."*
 - Both pane switchers are `SegmentedControl`s, which the lower dock's three
   `FlatButton`s were not.
 
+## Step 05 — two of the small features, since the toolbar was open
+
+- **Pattern length moves a beat at a time.** Adam: *"maybe shift click moves
+  by 4 or something, or a hotkey to grow it by 4."* Both: `StepperField`
+  gained a `coarse-step` that Shift takes on its arrows and its wheel, and
+  `pattern.length-grow` / `pattern.length-shrink` are in the registry, so the
+  chord is rebindable like every other. `STEPS_PER_BEAT` is in
+  `mooloop-core` rather than a four written in two places.
+- **The rack grid's accent is a setting.** Adam: *"its 1 bright 3 dim
+  static."* It was `mod(i, 4) == 0`, which is a 4/4 sixteenth grid and
+  nothing else; GROUP in the work-surface toolbar offers 2, 3, 4, 6, 8, 12
+  and 16. View state, not persisted, which is how the two snap indices beside
+  it are already treated.
+
 ## Not in this pass
 
-Laundry-list items 3, 5 and 7 — growing a pattern by four steps, a
-configurable step-grid highlight, and moving the playlist into the pattern
-pane — are features rather than corrections.
+Laundry-list item 7 — moving the playlist into the pattern pane — is a
+feature rather than a correction.
 
-The playlist move (item 7) is the one worth a plan of its own before any of
-it is built: Adam wants the pane splittable so a pattern and the playlist can
+It is worth a plan of its own before any of it is built: Adam wants the pane splittable so a pattern and the playlist can
 be read at once, with an editor below. That is a layout question the
 `interface-iteration/` directory is the right home for.
