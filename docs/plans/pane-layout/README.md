@@ -164,8 +164,10 @@ loop when a slot's height is the work area's own.
 
 Numbered files, worked in order. Each ends in something usable.
 
-- `01` — the pane model and the computed work area. Same views, same places,
-  new mechanism. Ends with the interface behaving exactly as it does today.
+- `01` — the pane model and the computed work area, and one toolbar per view.
+  Same views in the same places; the only visible change is that the bottom
+  pane's two stacked toolbars become one, which the slot model forces and
+  which returns 34px.
 - `02` — the split, its divider, and the status-bar chip.
 - `03` — zoom, and the bottom divider generalised past the devices view.
 - `04` — moving a view between panes, and the actions/menu that name all of it.

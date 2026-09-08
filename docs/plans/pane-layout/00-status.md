@@ -33,6 +33,13 @@ done, and in particular anything the doing proved wrong about the plan.
   to a row that is already wrong.
 - **The mixer scrolls rather than compresses in a narrow split column**, per
   `UI_DESIGN.md` > Responsive Behavior. Adam's call, 2026-09-08.
-- **Views are instantiated once and positioned**, not instantiated per slot.
+- **Every view has exactly one toolbar row, led by its slot's tab strip.**
+  Adam's call, 2026-09-08, on finding the bottom pane carrying two stacked
+  toolbars: *"i dont see why it cant just be 1 dynamic toolbar with sensible
+  controls in each."* The slot model requires it anyway — a slot-level header
+  cannot hold per-view controls once views are placeable. The channel preset
+  browser goes to `DEVICES` alone; `SONG ARRANGEMENT` goes entirely. Folded
+  into step 01 rather than made a step of its own, because keeping the old
+  content in the merged row would be doing the merge twice.
   See `README.md` > The implementation shape. This is what keeps the change
   off the four-minute rebuild loop for as long as possible.

@@ -73,9 +73,12 @@ has moved under you; do not trust these numbers after any other commit lands.
 | Channel rack `ScrollView` | 2020-2313 | the `STEPS` view's body |
 | Dock splitter | 2315-2356 | the horizontal divider, generalised in step 03 |
 | Bottom dock `Rectangle` | 2364-4866 | dissolved; its geometry becomes the bottom slot's |
-| Dock header, `height: 30px` | 2391-2440 | splits: the switcher becomes the slot's tab strip, the channel name and preset controls go to `DEVICES` and `NOTES` |
+| Dock header, `height: 30px` | 2391-2440 | dissolved: the switcher becomes the slot's tab strip, the channel name goes to `DEVICES` and `NOTES`, the preset controls to `DEVICES` alone |
+| Playlist toolbar, `height: 34px` | 2447-2525 | merged into the `PLAYLIST` row |
 | Playlist page | 2442-2892 | the `PLAYLIST` view |
+| Device chain toolbar, `height: 34px` | 2899-2954 | merged into the `DEVICES` row |
 | Device rack page | 2894-4215 | the `DEVICES` view |
+| Piano roll toolbar, `height: 34px` | 4222-4356 | merged into the `NOTES` row |
 | Piano roll page | 4217-4864 | the `NOTES` view |
 | Browser sidebar | 4870-5193 | unchanged |
 
@@ -87,13 +90,88 @@ a toolbar of its own. The move is invisible -- the rows are adjacent already,
 and keeping the `0.6` hairline above and putting the `1.0` one below the
 header reproduces the boundary exactly.
 
-**The channel identity row is shared by two views.** The dock header carries
-the channel name and the channel preset browser for `editor-page != 2`, which
-is `DEVICES` and `NOTES`. Once those two are independently placeable it cannot
-be one row in one slot, so each gets its own copy. It is the same information
-about the same channel and both views edit a channel; `UI_DESIGN.md`'s "the
-lower editor retains one channel row" survives as "the view that edits a
-channel says which channel", which is the rule it was standing in for.
+## One toolbar per view
+
+The map found the bottom pane carrying **two** stacked toolbars — a 30px slot
+header and a 34px per-page row — and the shared header holding controls that
+only two of its three pages want. Adam, 2026-09-08:
+
+> that toolbar in the bottom half needs love anyway. it has that preset
+> dropdown that doesn't really make sense to be there and is mostly just empty
+> space. there's a second toolbar that pops up below it e.g. in the piano roll
+> mode. i dont see why it cant just be 1 dynamic toolbar with sensible
+> controls in each.
+
+**It can, and the slot model requires it.** A slot-level header cannot hold
+per-view controls once views are independently placeable — and the shared row
+already had to ask `editor-page != 2` which of its controls to draw, which is
+`UI_DESIGN.md`'s own stated symptom for a control in the wrong place:
+
+> A setting that belongs to a pane lives in that pane's header, once. A
+> control that has to ask which pane is open in order to know which value it
+> is editing is in the wrong place — that question is the symptom.
+
+So the rule is one line and it covers all five views, top and bottom:
+**every view has exactly one toolbar row, and its slot's tab strip leads it.**
+That is the rule the document already states for a switcher, applied once
+rather than twice.
+
+### What each row carries
+
+`···` is the stretch. One row, `30px`, `Theme.surface`, `24px` controls, 3px
+padding, 6px spacing, a 1px bottom border. Nothing shrinks to fit: the piano
+roll's controls are already 24px, which is `ToolbarMetrics.control-height`.
+
+| View | Row |
+| --- | --- |
+| `STEPS` | `[tabs] │ PAT [n] [name] [+] │ [tools] │ STEPS [n] GROUP [n] ···` |
+| `MIXER` | `[tabs] ···` |
+| `DEVICES` | `[tabs] │ DEVICE CHAIN [source] ··· [channel] [CHANNEL PRESET] [save]` |
+| `NOTES` | `[tabs] │ [tools] [SNAP] [interval] │ TICK NOTE VEL LEN [len] │ VEL AUTO ··· [channel]` |
+| `PLAYLIST` | `[tabs] │ SNAP [interval] [Loop] [range] ···` |
+
+Three content decisions, each answering something Adam named:
+
+- **The channel preset browser goes to `DEVICES` only.** It is on `NOTES`
+  today because the shared header drew it for `editor-page != 2`, and on the
+  piano roll a whole-channel preset browser is noise — you are editing notes,
+  not the channel's sound. `DEVICES` is the view whose subject *is* the
+  channel's sound. `FOCUS.md` step 3's left channel sidebar is its eventual
+  home; this is where it lives until that exists.
+- **`SONG ARRANGEMENT` goes.** It is a label saying what the pane is, and the
+  tab beside it already says that. It is the same permanent-chrome sentence
+  the work-surface row's own comment records deleting once already.
+- **The channel name stays on `DEVICES` and `NOTES`**, and appears on neither
+  of the others, because neither of those edits a channel.
+
+### What it buys
+
+**34px back in the bottom pane**, since two rows of 30 and 34 become one of
+30 — which is the negative-space complaint this plan started from, applied to
+the other half of the window. The `DEVICES` view's fixed height drops with it.
+
+And the empty space goes. The shared header was a switcher, a name, a stretch
+and a preset browser, so most of its width *was* the stretch. Merged, that
+width carries the view's actual controls.
+
+### Watch: the merged `NOTES` row clips sooner
+
+Measured with `scripts/slint-sketch` before building it. At 1280px the merged
+row ends around x 1090, with room to spare. At the 704px a 55% split column
+gives it, it clips just after the snap interval, losing the note-property
+steppers and the lane toggles — roughly 200px sooner than today, because the
+tab strip is now in front of it.
+
+That is the documented behaviour for this row rather than a new defect —
+`UI_DESIGN.md`: *"The row clips rather than widening the window; keys 1-6
+reach the tools and the snap toggle when it is narrow."* **The tab strip is
+deliberately the part that never clips**, because it is the way out of the
+pane. Step 03's zoom is the answer for actually editing notes in a narrow
+column.
+
+If it turns out to bite, the fix is a standard toolbar overflow menu at the
+row's right edge, not a smaller control — but do not build one until a narrow
+column is something Adam is actually working in.
 
 ## Watch for
 
@@ -112,8 +190,15 @@ channel says which channel", which is the rule it was standing in for.
 
 ## Done when
 
-The application is indistinguishable from `main` at 1080p and at 960x760 —
-both panes, both switchers, the dock divider on the notes page and not on the
-others, every dock height as it was, every View menu row and every `Ctrl+1..5`
-chord doing what it did. Verified from a software-rendered screenshot and from
-`scripts/mooloop-mcp` driving the switchers, not from the source.
+The application is indistinguishable from `main` at 1080p and at 960x760
+**except for the toolbar merge**, which is the one visible change and is
+specified above control by control: both panes, both switchers, the dock
+divider on the notes page and not on the others, every dock height as it was
+less the 34px the merge returns, every View menu row and every `Ctrl+1..5`
+chord doing what it did.
+
+Verified from a software-rendered screenshot and from `scripts/mooloop-mcp`
+driving the switchers, not from the source. `scripts/slint-sketch` takes
+`ui/main.slint` itself — 2.7s to type-check, 3s to render with empty models
+— so the whole restructure iterates there and crosses into a `mooloop-ui`
+build once.
