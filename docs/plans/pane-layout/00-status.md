@@ -26,6 +26,13 @@ done, and in particular anything the doing proved wrong about the plan.
   `panel-bottom` are already there and already mean exactly this for the other
   two regions.
 - **Zoom is a double-click on the active tab**, not a button per slot.
+- **The status bar's layout chips read in screen order**, and each glyph draws
+  its region where that region actually is. Adam's call, 2026-09-08. Applying
+  it turned up that the browser toggle draws `panel-left` for a sidebar that
+  is docked on the right; step 02 fixes that rather than adding a third chip
+  to a row that is already wrong.
+- **The mixer scrolls rather than compresses in a narrow split column**, per
+  `UI_DESIGN.md` > Responsive Behavior. Adam's call, 2026-09-08.
 - **Views are instantiated once and positioned**, not instantiated per slot.
   See `README.md` > The implementation shape. This is what keeps the change
   off the four-minute rebuild loop for as long as possible.
