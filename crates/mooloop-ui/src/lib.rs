@@ -1446,30 +1446,25 @@ fn ds01_step_label(id: u32, params: &Ds01Params) -> Option<&'static str> {
     })
 }
 
-/// How a DS-01 value is written: the factor between the number on the face
-/// and the natural value, and the unit that follows it.
-///
-/// One function, used by the formatter and by the parser, so a field always
-/// reads back what it shows. Three departures from the shared
-/// [`format_param_value`], all of them because a drum lives at the short end
-/// of every range this device has:
-///
-/// - **A time under a second is milliseconds.** Two decimals of seconds makes
-///   a 5 ms attack, a 1 ms one and a zero all read `0.00 s`, and sub-100 ms
-///   percussion is the range the instrument is *for*.
-/// - **A frequency over a kilohertz is kilohertz.** The shared formatter's
-///   `k` starts at ten thousand, which leaves the noise cutoff reading as a
-///   bare `7500`.
-/// - **A route's depth is a percentage**, which is what a share of a
-///   destination's range is called everywhere else in the program.
 /// The unit a face is showing a value in, and the factor that converts a
 /// number in it back to the parameter's own unit.
 ///
-/// Seconds read as milliseconds below one and as seconds above, which is what
-/// `TimeFormat.seconds` prints and what `ds01_number` formats; hertz read as
-/// kilohertz past a thousand. A bare number typed into a field is read in
-/// whichever of those the field was showing, because that is the number the
-/// person was looking at when they started typing.
+/// Two departures from the shared [`format_param_value`], both because the
+/// short end of a range is where the useful values are:
+///
+/// - **A time under a second is milliseconds.** Two decimals of seconds makes
+///   a 5 ms attack, a 1 ms one and a zero all read `0.00 s`, and sub-100 ms
+///   percussion is the range a drum is *for*. This is the same rule
+///   `TimeFormat.seconds` prints by, so a knob's readout and a typed field
+///   agree.
+/// - **A frequency over a kilohertz is kilohertz.** The shared formatter's
+///   `k` starts at ten thousand, which leaves the noise cutoff reading as a
+///   bare `7500`.
+///
+/// One function, used by the formatter and by the parser, so a field always
+/// reads back what it shows: a bare number typed into one is read in
+/// whichever unit it was showing, because that is the number the person was
+/// looking at when they started typing.
 fn display_unit(descriptor: &ParamDescriptor, natural: f32) -> (f32, &'static str) {
     match descriptor.unit {
         "s" if natural.abs() < 1.0 => (0.001, "ms"),
@@ -1478,6 +1473,9 @@ fn display_unit(descriptor: &ParamDescriptor, natural: f32) -> (f32, &'static st
     }
 }
 
+/// The above, plus DS-01's own third departure: **a route's depth is a
+/// percentage**, which is what a share of a destination's range is called
+/// everywhere else in the program.
 fn ds01_display_unit(descriptor: &ParamDescriptor, natural: f32) -> (f32, &'static str) {
     if ds01::matrix_offset(descriptor.id) == Some(ds01::MATRIX_OFFSET_AMOUNT) {
         return (0.01, "%");
