@@ -327,6 +327,9 @@ export component MainWindow inherits Window {
     in-out property <float> meter-r-held-db: -60;
     in-out property <bool> meter-l-clipping;
     in-out property <bool> meter-r-clipping;
+    // Both latches at once: the light is one lamp over a stereo pair, so
+    // clearing it clears what it was reporting.
+    callback master-clip-reset();
     in-out property <float> source-output-left-db: -60;
     in-out property <float> source-output-right-db: -60;
     in-out property <float> selected-channel-volume-db: 0;
@@ -557,6 +560,7 @@ export component MainWindow inherits Window {
     callback bus-volume-changed(int, float);
     callback bus-pan-changed(int, float);
     callback bus-output-changed(int, int);
+    callback bus-clip-reset(int);
 
     // ---- the bus the device rack is editing, when it is editing one ----
     in property <bool> editing-bus;
@@ -800,9 +804,6 @@ export component MainWindow inherits Window {
     // previous frame's rounding.
     callback piano-scale-begin(bool);   // true when dragging the left handle
     callback piano-selection-scaled(float);
-    // Clicking the grid takes keyboard focus back from whatever control had
-    // it, so Delete and the arrow keys reach the selection.
-    callback piano-focus-requested();
     callback piano-notes-nudged(int, int); // tick delta, semitone delta
     callback piano-notes-copied(bool);     // true to cut
     callback piano-notes-pasted();
@@ -1779,6 +1780,7 @@ export component MainWindow inherits Window {
                                 held-right-db: root.meter-r-held-db;
                                 left-clipping: root.meter-l-clipping;
                                 right-clipping: root.meter-r-clipping;
+                                clip-reset => { root.master-clip-reset(); }
                             }
 
                             IconButton {
@@ -1973,6 +1975,7 @@ export component MainWindow inherits Window {
                         bus-volume-changed(i, v) => { root.bus-volume-changed(i, v); }
                         bus-pan-changed(i, v) => { root.bus-pan-changed(i, v); }
                         bus-output-changed(i, o) => { root.bus-output-changed(i, o); }
+                        bus-clip-reset(i) => { root.bus-clip-reset(i); }
                     }
 
                     // ===== Channel rack: one step-grid row per channel =====

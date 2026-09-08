@@ -81,6 +81,11 @@ fn strips(selected: usize) -> Rc<VecModel<MixerStripRow>> {
                 ))),
                 left_db: if index == 0 { -6.0 } else { -60.0 },
                 right_db: if index == 0 { -8.0 } else { -60.0 },
+                // A peak above the level, so the snapshot carries the held
+                // marker the strips did not draw before.
+                held_left_db: if index == 0 { -3.0 } else { -60.0 },
+                held_right_db: if index == 0 { -4.0 } else { -60.0 },
+                clipping: false,
             })
             .collect::<Vec<_>>(),
     ))

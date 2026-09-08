@@ -24,6 +24,13 @@ export struct MixerStripRow {
     allowed: [bool],
     left-db: float,
     right-db: float,
+    // The meter's own ballistics, computed per bus in the pump. Held levels
+    // and the clip latch used to be dropped on the floor here, so a strip
+    // drew a bare level with its peak marker pinned to it and a clip light
+    // that could never come on.
+    held-left-db: float,
+    held-right-db: float,
+    clipping: bool,
 }
 
 // Shared bus chooser. Used both to assign a channel to a bus and to route one
@@ -121,6 +128,7 @@ component MixerStrip inherits Rectangle {
     callback volume-changed(float);
     callback pan-changed(float);
     callback output-picked(int);
+    callback clip-reset();
 
     width: 62px;
     background: root.strip.selected ? Theme.surface-active : Theme.surface;
@@ -164,8 +172,10 @@ component MixerStrip inherits Rectangle {
                 segments: 14;
                 left-db: root.strip.left-db;
                 right-db: root.strip.right-db;
-                held-left-db: root.strip.left-db;
-                held-right-db: root.strip.right-db;
+                held-left-db: root.strip.held-left-db;
+                held-right-db: root.strip.held-right-db;
+                clipping: root.strip.clipping;
+                clip-reset => { root.clip-reset(); }
             }
             MixerFader {
                 width: 30px;
@@ -246,6 +256,7 @@ export component MixerPane inherits Rectangle {
     callback bus-volume-changed(int, float);
     callback bus-pan-changed(int, float);
     callback bus-output-changed(int, int);
+    callback bus-clip-reset(int);
 
     background: Theme.panel;
 
@@ -275,6 +286,7 @@ export component MixerPane inherits Rectangle {
                     volume-changed(v) => { root.bus-volume-changed(i, v); }
                     pan-changed(v) => { root.bus-pan-changed(i, v); }
                     output-picked(o) => { root.bus-output-changed(i, o); }
+                    clip-reset => { root.bus-clip-reset(i); }
                 }
             }
         }

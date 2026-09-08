@@ -114,7 +114,7 @@ use slint::{
     CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode,
     VecModel,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -3092,17 +3092,30 @@ impl UiState {
             allowed: self.allowed_destinations(index),
             // Levels are owned by the metering timer, which writes them in
             // place; rebuilding a row must not stamp them back to silence.
-            left_db: self
-                .mixer_strip_model
-                .row_data(index)
-                .map(|row| row.left_db)
-                .unwrap_or(METER_FLOOR_DB),
-            right_db: self
-                .mixer_strip_model
-                .row_data(index)
-                .map(|row| row.right_db)
-                .unwrap_or(METER_FLOOR_DB),
+            // The clip latch is the same, and more so: it is the one field
+            // here a user has to be shown, so a rename or a reroute clearing
+            // it would be the strip forgetting what it had just reported.
+            left_db: self.retained_meter(index, |row| row.left_db, METER_FLOOR_DB),
+            right_db: self.retained_meter(index, |row| row.right_db, METER_FLOOR_DB),
+            held_left_db: self.retained_meter(index, |row| row.held_left_db, METER_FLOOR_DB),
+            held_right_db: self.retained_meter(index, |row| row.held_right_db, METER_FLOOR_DB),
+            clipping: self.retained_meter(index, |row| row.clipping, false),
         }
+    }
+
+    /// One metering field of the strip as it stands, or its resting value if
+    /// there is no strip there yet.
+    fn retained_meter<T>(
+        &self,
+        index: usize,
+        field: impl Fn(&MixerStripRow) -> T,
+        fallback: T,
+    ) -> T {
+        self.mixer_strip_model
+            .row_data(index)
+            .as_ref()
+            .map(field)
+            .unwrap_or(fallback)
     }
 
     /// Refresh one strip's controls without disturbing the rest.
@@ -6385,6 +6398,26 @@ impl AppUi {
             });
         }
 
+        // Clip latches. The ballistics live inside the metering timer's
+        // closure, and a click on an indicator arrives on the UI thread
+        // between two of its ticks, so the flag is the handoff: the callback
+        // raises it, the next tick lowers it and clears the latch it names.
+        // Nothing else can clear one -- see `MeterBallistics::clear_clip`.
+        let master_clip_clear = Rc::new(Cell::new(false));
+        let bus_clip_clear = Rc::new(RefCell::new(vec![false; MAX_BUSES]));
+        {
+            let flag = master_clip_clear.clone();
+            window.on_master_clip_reset(move || flag.set(true));
+        }
+        {
+            let flags = bus_clip_clear.clone();
+            window.on_bus_clip_reset(move |bus| {
+                if let Some(flag) = flags.borrow_mut().get_mut(bus.max(0) as usize) {
+                    *flag = true;
+                }
+            });
+        }
+
         {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
@@ -9629,8 +9662,10 @@ impl AppUi {
         let ui_settings_for_pump = ui_settings.clone();
         let pump = Timer::default();
         // Diagnostics shared with the autodrive self-test (MOOLOOP_AUTODRIVE=1).
-        let stats = Rc::new(std::cell::Cell::new((0.0f32, false, 0usize)));
+        let stats = Rc::new(Cell::new((0.0f32, false, 0usize)));
         let stats_in = stats.clone();
+        let master_clip_clear_in = master_clip_clear.clone();
+        let bus_clip_clear_in = bus_clip_clear.clone();
         let mut left_meter = MeterBallistics::default();
         let mut right_meter = MeterBallistics::default();
         // One pair per bus, so a strip's decay is its own rather than shared.
@@ -10354,6 +10389,10 @@ impl AppUi {
                     }
                     xruns_this_window = 0;
                 }
+                if master_clip_clear_in.replace(false) {
+                    left_meter.clear_clip();
+                    right_meter.clear_clip();
+                }
                 let left = left_meter.update(block_peak_l, elapsed);
                 let right = right_meter.update(block_peak_r, elapsed);
                 w.set_meter_l_db(left.level_db);
@@ -10373,17 +10412,39 @@ impl AppUi {
                 let edited_bus = w.get_editing_bus_index().max(0) as usize;
                 let selected_channel = st.borrow().session.selected;
                 for (bus, meters) in bus_meters.iter_mut().enumerate() {
+                    if bus_clip_clear_in
+                        .borrow_mut()
+                        .get_mut(bus)
+                        .map(|flag| std::mem::replace(flag, false))
+                        .unwrap_or(false)
+                    {
+                        meters.0.clear_clip();
+                        meters.1.clear_clip();
+                    }
                     let (peak_l, peak_r) = handle.take_bus_peak(bus);
                     let left = meters.0.update(peak_l, elapsed);
                     let right = meters.1.update(peak_r, elapsed);
                     if showing_mixer {
                         let strips = st.borrow();
                         if let Some(mut row) = strips.mixer_strip_model.row_data(bus) {
+                            // The held level and the clip latch are stepped
+                            // changes rather than a continuous level, so they
+                            // get their own reasons to repaint: throttling
+                            // them behind the level's own quantiser is how a
+                            // peak marker comes to sit one segment behind
+                            // where the audio put it.
+                            let clipping = left.clipping || right.clipping;
                             if meter_display_changed(row.left_db, left.level_db, 14)
                                 || meter_display_changed(row.right_db, right.level_db, 14)
+                                || meter_display_changed(row.held_left_db, left.held_db, 14)
+                                || meter_display_changed(row.held_right_db, right.held_db, 14)
+                                || row.clipping != clipping
                             {
                                 row.left_db = left.level_db;
                                 row.right_db = right.level_db;
+                                row.held_left_db = left.held_db;
+                                row.held_right_db = right.held_db;
+                                row.clipping = clipping;
                                 strips.mixer_strip_model.set_row_data(bus, row);
                             }
                         }
