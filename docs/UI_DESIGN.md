@@ -456,8 +456,25 @@ columns with tiny `+` and `-` glyphs.
   overlay must make this mode obvious.
 - Familiar icon buttons receive tooltips; visible prose does not explain the
   interface.
-- Tooltips name the musical result or action. They do not narrate the code.
-- Long contextual detail belongs in a status bar, not a multi-line hover card.
+- **A tooltip is a value or a label. Nothing else.** `"Freq"` and `"22 kHz"`
+  are tooltips; *"Sweep the frequency — Ctrl+drag for slow"* is a status-bar
+  hint. A tooltip that is a sentence covers the control beside the one being
+  read.
+- Long contextual detail belongs in the status bar, not a multi-line hover
+  card. Two channels reach it, and which to use is decided by where the
+  control lives:
+  - **`StatusHint.show` / `.clear`** (`theme.slint`) for a control anywhere.
+    A knob, fader, `ToolButton`, `ToggleButton`, `SelectorBank`,
+    `StepperField` or `MenuField` publishes automatically: a knob sends its
+    `tooltip` (which is why a knob's tooltip may be a sentence — it is never
+    rendered as one, the value is), and a button-shaped control sends its
+    separate `hint` while its `tooltip` stays the label.
+  - **`root.hover-hint`** for the surfaces defined in `main.slint` itself —
+    the playlist, the piano roll, the automation lane — which can write the
+    window's own property directly and take priority over the global.
+  Do not thread a `hover-hint` property up through a device face. That was
+  tried, exactly one face grew it, and every other sentence in the program
+  stayed in a tooltip.
 - The first click acts. Focus acquisition must not consume it.
 
 ## Agent Acceptance Checklist

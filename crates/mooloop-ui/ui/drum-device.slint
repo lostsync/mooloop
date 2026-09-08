@@ -124,7 +124,7 @@ export component DrumDeviceFace inherits Rectangle {
                     value <=> root.choke-group;
                     minimum: 0; maximum: 16; step: 1;
                     value-width: 18px;
-                    tooltip: "Matching non-zero groups choke each other. 0 is off.";
+                    tooltip: "Choke"; hint: "Matching non-zero groups choke each other. 0 is off.";
                     changed(v) => { root.choke-group-changed(v); }
                 }
             }

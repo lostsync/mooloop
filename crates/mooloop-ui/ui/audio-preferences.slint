@@ -102,7 +102,7 @@ export component JackControlSurface inherits VerticalLayout {
 
     ToggleButton {
         text: "Auto-reconnect output";
-        tooltip: "Reconnects to the output above when it reappears on the JACK graph — for example after unplugging and replugging a device.";
+        hint: "Reconnects to the output above when it reappears on the JACK graph — for example after unplugging and replugging a device.";
         checked: root.auto-reconnect;
         toggled(v) => { root.auto-reconnect-toggled(v); }
     }

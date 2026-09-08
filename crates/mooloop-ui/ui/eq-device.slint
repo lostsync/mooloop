@@ -151,12 +151,12 @@ export component EqDeviceFace inherits EffectDeviceShell {
             }
             ToolButton {
                 min-width: 30px; max-width: 30px; min-height: 26px; max-height: 26px;
-                text: "ON"; tooltip: "Enable selected EQ section"; active: root.enabled >= 0.5;
+                text: "ON"; tooltip: "On"; hint: "Enable selected EQ section"; active: root.enabled >= 0.5;
                 clicked => { root.enabled-changed(root.enabled >= 0.5 ? 0 : 1); }
             }
             ToolButton {
                 min-width: 30px; max-width: 30px; min-height: 26px; max-height: 26px;
-                text: "FFT"; tooltip: "Show spectrum analyzer"; active: root.analyzer-enabled;
+                text: "FFT"; tooltip: "Analyzer"; hint: "Show spectrum analyzer"; active: root.analyzer-enabled;
                 clicked => { root.analyzer-toggled(!root.analyzer-enabled); }
             }
         }

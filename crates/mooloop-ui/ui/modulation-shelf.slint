@@ -583,7 +583,7 @@ component RouteRow inherits Rectangle {
         }
         ToolButton {
             text: root.polarity == 0 ? "±" : "↑";
-            tooltip: root.polarity == 0 ? "Bipolar: swings around the base value" : "Unipolar: base value is the floor";
+            tooltip: root.polarity == 0 ? "Bipolar" : "Unipolar"; hint: root.polarity == 0 ? "Bipolar: swings around the base value" : "Unipolar: base value is the floor";
             min-width: 24px;
             max-width: 24px;
             min-height: 20px;
@@ -592,7 +592,7 @@ component RouteRow inherits Rectangle {
         }
         ToolButton {
             text: "×";
-            tooltip: "Remove this modulation route";
+            tooltip: "Remove"; hint: "Remove this modulation route";
             min-width: 22px;
             max-width: 22px;
             min-height: 20px;
@@ -882,7 +882,7 @@ export component ModulationShelf inherits Rectangle {
                                 width: ModuleGrid.tile-width;
                                 height: ModuleGrid.tile-height;
                                 text: "+";
-                                tooltip: "Add a control module";
+                                tooltip: "Add"; hint: "Add a control module";
                                 clicked => { root.add-source-menu-open = true; }
                             }
                             if root.add-source-menu-open : Rectangle {
@@ -1025,7 +1025,7 @@ export component ModulationShelf inherits Rectangle {
                                 }
                                 ToolButton {
                                     text: "×";
-                                    tooltip: "Remove this module and its routes";
+                                    tooltip: "Remove"; hint: "Remove this module and its routes";
                                     min-width: 22px; max-width: 22px; min-height: 15px; max-height: 15px;
                                     text-color: Theme.text-muted;
                                     clicked => { root.source-removed(root.selected-slot); }

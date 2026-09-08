@@ -419,7 +419,7 @@ export component SamplerDeviceFace inherits Rectangle {
                 }
                 StepperField {
                     label: "ROOT"; value <=> root.root-note; minimum: 0; maximum: 127; step: 1; value-width: 24px;
-                    tooltip: "MIDI root note for original sample pitch";
+                    tooltip: "Root"; hint: "MIDI root note for original sample pitch";
                     changed(v) => { root.root-note-changed(v); }
                 }
                 ToolButton {
@@ -637,22 +637,22 @@ export component SamplerDeviceFace inherits Rectangle {
                             label: "BASE"; value <=> root.slice-base-note;
                             minimum: 0; maximum: 127; step: 1; value-width: 26px;
                             display-text: NoteFormat.midi-name(root.slice-base-note);
-                            tooltip: "The note that plays the first slice";
+                            tooltip: "Base note"; hint: "The note that plays the first slice";
                             changed(v) => { root.slice-base-note-changed(v); }
                         }
                         StepperField {
                             label: "N"; value <=> root.slice-count;
                             minimum: 1; maximum: 128; step: 1; value-width: 20px;
-                            tooltip: "How many slices DIVIDE lays down";
+                            tooltip: "Slices"; hint: "How many slices DIVIDE lays down";
                         }
                         ToolButton {
                             text: "DIVIDE"; min-width: 46px; max-width: 46px; min-height: 20px;
-                            tooltip: "Replace the slices with equal divisions of the playback region";
+                            tooltip: "Divide"; hint: "Replace the slices with equal divisions of the playback region";
                             clicked => { root.slices-divided(root.slice-count); }
                         }
                         ToolButton {
                             text: "CLEAR"; min-width: 42px; max-width: 42px; min-height: 20px;
-                            tooltip: "Remove every slice";
+                            tooltip: "Clear"; hint: "Remove every slice";
                             clicked => { root.slices-cleared(); }
                         }
                     }
@@ -665,13 +665,13 @@ export component SamplerDeviceFace inherits Rectangle {
                     spacing: 3px;
                     ToggleButton {
                         text: "AUTO"; min-width: 44px; max-width: 44px; min-height: 20px;
-                        tooltip: "Snap markers to zero crossings while editing";
+                        tooltip: "Zero-cross"; hint: "Snap markers to zero crossings while editing";
                         checked <=> root.snap-to-zero;
                         toggled(v) => { root.snap-to-zero-changed(v); }
                     }
                     ToolButton {
                         text: "SNAP"; min-width: 44px; max-width: 44px; min-height: 20px;
-                        tooltip: "Snap all four markers to zero crossings now";
+                        tooltip: "Zero-cross"; hint: "Snap all four markers to zero crossings now";
                         clicked => { root.snap-markers-clicked(); }
                     }
                 }
@@ -688,8 +688,8 @@ export component SamplerDeviceFace inherits Rectangle {
                     Text { text: "VOICE"; color: Theme.text-faint; font-size: 8px; }
                     SelectorBank { options: ["One Shot", "Gate"]; selected-index <=> root.voice-mode; segment-width: 74px; tooltip: "Playback mode"; selected(i) => { root.voice-mode-changed(i); } }
                     SelectorBank { options: ["Restart", "Layer"]; selected-index <=> root.retrigger-mode; segment-width: 74px; tooltip: "Retrigger behavior"; selected(i) => { root.retrigger-mode-changed(i); } }
-                    StepperField { label: "VOICES"; value <=> root.polyphony; minimum: 1; maximum: 16; step: 1; value-width: 18px; tooltip: "Maximum simultaneous voices"; changed(v) => { root.polyphony-changed(v); } }
-                    StepperField { label: "CHOKE"; value <=> root.choke-group; minimum: 0; maximum: 16; step: 1; value-width: 18px; tooltip: "Matching non-zero groups choke each other"; changed(v) => { root.choke-group-changed(v); } }
+                    StepperField { label: "VOICES"; value <=> root.polyphony; minimum: 1; maximum: 16; step: 1; value-width: 18px; tooltip: "Voices"; hint: "Maximum simultaneous voices"; changed(v) => { root.polyphony-changed(v); } }
+                    StepperField { label: "CHOKE"; value <=> root.choke-group; minimum: 0; maximum: 16; step: 1; value-width: 18px; tooltip: "Choke"; hint: "Matching non-zero groups choke each other"; changed(v) => { root.choke-group-changed(v); } }
                     // Without this the column shares its slack out between the
                     // rows, floating them into the middle of an empty panel.
                     Rectangle { vertical-stretch: 1; }
@@ -710,7 +710,7 @@ export component SamplerDeviceFace inherits Rectangle {
                         Rectangle { horizontal-stretch: 1; }
                         ToggleButton {
                             text: "ON";
-                            tooltip: "Time stretching";
+                            tooltip: "Stretch"; hint: "Time stretching";
                             // Bounded, or the layout hands a toggle the whole
                             // width the title row is not using.
                             min-width: 40px; max-width: 40px; max-height: 20px;
@@ -785,7 +785,7 @@ export component SamplerDeviceFace inherits Rectangle {
                             alignment: center;
                             ToggleButton {
                                 text: "SYNC";
-                                tooltip: "Fit the loop to the project tempo";
+                                tooltip: "Sync"; hint: "Fit the loop to the project tempo";
                                 min-width: 46px; max-width: 46px; max-height: 20px;
                                 checked <=> root.stretch-sync;
                                 toggled(on) => { root.stretch-sync-changed(on); }
@@ -899,13 +899,13 @@ export component SamplerDeviceFace inherits Rectangle {
                         if root.committed && root.commit-stale : ToolButton {
                             text: "REBAKE";
                             min-width: 50px; max-width: 50px; min-height: 18px;
-                            tooltip: "Re-bake the stretch";
+                            tooltip: "Re-bake"; hint: "Re-bake the stretch";
                             clicked => { root.commit-clicked(); }
                         }
                         if root.committed : ToolButton {
                             text: "REVERT";
                             min-width: 52px; max-width: 52px; min-height: 18px;
-                            tooltip: "Put the source buffer and its markers back";
+                            tooltip: "Revert"; hint: "Put the source buffer and its markers back";
                             clicked => { root.revert-clicked(); }
                         }
                         if !root.committed : Rectangle { horizontal-stretch: 1; }

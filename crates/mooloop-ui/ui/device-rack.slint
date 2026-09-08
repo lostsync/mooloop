@@ -1,5 +1,5 @@
 import { HorizontalBox } from "std-widgets.slint";
-import { Theme } from "theme.slint";
+import { StatusHint, Theme } from "theme.slint";
 import { IconButton, MiniKnob, ToolButton, TrimKnob } from "controls.slint";
 import { ChannelMeter } from "meters.slint";
 
@@ -136,6 +136,9 @@ export component ContainerEnclosure inherits Rectangle {
 // grows to fit whichever entry is widest.
 component EffectTypeRow inherits Rectangle {
     in property <string> text;
+    /// What inserting this would do. The row already draws its own name, so
+    /// there is no label a tooltip could add -- the sentence goes to the
+    /// status bar, which a popup can still reach through `StatusHint`.
     in property <string> tooltip: root.text;
     callback selected;
 
@@ -155,9 +158,11 @@ component EffectTypeRow inherits Rectangle {
     touch := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.selected(); }
+        changed has-hover => {
+            if (self.has-hover) { StatusHint.show(root.tooltip); }
+            else { StatusHint.clear(root.tooltip); }
+        }
     }
-
-    Tooltip { text: @markdown("\{root.tooltip}"); }
 }
 
 // The effect-type list shared by every "insert effect" trigger (the rail
@@ -235,7 +240,7 @@ export component DeviceOutputRail inherits Rectangle {
         // out is one click rather than N drags.
         if root.unwrap-enabled : IconButton {
             text: "⇱"; size: 24px;
-            tooltip: "Remove the container, keep what is inside it";
+            tooltip: "Unwrap"; hint: "Remove the container, keep what is inside it";
             clicked => { root.unwrap-requested(); }
         }
         Rectangle { vertical-stretch: 1; }
@@ -384,7 +389,7 @@ export component DeviceFrame inherits Rectangle {
             }
             IconButton {
                 text: "⌑"; size: 24px; enabled: root.preset-enabled;
-                tooltip: "Save this device's settings as a preset";
+                tooltip: "Save preset"; hint: "Save this device's settings as a preset";
                 clicked => { root.save-preset-requested(); }
             }
             IconButton {
@@ -401,7 +406,7 @@ export component DeviceFrame inherits Rectangle {
             // than a container gesture being at the top.
             IconButton {
                 text: "❏"; size: 24px; enabled: root.wrap-enabled;
-                tooltip: "Wrap this device in a container";
+                tooltip: "Wrap"; hint: "Wrap this device in a container";
                 clicked => { root.wrap-requested(); }
             }
             // Fifth, under wrap, for the reason wrap is fourth: the preset
@@ -504,7 +509,7 @@ export component DeviceFrame inherits Rectangle {
         y: 3px; z: 100; width: 22px; height: 22px; size: 22px;
         text: root.bypassed ? "○" : "●";
         active: !root.bypassed;
-        tooltip: root.bypassed ? "Enable this device" : "Bypass this device";
+        tooltip: root.bypassed ? "Enable" : "Bypass"; hint: root.bypassed ? "Enable this device" : "Bypass this device";
         clicked => { root.bypass-toggled(); }
     }
     if root.wet-dry-enabled : MiniKnob {

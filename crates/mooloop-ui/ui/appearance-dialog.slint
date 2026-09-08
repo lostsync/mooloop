@@ -437,7 +437,7 @@ export component AppearancePage inherits VerticalLayout {
                         }
                         if scheme.is-user : ToolButton {
                             text: "Remove";
-                            tooltip: "Delete the " + scheme.name + " scheme";
+                            tooltip: "Delete"; hint: "Delete the " + scheme.name + " scheme";
                             min-width: 56px;
                             min-height: 20px;
                             clicked => { root.remove-scheme(scheme.name); }
@@ -457,7 +457,7 @@ export component AppearancePage inherits VerticalLayout {
         }
         ToolButton {
             text: "Save Scheme";
-            tooltip: "Save the current colors as a scheme";
+            tooltip: "Save"; hint: "Save the current colors as a scheme";
             min-width: 88px;
             clicked => { root.save-scheme(root.scheme-name); }
         }
@@ -549,7 +549,7 @@ export component AppearancePage inherits VerticalLayout {
         Rectangle { horizontal-stretch: 1; }
         ToggleButton {
             text: root.smooth-curves ? "On" : "Off";
-            tooltip: "Draw smooth antialiased curves";
+            tooltip: "Smooth"; hint: "Draw smooth antialiased curves";
             max-width: 72px;
             checked <=> root.smooth-curves;
         }
@@ -914,7 +914,7 @@ export component PreferencesDialog inherits Rectangle {
                                 Rectangle { horizontal-stretch: 1; }
                                 ToggleButton {
                                     text: "Enabled";
-                                    tooltip: "Mirror the diagnostic log to a file";
+                                    tooltip: "Log to file"; hint: "Mirror the diagnostic log to a file";
                                     checked: root.log-to-file;
                                     toggled(v) => { root.log-to-file-toggled(v); }
                                 }

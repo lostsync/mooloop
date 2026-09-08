@@ -1,4 +1,4 @@
-import { Theme } from "theme.slint";
+import { StatusHint, Theme } from "theme.slint";
 
 // Toolbar vocabulary.
 //
@@ -86,6 +86,9 @@ component StepperArrow inherits Rectangle {
 export component StepperField inherits Rectangle {
     in property <string> label;
     in property <string> tooltip: root.label;
+    /// The sentence explaining the field, for the status bar. The tooltip
+    /// above stays a label; see `StatusHint`.
+    in property <string> hint;
     in-out property <int> value;
     in property <int> minimum: 0;
     in property <int> maximum: 999;
@@ -148,6 +151,10 @@ export component StepperField inherits Rectangle {
             drag := TouchArea {
                 enabled: root.enabled;
                 mouse-cursor: root.enabled ? ns-resize : default;
+                changed has-hover => {
+                    if (self.has-hover) { StatusHint.show(root.hint); }
+                    else { StatusHint.clear(root.hint); }
+                }
                 pointer-event(e) => {
                     if (e.kind == PointerEventKind.down) {
                         root.pressed-value = root.value;
@@ -176,6 +183,7 @@ export component StepperField inherits Rectangle {
 export component MenuField inherits Rectangle {
     in property <string> label;
     in property <string> tooltip: root.label;
+    in property <string> hint;
     in property <[string]> options;
     in-out property <int> selected-index;
     in property <string> display-text: root.selected-index >= 0
@@ -224,6 +232,10 @@ export component MenuField inherits Rectangle {
     touch := TouchArea {
         mouse-cursor: pointer;
         clicked => { menu.show(); }
+        changed has-hover => {
+            if (self.has-hover) { StatusHint.show(root.hint); }
+            else { StatusHint.clear(root.hint); }
+        }
     }
 
     menu := PopupWindow {
@@ -364,8 +376,14 @@ export component ToolModeButton inherits Rectangle {
     touch := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
+        changed has-hover => {
+            if (self.has-hover) { StatusHint.show(root.hint); }
+            else { StatusHint.clear(root.hint); }
+        }
     }
-    Tooltip { text: @markdown("**\{root.name}** \{root.hint}"); }
+    // The name is the tooltip; what the tool does is a sentence, and a
+    // sentence belongs in the status bar.
+    Tooltip { text: @markdown("**\{root.name}**"); }
 }
 
 // Transport position, as bar:beat:tick. Tabular so the digits do not shuffle

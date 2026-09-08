@@ -96,7 +96,7 @@ component RouteRow inherits Rectangle {
         }
         ToolButton {
             text: "\u{00d7}";
-            tooltip: "Remove this route";
+            tooltip: "Remove"; hint: "Remove this route";
             min-width: 18px;
             max-width: 18px;
             clicked => { root.removed(); }
@@ -1802,7 +1802,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     // rather than failing on click.
                     if !root.routes-full : ToolButton {
                         text: "+ ADD ROUTE";
-                        tooltip: "Add an internal modulation route";
+                        tooltip: "Add route"; hint: "Add an internal modulation route";
                         min-width: 88px;
                         max-width: 88px;
                         clicked => { root.route-added(); }

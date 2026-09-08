@@ -42,6 +42,33 @@ export global DisplayPrefs {
     in-out property <bool> smooth-curves: true;
 }
 
+// What the status bar is saying about whatever the pointer is over.
+//
+// Adam's rule for the two surfaces, which this exists to make cheap to obey:
+// a tooltip is a value or a label, and the sentence explaining a control goes
+// in the status bar. A control publishes its own sentence here and the status
+// bar reads it; neither knows about the other, and it works at any depth.
+//
+// The alternative was in the tree and is why the rule was not kept: a
+// `hover-hint` property threaded from a knob, up through its device face, and
+// bound at the face's instantiation in `main.slint`. Exactly one device face
+// ever grew that plumbing, and every sentence on the other twenty-odd stayed
+// in a tooltip.
+//
+// A hover leaving clears the hint only if it is still that control's own: the
+// pointer reaches the next control before the last one hears that it left, so
+// an unconditional clear would blank a hint that had just been set.
+export global StatusHint {
+    in-out property <string> text;
+
+    public function show(hint: string) {
+        if (hint != "") { StatusHint.text = hint; }
+    }
+    public function clear(hint: string) {
+        if (StatusHint.text == hint) { StatusHint.text = ""; }
+    }
+}
+
 // The one owner of UI motion: every hide/show or reflow animation in the
 // app draws its duration and easing from here, so Preferences > Appearance
 // retunes all of them at once. `speed`/`easing` are indices into the

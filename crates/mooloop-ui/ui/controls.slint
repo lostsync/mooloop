@@ -1,5 +1,5 @@
 import { ScrollView } from "std-widgets.slint";
-import { Theme } from "theme.slint";
+import { StatusHint, Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
 
 export enum ValueScale { linear, logarithmic }
@@ -68,6 +68,9 @@ export component ToolButton inherits Rectangle {
     // stay one family). Empty string keeps the plain-text behavior.
     in property <string> icon: "";
     in property <string> tooltip: root.text;
+    /// The sentence explaining what this does, for the status bar. The
+    /// tooltip above stays a label; see `StatusHint`.
+    in property <string> hint;
     in property <bool> active;
     in property <bool> enabled: true;
     in property <color> text-color: Theme.text;
@@ -85,7 +88,7 @@ export component ToolButton inherits Rectangle {
             ? Theme.surface-active
             : root.active ? root.active-color : Theme.surface-raised;
     accessible-role: button;
-    accessible-label: root.tooltip;
+    accessible-label: root.hint == "" ? root.tooltip : root.hint + ": " + root.tooltip;
     forward-focus: button-keyboard;
 
     if root.icon == "" : Text {
@@ -112,6 +115,10 @@ export component ToolButton inherits Rectangle {
         enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
         clicked => { button-keyboard.focus(); root.clicked(); }
+        changed has-hover => {
+            if (self.has-hover) { StatusHint.show(root.hint); }
+            else { StatusHint.clear(root.hint); }
+        }
     }
 
     // focus-on-click must stay off: a FocusScope that doesn't yet have focus
@@ -141,6 +148,7 @@ export component ToolButton inherits Rectangle {
 export component ToggleButton inherits Rectangle {
     in property <string> text;
     in property <string> tooltip: root.text;
+    in property <string> hint;
     in-out property <bool> checked;
     in property <bool> enabled: true;
     callback toggled(bool);
@@ -150,6 +158,7 @@ export component ToggleButton inherits Rectangle {
     ToolButton {
         text: root.text;
         tooltip: root.tooltip;
+        hint: root.hint;
         active: root.checked;
         enabled: root.enabled;
         clicked => {
@@ -163,6 +172,9 @@ export component SegmentedControl inherits Rectangle {
     in property <[string]> options;
     in-out property <int> selected-index;
     in property <bool> enabled: true;
+    /// What the bank as a whole does, for the status bar. Each segment's
+    /// tooltip stays its own label.
+    in property <string> hint;
     callback selected(int);
 
     min-height: 26px;
@@ -176,6 +188,7 @@ export component SegmentedControl inherits Rectangle {
         for option[i] in root.options : ToolButton {
             text: option;
             tooltip: option;
+            hint: root.hint;
             active: root.selected-index == i;
             enabled: root.enabled;
             horizontal-stretch: 1;
@@ -207,9 +220,15 @@ export component SelectorBank inherits Rectangle {
 
     selector-layout := HorizontalLayout {
         spacing: 1px;
+        // The bank's own `tooltip` is the sentence explaining the choice, so
+        // it goes to the status bar; a segment shows its own label. It used
+        // to be pasted in front of the option and rendered, which is how
+        // "Advance from the transport clock, or one step per note: CLOCK"
+        // came to be a tooltip.
         for option[i] in root.options : ToolButton {
             text: option;
-            tooltip: root.tooltip == "" ? option : root.tooltip + ": " + option;
+            tooltip: option;
+            hint: root.tooltip;
             active: root.selected-index == i;
             enabled: root.enabled;
             min-width: root.segment-width;
@@ -262,6 +281,10 @@ export component PickerChip inherits Rectangle {
     touch := TouchArea {
         mouse-cursor: pointer;
         clicked => { menu.show(); }
+        changed has-hover => {
+            if (self.has-hover) { StatusHint.show(root.tooltip); }
+            else { StatusHint.clear(root.tooltip); }
+        }
     }
     menu := PopupWindow {
         x: 0px;
@@ -734,6 +757,10 @@ export component ParameterKnob inherits Rectangle {
     knob-touch := TouchArea {
         enabled: root.enabled;
         mouse-cursor: root.modulation-active ? crosshair : ns-resize;
+        changed has-hover => {
+            if (self.has-hover) { StatusHint.show(root.tooltip); }
+            else { StatusHint.clear(root.tooltip); }
+        }
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down) {
                 keyboard.focus();
@@ -1195,6 +1222,10 @@ export component ParameterFader inherits Rectangle {
             TouchArea {
                 enabled: root.enabled;
                 mouse-cursor: pointer;
+                changed has-hover => {
+                    if (self.has-hover) { StatusHint.show(root.tooltip); }
+                    else { StatusHint.clear(root.tooltip); }
+                }
                 pointer-event(e) => {
                     if (e.kind == PointerEventKind.down) {
                         fader-keyboard.focus();
@@ -1371,6 +1402,9 @@ export component MuteButton inherits ToolButton {
 // instead of taking layout space.
 export component MiniKnob inherits Rectangle {
     in property <string> label;
+    /// The sentence explaining this control, for the status bar. A mini knob
+    /// has no room for a caption, so this is also its accessible name.
+    in property <string> hint;
     in property <string> value-text;
     in-out property <float> value;
     in property <float> minimum: 0;
@@ -1414,7 +1448,7 @@ export component MiniKnob inherits Rectangle {
     width: root.diameter;
     height: root.diameter;
     accessible-role: slider;
-    accessible-label: root.label;
+    accessible-label: root.hint == "" ? root.label : root.hint;
     accessible-value: root.value-text;
     forward-focus: mini-keyboard;
 
@@ -1476,6 +1510,10 @@ export component MiniKnob inherits Rectangle {
         mini-touch := TouchArea {
             enabled: root.enabled;
             mouse-cursor: root.modulation-active ? crosshair : ns-resize;
+            changed has-hover => {
+                if (self.has-hover) { StatusHint.show(root.hint); }
+                else { StatusHint.clear(root.hint); }
+            }
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.down) {
                     mini-keyboard.focus();
@@ -2043,6 +2081,10 @@ export component MixerFader inherits Rectangle {
         mixer-touch := TouchArea {
             enabled: root.enabled;
             mouse-cursor: ns-resize;
+            changed has-hover => {
+                if (self.has-hover) { StatusHint.show(root.tooltip); }
+                else { StatusHint.clear(root.tooltip); }
+            }
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.down) {
                     mixer-keyboard.focus();

@@ -1,5 +1,5 @@
 import { ComboBox, HorizontalBox, ScrollView, SpinBox, VerticalBox } from "std-widgets.slint";
-import { Theme, Motion } from "theme.slint";
+import { Theme, Motion, StatusHint } from "theme.slint";
 import { GainMath } from "gain.slint";
 export { DisplayPrefs, Motion } from "theme.slint";
 import {
@@ -1761,7 +1761,8 @@ export component MainWindow inherits Window {
 
                             StepperField {
                                 label: "SWING";
-                                tooltip: "Global sixteenth-note swing; 50% is straight";
+                                tooltip: "Swing";
+                                hint: "Global sixteenth-note swing; 50% is straight";
                                 value <=> root.swing-percent;
                                 minimum: 50;
                                 maximum: 75;
@@ -1896,7 +1897,8 @@ export component MainWindow inherits Window {
                                 value <=> root.pattern-length;
                                 minimum: 1;
                                 maximum: 256;
-                                tooltip: "Length of the selected pattern in 16th-note steps";
+                                tooltip: "Steps";
+                                hint: "Length of the selected pattern in 16th-note steps";
                                 changed(v) => { root.pattern-length-changed(v); }
                             }
                             MenuField {
@@ -2381,12 +2383,14 @@ export component MainWindow inherits Window {
                                         display-text: "Browse...";
                                         field-width: 90px;
                                         menu-width: 220px;
-                                        tooltip: "Load a saved whole-channel preset (source + mixer)";
+                                        tooltip: "Channel preset";
+                                        hint: "Load a saved whole-channel preset (source + mixer)";
                                         selected(i) => { root.channel-preset-selected(i); }
                                     }
                                     if root.editor-page != 2 && !root.editing-bus : IconButton {
                                         text: "💾";
-                                        tooltip: "Save this channel (source + mixer) as a preset";
+                                        tooltip: "Save preset";
+                                        hint: "Save this channel (source + mixer) as a preset";
                                         size: 24px;
                                         clicked => { root.save-channel-preset-requested(); }
                                     }
@@ -3830,7 +3834,6 @@ export component MainWindow inherits Window {
                                                             release-changed(v) => { root.effect-param-changed(index, 3, v); }
                                                             knee-changed(v) => { root.effect-param-changed(index, 4, v); }
                                                             makeup-changed(v) => { root.effect-param-changed(index, 5, v); }
-                                                            hover-hint <=> root.hover-hint;
                                                             reorder-requested(target) => { root.reorder-effect(index, target); }
                                                             select-requested => { root.device-selected(index); }
                                                         }
@@ -4176,7 +4179,7 @@ export component MainWindow inherits Window {
                                                 width: 50px;
                                                 height: 24px;
                                                 toggled => { root.piano-snap-enabled = !root.piano-snap-enabled; }
-                                                Tooltip { text: @markdown("Quantise edits to the grid. Hold the snap-override modifier to invert this for one drag."); }
+                                                hint: "Quantise edits to the grid. Hold the snap-override modifier to invert this for one drag.";
                                             }
                                             ComboBox {
                                                 model: root.musical-snap-options;
@@ -5121,8 +5124,16 @@ export component MainWindow inherits Window {
             //
             // A docked, always-visible row: the work surface ends at this bar's
             // top edge, so nothing ever reflows or hides under the pointer when
-            // a hint appears. Live gesture hints (hover-hint) take priority over
-            // the last status-message; permanent readouts can join the strip.
+            // a hint appears. Live gesture hints take priority over the last
+            // status-message; permanent readouts can join the strip.
+            //
+            // Two hint channels, and they are not redundant. `hover-hint` is
+            // this window's own -- the surfaces defined in this file, which
+            // can write a property on `root` directly. `StatusHint` is the
+            // one every control anywhere reaches, without a property threaded
+            // up through the device face it sits in. The window's own wins,
+            // because a gesture over the playlist is more specific than the
+            // button the pointer passed on the way there.
             Rectangle {
                 height: 24px;
                 vertical-stretch: 0;
@@ -5138,7 +5149,9 @@ export component MainWindow inherits Window {
                 Text {
                     y: 0;
                     height: parent.height;
-                    text: root.hover-hint != "" ? root.hover-hint : root.status-message;
+                    text: root.hover-hint != "" ? root.hover-hint
+                        : StatusHint.text != "" ? StatusHint.text
+                        : root.status-message;
                     color: Theme.text-muted;
                     font-size: 10px;
                     x: 8px;
