@@ -123,7 +123,10 @@ Alphabetical by model name, then by harness.
   into a set of views and three slots to put them in, and its first step --
   a work area that computes each slot's rectangle instead of nesting layouts,
   so a view needs one instance wherever it is drawn, and the bottom pane's two
-  stacked toolbars folded into the one row per view that made possible.
+  stacked toolbars folded into the one row per view that made possible, and
+  then the split itself, whose divider closes what it is dragged out of
+  existence, and the status-bar chip that had been drawing a left-docked panel
+  for a sidebar docked on the right since the day it was written.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

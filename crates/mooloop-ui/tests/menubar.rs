@@ -12,7 +12,7 @@
 //!   nothing,
 //! - disabled rows swallow clicks without firing their callbacks.
 
-use mooloop_ui::MainWindow;
+use mooloop_ui::{view, MainWindow};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize};
 use std::cell::Cell;
@@ -63,20 +63,21 @@ fn file_menu_items_fire_their_callbacks() {
 }
 
 #[test]
-fn view_menu_switches_editor_pages() {
+fn view_menu_reveals_a_view() {
     let ui = harness();
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
 
     // "View" is the fifth title, after File, Edit, Pattern and Channel.
     click(ui.window(), 223.0, TITLE_Y);
-    // Popup rows are 24px under the popup's 4px padding below the bar:
-    // row 0 (Sampler) spans about y 42..66, row 2 (Playlist) about 90..114.
-    click(ui.window(), 220.0, 100.0);
+    // Popup rows are 24px under the popup's 4px padding below the bar, so
+    // row N spans y 42 + 24N .. 66 + 24N. The menu is one row per view now --
+    // Steps, Mixer, Devices, Notes, Playlist -- rather than the three pages
+    // of the lower dock, so Playlist is row 4 and not row 2.
+    click(ui.window(), 220.0, 150.0);
 
-    assert_eq!(
-        ui.get_editor_page(),
-        2,
-        "Playlist must select the playlist page"
+    assert!(
+        ui.get_showing_playlist(),
+        "Playlist must reveal the playlist view"
     );
 }
 
@@ -107,7 +108,7 @@ fn disabled_rows_swallow_clicks() {
     // Verify the window survived and rows keep rendering by toggling the
     // menu again.
     click(ui.window(), EDIT_X, TITLE_Y);
-    assert_eq!(ui.get_editor_page(), 0);
+    assert!(ui.get_showing_devices());
 }
 
 #[test]

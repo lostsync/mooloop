@@ -19,12 +19,34 @@ export global ToolIcons {
         "M 2.5 5 L 13.5 5 L 13.5 11 L 2.5 11 Z M 6.2 5 L 6.2 11 M 9.8 5 L 9.8 11";
     out property <string> stretch:
         "M 2.5 8 L 13.5 8 M 5 5.5 L 2.5 8 L 5 10.5 M 11 5.5 L 13.5 8 L 11 10.5";
-    // Panel toggles: the outline is the window, the inner rule marks the
-    // pane each button reveals.
+    // Layout toggles. The outline is the window and the inner rule marks the
+    // region; `*-fill` is the region drawn solid, on a second Path beneath
+    // the outline because one Path has one fill and filling the outline would
+    // fill the whole window shape.
+    //
+    // **A docked panel is filled; a split is not.** Position alone did not
+    // separate them -- a rule at x 8 and a rule at x 10 are the same square
+    // at 16px -- and fill is the true distinction anyway: a panel appears and
+    // disappears, a split is two editors side by side.
+    out property <string> panel-frame:
+        "M 2.5 3 L 13.5 3 L 13.5 13 L 2.5 13 Z ";
+    // Kept for a left-docked panel, which `FOCUS.md` step 3 draws and this
+    // program does not have yet. The browser is docked on the *right*.
     out property <string> panel-left:
-        "M 2.5 3 L 13.5 3 L 13.5 13 L 2.5 13 Z M 6.5 3 L 6.5 13";
+        root.panel-frame + "M 6.5 3 L 6.5 13";
+    out property <string> panel-left-fill:
+        "M 2.5 3 L 6.5 3 L 6.5 13 L 2.5 13 Z";
+    out property <string> panel-right:
+        root.panel-frame + "M 11 3 L 11 13";
+    out property <string> panel-right-fill:
+        "M 11 3 L 13.5 3 L 13.5 13 L 11 13 Z";
     out property <string> panel-bottom:
-        "M 2.5 3 L 13.5 3 L 13.5 13 L 2.5 13 Z M 2.5 9.5 L 13.5 9.5";
+        root.panel-frame + "M 2.5 9.5 L 13.5 9.5";
+    out property <string> panel-bottom-fill:
+        "M 2.5 9.5 L 13.5 9.5 L 13.5 13 L 2.5 13 Z";
+    // Centred, and unfilled: two editors, not a panel.
+    out property <string> panel-split:
+        root.panel-frame + "M 8 3 L 8 13";
 }
 
 export global ToolbarMetrics {

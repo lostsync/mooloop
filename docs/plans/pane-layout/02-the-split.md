@@ -1,5 +1,7 @@
 # 02 — The split, its divider, and the status-bar chip
 
+**Landed 2026-09-08.** `00-status.md` records what the doing changed.
+
 **Goal: requirements 1, 2 and 3.** Pattern, mixer or playlist full-width in
 the top pane; any two of them side by side; a divider that drags.
 

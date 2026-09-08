@@ -1,6 +1,6 @@
 use mooloop_core::{Ds01EnvParams, Ds01Params, DrumMode, DrumSynthParams};
 use mooloop_dsp::DrumSynth;
-use mooloop_ui::{
+use mooloop_ui::{view, 
     ChannelRow, EffectSlotRow, MainWindow, MlP8RouteRow, ModulationOutletRow, ModulationRouteRow,
     ModulationSourceRow, StepCell,
 };
@@ -65,7 +65,7 @@ fn render_drum_and_mono_source_editors() {
     ui.set_channels(rack_rows());
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("Kick"));
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(1);
     ui.set_drum_mode(0);
     set_drum_preview(&ui, DrumSynthParams::default());
@@ -149,7 +149,7 @@ fn render_mlm1_source_editor() {
     ui.set_channels(rack_rows());
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("ML-M1"));
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(4);
 
     let osc = ui.window().take_snapshot().unwrap();
@@ -231,7 +231,7 @@ fn render_sampler_source_editor() {
     ui.set_channels(rack_rows());
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("Kick"));
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(0);
     ui.set_sample_name(SharedString::from("kick_808.wav"));
     ui.set_sample_description(SharedString::from("48kHz / 16-bit / mono"));
@@ -662,7 +662,7 @@ fn render_effect_header_comparison() {
     ui.set_channels(rack_rows());
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("Kick"));
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(1);
     set_drum_preview(&ui, DrumSynthParams::default());
 
@@ -714,7 +714,7 @@ fn a_container_draws_its_run_and_its_nesting() {
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui.set_channels(rack_rows());
     ui.set_selected_channel_name(SharedString::from("Kick"));
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(0);
 
     // A container holding two devices, one of which is another container
@@ -793,7 +793,7 @@ fn effect_rack_scrolls_horizontally_to_reach_a_long_chain() {
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui.set_channels(rack_rows());
     ui.set_selected_channel_name(SharedString::from("Kick"));
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(0);
     // Filter, drive, bitcrush, delay (two units wide), filter: comfortably
     // past the 960 px window even before the source device's own three units.
@@ -843,7 +843,7 @@ fn render_poly_source_editor() {
     ui.set_channels(rack_rows());
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("Poly"));
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(3);
 
     let poly = ui.window().take_snapshot().unwrap();
@@ -895,7 +895,7 @@ fn render_sampler_zoomed_markers() {
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui.set_channels(rack_rows());
     ui.set_selected_channel_name(SharedString::from("Kick"));
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(0);
     ui.set_sampler_device_page(0);
     ui.set_sample_name(SharedString::from("amen_break.wav"));
@@ -946,7 +946,7 @@ fn render_sampler_slice_markers() {
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui.set_channels(rack_rows());
     ui.set_selected_channel_name(SharedString::from("Break"));
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(0);
     ui.set_sampler_device_page(0);
     ui.set_sample_name(SharedString::from("amen_break.wav"));
@@ -1001,7 +1001,7 @@ fn render_sampler_committed_stretch() {
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui.set_channels(rack_rows());
     ui.set_selected_channel_name(SharedString::from("Break"));
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(0);
     // The stretch group lives on the sampler's second page.
     ui.set_sampler_device_page(1);
@@ -1039,7 +1039,7 @@ fn the_module_grid_scales_with_capacity_alone() {
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(1440.0, 900.0));
     ui.set_channels(rack_rows());
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_modulation_shelf_open(true);
     ui.set_modulation_selected_slot(3);
     ui.set_modulation_selected_kind(4);
@@ -1098,7 +1098,7 @@ fn render_mlp8_modulation_page() {
     ui.set_channels(rack_rows());
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("ML-P8"));
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(5);
 
     let names = |labels: &[&str]| {
@@ -1224,7 +1224,7 @@ fn render_mlp8_source_editor() {
     ui.set_channels(rack_rows());
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("ML-P8"));
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(5);
     // The pool's own arithmetic, which the face is given rather than deriving.
     ui.set_mlp8_unison_note_counts(ModelRc::from(Rc::new(VecModel::from(vec![
@@ -1382,7 +1382,7 @@ fn render_the_ds01_face() {
     ui.set_channels(rack_rows());
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("Kick"));
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(6);
 
     mooloop_ui::refresh_ds01(&ui, &Ds01Params::default());
@@ -1461,7 +1461,7 @@ fn render_aux_in_source_editor() {
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui.set_channels(rack_rows());
     ui.set_pattern_length(16);
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_selected_channel_name(SharedString::from("Aux 2"));
     ui.set_source_kind(7);
     ui.set_aux_in_source_names(

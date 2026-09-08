@@ -711,7 +711,6 @@ export component MainWindow inherits Window {
     // ---- mixer ----
     // The work surface shows either the step grid or the mixer; the bottom
     // device rack follows whichever strip is selected in the visible one.
-    in-out property <bool> mixer-visible;
     in property <[MixerStripRow]> mixer-strips;
     // Full bus names, master first, indexed by bus. Shared by every picker.
     in property <[string]> bus-names;
@@ -739,7 +738,6 @@ export component MainWindow inherits Window {
     in property <float> editing-bus-input-right-db: -60;
 
     // ---- lower editor ----
-    in-out property <int> editor-page;      // 0=Source, 1=Notes, 2=Playlist
     // Dock height the piano roll restores. Only the notes page drives the
     // splitter today. Source starts at 430px so a fixed device face and the
     // compact modulation shelf fit without an initial vertical scroll, and
@@ -771,22 +769,74 @@ export component MainWindow inherits Window {
         root.steps-slot, root.mixer-slot, root.devices-slot,
         root.notes-slot, root.playlist-slot,
     ];
-    // A tab click. One entry point for every strip, so the mapping back onto
-    // the state Rust owns is written once instead of once per slot.
+    // A tab click.
     callback view-picked(int);
-    view-picked(v) => {
-        if (v == PaneViews.steps) { root.mixer-visible = false; }
-        else if (v == PaneViews.mixer) { root.mixer-visible = true; }
-        else { root.editor-page = v - 2; }
+    view-picked(v) => { root.show-view(v); }
+
+    function slot-of(v: int) -> int {
+        return v == PaneViews.steps ? root.steps-slot
+            : v == PaneViews.mixer ? root.mixer-slot
+            : v == PaneViews.devices ? root.devices-slot
+            : v == PaneViews.notes ? root.notes-slot
+            : root.playlist-slot;
     }
-    // Which view is active in each slot. `editor-page` and `mixer-visible`
-    // stay the writable state and Rust keeps its existing API: deriving the
-    // slot model from them rather than the other way round is what keeps this
-    // step to one file's markup, and a `mooloop-ui` build is four minutes.
-    // Step 02 inverts the ownership, when a third slot exists to need it.
-    property <int> main-active: root.mixer-visible ? PaneViews.mixer : PaneViews.steps;
-    property <int> split-active: -1;
-    property <int> bottom-active: root.editor-page + 2;
+    function set-view-slot(v: int, s: int) {
+        if (v == PaneViews.steps) { root.steps-slot = s; }
+        else if (v == PaneViews.mixer) { root.mixer-slot = s; }
+        else if (v == PaneViews.devices) { root.devices-slot = s; }
+        else if (v == PaneViews.notes) { root.notes-slot = s; }
+        else { root.playlist-slot = s; }
+    }
+    function set-slot-active(s: int, v: int) {
+        if (s == 0) { root.main-active = v; }
+        else if (s == 1) { root.split-active = v; }
+        else { root.bottom-active = v; }
+    }
+    // Reveal a view where it lives. Rust calls this; so does every tab.
+    public function show-view(v: int) {
+        root.set-slot-active(root.slot-of(v), v);
+    }
+
+    // The main slot's other view -- the one the split opens with, so opening
+    // it needs no prompt and no menu. Written out rather than looped because
+    // Slint functions have no loop and there are five views; the order is the
+    // tab order, so it is "the next tab along" as read.
+    function other-main-view() -> int {
+        return (root.steps-slot == 0 && root.main-active != PaneViews.steps) ? PaneViews.steps
+            : (root.mixer-slot == 0 && root.main-active != PaneViews.mixer) ? PaneViews.mixer
+            : (root.devices-slot == 0 && root.main-active != PaneViews.devices) ? PaneViews.devices
+            : (root.notes-slot == 0 && root.main-active != PaneViews.notes) ? PaneViews.notes
+            : (root.playlist-slot == 0 && root.main-active != PaneViews.playlist) ? PaneViews.playlist
+            : -1;
+    }
+    // Open or close the split. Closing folds its views back into the main
+    // slot rather than losing them, which is also what the divider does when
+    // it is dragged to an edge -- one behaviour, two ways to ask for it.
+    public function toggle-split() {
+        if (root.split-active >= 0) {
+            if (root.steps-slot == 1) { root.steps-slot = 0; }
+            if (root.mixer-slot == 1) { root.mixer-slot = 0; }
+            if (root.devices-slot == 1) { root.devices-slot = 0; }
+            if (root.notes-slot == 1) { root.notes-slot = 0; }
+            if (root.playlist-slot == 1) { root.playlist-slot = 0; }
+            // `main-active` is deliberately left alone: closing the split
+            // takes a pane away, it does not change what the pane you kept
+            // was showing.
+            root.split-active = -1;
+        } else if (root.other-main-view() >= 0) {
+            root.split-active = root.other-main-view();
+            root.set-view-slot(root.split-active, 1);
+            root.split-fraction = 0.5;
+        }
+    }
+    // Which view is active in each slot, or -1 for a slot holding nothing.
+    // This is the state now: `editor-page` and `mixer-visible` are gone,
+    // because a page index cannot name a view that has moved to another pane.
+    // Rust reveals a view with `show-view` and asks after one with the
+    // `showing-*` properties below.
+    in-out property <int> main-active: PaneViews.steps;
+    in-out property <int> split-active: -1;
+    in-out property <int> bottom-active: PaneViews.devices;
     // Which view is active in a slot, and whether a given view is the one.
     // Functions rather than an indexed array: a nested model access --
     // `slot-active[view-slots[v]]` -- reads as the obvious spelling and does
@@ -799,6 +849,14 @@ export component MainWindow inherits Window {
     function view-showing(v: int, s: int) -> bool {
         return root.slot-active(s) == v;
     }
+    // What Rust asks instead of comparing a page index. Each is "this view is
+    // the active view of whichever slot holds it", which stays true however
+    // the panes are arranged.
+    out property <bool> showing-steps: root.view-showing(PaneViews.steps, root.steps-slot);
+    out property <bool> showing-mixer: root.view-showing(PaneViews.mixer, root.mixer-slot);
+    out property <bool> showing-devices: root.view-showing(PaneViews.devices, root.devices-slot);
+    out property <bool> showing-notes: root.view-showing(PaneViews.notes, root.notes-slot);
+    out property <bool> showing-playlist: root.view-showing(PaneViews.playlist, root.playlist-slot);
     // How much room the bottom slot takes. DEVICES declares its own height;
     // every other view is given one. The three numbers were a conditional
     // chain on `editor-page` -- they are the same three, said once each.
@@ -806,7 +864,7 @@ export component MainWindow inherits Window {
         + (root.modulation-shelf-open && !root.editing-bus
             ? ModulationShelfMetrics.open-height - ModulationShelfMetrics.closed-height
             : 0px);
-    property <length> bottom-extent: !root.bottom-pane-visible ? 0px
+    property <length> bottom-extent: !root.bottom-pane-visible || root.bottom-active < 0 ? 0px
         : PaneViews.fixed-height[root.bottom-active] ? root.devices-extent
         : root.bottom-active == PaneViews.notes ? root.piano-dock-height
         : 376px;
@@ -822,7 +880,7 @@ export component MainWindow inherits Window {
     // itself shrinking under a tall dock. Kept out of the dock's height
     // binding: reading root.height there loops through the layout.
     changed height => {
-        if (root.editor-page == 1) {
+        if (root.showing-notes) {
             root.piano-dock-height = max(140px,
                 min(root.piano-dock-height, root.height - 220px));
         }
@@ -1585,13 +1643,13 @@ export component MainWindow inherits Window {
     // nested scroll area -- so a keyboard zoom just changes scale in place.
     callback zoom-in-requested();
     zoom-in-requested => {
-        if (root.editor-page == 1) {
+        if (root.showing-notes) {
             root.piano-step-width = clamp(root.piano-step-width * 1.15, 20px, 72px);
         }
     }
     callback zoom-out-requested();
     zoom-out-requested => {
-        if (root.editor-page == 1) {
+        if (root.showing-notes) {
             root.piano-step-width = clamp(root.piano-step-width * 0.87, 20px, 72px);
         }
     }
@@ -1614,11 +1672,11 @@ export component MainWindow inherits Window {
             // to transpose -- an editor with something selected is where the
             // arrow keys are expected to act.
             } else if (event.text == Key.UpArrow && !event.modifiers.control
-                    && !(root.editor-page == 1 && root.has-note-selection)) {
+                    && !(root.showing-notes && root.has-note-selection)) {
                 root.channel-selected(max(0, root.selected-channel - 1));
                 accept
             } else if (event.text == Key.DownArrow && !event.modifiers.control
-                    && !(root.editor-page == 1 && root.has-note-selection)) {
+                    && !(root.showing-notes && root.has-note-selection)) {
                 root.channel-selected(min(root.channels.length - 1, root.selected-channel + 1));
                 accept
             } else if (event.text == " ") {
@@ -1814,7 +1872,7 @@ export component MainWindow inherits Window {
                     MenuRow { text: "Copy Channel"; shortcut: "Ctrl+C"; selected => { root.edit-command-requested(3, root.selected-channel); } }
                     MenuRow { text: "Paste Channel"; shortcut: "Ctrl+V"; enabled: !root.project-edit-pending && root.channel-clipboard-available && root.channels.length < root.max-channels; selected => { root.edit-command-requested(4, root.selected-channel); } }
                     MenuSeparator {}
-                    MenuRow { text: "Select All Notes"; shortcut: "Ctrl+A"; enabled: root.editor-page == 1 && root.notes.length > 0; selected => { root.select-all-requested(); } }
+                    MenuRow { text: "Select All Notes"; shortcut: "Ctrl+A"; enabled: root.showing-notes && root.notes.length > 0; selected => { root.select-all-requested(); } }
                     MenuRow { text: "Delete Selected Notes"; shortcut: "Delete"; enabled: root.has-note-selection; selected => { root.delete-selected-notes-requested(); } }
                 }
 
@@ -1874,24 +1932,47 @@ export component MainWindow inherits Window {
                     open-menu <=> menu-bar.open-menu;
                     titles: menu-bar.titles;
                     bar-width: menu-bar.width;
-                    // Named for the view, not for one of the eight devices
-                    // that can head the chain. The tab beside it says
-                    // DEVICES; a menu row saying "Sampler" over a chain
+                    // One row per view, checked when that view is showing
+                    // wherever it lives. "Devices" is named for the view
+                    // rather than for one of the eight instruments that can
+                    // head the chain: a row saying "Sampler" over a chain
                     // headed by DS-01 said the wrong thing.
                     MenuRow {
+                        text: "Steps";
+                        shortcut: "Ctrl+1";
+                        checked: root.showing-steps;
+                        selected => { root.show-view(PaneViews.steps); }
+                    }
+                    MenuRow {
+                        text: "Mixer";
+                        shortcut: "Ctrl+2";
+                        checked: root.showing-mixer;
+                        selected => { root.show-view(PaneViews.mixer); }
+                    }
+                    MenuRow {
                         text: "Devices";
-                        checked: root.editor-page == 0;
-                        selected => { root.editor-page = 0; }
+                        shortcut: "Ctrl+3";
+                        checked: root.showing-devices;
+                        selected => { root.show-view(PaneViews.devices); }
                     }
                     MenuRow {
                         text: "Notes";
-                        checked: root.editor-page == 1;
-                        selected => { root.editor-page = 1; }
+                        shortcut: "Ctrl+4";
+                        checked: root.showing-notes;
+                        selected => { root.show-view(PaneViews.notes); }
                     }
                     MenuRow {
                         text: "Playlist";
-                        checked: root.editor-page == 2;
-                        selected => { root.editor-page = 2; }
+                        shortcut: "Ctrl+5";
+                        checked: root.showing-playlist;
+                        selected => { root.show-view(PaneViews.playlist); }
+                    }
+                    MenuSeparator {}
+                    MenuRow {
+                        text: "Split Top Pane";
+                        checked: root.split-active >= 0;
+                        enabled: root.split-active >= 0 || root.other-main-view() >= 0;
+                        selected => { root.toggle-split(); }
                     }
                     MenuSeparator {}
                     MenuRow {
@@ -5012,6 +5093,64 @@ export component MainWindow inherits Window {
                     }
 
 
+                    // The divider between the two top slots. Same idiom as the
+                    // dock's, turned ninety degrees, and drawn only while
+                    // there is a split to divide.
+                    //
+                    // Dragging it to either bound closes the split and folds
+                    // its views back into the main slot. That is the same
+                    // behaviour as the status bar's chip and the View menu
+                    // row, reached by the gesture people already try.
+                    if root.split-active >= 0 : Rectangle {
+                        x: work.main-w;
+                        y: 0px;
+                        width: 1px;
+                        height: work.top-h;
+                        background: split-grip.has-hover || split-grip.pressed
+                            ? Theme.focus : Theme.border;
+
+                        split-grip := TouchArea {
+                            x: -3px;
+                            width: 7px;
+                            height: parent.height;
+                            mouse-cursor: ew-resize;
+                            property <length> grab-x;
+                            pointer-event(e) => {
+                                if (e.kind == PointerEventKind.down) {
+                                    Motion.gesture-active = true;
+                                    self.grab-x = self.mouse-x;
+                                } else if (e.kind == PointerEventKind.move && self.pressed) {
+                                    // Moving-origin arithmetic, for the reason
+                                    // the dock's grip records: the grip travels
+                                    // with the edge it is setting.
+                                    let target = root.split-fraction
+                                        + (self.mouse-x - self.grab-x) / work.width;
+                                    let clamped = clamp(target, 0.15, 0.85);
+                                    if (clamped != target) {
+                                        self.grab-x = self.mouse-x;
+                                    }
+                                    root.split-fraction = clamped;
+                                } else if (e.kind == PointerEventKind.up
+                                        || e.kind == PointerEventKind.cancel) {
+                                    Motion.gesture-active = false;
+                                    // Dragged hard against a bound: the pane
+                                    // being squeezed out is being closed.
+                                    if (root.split-fraction <= 0.16
+                                            || root.split-fraction >= 0.84) {
+                                        if (root.split-fraction <= 0.16) {
+                                            // The main slot lost; what survives
+                                            // is what the split was showing.
+                                            root.main-active = root.split-active;
+                                        }
+                                        root.toggle-split();
+                                        root.split-fraction = 0.5;
+                                    }
+                                }
+                            }
+                            double-clicked => { root.split-fraction = 0.5; }
+                        }
+                    }
+
                     // The divider between the top slots and the dock. The 1px
                     // line is the visual; the grab zone is 6px and reaches
                     // up. Declared after every slot on purpose: the zone
@@ -5436,19 +5575,35 @@ export component MainWindow inherits Window {
                     overflow: elide;
                 }
 
-                // Panel toggles. The pinned ToolButton style exposes no checkable
-                // state, so these are hand-rolled two-state chips: tinted while
-                // their pane is visible, plain while hidden.
-                Rectangle {
+                // Layout toggles. The pinned ToolButton style exposes no
+                // checkable state, so these are hand-rolled two-state chips:
+                // tinted while their region is showing, plain while hidden.
+                //
+                // **They read in the screen order of the regions they
+                // toggle**, by each region's left edge: the dock starts at
+                // x 0, the split at the divider, the browser at the sidebar's
+                // edge. Adam asked for that on 2026-09-08, and applying it
+                // found the browser chip drawing `panel-left` for a sidebar
+                // that is docked on the right -- which it had done since the
+                // chip was written.
+                for chip[k] in [
+                    { on: root.bottom-pane-visible, fill: ToolIcons.panel-bottom-fill,
+                      line: ToolIcons.panel-bottom, label: "Toggle bottom pane" },
+                    { on: root.split-active >= 0, fill: "",
+                      line: ToolIcons.panel-split, label: "Split top pane" },
+                    { on: root.sidebar-visible, fill: ToolIcons.panel-right-fill,
+                      line: ToolIcons.panel-right, label: "Toggle browser" },
+                ] : Rectangle {
                     width: 20px;
                     height: 20px;
                     y: 2px;
-                    x: parent.width - self.width - 6px;
+                    // Chip k spans [width - (3 - k) * 26, +20].
+                    x: parent.width - (3 - k) * 26px;
                     border-radius: Theme.radius-sm;
                     border-width: 1px;
-                    border-color: bottom-pane-toggle.has-hover ? Theme.border : transparent;
-                    background: root.bottom-pane-visible ? Theme.accent-active
-                        : bottom-pane-toggle.pressed ? Theme.surface-active : Theme.surface;
+                    border-color: chip-touch.has-hover ? Theme.border : transparent;
+                    background: chip.on ? Theme.accent-active
+                        : chip-touch.pressed ? Theme.surface-active : Theme.surface;
                     Path {
                         width: 16px;
                         height: 16px;
@@ -5456,29 +5611,10 @@ export component MainWindow inherits Window {
                         y: (parent.height - self.height) / 2;
                         viewbox-width: 16;
                         viewbox-height: 16;
-                        commands: ToolIcons.panel-bottom;
-                        stroke: root.bottom-pane-visible ? Theme.text : Theme.text-muted;
-                        stroke-width: 1.3px;
-                        fill: transparent;
+                        commands: chip.fill;
+                        fill: chip.on ? Theme.text : Theme.text-muted;
+                        opacity: 0.55;
                     }
-                    bottom-pane-toggle := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.bottom-pane-visible = !root.bottom-pane-visible; }
-                    }
-                    accessible-role: button;
-                    accessible-label: "Toggle bottom pane";
-                    accessible-checked: root.bottom-pane-visible;
-                }
-                Rectangle {
-                    width: 20px;
-                    height: 20px;
-                    y: 2px;
-                    x: parent.width - self.width - 32px;
-                    border-radius: Theme.radius-sm;
-                    border-width: 1px;
-                    border-color: sidebar-toggle.has-hover ? Theme.border : transparent;
-                    background: root.sidebar-visible ? Theme.accent-active
-                        : sidebar-toggle.pressed ? Theme.surface-active : Theme.surface;
                     Path {
                         width: 16px;
                         height: 16px;
@@ -5486,18 +5622,24 @@ export component MainWindow inherits Window {
                         y: (parent.height - self.height) / 2;
                         viewbox-width: 16;
                         viewbox-height: 16;
-                        commands: ToolIcons.panel-left;
-                        stroke: root.sidebar-visible ? Theme.text : Theme.text-muted;
+                        commands: chip.line;
+                        stroke: chip.on ? Theme.text : Theme.text-muted;
                         stroke-width: 1.3px;
                         fill: transparent;
                     }
-                    sidebar-toggle := TouchArea {
+                    chip-touch := TouchArea {
                         mouse-cursor: pointer;
-                        clicked => { root.sidebar-visible = !root.sidebar-visible; }
+                        enabled: k != 1 || root.split-active >= 0
+                            || root.other-main-view() >= 0;
+                        clicked => {
+                            if (k == 0) { root.bottom-pane-visible = !root.bottom-pane-visible; }
+                            else if (k == 1) { root.toggle-split(); }
+                            else { root.sidebar-visible = !root.sidebar-visible; }
+                        }
                     }
                     accessible-role: button;
-                    accessible-label: "Toggle sidebar";
-                    accessible-checked: root.sidebar-visible;
+                    accessible-label: chip.label;
+                    accessible-checked: chip.on;
                 }
             }
 

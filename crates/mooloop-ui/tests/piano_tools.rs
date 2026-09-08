@@ -5,7 +5,7 @@
 //! and the target note from the press position, and none of that is
 //! exercised by calling the callback directly.
 
-use mooloop_ui::{default_piano_gestures, note_hit_test, MainWindow, NoteCell};
+use mooloop_ui::{view, default_piano_gestures, note_hit_test, MainWindow, NoteCell};
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc, VecModel};
 use std::cell::RefCell;
@@ -53,7 +53,7 @@ fn harness(tool: i32, notes: Vec<NoteCell>) -> MainWindow {
     let ui = MainWindow::new().unwrap();
     ui.set_piano_gestures(default_piano_gestures());
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
-    ui.set_editor_page(1);
+    ui.invoke_show_view(view::NOTES);
     ui.set_pattern_length(16);
     ui.set_piano_tool(tool);
 

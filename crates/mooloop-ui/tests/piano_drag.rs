@@ -12,7 +12,7 @@
 //! only appears after the SECOND move event. Invoking the callbacks directly,
 //! or dispatching a single move, passes even against the broken version.
 
-use mooloop_ui::{default_piano_gestures, note_hit_test, MainWindow, NoteCell};
+use mooloop_ui::{view, default_piano_gestures, note_hit_test, MainWindow, NoteCell};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc, VecModel};
 use std::cell::RefCell;
@@ -60,7 +60,7 @@ fn harness(notes: Vec<NoteCell>) -> MainWindow {
     // gesture role is unbound and no modifier does anything.
     ui.set_piano_gestures(default_piano_gestures());
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
-    ui.set_editor_page(1);
+    ui.invoke_show_view(view::NOTES);
     ui.set_pattern_length(16);
 
     let model = Rc::new(VecModel::from(notes));

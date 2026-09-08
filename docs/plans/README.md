@@ -9,9 +9,11 @@ directory should always contain live work.
 `docs/FOCUS.md` decides which of these is next. This file only says what state
 each one is in.
 
-Last swept 2026-09-08, when `pane-layout/` step 01 landed: the work area is
-five views in three slots, and the dock stopped carrying two toolbars where
-one would do. Earlier the same day, when that plan was written: Adam asked for
+Last swept 2026-09-08, when `pane-layout/` steps 01 and 02 landed: the work
+area is five views in three slots, the top pane splits, the dock stopped
+carrying two toolbars where one would do, and `Ctrl+1`..`Ctrl+5` started
+meaning "reveal this view wherever it lives" without their registry entries
+changing at all. Earlier the same day, when that plan was written: Adam asked for
 the top pane to split, and the four requirements he gave turned out to be one
 requirement -- *this view, in that place, at that size* -- asked about four
 surfaces, so the plan answers it once. Earlier the same day, when
@@ -51,7 +53,7 @@ is worth reading before either.
 
 | Plan | State |
 | --- | --- |
-| `pane-layout/` | **Step 01 landed 2026-09-08; 02-04 open.** Adam's split-view request, answered as a set of views and three slots rather than a control per requirement. The work area computes each slot's rectangle instead of nesting layouts, so a view needs one instance wherever it is drawn, and the dock's two stacked toolbars are the one row per view that made possible. Read its `README.md` before touching the work area, and `00-status.md` for the four Slint constraints step 01 found -- one of which, a nested model index that type-checks and does not evaluate, cost a wrong render. |
+| `pane-layout/` | **Steps 01-02 landed 2026-09-08; 03-04 open.** Adam's split-view request, answered as a set of views and three slots rather than a control per requirement. The work area computes each slot's rectangle instead of nesting layouts, so a view needs one instance wherever it is drawn, and the dock's two stacked toolbars are the one row per view that made possible. The top pane splits, and `editor-page` is gone -- a page index of the lower dock cannot name a view that has moved out of it. Read its `README.md` before touching the work area, and `00-status.md` for the four Slint constraints step 01 found -- one of which, a nested model index that type-checks and does not evaluate, cost a wrong render. |
 | `buffer-implementation/` | **Stage 1 done, Stage 2 open.** Stage 1's acceptance test 8 (RT allocation hygiene) is still unverified. |
 | `mono-synth-v2/` | **Complete and played**, one finding deliberately left open (Acid's cutoff corner). Kept out of the archive only because that finding needs Adam's ear, not because a step is unbuilt. |
 | `session-layer-extraction/` | **Done, 2026-09-03.** Lifted `mooloop-session` -- the model, the edits, undo, and engine command emission -- out of `mooloop-ui/src/lib.rs`, which is down from 14,157 lines to 9,797. `cargo test -p mooloop-session` is 87 tests in under a second, and is the first coverage the edit logic has ever had. Two departures are recorded in `00-status.md`: `UiState::new` is still long (callback *registration*, no longer decisions), and the pump's meter polling stayed in the view on purpose. |

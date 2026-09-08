@@ -9,7 +9,7 @@ done, and in particular anything the doing proved wrong about the plan.
 | Step | State |
 | --- | --- |
 | `01-the-pane-model.md` | **Landed 2026-09-08** on `feat/pane-split`. See below. |
-| `02-the-split.md` | Not started |
+| `02-the-split.md` | **Landed 2026-09-08.** See below. |
 | `03-zoom-and-resize.md` | Not started |
 | `04-moving-a-view.md` | Not started |
 
@@ -54,6 +54,64 @@ preferred-height: 0px` is what lets a slot read `parent.width`.** Without it
 the container sizes to its children while its children size off it, and the
 layout closes a loop through `layoutinfo-v`. That was the first thing the
 prototype hit and it is the load-bearing line in the work container.
+
+## Step 02 — what the doing changed
+
+The top pane splits, the divider drags and resets and closes, and the status
+bar's layout cluster reads in screen order with a glyph family that can be
+told apart.
+
+**`editor-page` and `mixer-visible` are gone.** Step 01 kept them and derived
+the slot model from them; that could not survive this step, because
+requirement 1 is `PLAYLIST` full-width in the *top* pane and a page index of
+the lower dock cannot name a view that has left it. Rust now reveals a view
+with `invoke_show_view(id)` and asks after one with `get_showing_notes()` and
+friends, which stay true however the panes are arranged. `apply_pane` went
+from six lines of "clear the mixer flag, then set a page index" to one.
+
+**The view ids are public.** `mooloop_ui::view::{STEPS, MIXER, DEVICES, NOTES,
+PLAYLIST}` — ten test files set `editor_page` directly and now reveal a view
+the way the application does, off one definition rather than a literal each.
+`view_id(Pane)` is the only place the session's `Pane` and the Slint ids meet.
+
+**Closing the split leaves `main-active` alone.** The first cut moved the
+split's view into the main slot, which is wrong: closing a split takes a pane
+away, it does not change what the pane you kept was showing. The exception is
+dragging the divider all the way *left* — there the main slot is the one being
+squeezed out, so what survives is what the split was showing.
+
+**The `View` menu is one row per view.** It was three rows for the lower
+dock's pages; it is five now, checked on `showing-*`, with the `Ctrl+1..5`
+chords shown and a `Split Top Pane` row under a separator. `menubar.rs` moved
+with it: Playlist is row 4 rather than row 2, which is a coordinate the test
+had hard-coded.
+
+**Both narrow-column worries needed no code, which is worth recording so
+they are not re-checked.** `MixerPane` already sets
+`viewport-width: max(self.visible-width, strip-row.preferred-width)`, so a
+strip row wider than its column scrolls rather than compressing -- which is
+what `UI_DESIGN.md` asks for and what Adam confirmed he wanted. The channel
+rack's own `ScrollView` already derives its viewport width from the pattern
+length, so halving its column is the case it was written for. Verified by
+reading them, not assumed.
+
+**The dock chip and the browser chip swapped places, and two tests clicked
+the old ones.** Ordering by each region's left edge puts the dock first and
+the browser last, so in a 960px window the dock's chip went from centre 944 to
+892 and the browser's from 922 to 944 -- each landing where the other had
+been, which is the worst possible arrangement for a coordinate a test
+hard-codes, since the click keeps working and toggles the wrong thing.
+`dock_resize.rs` caught it; `sidebar.rs` would have opened the split instead
+of the sidebar. Both now carry the chip-position formula in a comment rather
+than a bare number.
+
+**The layout cluster's glyphs needed fill, not position.** A rule at `x 8` and
+a rule at `x 10` are the same square at 16px — the sketch said so before any
+of it was built. A docked panel is drawn solid and a split is drawn as two
+empty halves, which is the true distinction and the one VS Code draws too.
+The browser chip had been drawing `panel-left` for a sidebar docked on the
+right since the chip was written; that is fixed here rather than left beside
+a new chip.
 
 ## Decisions taken before any code, so they are not re-litigated
 

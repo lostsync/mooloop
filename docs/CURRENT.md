@@ -11,12 +11,22 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   dock. The transport row carries play/stop, pattern-vs-song mode, a
   bar:beat:tick position readout, beat lamps, drag-or-type tempo, global
   sixteenth-note swing, and the master meter, and never changes.
-- **The work area is five views in slots**, as of 2026-09-08: `STEPS` and
-  `MIXER` in the top pane, `DEVICES`, `NOTES` and `PLAYLIST` in the dock. A
-  view lives in exactly one slot, and a slot's tab strip lists what it holds.
-  The arrangement is fixed for now; what changed is the mechanism under it,
-  which computes each slot's rectangle rather than nesting layouts, so a view
-  needs one instance wherever it is drawn.
+- **The work area is five views in three slots**, as of 2026-09-08. `main`
+  and `split` divide the top; `bottom` is the dock. A view lives in exactly
+  one slot, and a slot's tab strip lists what it holds, so no strip can
+  misreport what is on screen. Each slot's rectangle is computed rather than
+  nested in layouts, which is what lets a view be drawn anywhere off one
+  instance.
+- **The top pane splits.** The status bar's middle chip opens it with the main
+  pane's other view; the divider between the two halves drags, resets to even
+  on a double-click, and closes the split when dragged to either bound —
+  folding its views back into the main pane rather than losing them. `View >
+  Split Top Pane` does the same thing from the menu.
+- **A view is revealed, not navigated to.** `Ctrl+1`..`Ctrl+5` and the `View`
+  menu name `Steps`, `Mixer`, `Devices`, `Notes` and `Playlist`, and each
+  shows that view wherever it lives. There is no longer an `editor page`: a
+  page index of the lower dock could not name a view that had moved out of
+  it.
 - **A view has exactly one toolbar row, and its slot's tab strip leads it.**
   With `STEPS` up it carries pattern selection, the cursor tools and pattern
   length; with `MIXER` up, nothing, because the mixer's controls are on its

@@ -1,5 +1,5 @@
 use mooloop_core::MAX_BUSES;
-use mooloop_ui::{ChannelRow, EffectSlotRow, MainWindow, MixerStripRow, StepCell};
+use mooloop_ui::{view, ChannelRow, EffectSlotRow, MainWindow, MixerStripRow, StepCell};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
 use std::cell::Cell;
@@ -129,8 +129,8 @@ fn click(ui: &MainWindow, x: f32, y: f32) {
 #[test]
 fn render_mixer_pane_with_a_bus_chain() {
     let ui = headless();
-    ui.set_mixer_visible(true);
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::MIXER);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_editing_bus(true);
     ui.set_editing_bus_index(3);
     ui.set_editing_bus_name(SharedString::from("Bus 3"));
@@ -231,7 +231,7 @@ fn render_mixer_pane_with_a_bus_chain() {
 #[test]
 fn clicking_a_strip_name_selects_that_bus() {
     let ui = headless();
-    ui.set_mixer_visible(true);
+    ui.invoke_show_view(view::MIXER);
 
     let picked = Rc::new(Cell::new(-1));
     let sink = picked.clone();
@@ -258,7 +258,7 @@ fn clicking_a_strip_name_selects_that_bus() {
 #[test]
 fn channel_bus_picker_reports_the_selected_destination() {
     let ui = headless();
-    ui.set_mixer_visible(false);
+    ui.invoke_show_view(view::STEPS);
 
     let picked = Rc::new(Cell::new(-1));
     let sink = picked.clone();

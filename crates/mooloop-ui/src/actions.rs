@@ -131,9 +131,13 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
     action!("view.pane-prev", "Previous Pane", "View", ctrl + "left"),
     action!("view.pane-steps", "Show Steps", "View", ctrl + "1"),
     action!("view.pane-mixer", "Show Mixer", "View", ctrl + "2"),
-    action!("view.pane-source", "Show Source", "View", ctrl + "3"),
+    // Labelled for the view; the *id* keeps `source` because a user's
+    // rebindings are stored against it and renaming an id silently drops
+    // whatever they had bound.
+    action!("view.pane-source", "Show Devices", "View", ctrl + "3"),
     action!("view.pane-notes", "Show Notes", "View", ctrl + "4"),
     action!("view.pane-playlist", "Show Playlist", "View", ctrl + "5"),
+    action!("view.split-toggle", "Split Top Pane", "View", ctrl + "\\"),
     action!("view.zoom-in", "Zoom In", "View", ctrl + "="),
     action!("view.zoom-out", "Zoom Out", "View", ctrl + "-"),
     action!("channel.add", "Add Channel", "Channel", ctrl + shift + "n"),

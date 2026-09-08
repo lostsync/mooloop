@@ -1,4 +1,4 @@
-use mooloop_ui::{ChannelRow, MainWindow, PlaylistClip, StepCell};
+use mooloop_ui::{view, ChannelRow, MainWindow, PlaylistClip, StepCell};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
 use std::cell::Cell;
@@ -28,7 +28,7 @@ fn render_playlist_snapshot() {
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui.set_song_mode(true);
-    ui.set_editor_page(2);
+    ui.invoke_show_view(view::PLAYLIST);
     ui.set_pattern_count(2);
     ui.set_pattern_length(2);
     ui.set_playlist_snap_index(1);

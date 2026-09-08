@@ -467,6 +467,17 @@ columns with tiny `+` and `-` glyphs.
 - **The tab strip is the part of that row that never clips.** It is the way
   out of the pane. A dense row clips its own controls at a narrow width
   instead, which is what the piano roll's already did.
+- **The status bar's layout chips read in the screen order of the regions
+  they toggle**, by each region's left edge: the dock at `x 0`, the split at
+  the divider, the browser at the sidebar's edge. Their glyphs share one
+  outline, and what separates them is **fill, not position** — a docked panel
+  appears and disappears and is drawn solid; a split is two editors and is
+  drawn as two empty halves. Two rules 2px apart are the same square at 16px.
+- **A divider closes what it is dragged out of existence.** Both dividers use
+  one idiom: a 1px line taking `Theme.focus` on hover, a grab zone beside it,
+  moving-origin drag arithmetic because the grip travels with the edge it
+  sets, and re-anchoring when a bound swallows a move. The vertical one adds
+  double-click-to-even, and dragging it to either bound folds the split away.
 - **A setting that belongs to a pane lives in that pane's header, once.** A
   control that has to ask which pane is open in order to know which value it
   is editing is in the wrong place -- that question is the symptom.
