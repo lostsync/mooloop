@@ -23,7 +23,7 @@ Three disagreements, one shape: a range written twice.
 
 - The sampler's envelope readout was **wrong by 2.5x**, and its resting values
   disagreed with the table as well.
-- **Nothing tapered.** Eighteen envelope stages across five faces laid a
+- **Nothing tapered.** Twenty-one envelope stages across five faces laid a
   1 ms–8 s ratio range across linear travel, so the useful part of every one
   was the first 2.5% of the knob.
 - **The delay's `1/2` was an eighth note**, and the "Reverse Wash" factory
@@ -52,9 +52,11 @@ twenty-one stages.
 **Forty-six rendered tooltips were sentences, and one is left** — "Repeat the
 marked section (L)", a label plus its shortcut, which is the one form Adam's
 rule allows. The commit message says twenty-six: that was a recount taken
-after the first twenty had already been shortened, and it undercounts. The reason the rule was not kept
-is that explaining a control needed a `hover-hint` property threaded up
-through its device face, and exactly one face ever grew that plumbing.
+after the first twenty had already been shortened, and it undercounts.
+
+The reason the rule was not kept is that explaining a control needed a
+`hover-hint` property threaded up through its device face, and exactly one
+face ever grew that plumbing.
 
 `StatusHint` is a global on the pattern `Motion.gesture-active` established:
 a control publishes its own sentence, the status bar reads it, and it works at
