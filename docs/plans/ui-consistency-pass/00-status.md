@@ -49,7 +49,10 @@ twenty-one stages.
 
 ## Step 03 — tooltips are labels
 
-Twenty-six rendered tooltips were sentences. The reason the rule was not kept
+**Forty-six rendered tooltips were sentences, and one is left** — "Repeat the
+marked section (L)", a label plus its shortcut, which is the one form Adam's
+rule allows. The commit message says twenty-six: that was a recount taken
+after the first twenty had already been shortened, and it undercounts. The reason the rule was not kept
 is that explaining a control needed a `hover-hint` property threaded up
 through its device face, and exactly one face ever grew that plumbing.
 

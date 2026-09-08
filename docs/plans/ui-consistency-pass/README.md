@@ -85,7 +85,14 @@ Only twelve components render their `tooltip` as a visible tooltip —
 `SelectorBank` show the *value* and keep `tooltip` for `accessible-label`, so
 the hundred-odd long strings on those are correct where they are.
 
-The ones that do show, and are sentences rather than labels:
+**Forty-six of them are sentences rather than labels** (counted as a rendered
+`tooltip:` whose longest string literal is over 26 characters). Fifteen are
+`SelectorBank`s, which do not render their own `tooltip` but paste it in
+front of each option and hand the result to the segment's `ToolButton`, which
+does — so "Advance from the transport clock, or one step per note: CLOCK" is
+a tooltip on a 44px chip.
+
+The worst of them:
 
 | Site | Now |
 | --- | --- |
