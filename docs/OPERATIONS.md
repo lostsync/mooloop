@@ -113,6 +113,30 @@ Write a log file** mirrors everything, `debug` included, to
 It appends across runs and rolls to `mooloop.log.1` past 4 MB. The preference
 sticks, so it can be switched on before trying to reproduce something.
 
+### The Output Went Missing
+
+A saved output destination outlives the thing it names. Unplug the headphones,
+change an ALSA profile, or restart the audio server and have it rename its
+nodes, and the pair recorded in `settings.toml` matches nothing in the graph.
+
+Connecting to nothing is the one failure with no symptom — the engine runs,
+the meters move, the transport rolls, and there is silence. So mooloop takes
+any working stereo destination instead and says which:
+
+```text
+warn  audio  the saved audio output "..." does not exist; connected to
+             "alsa_output...HiFi__Speaker__sink" instead.
+             Preferences -> Audio picks a different one
+```
+
+The choice is deliberately unranked — the first destination that is neither
+mooloop itself nor the pair that just failed. Preferring speakers over HDMI
+would be a guess about a machine the engine cannot see; being audible
+*somewhere* is the whole intent, and Preferences owns the real choice.
+
+To see the state directly: `pw-link -l | grep mooloop` lists the links, and no
+output at all means the outputs are connected to nothing.
+
 ### Reading An Audio Dropout
 
 A dropout has two possible causes and they need opposite fixes, so the log

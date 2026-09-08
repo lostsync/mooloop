@@ -278,6 +278,10 @@ const CLIENT_NAME: &str = "mooloop";
 const OUT_L_NAME: &str = "mooloop:out_l";
 const OUT_R_NAME: &str = "mooloop:out_r";
 const DEFAULT_OUTPUT_L: &str = "system:playback_1";
+/// JACK's built-in audio port type, as `Client::ports` wants it. Named here
+/// rather than spelled at the call site because a typo in it silently matches
+/// nothing rather than failing.
+const AUDIO_PORT_TYPE: &str = "32 bit float mono audio";
 const DEFAULT_OUTPUT_R: &str = "system:playback_2";
 
 #[derive(Debug)]
@@ -298,6 +302,70 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// JACK input ports grouped by owning client, as candidate output
+/// destinations. A non-realtime JACK graph query.
+///
+/// Shared by the preferences page and by startup's fallback, so that what the
+/// engine reaches for when a saved target has gone is exactly what the
+/// interface would have offered.
+fn stereo_destinations(jack_client: &Client) -> Vec<OutputTarget> {
+    // Audio inputs only. Unfiltered, this returns MIDI destinations too --
+    // a machine with `Midi-Bridge` on the graph offers it as an output pair,
+    // and connecting an audio port to it simply fails. That was survivable
+    // while the list only populated a menu a human read; it is not, now that
+    // the fallback below picks from it without asking.
+    let ports = jack_client.ports(
+        None,
+        Some(AUDIO_PORT_TYPE),
+        jack::PortFlags::IS_INPUT,
+    );
+    let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
+    for port in ports {
+        let Some((client_name, _)) = port.split_once(':') else {
+            continue;
+        };
+        match grouped.iter_mut().find(|(name, _)| name == client_name) {
+            Some((_, ports)) => ports.push(port),
+            None => grouped.push((client_name.to_owned(), vec![port])),
+        }
+    }
+    grouped
+        .into_iter()
+        .filter_map(|(client, ports)| {
+            let mut ports = ports.into_iter();
+            let port_l = ports.next()?;
+            let port_r = ports.next()?;
+            Some(OutputTarget {
+                client,
+                port_l,
+                port_r,
+            })
+        })
+        .collect()
+}
+
+/// Which destinations to try when the saved one does not exist, in order.
+///
+/// Split from the JACK calls around it because this is the only part with a
+/// decision in it, and a decision that cannot be tested without an audio
+/// server is a decision nobody will revisit.
+///
+/// The rule is deliberately dull: the first destination that is not the one
+/// already tried, and not mooloop itself. Ranking outputs by desirability --
+/// preferring speakers over HDMI, say -- is a guess about a machine this code
+/// cannot see, and being audible somewhere is the whole of what is wanted
+/// here. Preferences owns the actual choice.
+fn fallback_destinations<'a>(
+    available: &'a [OutputTarget],
+    tried: &'a (String, String),
+) -> impl Iterator<Item = &'a OutputTarget> + 'a {
+    available.iter().filter(move |candidate| {
+        candidate.client != CLIENT_NAME
+            && candidate.port_l != tried.0
+            && candidate.port_r != tried.1
+    })
+}
 
 /// Keep-alive guard for the audio engine. Dropping this shuts down JACK.
 pub struct Engine {
@@ -417,13 +485,65 @@ impl Engine {
         let c = async_client.as_client();
         let sources = [OUT_L_NAME, OUT_R_NAME];
         let destinations = [target.0.as_str(), target.1.as_str()];
+        let mut connected = true;
         for (src, dst) in sources.iter().zip(destinations.iter()) {
             match c.connect_ports_by_name(src, dst) {
                 Ok(()) | Err(jack::Error::PortAlreadyConnected(_, _)) => {}
-                Err(e) => mooloop_core::log_warn!(
+                Err(_) => connected = false,
+            }
+        }
+        // A saved destination outlives the thing it names. A device is
+        // unplugged, a profile changes, the audio server is restarted and
+        // renames its nodes -- and the target recorded in settings then
+        // matches nothing. Connecting to nothing is the one outcome with no
+        // symptom: the engine runs, the meters move, the transport rolls, and
+        // there is silence with nothing on screen to say why.
+        //
+        // So take any working stereo destination rather than none, and say so.
+        // A wrong output is audible and one click from right in Preferences;
+        // no output is a bug report.
+        if !connected {
+            for (src, dst) in sources.iter().zip(destinations.iter()) {
+                let _ = c.disconnect_ports_by_name(src, dst);
+            }
+            // In order, not just the first: a candidate can be present in the
+            // graph and still refuse the connection, and stopping at one would
+            // leave the silence this exists to prevent.
+            let available = stereo_destinations(c);
+            let landed = fallback_destinations(&available, &target).find(|candidate| {
+                let pair = [candidate.port_l.as_str(), candidate.port_r.as_str()];
+                let mut ok = true;
+                for (src, dst) in sources.iter().zip(pair.iter()) {
+                    match c.connect_ports_by_name(src, dst) {
+                        Ok(()) | Err(jack::Error::PortAlreadyConnected(_, _)) => {}
+                        Err(_) => ok = false,
+                    }
+                }
+                if !ok {
+                    for (src, dst) in sources.iter().zip(pair.iter()) {
+                        let _ = c.disconnect_ports_by_name(src, dst);
+                    }
+                }
+                ok
+            });
+            match landed {
+                Some(fallback) => {
+                    output_target
+                        .store(Arc::new((fallback.port_l.clone(), fallback.port_r.clone())));
+                    mooloop_core::log_warn!(
+                        "audio",
+                        "the saved audio output {:?} is not available; connected to {:?} \
+                         instead. Preferences -> Audio picks a different one",
+                        target.0,
+                        fallback.client
+                    );
+                }
+                None => mooloop_core::log_warn!(
                     "audio",
-                    "could not auto-connect {src} -> {dst} ({e}); \
-                     connect it manually in a patchbay (e.g. qpwgraph, qjackctl, Helvum)"
+                    "the saved audio output {:?} is not available and nothing else accepted \
+                     a connection; connect mooloop manually in a patchbay \
+                     (e.g. qpwgraph, qjackctl, Helvum)",
+                    target.0
                 ),
             }
         }
@@ -756,31 +876,7 @@ impl EngineHandle {
     /// destinations. A non-realtime JACK graph query; call it when the audio
     /// preferences page opens or on an explicit refresh, not every frame.
     pub fn available_output_targets(&self) -> Vec<OutputTarget> {
-        let jack_client = self.client.as_client();
-        let ports = jack_client.ports(None, None, jack::PortFlags::IS_INPUT);
-        let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
-        for port in ports {
-            let Some((client_name, _)) = port.split_once(':') else {
-                continue;
-            };
-            match grouped.iter_mut().find(|(name, _)| name == client_name) {
-                Some((_, ports)) => ports.push(port),
-                None => grouped.push((client_name.to_owned(), vec![port])),
-            }
-        }
-        grouped
-            .into_iter()
-            .filter_map(|(client, ports)| {
-                let mut ports = ports.into_iter();
-                let port_l = ports.next()?;
-                let port_r = ports.next()?;
-                Some(OutputTarget {
-                    client,
-                    port_l,
-                    port_r,
-                })
-            })
-            .collect()
+        stereo_destinations(self.client.as_client())
     }
 
     /// Disconnect the previously configured output target (if connected) and
@@ -834,5 +930,74 @@ fn effect_target_index(target: EffectTarget) -> usize {
     match target {
         EffectTarget::Channel(channel) => usize::from(channel),
         EffectTarget::Bus(bus) => MAX_CHANNELS + usize::from(bus),
+    }
+}
+
+#[cfg(test)]
+mod output_fallback_tests {
+    use super::{fallback_destinations, OutputTarget, CLIENT_NAME};
+
+    fn target(client: &str) -> OutputTarget {
+        OutputTarget {
+            client: client.to_owned(),
+            port_l: format!("{client}:playback_FL"),
+            port_r: format!("{client}:playback_FR"),
+        }
+    }
+
+    fn clients(available: &[OutputTarget], tried: &(String, String)) -> Vec<String> {
+        fallback_destinations(available, tried)
+            .map(|t| t.client.clone())
+            .collect()
+    }
+
+    fn gone() -> (String, String) {
+        ("gone:playback_FL".into(), "gone:playback_FR".into())
+    }
+
+    /// The ordinary case: a saved output that no longer exists, and a machine
+    /// that has something else to offer.
+    #[test]
+    fn a_missing_output_falls_back_to_whatever_is_there() {
+        let available = vec![target("hdmi"), target("speaker")];
+        assert_eq!(clients(&available, &gone()), ["hdmi", "speaker"]);
+    }
+
+    /// Every candidate is offered, not just the first. A destination can be
+    /// in the graph and still refuse the connection, and the caller walks this
+    /// until one accepts.
+    #[test]
+    fn every_candidate_is_offered_in_order() {
+        let available = vec![target("a"), target("b"), target("c")];
+        assert_eq!(clients(&available, &gone()), ["a", "b", "c"]);
+    }
+
+    /// The destination that was already tried is not a fallback for itself.
+    /// Reaching here means connecting to it failed, and the identical pair
+    /// would fail the same way.
+    #[test]
+    fn the_destination_that_just_failed_is_not_offered_again() {
+        let available = vec![target("headphones"), target("speaker")];
+        let tried = (
+            "headphones:playback_FL".into(),
+            "headphones:playback_FR".into(),
+        );
+        assert_eq!(clients(&available, &tried), ["speaker"]);
+    }
+
+    /// Mooloop's own input ports are in the graph like anyone else's. Routing
+    /// the master output back into the program would be a feedback loop
+    /// arrived at by accident.
+    #[test]
+    fn mooloop_is_never_its_own_output() {
+        let available = vec![target(CLIENT_NAME), target("speaker")];
+        assert_eq!(clients(&available, &gone()), ["speaker"]);
+    }
+
+    /// A machine with nothing to play through gets the warning, not a panic
+    /// and not a wrong guess.
+    #[test]
+    fn nothing_available_means_no_fallback() {
+        assert!(clients(&[], &gone()).is_empty());
     }
 }
