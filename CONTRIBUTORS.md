@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-07
-- Sessions: 71
+- Sessions: 72
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -110,7 +110,8 @@ Alphabetical by model name, then by harness.
   that could not say whether it was late or merely never run, and the undo
   history whose ceiling was a count of things that are not the same size, and
   the gigabyte a one-channel project allocates before it holds
-  anything. Longer accounts of most of this are in
+  anything, and then what that gigabyte costs every time a drag moves the
+  mouse. Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
 ### Claude Sonnet 5 — Claude Code

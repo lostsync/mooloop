@@ -15,7 +15,10 @@
 
 use std::time::Instant;
 
-use mooloop_core::{AutomationLane, AutomationPoint, NoteEvent, ParamAddr, Project, ProjectChannel};
+use mooloop_core::{
+    AutomationLane, AutomationPoint, EffectKind, EffectSlotState, NoteEvent, ParamAddr, Project,
+    ProjectChannel,
+};
 
 use crate::session::Session;
 
@@ -183,7 +186,6 @@ fn undo_entry_memory() {
 #[test]
 fn a_heavy_song_is_bounded_by_the_undo_budget() {
     use crate::history::{Entry, History, MAX_RETAINED_BYTES, MIN_ENTRIES};
-    use mooloop_core::{EffectKind, EffectSlotState};
 
     let mut project = Project {
         pattern_lengths: vec![16; 24],
@@ -245,6 +247,67 @@ fn a_heavy_song_is_bounded_by_the_undo_budget() {
         "only {} entries survived",
         history.retained()
     );
+}
+
+/// What the pump derives on every tick, whether or not anything changed.
+///
+/// `sync_compensation` and `sync_audio_graph` are called from the UI pump at
+/// `PUMP_INTERVAL_MS`, currently 8 ms, and both begin by deriving a whole
+/// plan from the project so they can compare it against the one already sent.
+/// That is deliberate -- a flag each edit had to set is a flag some edit will
+/// forget -- but it means the cost is paid 125 times a second forever, not
+/// once per edit.
+///
+/// The figure that matters is the share of one tick. A tick is 8 ms; anything
+/// here that reaches a meaningful fraction of that is a UI thread spending
+/// its budget on deciding nothing has changed.
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn pump_derivation_cost() {
+    let ticks = 2000;
+    println!();
+    println!("  A pump tick is 8 ms. Per-call medians over {ticks} derivations.");
+    println!();
+    println!("  channels  patterns  effects   latency_plan   audio_graph_plan   % of a tick");
+    for (channels, patterns, effects) in
+        [(4usize, 4usize, 2usize), (15, 24, 3), (32, 24, 8), (64, 32, 8)]
+    {
+        let mut project = Project {
+            pattern_lengths: vec![16; patterns],
+            ..Project::default()
+        };
+        project.channels.clear();
+        for index in 0..channels {
+            let mut channel = ProjectChannel::mlp8(index, patterns);
+            for _ in 0..effects {
+                channel
+                    .setup
+                    .push_effect(EffectSlotState::of_kind(EffectKind::Drive));
+            }
+            project.channels.push(channel);
+        }
+        let mut session = Session::default();
+        session.replace_project(&project, &[]);
+
+        let mut latency = Vec::with_capacity(ticks);
+        let mut graph = Vec::with_capacity(ticks);
+        for _ in 0..ticks {
+            let started = Instant::now();
+            std::hint::black_box(session.latency_plan());
+            latency.push(started.elapsed().as_nanos());
+            let started = Instant::now();
+            std::hint::black_box(session.audio_graph_plan());
+            graph.push(started.elapsed().as_nanos());
+        }
+        latency.sort_unstable();
+        graph.sort_unstable();
+        let l = latency[latency.len() / 2];
+        let g = graph[graph.len() / 2];
+        let share = (l + g) as f64 / 8_000_000.0 * 100.0;
+        println!(
+            "  {channels:>8}  {patterns:>8}  {effects:>7}   {l:>10} ns   {g:>14} ns   {share:>9.3}%"
+        );
+    }
 }
 
 /// `seconds` of stereo audio, as a sample a channel could be holding.

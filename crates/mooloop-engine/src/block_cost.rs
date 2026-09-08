@@ -355,3 +355,54 @@ fn prepared_project_memory() {
         drop(render);
     }
 }
+
+/// What installing a project costs the thread that does it.
+///
+/// Every `PendingEngineMessage::ProjectEdit` reaches
+/// `EngineHandle::install_project`, which builds a *complete* new
+/// `RenderState` and hands the displaced one back through the reclaim ring to
+/// be dropped by `poll` -- both on the UI thread. `prepared_project_memory`
+/// says that state is about a gigabyte; this says what allocating and freeing
+/// it costs.
+///
+/// The budget to read it against is a pointer frame. A drag reports an edit on
+/// every move, so an install costing more than about 8 ms is a drag the
+/// interface cannot keep up with, and one costing a large fraction of a core
+/// is a UI thread that stays busy for as long as the mouse is moving.
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn project_install_cost() {
+    println!();
+    println!("  channels   effects each   ms per install   installs per core-second");
+    for (channels, effects) in [(1usize, 0usize), (15, 3), (15, 10), (32, 10)] {
+        let mut project = idle_sampler_project(channels);
+        for channel in &mut project.channels {
+            for _ in 0..effects {
+                channel
+                    .setup
+                    .push_effect(EffectSlotState::of_kind(EffectKind::Reverb));
+            }
+        }
+        // Warm the allocator so the first install is not paying for arena
+        // growth the rest do not.
+        for _ in 0..4 {
+            drop(RenderState::from_project(SAMPLE_RATE, &project, &[]));
+        }
+        let mut timings = Vec::with_capacity(40);
+        for _ in 0..40 {
+            let started = Instant::now();
+            let render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+            // The drop is the other half of the cost and lands on the same
+            // thread, one poll later.
+            drop(render);
+            timings.push(started.elapsed().as_nanos());
+        }
+        timings.sort_unstable();
+        let median = timings[timings.len() / 2];
+        println!(
+            "  {channels:>8}   {effects:>12}   {:>14.2}   {:>24.0}",
+            median as f64 / 1.0e6,
+            1.0e9 / median as f64
+        );
+    }
+}

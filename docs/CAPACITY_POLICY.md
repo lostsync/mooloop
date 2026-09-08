@@ -54,8 +54,43 @@ effects, buffers and whole projects already travel. Making a strip arrive when
 a channel does, and a generator when a channel selects it, keeps every ceiling
 where it is and stops dimensioning by them.
 
+### What the floor costs per edit, which is the part that hurts
+
+The gigabyte would be affordable if it were paid once. It is not.
+`EngineHandle::install_project` builds a *complete* new `RenderState` and
+returns the displaced one through the reclaim ring to be dropped by `poll` —
+both on the UI thread — and every `PendingEngineMessage::ProjectEdit` goes
+through it. `block_cost::project_install_cost` measures that round trip at
+**20 ms for a fifteen-channel project** and 48 ms for a thirty-two channel
+one.
+
+A pointer drag reports an edit on every move frame; `history::Entry::gesture`
+exists precisely because it does. So a drag asks the UI thread for a 20 ms
+allocate-and-free of a gigabyte, sixty times a second, and the thread
+saturates — measured at 65% of a core sustained across a 46-minute session,
+against 0.8% when idle.
+
+It is also the most likely reason an edit is *audible*. The audio callback
+holds `SCHED_FIFO` and is still not protected from what a gigabyte of
+`mmap`/`munmap` does to the machine underneath it: page faults on fresh pages,
+TLB shootdown IPIs that no scheduling priority defers, and the memory
+bandwidth the churn consumes. That is a hypothesis rather than a measurement,
+and it has a cheap test — `EngineHandle::take_load` reports `late_wakeups`,
+which should spike during a drag and stay at zero during playback that is not
+being edited.
+
+Two independent fixes, either of which helps:
+
+- make the render state cheap to build, per the section above, so an install
+  costs what a fifteen-channel project's worth of state costs rather than what
+  256 channels' worth does;
+- stop rebuilding it for edits that do not change structure. A note move or a
+  knob is already expressible on the POD command path, and the structural
+  command path already exists for the ones that are not.
+
 Not yet done, and not a thing to do casually — it is the core of the render
-state. The measurement is committed so the decision has a before to point at.
+state and the edit path either side of it. The measurements are committed so
+the decision has a before to point at.
 
 ## Current boundaries
 
