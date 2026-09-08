@@ -8,6 +8,18 @@
 //! cargo test -p mooloop-engine --release block_cost -- --ignored --nocapture
 //! ```
 //!
+//! **The allocation tests need `--test-threads=1`, and one filter at a time.**
+//! `COUNTING` is a global allocator and `live()` is a process-wide figure, so
+//! two of them running at once measure each other. The failure is silent and
+//! does not look like a failure -- it looks like a number:
+//! `RenderState::from_project(0ch)` read 40.33 MB and the one-channel row read
+//! 0.00 MB on a run where three of these shared a thread pool.
+//!
+//! ```sh
+//! cargo test -p mooloop-engine --release prepared_project_memory \
+//!   -- --ignored --nocapture --test-threads=1
+//! ```
+//!
 //! The figure that matters is nanoseconds per block against the block's own
 //! real-time budget: a 128-frame block at 48 kHz must finish inside 2.67 ms,
 //! and everything the engine spends before a single sample is generated comes
@@ -326,7 +338,7 @@ fn idle_bus_cost() {
 /// Recorded here rather than argued about, so that any later decision to make
 /// strips or generators arrive on demand has a before to point at.
 #[test]
-#[ignore = "measures live allocation; run deliberately in release"]
+#[ignore = "measures live allocation; run alone, in release, with --test-threads=1"]
 fn prepared_project_memory() {
     println!();
     println!(
@@ -549,7 +561,7 @@ fn install_churn_disturbs_a_deadline_thread() {
 /// `RenderState::new` separately, because the floor is a sum of independently
 /// reasonable decisions and only the total is alarming.
 #[test]
-#[ignore = "measures live allocation; run deliberately in release"]
+#[ignore = "measures live allocation; run alone, in release, with --test-threads=1"]
 fn render_state_floor_by_component() {
     use mooloop_core::{MAX_BUSES, MAX_CHANNELS};
 

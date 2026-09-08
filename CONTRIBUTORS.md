@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-08
-- Sessions: 76
+- Sessions: 77
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -116,8 +116,9 @@ Alphabetical by model name, then by harness.
   showed that gigabyte was not what had been interrupting the audio after
   all, and then the bisection that found the gigabyte was a pattern bank and
   not the strips it had twice been blamed on, and the saved audio output that
-  had stopped existing and took the sound with it. Longer accounts of most of
-  this are in
+  had stopped existing and took the sound with it, and the pricing that showed
+  the cheap half of that fix buys almost none of what it was wanted for.
+  Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
 ### Claude Sonnet 5 — Claude Code

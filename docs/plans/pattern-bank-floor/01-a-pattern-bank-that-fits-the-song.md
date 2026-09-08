@@ -62,6 +62,40 @@ felt. It is also the one most likely to be wanted for its own sake, since
 rebuilding an entire executor to move a note is doing a lot of work to
 express a small intention.
 
+## What they are actually worth, measured
+
+Prototyped on `spike/pattern-bank-cost` (unmerged, and not correct — it models
+the load path only and leaves `add_pattern` / `set_active_channels` on the
+audio thread). Numbers from `prepared_project_memory` and
+`project_install_cost`, release, one test at a time:
+
+| | today | A alone | A + B |
+| --- | --- | --- | --- |
+| floor, 1 channel no effects | 1069.9 MB | 109.9 MB | **18.4 MB** |
+| memory, 15 channels 3 effects | 1081.4 MB | 121.4 MB | **30.0 MB** |
+| install, 15 channels 3 effects | 20.05 ms | 17.80 ms | **2.14 ms** |
+| install, 32 channels 10 effects | 48.48 ms | 41.50 ms | **5.23 ms** |
+
+**This reorders the options, and against what this document first said.**
+A was called the cheapest real win. For memory it is — tenfold — but it takes
+only 11% off the install, because the cost of building the bank is dominated
+by the *number* of allocations rather than their size: 65,536
+`ChannelPattern`s each allocating a notes vector and a lanes vector, whatever
+those vectors then reserve. A makes each one smaller. Only B stops making
+most of them at all.
+
+So if the thing to fix is the 20 ms edit — and that is the thing anyone
+actually feels — **B is not optional and A is not sufficient**. Together they
+take a fifteen-channel install to 2.14 ms, which is a 60 Hz drag costing about
+13% of a core instead of 120%.
+
+A is still worth having beside B, and is cheap once B exists: the two
+multiply, and A is what takes the remaining bank from megabytes to
+hundreds of kilobytes.
+
+C remains untested and remains the largest change. It is also the only one
+that makes the number zero rather than small.
+
 ## How to know it worked
 
 The measurements are committed and are the acceptance criteria:

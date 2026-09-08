@@ -21,10 +21,16 @@ about something else entirely.
 
 ## Step 01 — not started
 
-`01-a-pattern-bank-that-fits-the-song.md` sets out the options. It deliberately
-does not choose: the cheap partial fix and the correct one differ by a lot of
-work and by how much they help, and that is a judgement about what Adam wants
-next rather than about the code.
+`01-a-pattern-bank-that-fits-the-song.md` sets out the options and now prices
+them, from a prototype on the unmerged `spike/pattern-bank-cost` branch. The
+pricing changed the recommendation: option A alone is a tenfold memory win and
+an 11% install win, because what makes an install expensive is the *number* of
+`ChannelPattern` allocations rather than their size. A and B together take a
+fifteen-channel install from 20.05 ms to **2.14 ms** and the floor from 1069.9
+MB to **18.4 MB**.
+
+Still not choosing — B is the larger piece of work and the decision is about
+what is worth doing next, not about which is better.
 
 ## Where this sits against FOCUS.md
 
