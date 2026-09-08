@@ -113,6 +113,46 @@ Write a log file** mirrors everything, `debug` included, to
 It appends across runs and rolls to `mooloop.log.1` past 4 MB. The preference
 sticks, so it can be switched on before trying to reproduce something.
 
+### Reading An Audio Dropout
+
+A dropout has two possible causes and they need opposite fixes, so the log
+reports both numbers rather than the xrun alone. Once a second, when there is
+something to say:
+
+```text
+warn  audio  audio dropout in the last second: 3 of 47 blocks over budget,
+             0 late wake-ups, 1 xruns reported (load 34% mean, 118% worst
+             block, worst wake-up 1.1x the block period)
+```
+
+**Blocks over budget** means the engine did more work than the buffer size
+allows. A block of 1024 frames at 48 kHz has 21.3 ms; if the worst block wants
+more, the fix is a larger buffer or a lighter project. **Late wake-ups** mean
+the opposite: the block was cheap and the operating system did not run the
+audio thread in time. Nothing about the project will help that.
+
+The xrun count is a count, not a flag. Several arrive between two blocks when a
+machine stalls, and reporting only that the number changed is how a run of
+audible dropouts used to read as a single line.
+
+The first thing to check when late wake-ups appear is whether the callback is
+realtime at all. It is warned about once per run:
+
+```text
+warn  audio  the audio callback is running on an ordinary time-shared thread,
+             not a realtime one; ...
+```
+
+Under PipeWire this is usually `rtkit` having demoted every realtime thread on
+the machine after its canary starved — which a heavy local build is enough to
+cause, and which nothing undoes automatically. `journalctl -b -u rtkit-daemon`
+shows it as "Demoting known real-time threads", and
+`chrt -p $(pgrep -f data-loop)` confirms the current policy.
+`systemctl --user restart pipewire pipewire-pulse wireplumber` asks again.
+Putting the user in the `pipewire` group is the durable fix: Fedora's
+`/etc/security/limits.d/25-pw-rlimits.conf` grants that group `rtprio 70`
+directly, so PipeWire stops depending on rtkit's judgement.
+
 A song that cannot be saved is written to `~/.config/mooloop/quarantine/`
 anyway, with a `.txt` beside it holding the same explanation the dialog showed.
 Assets are referenced rather than embedded, so this is fast and the file is

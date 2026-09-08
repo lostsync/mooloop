@@ -29,6 +29,7 @@ use rtrb::{Consumer, Producer};
 
 mod driver;
 mod graph;
+pub mod load;
 mod meters;
 mod offline;
 mod render;
@@ -323,6 +324,7 @@ impl Engine {
         );
 
         let xrun_count = Arc::new(AtomicU64::new(0));
+        let load = load::LoadMeters::new();
         let bus_meters = BusMeters::new();
         let device_meters = DeviceMeters::new();
         let device_telemetry = DeviceTelemetry::new();
@@ -347,7 +349,13 @@ impl Engine {
             evt_tx,
             reclaim_tx,
         };
-        let graph = Graph::new(io, Box::new(render), xrun_count.clone());
+        let graph = Graph::new(
+            io,
+            Box::new(render),
+            xrun_count.clone(),
+            sample_rate,
+            load.clone(),
+        );
 
         let target = config
             .output_target
@@ -406,6 +414,7 @@ impl Engine {
                 output_target,
                 auto_reconnect,
                 preview_gain,
+                load,
             },
         ))
     }
@@ -432,9 +441,26 @@ pub struct EngineHandle {
     output_target: Arc<ArcSwap<(String, String)>>,
     auto_reconnect: Arc<AtomicBool>,
     preview_gain: Arc<AtomicU32>,
+    load: Arc<load::LoadMeters>,
 }
 
 impl EngineHandle {
+    /// Read the audio callback's timing since this was last called, and start
+    /// a new window.
+    ///
+    /// Meant to be polled about once a second. Every field is a count or a
+    /// ratio over the window, so calling it faster narrows the window rather
+    /// than repeating a reading.
+    pub fn take_load(&self) -> load::LoadSnapshot {
+        self.load.take()
+    }
+
+    /// How the audio callback thread is scheduled, without draining the
+    /// timing window.
+    pub fn realtime_status(&self) -> load::RealtimeStatus {
+        self.load.realtime()
+    }
+
     /// Queue a command for the audio thread. Non-blocking; drops on overflow
     /// (which should not happen at sane UI event rates).
     pub fn send(&mut self, cmd: EngineCommand) {

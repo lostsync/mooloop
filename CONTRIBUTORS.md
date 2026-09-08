@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-07
-- Sessions: 69
+- Sessions: 70
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -106,7 +106,8 @@ Alphabetical by model name, then by harness.
   and the generator that could not be selected, and the song loop the
   application was named after and did not have, folded into the transport so
   nothing below it had to learn that looping exists, with the grabbable
-  playhead that turned out to be the same mechanism. Longer accounts of most of this are in
+  playhead that turned out to be the same mechanism, and the audio callback
+  that could not say whether it was late or merely never run. Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
 ### Claude Sonnet 5 — Claude Code

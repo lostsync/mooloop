@@ -9637,6 +9637,12 @@ impl AppUi {
         let mut bus_meters: Vec<(MeterBallistics, MeterBallistics)> =
             (0..MAX_BUSES).map(|_| Default::default()).collect();
         let mut last_meter_update = std::time::Instant::now();
+        // The audio callback's own health, read once a second rather than
+        // once a frame: every field is a count over a window, so polling it
+        // faster would only make the window smaller.
+        let mut last_load_report = std::time::Instant::now();
+        let mut xruns_this_window = 0u32;
+        let mut reported_time_shared = false;
         let autodrive_verbose = std::env::var_os("MOOLOOP_AUTODRIVE_VERBOSE").is_some();
         let mut playhead_was_nonempty = false;
         pump.start(
@@ -10289,11 +10295,11 @@ impl AppUi {
                                 saw_nonzero = true;
                             }
                         }
-                        EngineEvent::Xrun => {
+                        EngineEvent::Xrun { count } => {
                             // Read off the event queue on the UI thread. The
-                            // audio thread only ever pushes the marker; it
+                            // audio thread only ever pushes the count; it
                             // does no formatting and takes no lock.
-                            log_warn!("audio", "JACK reported an xrun (audio dropout)");
+                            xruns_this_window += count;
                         }
                         EngineEvent::ProjectInstalled { .. } => {
                             unreachable!("EngineHandle filters project acknowledgements")
@@ -10303,6 +10309,51 @@ impl AppUi {
                 let now = std::time::Instant::now();
                 let elapsed = now.duration_since(last_meter_update).as_secs_f32();
                 last_meter_update = now;
+                // Once a second: what the audio callback actually cost, and
+                // whether it was given the thread it needs. An xrun is the
+                // last symptom rather than the first, and on its own it does
+                // not say which of the two faults produced it -- a block that
+                // took too long, or a block that was never run in time.
+                // Reported together so the difference is legible without
+                // guessing, and only when there is something to say.
+                if now.duration_since(last_load_report) >= std::time::Duration::from_secs(1) {
+                    last_load_report = now;
+                    let load = handle.take_load();
+                    // Once, not once a second: this cannot change without a
+                    // new callback thread, and a warning that repeats forever
+                    // is one that gets scrolled past.
+                    if !reported_time_shared
+                        && load.realtime == mooloop_engine::load::RealtimeStatus::TimeShared
+                    {
+                        reported_time_shared = true;
+                        log_warn!(
+                            "audio",
+                            "the audio callback is running on an ordinary time-shared thread, \
+                             not a realtime one; audio will drop out whenever the machine is \
+                             busy no matter how light the project is. Under PipeWire, \
+                             `systemctl --user restart pipewire pipewire-pulse wireplumber` \
+                             asks for realtime scheduling again, and putting your user in the \
+                             `pipewire` group makes the grant survive a busy machine"
+                        );
+                    }
+                    if load.blocks > 0 && (load.had_trouble() || xruns_this_window > 0) {
+                        log_warn!(
+                            "audio",
+                            "audio dropout in the last second: {} of {} blocks over budget, \
+                             {} late wake-ups, {} xruns reported \
+                             (load {:.0}% mean, {:.0}% worst block, \
+                             worst wake-up {:.1}x the block period)",
+                            load.over_budget,
+                            load.blocks,
+                            load.late_wakeups,
+                            xruns_this_window,
+                            load.mean_load * 100.0,
+                            load.peak_load * 100.0,
+                            load.peak_period
+                        );
+                    }
+                    xruns_this_window = 0;
+                }
                 let left = left_meter.update(block_peak_l, elapsed);
                 let right = right_meter.update(block_peak_r, elapsed);
                 w.set_meter_l_db(left.level_db);

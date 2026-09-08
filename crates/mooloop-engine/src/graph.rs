@@ -2,6 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use arc_swap::ArcSwap;
 use jack::ProcessHandler;
@@ -10,11 +11,19 @@ use mooloop_core::{EngineEvent, MidiMessage};
 use mooloop_dsp::{SampleData, MAX_BLOCK_SIZE};
 use rtrb::Consumer;
 
+use crate::load::LoadMeters;
 use crate::render::RenderState;
 use crate::{RealtimeCommand, StructuralReclaim};
 
 /// Per-block MIDI input ceiling. Bounded so the callback never allocates.
 const MAX_MIDI_PER_BLOCK: usize = 256;
+
+/// How many finished preview samples the callback can hold while the reclaim
+/// ring is full. A preview is one auditioned sample and the ring drains every
+/// GUI frame, so reaching this would take a backlog no interaction produces --
+/// but the capacity is reserved up front regardless, because the alternative
+/// is a `Vec` growing on the realtime thread.
+const MAX_RETIRED_PREVIEWS: usize = 64;
 
 pub(crate) struct GraphIo {
     pub out_l: Port<AudioOut>,
@@ -44,10 +53,27 @@ pub(crate) struct Graph {
     retired_previews: Vec<Arc<SampleData>>,
     xrun_count: Arc<AtomicU64>,
     last_seen_xruns: u64,
+    /// Frames per second, for turning a block length into the wall-clock
+    /// budget it has to finish inside.
+    sample_rate: u32,
+    load: Arc<LoadMeters>,
+    /// When the previous callback was entered, so the gap between wake-ups
+    /// can be measured. `None` before the first block of a run.
+    last_entered: Option<Instant>,
+    /// Whether the scheduling policy of this thread has been asked for yet.
+    /// The answer cannot change without JACK making a new thread, and a new
+    /// thread starts a new `Graph`, so it is asked exactly once.
+    checked_scheduling: bool,
 }
 
 impl Graph {
-    pub(crate) fn new(io: GraphIo, render: Box<RenderState>, xrun_count: Arc<AtomicU64>) -> Self {
+    pub(crate) fn new(
+        io: GraphIo,
+        render: Box<RenderState>,
+        xrun_count: Arc<AtomicU64>,
+        sample_rate: u32,
+        load: Arc<LoadMeters>,
+    ) -> Self {
         Self {
             render,
             out_l: io.out_l,
@@ -62,9 +88,13 @@ impl Graph {
             evt_tx: io.evt_tx,
             reclaim_tx: io.reclaim_tx,
             pending_command: None,
-            retired_previews: Vec::new(),
+            retired_previews: Vec::with_capacity(MAX_RETIRED_PREVIEWS),
             xrun_count,
             last_seen_xruns: 0,
+            sample_rate,
+            load,
+            last_entered: None,
+            checked_scheduling: false,
         }
     }
 }
@@ -100,6 +130,24 @@ fn enable_flush_to_zero() {}
 impl ProcessHandler for Graph {
     fn process(&mut self, _client: &Client, scope: &ProcessScope) -> Control {
         enable_flush_to_zero();
+        // On this thread rather than at engine construction, and for the same
+        // reason as the flush-to-zero write above: the property being read
+        // belongs to the callback's own thread, which JACK created. Whether
+        // the realtime request JACK made on its behalf was actually granted
+        // is not observable anywhere else, and a denied one is silent -- the
+        // audio simply glitches under load and nothing in the program says
+        // why.
+        if !self.checked_scheduling {
+            self.checked_scheduling = true;
+            self.load.set_realtime(crate::load::thread_realtime_status());
+        }
+        // `Instant::now` on Linux is a vDSO read of the monotonic clock: no
+        // syscall, no lock, tens of nanoseconds against a budget of millions.
+        let entered = Instant::now();
+        let period = self
+            .last_entered
+            .map(|last| entered.duration_since(last).as_nanos() as u64);
+        self.last_entered = Some(entered);
         let frames = (scope.n_frames() as usize).min(MAX_BLOCK_SIZE);
         // Value edits, structural ownership transfers, and prepared projects
         // share one ordered stream. Only apply an ownership-changing command
@@ -208,11 +256,27 @@ impl ProcessHandler for Graph {
             peak_l: report.peak_l,
             peak_r: report.peak_r,
         });
+        // The difference, not the fact of one. Several xruns can land between
+        // two callbacks -- a burst is the normal shape of the fault -- and
+        // reporting the change as a single event is what made a run of
+        // dropouts read as one line in the log.
         let xruns = self.xrun_count.load(Ordering::Relaxed);
         if xruns != self.last_seen_xruns {
+            let count = xruns.saturating_sub(self.last_seen_xruns);
             self.last_seen_xruns = xruns;
-            let _ = self.evt_tx.push(EngineEvent::Xrun);
+            let _ = self.evt_tx.push(EngineEvent::Xrun {
+                count: u32::try_from(count).unwrap_or(u32::MAX),
+            });
         }
+        // Last, so the figure covers everything the callback does and not
+        // just the render. The budget is this block's own: JACK may change
+        // the buffer size under a running client.
+        let budget = (frames as u64)
+            .saturating_mul(1_000_000_000)
+            .checked_div(u64::from(self.sample_rate))
+            .unwrap_or(0);
+        self.load
+            .record(entered.elapsed().as_nanos() as u64, budget, period);
         Control::Continue
     }
 }

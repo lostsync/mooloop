@@ -333,8 +333,13 @@ pub enum EngineEvent {
     },
     /// Output peak meters for the UI's level display.
     Metering { peak_l: f32, peak_r: f32 },
-    /// An xrun (buffer overrun/underrun) was reported by JACK.
-    Xrun,
+    /// One or more xruns (buffer overrun/underrun) were reported by JACK.
+    ///
+    /// `count` is how many arrived since the last report rather than a flag,
+    /// because a burst is the ordinary shape of the fault: several land
+    /// between two blocks, and collapsing them into one event is how a run of
+    /// audible dropouts came to read as a single line in the log.
+    Xrun { count: u32 },
     /// Internal acknowledgement used to reclaim a replaced project snapshot
     /// on the non-realtime thread.
     ProjectInstalled { generation: u64 },

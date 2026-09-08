@@ -14,6 +14,11 @@ arc-swap = "1"
 hound = "3"
 mp3lame-encoder = "0.2.4"
 
+# Only for `sched_getscheduler`, to ask the callback thread whether the
+# realtime scheduling JACK requested on its behalf was actually granted.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 # The container tests render a project, save it, reload it and render it
 # again; the claim is that the document round trip preserves a nesting the
