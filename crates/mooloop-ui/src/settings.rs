@@ -409,6 +409,149 @@ pub(crate) struct BrowserSettings {
     pub locations: Vec<PathBuf>,
 }
 
+/// Where the panes were left.
+///
+/// UI state rather than project state, which is the whole reason it is here
+/// and not in `PROJECT_FORMAT.md`: a song must not carry a window layout, and
+/// the arrangement you work in should greet you whichever song you open.
+///
+/// **Zoom is deliberately absent.** It is a glance, not an arrangement, and
+/// starting up with one pane filling the window and no memory of asking for
+/// it is a worse first second than any amount of fidelity is worth.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct LayoutSettings {
+    /// Which slot each view lives in, indexed by view id -- steps, mixer,
+    /// devices, notes, playlist -- where 0 is the main top pane, 1 the split
+    /// and 2 the dock.
+    #[serde(default = "default_view_slots")]
+    pub view_slots: Vec<i32>,
+    /// The active view in each slot, indexed by slot, or -1 for a slot
+    /// holding nothing.
+    #[serde(default = "default_slot_active")]
+    pub slot_active: Vec<i32>,
+    #[serde(default = "default_split_fraction")]
+    pub split_fraction: f32,
+    #[serde(default = "default_steps_dock_height")]
+    pub steps_dock_height: f32,
+    #[serde(default = "default_steps_dock_height")]
+    pub mixer_dock_height: f32,
+    #[serde(default = "default_notes_dock_height")]
+    pub notes_dock_height: f32,
+    #[serde(default = "default_playlist_dock_height")]
+    pub playlist_dock_height: f32,
+    #[serde(default = "default_true")]
+    pub bottom_pane_visible: bool,
+    #[serde(default)]
+    pub sidebar_visible: bool,
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: f32,
+}
+
+pub(crate) const VIEW_COUNT: usize = 5;
+pub(crate) const SLOT_COUNT: usize = 3;
+const MIN_DOCK_HEIGHT: f32 = 140.0;
+const MAX_DOCK_HEIGHT: f32 = 2000.0;
+const MIN_SPLIT_FRACTION: f32 = 0.15;
+const MAX_SPLIT_FRACTION: f32 = 0.85;
+const MIN_SIDEBAR_WIDTH: f32 = 180.0;
+const MAX_SIDEBAR_WIDTH: f32 = 400.0;
+
+fn default_view_slots() -> Vec<i32> {
+    vec![0, 0, 2, 2, 2]
+}
+fn default_slot_active() -> Vec<i32> {
+    vec![0, -1, 2]
+}
+fn default_split_fraction() -> f32 {
+    0.5
+}
+fn default_steps_dock_height() -> f32 {
+    300.0
+}
+fn default_notes_dock_height() -> f32 {
+    410.0
+}
+fn default_playlist_dock_height() -> f32 {
+    376.0
+}
+fn default_sidebar_width() -> f32 {
+    260.0
+}
+
+impl Default for LayoutSettings {
+    fn default() -> Self {
+        Self {
+            view_slots: default_view_slots(),
+            slot_active: default_slot_active(),
+            split_fraction: default_split_fraction(),
+            steps_dock_height: default_steps_dock_height(),
+            mixer_dock_height: default_steps_dock_height(),
+            notes_dock_height: default_notes_dock_height(),
+            playlist_dock_height: default_playlist_dock_height(),
+            bottom_pane_visible: true,
+            sidebar_visible: false,
+            sidebar_width: default_sidebar_width(),
+        }
+    }
+}
+
+impl LayoutSettings {
+    /// An arrangement that cannot be worked in is worse than no memory of one,
+    /// so anything self-contradictory falls back to the default *whole*
+    /// arrangement rather than being half-applied. `settings.toml` is a file a
+    /// user may edit, and the failure this guards is a window with no pane in
+    /// it and no way to get one back.
+    pub(crate) fn sanitized(mut self) -> Self {
+        let sane = self.view_slots.len() == VIEW_COUNT
+            && self.view_slots.iter().all(|&s| (0..SLOT_COUNT as i32).contains(&s))
+            && self.slot_active.len() == SLOT_COUNT
+            // The main slot must hold something, or there is no pane left to
+            // move anything back into.
+            && self.view_slots.contains(&0)
+            // A slot's active view must actually live in that slot.
+            && self.slot_active.iter().enumerate().all(|(slot, &view)| {
+                view == -1
+                    || (usize::try_from(view).is_ok_and(|v| v < VIEW_COUNT)
+                        && self.view_slots[view as usize] == slot as i32)
+            })
+            // A slot that holds views must have one of them active, and the
+            // main slot may never be empty.
+            && (0..SLOT_COUNT).all(|slot| {
+                let holds = self.view_slots.contains(&(slot as i32));
+                holds == (self.slot_active[slot] != -1)
+            });
+        if !sane {
+            return Self {
+                view_slots: default_view_slots(),
+                slot_active: default_slot_active(),
+                ..self
+            }
+            .clamped();
+        }
+        self = self.clamped();
+        self
+    }
+
+    fn clamped(mut self) -> Self {
+        self.split_fraction = self
+            .split_fraction
+            .clamp(MIN_SPLIT_FRACTION, MAX_SPLIT_FRACTION);
+        for height in [
+            &mut self.steps_dock_height,
+            &mut self.mixer_dock_height,
+            &mut self.notes_dock_height,
+            &mut self.playlist_dock_height,
+        ] {
+            *height = height.clamp(MIN_DOCK_HEIGHT, MAX_DOCK_HEIGHT);
+        }
+        self.sidebar_width = self
+            .sidebar_width
+            .clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+        self
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct UiSettings {
@@ -424,6 +567,8 @@ pub(crate) struct UiSettings {
     pub gestures: GestureSettings,
     #[serde(default)]
     pub browser: BrowserSettings,
+    #[serde(default)]
+    pub layout: LayoutSettings,
 }
 
 impl Default for UiSettings {
@@ -436,6 +581,7 @@ impl Default for UiSettings {
             shortcuts: ShortcutSettings::default(),
             gestures: GestureSettings::default(),
             browser: BrowserSettings::default(),
+            layout: LayoutSettings::default(),
         }
     }
 }
@@ -468,8 +614,14 @@ impl UiSettings {
             .appearance
             .validated()
             .map_err(SettingsError::Validation)?;
+        // The layout is *sanitized* rather than validated: a bad palette is
+        // worth refusing the whole file over, because the alternative is a
+        // window the user cannot read. A bad arrangement is not -- it falls
+        // back to the default panes and keeps everything else in the file.
+        let layout = settings.layout.clone().sanitized();
         Ok(Self {
             appearance,
+            layout,
             ..settings
         })
     }
@@ -894,6 +1046,92 @@ mod tests {
         );
     }
 
+    /// The arrangement a hand-edited file can ask for, and the one the
+    /// window can actually be worked in, are not the same set. Every case
+    /// here would leave a pane the user cannot recover: an empty main slot,
+    /// a slot whose active view lives somewhere else, a slot holding views
+    /// with none of them showing.
+    #[test]
+    fn an_unusable_arrangement_falls_back_to_the_default_one() {
+        let default = LayoutSettings::default();
+        let cases = [
+            (
+                "main slot empty",
+                LayoutSettings {
+                    view_slots: vec![2, 2, 2, 2, 2],
+                    slot_active: vec![-1, -1, 2],
+                    ..default.clone()
+                },
+            ),
+            (
+                "active view lives in another slot",
+                LayoutSettings {
+                    view_slots: vec![0, 0, 2, 2, 2],
+                    slot_active: vec![2, -1, 2],
+                    ..default.clone()
+                },
+            ),
+            (
+                "slot holds views but shows none",
+                LayoutSettings {
+                    view_slots: vec![0, 0, 2, 2, 2],
+                    slot_active: vec![0, -1, -1],
+                    ..default.clone()
+                },
+            ),
+            (
+                "slot index out of range",
+                LayoutSettings {
+                    view_slots: vec![0, 0, 2, 2, 7],
+                    slot_active: vec![0, -1, 2],
+                    ..default.clone()
+                },
+            ),
+            (
+                "wrong number of views",
+                LayoutSettings {
+                    view_slots: vec![0, 0, 2],
+                    slot_active: vec![0, -1, 2],
+                    ..default.clone()
+                },
+            ),
+        ];
+        for (name, broken) in cases {
+            let fixed = broken.sanitized();
+            assert_eq!(
+                fixed.view_slots, default.view_slots,
+                "{name}: must fall back to the default arrangement"
+            );
+            assert_eq!(
+                fixed.slot_active, default.slot_active,
+                "{name}: must fall back to the default active views"
+            );
+        }
+    }
+
+    /// A coherent arrangement survives, and only the numbers that have bounds
+    /// are pulled into them -- falling back wholesale on a merely silly
+    /// divider position would throw away an arrangement that was fine.
+    #[test]
+    fn a_usable_arrangement_survives_and_only_its_numbers_are_clamped() {
+        let moved = LayoutSettings {
+            // The mixer in the dock and the playlist split off the top: the
+            // arrangement Adam asked for by name.
+            view_slots: vec![0, 2, 2, 2, 1],
+            slot_active: vec![0, 4, 1],
+            split_fraction: 9.0,
+            notes_dock_height: 5.0,
+            sidebar_width: 4000.0,
+            ..LayoutSettings::default()
+        };
+        let fixed = moved.clone().sanitized();
+        assert_eq!(fixed.view_slots, moved.view_slots, "the arrangement holds");
+        assert_eq!(fixed.slot_active, moved.slot_active, "so do its active views");
+        assert_eq!(fixed.split_fraction, MAX_SPLIT_FRACTION);
+        assert_eq!(fixed.notes_dock_height, MIN_DOCK_HEIGHT);
+        assert_eq!(fixed.sidebar_width, MAX_SIDEBAR_WIDTH);
+    }
+
     #[test]
     fn saves_and_removes_user_schemes() {
         let mut settings = appearance("#101014", "#22D3EE", "#F97316");
@@ -978,9 +1216,38 @@ mod tests {
             browser: BrowserSettings {
                 locations: vec![PathBuf::from("/sounds/one-shots")],
             },
+            // Deliberately not the default arrangement, and deliberately one
+            // that `sanitized()` must leave alone: the mixer in the dock and
+            // the playlist split off the top. A round trip through the
+            // default would pass even if the section were never written.
+            layout: LayoutSettings {
+                view_slots: vec![0, 2, 2, 2, 1],
+                slot_active: vec![0, 4, 1],
+                split_fraction: 0.62,
+                notes_dock_height: 380.0,
+                sidebar_visible: true,
+                ..LayoutSettings::default()
+            },
         };
         expected.save_to(&path).unwrap();
         assert_eq!(UiSettings::load_from(&path).unwrap(), expected);
+    }
+
+    #[test]
+    fn defaults_missing_layout_settings_for_existing_configs() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            "schema-version = 1\n[appearance]\npreset = 'mooloop'\naccent = '#84CC16'\n",
+        )
+        .unwrap();
+        // A config written before panes could move opens on the default
+        // arrangement rather than being refused.
+        assert_eq!(
+            UiSettings::load_from(&path).unwrap().layout,
+            LayoutSettings::default()
+        );
     }
 
     #[test]

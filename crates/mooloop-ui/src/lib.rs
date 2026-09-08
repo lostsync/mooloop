@@ -109,7 +109,7 @@ use mooloop_session::values::{
 pub use mockup::{load_mockup_layout, wire_mockup};
 #[cfg(feature = "mockup")]
 pub use mockup_ui::MockupCanvas;
-use settings::{AppearanceSettings, ThemePalette, ThemeScheme, UiSettings};
+use settings::{AppearanceSettings, LayoutSettings, ThemePalette, ThemeScheme, UiSettings};
 use slint::{
     CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode,
     VecModel,
@@ -386,23 +386,89 @@ fn show_pane(commands: &Rc<RefCell<CommandState>>, window: &MainWindow, pane: Pa
     apply_pane(window, pane);
 }
 
-fn apply_pane(window: &MainWindow, pane: Pane) {
-    match pane {
-        Pane::Steps => window.set_mixer_visible(false),
-        Pane::Mixer => window.set_mixer_visible(true),
-        Pane::Source => {
-            window.set_mixer_visible(false);
-            window.set_editor_page(0);
-        }
-        Pane::Notes => {
-            window.set_mixer_visible(false);
-            window.set_editor_page(1);
-        }
-        Pane::Playlist => {
-            window.set_mixer_visible(false);
-            window.set_editor_page(2);
-        }
+/// The view ids `main.slint`'s `PaneViews` global declares, in the order
+/// `Ctrl+1..5` already used, so a chord is `Ctrl+(id + 1)`.
+///
+/// Public because the UI tests reveal a view the same way the application
+/// does. They used to set `editor_page` and `mixer_visible` directly, which
+/// stopped being expressible once a view could move between panes.
+pub mod view {
+    pub const STEPS: i32 = 0;
+    pub const MIXER: i32 = 1;
+    pub const DEVICES: i32 = 2;
+    pub const NOTES: i32 = 3;
+    pub const PLAYLIST: i32 = 4;
+}
+
+/// Restore the pane arrangement. Called once at startup, from a
+/// `LayoutSettings` that `sanitized()` has already made coherent -- so this
+/// only has to hand the numbers over, not defend against them.
+///
+/// Zoom is not restored, because it is not saved: see `LayoutSettings`.
+fn apply_layout(window: &MainWindow, layout: &LayoutSettings) {
+    let slots = &layout.view_slots;
+    window.set_steps_slot(slots[view::STEPS as usize]);
+    window.set_mixer_slot(slots[view::MIXER as usize]);
+    window.set_devices_slot(slots[view::DEVICES as usize]);
+    window.set_notes_slot(slots[view::NOTES as usize]);
+    window.set_playlist_slot(slots[view::PLAYLIST as usize]);
+    window.set_main_active(layout.slot_active[0]);
+    window.set_split_active(layout.slot_active[1]);
+    window.set_bottom_active(layout.slot_active[2]);
+    window.set_split_fraction(layout.split_fraction);
+    window.set_steps_dock_height(layout.steps_dock_height);
+    window.set_mixer_dock_height(layout.mixer_dock_height);
+    window.set_notes_dock_height(layout.notes_dock_height);
+    window.set_playlist_dock_height(layout.playlist_dock_height);
+    window.set_bottom_pane_visible(layout.bottom_pane_visible);
+    window.set_sidebar_visible(layout.sidebar_visible);
+    window.set_sidebar_width(layout.sidebar_width);
+}
+
+/// Read the arrangement back off the window. The window is the live truth
+/// while the app runs; this is only ever called to write that truth down.
+fn read_layout(window: &MainWindow) -> LayoutSettings {
+    LayoutSettings {
+        view_slots: vec![
+            window.get_steps_slot(),
+            window.get_mixer_slot(),
+            window.get_devices_slot(),
+            window.get_notes_slot(),
+            window.get_playlist_slot(),
+        ],
+        slot_active: vec![
+            window.get_main_active(),
+            window.get_split_active(),
+            window.get_bottom_active(),
+        ],
+        split_fraction: window.get_split_fraction(),
+        steps_dock_height: window.get_steps_dock_height(),
+        mixer_dock_height: window.get_mixer_dock_height(),
+        notes_dock_height: window.get_notes_dock_height(),
+        playlist_dock_height: window.get_playlist_dock_height(),
+        bottom_pane_visible: window.get_bottom_pane_visible(),
+        sidebar_visible: window.get_sidebar_visible(),
+        sidebar_width: window.get_sidebar_width(),
     }
+}
+
+/// The one place `Pane` and the Slint view ids meet.
+fn view_id(pane: Pane) -> i32 {
+    match pane {
+        Pane::Steps => view::STEPS,
+        Pane::Mixer => view::MIXER,
+        Pane::Source => view::DEVICES,
+        Pane::Notes => view::NOTES,
+        Pane::Playlist => view::PLAYLIST,
+    }
+}
+
+/// Reveal a pane. It used to have to say *where* -- clear `mixer_visible`,
+/// then set an `editor_page` index -- which stopped being expressible once a
+/// view could be moved between panes. The view now knows which slot it is in,
+/// so this asks for the view and nothing else.
+fn apply_pane(window: &MainWindow, pane: Pane) {
+    window.invoke_show_view(view_id(pane));
 }
 
 fn project_snapshot(state: &UiState, window: &MainWindow) -> ProjectSnapshot {
@@ -547,7 +613,7 @@ fn length_text(ticks: u32) -> String {
 }
 
 fn notes_have_focus(window: &MainWindow) -> bool {
-    window.get_editor_page() == 1 && window.get_has_note_selection()
+    window.get_showing_notes() && window.get_has_note_selection()
 }
 
 fn record_project_history(
@@ -3654,7 +3720,13 @@ impl AppUi {
         window.set_current_pattern(0);
         window.set_pattern_length(DEFAULT_STEPS as i32);
         window.set_current_step(0);
-        window.set_editor_page(0);
+        window.invoke_show_view(view_id(Pane::Source));
+        // The two ceilings the markup enables Add/Clone/Paste against. They
+        // are handed over once, from the core's own constants, so raising a
+        // cap never leaves a menu row disabled at the old number --
+        // `docs/CAPACITY_POLICY.md` names that exact symptom.
+        window.set_max_channels(MAX_CHANNELS as i32);
+        window.set_max_patterns(MAX_PATTERNS as i32);
         // Two lists the device declares once; nothing about a patch moves
         // them, so they are installed here rather than on every refresh.
         install_mlp8_route_vocabularies(&window);
@@ -4358,6 +4430,7 @@ impl AppUi {
         {
             let settings = ui_settings.borrow();
             apply_appearance(&window, &settings.appearance);
+            apply_layout(&window, &settings.layout);
             sync_preferences_properties(&window, &settings);
             audio_tx.send(AudioAction::ApplyPersisted(settings.audio.engine_config()));
             // The browser opens with every top-level location expanded: the
@@ -4422,7 +4495,7 @@ impl AppUi {
                     "edit.paste-channel" => {
                         // Paste does not need a selection -- it needs
                         // something on the note clipboard.
-                        if window.get_editor_page() == 1
+                        if window.get_showing_notes()
                             && !commands.borrow().note_clipboard.is_empty()
                         {
                             window.invoke_piano_notes_pasted();
@@ -4489,7 +4562,7 @@ impl AppUi {
                     | "notes.tool-paint"
                     | "notes.tool-slice"
                     | "notes.tool-erase" => {
-                        if window.get_editor_page() != 1 {
+                        if !window.get_showing_notes() {
                             return false;
                         }
                         window.set_piano_tool(match action_id {
@@ -4501,7 +4574,7 @@ impl AppUi {
                         });
                     }
                     "notes.snap-toggle" => {
-                        if window.get_editor_page() != 1 {
+                        if !window.get_showing_notes() {
                             return false;
                         }
                         window.set_piano_snap_enabled(!window.get_piano_snap_enabled());
@@ -4513,6 +4586,8 @@ impl AppUi {
                     "view.pane-source" => show_pane(&commands, &window, Pane::Source),
                     "view.pane-notes" => show_pane(&commands, &window, Pane::Notes),
                     "view.pane-playlist" => show_pane(&commands, &window, Pane::Playlist),
+                    "view.split-toggle" => window.invoke_toggle_split(),
+                    "view.zoom-pane" => window.invoke_toggle_zoom_active(),
                     "view.pane-next" => {
                         let pane = cycle_pane(commands.borrow().pane, true);
                         show_pane(&commands, &window, pane);
@@ -7668,6 +7743,25 @@ impl AppUi {
         }
 
         {
+            // The pane arrangement outlives both the session and the project:
+            // it is how this user works, not what this song is. Fired on
+            // discrete changes and at the end of a drag, never per frame, so
+            // this is a handful of small writes rather than one per pointer
+            // move. A failed save costs the memory of the arrangement and
+            // nothing else, so it is not worth interrupting anyone over.
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_layout_changed(move || {
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                let mut settings = settings.borrow_mut();
+                settings.layout = read_layout(&window);
+                let _ = settings.save();
+            });
+        }
+
+        {
             // The toggle is a user preference, so it outlives the project. A
             // failed save leaves the session's choice in place rather than
             // fighting the user over a checkbox.
@@ -10518,8 +10612,8 @@ impl AppUi {
                 // ring. Always drain them, even while the mixer is hidden, so
                 // a strip does not open showing a peak from minutes ago; only
                 // write the models when something is actually displaying them.
-                let showing_mixer = w.get_mixer_visible();
-                let showing_device_rack = w.get_editor_page() == 0;
+                let showing_mixer = w.get_showing_mixer();
+                let showing_device_rack = w.get_showing_devices();
                 let editing_bus = w.get_editing_bus();
                 let edited_bus = w.get_editing_bus_index().max(0) as usize;
                 let selected_channel = st.borrow().session.selected;
@@ -10766,7 +10860,7 @@ impl AppUi {
                 // another, and build an effect chain on a bus rather than a
                 // channel. This is the surface the routing rule guards, so
                 // include the uphill route it must refuse.
-                w.set_mixer_visible(true);
+                w.invoke_show_view(view_id(Pane::Mixer));
                 w.invoke_channel_bus_changed(0, 3);
                 w.invoke_channel_bus_changed(1, 3);
                 w.invoke_bus_output_changed(3, 1);
@@ -10783,10 +10877,10 @@ impl AppUi {
                 w.invoke_add_effect_clicked(6, 0); // limiter on the master
                 w.invoke_effect_param_changed(0, 0, 0.95);
                 w.invoke_channel_selected(0); // back to a channel's chain
-                w.set_mixer_visible(false);
+                w.invoke_show_view(view_id(Pane::Source));
                 w.set_song_mode(true);
                 w.invoke_playback_mode_changed(true);
-                w.set_editor_page(2);
+                w.invoke_show_view(view_id(Pane::Playlist));
                 w.invoke_play_clicked();
             });
             let stats = stats.clone();

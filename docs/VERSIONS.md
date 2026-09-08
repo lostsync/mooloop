@@ -43,6 +43,56 @@ The effect suite is finished for this release: twelve kinds, the whole
 This release does not claim general automation, retained audio, sends,
 sidechains, recording, or a metronome.
 
+## 0.1.3 — Panes you can arrange, and an engine that rests
+
+Status: shipped 2026-09-08.
+
+Ninety-six commits since `v0.1.2`, and they fall into three groups: an
+interface whose panes can be arranged, an engine that stops working when
+there is nothing to do, and an audit that found controls saying things the
+engine was not doing.
+
+Milestones:
+
+- **Done.** The work area is five views in three slots. `STEPS`, `MIXER`,
+  `DEVICES`, `NOTES` and `PLAYLIST` each live in exactly one pane; the top
+  pane splits; any pane fills the window on a double-click of its tab; and a
+  tab drags between panes. The arrangement persists into `settings.toml`.
+  Each view carries one toolbar where the dock used to stack two.
+- **Done.** A container is a device that holds a run of devices, blends it,
+  and saves as one preset — and a rack device is a durable identity rather
+  than a seat, so reordering a chain no longer rewrites what a selection or a
+  route means.
+- **Done.** The song loops. A section can be marked to repeat and the
+  playhead dragged, which is one mechanism and was absent from a program
+  named for it.
+- **Done.** Devices publish outlets. A channel set to `Aux In` plays another
+  channel's published audio in the same block, over compiled typed edges with
+  cycle refusal and per-producer compensation delays; an export is asserted
+  sample-identical to the live render.
+- **Done.** Idle work stops costing. A channel with nothing to play, a bus
+  nobody routes to, a resting delay, a sleeping LFO and an EQ's switched-off
+  bands are all skipped, and the control pass no longer pays per descriptor
+  for automation nobody authored.
+- **Done.** A device can be copied, cut, pasted and duplicated, within a chain
+  or across channels, and the browser sidebar browses presets as well as
+  samples.
+- **Done.** The consistency audit in `docs/plans/archive/ui-consistency-pass/`:
+  a clip light nothing could clear, a sampler envelope printing 2.5x what it
+  played, a delay whose `1/2` was an eighth note, eighteen envelope stages
+  laid across a linear range their own descriptors call exponential, and
+  twenty-six tooltips that were sentences.
+- **Done.** The undo history has a ceiling measured in bytes rather than in
+  entries that are not the same size, and opening a song stopped running the
+  TOML parser over it twice.
+- **Partly.** The tooltip debt 0.1.1 and 0.1.2 both recorded is largely paid —
+  `StatusHint` reaches every control class — but the sampler face is still
+  the one surface that publishes least.
+
+This release does not claim MIDI input that reaches the engine, recording, a
+metronome, sends, or sidechains. Parallel routing is priced in
+`docs/plans/containers/06-layers-and-selectors.md` and deliberately not taken.
+
 ## 0.1.2 — Three instruments, and a grid to modulate them with
 
 Status: shipped 2026-09-05.

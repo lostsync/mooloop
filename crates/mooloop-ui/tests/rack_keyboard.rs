@@ -36,7 +36,7 @@
 //! application through `scripts/mooloop-mcp`: at 1280x760 the rack row sits
 //! at (8, 364) and the first device frame at (16, 384).
 
-use mooloop_ui::{ChannelRow, EffectSlotRow, MainWindow, StepCell};
+use mooloop_ui::{view, ChannelRow, EffectSlotRow, MainWindow, StepCell};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -128,7 +128,7 @@ fn harness() -> Harness {
     ui.window().set_size(LogicalSize::new(1280.0, 760.0));
     ui.set_channels(channels());
     ui.set_selected_channel_name(SharedString::from("Kick"));
-    ui.set_editor_page(0);
+    ui.invoke_show_view(view::DEVICES);
     ui.set_source_kind(1);
     ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
         effect_slot(0),

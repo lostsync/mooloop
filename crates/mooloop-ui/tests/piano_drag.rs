@@ -12,7 +12,7 @@
 //! only appears after the SECOND move event. Invoking the callbacks directly,
 //! or dispatching a single move, passes even against the broken version.
 
-use mooloop_ui::{default_piano_gestures, note_hit_test, MainWindow, NoteCell};
+use mooloop_ui::{view, default_piano_gestures, note_hit_test, MainWindow, NoteCell};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc, VecModel};
 use std::cell::RefCell;
@@ -21,8 +21,16 @@ use std::rc::Rc;
 /// Piano roll grid geometry in logical pixels, derived empirically from a
 /// software render of the 960x760 window on the Notes page. These move if the
 /// editor's left gutter or the toolbar above it is resized.
+///
+/// `GRID_TOP_Y` moved up 34px on 2026-09-08, when the dock's two stacked
+/// toolbars -- a 30px slot header and a 34px per-page row -- became the one
+/// 30px row every view now carries. The grid's *top* is what moved: the
+/// horizontal scrollbar and the velocity lane are anchored to the dock's
+/// bottom edge, which did not move, so their constants are unchanged. Both
+/// were re-measured off software renders of the old and new layouts rather
+/// than adjusted by arithmetic.
 const GRID_ORIGIN_X: f32 = 54.0;
-const GRID_TOP_Y: f32 = 383.0;
+const GRID_TOP_Y: f32 = 349.0;
 const ROW_HEIGHT: f32 = 8.0;
 const STEP_WIDTH: f32 = 32.0;
 const TICKS_PER_STEP: i32 = 24;
@@ -52,7 +60,7 @@ fn harness(notes: Vec<NoteCell>) -> MainWindow {
     // gesture role is unbound and no modifier does anything.
     ui.set_piano_gestures(default_piano_gestures());
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
-    ui.set_editor_page(1);
+    ui.invoke_show_view(view::NOTES);
     ui.set_pattern_length(16);
 
     let model = Rc::new(VecModel::from(notes));

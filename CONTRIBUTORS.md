@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-08
-- Sessions: 77
+- Sessions: 81
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -114,7 +114,36 @@ Alphabetical by model name, then by harness.
   mouse, and the UI consistency pass that found a clip light nothing cleared
   and a sampler envelope reading 2.5x what it played, and the test that
   showed that gigabyte was not what had been interrupting the audio after
-  all, and then the bisection that found the gigabyte was a pattern bank and
+  all, and the picker chip that closed its menu before it reported, which had
+  left seven source and route controls drawing correctly and doing nothing
+  since the day it was written, and the knob wrapper that kept the value
+  string to itself, so 85 ML-P8 and DS-01 dials hovered as an empty box,
+  and the sixteen-channel ceiling that only ever existed in the markup, and
+  the pane-layout plan that turned four requests for one surface in one place
+  into a set of views and three slots to put them in, and its first step --
+  a work area that computes each slot's rectangle instead of nesting layouts,
+  so a view needs one instance wherever it is drawn, and the bottom pane's two
+  stacked toolbars folded into the one row per view that made possible, and
+  then the split itself, whose divider closes what it is dragged out of
+  existence, and the status-bar chip that had been drawing a left-docked panel
+  for a sidebar docked on the right since the day it was written, and the zoom
+  that is a double-click on the thing naming the pane rather than a button per
+  pane, with the dock's divider generalised from a named page to the one fact
+  underneath it -- that a device face declares a height and nothing else does,
+  and the tab drag that moves a view between panes, whose grab and landing
+  live in elements that do not contain each other -- the split of labour the
+  rack's reorder had already had to learn, and then the tab's own right-click
+  menu -- recorded a commit earlier as wanting machinery that did not exist,
+  which was a claim made from the absence of submenus in the menu bar and
+  three existing `PopupWindow` menus away from being true -- and the pane
+  arrangement persisted into settings, sanitized rather than validated so a
+  hand-edited file cannot produce a window with no pane in it, and the pane
+  that went blank when the view it was showing was dragged out of it, which
+  had been two bugs in four lines and no test covering pane moves at all, and
+  the drag's own geometry tested at last, led by the check that says the
+  measured tab coordinates still land on tabs, and the clippy lint that had
+  been failing CI for two days while a bare `cargo clippy` reported it green,
+  and then the bisection that found the gigabyte was a pattern bank and
   not the strips it had twice been blamed on, and the saved audio output that
   had stopped existing and took the sound with it, and the pricing that showed
   the cheap half of that fix buys almost none of what it was wanted for.

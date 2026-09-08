@@ -1,4 +1,11 @@
-//! Tests for dragging the piano roll's dock splitter.
+//! Tests for dragging the dock's splitter, on the piano roll.
+//!
+//! The height it sets belongs to the *view*, not to the dock: each view
+//! remembers what it was left at, so switching tabs restores that rather than
+//! a number shared across three editors. `piano_dock_height` became
+//! `notes_dock_height` on 2026-09-08 for that reason, and the grip is live
+//! for any view that does not declare its own height -- which is every view
+//! but `DEVICES`, whose face is a fixed 268px.
 //!
 //! The splitter is a 1px line at the dock's top edge with a 6px grab zone
 //! reaching up into the work surface. These tests dispatch real pointer
@@ -11,7 +18,7 @@
 //! only drives the status bar's hover hint), so grip hover states never
 //! leak into the comparison.
 
-use mooloop_ui::MainWindow;
+use mooloop_ui::{view, MainWindow};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, SharedString};
 
@@ -34,7 +41,7 @@ fn harness() -> MainWindow {
     .ok();
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
-    ui.set_editor_page(1);
+    ui.invoke_show_view(view::NOTES);
     ui
 }
 
@@ -123,7 +130,7 @@ fn splitter_drag_clamps_at_minimum_and_restores_exactly() {
         "dragging past the bound must still resize the dock"
     );
     assert_eq!(
-        ui.get_piano_dock_height(),
+        ui.get_notes_dock_height(),
         140.0,
         "the dock must clamp at its 140px floor"
     );
@@ -137,7 +144,7 @@ fn splitter_drag_clamps_at_minimum_and_restores_exactly() {
         (GRIP_X, GRIP_Y),
     );
     hover_neutral(&ui);
-    let restored = ui.get_piano_dock_height();
+    let restored = ui.get_notes_dock_height();
     assert_eq!(
         restored, 410.0,
         "the dock property must return to the default after the clamped drag"
@@ -149,10 +156,15 @@ fn splitter_drag_clamps_at_minimum_and_restores_exactly() {
     );
 }
 
-// The status bar's bottom-pane button (a 20px chip at the window's bottom
-// right, 26px from the edge) collapses the whole dock column, splitter
-// included, and toggling it back must restore the exact layout.
-const PANE_BUTTON: (f32, f32) = (936.0, 746.0);
+// The status bar's bottom-pane button collapses the whole dock column,
+// splitter included, and toggling it back must restore the exact layout.
+//
+// It is the *leftmost* of three 20px chips now, not the rightmost of two:
+// they read in the screen order of the regions they toggle, by each region's
+// left edge, so the dock (which starts at x 0) leads. Chip k spans
+// [width - (3 - k) * 26, +20] in a 960px window, so this one's centre is 892
+// where it used to be 944 -- which is the browser's now.
+const PANE_BUTTON: (f32, f32) = (892.0, 746.0);
 
 fn click(window: &slint::Window, at: (f32, f32)) {
     let pos = LogicalPosition::new(at.0, at.1);

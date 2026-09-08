@@ -179,6 +179,19 @@ their own passes; nobody has decided whether they should match.
 
 ## Housekeeping
 
+**The piano roll's grid geometry is a constant in two test files and nothing
+holds them together.** `piano_drag.rs:32` and `piano_tools.rs:16` each declare
+`GRID_ORIGIN_X` / `GRID_TOP_Y` / `ROW_HEIGHT` / `STEP_WIDTH` / `HIGH_NOTE`,
+measured off a software render of the 960x760 window, and `piano_tools.rs`
+says "matching `piano_drag.rs`" in a comment that nothing enforces. Both moved
+on 2026-09-08 when the dock's two toolbars merged; fixing the first and
+running the suite reported the second as nineteen fresh failures, which is how
+the copy was found. The cost is one wasted five-minute remote run per toolbar
+change, so it is small — but it is exactly the shape `slint_face_agreement.rs`
+exists to prevent for faces, and a shared `tests/common/` module or one
+element-derived origin would end it. `rack_tools.rs:28` has a third
+`GRID_ORIGIN_X` for the step grid; that one is genuinely a different grid.
+
 **`mooloop-ui` had never been linted, and two things had ridden in on that.**
 Fixed 2026-09-07, recorded because the *shape* of it will recur: `cargo
 clippy` walks the dependency graph, `mooloop-core` had been failing since

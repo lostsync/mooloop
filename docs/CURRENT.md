@@ -7,24 +7,70 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 
 ## Implemented User Surface
 
-- One application window with a two-row toolbar, channel rack, and a lower
-  editor. The transport row carries play/stop, pattern-vs-song mode, a
+- One application window with a transport toolbar, a work surface, and a lower
+  dock. The transport row carries play/stop, pattern-vs-song mode, a
   bar:beat:tick position readout, beat lamps, drag-or-type tempo, global
   sixteenth-note swing, and the master meter, and never changes.
-- **The second row belongs to the work surface, and switches with it.** It
-  opens with the STEPS/MIXER switcher and then carries whatever that pane
-  needs: with the step grid up, pattern selection, the cursor tools and
-  pattern length; with the mixer up, nothing, because the mixer's controls
-  are on its strips. Both halves of that were somewhere else until
-  2026-09-08 -- the switcher on a 26px strip of its own below the toolbar,
-  beside a permanent sentence of chrome, and the pattern controls here
-  whether or not the pattern grid was showing.
-- **Each editor owns its own grid snap**, in its own header: the piano roll a
+- **The work area is five views in three slots**, as of 2026-09-08. `main`
+  and `split` divide the top; `bottom` is the dock. A view lives in exactly
+  one slot, and a slot's tab strip lists what it holds, so no strip can
+  misreport what is on screen. Each slot's rectangle is computed rather than
+  nested in layouts, which is what lets a view be drawn anywhere off one
+  instance.
+- **The top pane splits.** The status bar's middle chip opens it with the main
+  pane's other view; the divider between the two halves drags, resets to even
+  on a double-click, and closes the split when dragged to either bound —
+  folding its views back into the main pane rather than losing them. `View >
+  Split Top Pane` does the same thing from the menu.
+- **Any pane can fill the window.** Double-click a pane's active tab — the
+  maximise gesture a title bar has, on the control that names the pane — and
+  everything but the menu bar, the transport row and the status bar goes away.
+  Double-click again or press `Esc` to restore; `View > Zoom Pane` and
+  `Ctrl+Shift+\` do the same. Zoom never moves a view, so leaving it puts
+  everything back where it was. The zoomed tab takes the full accent rather
+  than the muted active fill, and the status bar says how to get out.
+- **The bottom pane resizes for any view that does not declare its own
+  height**, which is every view except `DEVICES` — a device face is a fixed
+  268px and does not stretch. The playlist became resizable on 2026-09-08;
+  before that the grip was live on the notes page alone.
+- **Each view remembers its own dock height**, so switching tabs restores the
+  height that view was left at rather than sharing one number.
+- **The pane arrangement survives a restart**, in `[ui.layout]` of
+  `settings.toml` beside the palette seeds: which slot each view is in, what
+  each pane is showing, the divider position, each view's dock height, and
+  whether the dock and the browser are open. Zoom is deliberately not saved —
+  it is a glance, not an arrangement. An arrangement that could not be worked
+  in falls back to the default panes and keeps the rest of the file.
+- **A view moves between panes by dragging its tab.** Drop it on another
+  pane, or on the right edge of an unsplit top pane to open the split there.
+  The pane it would land in is tinted while the drag is live, the dragged tab
+  dims at its origin, and the main pane's last view refuses to be dragged out
+  — there would be nothing left to drop onto. `View > Move <name> to …` does
+  the same from the menu, and so does right-clicking the tab itself — which
+  is where a tab says what can be done to it, since the drag and the
+  double-click have no affordance of their own. This is how the mixer reaches
+  the bottom pane.
+- **A view is revealed, not navigated to.** `Ctrl+1`..`Ctrl+5` and the `View`
+  menu name `Steps`, `Mixer`, `Devices`, `Notes` and `Playlist`, and each
+  shows that view wherever it lives. There is no longer an `editor page`: a
+  page index of the lower dock could not name a view that had moved out of
+  it.
+- **A view has exactly one toolbar row, and its slot's tab strip leads it.**
+  With `STEPS` up it carries pattern selection, the cursor tools and pattern
+  length; with `MIXER` up, nothing, because the mixer's controls are on its
+  strips; with `DEVICES` up, the device chain's source picker and, at the far
+  end, the channel name and its preset browser.
+  The dock used to stack **two** rows -- a header with the switcher, the
+  channel name and the preset browser, and a per-page row under it. Merging
+  them returned 34px and removed a `SONG ARRANGEMENT` label that named the
+  pane a tab beside it already named. The preset browser is now on `DEVICES`
+  alone; on the piano roll a whole-channel preset browser was noise.
+  The pattern controls and the `STEPS/MIXER` switcher had already moved once,
+  on 2026-09-07, off a 26px strip of their own.
+- **Each editor owns its own grid snap**, in its own row: the piano roll a
   toggle and a menu, the playlist a menu. A third snap control used to sit in
   the toolbar and ask `editor-page` which of the two indices it was editing.
-- The lower dock switches between SOURCE, NOTES and PLAYLIST with the same
-  segmented control the work surface uses, and the source device is a picker
-  rather than a chip per instrument.
+- The source device is a picker rather than a chip per instrument.
 - Patterns are chosen with a fixed-width stepper plus a jump menu and can be
   named; the selector costs the same width at any pattern count.
 - Pattern length moves a beat at a time with Shift -- on the STEPS field's
@@ -125,7 +171,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   existed load at unity. Voice controls cover one-shot/gated playback, 1-16
   voices, restart/layer retriggering, and 16 cross-channel choke groups.
 - A mixer sharing the work surface with the step grid, behind the toolbar's
-  STEPS/MIXER switcher. It is a strip per bus - master first, then sixteen inserts - with a
+  STEPS/MIXER tab strip. It is a strip per bus - master first, then sixteen inserts - with a
   name plate, live stereo meter, fader, pan, mute, destination, and a count of
   the channels feeding it. Clicking a strip's name plate points the device rack
   below at that bus, so a chain on a group of channels is built with the same

@@ -25,6 +25,17 @@ same way every existing surface already does for undo/redo/cut/copy/paste
 (`edit-command-requested` in `main.slint`, handled in `lib.rs`) and now for
 the full action set.
 
+### An id outlives its label
+
+`view.pane-source` is labelled **Show Devices** and reveals the `DEVICES`
+view. The id was not renamed with it, and that is the rule rather than an
+oversight: a user's rebindings are stored against the id, so renaming one
+silently drops whatever they had bound to it. Change the label, leave the id.
+
+`Ctrl+1`..`Ctrl+5` also stopped meaning "switch a particular pane to this
+page" on 2026-09-08 and started meaning "reveal this view, wherever it lives",
+without the table changing at all — which is what the ids had said all along.
+
 **A shortcut that reaches into a widget's internal state is a bug, not a
 shortcut** — this line is inherited from `FOCUS.md`'s original framing of
 the command layer, and applies equally to any future console/MCP command.
@@ -32,11 +43,13 @@ the command layer, and applies equally to any future console/MCP command.
 ## What's registered today
 
 `actions.rs`'s `ACTIONS` table is the source of truth; read it rather than
-this document for the current list. As of this writing it holds 46 actions in
-eight categories: Transport (play/pause on Space and the song loop on L),
+this document for the current list — and mean it: on 2026-09-08 this sentence
+said 46 where the table held 45, and had done for long enough that nobody
+knew when it drifted. It holds 47 in eight categories as of that date: Transport (play/pause on Space and the song loop on L),
 File, Edit, Notes (arrow-key nudge and
 transpose, the five pointer tools on keys 1-5, and the snap toggle on 6),
-View (pane switching and piano-roll zoom), Channel, Pattern (including
+View (revealing a view, splitting the top pane on Ctrl+\\, zooming a pane to
+the window on Ctrl+Shift+\\, and piano-roll zoom), Channel, Pattern (including
 lengthening and shortening the pattern by a beat, on Ctrl+Shift+= and
 Ctrl+Shift+-), and Device
 (copy, cut, paste and duplicate the selected rack device, on

@@ -2,7 +2,7 @@
 //! `MOOLOOP_PIANO_SNAPSHOT` is set, so zoom-scrollbar placement and the
 //! default pitch zoom can be verified without a compositor.
 
-use mooloop_ui::{
+use mooloop_ui::{view, 
     default_piano_gestures, note_hit_test, AutomationPointCell, AutomationTargetRow,
     MainWindow, NoteCell,
 };
@@ -24,7 +24,7 @@ fn render_piano_snapshot() {
     // gesture role is unbound and no modifier does anything.
     ui.set_piano_gestures(default_piano_gestures());
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
-    ui.set_editor_page(1);
+    ui.invoke_show_view(view::NOTES);
     ui.set_pattern_length(16);
 
     let model = Rc::new(VecModel::from(vec![NoteCell {
@@ -75,7 +75,7 @@ fn render_piano_lanes_snapshot() {
     // gesture role is unbound and no modifier does anything.
     ui.set_piano_gestures(default_piano_gestures());
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
-    ui.set_editor_page(1);
+    ui.invoke_show_view(view::NOTES);
     ui.set_pattern_length(16);
     ui.set_velocity_lane_visible(true);
     ui.set_automation_lane_visible(true);

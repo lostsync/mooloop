@@ -1413,8 +1413,10 @@ mod tests {
         };
 
         // Onto a bus, which is a different chain entirely.
-        let mut destination = Session::default();
-        destination.effect_target = EffectTarget::Bus(1);
+        let mut destination = Session {
+            effect_target: EffectTarget::Bus(1),
+            ..Default::default()
+        };
         destination
             .insert_effect_at(EffectKind::Chain, 0)
             .expect("room");

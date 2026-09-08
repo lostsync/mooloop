@@ -9,13 +9,19 @@
 //! where the sidebar meets the window edge; the window keeps small side
 //! insets, so this is inside the 960px surface).
 
-use mooloop_ui::MainWindow;
+use mooloop_ui::{view, MainWindow};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, SharedString};
 
 const CONTENT_RIGHT: f32 = 952.0;
 const DEFAULT_WIDTH: f32 = 260.0;
-const BUTTON_X: f32 = CONTENT_RIGHT - 6.0 - 32.0;
+// The browser's chip is the *rightmost* of the status bar's three layout
+// chips, which read in the screen order of the regions they toggle: dock,
+// split, browser. It was the middle one of two until 2026-09-08, and it was
+// drawing a left-docked panel for a sidebar that is docked on the right.
+// Chip k spans [width - (3 - k) * 26, +20] in a 960px window, so the
+// browser's centre is width - 16.
+const BUTTON_X: f32 = 944.0;
 const BUTTON_Y: f32 = 740.0;
 const NEUTRAL: (f32, f32) = (300.0, 400.0);
 
@@ -30,7 +36,7 @@ fn harness() -> MainWindow {
     .ok();
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
-    ui.set_editor_page(1);
+    ui.invoke_show_view(view::NOTES);
     ui
 }
 

@@ -322,9 +322,19 @@ export component PickerChip inherits Rectangle {
                         }
                         row-touch := TouchArea {
                             mouse-cursor: pointer;
+                            // Report first, close second. Closing tears down
+                            // the repeater item whose handler is still
+                            // running, so a `picked` after it never lands and
+                            // the chip looks stuck on its old entry. The same
+                            // bug has been found and fixed twice already --
+                            // `mixer.slint`'s `BusPicker` and
+                            // `device-rack.slint`'s preset menu, which has a
+                            // pointer-event test behind it in
+                            // `tests/effect_preset_menu.rs`. `tests/picker_chip.rs`
+                            // is this one's.
                             clicked => {
-                                menu.close();
                                 root.picked(index);
+                                menu.close();
                             }
                         }
                     }
@@ -1875,6 +1885,12 @@ export component KnobStack inherits Rectangle {
             step: root.step;
             scale: root.scale;
             bipolar: root.bipolar;
+            // The dial still needs the value even though it does not draw it:
+            // `ParameterKnob`'s tooltip *is* its value, and its
+            // `accessible-value` comes from the same place. Without this the
+            // hover bubble on every ML-P8 and DS-01 knob is an empty box.
+            // `KnobField` forwards it for the same reason.
+            value-text: root.display-text;
             modulation-armed: root.modulation-armed;
             modulation-allowed: root.modulation-allowed;
             modulation-depth <=> root.modulation-depth;

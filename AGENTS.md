@@ -105,7 +105,17 @@ Do not reach for `cargo build` to find out whether a `.slint` edit is valid or
 what it looks like. `scripts/slint-sketch` type-checks a scratch `.slint`
 against the real widgets in about 0.05s and screenshots it in about 0.2s,
 where `cargo build -p mooloop-ui` is about four minutes for any edit at all.
-Iterate there, then build once. It needs `slint-viewer` installed locally; it
+Iterate there, then build once.
+
+**It also takes `ui/main.slint` itself**, which is not obvious from the name
+and is worth knowing before any structural edit: `scripts/slint-sketch
+crates/mooloop-ui/ui/main.slint` type-checks the whole real window in about
+2.7s, and `--shot` renders it in about 3s with empty models -- enough to see
+the layout, the chrome, the toolbar and the status bar, though not anything
+driven by a Rust-supplied model. For a change that moves markup around rather
+than one that needs live data, that is the check-and-look loop, at roughly a
+hundredth of a `mooloop-ui` build. Found 2026-09-08, restructuring the work
+area. It needs `slint-viewer` installed locally; it
 is deliberately not a workspace dependency, and the build never refers to it.
 See `docs/AGENT_OPERATIONS.md`.
 
@@ -128,7 +138,7 @@ you are about to stop.**
 | 1 | `cargo check -p <crate>` | ~1 s | after every edit |
 | 2 | `cargo test -p <crate>` | 4 s laptop / 18 s box | after every edit that changes behaviour |
 | 3 | `cargo test --workspace --exclude mooloop-ui` | 43 s | before handing work over |
-| 4 | `cargo test --workspace` + `cargo clippy --workspace --all-targets` | 118 s + ~88 s | before committing, and nothing smaller than a milestone |
+| 4 | `cargo test --workspace` + `cargo clippy --workspace --all-targets -- -D warnings` | 118 s + ~88 s | before committing, and nothing smaller than a milestone |
 
 - **`cargo test --workspace` is a commit-time command, not an iteration-time
   command.** One measured session spent 104 minutes on twenty-one of them,
@@ -166,6 +176,17 @@ The exception is when the very next thing you do depends on the result and
 there is nothing else to usefully do. That is rarer than it feels: there is
 almost always another file to read, another edit to prepare, or a measurement
 to take.
+
+### Run clippy the way CI runs it, or you are not running it
+
+**`-- -D warnings`.** `.github/workflows/ci.yml` denies warnings; a bare
+`cargo clippy` does not, and the difference is the whole result. On
+2026-09-08 a `field_reassign_with_default` in a `mooloop-session` test was
+noticed during a release, checked with a bare `cargo clippy`, seen to exit 0,
+and written into `LOOSE_ENDS.md` as a tolerated warning worth fixing
+sometime. It had been failing CI on `main` on every push for two days.
+
+An exit code only answers the question you asked. Ask CI's.
 
 ### Never read a piped run's exit code
 

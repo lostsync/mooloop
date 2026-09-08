@@ -219,19 +219,27 @@ alignment, and height contract as effects.
   +12 dB, double-click to 0 dB. No gain control reads in percent; dB is the
   unit the values actually mean.
 
-The lower editor retains one channel row:
+The device rack is one of five **views**, and a view has exactly one toolbar
+row, led by its slot's tab strip:
 
-`[Source | Notes | Playlist] [channel name] [channel preset browser/actions]`
+`[DEVICES NOTES PLAYLIST] | [DEVICE CHAIN] [source type] ··· [channel name] [channel preset browser/actions]`
 
-The device-chain row directly below it owns the source type, and nothing else:
+This used to be two stacked rows — a slot header carrying the switcher, the
+channel name and the preset browser, and a device-chain row under it. They
+merged because a slot header cannot hold per-view controls once a view can be
+moved between panes, and because the shared row was already asking which page
+was open in order to know whether to draw the preset browser, which is this
+document's own stated symptom for a control in the wrong place.
 
-`[DEVICE CHAIN] [source type]`
+The channel preset browser is on this view and no other. A channel preset is
+the channel's sound, and this is the view whose subject is the channel's
+sound; on the piano roll it was noise beside a stretch.
 
 ### Piano roll gestures
 
-The roll's header reads left to right as mode, grid, then selection:
+The roll's header reads left to right as pane, mode, grid, then selection:
 
-`[SEL DRAW PAINT SLICE ERASE] [SNAP] [interval] | [tick/note/vel] [length] | [VEL AUTO]`
+`[DEVICES NOTES PLAYLIST] | [SEL DRAW PAINT SLICE ERASE] [SNAP] [interval] | [tick/note/vel] [length] | [VEL AUTO] ··· [channel name]`
 
 Length is a musical division, not a tick count, and setting it applies to the
 whole selection. Beside the picker is a readout of the exact value, because an
@@ -449,10 +457,48 @@ columns with tiny `+` and `-` glyphs.
 
 ## Toolbars
 
-- **A pane's switcher leads the toolbar whose contents it decides.** A strip
-  that exists only to hold a switcher is chrome; a toolbar carrying controls
-  for a pane that is not showing is worse, because it looks like it applies
-  to what is on screen.
+- **A view has exactly one toolbar row, and its slot's tab strip leads it.**
+  A strip that exists only to hold a switcher is chrome; a toolbar carrying
+  controls for a pane that is not showing is worse, because it looks like it
+  applies to what is on screen; and *two* stacked rows, where the upper one
+  has to ask which of the lower one's pages is open, is both at once. The row
+  is 30px on `Theme.surface` with 24px controls, whichever slot the view is
+  in — a pane's toolbar should not change shape when the pane moves.
+- **The tab strip is the part of that row that never clips.** It is the way
+  out of the pane. A dense row clips its own controls at a narrow width
+  instead, which is what the piano roll's already did.
+- **The status bar's layout chips read in the screen order of the regions
+  they toggle**, by each region's left edge: the dock at `x 0`, the split at
+  the divider, the browser at the sidebar's edge. Their glyphs share one
+  outline, and what separates them is **fill, not position** — a docked panel
+  appears and disappears and is drawn solid; a split is two editors and is
+  drawn as two empty halves. Two rules 2px apart are the same square at 16px.
+- **A gesture with no affordance needs a menu that names it.** The tab drag
+  and the double-click to zoom are both invisible, so a tab's right-click menu
+  lists them: it is where the control says what can be done to it, and it is
+  what lets the gestures stay gestures once they are learned. A menu row
+  elsewhere is not a substitute when it acts on "the current thing" rather
+  than on the thing under the pointer.
+- **A view moves by dragging its tab, and a drop says which pane, not where
+  in a sequence.** So the feedback is a tint over the target pane, where the
+  device rack animates its rows aside — a reorder has to answer *where in the
+  order*, a pane drop only *which pane*. A drag that is not allowed refuses at
+  the grab rather than snapping back at the end.
+- **A pane fills the window on a double-click of its active tab.** The
+  maximise gesture a title bar has, on the control that names the pane, which
+  costs no chrome at all — a button per slot would be three buttons for a mode
+  entered rarely and left immediately. The state is not hidden: the zoomed tab
+  takes the full accent, the other slots are gone from the screen, and the
+  status bar says how to get back. `Esc` leaves, and loses to every dialog.
+- **A view declares an intrinsic height or it stretches.** A device face is a
+  fixed 268px, so `DEVICES` declares one and nothing else does; that single
+  fact is what makes the dock's divider live on some views and not others.
+  Do not write a condition naming a view where the view can state a fact.
+- **A divider closes what it is dragged out of existence.** Both dividers use
+  one idiom: a 1px line taking `Theme.focus` on hover, a grab zone beside it,
+  moving-origin drag arithmetic because the grip travels with the edge it
+  sets, and re-anchoring when a bound swallows a move. The vertical one adds
+  double-click-to-even, and dragging it to either bound folds the split away.
 - **A setting that belongs to a pane lives in that pane's header, once.** A
   control that has to ask which pane is open in order to know which value it
   is editing is in the wrong place -- that question is the symptom.
