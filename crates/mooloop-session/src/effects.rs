@@ -626,6 +626,26 @@ impl Session {
     }
 }
 
+/// The rate a synced modulation effect should now be running at, as a command,
+/// or `None` while it is free-running and there is nothing to restate.
+fn resolved_modulation_rate(
+    params: &mut mooloop_core::ModulationParams,
+    target: EffectTarget,
+    slot: i32,
+    bpm: f64,
+) -> Option<EngineCommand> {
+    if !params.tempo_sync {
+        return None;
+    }
+    params.rate_hz = params.synced_rate_hz(bpm);
+    Some(EngineCommand::SetEffectParam {
+        target,
+        slot: u8::try_from(slot).ok()?,
+        id: mooloop_core::MODULATION_PARAM_RATE_HZ,
+        value: params.rate_hz,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1563,24 +1583,4 @@ mod tests {
         assert_eq!(session.effect_preset_name(EffectTarget::Bus(1), bus_gate), None);
         assert_eq!(session.effect_preset_name(EffectTarget::Bus(1), gate), None);
     }
-}
-
-/// The rate a synced modulation effect should now be running at, as a command,
-/// or `None` while it is free-running and there is nothing to restate.
-fn resolved_modulation_rate(
-    params: &mut mooloop_core::ModulationParams,
-    target: EffectTarget,
-    slot: i32,
-    bpm: f64,
-) -> Option<EngineCommand> {
-    if !params.tempo_sync {
-        return None;
-    }
-    params.rate_hz = params.synced_rate_hz(bpm);
-    Some(EngineCommand::SetEffectParam {
-        target,
-        slot: u8::try_from(slot).ok()?,
-        id: mooloop_core::MODULATION_PARAM_RATE_HZ,
-        value: params.rate_hz,
-    })
 }

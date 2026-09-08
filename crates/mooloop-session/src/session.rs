@@ -1375,6 +1375,31 @@ impl Session {
     }
 }
 
+/// One effect's answer to a tempo change, if it has one.
+///
+/// Free with the `EffectParams` match rather than a trait, because there are
+/// two and the third would want to be visible here rather than opted into
+/// somewhere else.
+fn retune_effect(
+    params: &mut EffectParams,
+    bpm: f64,
+    target: EffectTarget,
+    slot: u8,
+    changes: &mut Vec<(EffectTarget, u8, u32, f32)>,
+) {
+    match params {
+        EffectParams::Delay(delay) if delay.tempo_sync => {
+            delay.time_ms = delay.time_division.time_ms(bpm);
+            changes.push((target, slot, DELAY_PARAM_TIME_MS, delay.time_ms));
+        }
+        EffectParams::Modulation(modulation) if modulation.tempo_sync => {
+            modulation.rate_hz = modulation.synced_rate_hz(bpm);
+            changes.push((target, slot, MODULATION_PARAM_RATE_HZ, modulation.rate_hz));
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod commit_reuse_tests {
     use std::sync::Arc;
@@ -1467,30 +1492,5 @@ mod commit_reuse_tests {
                 "channel {index} re-rendered its commit after moving one seat along"
             );
         }
-    }
-}
-
-/// One effect's answer to a tempo change, if it has one.
-///
-/// Free with the `EffectParams` match rather than a trait, because there are
-/// two and the third would want to be visible here rather than opted into
-/// somewhere else.
-fn retune_effect(
-    params: &mut EffectParams,
-    bpm: f64,
-    target: EffectTarget,
-    slot: u8,
-    changes: &mut Vec<(EffectTarget, u8, u32, f32)>,
-) {
-    match params {
-        EffectParams::Delay(delay) if delay.tempo_sync => {
-            delay.time_ms = delay.time_division.time_ms(bpm);
-            changes.push((target, slot, DELAY_PARAM_TIME_MS, delay.time_ms));
-        }
-        EffectParams::Modulation(modulation) if modulation.tempo_sync => {
-            modulation.rate_hz = modulation.synced_rate_hz(bpm);
-            changes.push((target, slot, MODULATION_PARAM_RATE_HZ, modulation.rate_hz));
-        }
-        _ => {}
     }
 }
