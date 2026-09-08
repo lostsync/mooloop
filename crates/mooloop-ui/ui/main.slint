@@ -4,7 +4,7 @@ import { GainMath } from "gain.slint";
 export { DisplayPrefs, Motion } from "theme.slint";
 import {
     AudioOrientation, IconButton, InstrumentModule, MiniKnob, ParameterFader, ParameterKnob, PeakMeter,
-    SegmentedControl, SelectorBank, StereoPeakMeter, ZoomScrollBar,
+    PickerChip, SegmentedControl, SelectorBank, StereoPeakMeter, ZoomScrollBar,
     ToggleButton, ToolButton, TransportButton, ValueScale, MuteButton as DesignMuteButton, TrimKnob
 } from "controls.slint";
 import {
@@ -1797,7 +1797,13 @@ export component MainWindow inherits Window {
 
                     Rectangle { height: 1px; background: Theme.border; opacity: 0.6; }
 
-                    // --- Edit row ----------------------------------------------
+                    // --- Work-surface row --------------------------------------
+                    //
+                    // What the top pane is, and then what that pane needs.
+                    // Both halves used to be somewhere else: the switcher on
+                    // a 26px strip below this bar, and the pane's controls
+                    // here whether or not the pane they act on was showing --
+                    // a pattern length and a step tool sitting over a mixer.
                     Rectangle {
                         height: 29px;
                         background: Theme.panel;
@@ -1808,10 +1814,26 @@ export component MainWindow inherits Window {
                             padding-bottom: 2px;
                             spacing: 3px;
 
+                            SegmentedControl {
+                                width: 108px;
+                                height: 24px;
+                                options: ["STEPS", "MIXER"];
+                                selected-index: root.mixer-visible ? 1 : 0;
+                                hint: root.mixer-visible
+                                    ? "Click a bus to put effects on it"
+                                    : "Each channel's bus field picks where it lands";
+                                selected(i) => { root.mixer-visible = i == 1; }
+                            }
+
+                            // The rule separates the switcher from the pane's
+                            // own controls, so with the mixer up -- which has
+                            // none -- there is nothing for it to separate.
+                            if !root.mixer-visible : ToolbarRule {}
+
                             // Pattern selection is a stepper plus a jump list, so
                             // it costs the same width at 2 patterns and at 200.
-                            ToolbarLabel { text: "PAT"; }
-                            Rectangle {
+                            if !root.mixer-visible : ToolbarLabel { text: "PAT"; }
+                            if !root.mixer-visible : Rectangle {
                                 height: 24px;
                                 width: pattern-group.preferred-width;
                                 border-radius: Theme.radius-md;
@@ -1839,13 +1861,13 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                            NameField {
+                            if !root.mixer-visible : NameField {
                                 text: root.current-pattern-name;
                                 placeholder: "Pattern " + (root.current-pattern + 1);
                                 tooltip: "Name this pattern";
                                 edited(t) => { root.pattern-renamed(root.current-pattern, t); }
                             }
-                            IconButton {
+                            if !root.mixer-visible : IconButton {
                                 text: "+";
                                 tooltip: "Add Pattern";
                                 size: 24px;
@@ -1853,35 +1875,35 @@ export component MainWindow inherits Window {
                                 clicked => { root.add-pattern-clicked(); }
                             }
 
-                            ToolbarRule {}
+                            if !root.mixer-visible : ToolbarRule {}
 
                             // Tool modes. The glyph row is the answer to "what
                             // will my next drag across the grid do".
-                            ToolModeButton {
+                            if !root.mixer-visible : ToolModeButton {
                                 icon: ToolIcons.select; name: "Select";
                                 hint: "Click toggles a step. Ctrl-drag sets velocity.";
                                 active: root.tool-mode == 0;
                                 clicked => { root.tool-mode = 0; }
                             }
-                            ToolModeButton {
+                            if !root.mixer-visible : ToolModeButton {
                                 icon: ToolIcons.paint; name: "Paint";
                                 hint: "Drag to fill steps. Right-drag to clear.";
                                 active: root.tool-mode == 1;
                                 clicked => { root.tool-mode = 1; }
                             }
-                            ToolModeButton {
+                            if !root.mixer-visible : ToolModeButton {
                                 icon: ToolIcons.slice; name: "Slice";
                                 hint: "Click a step to ratchet it into even hits.";
                                 active: root.tool-mode == 2;
                                 clicked => { root.tool-mode = 2; }
                             }
-                            ToolModeButton {
+                            if !root.mixer-visible : ToolModeButton {
                                 icon: ToolIcons.stretch; name: "Stretch";
                                 hint: "Drag a step sideways to set its length.";
                                 active: root.tool-mode == 3;
                                 clicked => { root.tool-mode = 3; }
                             }
-                            if root.tool-mode == 2 : StepperField {
+                            if !root.mixer-visible && root.tool-mode == 2 : StepperField {
                                 label: "×";
                                 value <=> root.slice-divisions;
                                 minimum: 2;
@@ -1890,9 +1912,9 @@ export component MainWindow inherits Window {
                                 value-width: 18px;
                             }
 
-                            ToolbarRule {}
+                            if !root.mixer-visible : ToolbarRule {}
 
-                            StepperField {
+                            if !root.mixer-visible : StepperField {
                                 label: "STEPS";
                                 value <=> root.pattern-length;
                                 minimum: 1;
@@ -1901,22 +1923,14 @@ export component MainWindow inherits Window {
                                 hint: "Length of the selected pattern in 16th-note steps";
                                 changed(v) => { root.pattern-length-changed(v); }
                             }
-                            MenuField {
-                                label: "SNAP";
-                                options: root.musical-snap-options;
-                                selected-index: root.editor-page == 2
-                                    ? root.playlist-snap-index : root.piano-snap-index;
-                                field-width: 46px;
-                                menu-width: 120px;
-                                selected(i) => {
-                                    if (root.editor-page == 2) {
-                                        root.playlist-snap-index = i;
-                                    } else {
-                                        root.piano-snap-index = i;
-                                    }
-                                }
-                            }
-
+                            // Snap is not here. It belongs to whichever
+                            // editor is open in the *bottom* dock, which is
+                            // why the one that used to sit here had to ask
+                            // `editor-page` which of two indices it was
+                            // editing -- while the piano roll and the
+                            // playlist each carried a snap control of their
+                            // own. Three controls, one setting, in two
+                            // halves of the window.
                             Rectangle { horizontal-stretch: 1; }
                         }
                     }
@@ -1938,36 +1952,14 @@ export component MainWindow inherits Window {
                     spacing: 0px;
 
                     // ===== Work surface: the step grid or the mixer =====
-                    Rectangle {
-                        height: 26px;
-                        background: Theme.surface;
-                        HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
-                            padding-top: 3px;
-                            padding-bottom: 3px;
-                            spacing: 6px;
-                            SelectorBank {
-                                options: ["Steps", "Mixer"];
-                                selected-index: root.mixer-visible ? 1 : 0;
-                                segment-width: 54px;
-                                tooltip: "Show the step grid or the mixer";
-                                selected(i) => { root.mixer-visible = i == 1; }
-                            }
-                            Text {
-                                text: root.mixer-visible
-                                    ? "Click a bus to put effects on it"
-                                    : "Each channel's bus field picks where it lands";
-                                color: Theme.text-faint;
-                                font-size: 9px;
-                                vertical-alignment: center;
-                            }
-                            Rectangle { horizontal-stretch: 1; }
-                        }
-                    }
-
-                    Rectangle { height: 1px; background: Theme.border; }
-
+                    //
+                    // The switcher used to sit on a 26px strip of its own,
+                    // directly under the toolbar, beside a sentence of
+                    // permanent chrome explaining the pane. Adam, of that
+                    // strip: "that one has no reason to exist." It does not:
+                    // the switcher belongs at the head of the pane toolbar
+                    // whose contents it decides, and the sentence belongs in
+                    // the status bar.
                     if root.mixer-visible : MixerPane {
                         vertical-stretch: 1;
                         strips: root.mixer-strips;
@@ -2351,20 +2343,18 @@ export component MainWindow inherits Window {
                                     padding: 3px;
                                     spacing: 3px;
                                     alignment: start;
-                                    FlatButton {
-                                        text: "Source";
-                                        active: root.editor-page == 0;
-                                        clicked => { root.editor-page = 0; }
-                                    }
-                                    FlatButton {
-                                        text: "Notes";
-                                        active: root.editor-page == 1;
-                                        clicked => { root.editor-page = 1; }
-                                    }
-                                    FlatButton {
-                                        text: "Playlist";
-                                        active: root.editor-page == 2;
-                                        clicked => { root.editor-page = 2; }
+                                    // The same switcher shape the work
+                                    // surface above uses, for the same
+                                    // reason: two panes, two toolbars, one
+                                    // way of saying which pane you are
+                                    // looking at.
+                                    SegmentedControl {
+                                        width: 186px;
+                                        height: 24px;
+                                        options: ["SOURCE", "NOTES", "PLAYLIST"];
+                                        selected-index: root.editor-page;
+                                        hint: "What the lower dock is editing";
+                                        selected(i) => { root.editor-page = i; }
                                     }
                                     Rectangle { width: 8px; }
                                     Text {
@@ -2409,17 +2399,24 @@ export component MainWindow inherits Window {
                                             padding: 4px;
                                             spacing: 6px;
                                             alignment: start;
-                                            Text {
-                                                text: "SNAP";
-                                                color: Theme.text-faint;
-                                                font-size: 9px;
-                                                vertical-alignment: center;
-                                            }
-                                            ComboBox {
-                                                model: root.musical-snap-options;
-                                                current-index <=> root.playlist-snap-index;
-                                                width: 92px;
-                                                height: 24px;
+                                            // The same pair the piano roll
+                                            // carries, in the same order, so
+                                            // snap is one control in one
+                                            // place per editor rather than a
+                                            // label and a ComboBox here, a
+                                            // toggle and a ComboBox there,
+                                            // and a MenuField in the toolbar
+                                            // above deciding which of the two
+                                            // indices it meant.
+                                            ToolbarLabel { text: "SNAP"; }
+                                            MenuField {
+                                                options: root.musical-snap-options;
+                                                selected-index: root.playlist-snap-index;
+                                                field-width: 62px;
+                                                menu-width: 120px;
+                                                tooltip: "Snap";
+                                                hint: "Grid the playlist quantises clips and the loop to";
+                                                selected(i) => { root.playlist-snap-index = i; }
                                             }
                                             Rectangle { width: 4px; }
                                             FlatButton {
@@ -2862,12 +2859,24 @@ export component MainWindow inherits Window {
                                                 font-size: 9px;
                                                 vertical-alignment: center;
                                             }
-                                            if !root.editing-bus : SelectorBank {
-                                                options: ["Sampler", "Drum", "Mono", "Poly", "ML-M1", "ML-P8", "DS-01", "Aux In"];
-                                                selected-index <=> root.source-kind;
-                                                segment-width: 48px;
+                                            // A picker rather than a bank of
+                                            // eight chips. Adam: "a toolbar
+                                            // button per instrument doesn't
+                                            // really make sense past
+                                            // prototyping" -- the bank cost
+                                            // 384px and grew by 48 with every
+                                            // instrument, and this is the
+                                            // widget the inventory already
+                                            // names for "an option set past
+                                            // what a segmented bank can
+                                            // carry".
+                                            if !root.editing-bus : PickerChip {
+                                                width: 96px;
+                                                height: 22px;
+                                                options: ["Sampler", "Drum Synth", "Mono Synth", "Poly Synth", "ML-M1", "ML-P8", "DS-01", "Aux In"];
+                                                selected-index: root.source-kind;
                                                 tooltip: "Source device";
-                                                selected(i) => {
+                                                picked(i) => {
                                                     root.source-kind = i;
                                                     root.channel-source-changed(i);
                                                 }
@@ -4181,12 +4190,15 @@ export component MainWindow inherits Window {
                                                 toggled => { root.piano-snap-enabled = !root.piano-snap-enabled; }
                                                 hint: "Quantise edits to the grid. Hold the snap-override modifier to invert this for one drag.";
                                             }
-                                            ComboBox {
-                                                model: root.musical-snap-options;
-                                                current-index <=> root.piano-snap-index;
+                                            MenuField {
+                                                options: root.musical-snap-options;
+                                                selected-index: root.piano-snap-index;
                                                 enabled: root.piano-snap-enabled;
-                                                width: 84px;
-                                                height: 24px;
+                                                field-width: 62px;
+                                                menu-width: 120px;
+                                                tooltip: "Snap";
+                                                hint: "Grid note edits quantise to";
+                                                selected(i) => { root.piano-snap-index = i; }
                                             }
                                             Rectangle { width: 8px; }
                                             Text {

@@ -139,7 +139,7 @@ export component StepperField inherits Rectangle {
             width: root.value-width;
             Text {
                 text: root.display-text;
-                color: Theme.text;
+                color: root.enabled ? Theme.text : Theme.text-faint;
                 font-size: ToolbarMetrics.value-size;
                 font-family: "monospace";
                 horizontal-alignment: center;
@@ -192,13 +192,15 @@ export component MenuField inherits Rectangle {
     in property <length> field-width: 54px;
     in property <length> menu-width: 150px;
     in property <int> visible-rows: 10;
+    in property <bool> enabled: true;
     in property <brush> field-background: Theme.surface-raised;
     callback selected(int);
 
     height: ToolbarMetrics.control-height;
     width: menu-layout.preferred-width;
     border-radius: Theme.radius-md;
-    background: touch.has-hover ? Theme.surface-active : root.field-background;
+    background: !root.enabled ? Theme.surface
+        : touch.has-hover ? Theme.surface-active : root.field-background;
     accessible-role: combobox;
     accessible-label: root.tooltip;
     accessible-value: root.display-text;
@@ -230,6 +232,7 @@ export component MenuField inherits Rectangle {
     }
 
     touch := TouchArea {
+        enabled: root.enabled;
         mouse-cursor: pointer;
         clicked => { menu.show(); }
         changed has-hover => {

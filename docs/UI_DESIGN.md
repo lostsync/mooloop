@@ -447,6 +447,21 @@ columns with tiny `+` and `-` glyphs.
   wrapping would destroy comparison or alignment.
 - Dynamic content must not resize toolbar, rack cells, knobs, or selectors.
 
+## Toolbars
+
+- **A pane's switcher leads the toolbar whose contents it decides.** A strip
+  that exists only to hold a switcher is chrome; a toolbar carrying controls
+  for a pane that is not showing is worse, because it looks like it applies
+  to what is on screen.
+- **A setting that belongs to a pane lives in that pane's header, once.** A
+  control that has to ask which pane is open in order to know which value it
+  is editing is in the wrong place -- that question is the symptom.
+- **A row of buttons is for a set that is fixed and small.** A button per
+  member of a set that grows -- one per instrument, one per effect -- does
+  not survive the set growing. Use `PickerChip`; `WIDGET_INVENTORY.md`
+  records what it is for.
+- Two switchers for two panes look the same. Both are `SegmentedControl`.
+
 ## Interaction And Wording
 
 - A knob's label and value drag the same parameter as its knob face.
