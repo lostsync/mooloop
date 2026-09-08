@@ -69,8 +69,14 @@ pub const SAMPLER_PARAM_SLICE_BASE_NOTE: u32 = 35;
 /// The three constructors below are `pub(crate)` because [`crate::mlp8`]
 /// builds its own table from them: ML-P8 owns its ids, but a second copy of
 /// "an envelope stage runs 1 ms to 8 s" would be a range written twice.
-const ENV_MIN_S: f32 = 0.001;
-const ENV_MAX_S: f32 = 8.0;
+/// The shared envelope-stage range: 1 ms to 8 s, in ratio.
+///
+/// Public because a face has to state the same range, and a range written
+/// twice from memory is the bug `ParamDescriptor` exists to prevent.
+pub const ENV_MIN_SECONDS: f32 = 0.001;
+pub const ENV_MAX_SECONDS: f32 = 8.0;
+const ENV_MIN_S: f32 = ENV_MIN_SECONDS;
+const ENV_MAX_S: f32 = ENV_MAX_SECONDS;
 
 pub(crate) const fn unit(id: u32, name: &'static str, default: f32) -> ParamDescriptor {
     ParamDescriptor {

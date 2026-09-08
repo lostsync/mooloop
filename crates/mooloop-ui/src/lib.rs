@@ -30,7 +30,7 @@ use mooloop_core::log::Level;
 use mooloop_core::{log_debug, log_error, log_info, log_warn};
 use mooloop_core::{
     snap_bars_to_power_of_two,
-    BufferDuration, BufferEvent, BusSetup,
+    BufferDuration, BufferEvent, BusSetup, ENV_MAX_SECONDS, ENV_MIN_SECONDS,
     DeviceKind, DrumMode, DrumSynthParams, EffectKind,
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, FilterModel,
     GeneratorParams, GlideMode, HatCharacter,
@@ -122,8 +122,6 @@ use std::sync::Arc;
 
 const PUMP_INTERVAL_MS: u64 = 8;
 const INITIAL_BPM: i32 = 120;
-/// Fader positions for time-based params map onto [0, MAX_TIME_S] seconds.
-const MAX_TIME_S: f32 = 2.0;
 
 /// Fixed JACK buffer size choices offered by the segmented control on the
 /// Audio preferences page. Index-addressed to match `SegmentedControl`.
@@ -754,11 +752,16 @@ fn set_marker_property(window: &MainWindow, marker: SampleMarker, value: f32) {
     }
 }
 
-fn norm_to_time(v: f32) -> f32 {
-    v * MAX_TIME_S
-}
-fn time_to_norm(t: f32) -> f32 {
-    t / MAX_TIME_S
+/// An envelope stage in seconds, on the range its descriptor declares.
+///
+/// The sampler's face used to carry these normalised and this side used to
+/// map them onto a two-second range, while the table says 1 ms to 8 s in
+/// ratio and the face printed the number against five. Three answers for one
+/// value. The face carries seconds now, like every other generator's, so
+/// there is nothing here to map -- only a clamp, so a value arriving from
+/// anywhere lands inside the range the lane resolves against.
+fn envelope_seconds(t: f32) -> f32 {
+    t.clamp(ENV_MIN_SECONDS, ENV_MAX_SECONDS)
 }
 
 /// Number of positional parameter fields `EffectSlotRow` carries. Raising it
@@ -1444,15 +1447,27 @@ fn ds01_step_label(id: u32, params: &Ds01Params) -> Option<&'static str> {
 ///   bare `7500`.
 /// - **A route's depth is a percentage**, which is what a share of a
 ///   destination's range is called everywhere else in the program.
-fn ds01_display_unit(descriptor: &ParamDescriptor, natural: f32) -> (f32, &'static str) {
-    if ds01::matrix_offset(descriptor.id) == Some(ds01::MATRIX_OFFSET_AMOUNT) {
-        return (0.01, "%");
-    }
+/// The unit a face is showing a value in, and the factor that converts a
+/// number in it back to the parameter's own unit.
+///
+/// Seconds read as milliseconds below one and as seconds above, which is what
+/// `TimeFormat.seconds` prints and what `ds01_number` formats; hertz read as
+/// kilohertz past a thousand. A bare number typed into a field is read in
+/// whichever of those the field was showing, because that is the number the
+/// person was looking at when they started typing.
+fn display_unit(descriptor: &ParamDescriptor, natural: f32) -> (f32, &'static str) {
     match descriptor.unit {
         "s" if natural.abs() < 1.0 => (0.001, "ms"),
         "Hz" if natural.abs() >= 1_000.0 => (1_000.0, "kHz"),
         unit => (1.0, unit),
     }
+}
+
+fn ds01_display_unit(descriptor: &ParamDescriptor, natural: f32) -> (f32, &'static str) {
+    if ds01::matrix_offset(descriptor.id) == Some(ds01::MATRIX_OFFSET_AMOUNT) {
+        return (0.01, "%");
+    }
+    display_unit(descriptor, natural)
 }
 
 /// The number itself, at a precision that suits its unit and its size.
@@ -1535,7 +1550,7 @@ fn ds01_text(
 /// the field was already showing. That is the only self-consistent rule for a
 /// field whose unit follows its value: `240` typed over `240 ms` is 240
 /// milliseconds, and a second and a half is written `1.5 s`.
-fn ds01_typed_value(descriptor: &ParamDescriptor, text: &str, current: f32) -> Option<f32> {
+fn typed_value(text: &str, bare_scale: f32) -> Option<f32> {
     let number = parse_typed_value(text)?;
     let suffix = text
         .trim()
@@ -1549,12 +1564,16 @@ fn ds01_typed_value(descriptor: &ParamDescriptor, text: &str, current: f32) -> O
     } else if suffix.starts_with('%') {
         0.01
     } else if suffix.is_empty() {
-        ds01_display_unit(descriptor, current).0
+        bare_scale
     } else {
         // A unit that is not a prefix — `s`, `Hz`, `st` — is the natural one.
         1.0
     };
     Some(number * scale)
+}
+
+fn ds01_typed_value(descriptor: &ParamDescriptor, text: &str, current: f32) -> Option<f32> {
+    typed_value(text, ds01_display_unit(descriptor, current).0)
 }
 
 fn ds01_face_values(params: &Ds01Params) -> Ds01FaceValues {
@@ -3494,10 +3513,10 @@ impl UiState {
         window.set_waveform_view_visible_fraction(1.0);
         window.set_can_previous_sample(ch.can_previous_sample);
         window.set_can_next_sample(ch.can_next_sample);
-        window.set_attack(time_to_norm(p.attack));
-        window.set_decay(time_to_norm(p.decay));
+        window.set_attack(p.attack);
+        window.set_decay(p.decay);
         window.set_sustain(p.sustain);
-        window.set_release(time_to_norm(p.release));
+        window.set_release(p.release);
         window.set_start_pos(p.start);
         window.set_end_pos(p.end);
         window.set_loop_start(p.loop_start);
@@ -3557,10 +3576,10 @@ impl UiState {
         // still follows the amplitude one shows the shape it actually runs
         // rather than an empty control group.
         let filter_env = p.resolved_filter_env();
-        window.set_sampler_filter_attack(time_to_norm(filter_env.attack));
-        window.set_sampler_filter_decay(time_to_norm(filter_env.decay));
+        window.set_sampler_filter_attack(filter_env.attack);
+        window.set_sampler_filter_decay(filter_env.decay);
         window.set_sampler_filter_sustain(filter_env.sustain);
-        window.set_sampler_filter_release(time_to_norm(filter_env.release));
+        window.set_sampler_filter_release(filter_env.release);
         self.refresh_note_editor(window);
     }
 }
@@ -7444,7 +7463,7 @@ impl AppUi {
                     let Some(channel) = st.session.channels.get_mut(ch) else {
                         return;
                     };
-                    channel.params.$field = norm_to_time(v);
+                    channel.params.$field = envelope_seconds(v);
                     let p = channel.params;
                     let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                         channel: ch as u8,
@@ -7647,10 +7666,10 @@ impl AppUi {
                 });
             }};
         }
-        wire_filter_env_param!(on_sampler_filter_attack_changed, attack, norm_to_time);
-        wire_filter_env_param!(on_sampler_filter_decay_changed, decay, norm_to_time);
+        wire_filter_env_param!(on_sampler_filter_attack_changed, attack, envelope_seconds);
+        wire_filter_env_param!(on_sampler_filter_decay_changed, decay, envelope_seconds);
         wire_filter_env_param!(on_sampler_filter_sustain_changed, sustain, |v: f32| v);
-        wire_filter_env_param!(on_sampler_filter_release_changed, release, norm_to_time);
+        wire_filter_env_param!(on_sampler_filter_release_changed, release, envelope_seconds);
 
         {
             // Pure view state: re-bin the waveform for whatever range is
@@ -9173,15 +9192,35 @@ impl AppUi {
             let st = state.clone();
             let weak = window.as_weak();
             window.on_mlp8_text_committed(move |id, text| {
-                let Some(typed) = parse_typed_value(text.as_str()) else {
+                let id = id.max(0) as u32;
+                let refresh_only = || {
                     if let Some(window) = weak.upgrade() {
                         st.borrow().refresh_editor(&window);
                     }
+                };
+                // What a bare number means is decided against the value the
+                // field was showing, the way DS-01's fields already do it: an
+                // envelope stage prints milliseconds under a second, so `500`
+                // typed into one is half a second and not eight (the ceiling
+                // it used to clamp to).
+                let bare_scale = mooloop_core::mlp8::descriptor(id)
+                    .map(|descriptor| {
+                        let current = {
+                            let st = st.borrow();
+                            let params = st.session.channels[st.session.selected].mlp8_params;
+                            mooloop_core::mlp8::get(&params, id).unwrap_or(descriptor.default)
+                        };
+                        display_unit(descriptor, current).0
+                    })
+                    .unwrap_or(1.0);
+                let Some(typed) = typed_value(text.as_str(), bare_scale) else {
+                    refresh_only();
                     return;
                 };
-                let id = id.max(0) as u32;
                 // The five mix levels read in dB and store linear; core owns
                 // which those are so the face and this handler cannot drift.
+                // A gain field reads in dB and stores linear. `dB` is not a
+                // prefix, so `typed` is the number as typed either way.
                 let value = if mooloop_core::mlp8::is_gain_param(id) {
                     mooloop_core::gain::db_to_linear(typed)
                 } else {

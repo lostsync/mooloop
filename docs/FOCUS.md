@@ -196,7 +196,7 @@ case is exercised rather than described. Two things it turned up:
 
 The face and the table are two places one range is written, which is how a
 knob comes to disagree with the lane drawn against it, so
-`drum_slint_agreement.rs` holds them together on bounds, resting value, and
+`slint_face_agreement.rs` holds them together on bounds, resting value, and
 whether the control is drawn in ratio.
 
 ### 3. The interface, iterated

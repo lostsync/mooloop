@@ -931,15 +931,42 @@ export component KnobField inherits Rectangle {
 // visible set of musical divisions. The audio-facing value remains the same
 // normalized millisecond parameter in both cases; selecting a division simply
 // recalculates it against the current BPM.
+export component LedIndicator inherits Rectangle {
+    in property <bool> on;
+    in property <color> led-color: Theme.accent;
+    in property <length> diameter: 8px;
+    in property <string> tooltip;
+
+    width: root.diameter;
+    height: root.diameter;
+    border-radius: self.width / 2;
+    background: root.on ? root.led-color : root.led-color.with-alpha(0.16);
+    border-width: 1px;
+    border-color: root.on ? root.led-color.brighter(0.4) : Theme.border;
+
+    if root.tooltip != "" : Tooltip { text: @markdown("\{root.tooltip}"); }
+}
+
+// A delay's time control: free milliseconds, or a division of the shared
+// musical grid when its lamp is lit.
+//
+// The lamp is `SyncMiniKnob`'s gesture at a full knob's size. It replaced a
+// six-segment `SelectorBank` carrying five divisions and 230px of width, on
+// two counts: the grid was its own -- and wrong, since its `1/2` was worth
+// half a beat rather than two -- and a bank cannot carry twenty-one entries.
 export component TimeDivisionKnob inherits Rectangle {
     in property <string> label: "TIME";
     in property <string> tooltip: "Delay time";
     in-out property <float> value;
     in property <int> bpm: 120;
     in-out property <bool> tempo-sync;
-    // 0=1/2, 1=1/4, 2=1/8., 3=1/8T, 4=1/16.
-    in-out property <int> division: 1;
+    /// An index into the shared 21-entry grid, `Divisions`.
+    in-out property <int> division: 7;
     in property <float> default-value: 0.7815;
+    /// The longest time the delay line can actually serve. A division that
+    /// asks for more is played at this, and the readout says so rather than
+    /// printing a duration the ring cannot reach.
+    in property <float> maximum-ms: 2000;
     in property <bool> modulation-armed;
     // Only the free-running millisecond value is a continuous destination:
     // while tempo-synced the knob selects a division index, and sweeping that
@@ -955,15 +982,16 @@ export component TimeDivisionKnob inherits Rectangle {
     callback modulation-edit-started();
     callback modulation-edit-finished();
 
-    private property <float> division-beats: root.division == 0 ? 0.5
-        : root.division == 1 ? 1.0 : root.division == 2 ? 0.75
-        : root.division == 3 ? 1.0 / 3.0 : 0.25;
+    private property <float> synced-ms:
+        Divisions.beats(root.division) * 60000 / max(root.bpm, 1);
     private property <float> effective-ms: root.tempo-sync
-        ? root.division-beats * 60000 / max(root.bpm, 1)
+        ? min(root.synced-ms, root.maximum-ms)
         : pow(2000, root.value);
-    private property <int> selected-mode: root.tempo-sync ? root.division + 1 : 0;
+    // Lit when the grid is asking for longer than the line can serve, so a
+    // clamped division is visible rather than silently wrong.
+    private property <bool> clamped: root.tempo-sync && root.synced-ms > root.maximum-ms + 0.5;
 
-    width: 230px;
+    width: 92px;
     height: 80px;
 
     pure function normalized-for-ms(ms: float) -> float {
@@ -971,7 +999,7 @@ export component TimeDivisionKnob inherits Rectangle {
     }
 
     function set-division(next: int) {
-        let clamped = clamp(next, 0, 4);
+        let clamped = clamp(next, 0, 20);
         if (clamped != root.division) {
             root.division = clamped;
             root.division-changed(clamped);
@@ -980,23 +1008,16 @@ export component TimeDivisionKnob inherits Rectangle {
         root.changed(root.value);
     }
 
-    function select-mode(index: int) {
-        if (index == 0) {
-            if (root.tempo-sync) {
-                root.tempo-sync = false;
-                root.tempo-sync-changed(false);
-            }
-        } else {
-            if (!root.tempo-sync) {
-                root.tempo-sync = true;
-                root.tempo-sync-changed(true);
-            }
-            root.set-division(index - 1);
+    function set-sync(on: bool) {
+        if (on != root.tempo-sync) {
+            root.tempo-sync = on;
+            root.tempo-sync-changed(on);
+            if (on) { root.set-division(root.division); }
         }
     }
 
     HorizontalLayout {
-        spacing: 4px;
+        spacing: 2px;
         alignment: start;
         ParameterKnob {
             width: 64px;
@@ -1005,8 +1026,8 @@ export component TimeDivisionKnob inherits Rectangle {
             tooltip: root.tooltip;
             value: root.tempo-sync ? root.division * 1.0 : root.value;
             minimum: 0;
-            maximum: root.tempo-sync ? 4 : 1;
-            default-value: root.tempo-sync ? 1 : root.default-value;
+            maximum: root.tempo-sync ? 20 : 1;
+            default-value: root.tempo-sync ? 7 : root.default-value;
             step: root.tempo-sync ? 1 : 0;
             value-text: root.effective-ms >= 100
                 ? round(root.effective-ms) + " ms"
@@ -1028,12 +1049,37 @@ export component TimeDivisionKnob inherits Rectangle {
                 }
             }
         }
-        SelectorBank {
-            options: ["MS", "1/2", "1/4", "1/8.", "1/8T", "1/16"];
-            selected-index: root.selected-mode;
-            segment-width: 26px;
-            tooltip: "Delay time mode";
-            selected(i) => { root.select-mode(i); }
+        VerticalLayout {
+            alignment: center;
+            spacing: 3px;
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 13px;
+                    height: 13px;
+                    accessible-role: button;
+                    accessible-label: "Tempo sync " + root.label;
+                    LedIndicator {
+                        x: 2px;
+                        y: 2px;
+                        diameter: 9px;
+                        on: root.tempo-sync;
+                        tooltip: root.tempo-sync ? "Sync on" : "Sync off";
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.set-sync(!root.tempo-sync); }
+                    }
+                }
+            }
+            Text {
+                text: root.tempo-sync ? Divisions.label(root.division) : "MS";
+                color: root.clamped ? Theme.warning
+                    : root.tempo-sync ? Theme.focus : Theme.text-faint;
+                font-size: 8px;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
         }
     }
 }
@@ -1532,29 +1578,40 @@ export component TrimKnob inherits MiniKnob {
 
 // Small round status light. Not interactive - use it for activity, sync, and
 // record-armed state.
-export component LedIndicator inherits Rectangle {
-    in property <bool> on;
-    in property <color> led-color: Theme.accent;
-    in property <length> diameter: 8px;
-    in property <string> tooltip;
-
-    width: root.diameter;
-    height: root.diameter;
-    border-radius: self.width / 2;
-    background: root.on ? root.led-color : root.led-color.with-alpha(0.16);
-    border-width: 1px;
-    border-color: root.on ? root.led-color.brighter(0.4) : Theme.border;
-
-    if root.tooltip != "" : Tooltip { text: @markdown("\{root.tooltip}"); }
-}
 
 // Square glyph button, for toolbar affordances that carry a symbol rather
 // than a word.
+// Time as a musician reads it: milliseconds up to a second, then seconds.
+//
+// Here for the reason `Divisions` is: `round(x * 1000) + " ms"` was written
+// out at two dozen sites, each one rounding for itself and each one silently
+// wrong the moment its stage could reach past a second, which every envelope
+// stage in the program can.
+export global TimeFormat {
+    public pure function seconds(t: float) -> string {
+        return t < 1 ? round(t * 1000) + " ms" : round(t * 10) / 10 + " s";
+    }
+}
+
 // The shared musical grid, spelled once. Every control that carries a
 // `ModTimeDivision` index -- the modulator rack's sync knobs, the step
 // sequencer's rate, the ML-P8's own LFO -- reads its names from here, so
 // none of them gets to invent a second spelling.
 export global Divisions {
+    /// Duration in quarter-note beats. The same table as
+    /// `ModTimeDivision::beats`, and the reason a delay and an LFO cannot
+    /// disagree about what "1/2" is worth -- which they did, by a factor of
+    /// four, for as long as the delay had a grid of its own.
+    public pure function beats(index: int) -> float {
+        return index == 0 ? 16.0 : index == 1 ? 8.0 : index == 2 ? 4.0
+            : index == 3 ? 3.0 : index == 4 ? 2.0 : index == 5 ? 4.0 / 3.0
+            : index == 6 ? 1.5 : index == 7 ? 1.0 : index == 8 ? 2.0 / 3.0
+            : index == 9 ? 0.75 : index == 10 ? 0.5 : index == 11 ? 1.0 / 3.0
+            : index == 12 ? 0.375 : index == 13 ? 0.25 : index == 14 ? 1.0 / 6.0
+            : index == 15 ? 0.1875 : index == 16 ? 0.125 : index == 17 ? 1.0 / 12.0
+            : index == 18 ? 0.09375 : index == 19 ? 0.0625 : 1.0 / 24.0;
+    }
+
     public pure function label(index: int) -> string {
         return index == 0 ? "4/1" : index == 1 ? "2/1" : index == 2 ? "1/1"
             : index == 3 ? "1/2D" : index == 4 ? "1/2" : index == 5 ? "1/2T"

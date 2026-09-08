@@ -269,6 +269,11 @@ impl ModTimeDivision {
         self.seconds(bpm).recip()
     }
 
+    /// The same duration in milliseconds, which is what a delay line wants.
+    pub fn time_ms(self, bpm: f64) -> f32 {
+        self.seconds(bpm) * 1_000.0
+    }
+
     pub fn from_index(index: i32) -> Self {
         Self::ALL
             .get(index.clamp(0, Self::ALL.len() as i32 - 1) as usize)

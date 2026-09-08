@@ -2,16 +2,27 @@ import { Theme } from "theme.slint";
 
 // Graphical ADSR editor.
 //
-// Every stage is normalised 0..1, matching the sampler's parameter model, so
-// this draws shape rather than absolute time: the caller supplies the formatted
-// text for each stage. Horizontal space is divided into fixed budgets per stage
-// (attack, decay, a constant sustain plateau, release) so that dragging one
-// handle never reflows the others - the shape stays readable while editing.
+// Stages are times in seconds, on the range and curve their descriptor
+// declares -- the shared envelope range, 1 ms to 8 s in ratio, by default.
+// Sustain is a level and stays 0..1. Horizontal space is divided into fixed
+// budgets per stage (attack, decay, a constant sustain plateau, release) so
+// that dragging one handle never reflows the others - the shape stays
+// readable while editing.
+//
+// It took seconds from four of its five callers and normalised values from
+// the fifth, and drew both as though they were 0..1: every synth's plot
+// pinned its handles at the right edge past one second, and the sampler's
+// agreed with nothing. Naming the range here is what lets one component draw
+// either.
 export component EnvelopeEditor inherits Rectangle {
     in-out property <float> attack;
     in-out property <float> decay;
     in-out property <float> sustain: 1.0;
     in-out property <float> release;
+    // The stage range, which the caller takes from its own descriptor table.
+    in property <float> minimum: 0.001;
+    in property <float> maximum: 8.0;
+    in property <bool> logarithmic: true;
     in property <bool> enabled: true;
     in property <color> fill: Theme.accent;
     // Formatted values, shown while dragging the matching handle.
@@ -30,19 +41,39 @@ export component EnvelopeEditor inherits Rectangle {
     private property <float> stage-span: 0.28;
     private property <float> sustain-span: 0.16;
 
-    // Stage times are linear over their whole range, so musically ordinary
-    // values (a 3 ms attack, a 125 ms release against a 5 s maximum) all land
-    // in the first percent and the shape collapses into the left edge. The
-    // plot warps the time axis so the useful range gets useful width. This is
-    // display only: the values handed back are untouched.
-    in property <float> time-curve: 0.5;
+    // A stage's position along its budget, and back again. On a ratio range
+    // this is the whole answer to "a 3 ms attack against an 8 s maximum" --
+    // the useful part of the range gets useful width because the range itself
+    // is logarithmic, which is also what the knob beside the plot does.
+    pure function normalize(v: float) -> float {
+        if (root.logarithmic && root.minimum > 0 && root.maximum > root.minimum) {
+            return clamp(ln(clamp(v, root.minimum, root.maximum) / root.minimum)
+                / ln(root.maximum / root.minimum), 0, 1);
+        }
+        return clamp((v - root.minimum) / max(root.maximum - root.minimum, 0.000001), 0, 1);
+    }
+    pure function denormalize(n: float) -> float {
+        let position = clamp(n, 0, 1);
+        if (root.logarithmic && root.minimum > 0 && root.maximum > root.minimum) {
+            return root.minimum * pow(root.maximum / root.minimum, position);
+        }
+        return root.minimum + position * (root.maximum - root.minimum);
+    }
+
+    // A further display-only bend of the axis, for a caller whose range is
+    // linear and whose useful values still crowd the left edge. On a ratio
+    // range there is nothing left to correct, so it rests at 1.
+    in property <float> time-curve: 1.0;
     pure function warp(v: float) -> float { return pow(clamp(v, 0, 1), root.time-curve); }
     pure function unwarp(d: float) -> float { return pow(clamp(d, 0, 1), 1 / root.time-curve); }
 
-    private property <float> attack-x: root.warp(root.attack) * root.stage-span;
-    private property <float> decay-x: root.attack-x + root.warp(root.decay) * root.stage-span;
+    pure function stage-x(v: float) -> float { return root.warp(root.normalize(v)); }
+    pure function stage-value(x: float) -> float { return root.denormalize(root.unwarp(x)); }
+
+    private property <float> attack-x: root.stage-x(root.attack) * root.stage-span;
+    private property <float> decay-x: root.attack-x + root.stage-x(root.decay) * root.stage-span;
     private property <float> sustain-x: root.decay-x + root.sustain-span;
-    private property <float> release-x: root.sustain-x + root.warp(root.release) * root.stage-span;
+    private property <float> release-x: root.sustain-x + root.stage-x(root.release) * root.stage-span;
     // y is inverted: 0 is full level at the top of the plot.
     private property <float> sustain-y: 1 - clamp(root.sustain, 0, 1);
 
@@ -59,11 +90,11 @@ export component EnvelopeEditor inherits Rectangle {
     accessible-role: none;
 
     function drag-attack(delta: float) {
-        let next = root.unwarp(root.warp(root.attack) + delta);
+        let next = root.stage-value(root.stage-x(root.attack) + delta);
         if (next != root.attack) { root.attack = next; root.attack-changed(next); }
     }
     function drag-decay(delta: float) {
-        let next = root.unwarp(root.warp(root.decay) + delta);
+        let next = root.stage-value(root.stage-x(root.decay) + delta);
         if (next != root.decay) { root.decay = next; root.decay-changed(next); }
     }
     function drag-sustain(delta: float) {
@@ -71,7 +102,7 @@ export component EnvelopeEditor inherits Rectangle {
         if (next != root.sustain) { root.sustain = next; root.sustain-changed(next); }
     }
     function drag-release(delta: float) {
-        let next = root.unwarp(root.warp(root.release) + delta);
+        let next = root.stage-value(root.stage-x(root.release) + delta);
         if (next != root.release) { root.release = next; root.release-changed(next); }
     }
 

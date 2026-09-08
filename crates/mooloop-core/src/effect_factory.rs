@@ -18,7 +18,7 @@
 //! mean something would be a different unit (`docs/plans/preset-system/`).
 
 use crate::{
-    BitcrushStyle, DelayMode, DelayTimeDivision, DriveCurve, EffectKind, EffectParams,
+    BitcrushStyle, DelayMode, DriveCurve, EffectKind, EffectParams, ModTimeDivision,
     EffectSlotState, EqBandKind, EqPassFilter, EqQProfile, EqSlope, FilterMode, FilterSlope,
     ModulationMode,
 };
@@ -365,14 +365,14 @@ fn delay() -> Vec<EffectFactoryPatch> {
     vec![
         with("Dotted Eighth", &["sync", "rhythmic"], "The tempo-locked dotted eighth.", |p| {
             p.tempo_sync = true;
-            p.time_division = DelayTimeDivision::DottedEighth;
+            p.time_division = ModTimeDivision::DottedEighth;
             p.feedback = 0.4;
             p.tone = 0.55;
             p.mix = 0.3;
         }),
         with("Ping Pong", &["sync", "stereo"], "Quarter notes alternating sides.", |p| {
             p.tempo_sync = true;
-            p.time_division = DelayTimeDivision::Quarter;
+            p.time_division = ModTimeDivision::Quarter;
             p.feedback = 0.45;
             p.cross = 1.0;
             p.mix = 0.35;
@@ -395,7 +395,7 @@ fn delay() -> Vec<EffectFactoryPatch> {
         with("Reverse Wash", &["reverse", "ambient"], "Half-note windows played backwards.", |p| {
             p.mode = DelayMode::Reverse;
             p.tempo_sync = true;
-            p.time_division = DelayTimeDivision::Half;
+            p.time_division = ModTimeDivision::Half;
             p.feedback = 0.6;
             p.tone = 0.5;
             p.mix = 0.45;
@@ -403,7 +403,7 @@ fn delay() -> Vec<EffectFactoryPatch> {
         with("Dub Runaway", &["dub", "feedback"], "Triplet tape repeats on the edge of running away.", |p| {
             p.mode = DelayMode::Tape;
             p.tempo_sync = true;
-            p.time_division = DelayTimeDivision::EighthTriplet;
+            p.time_division = ModTimeDivision::EighthTriplet;
             p.feedback = 0.85;
             p.cross = 0.5;
             p.tone = 0.35;

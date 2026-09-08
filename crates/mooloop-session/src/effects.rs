@@ -9,7 +9,7 @@ use mooloop_core::{
     insert_effect, insert_into_container, move_effect, move_effect_into_container, remove_effect,
     unwrap_container,
     wrap_in_container,
-    DelayTimeDivision, DeviceId, EffectKind, EffectParams, EffectRun, EffectSlotState,
+    DeviceId, EffectKind, EffectParams, EffectRun, EffectSlotState, ModTimeDivision,
     EffectTarget, EngineCommand,
 };
 
@@ -526,7 +526,7 @@ impl Session {
         let Some(params) = self.delay_params_mut(slot) else {
             return false;
         };
-        params.time_division = DelayTimeDivision::from_index(division);
+        params.time_division = ModTimeDivision::from_index(division);
         self.mark_dirty();
         true
     }

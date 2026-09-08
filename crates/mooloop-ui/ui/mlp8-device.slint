@@ -1,6 +1,6 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { Divisions, KnobField, KnobStack, ParameterKnob, PickerChip, SectionLabel, SelectorBank, ToolButton, ValueScale } from "controls.slint";
+import { Divisions, KnobField, KnobStack, ParameterKnob, PickerChip, SectionLabel, SelectorBank, TimeFormat, ToolButton, ValueScale } from "controls.slint";
 import { DevicePageButton } from "device-rack.slint";
 import { EnvelopeEditor } from "envelope.slint";
 import { FilterResponseDisplay, OscillatorTrace } from "device-displays.slint";
@@ -1333,16 +1333,16 @@ export component MlP8DeviceFace inherits Rectangle {
                 title: "FILTER ENV";
                 EnvelopeEditor {
                     vertical-stretch: 1;
-                    attack: root.filter-attack / 2; decay: root.filter-decay / 2;
-                    sustain <=> root.filter-sustain; release: root.filter-release / 2;
-                    attack-text: round(root.filter-attack * 1000) + " ms";
-                    decay-text: round(root.filter-decay * 1000) + " ms";
+                    attack <=> root.filter-attack; decay <=> root.filter-decay;
+                    sustain <=> root.filter-sustain; release <=> root.filter-release;
+                    attack-text: TimeFormat.seconds(root.filter-attack);
+                    decay-text: TimeFormat.seconds(root.filter-decay);
                     sustain-text: round(root.filter-sustain * 100) + "%";
-                    release-text: round(root.filter-release * 1000) + " ms";
-                    attack-changed(v) => { root.filter-attack = v * 2; root.filter-attack-changed(root.filter-attack); }
-                    decay-changed(v) => { root.filter-decay = v * 2; root.filter-decay-changed(root.filter-decay); }
+                    release-text: TimeFormat.seconds(root.filter-release);
+                    attack-changed(v) => { root.filter-attack-changed(v); }
+                    decay-changed(v) => { root.filter-decay-changed(v); }
                     sustain-changed(v) => { root.filter-sustain-changed(v); }
-                    release-changed(v) => { root.filter-release = v * 2; root.filter-release-changed(root.filter-release); }
+                    release-changed(v) => { root.filter-release-changed(v); }
                 }
                 // The handles on the curve stay; these are the same four
                 // values as numbers you can read and dial exactly.
@@ -1351,8 +1351,8 @@ export component MlP8DeviceFace inherits Rectangle {
                     P8Knob {
                         label: "ATTACK"; tooltip: "Filter attack";
                         param: 48;
-                        value <=> root.filter-attack; minimum: 0; maximum: 2; default-value: 0.005; 
-                        display-text: round(root.filter-attack * 1000) + " ms";
+                        value <=> root.filter-attack; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.005;
+                        display-text: TimeFormat.seconds(root.filter-attack);
                         modulation-armed: root.modulation-armed;
                         depths: root.modulation-depths; allowed: root.modulation-allowed;
                         offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
@@ -1365,8 +1365,8 @@ export component MlP8DeviceFace inherits Rectangle {
                     P8Knob {
                         label: "DECAY"; tooltip: "Filter decay";
                         param: 49;
-                        value <=> root.filter-decay; minimum: 0; maximum: 2; default-value: 0.2; 
-                        display-text: round(root.filter-decay * 1000) + " ms";
+                        value <=> root.filter-decay; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.2;
+                        display-text: TimeFormat.seconds(root.filter-decay);
                         modulation-armed: root.modulation-armed;
                         depths: root.modulation-depths; allowed: root.modulation-allowed;
                         offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
@@ -1393,8 +1393,8 @@ export component MlP8DeviceFace inherits Rectangle {
                     P8Knob {
                         label: "RELEASE"; tooltip: "Filter release";
                         param: 51;
-                        value <=> root.filter-release; minimum: 0; maximum: 2; default-value: 0.15; 
-                        display-text: round(root.filter-release * 1000) + " ms";
+                        value <=> root.filter-release; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.15;
+                        display-text: TimeFormat.seconds(root.filter-release);
                         modulation-armed: root.modulation-armed;
                         depths: root.modulation-depths; allowed: root.modulation-allowed;
                         offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
@@ -1459,24 +1459,24 @@ export component MlP8DeviceFace inherits Rectangle {
                 title: "AMP ENV";
                 EnvelopeEditor {
                     vertical-stretch: 1;
-                    attack: root.attack / 2; decay: root.decay / 2;
-                    sustain <=> root.sustain; release: root.release / 2;
-                    attack-text: round(root.attack * 1000) + " ms";
-                    decay-text: round(root.decay * 1000) + " ms";
+                    attack <=> root.attack; decay <=> root.decay;
+                    sustain <=> root.sustain; release <=> root.release;
+                    attack-text: TimeFormat.seconds(root.attack);
+                    decay-text: TimeFormat.seconds(root.decay);
                     sustain-text: round(root.sustain * 100) + "%";
-                    release-text: round(root.release * 1000) + " ms";
-                    attack-changed(v) => { root.attack = v * 2; root.attack-changed(root.attack); }
-                    decay-changed(v) => { root.decay = v * 2; root.decay-changed(root.decay); }
+                    release-text: TimeFormat.seconds(root.release);
+                    attack-changed(v) => { root.attack-changed(v); }
+                    decay-changed(v) => { root.decay-changed(v); }
                     sustain-changed(v) => { root.sustain-changed(v); }
-                    release-changed(v) => { root.release = v * 2; root.release-changed(root.release); }
+                    release-changed(v) => { root.release-changed(v); }
                 }
                 HorizontalLayout {
                     alignment: center;
                     P8Knob {
                         label: "ATTACK"; tooltip: "Amplitude attack";
                         param: 15;
-                        value <=> root.attack; minimum: 0; maximum: 2; default-value: 0.005; 
-                        display-text: round(root.attack * 1000) + " ms";
+                        value <=> root.attack; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.005;
+                        display-text: TimeFormat.seconds(root.attack);
                         modulation-armed: root.modulation-armed;
                         depths: root.modulation-depths; allowed: root.modulation-allowed;
                         offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
@@ -1489,8 +1489,8 @@ export component MlP8DeviceFace inherits Rectangle {
                     P8Knob {
                         label: "DECAY"; tooltip: "Amplitude decay";
                         param: 16;
-                        value <=> root.decay; minimum: 0; maximum: 2; default-value: 0.2; 
-                        display-text: round(root.decay * 1000) + " ms";
+                        value <=> root.decay; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.2;
+                        display-text: TimeFormat.seconds(root.decay);
                         modulation-armed: root.modulation-armed;
                         depths: root.modulation-depths; allowed: root.modulation-allowed;
                         offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
@@ -1517,8 +1517,8 @@ export component MlP8DeviceFace inherits Rectangle {
                     P8Knob {
                         label: "RELEASE"; tooltip: "Amplitude release";
                         param: 18;
-                        value <=> root.release; minimum: 0; maximum: 2; default-value: 0.15; 
-                        display-text: round(root.release * 1000) + " ms";
+                        value <=> root.release; minimum: 0.001; maximum: 8; scale: ValueScale.logarithmic; default-value: 0.15;
+                        display-text: TimeFormat.seconds(root.release);
                         modulation-armed: root.modulation-armed;
                         depths: root.modulation-depths; allowed: root.modulation-allowed;
                         offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;

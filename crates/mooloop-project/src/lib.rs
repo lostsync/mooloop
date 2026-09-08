@@ -2544,7 +2544,7 @@ id = "default_kick"
             delay.feedback = 0.71;
             delay.mode = mooloop_core::DelayMode::Tape;
             delay.tempo_sync = true;
-            delay.time_division = mooloop_core::DelayTimeDivision::DottedEighth;
+            delay.time_division = mooloop_core::ModTimeDivision::DottedEighth;
         }
         let path = temp.path().join("tape.mooloop-effect");
         let report =

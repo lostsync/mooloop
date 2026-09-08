@@ -3030,6 +3030,7 @@ dependencies = [
  "arc-swap",
  "hound",
  "jack",
+ "libc",
  "mooloop-core",
  "mooloop-dsp",
  "mooloop-project",

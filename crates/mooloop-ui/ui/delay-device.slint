@@ -3,10 +3,10 @@ import { ParameterKnob, SelectorBank, TimeDivisionKnob } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 import { DelayEchoDisplay } from "device-displays.slint";
 
-// One delay in a channel's device rack. Three units wide: its musical time
-// selector sits beside the five working controls instead of compressing them.
-// Header and drag come from
-// the shared EffectDeviceShell.
+// One delay in a channel's device rack. Three units wide, which it now has
+// room to spare in: the musical time control was a 230px bank of five
+// divisions and is a knob with a sync lamp over the shared twenty-one.
+// Header and drag come from the shared EffectDeviceShell.
 export component DelayDeviceFace inherits EffectDeviceShell {
     name: "Delay";
     kind: "FX / 3U";
@@ -18,7 +18,8 @@ export component DelayDeviceFace inherits EffectDeviceShell {
     in-out property <float> mix;      // normalized 0..1
     in property <int> bpm: 120;
     in-out property <bool> tempo-sync;
-    in-out property <int> time-division: 1;
+    // An index into the shared `Divisions` grid; 7 is a quarter note.
+    in-out property <int> time-division: 7;
     callback time-changed(float);
     callback feedback-changed(float);
     callback mode-changed(int);
@@ -66,7 +67,7 @@ export component DelayDeviceFace inherits EffectDeviceShell {
             spacing: 0px;
             TimeDivisionKnob {
                 label: "Time";
-                tooltip: "Free milliseconds or a tempo-synced beat division";
+                tooltip: "Delay time";
                 value <=> root.time;
                 bpm: root.bpm;
                 tempo-sync <=> root.tempo-sync;

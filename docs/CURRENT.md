@@ -256,7 +256,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - A shared widget library in `crates/mooloop-ui/ui`: knobs with value arcs and a
   bipolar mode (`controls.slint`), LED-segment metering with scales, latching
   clip indicators, gain-reduction and correlation meters (`meters.slint`), and a
-  draggable graphical ADSR (`envelope.slint`). Source panels use bounded
+  draggable graphical ADSR whose stages are times on their descriptor's own
+  range and curve, not normalised positions (`envelope.slint`). Source panels use bounded
   instrument modules, visible selector banks for short fixed choices, and
   horizontal or vertical parameter faders where aligned values need to use a
   module's area. Knob labels and value readouts share the knob's drag target.
@@ -545,11 +546,14 @@ land on its own when it starts to matter:
 - Twelve effect kinds ship: a low-pass/high-pass filter, a drive/saturation
   with four curves at 2x oversampling, a bitcrush that is deliberately not
   oversampled, a stereo delay with damped cross-feedable feedback and
-  digital/tape/reverse responses to a moving delay time. Its Time control
-  switches visibly between free ms and half/quarter/dotted-eighth/triplet/
-  sixteenth divisions; while synced, every project BPM change immediately
-  recalculates and sends the ordinary ms parameter to the audio engine. It
-  persists the division, not just its current ms result. It is joined by a gate,
+  digital/tape/reverse responses to a moving delay time. Its Time control is
+  a knob with a sync lamp: dark, it sweeps free milliseconds; lit, it steps
+  the same twenty-one-entry musical grid the modulators use, `4/1` down to
+  `1/64T` with dotted and triplet entries throughout. While synced, every
+  project BPM change immediately recalculates and sends the ordinary ms
+  parameter to the audio engine, clamped to the two seconds the delay line
+  can serve -- a division asking for longer reads in amber. It persists the
+  division, not just its current ms result. It is joined by a gate,
   compressor, and limiter sharing one detector and gain-computer module; a
   seven-band parametric EQ with optional bounded spectrum telemetry; a
   feedback-delay-network hall reverb; and one five-mode modulation processor

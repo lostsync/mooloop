@@ -23,7 +23,9 @@ value.** `ParamDescriptor` is the single source of truth for a range and its
 curve (`effect.rs:180` says so outright), and every finding in section 1 below
 is a face that states a different range, a different curve, or both. That is
 the class of bug `drum_slint_agreement.rs` was written for — and the drum
-synth is the only device that has such a test.
+synth was the only device that had such a test. It is
+`slint_face_agreement.rs` now, and it covers every envelope stage in the
+program.
 
 ## The audit
 
