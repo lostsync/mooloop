@@ -3655,6 +3655,12 @@ impl AppUi {
         window.set_pattern_length(DEFAULT_STEPS as i32);
         window.set_current_step(0);
         window.set_editor_page(0);
+        // The two ceilings the markup enables Add/Clone/Paste against. They
+        // are handed over once, from the core's own constants, so raising a
+        // cap never leaves a menu row disabled at the old number --
+        // `docs/CAPACITY_POLICY.md` names that exact symptom.
+        window.set_max_channels(MAX_CHANNELS as i32);
+        window.set_max_patterns(MAX_PATTERNS as i32);
         // Two lists the device declares once; nothing about a patch moves
         // them, so they are installed here rather than on every refresh.
         install_mlp8_route_vocabularies(&window);

@@ -117,7 +117,8 @@ Alphabetical by model name, then by harness.
   all, and the picker chip that closed its menu before it reported, which had
   left seven source and route controls drawing correctly and doing nothing
   since the day it was written, and the knob wrapper that kept the value
-  string to itself, so 85 ML-P8 and DS-01 dials hovered as an empty box.
+  string to itself, so 85 ML-P8 and DS-01 dials hovered as an empty box,
+  and the sixteen-channel ceiling that only ever existed in the markup.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

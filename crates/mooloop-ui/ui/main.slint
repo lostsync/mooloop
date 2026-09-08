@@ -440,6 +440,15 @@ export component MainWindow inherits Window {
     in property <string> app-version;
 
     // ---- channels / patterns ----
+    // The real ceilings, set once from `mooloop_core::MAX_CHANNELS` and
+    // `MAX_PATTERNS`. Written-out literals here went stale the day the core
+    // raised its cap and left every Add Channel row dead at sixteen while the
+    // engine would happily have taken two hundred and forty more; see
+    // `docs/CAPACITY_POLICY.md`. Nothing in this file may spell a limit out.
+    // The defaults are only what a bare `MainWindow` in a test harness sees;
+    // `AppUi::new` overwrites both before the window is shown.
+    in property <int> max-channels: 256;
+    in property <int> max-patterns: 256;
     in-out property <[ChannelRow]> channels;
     in-out property <int> current-pattern;
     in-out property <int> pattern-count: 1;
@@ -1598,7 +1607,7 @@ export component MainWindow inherits Window {
                     MenuSeparator {}
                     MenuRow { text: "Cut Channel"; shortcut: "Ctrl+X"; enabled: !root.project-edit-pending && root.channels.length > 1; selected => { root.edit-command-requested(2, root.selected-channel); } }
                     MenuRow { text: "Copy Channel"; shortcut: "Ctrl+C"; selected => { root.edit-command-requested(3, root.selected-channel); } }
-                    MenuRow { text: "Paste Channel"; shortcut: "Ctrl+V"; enabled: !root.project-edit-pending && root.channel-clipboard-available && root.channels.length < 16; selected => { root.edit-command-requested(4, root.selected-channel); } }
+                    MenuRow { text: "Paste Channel"; shortcut: "Ctrl+V"; enabled: !root.project-edit-pending && root.channel-clipboard-available && root.channels.length < root.max-channels; selected => { root.edit-command-requested(4, root.selected-channel); } }
                     MenuSeparator {}
                     MenuRow { text: "Select All Notes"; shortcut: "Ctrl+A"; enabled: root.editor-page == 1 && root.notes.length > 0; selected => { root.select-all-requested(); } }
                     MenuRow { text: "Delete Selected Notes"; shortcut: "Delete"; enabled: root.has-note-selection; selected => { root.delete-selected-notes-requested(); } }
@@ -1613,13 +1622,13 @@ export component MainWindow inherits Window {
                     MenuRow {
                         text: "New Pattern";
                         shortcut: "Ctrl+Shift+P";
-                        enabled: !root.project-edit-pending && root.pattern-count < 256;
+                        enabled: !root.project-edit-pending && root.pattern-count < root.max-patterns;
                         selected => { root.add-pattern-clicked(); }
                     }
                     MenuRow {
                         text: "Clone Pattern";
                         shortcut: "Ctrl+Alt+D";
-                        enabled: !root.project-edit-pending && root.pattern-count < 256;
+                        enabled: !root.project-edit-pending && root.pattern-count < root.max-patterns;
                         selected => { root.pattern-clone-requested(); }
                     }
                     MenuSeparator {}
@@ -1640,7 +1649,7 @@ export component MainWindow inherits Window {
                     bar-width: menu-bar.width;
                     MenuRow {
                         text: "Add Channel";
-                        enabled: !root.project-edit-pending && root.channels.length < 16;
+                        enabled: !root.project-edit-pending && root.channels.length < root.max-channels;
                         selected => { root.add-channel-clicked(0); }
                     }
                     MenuRow {
@@ -1649,9 +1658,9 @@ export component MainWindow inherits Window {
                         selected => { root.edit-command-requested(6, root.selected-channel); }
                     }
                     MenuSeparator {}
-                    MenuRow { text: "Clone Channel"; enabled: !root.project-edit-pending && root.channels.length < 16; selected => { root.edit-command-requested(5, root.selected-channel); } }
+                    MenuRow { text: "Clone Channel"; enabled: !root.project-edit-pending && root.channels.length < root.max-channels; selected => { root.edit-command-requested(5, root.selected-channel); } }
                     MenuRow { text: "Copy Channel"; selected => { root.edit-command-requested(3, root.selected-channel); } }
-                    MenuRow { text: "Paste Channel"; enabled: !root.project-edit-pending && root.channel-clipboard-available && root.channels.length < 16; selected => { root.edit-command-requested(4, root.selected-channel); } }
+                    MenuRow { text: "Paste Channel"; enabled: !root.project-edit-pending && root.channel-clipboard-available && root.channels.length < root.max-channels; selected => { root.edit-command-requested(4, root.selected-channel); } }
                 }
 
                 MenuBarItem {
@@ -1888,7 +1897,7 @@ export component MainWindow inherits Window {
                                 text: "+";
                                 tooltip: "Add Pattern";
                                 size: 24px;
-                                enabled: !root.project-edit-pending && root.pattern-count < 256;
+                                enabled: !root.project-edit-pending && root.pattern-count < root.max-patterns;
                                 clicked => { root.add-pattern-clicked(); }
                             }
 
@@ -2067,9 +2076,9 @@ export component MainWindow inherits Window {
                                                 padding: 4px;
                                                 MenuRow { text: "Cut Channel"; shortcut: "Ctrl+X"; enabled: !root.project-edit-pending && root.channels.length > 1; selected => { root.edit-command-requested(2, ch); } }
                                                 MenuRow { text: "Copy Channel"; shortcut: "Ctrl+C"; selected => { root.edit-command-requested(3, ch); } }
-                                                MenuRow { text: "Paste Channel"; shortcut: "Ctrl+V"; enabled: !root.project-edit-pending && root.channel-clipboard-available && root.channels.length < 16; selected => { root.edit-command-requested(4, ch); } }
+                                                MenuRow { text: "Paste Channel"; shortcut: "Ctrl+V"; enabled: !root.project-edit-pending && root.channel-clipboard-available && root.channels.length < root.max-channels; selected => { root.edit-command-requested(4, ch); } }
                                                 MenuSeparator {}
-                                                MenuRow { text: "Clone Channel"; enabled: !root.project-edit-pending && root.channels.length < 16; selected => { root.edit-command-requested(5, ch); } }
+                                                MenuRow { text: "Clone Channel"; enabled: !root.project-edit-pending && root.channels.length < root.max-channels; selected => { root.edit-command-requested(5, ch); } }
                                                 MenuRow { text: "Delete Channel"; enabled: !root.project-edit-pending && root.channels.length > 1; selected => { root.edit-command-requested(6, ch); } }
                                             }
                                         }
@@ -2262,7 +2271,7 @@ export component MainWindow inherits Window {
                                 FlatButton {
                                     text: "+";
                                     tooltip: "Add channel";
-                                    enabled: !root.project-edit-pending && root.channels.length < 16;
+                                    enabled: !root.project-edit-pending && root.channels.length < root.max-channels;
                                     min-width: 28px; max-width: 28px;
                                     min-height: 24px; max-height: 24px;
                                     clicked => { add-source-menu.show(); }
@@ -2728,7 +2737,7 @@ export component MainWindow inherits Window {
                                                             border-radius: Theme.radius-md;
                                                             VerticalLayout {
                                                                 padding: 4px;
-                                                                MenuRow { text: "Clone Pattern"; shortcut: "Ctrl+Alt+D"; enabled: !root.project-edit-pending && root.pattern-count < 256; selected => { root.pattern-clone-requested(); } }
+                                                                MenuRow { text: "Clone Pattern"; shortcut: "Ctrl+Alt+D"; enabled: !root.project-edit-pending && root.pattern-count < root.max-patterns; selected => { root.pattern-clone-requested(); } }
                                                                 MenuRow { text: "Clear Pattern"; enabled: !root.project-edit-pending; selected => { root.pattern-clear-requested(); } }
                                                                 MenuSeparator {}
                                                                 MenuRow { text: "Delete Pattern"; shortcut: "Ctrl+Shift+Delete"; enabled: !root.project-edit-pending && root.pattern-count > 1; selected => { root.pattern-remove-requested(); } }
