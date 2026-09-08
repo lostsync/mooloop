@@ -743,7 +743,7 @@ mod tests {
         assert!((slower[0].3 - 0.25).abs() < 1.0e-4, "got {}", slower[0].3);
 
         // And the ceiling holds rather than handing the DSP 48 Hz.
-        session.set_modulation_rate_division(
+        let _ = session.set_modulation_rate_division(
             0,
             ModTimeDivision::SixtyFourthTriplet.to_index(),
             120.0,
