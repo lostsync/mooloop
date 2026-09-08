@@ -710,7 +710,21 @@ export component SamplerDeviceFace inherits Rectangle {
                         Rectangle { horizontal-stretch: 1; }
                         ToggleButton {
                             text: "ON";
-                            tooltip: "Stretch"; hint: "Time stretching";
+                            tooltip: "Stretch";
+                            // Live stretch is bypassed rather than refused in
+                            // Slice mode, in reverse, and in Pong: the DSP
+                            // declines to run WSOLA backwards and a commit is
+                            // the answer. The toggle stays lit in all three,
+                            // which used to leave nothing on screen saying
+                            // why -- this face had no way to reach the status
+                            // bar until `StatusHint` existed.
+                            hint: root.play-mode == 1
+                                ? "Bypassed in Slice mode. Commit the stretch to bake it in."
+                                : root.reverse-playback
+                                ? "Bypassed in reverse. Commit the stretch to bake it in."
+                                : root.loop-mode == 2
+                                ? "Bypassed in Pong. Commit the stretch to bake it in."
+                                : "Time stretching";
                             // Bounded, or the layout hands a toggle the whole
                             // width the title row is not using.
                             min-width: 40px; max-width: 40px; max-height: 20px;
@@ -802,6 +816,16 @@ export component SamplerDeviceFace inherits Rectangle {
                         // Normalized, so unity is not zero: without this a
                         // double-click resets to the bottom of the range.
                         default-value: 0.4;
+                        // Detented to powers of two, which is what
+                        // `snap_bars_to_power_of_two` already guesses when
+                        // fit-to-tempo is switched on: a loop is nearly
+                        // always some power of two of bars, and a continuous
+                        // knob over ten octaves lands on 1.372 instead. The
+                        // range is 1/16 to 64 bars -- ten octaves -- and the
+                        // knob is logarithmic, so a tenth of its travel is
+                        // exactly one octave. Typing into the field is still
+                        // free, for the loop that genuinely is three bars.
+                        step: 0.1;
                         field-width: 84px;
                         value <=> root.stretch-bars;
                         display-text: root.stretch-bars-label;

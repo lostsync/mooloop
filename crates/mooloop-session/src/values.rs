@@ -37,15 +37,20 @@ pub fn parse_typed_value(text: &str) -> Option<f32> {
         .filter(|value| value.is_finite())
 }
 
-/// Bar counts read as "2 bar" or "0.5 bar" rather than "2.000000": the
-/// values that matter here are powers of two, and trailing zeros make a
-/// snapped length look like an arbitrary one.
+/// Bar counts read as "2 bar" or "1/2 bar" rather than "2.000000" or
+/// "0.500 bar": the values that matter here are powers of two, and both
+/// trailing zeros and a decimal make a snapped length look like an arbitrary
+/// one. Below a bar it reads as a division, which is the vocabulary every
+/// other tempo-relative control in the program already uses.
 pub fn format_bars(bars: f32) -> String {
     if (bars - bars.round()).abs() < 1.0e-4 {
-        format!("{} bar", bars.round() as i32)
-    } else {
-        format!("{bars:.3} bar")
+        return format!("{} bar", bars.round() as i32);
     }
+    let inverse = bars.recip();
+    if bars < 1.0 && (inverse - inverse.round()).abs() < 1.0e-3 {
+        return format!("1/{} bar", inverse.round() as i32);
+    }
+    format!("{bars:.3} bar")
 }
 
 pub fn stretch_bars_to_norm(bars: f32) -> f32 {
@@ -129,6 +134,33 @@ pub fn descriptor_slots(descriptors: &[ParamDescriptor]) -> usize {
 mod tests {
     use super::*;
     use mooloop_core::{snap_bars_to_power_of_two, LoopMode, PlayMode};
+
+    /// The Bars knob detents to powers of two, so every value it can reach
+    /// has to read as one. A tenth of the knob's travel is exactly one
+    /// octave of its ten-octave logarithmic range, which is what makes the
+    /// detent land on these and nothing between them.
+    #[test]
+    fn every_detented_bar_length_reads_as_a_power_of_two() {
+        let expected = [
+            "1/16 bar", "1/8 bar", "1/4 bar", "1/2 bar", "1 bar", "2 bar", "4 bar", "8 bar",
+            "16 bar", "32 bar", "64 bar",
+        ];
+        for (step, want) in expected.iter().enumerate() {
+            let bars = stretch_bars_from_norm(step as f32 * 0.1);
+            assert_eq!(
+                &format_bars(bars),
+                want,
+                "detent {step} produced {bars} bars"
+            );
+        }
+    }
+
+    /// A length typed rather than dragged still reads honestly.
+    #[test]
+    fn a_length_off_the_grid_keeps_its_decimals() {
+        assert_eq!(format_bars(3.0), "3 bar");
+        assert_eq!(format_bars(1.372), "1.372 bar");
+    }
 
     /// A knob that reports a different number from the one the engine runs is
     /// worse than no knob. Round-trip both stretch mappings across their

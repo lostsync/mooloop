@@ -414,11 +414,10 @@ land on its own when it starts to matter:
 
 - **Live stretch is bypassed, not refused, in Slice mode, in reverse, and in
   Pong.** The DSP declines to run WSOLA backwards and the commit path is the
-  answer, but the face still shows the ON toggle lit while nothing stretches.
-  The sampler face has no `hover-hint` plumbing yet, so the explanation cannot
-  reach the status bar from that toggle; adding the property to
-  `SamplerDevice` and threading it through `main.slint` the way the effect
-  faces do is the fix.
+  answer, and the face still shows the ON toggle lit while nothing stretches.
+  The toggle now says which of the three it is, and to commit, in the status
+  bar; `StatusHint` reaches it from any face without the threaded property
+  this entry used to ask for.
 - **Auditions never fire a choke.** `inject_choke_events` is a pre-pass over
   the block's sequenced notes and runs before auditions are dispatched, so a
   slice auditioned from the face does not silence the rest of its choke group.
