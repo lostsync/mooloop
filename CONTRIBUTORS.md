@@ -123,8 +123,8 @@ Alphabetical by model name, then by harness.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-09-01
-- Sessions: 18
+- Last seen: 2026-09-08
+- Sessions: 19
 - Notes: Rounded out the UI mockup tool's palette with the remaining real
   controls (meters, mute/solo, trim knob, device chassis), fixed its
   selection tab and click-vs-drag handling, and wired a launcher into
