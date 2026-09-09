@@ -39,6 +39,14 @@ impl Biquad {
         }
     }
 
+    /// Drop the filter's memory without disturbing its coefficients. For a
+    /// chain reset, not a per-block call: zeroing state mid-signal is a
+    /// discontinuity.
+    pub fn reset(&mut self) {
+        self.z1 = 0.0;
+        self.z2 = 0.0;
+    }
+
     pub fn process(&mut self, input: f32) -> f32 {
         let out = self.b0 * input + self.z1;
         self.z1 = self.b1 * input - self.a1 * out + self.z2;

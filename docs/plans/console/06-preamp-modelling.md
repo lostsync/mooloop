@@ -39,6 +39,13 @@ DC back out.
 
 ### 2. Frequency-dependent drive — the transformer, and the biggest missing piece
 
+> **Built 2026-09-09** as `mooloop_dsp::preamp`, with provisional numbers, on
+> Adam's ruling: *"we can do some sweep measurements on UAD and Waves plugs
+> later to try and get some real numbers. if we need them before then lets
+> just pick some."* `PreampVoicing` is deliberately a table of numbers with no
+> behaviour attached, so a measured fit replaces four rows and nothing else.
+> Two things the building found are recorded at the end of this section.
+
 **This is the one that turns "a shaper" into "a preamp".** A transformer's
 core flux is proportional to `V/f`: for a constant voltage, halve the
 frequency and you double the flux. So a transformer saturates **from the
@@ -63,6 +70,38 @@ This is a **Wiener–Hammerstein** model — linear filter, static nonlinearity,
 linear filter — which is the standard block-oriented structure for exactly
 this class of device, and a great deal of analog gear is well approximated by
 it.
+
+#### Cut the top, do not boost the bottom
+
+The diagram above says "tilt (boost lows)" because that is the obvious reading
+of *saturates from the bottom up*. **It is wrong in practice, and it was built
+before it was noticed.** A 14 dB boost on material at the operating level
+walks straight past the shaper's `[-1, 1]` domain, the monotone clamp takes
+over, and what comes out is a square wave: all odd harmonics, `Iron`'s 3rd
+sitting 31 dB *above* its 2nd, and — the tell — **more drive producing less**
+2nd harmonic.
+
+Attenuating the top instead is the same relative tilt with the loudest part of
+the signal left where the curve can still shape it. Same two biquads, same
+exact-inverse property, none of the blow-out.
+
+#### And do not derive anything about a profile
+
+The corrected structure suggested a lovely property: since the post-filter
+restores fundamental and harmonics by the same factor, `tilt_db` ought to *be*
+the dB difference in distortion across the corner. It was claimed, tested, and
+false — `Grip` states 10 dB and delivers 31.
+
+The reason is the one `harmonics.rs` already records about its level law:
+**a multi-term profile's terms interact.** `Grip`'s 2nd-harmonic coefficient
+is `-a₂a² + a₄(4a² - 4a⁴)`, and at the amplitude the tilt leaves at 8 kHz
+those two terms agree to within a few percent and annihilate each other.
+
+That is twice that a clean closed-form claim about this scheme has been wrong
+in the same way, which makes it a rule rather than a coincidence: **derive
+nothing about a profile, measure it.** `tilt_db` is a control to be turned,
+not a specification to be read off, and the test that survives asserts
+monotonicity rather than a law.
 
 ### 3. Slew limiting — the transient half
 
@@ -169,13 +208,26 @@ applies:
 
 ## Verification
 
-The flat harmonic target is already tested. The addition this step needs is
-the **frequency-dependent** one, which is what makes "warm on a kick, clean on
-a hat" a number rather than an adjective:
+Both halves are now tested in `mooloop_dsp::preamp`.
 
-> measure the 2nd harmonic at 80 Hz and at 5 kHz, at the same input level, and
-> assert the ratio between them.
+The **frequency-dependent** measurement is what makes "warm on a kick, clean
+on a hat" a number rather than an adjective — the 2nd harmonic at 80 Hz
+against the same at 5 kHz, at one input level. Measured, at a modest drive:
 
-That test is what says the filter sandwich is doing its job, and it fails
-loudly if someone later "simplifies" the tilt away. It extends
-`harmonics.rs`'s existing measurement rather than needing new machinery.
+```text
+   Grip    -62.6 dB at 80 Hz    -93.8 dB at 5 kHz
+   Punch   -37.9 dB at 80 Hz    -47.2 dB at 5 kHz
+   Iron    -29.4 dB at 80 Hz    -86.2 dB at 5 kHz
+```
+
+It fails loudly if someone later "simplifies" the tilt away, which is the kind
+of change that looks harmless.
+
+Beside it: the sandwich is flat to 0.01 dB with the curve removed, so the
+stage colours without equalising; `Iron`'s 2nd sits 17.5 dB above its 3rd and
+`Grip`'s 3rd 16.4 dB above its 2nd, which is the warm-versus-hard axis holding;
+driving `Iron` moves its 2nd from -41.7 to -28.2 dB; and a slew limit catches
+a step while leaving a 100 Hz tone of the same peak untouched, which is what
+says it acts on `dV/dt` rather than on level.
+
+**What is still unbuilt from the list above:** supply sag, and hysteresis.

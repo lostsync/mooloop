@@ -161,7 +161,9 @@ Alphabetical by model name, then by harness.
   question "why did you want channel groups" turning out to have a concrete
   answer, and then how you actually model a preamp, which is mostly one
   structure -- tilt, shape, untilt -- because a transformer's flux goes as V/f
-  and so it saturates from the bottom up.
+  and so it saturates from the bottom up -- and then the filter sandwich that
+  does it, where boosting the bottom into the curve turned out to be the wrong
+  half of the obvious idea.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
