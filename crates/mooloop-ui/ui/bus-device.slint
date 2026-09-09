@@ -1,5 +1,6 @@
 import { Theme } from "theme.slint";
-import { ConsoleButton, MixerFader, MiniKnob, MuteButton, SectionLabel } from "controls.slint";
+import { ConsoleButton, MixerFader, MiniKnob, MuteButton, SectionLabel, ToolButton } from "controls.slint";
+import { NameField } from "toolbar.slint";
 import { GainMath } from "gain.slint";
 import { ChannelMeter } from "meters.slint";
 import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
@@ -22,6 +23,9 @@ export component BusDeviceFace inherits Rectangle {
     in property <float> left-db: -60;
     in property <float> right-db: -60;
     in property <bool> console;
+    in property <bool> can-remove: true;
+    callback renamed(string);
+    callback removed();
     callback volume-changed(float);
     callback pan-changed(float);
     callback mute-toggled();
@@ -161,6 +165,34 @@ export component BusDeviceFace inherits Rectangle {
                             color: root.console ? Theme.accent : Theme.text-faint;
                             font-size: 9px;
                             vertical-alignment: center;
+                        }
+                    }
+                    // Rename and remove live here rather than on the mixer
+                    // strip: this is where a track's chain is edited, there is
+                    // room for a field, and the strip stays compact. The name
+                    // has always saved and loaded and nothing could set it --
+                    // the gap `LOOSE_ENDS.md` had been carrying.
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Text {
+                            text: "Name";
+                            color: Theme.text-muted;
+                            font-size: 9px;
+                            vertical-alignment: center;
+                        }
+                        NameField {
+                            text: root.name;
+                            placeholder: "Track";
+                            tooltip: "Rename this track";
+                            edited(value) => { root.renamed(value); }
+                        }
+                        if !root.is-master : ToolButton {
+                            text: "Remove";
+                            tooltip: "Remove this track";
+                            hint: "Remove this track. Anything routed to it falls back to the master.";
+                            enabled: root.can-remove;
+                            clicked => { root.removed(); }
                         }
                     }
                     if root.is-master : Text {

@@ -12,8 +12,8 @@ use crate::notes::ScaleBase;
 use crate::project::ProjectSnapshot;
 use crate::values::descriptor_slots;
 use mooloop_core::{
-    compile_bus_graph, default_buses, sanitize_route, would_create_cycle, DEFAULT_STEPS,
-    MASTER_BUS, MAX_BUSES, MAX_PLAYLIST_PLACEMENTS,
+    default_buses, sanitize_bank, would_create_cycle, DEFAULT_STEPS,
+    MAX_BUSES, MAX_PLAYLIST_PLACEMENTS,
     drop_lanes_for_device, strip_descriptor, AutomationLane, BusSetup, Channel, ChannelSetup,
     DeviceId,
     AuxInParams, AuxInState, ChannelSource, DeviceKind, DrumSynthParams, DrumSynthState, Ds01Params, Ds01State,
@@ -137,8 +137,11 @@ pub struct Session {
     pub default_waveform: Vec<f32>,
     pub default_sample_description: String,
     pub default_sample_duration: f32,
-    /// Mirror of the project's bus bank, master first. Always `MAX_BUSES`
-    /// long, matching the engine's preallocated bank.
+    /// Mirror of the project's track bank, master first.
+    ///
+    /// As long as the song says, not a fixed seventeen: a track exists
+    /// because somebody made it. `mooloop_core::sanitize_bank` guarantees the
+    /// master and repairs routing on the way in.
     pub buses: Vec<BusSetup>,
     pub pattern_lengths: Vec<usize>,
     pub pattern_names: Vec<String>,
@@ -252,32 +255,6 @@ impl Default for Session {
 /// Bins the stored channel waveform is reduced to. A fixed overview; the
 /// editor re-derives real detail for whatever range it is zoomed to.
 pub const WAVEFORM_BINS: usize = 256;
-
-/// Coerce a loaded bus bank to the fixed size the engine preallocates,
-/// padding a short one and repairing any routing an older or hand-edited file
-/// left illegal. Everything downstream can then index the bank directly.
-///
-/// Per-edge nonsense is fixed first, then the graph as a whole: a file whose
-/// routing contains a loop is flattened to everything-to-master rather than
-/// rejected, matching what the engine does with the same file.
-fn normalized_buses(buses: &[BusSetup]) -> Vec<BusSetup> {
-    let mut normalized: Vec<BusSetup> = (0..MAX_BUSES)
-        .map(|index| match buses.get(index) {
-            Some(setup) => {
-                let mut setup = setup.clone();
-                setup.bus.output = sanitize_route(index as u8, setup.bus.output);
-                setup
-            }
-            None => BusSetup::new(index),
-        })
-        .collect();
-    if compile_bus_graph(&normalized).is_none() {
-        for setup in &mut normalized {
-            setup.bus.output = MASTER_BUS;
-        }
-    }
-    normalized
-}
 
 /// What `Session::arm_modulation_route` did.
 pub enum ArmedRoute {
@@ -1229,7 +1206,7 @@ impl Session {
             })
             .collect::<Vec<_>>();
 
-        self.buses = normalized_buses(&project.buses);
+        self.buses = sanitize_bank(&project.buses);
         self.pattern_lengths = project
             .pattern_lengths
             .iter()

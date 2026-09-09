@@ -557,10 +557,20 @@ land on its own when it starts to matter:
 
 - Channel mute, volume, and pan are exposed, as compact knobs in the rack row,
   alongside the mixer track the channel feeds.
-- Every channel names one mixer bus. The bank is the master plus sixteen
-  inserts, all preallocated, so assigning a channel to any bus is a bounded
-  mutation rather than an allocation. Buses carry their own effect chain,
-  volume, pan, and mute, and may feed another bus.
+- **The mixer is a list of tracks, and a track is made because somebody made
+  it.** A new song opens with the master; the starter kit adds `Drums` and
+  `Bass`, with its four drum channels grouped onto the first. `+` in the mixer
+  adds a track, and a track's device face renames it or removes it — both
+  undoable. Removing one falls anything routed to it back to the master rather
+  than leaving it unheard.
+
+  **There is no `+ Bus` and no `+ Send`.** What a track *is* — an ordinary
+  track, a bus, a send return — is decided entirely by what routes into it.
+  See `TERMINOLOGY.md`.
+- Every channel names one mixer track. Tracks carry their own effect chain,
+  volume, pan, and mute, and may feed another track. The addressable space is
+  the master plus sixteen; strips are materialised per track as a project
+  loads rather than preallocated, which `CAPACITY_POLICY.md` measures.
 - Any bus may feed any other. The realtime thread still never sorts a graph:
   `mooloop_core::compile_bus_graph` normalizes and topologically sorts the bank
   off the audio thread (Kahn's algorithm over fixed-size arrays, no allocation)

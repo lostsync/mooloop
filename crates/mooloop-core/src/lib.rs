@@ -143,7 +143,7 @@ pub use effect::{
 };
 pub use mixer::{
     chain_latency, run_latency, clamp_bus, compile_audio_graph, compile_bus_graph, compile_latency,
-    compile_render_order, default_buses, default_render_order, is_legal_route, sanitize_route,
+    compile_render_order, default_buses, default_render_order, is_legal_route, sanitize_bank, sanitize_route,
     would_create_cycle, AudioEdge, AudioOrder, BusSetup, CompiledAudioGraph, CompiledBusGraph,
     CompiledLatency, EdgeRefusal, EffectTarget, MixerBus, RenderOrder, INSERT_BUSES, MASTER_BUS,
     MAX_BUSES,
@@ -173,7 +173,7 @@ pub use structure::{
     assign_device_ids, depth_at, device_slot, drop_lanes_for_device, insert_effect,
     insert_into_container, insert_run, mint_device_id, move_sequence, parent_of, run_of, span_of, span_problem, unwrap_container, wrap_in_container,
     MAX_CONTAINER_DEPTH, move_effect, move_effect_into_container, remove_effect,
-    replace_run, rescope_lanes, slot_of, ChannelEdit,
+    replace_run, rescope_lanes, rescope_lanes_for_track, slot_of, ChannelEdit, TrackEdit,
 };
 pub use synth::{
     DrumMode, DrumSynthParams, HatCharacter, KickCharacter, LfoParams, LfoWave, MonoSynthParams,

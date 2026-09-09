@@ -1,9 +1,9 @@
-//! Mixer and bus edits.
+//! Mixer and track edits. `docs/TERMINOLOGY.md` for which word means what.
 
 use crate::session::Session;
 use mooloop_core::{
-    compile_bus_graph, sanitize_route, would_create_cycle, EffectParams, EffectTarget,
-    EngineCommand, MAX_LINEAR_GAIN,
+    compile_bus_graph, sanitize_route, would_create_cycle, BusSetup, EffectParams, EffectTarget,
+    EngineCommand, MAX_BUSES, MAX_LINEAR_GAIN,
 };
 
 /// Why a routing edit was refused, for the status bar to say.
@@ -21,6 +21,50 @@ impl Session {
         }
         self.effect_target = EffectTarget::Bus(bus);
         Some(bus)
+    }
+
+    /// Add a track, returning where it landed and its name.
+    ///
+    /// One `+`, one kind of thing: what a track *is* -- an ordinary track, a
+    /// bus, a send -- is decided by what routes into it, not by which button
+    /// made it. `docs/TERMINOLOGY.md` is the vocabulary.
+    pub fn add_track(&mut self) -> Option<usize> {
+        if self.buses.len() >= MAX_BUSES {
+            return None;
+        }
+        let index = self.buses.len();
+        self.buses.push(BusSetup::new(index));
+        Some(index)
+    }
+
+    /// Remove the track at `index`, closing the gap.
+    ///
+    /// Refused on the master, which every route eventually reaches. The
+    /// caller reinstalls the document, because everything that named a later
+    /// track has to renumber and that is `Project::remove_track`'s walk --
+    /// this side only says whether the gesture is allowed.
+    pub fn can_remove_track(&self, index: usize) -> bool {
+        index != mooloop_core::MASTER_BUS as usize && index < self.buses.len()
+    }
+
+    /// Rename a track. The gap `LOOSE_ENDS.md` has been carrying: the name
+    /// has always saved and loaded and nothing could set it.
+    ///
+    /// An empty name is refused rather than stored, because a nameless column
+    /// in a mixer is worse than a numbered one.
+    pub fn rename_track(&mut self, index: i32, name: &str) -> bool {
+        let name = name.trim();
+        let Ok(index) = usize::try_from(index) else {
+            return false;
+        };
+        let Some(setup) = self.buses.get_mut(index) else {
+            return false;
+        };
+        if name.is_empty() || setup.bus.name == name {
+            return false;
+        }
+        setup.bus.name = name.to_string();
+        true
     }
 
     /// Flips a bus's mute.
@@ -128,6 +172,17 @@ impl Session {
     }
 }
 
+impl Session {
+    /// Make sure the bank has at least `count` tracks, for tests written when
+    /// a session came with seventeen. A track is now made, not found.
+    #[cfg(test)]
+    pub(crate) fn ensure_tracks(&mut self, count: usize) {
+        while self.buses.len() < count {
+            self.add_track().expect("room for a track");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,6 +193,7 @@ mod tests {
     #[test]
     fn a_bus_fader_reaches_the_containers_headroom() {
         let mut session = Session::default();
+        session.ensure_tracks(2);
         assert!(matches!(
             session.set_bus_volume(1, 100.0),
             Some(EngineCommand::SetBusVolume { volume, .. }) if volume == MAX_LINEAR_GAIN
@@ -154,6 +210,7 @@ mod tests {
     #[test]
     fn a_routing_loop_is_refused_by_name() {
         let mut session = Session::default();
+        session.ensure_tracks(3);
         session.buses[1].bus.name = "Drum Bus".into();
 
         // Send bus 2 into bus 1, then try to close the loop the other way.
@@ -172,6 +229,7 @@ mod tests {
     #[test]
     fn selecting_a_bus_points_the_rack_at_it() {
         let mut session = Session::default();
+        session.ensure_tracks(4);
         assert_eq!(session.select_bus(3), Some(3));
         assert_eq!(session.effect_target, EffectTarget::Bus(3));
         assert_eq!(session.select_bus(-1), None);
@@ -184,6 +242,7 @@ mod tests {
     #[test]
     fn the_analyzer_toggle_refuses_a_slot_that_is_not_an_eq() {
         let mut session = Session::default();
+        session.ensure_tracks(2);
         session.select_bus(1);
         session.insert_effect_at(EffectKind::Delay, 0);
         assert!(session.set_eq_analyzer(0, true).is_none());

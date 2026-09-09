@@ -768,6 +768,52 @@ fn queue_channel_move(
     queue_structural_edit(tx, before, ProjectSnapshot { project, samples }, status, Some(edit))
 }
 
+/// Add a mixer track, undoably.
+///
+/// A whole-document edit rather than an incremental command, because the
+/// engine builds a strip per track when a project loads -- `grow_buses` --
+/// and there is no structural command that adds one. The same door
+/// `queue_channel_insert` uses, and undoable for the same reason.
+fn queue_track_add(
+    tx: &ProjectEditSender,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+) -> bool {
+    let before = {
+        let state = state.borrow();
+        project_snapshot(&state, window)
+    };
+    let mut project = before.project.clone();
+    let samples = before.samples.clone();
+    if project.add_track().is_none() {
+        return false;
+    }
+    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, "Track added")
+}
+
+/// Remove a mixer track, undoably.
+///
+/// `Project::remove_track` renumbers everything that named a later track and
+/// falls anything routed *here* back to the master, so a channel does not go
+/// silently unheard.
+fn queue_track_remove(
+    tx: &ProjectEditSender,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    track: usize,
+) -> bool {
+    let before = {
+        let state = state.borrow();
+        project_snapshot(&state, window)
+    };
+    let mut project = before.project.clone();
+    let samples = before.samples.clone();
+    if project.remove_track(track).is_none() {
+        return false;
+    }
+    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, "Track removed")
+}
+
 /// Duplicates pattern `index`'s length and every channel's notes for it,
 /// inserting the copy immediately after. Existing playlist placements (and
 /// `current_pattern`) keep pointing at the same pattern *content*, which
@@ -3234,6 +3280,7 @@ impl UiState {
             .map(|(index, setup)| self.mixer_strip_row(index, setup))
             .collect();
         self.mixer_strip_model.set_vec(strips);
+        window.set_can_add_track(self.session.buses.len() < MAX_BUSES);
         self.sync_bus_editor(window);
     }
 
@@ -3327,6 +3374,7 @@ impl UiState {
         window.set_editing_bus_output(setup.bus.output as i32);
         window.set_editing_bus_feed_count(self.session.bus_feed_count(index) as i32);
         window.set_editing_bus_console(setup.bus.console);
+        window.set_editing_bus_can_remove(self.session.can_remove_track(index));
         window.set_editing_bus_allowed(self.allowed_destinations(index));
     }
 
@@ -6674,6 +6722,64 @@ impl AppUi {
                     guard.update_document_title(&w);
                 }
                 let _ = tx.send(command);
+            });
+        }
+
+        // Track structure. Adding and removing a track reinstalls the
+        // document, because the engine materialises a strip per track when a
+        // project loads and everything that named a later track has to
+        // renumber -- the same path a channel paste takes, and undoable for
+        // the same reason. A rename touches neither, so it is a plain session
+        // edit like a pattern rename.
+        {
+            let tx = project_edit_tx.clone();
+            let commands = command_state.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_track_added(move || {
+                let Some(window) = weak.upgrade() else { return };
+                if commands.borrow().project_edit_pending {
+                    return;
+                }
+                if queue_track_add(&tx, &st, &window) {
+                    commands.borrow_mut().project_edit_pending = true;
+                    sync_command_availability(&window, &commands.borrow());
+                }
+            });
+        }
+        {
+            let tx = project_edit_tx.clone();
+            let commands = command_state.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_track_removed(move |track| {
+                let Some(window) = weak.upgrade() else { return };
+                if commands.borrow().project_edit_pending {
+                    return;
+                }
+                let Ok(track) = usize::try_from(track) else {
+                    return;
+                };
+                if queue_track_remove(&tx, &st, &window, track) {
+                    commands.borrow_mut().project_edit_pending = true;
+                    sync_command_availability(&window, &commands.borrow());
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_track_renamed(move |track, name| {
+                let mut guard = st.borrow_mut();
+                if !guard.session.rename_track(track, &name) {
+                    return;
+                }
+                guard.session.dirty = true;
+                if let Some(window) = weak.upgrade() {
+                    guard.sync_mixer(&window);
+                    guard.sync_bus_editor(&window);
+                    guard.update_document_title(&window);
+                }
             });
         }
 

@@ -851,6 +851,11 @@ export component MainWindow inherits Window {
     callback bus-output-changed(int, int);
     callback bus-console-toggled(int);
     callback bus-clip-reset(int);
+    // Track structure. One `+`; routing decides what a track is.
+    callback track-added();
+    callback track-renamed(int, string);
+    callback track-removed(int);
+    in property <bool> can-add-track: true;
 
     // ---- the bus the device rack is editing, when it is editing one ----
     in property <bool> editing-bus;
@@ -863,6 +868,7 @@ export component MainWindow inherits Window {
     in property <int> editing-bus-output;
     in property <int> editing-bus-feed-count;
     in property <bool> editing-bus-console;
+    in property <bool> editing-bus-can-remove;
     in property <[bool]> editing-bus-allowed;
     in property <float> editing-bus-left-db: -60;
     in property <float> editing-bus-right-db: -60;
@@ -3041,6 +3047,8 @@ export component MainWindow inherits Window {
                                 bus-output-changed(i, o) => { root.bus-output-changed(i, o); }
                                 bus-console-toggled(i) => { root.bus-console-toggled(i); }
                                 bus-clip-reset(i) => { root.bus-clip-reset(i); }
+                                can-add-track: root.can-add-track;
+                                track-added => { root.track-added(); }
                             }
                         }
                     }
@@ -3252,8 +3260,11 @@ export component MainWindow inherits Window {
                                                 pan-changed(v) => { root.bus-pan-changed(root.editing-bus-index, v); }
                                                 mute-toggled => { root.bus-muted(root.editing-bus-index); }
                                                 console: root.editing-bus-console;
+                                                can-remove: root.editing-bus-can-remove;
                                                 output-picked(o) => { root.bus-output-changed(root.editing-bus-index, o); }
                                                 console-toggled => { root.bus-console-toggled(root.editing-bus-index); }
+                                                renamed(v) => { root.track-renamed(root.editing-bus-index, v); }
+                                                removed => { root.track-removed(root.editing-bus-index); }
                                             }
 
                                             if !root.editing-bus && root.source-kind == 0 : SamplerDeviceFace {

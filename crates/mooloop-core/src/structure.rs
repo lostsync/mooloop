@@ -635,6 +635,73 @@ impl ChannelEdit {
     }
 }
 
+/// One edit to the track list, and where every track index lands after it.
+///
+/// [`ChannelEdit`]'s twin, and deliberately the same shape rather than a
+/// stable-id scheme: a track is addressed by position exactly as a channel is,
+/// by `EffectTarget::Bus` and by a channel's own destination. Ids are the
+/// right eventual answer and they belong to the `EffectTarget` unification,
+/// not smuggled in here -- `docs/TERMINOLOGY.md` records that the code has not
+/// caught up with the vocabulary yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackEdit {
+    Removed(u8),
+    Inserted(u8),
+}
+
+impl TrackEdit {
+    /// Where the track that was at `old` now sits, or `None` when it is the
+    /// one that went.
+    pub fn track(self, old: u8) -> Option<u8> {
+        match self {
+            Self::Removed(at) if old == at => None,
+            Self::Removed(at) if old > at => Some(old - 1),
+            Self::Inserted(at) if old >= at => old.checked_add(1),
+            _ => Some(old),
+        }
+    }
+
+    /// Where a channel's destination lands. A channel whose track was removed
+    /// falls back to the master rather than inheriting whichever track closed
+    /// the gap -- the same choice `AuxInParams::rescope` makes, and for the
+    /// same reason: silently re-pointing an edge is worse than an obvious
+    /// one.
+    pub fn destination(self, old: u8) -> u8 {
+        self.track(old).unwrap_or(crate::MASTER_BUS)
+    }
+
+    /// Where `address` points after the edit. Channel scopes are untouched: a
+    /// channel exists independently of which track it feeds.
+    pub fn address(self, address: ParamAddr) -> Option<ParamAddr> {
+        let EffectTarget::Bus(track) = address.scope else {
+            return Some(address);
+        };
+        let track = self.track(track)?;
+        Some(ParamAddr {
+            scope: EffectTarget::Bus(track),
+            ..address
+        })
+    }
+}
+
+/// Re-scope every track-addressed lane after a track edit, dropping the ones
+/// whose track is gone. Returns whether anything changed.
+pub fn rescope_lanes_for_track(lanes: &mut Vec<AutomationLane>, edit: TrackEdit) -> bool {
+    let mut changed = false;
+    lanes.retain_mut(|lane| match edit.address(lane.target) {
+        Some(target) => {
+            changed |= target != lane.target;
+            lane.target = target;
+            true
+        }
+        None => {
+            changed = true;
+            false
+        }
+    });
+    changed
+}
+
 /// Re-scope every channel-addressed lane after a channel edit, dropping the
 /// ones whose channel is gone. Returns whether anything changed.
 pub fn rescope_lanes(lanes: &mut Vec<AutomationLane>, edit: ChannelEdit) -> bool {

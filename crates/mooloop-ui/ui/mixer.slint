@@ -287,6 +287,8 @@ export component MixerPane inherits Rectangle {
     callback bus-output-changed(int, int);
     callback bus-console-toggled(int);
     callback bus-clip-reset(int);
+    callback track-added();
+    in property <bool> can-add-track: true;
 
     background: Theme.panel;
 
@@ -318,6 +320,26 @@ export component MixerPane inherits Rectangle {
                     output-picked(o) => { root.bus-output-changed(i, o); }
                     console-toggled => { root.bus-console-toggled(i); }
                     clip-reset => { root.bus-clip-reset(i); }
+                }
+
+                // One `+`, one kind of thing. What a track *is* -- an
+                // ordinary track, a bus, a send -- is decided by what routes
+                // into it, not by which button made it, which is why there
+                // is no `+ Bus` and no `+ Send` beside this
+                // (`docs/TERMINOLOGY.md`).
+                Rectangle {
+                    width: 34px;
+                    ToolButton {
+                        y: 4px;
+                        width: 26px;
+                        height: 26px;
+                        text: "+";
+                        tooltip: "Add track";
+                        hint: "Add a mixer track. Route channels or other tracks into it to "
+                            + "make it a bus; feed it from a send to make it a return.";
+                        enabled: root.can-add-track;
+                        clicked => { root.track-added(); }
+                    }
                 }
             }
         }

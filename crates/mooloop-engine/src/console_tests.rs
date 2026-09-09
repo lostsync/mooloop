@@ -87,6 +87,7 @@ fn two_track_project(console: [bool; 2]) -> Project {
         channels: vec![low, high],
         ..Project::default()
     };
+    project.ensure_tracks(4);
     project.buses[1].bus.console = console[0];
     project.buses[2].bus.console = console[1];
     project
@@ -179,6 +180,7 @@ fn the_linear_group_and_the_console_group_superpose() {
             channels,
             ..Project::default()
         };
+        project.ensure_tracks(4);
         for (index, on) in console.into_iter().enumerate() {
             project.buses[index + 1].bus.console = on;
         }

@@ -1924,7 +1924,9 @@ id = "default_kick"
             .params
             .output_gain = 1.0;
         assert_eq!(loaded, expected);
-        assert_eq!(loaded.buses.len(), mooloop_core::MAX_BUSES);
+        // A manifest written before the mixer existed opens with the master
+        // and nothing else, rather than sixteen empty tracks nobody made.
+        assert_eq!(loaded.buses.len(), 1);
         assert_eq!(
             loaded.channels[0].setup.channel.bus,
             mooloop_core::MASTER_BUS
@@ -1938,6 +1940,7 @@ id = "default_kick"
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("routed.mooloop");
         let mut project = Project::default();
+        project.ensure_tracks(5);
         project.channels[0].setup.channel.bus = 4;
         project.buses[4].bus.name = "Drums".into();
         project.buses[4].bus.output = 2;

@@ -547,6 +547,28 @@ fn check_project(doctor: &mut Doctor, project: &mut Project) {
     check_patterns(doctor, project);
     check_buses(doctor, project);
 
+    // A channel naming a track that is not in the bank. `channel.bus` is
+    // separately bounded by the *address space* in `check_setup`, which is
+    // not the same question: a song can name track 9 and have made three.
+    // Feeding the master is the repair, because the alternative is a channel
+    // that plays and is not heard.
+    let track_count = project.buses.len().max(1);
+    for (index, channel) in project.channels.iter_mut().enumerate() {
+        if (channel.setup.channel.bus as usize) < track_count {
+            continue;
+        }
+        let found = channel.setup.channel.bus;
+        let who = format!("Channel {}", index + 1);
+        if doctor.correct(
+            "channel.bus.missing",
+            &who,
+            format!("it feeds mixer track {found}, which this song does not have"),
+            "feed it into the master instead".into(),
+        ) {
+            channel.setup.channel.bus = MASTER_BUS;
+        }
+    }
+
     if project.channels.is_empty() {
         let patterns = project.pattern_lengths.len().max(1);
         if doctor.correct(
@@ -654,23 +676,33 @@ fn check_patterns(doctor: &mut Doctor, project: &mut Project) {
 fn check_buses(doctor: &mut Doctor, project: &mut Project) {
     const MIXER: &str = "Mixer";
 
-    if project.buses.len() != MAX_BUSES {
+    // A track exists because somebody made it, so a short bank is a small
+    // mixer rather than a broken one -- this used to restore a missing
+    // sixteen. What is *not* optional is the master: it is the sink every
+    // route reaches, and a song without one has nowhere to send audio.
+    if project.buses.is_empty()
+        && doctor.correct(
+            "song.buses.master",
+            MIXER,
+            "the mixer has no master track".into(),
+            "add the master back".into(),
+        )
+    {
+        project.buses.push(BusSetup::new(MASTER_BUS as usize));
+    }
+    if project.buses.len() > MAX_BUSES {
         let found = project.buses.len();
-        // Every index exists whether or not anything feeds it, so a short
-        // bank is a missing destination rather than a smaller mixer.
         if doctor.correct(
             "song.buses.count",
             MIXER,
-            format!("the mixer has {found} buses; it always has {MAX_BUSES}"),
-            format!("restore the missing buses (it will have {MAX_BUSES})"),
+            format!("the mixer has {found} tracks; the engine addresses {MAX_BUSES}"),
+            format!("drop the tracks past {MAX_BUSES}"),
         ) {
             project.buses.truncate(MAX_BUSES);
-            for index in project.buses.len()..MAX_BUSES {
-                project.buses.push(BusSetup::new(index));
-            }
         }
     }
 
+    let track_count = project.buses.len().max(1);
     for (index, setup) in project.buses.iter_mut().enumerate() {
         let name = if index == MASTER_BUS as usize {
             "Master bus".to_string()
@@ -695,7 +727,13 @@ fn check_buses(doctor: &mut Doctor, project: &mut Project) {
         );
 
         let bus = u8::try_from(index).unwrap_or(u8::MAX);
-        let routed = sanitize_route(bus, setup.bus.output);
+        let mut routed = sanitize_route(bus, setup.bus.output);
+        // `sanitize_route` bounds by the address space, which is not the same
+        // as the bank being that long. A track may name one that was never
+        // made, or that a removal took away.
+        if routed as usize >= track_count {
+            routed = MASTER_BUS;
+        }
         if index != MASTER_BUS as usize && routed != setup.bus.output {
             let found = setup.bus.output;
             if doctor.correct(
@@ -2680,16 +2718,47 @@ mod tests {
         assert_eq!(project.channels[0].setup.channel.name.chars().count(), 64);
     }
 
+    /// A short bank is a small mixer, not a broken one.
+    ///
+    /// This used to assert the opposite -- that a two-track song was repaired
+    /// back to seventeen -- which meant the integrity pass silently added
+    /// fifteen tracks to every song it opened. A track exists because
+    /// somebody made it (`docs/TERMINOLOGY.md`).
     #[test]
-    fn a_missing_bus_bank_is_rebuilt_without_disturbing_the_ones_present() {
+    fn a_short_track_bank_is_left_alone() {
         let mut project = Project::default();
-        project.buses.truncate(2);
+        project.ensure_tracks(2);
         project.buses[1].bus.name = "Drums".into();
 
         let diagnosis = repair_project(&mut project);
+        assert!(diagnosis.is_clean(), "{diagnosis}");
+        assert_eq!(project.buses.len(), 2);
+        assert_eq!(project.buses[1].bus.name, "Drums");
+    }
+
+    /// The master is the one track that is not optional: it is the sink every
+    /// route reaches, so a song without one has nowhere to send audio.
+    #[test]
+    fn a_song_with_no_master_gets_one_back() {
+        let mut project = Project::default();
+        project.buses.clear();
+        let diagnosis = repair_project(&mut project);
+        assert!(diagnosis.is_usable(), "{diagnosis}");
+        assert_eq!(project.buses.len(), 1);
+        assert_eq!(project.buses[0].bus.name, "Master");
+    }
+
+    /// A bank longer than the engine can address is trimmed rather than
+    /// refused, so the song still opens.
+    #[test]
+    fn a_bank_past_the_address_space_is_trimmed() {
+        let mut project = Project::default();
+        for index in 1..MAX_BUSES + 4 {
+            project.buses.push(mooloop_core::BusSetup::new(index));
+        }
+        let diagnosis = repair_project(&mut project);
         assert!(diagnosis.is_usable(), "{diagnosis}");
         assert_eq!(project.buses.len(), MAX_BUSES);
-        assert_eq!(project.buses[1].bus.name, "Drums");
     }
 
     fn lfo_channel(name: &str) -> ChannelSetup {
@@ -2816,10 +2885,23 @@ mod tests {
 
     #[test]
     fn a_channel_pointed_at_a_bus_that_does_not_exist_lands_on_the_master() {
+        // Past the address space. The bank check reaches it first and sends
+        // it home in one repair rather than clamping it into the address
+        // space and then finding it still names no track.
         let mut project = Project::default();
         project.channels[0].setup.channel.bus = 200;
         let diagnosis = repair_project(&mut project);
-        assert_eq!(codes(&diagnosis), ["channel.bus"]);
-        assert!((project.channels[0].setup.channel.bus as usize) < MAX_BUSES);
+        assert_eq!(codes(&diagnosis), ["channel.bus.missing"]);
+        assert_eq!(project.channels[0].setup.channel.bus, MASTER_BUS);
+
+        // Inside the address space but past the *bank*, which is a different
+        // question now that a song has as many tracks as somebody made. A
+        // channel repaired here would otherwise play and not be heard.
+        let mut project = Project::default();
+        project.ensure_tracks(3);
+        project.channels[0].setup.channel.bus = 9;
+        let diagnosis = repair_project(&mut project);
+        assert_eq!(codes(&diagnosis), ["channel.bus.missing"]);
+        assert_eq!(project.channels[0].setup.channel.bus, MASTER_BUS);
     }
 }

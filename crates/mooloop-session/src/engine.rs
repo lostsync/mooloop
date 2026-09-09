@@ -596,6 +596,7 @@ mod tests {
     fn a_channel_waits_for_a_latent_bus_it_does_not_use() {
         let latency = mooloop_core::effect::OVERSAMPLER_LATENCY_FRAMES;
         let mut session = Session::default();
+        session.ensure_tracks(2);
         session.add_channel(mooloop_core::DeviceKind::Sampler);
         session.channels[0].bus = 1;
         session.buses[1].effects.push(transparent_drive().with_id(mooloop_core::DeviceId(0)));

@@ -1077,10 +1077,9 @@ mod tests {
     /// chain the dialog was opened on, not from the selected channel.
     #[test]
     fn an_effect_save_on_a_bus_reads_the_bus_row() {
-        let mut session = Session {
-            effect_target: EffectTarget::Bus(1),
-            ..Session::default()
-        };
+        let mut session = Session::default();
+        session.ensure_tracks(2);
+        session.effect_target = EffectTarget::Bus(1);
         let compressor = session
             .insert_effect_at(EffectKind::Compressor, 0)
             .expect("room")
@@ -1413,10 +1412,9 @@ mod tests {
         };
 
         // Onto a bus, which is a different chain entirely.
-        let mut destination = Session {
-            effect_target: EffectTarget::Bus(1),
-            ..Default::default()
-        };
+        let mut destination = Session::default();
+        destination.ensure_tracks(2);
+        destination.effect_target = EffectTarget::Bus(1);
         destination
             .insert_effect_at(EffectKind::Chain, 0)
             .expect("room");
@@ -1571,6 +1569,7 @@ mod tests {
             .device;
         session.set_effect_preset_name(EffectTarget::Channel(0), gate, "Tight Drum Gate");
 
+        session.ensure_tracks(2);
         session.effect_target = EffectTarget::Bus(1);
         session.insert_effect_at(EffectKind::Limiter, 0).expect("room");
         let bus_gate = session

@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::structure::{rescope_lanes, ChannelEdit};
+use crate::structure::{rescope_lanes, rescope_lanes_for_track, ChannelEdit, TrackEdit};
 use crate::{
     default_buses, BusSetup, Channel, DeviceKind, Ds01Params, DrumMode, DrumSynthParams,
     EffectTarget,
@@ -905,6 +905,74 @@ impl Project {
         Some(edit)
     }
 
+    /// Add a track, returning where it landed. Refused when the bank is full.
+    ///
+    /// Appends rather than inserting, because appending renumbers nothing and
+    /// a mixer's order is not yet something a user arranges. When it becomes
+    /// one, `TrackEdit::Inserted` is already the edit for it.
+    pub fn add_track(&mut self) -> Option<usize> {
+        if self.buses.len() >= crate::MAX_BUSES {
+            return None;
+        }
+        let index = self.buses.len();
+        self.buses.push(crate::BusSetup::new(index));
+        Some(index)
+    }
+
+    /// Make sure the bank has at least `count` tracks, adding plain ones to
+    /// reach it. Returns how many there are now.
+    ///
+    /// Useful beyond tests: a hand-edited or future-format file can name a
+    /// track it did not save, and materialising it is a kinder repair than
+    /// dropping the routing that named it.
+    pub fn ensure_tracks(&mut self, count: usize) -> usize {
+        while self.buses.len() < count.min(crate::MAX_BUSES) {
+            self.add_track();
+        }
+        self.buses.len()
+    }
+
+    /// Remove the track at `index`, closing the gap.
+    ///
+    /// Everything that named a later track is renumbered to follow it, and
+    /// anything that named *this* one is dealt with rather than left dangling:
+    /// a channel routed here falls back to the master, a track feeding here
+    /// falls back to the master, and a lane or route scoped to its chain is
+    /// dropped with the chain it drove.
+    ///
+    /// The master cannot be removed -- it is the sink every route reaches.
+    pub fn remove_track(&mut self, index: usize) -> Option<crate::BusSetup> {
+        if index == crate::MASTER_BUS as usize || index >= self.buses.len() {
+            return None;
+        }
+        let removed = self.buses.remove(index);
+        let edit = TrackEdit::Removed(index as u8);
+        self.rescope_tracks_after(edit);
+        Some(removed)
+    }
+
+    /// Re-scope every track-addressed thing in the song after a track edit.
+    ///
+    /// Three kinds of address name a track: a channel's destination, a track's
+    /// own destination, and anything scoped to a track's effect chain -- which
+    /// is automation lanes and modulation routes, in any channel, because a
+    /// track's chain can be automated from any channel's clip.
+    fn rescope_tracks_after(&mut self, edit: TrackEdit) {
+        for setup in &mut self.buses {
+            setup.bus.output = edit.destination(setup.bus.output);
+        }
+        for channel in &mut self.channels {
+            channel.setup.channel.bus = edit.destination(channel.setup.channel.bus);
+            channel.setup.modulation.rescope_tracks(edit);
+            for lanes in &mut channel.automation {
+                rescope_lanes_for_track(lanes, edit);
+            }
+        }
+        // A track that fed the removed one, or the removed one itself, may
+        // have left the graph in a shape that no longer sorts.
+        self.buses = crate::sanitize_bank(&self.buses);
+    }
+
     /// The audio edges this project's channels compile to, and the order
     /// that satisfies them.
     ///
@@ -974,7 +1042,7 @@ impl Project {
         open_hat.hat_hp_hz = random.range(6_000.0, 9_500.0);
         open_hat.hat_metallic = random.range(0.3, 0.68);
 
-        Self {
+        let mut project = Self {
             channels: [
                 ("Kick", kick),
                 ("Snare", snare),
@@ -989,9 +1057,41 @@ impl Project {
                 next_note_id: 1,
             })
             .collect(),
+            buses: starter_tracks(),
             ..Self::default()
+        };
+        // Four drum channels onto one track, which is the grouping: it is the
+        // `bus` field several channels share and needs no other concept.
+        for channel in &mut project.channels {
+            channel.setup.channel.bus = DRUM_TRACK;
         }
+        project
     }
+}
+
+/// The track a starter kit's drums are grouped onto.
+const DRUM_TRACK: u8 = 1;
+
+/// The tracks a new song opens with.
+///
+/// Adam's sketch, and the reason he wanted channel grouping at all: *"a drum
+/// kit, grouped, sent to mixer track 1, and then a monosynth or something on
+/// mixer 2, and maybe one track set up as a reverb send -- a reasonable,
+/// modest default that sort of also demonstrates what can be done just by
+/// already having had it done to it."*
+///
+/// A blank project teaches nothing; this one shows a group and a bus by
+/// having already done them. The reverb send is the third track and waits on
+/// step 05, because a send is what would feed it -- see
+/// `docs/plans/console/04-the-mixer-is-tracks.md`.
+fn starter_tracks() -> Vec<crate::BusSetup> {
+    let mut tracks = default_buses();
+    for name in ["Drums", "Bass"] {
+        let mut track = crate::BusSetup::new(tracks.len());
+        track.bus.name = name.into();
+        tracks.push(track);
+    }
+    tracks
 }
 
 struct StarterRandom(u64);

@@ -54,6 +54,66 @@ effects, buffers and whole projects already travel. Making a strip arrive when
 a channel does, and a generator when a channel selects it, keeps every ceiling
 where it is and stops dimensioning by them.
 
+### The track bank, measured 2026-09-09
+
+The same lesson again, found and half-fixed the same day. `MAX_BUSES` was
+seventeen -- a small product cap of exactly the kind this document opens by
+forbidding -- *and* the engine preallocated all seventeen strips whether or
+not a song had them. `block_cost::track_memory` measures both halves:
+
+```text
+  a project with 1 track          1067.95 MB
+  a project with 17 tracks        1069.95 MB
+  marginal cost of one track        128.0 KB
+
+  dimensioned by MAX_BUSES = 17, whatever the song holds:
+    DeviceMeters spectrum           12.85 MB   (273 targets x 257 stages x 48 bins)
+    ...of which per bus              48.2 KB
+```
+
+**Making strips arrive with the project saved 2.00 MB of pure floor**, which
+is the reserving-versus-dimensioning distinction applied to tracks. It is a
+small number beside the gigabyte above and it is the whole of what a fixed
+bank was buying.
+
+**Raising the ceiling is the other half and is not free.** At 48.2 KB per bus
+of fixed cost, taking `MAX_BUSES` to the `u8` address space would add 11.25 MB
+before anybody makes anything:
+
+```text
+  MAX_BUSES =  32  adds    0.71 MB      MAX_BUSES = 128  adds    5.22 MB
+  MAX_BUSES =  64  adds    2.21 MB      MAX_BUSES = 256  adds   11.25 MB
+```
+
+The reason was this document's own subject one level down: almost all of it
+was `DeviceMeters`'s spectrum array, `(MAX_CHANNELS + MAX_BUSES) * (MAX_EFFECTS_
+PER_CHANNEL + 1) * SPECTRUM_BINS` -- 12.85 MB of storage for analyzers that are
+individually gated by `spectrum_enabled` and almost never on.
+
+**Fixed the same day**, and the numbers moved as predicted. The spectra are a
+pool of `SPECTRUM_SLOTS` now, handed to whichever stages are subscribed, and
+the subscription flag doubles as the slot index so the audio thread's existing
+atomic load is also the lookup:
+
+```text
+                          before        after
+  spectrum storage       12.85 MB      12.0 KB   (a pool; does not scale)
+  per-bus ceiling cost    48.2 KB       8.0 KB
+  MAX_BUSES = 256 adds   11.25 MB       1.87 MB
+  a 1-track project      1067.95 MB   1055.11 MB
+```
+
+So the ceiling is now liftable for under two megabytes rather than eleven, and
+what remains dimensioned by it is honest: six meter cells, a subscription flag
+and a collision counter per addressable stage.
+
+It also unblocked something that was not the point and turned out to matter
+more. The analyzer is blocky and unfluid (`ENHANCEMENTS.md` has the diagnosis),
+and the fix wants far more bins -- which at the old array would have been 68 MB
+at 256 bins, and is 64 KB now. **The capacity mistake was holding the display
+quality hostage**, which is worth noticing: dimensioning by a ceiling does not
+just cost memory, it makes the thing it dimensions unimprovable.
+
 ### What the floor costs per edit, which is the part that hurts
 
 The gigabyte would be affordable if it were paid once. It is not.

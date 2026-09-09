@@ -168,7 +168,10 @@ Alphabetical by model name, then by harness.
   against writing a JUCE host and reached for rendered WAVs, when Adam knew it
   was a pip install and a for-loop, and then taking the analog-sum switch back
   off the channels, because a console puts its Channel stage on a mixer strip
-  and mooloop's mixer strip is a track.
+  and mooloop's mixer strip is a track, and then the mixer becoming a list of
+  tracks somebody made rather than a fixed bank of seventeen -- which turned up
+  a render loop that walked a prefix of a whole-address-space permutation, so a
+  short bank would have dropped tracks silently.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

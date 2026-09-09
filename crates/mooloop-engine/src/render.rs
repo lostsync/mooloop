@@ -2238,7 +2238,17 @@ impl RenderState {
             strips,
             sample_slots: slots_for_growth,
             slice_slots: slice_slots_for_growth,
-            buses: (0..MAX_BUSES).map(|_| BusStrip::new()).collect(),
+            // The master alone. Tracks arrive with the project through
+            // `grow_buses`, rather than seventeen 64 KB strips being built
+            // whether or not a song has them -- `docs/CAPACITY_POLICY.md`:
+            // reserving an address space is free, dimensioning by it is not.
+            // The master is not optional, because `master()` reads it and
+            // every route ends there.
+            buses: {
+                let mut buses = Vec::with_capacity(MAX_BUSES);
+                buses.push(BusStrip::new());
+                buses
+            },
             bus_graph: CompiledBusGraph::default(),
             // A project with no subscriptions holds no buffers at all, which
             // is the whole design: the identity order costs nothing and
@@ -2469,6 +2479,17 @@ impl RenderState {
     }
 
     /// Materialize channels up to `count`. Allocates; control thread only.
+    /// Materialise track strips up to `count`, the way [`Self::grow_channels`]
+    /// does for channels. The graph only grows: a project with fewer tracks
+    /// than the last one keeps the spare strips rather than freeing them,
+    /// since this may run while a state is being prepared for a swap and the
+    /// displaced one is dropped on the control thread anyway.
+    fn grow_buses(&mut self, count: usize) {
+        while self.buses.len() < count.min(MAX_BUSES) {
+            self.buses.push(BusStrip::new());
+        }
+    }
+
     fn grow_channels(&mut self, count: usize) {
         let sample_rate = self.sample_rate;
         while self.strips.len() < count.min(MAX_CHANNELS) {
@@ -2483,6 +2504,7 @@ impl RenderState {
         // control thread inside `install_project`, so allocating here is the
         // point rather than a hazard.
         self.grow_channels(project.channels.len());
+        self.grow_buses(project.buses.len());
         self.transport.stop();
         self.transport.set_tempo(project.bpm.into());
         self.loop_range = project.loop_range;
@@ -2493,7 +2515,17 @@ impl RenderState {
                 strip.output.muted = channel.setup.channel.muted;
                 strip.output.set_volume(channel.setup.channel.volume);
                 strip.output.set_pan(channel.setup.channel.pan);
-                strip.destination = clamp_bus(channel.setup.channel.bus);
+                // A channel naming a track that is not in the bank feeds the
+                // master rather than nothing: `clamp_bus` bounds by the
+                // address space, which is not the same as the bank being that
+                // long, and a silently unheard channel is the worst of the
+                // available answers.
+                let destination = clamp_bus(channel.setup.channel.bus);
+                strip.destination = if (destination as usize) < project.buses.len().max(1) {
+                    destination
+                } else {
+                    MASTER_BUS
+                };
                 // `load_project` runs while a complete RenderState is prepared
                 // on the control thread (or for offline export), never from the
                 // JACK callback, so constructing boxed nodes is acceptable.
@@ -4088,7 +4120,12 @@ impl RenderState {
         // looks like; the master sorts last and keeps its audio, since it is
         // what the caller reads.
         let mut master_peak = (0.0, 0.0);
-        for slot in 0..self.buses.len() {
+        // The **whole** compiled order, not the first `buses.len()` slots of
+        // it. `render_order` is a permutation over the entire address space,
+        // so a track's position in it has nothing to do with how many tracks
+        // exist -- walking a prefix would visit an arbitrary subset and drop
+        // real tracks silently. Absent indices are skipped instead.
+        for slot in 0..MAX_BUSES {
             let index = self.bus_graph.render_order()[slot] as usize;
             let Some(strip) = self.buses.get_mut(index) else {
                 continue;
@@ -4262,6 +4299,24 @@ impl RenderState {
 
 #[cfg(test)]
 mod tests {
+
+/// A project with the whole track address space materialised.
+///
+/// `Project::default()` is the master alone since tracks stopped being a
+/// fixed bank (`docs/CAPACITY_POLICY.md`), and the tests below are about the
+/// *graph* rather than about how many tracks a song has, so they ask for the
+/// bank they route through.
+fn full_bank_project() -> Project {
+    let mut project = Project::default();
+    project.ensure_tracks(mooloop_core::MAX_BUSES);
+    project
+}
+
+/// The same bank on its own, for the tests that build a routing graph
+/// directly rather than through a project.
+fn full_bank() -> Vec<mooloop_core::BusSetup> {
+    full_bank_project().buses
+}
     use super::*;
     use mooloop_core::{NoteEvent, ProjectChannel};
 
@@ -4594,7 +4649,7 @@ mod tests {
     fn project_load_replaces_preallocated_state() {
         let mut project = Project {
             bpm: 173,
-            ..Project::default()
+            ..full_bank_project()
         };
         project.pattern_lengths[0] = 32;
         project.channels[0].notes[0].push(mooloop_core::NoteEvent::new(1, 24, 12, 60, 100));
@@ -4737,7 +4792,7 @@ mod tests {
         }
         let mut project = Project {
             channels: vec![channel],
-            ..Project::default()
+            ..full_bank_project()
         };
         project.channels[0].notes[0].push(NoteEvent::new(1, 0, 96, 60, 127));
         project
@@ -4770,7 +4825,7 @@ mod tests {
         channel.notes[0].push(NoteEvent::new(1, 0, 96, note, 127));
         let project = Project {
             channels: vec![channel],
-            ..Project::default()
+            ..full_bank_project()
         };
 
         let samples = vec![Some(sample.clone())];
@@ -6151,7 +6206,7 @@ mod tests {
         let together = render_master(
             &Project {
                 channels: vec![hit_channel(0, true), hit_channel(1, false)],
-                ..Project::default()
+                ..full_bank_project()
             },
             FRAMES,
         );
@@ -6168,7 +6223,7 @@ mod tests {
         let alone = render_master(
             &Project {
                 channels: vec![hit_channel(0, true)],
-                ..Project::default()
+                ..full_bank_project()
             },
             FRAMES,
         );
@@ -6191,7 +6246,7 @@ mod tests {
 
         let mut project = Project {
             channels: vec![hit_channel(0, false), hit_channel(1, false)],
-            ..Project::default()
+            ..full_bank_project()
         };
         // Channel 0 through bus 1, which carries the cost; channel 1 straight
         // to the master with nothing.
@@ -6217,7 +6272,7 @@ mod tests {
         const FRAMES: usize = 512;
         let live = Project {
             channels: vec![hit_channel(0, true), hit_channel(1, false)],
-            ..Project::default()
+            ..full_bank_project()
         };
         let mut bypassed = live.clone();
         bypassed.channels[0].setup.effects[0].bypassed = true;
@@ -6241,7 +6296,7 @@ mod tests {
         const FRAMES: usize = 1_024;
         let project = Project {
             channels: vec![hit_channel(0, true), hit_channel(1, false)],
-            ..Project::default()
+            ..full_bank_project()
         };
         let render_in_blocks = |block: usize| {
             let mut render = RenderState::from_project(48_000, &project, &[]);
@@ -6273,7 +6328,7 @@ mod tests {
         let latency = mooloop_core::effect::OVERSAMPLER_LATENCY_FRAMES as usize;
         let project = Project {
             channels: vec![hit_channel(0, true), hit_channel(1, false)],
-            ..Project::default()
+            ..full_bank_project()
         };
 
         let temp = tempfile::tempdir().expect("a temporary directory");
@@ -6493,7 +6548,7 @@ mod tests {
                 ProjectChannel::mono_synth(2, 1),
                 ProjectChannel::poly_synth(3, 1),
             ],
-            ..Project::default()
+            ..full_bank_project()
         };
         for (index, channel) in project.channels.iter_mut().enumerate() {
             channel.notes[0].push(NoteEvent::new(index as u32 + 1, 0, 96, 60, 127));
@@ -6753,14 +6808,14 @@ mod tests {
     fn a_bus_can_feed_another_bus() {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let chained = rendered_energy(&project, |render| {
-            let mut buses = mooloop_core::default_buses();
+            let mut buses = full_bank();
             render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 5 });
             route(render, &mut buses, 5, 2);
         });
         assert!(chained > 0.0, "chained buses must still reach the master");
 
         let filtered = rendered_energy(&project, |render| {
-            let mut buses = mooloop_core::default_buses();
+            let mut buses = full_bank();
             render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 5 });
             route(render, &mut buses, 5, 2);
             let _ =
@@ -6779,14 +6834,14 @@ mod tests {
     fn a_bus_can_feed_a_higher_numbered_bus() {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let chained = rendered_energy(&project, |render| {
-            let mut buses = mooloop_core::default_buses();
+            let mut buses = full_bank();
             render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 2 });
             route(render, &mut buses, 2, 9);
         });
         assert!(chained > 0.0, "an uphill route must still reach the master");
 
         let filtered = rendered_energy(&project, |render| {
-            let mut buses = mooloop_core::default_buses();
+            let mut buses = full_bank();
             render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 2 });
             route(render, &mut buses, 2, 9);
             let _ =
@@ -6806,7 +6861,7 @@ mod tests {
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let dry = rendered_energy(&project, |_| {});
         let routed = rendered_energy(&project, |render| {
-            let mut buses = mooloop_core::default_buses();
+            let mut buses = full_bank();
             render.apply_command(EngineCommand::SetChannelBus { channel: 0, bus: 1 });
             buses[1].bus.output = 4;
             buses[4].bus.output = 11;
@@ -6833,7 +6888,7 @@ mod tests {
 
         let dry = {
             let mut clean = synth_project(ProjectChannel::sampler(0, 1));
-            clean.buses = mooloop_core::default_buses();
+            clean.buses = full_bank();
             rendered_energy(&clean, |_| {})
         };
         let repaired = rendered_energy(&project, |_| {});

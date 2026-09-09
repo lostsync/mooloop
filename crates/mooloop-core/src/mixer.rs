@@ -130,10 +130,56 @@ impl BusSetup {
     }
 }
 
-/// The full bus bank a project starts with. Every index exists whether or not
-/// anything feeds it, so assigning a channel to bus 12 never has to create one.
+/// The tracks a project starts with: the master, and nothing else.
+///
+/// **This used to return all seventeen**, on the reasoning that assigning a
+/// channel to bus 12 should never have to create one. That is a fixed bank
+/// wearing a `Vec`, and `docs/CAPACITY_POLICY.md` is about exactly this:
+/// reserving an address space is free, dimensioning by it is not. A track now
+/// exists because somebody made it.
+///
+/// The master is not optional -- it is the sink every route eventually
+/// reaches, and a project without one has nowhere to send audio -- so it is
+/// the one entry a bank always has. [`sanitize_bank`] enforces that on load.
 pub fn default_buses() -> Vec<BusSetup> {
-    (0..MAX_BUSES).map(BusSetup::new).collect()
+    vec![BusSetup::new(MASTER_BUS as usize)]
+}
+
+/// Repair a loaded track bank: guarantee the master, drop anything past the
+/// addressable space, and coerce individually illegal routing to the master.
+///
+/// Per-edge nonsense is fixed first and the graph as a whole second, so a file
+/// whose routing contains a loop is flattened to everything-to-master rather
+/// than rejected -- it still opens and plays, which is the same treatment the
+/// engine gives it.
+pub fn sanitize_bank(buses: &[BusSetup]) -> Vec<BusSetup> {
+    let mut bank: Vec<BusSetup> = buses
+        .iter()
+        .take(MAX_BUSES)
+        .enumerate()
+        .map(|(index, setup)| {
+            let mut setup = setup.clone();
+            setup.bus.output = sanitize_route(index as u8, setup.bus.output);
+            setup
+        })
+        .collect();
+    if bank.is_empty() {
+        bank.push(BusSetup::new(MASTER_BUS as usize));
+    }
+    // A route naming a track that is not there lands on the master, the same
+    // repair `sanitize_route` makes for an out-of-range one.
+    let count = bank.len();
+    for (index, setup) in bank.iter_mut().enumerate() {
+        if index != MASTER_BUS as usize && setup.bus.output as usize >= count {
+            setup.bus.output = MASTER_BUS;
+        }
+    }
+    if compile_bus_graph(&bank).is_none() {
+        for setup in &mut bank {
+            setup.bus.output = MASTER_BUS;
+        }
+    }
+    bank
 }
 
 /// Whether `bus` could address `output` at all, ignoring what the rest of the
@@ -275,6 +321,12 @@ pub fn compile_bus_graph(buses: &[BusSetup]) -> Option<CompiledBusGraph> {
         }
     }
 
+    // Every slot in the fixed address space is sorted, present or not: an
+    // absent track is a phantom feeding the master, which constrains nothing
+    // and keeps `render_order` a complete permutation. The executor skips the
+    // ones that do not exist, and must walk the *whole* order to do that --
+    // iterating only the first `buses.len()` slots would visit an arbitrary
+    // subset and silently drop real tracks.
     (emitted == MAX_BUSES).then_some(CompiledBusGraph {
         destinations,
         render_order,
@@ -1070,14 +1122,63 @@ mod tests {
     }
     use super::*;
 
+    /// A bank the size of the whole address space, for the tests that are
+    /// about the *compiler* rather than about how many tracks a project has.
+    /// `default_buses` no longer returns one, and that is the point of it.
+    fn full_bank() -> Vec<BusSetup> {
+        (0..MAX_BUSES).map(BusSetup::new).collect()
+    }
+
+    /// A new song has one track, and it is the master.
+    ///
+    /// This used to assert the opposite -- seventeen, every index
+    /// materialised -- which was a fixed bank wearing a `Vec` and is what
+    /// `docs/CAPACITY_POLICY.md` calls dimensioning by a ceiling.
     #[test]
-    fn the_bank_is_master_plus_every_insert() {
+    fn a_new_bank_is_the_master_alone() {
         let buses = default_buses();
-        assert_eq!(buses.len(), MAX_BUSES);
+        assert_eq!(buses.len(), 1);
         assert_eq!(buses[MASTER_BUS as usize].bus.name, "Master");
-        assert_eq!(buses[1].bus.name, "Bus 1");
-        assert_eq!(buses[INSERT_BUSES].bus.name, format!("Bus {INSERT_BUSES}"));
-        assert!(buses.iter().all(|setup| setup.bus.output == MASTER_BUS));
+        assert_eq!(buses[MASTER_BUS as usize].bus.output, MASTER_BUS);
+    }
+
+    /// The master is not optional: a bank without one has nowhere to send
+    /// audio, so an empty or hand-emptied file gets one back.
+    #[test]
+    fn a_bank_always_has_a_master() {
+        assert_eq!(sanitize_bank(&[]).len(), 1);
+        assert_eq!(sanitize_bank(&[])[0].bus.name, "Master");
+    }
+
+    /// A route naming a track that is not there lands on the master, the same
+    /// repair an out-of-range one gets. Without this a bank could be shorter
+    /// than one of its own edges.
+    #[test]
+    fn a_route_to_a_track_that_is_not_there_falls_back() {
+        let mut bank = full_bank();
+        bank[1].bus.output = 9;
+        bank.truncate(3);
+        let repaired = sanitize_bank(&bank);
+        assert_eq!(repaired.len(), 3);
+        assert_eq!(repaired[1].bus.output, MASTER_BUS);
+    }
+
+    /// A short bank still compiles, and every track in it is rendered before
+    /// what it feeds. The absent indices are phantoms feeding the master;
+    /// what must not happen is a real track being left out of the order.
+    #[test]
+    fn a_short_bank_still_sorts_every_track_it_has() {
+        let mut bank = full_bank();
+        bank[1].bus.output = 2;
+        bank.truncate(3);
+        let graph = compile_bus_graph(&bank).expect("a short bank sorts");
+        let order = graph.render_order();
+        let position = |bus: u8| order.iter().position(|slot| *slot == bus).unwrap();
+        assert!(position(1) < position(2), "1 feeds 2 and must render first");
+        assert!(position(2) < position(MASTER_BUS));
+        for track in 0..bank.len() as u8 {
+            assert!(order.contains(&track), "track {track} was left out of the order");
+        }
     }
 
     #[test]
@@ -1099,7 +1200,7 @@ mod tests {
     }
 
     fn routed(edges: &[(usize, u8)]) -> Vec<BusSetup> {
-        let mut buses = default_buses();
+        let mut buses = full_bank();
         for (bus, output) in edges {
             buses[*bus].bus.output = *output;
         }

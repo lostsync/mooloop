@@ -207,3 +207,54 @@ explicit dislike of tiny low-contrast labels.
 The master has no switch, because it feeds nothing and an encode there would
 go into a sum nothing decodes. Refused in the engine as well as absent from
 the face, so a hand-edited file cannot make the master inaudible.
+
+
+## Step 04 — the mixer is tracks (model half)
+
+Landed on `feat/dynamic-tracks` (2026-09-09). The track bank stops being a
+fixed seventeen: `default_buses()` returns the master alone, tracks are made,
+renamed and removed, and the engine materialises a strip per track as a
+project loads instead of building all seventeen whether or not a song has
+them.
+
+### The default song is in, as far as it goes
+
+`Project::starter_kit` now opens with `Drums` and `Bass`, its four drum
+channels grouped onto the first. That is Adam's sketch minus the reverb send,
+which waits on step 05 because a send is what would feed it. Grouping needed
+no new concept at all: it is the `bus` field several channels share.
+
+### Two things found by doing it
+
+**A short bank could silently drop tracks.** The bus render loop was
+`for slot in 0..self.buses.len()`, indexing `render_order` — which is a
+permutation over the *whole* address space, so a track's position in it has
+nothing to do with how many tracks exist. Walking a prefix visits an arbitrary
+subset. It now walks the whole order and skips absent entries. This was
+invisible while the bank was always full, and would have been a track that
+simply made no sound.
+
+**A channel could name a track that is not there.** `clamp_bus` bounds by the
+address space, which is not the same as the bank being that long. Such a
+channel now feeds the master; the alternative is a channel that is silently
+unheard, which is the worst of the available answers.
+
+### Capacity, measured rather than assumed
+
+`docs/CAPACITY_POLICY.md` forbids small product caps, and seventeen is one. It
+also warns that the expensive mistake is dimensioning by a ceiling, so the
+ceiling was measured before being raised — `block_cost::track_memory`:
+
+- making strips arrive with the project **saved 2.00 MB** of pure floor;
+- a track costs **128 KB** when it exists;
+- the ceiling costs **48.2 KB per bus** whatever the song holds, so raising
+  `MAX_BUSES` to the `u8` space would add **11.25 MB** before anybody makes
+  anything.
+
+Almost all of that is `DeviceMeters`'s spectrum array, which is dimensioned by
+two ceilings multiplied together for analyzers that are individually gated and
+almost never on. **The recommendation is to fix that first**, after which the
+ceiling is free — raising it before would be paying to keep a mistake.
+
+So the cap is unchanged at seventeen and is now written down with the
+measurement needed to lift it, rather than being a number nobody had priced.

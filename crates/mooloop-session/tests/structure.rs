@@ -219,7 +219,8 @@ fn removing_an_effect_drops_what_named_it_and_disturbs_nothing_else() {
 fn a_bus_chain_reorder_leaves_every_channels_lanes_alone() {
     let mut session = Session::default();
     session.add_channel(DeviceKind::Sampler);
-    session.select_bus(1).expect("bus 1 exists");
+    session.add_track().expect("room for a track");
+    session.select_bus(1).expect("track 1 exists");
     session.insert_effect_at(EffectKind::Delay, 0).expect("room");
     let filter = session
         .insert_effect_at(EffectKind::Filter, 1)
