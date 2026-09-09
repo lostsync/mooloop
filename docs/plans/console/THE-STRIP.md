@@ -109,14 +109,30 @@ it *testable*: render a sine at `gain::REFERENCE_PEAK_DBFS` through each
 voicing and assert the harmonic amplitudes against the table. `SpectrumAnalyzer`
 already exists, so the measurement costs nothing to build.
 
+**Built and proven, 2026-09-09**, in `mooloop_dsp::harmonics`: every voicing's
+stated profile is what a full-scale sine measures coming out of it, to 0.00 dB.
+`harmonics_hit_their_stated_target` is that claim as a test.
+
 The two limits, stated up front so the target is not quietly missed:
 
-1. **The exact correspondence holds at one amplitude.** At other levels the
-   mix moves — which is wanted, not a flaw: `reference/ADAM.md` asks for colour
-   that *"reacts to level"*, and a distortion whose spectrum is the same at
-   −30 and −6 dBFS is the one that sounds like a plugin. So the table is a
-   target *at the operating level*, and how it travels away from there is a
-   voicing decision of its own.
+1. **The exact correspondence holds at one amplitude, and below it the
+   character both thins *and changes shape*.** Building it turned up something
+   the first draft of this file got wrong: there is no simple `a^(n-1)` law
+   once a profile has more than one term. Off full scale every `Tₙ` spills
+   into harmonics `n-2`, `n-4`…, so `T₄` feeds the 2nd against `T₂` and the
+   two partially cancel — `Iron`'s 2nd falls 9 dB per halving, not 6. The
+   module header carries the worked algebra and a test pins the number.
+
+   That is wanted, not a flaw: `reference/ADAM.md` asks for colour that
+   *"reacts to level"*, and a distortion whose spectrum is the same at −30 and
+   −6 dBFS is the one that sounds like a plugin.
+
+   **But it means the profile numbers cannot be authored on their own.** At
+   −18 dBFS the first-pass `Grip` profile has receded past −110 dB, which is
+   nothing; "−28 dB of 2nd harmonic" says nothing without saying what level
+   arrives at the curve. The stage that decides that is `pre in / drive`,
+   normalizing into the shaper the way `shaper::drive_compensation` already
+   does for the Drive device. **Author the two together, with ears.**
 2. **Real transformer distortion is frequency-dependent and hysteretic, and a
    memoryless shaper is neither.** Core saturation rises steeply toward low
    frequencies, which is most of why `Iron` sounds like `Iron` on a kick and

@@ -39,6 +39,7 @@ pub mod effects;
 pub mod env;
 pub mod event;
 pub mod filter;
+pub mod harmonics;
 pub mod interpolate;
 pub mod heldnotes;
 pub mod lfo;

@@ -152,7 +152,9 @@ Alphabetical by model name, then by harness.
   second -- console summing, where the requirement turned out to be that the
   decoding bus is invisible, and where normalizing the curve to put its knee
   on full scale was built, measured, and rejected because it is worst exactly
-  where music is loudest.
+  where music is loudest, and the harmonic target that turns "we want it to
+  sound like iron" into a number a test can check, which found on the way that
+  there is no simple level law once a profile has more than one term.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
