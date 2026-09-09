@@ -556,8 +556,7 @@ land on its own when it starts to matter:
 ### Mixing, Routing, And Effects
 
 - Channel mute, volume, and pan are exposed, as compact knobs in the rack row,
-  alongside the bus the channel feeds and the analog-sum switch that says how
-  it gets there.
+  alongside the mixer track the channel feeds.
 - Every channel names one mixer bus. The bank is the master plus sixteen
   inserts, all preallocated, so assigning a channel to any bus is a bounded
   mutation rather than an allocation. Buses carry their own effect chain,
@@ -575,12 +574,18 @@ land on its own when it starts to matter:
   value. A routing change installs the whole value atomically, so no block can
   render edges against a stale order. Short stored banks are padded and invalid
   individual routes are repaired to the master at this compilation boundary.
-- **Analog sum.** Any channel or bus can be switched to sum into its
-  destination through a non-linear encode, decoded at that destination
-  together with everything else feeding it that has the switch on. The control
-  is a small button drawing a straight line when it is off and a sine when it
-  is on: at the foot of a mixer strip, set apart from mute, and at the end of
-  a channel's rack row. The master has none, because it feeds nothing.
+- **Analog sum.** Any mixer track can be switched to sum into its destination
+  through a non-linear encode, decoded at that destination together with
+  everything else feeding it that has the switch on. The control is a small
+  button at the foot of the strip, set apart from mute, drawing a straight
+  line when it is off and a sine when it is on. The master has none, because
+  it feeds nothing.
+
+  **A track's switch, and only a track's.** A sequencer channel has none: the
+  console this models puts its Channel stage on a mixer strip, and mooloop's
+  mixer strip is a track (`TERMINOLOGY.md`). Several channels on one track
+  therefore reach it linearly and the track encodes their sum, which is what a
+  desk does with a group.
 
   There is no device to place and no bus to create: every summing point
   decodes, and the master is already one, so two channels switched on glue

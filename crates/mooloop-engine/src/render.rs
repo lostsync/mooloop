@@ -1617,9 +1617,6 @@ pub struct ChannelStrip {
     output: OutputStage,
     /// Mixer bus this channel feeds.
     destination: u8,
-    /// Whether this strip's output is console-encoded on the way into its
-    /// bus. See `mooloop_dsp::console`.
-    console: bool,
     /// How long this channel waits before summing into its bus, so that
     /// everything arriving there comes from the same moment.
     ///
@@ -1663,7 +1660,6 @@ impl ChannelStrip {
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             output: OutputStage::new(0.8),
             destination: MASTER_BUS,
-            console: false,
             compensation: None,
             source_silent_frames: 0,
             sleeping: false,
@@ -1696,7 +1692,6 @@ impl ChannelStrip {
         self.effects.clear(reclaim);
         self.output = OutputStage::new(0.8);
         self.destination = MASTER_BUS;
-        self.console = false;
     }
 
     /// Move one internal route's depth on both the base and the running node.
@@ -2564,12 +2559,6 @@ impl RenderState {
     /// Allocates, and is allowed to: `load_project` runs on the control
     /// thread while a state is prepared, never from the callback.
     fn install_console(&mut self, project: &Project) {
-        for (index, strip) in self.strips.iter_mut().enumerate() {
-            strip.console = project
-                .channels
-                .get(index)
-                .is_some_and(|channel| channel.setup.channel.console);
-        }
         for (index, strip) in self.buses.iter_mut().enumerate() {
             // The master feeds nothing, so a switch on it would encode into a
             // sum that is never decoded. Refused here rather than hidden in
@@ -2578,11 +2567,6 @@ impl RenderState {
                 && project.buses.get(index).is_some_and(|setup| setup.bus.console);
         }
         let mut wanted = [false; MAX_BUSES];
-        for channel in project.channels.iter().take(MAX_CHANNELS) {
-            if channel.setup.channel.console {
-                wanted[clamp_bus(channel.setup.channel.bus) as usize] = true;
-            }
-        }
         for index in 1..self.buses.len().min(MAX_BUSES) {
             if self.buses[index].console {
                 wanted[self.bus_graph.destination(index) as usize] = true;
@@ -3384,22 +3368,15 @@ impl RenderState {
                     chain.move_slot(from as usize, to as usize);
                 }
             }
-            EngineCommand::SetStripConsole { target, enabled } => match target {
-                EffectTarget::Channel(index) => {
-                    if let Some(strip) = self.strips.get_mut(index as usize) {
+            EngineCommand::SetTrackConsole { bus, enabled } => {
+                // The master feeds nothing, so encoding its output would put
+                // the mix into a sum nothing decodes.
+                if bus != MASTER_BUS {
+                    if let Some(strip) = self.buses.get_mut(bus as usize) {
                         strip.console = enabled;
                     }
                 }
-                EffectTarget::Bus(index) => {
-                    // The master feeds nothing, so encoding its output would
-                    // put the mix into a sum nothing decodes.
-                    if index != MASTER_BUS {
-                        if let Some(strip) = self.buses.get_mut(index as usize) {
-                            strip.console = enabled;
-                        }
-                    }
-                }
-            },
+            }
             EngineCommand::SetEffectBypassed {
                 target,
                 slot,
@@ -4097,18 +4074,11 @@ impl RenderState {
                 delay.process(&mut strip.bus.l[..frames], &mut strip.bus.r[..frames]);
             }
             if let Some(destination) = self.buses.get_mut(strip.destination as usize) {
-                // A console-on strip encodes on the way out and lands in the
-                // destination's *second* accumulator, so the destination can
-                // decode this and only this. A strip whose switch is on but
-                // whose destination has no accumulator yet sums linearly for
-                // the tick it takes `sync_console_sums` to converge.
-                match (strip.console, destination.console_sum.as_mut()) {
-                    (true, Some(sum)) => {
-                        add_encoded(sum, &strip.bus, frames);
-                        destination.console_dirty = true;
-                    }
-                    _ => destination.bus.add_from(&strip.bus, frames),
-                }
+                // Always linear. A channel is what reaches a track, not a
+                // console strip of its own -- analog sum is a track's switch
+                // and only a track's, so the encode happens at a track's
+                // *output*, one level further on.
+                destination.bus.add_from(&strip.bus, frames);
                 destination.dirty = true;
             }
         }

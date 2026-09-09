@@ -66,9 +66,6 @@ pub struct ChannelState {
     pub modulation: ModRack,
     /// Mixer bus this channel feeds; 0 is the master.
     pub bus: u8,
-    /// Whether this strip's output is console-encoded on the way into its
-    /// bus. See `mooloop_dsp::console`.
-    pub console: bool,
 }
 
 impl ChannelState {
@@ -135,7 +132,6 @@ impl ChannelState {
             next_device_id: 0,
             modulation: ModRack::default(),
             bus: MASTER_BUS,
-            console: false,
         }
     }
 

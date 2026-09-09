@@ -26,7 +26,6 @@ fn rack_rows() -> ModelRc<ChannelRow> {
             pan: 0.0,
             selected: index == 0,
             bus,
-            console: false,
             steps: ModelRc::from(Rc::new(VecModel::from(vec![
                 StepCell {
                     active: false,

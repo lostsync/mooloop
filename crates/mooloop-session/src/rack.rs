@@ -72,23 +72,6 @@ impl Session {
         })
     }
 
-    /// Flips whether a channel's output is console-encoded.
-    ///
-    /// Only the switch travels here. The buffer its encoded output lands in
-    /// is reconciled by `Session::sync_console_sums` on the pump tick, for
-    /// the reason the compensation plan is reconciled there: which buses need
-    /// one is a property of every strip at once, so a per-edit call site is a
-    /// list that grows silently.
-    pub fn toggle_channel_console(&mut self, channel: i32) -> Option<EngineCommand> {
-        let channel = usize::try_from(channel).ok()?;
-        let state = self.channels.get_mut(channel)?;
-        state.console = !state.console;
-        Some(EngineCommand::SetStripConsole {
-            target: EffectTarget::Channel(channel as u8),
-            enabled: state.console,
-        })
-    }
-
     /// Replaces the selected channel's generator, returning which channel
     /// changed. `None` when it is already that kind.
     pub fn change_selected_source(&mut self, source: DeviceKind) -> Option<usize> {

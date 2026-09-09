@@ -87,15 +87,6 @@ pub struct Channel {
     /// the mixer existed land on the master.
     #[serde(default)]
     pub bus: u8,
-    /// Whether this strip's output is console-encoded, so the summing point
-    /// it reaches decodes it together with everything else that opted in.
-    ///
-    /// Defaulted on load, and `false` is bit-identical to a tree without
-    /// console summing at all. See `mooloop_dsp::console` for the curve and
-    /// `docs/plans/console/02-console-summing.md` for why it is a per-strip
-    /// switch rather than a device.
-    #[serde(default)]
-    pub console: bool,
 }
 
 impl Channel {
@@ -110,7 +101,6 @@ impl Channel {
             volume: 1.0,
             pan: 0.0,
             bus: crate::MASTER_BUS,
-            console: false,
         }
     }
 }

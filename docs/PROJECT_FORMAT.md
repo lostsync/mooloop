@@ -243,13 +243,17 @@ before any of them existed still loads:
   ids takes its **positions** as its ids — which is exactly what the routes
   and lanes in such a project already mean by `slot`, so an older song loads
   pointing where it pointed.
-- **Console summing is one defaulted boolean per strip.**
-  `channels[].setup.channel.console` and `buses[].bus.console` say whether
-  that strip's output is encoded on its way into its destination, to be
-  decoded there with everything else that opted in. Both default to `false`,
-  which is a linear mixer and is what every manifest written before this
-  existed reads as. The master's value is ignored, because the master feeds
-  nothing.
+- **Analog sum is one defaulted boolean per track.** `buses[].bus.console`
+  says whether that track's output is encoded on its way into its destination,
+  to be decoded there with everything else that opted in. It defaults to
+  `false`, which is a linear mixer and is what every manifest written before
+  this existed reads as. The master's value is ignored, because the master
+  feeds nothing.
+
+  A `channels[].setup.channel.console` briefly existed and was removed the
+  same day, when Adam settled that analog sum is a track's switch and not a
+  channel's. Serde ignores unknown fields, so a manifest written in that
+  window loads without complaint and simply drops it.
 
   There is deliberately **no field naming the algorithm**. One curve exists,
   and a `console_mode` added later with `#[serde(default)]` is the same no-op

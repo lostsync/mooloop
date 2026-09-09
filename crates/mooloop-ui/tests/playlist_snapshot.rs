@@ -57,7 +57,6 @@ fn render_playlist_snapshot() {
         pan: 0.0,
         selected: true,
         bus: 0,
-        console: false,
         steps: ModelRc::from(step_model),
     }]))));
     ui.set_playlist_clips(ModelRc::from(std::rc::Rc::new(VecModel::from(vec![
@@ -92,16 +91,18 @@ fn render_playlist_snapshot() {
     assert_ne!(pixel(160, 426), clip_color);
 
     // The step grid starts after the rack row's name, mute, the volume/pan
-    // knobs, the mixer-bus picker and the analog-sum switch, so these x
-    // coordinates move whenever that prefix is resized -- the picker's 30px
-    // plus its 6px of spacing is why they sit 36px further right than they
-    // once did, and the switch's 22px plus 6px is another 28 on top
-    // (`docs/plans/console/02-console-summing.md`). The first cell now spans
-    // 256..=279 and the second 283..=306 at 24px per cell.
-    const FIRST_CELL_X: usize = 257;
-    const FIRST_CELL_LAST_X: usize = 279;
-    const CELL_GAP_X: usize = 280;
-    const SECOND_CELL_X: usize = 284;
+    // knobs and the mixer-track picker, so these x coordinates move whenever
+    // that prefix is resized -- the picker's 30px plus its 6px of spacing is
+    // why they sit 36px further right than they used to. The first cell spans
+    // 228..=251 and the second 255..=278 at 24px per cell.
+    //
+    // They moved out and back on 2026-09-09: an analog-sum switch was added to
+    // the rack row and then removed again once Adam settled that the switch
+    // belongs to a track and not to a channel.
+    const FIRST_CELL_X: usize = 229;
+    const FIRST_CELL_LAST_X: usize = 251;
+    const CELL_GAP_X: usize = 252;
+    const SECOND_CELL_X: usize = 256;
     // Likewise these y values track the combined height of the menu bar and
     // the toolbar, since the rack sits directly beneath them. FILL_Y crosses
     // both cells' fills; VELOCITY_Y is high enough that only the louder step
@@ -117,7 +118,7 @@ fn render_playlist_snapshot() {
     // Cell one covers all four 64ths but is struck only on the first, so its
     // slots render at two different intensities.
     const ONSET_X: usize = FIRST_CELL_X;
-    const HELD_X: usize = 269;
+    const HELD_X: usize = 241;
 
     // A struck 64th is solid, one that is only being held is dim, and the gap
     // between cells is background. That ordering is the whole reason a

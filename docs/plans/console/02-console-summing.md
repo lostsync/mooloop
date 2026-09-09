@@ -76,9 +76,16 @@ acceptance case rather than a note.
 
 ## The shape of the setting
 
-One algorithm for the whole mixer -- a `ConsoleMode` on the project -- and a
-boolean per strip. Off is the default and is bit-identical to today, which is
-what makes the null test meaningful rather than approximate.
+One algorithm for the whole mixer and a boolean per **track**. Off is the
+default and is bit-identical to today, which is what makes the null test
+meaningful rather than approximate.
+
+**A track's switch, and only a track's.** Adam, 2026-09-09: *"the summing
+thing for now is tracks-only."* A sequencer channel briefly had one too and it
+was removed: the console this models puts its Channel stage on a mixer strip,
+and mooloop's mixer strip is a track (`docs/TERMINOLOGY.md`). Several channels
+on one track reach it linearly and the track encodes their sum, which is what
+a desk does with a group.
 
 ## The thing to decide first, because it contradicts a standing rule
 

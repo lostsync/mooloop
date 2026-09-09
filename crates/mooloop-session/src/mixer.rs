@@ -34,12 +34,12 @@ impl Session {
         })
     }
 
-    /// Flips whether a bus's *output* is console-encoded.
+    /// Flips whether a track's *output* is analog-summed.
     ///
     /// Refused on the master, which feeds nothing: encoding there would put
     /// the mix into a sum nothing decodes. Nesting otherwise needs no special
-    /// case -- a console-on bus is a producer like any other and whatever it
-    /// feeds decodes it.
+    /// case -- a console-on track is a producer like any other and whatever
+    /// it feeds decodes it.
     pub fn toggle_bus_console(&mut self, bus: i32) -> Option<EngineCommand> {
         let index = usize::try_from(bus).ok()?;
         if index == mooloop_core::MASTER_BUS as usize {
@@ -47,8 +47,8 @@ impl Session {
         }
         let setup = self.buses.get_mut(index)?;
         setup.bus.console = !setup.bus.console;
-        Some(EngineCommand::SetStripConsole {
-            target: EffectTarget::Bus(index as u8),
+        Some(EngineCommand::SetTrackConsole {
+            bus: index as u8,
             enabled: setup.bus.console,
         })
     }

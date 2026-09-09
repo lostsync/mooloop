@@ -10,7 +10,7 @@ use crate::project::ProjectEdit;
 use mooloop_core::{
     chain_latency, compile_audio_graph, compile_bus_graph, compile_latency, CompiledAudioGraph,
     CompiledLatency, DeviceKind, EffectTarget, EngineCommand, OutletDescriptor, PublishesOutlets,
-    clamp_bus, SliceMap, MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
+    SliceMap, MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
 };
 use mooloop_dsp::{IntegerDelay, SampleData, StereoBus, MAX_BLOCK_SIZE};
 use crate::session::Session;
@@ -250,25 +250,20 @@ impl Session {
         self.compensation_sent = plan;
     }
 
-    /// Which buses need a second input accumulator: the ones something
-    /// console-encoded actually reaches.
+    /// Which tracks need a second input accumulator: the ones something
+    /// analog-summed actually reaches.
     ///
     /// Derived rather than tracked, for the reason [`Self::latency_plan`]
-    /// gives. Four different edits change the answer -- switching a strip's
-    /// console on or off, re-routing a channel to another bus, re-routing a
-    /// bus, and loading a project -- so a flag each of them had to remember
-    /// to set is a list that grows silently.
+    /// gives. Three different edits change the answer -- switching a track's
+    /// analog sum on or off, re-routing a track, and loading a project -- so
+    /// a flag each of them had to remember to set is a list that grows
+    /// silently.
     ///
-    /// The master is included like any other bus: it is the summing point a
-    /// default project already has, which is what lets two channels glue with
-    /// no bus created and nothing placed in a chain.
+    /// The master is included like any other track: it is the summing point a
+    /// default project already has, which is what lets two tracks glue with
+    /// nothing created and nothing placed in a chain.
     pub fn console_plan(&self) -> [bool; MAX_BUSES] {
         let mut wanted = [false; MAX_BUSES];
-        for channel in self.channels.iter().take(MAX_CHANNELS) {
-            if channel.console {
-                wanted[clamp_bus(channel.bus) as usize] = true;
-            }
-        }
         let graph = compile_bus_graph(&self.buses).unwrap_or_default();
         for (index, setup) in self.buses.iter().enumerate().take(MAX_BUSES).skip(1) {
             if setup.bus.console {

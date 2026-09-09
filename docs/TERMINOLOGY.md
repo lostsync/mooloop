@@ -83,6 +83,12 @@ channel keeps its own track**, its fader and its sends. An earlier draft of
 `docs/plans/console/` had grouping *create* a track and its members *leave*
 the mixer — that is a spreadsheet's idea of a console and it is wrong.
 
+**Analog sum** is a track's switch, not a channel's, for the same reason the
+two words are separate: the console being modelled puts its Channel stage on a
+mixer strip, and a mixer strip here is a track. Several channels on one track
+reach it linearly and the track encodes their sum. Adam, 2026-09-09: *"the
+summing thing for now is tracks-only."*
+
 **Strip** means the vertical run of controls a track draws — preamp, EQ,
 compressor, sends, fader. It is a face, not an object. See
 `docs/plans/console/THE-STRIP.md`.

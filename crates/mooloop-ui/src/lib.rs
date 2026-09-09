@@ -2123,7 +2123,6 @@ impl UiState {
                 pan: channel.pan,
                 selected: index == self.session.selected,
                 bus: channel.bus as i32,
-                console: channel.console,
                 steps: ModelRc::from(self.step_models[index].clone()),
             })
             .collect();
@@ -2166,7 +2165,6 @@ impl UiState {
                 row.volume_db = linear_to_db(ch.volume);
                 row.pan = ch.pan;
                 row.bus = ch.bus as i32;
-                row.console = ch.console;
                 row.name = ch.name.as_str().into();
                 self.rows.set_row_data(i, row);
             }
@@ -3845,7 +3843,6 @@ impl AppUi {
             pan: first.pan,
             selected: true,
             bus: first.bus as i32,
-            console: first.console,
             steps: ModelRc::from(step_model.clone()),
         };
         let rows_model = Rc::new(VecModel::from(vec![row]));
@@ -6295,7 +6292,6 @@ impl AppUi {
                     pan: ch.pan,
                     selected: true,
                     bus: ch.bus as i32,
-                    console: ch.console,
                     steps: ModelRc::from(model.clone()),
                 };
                 st.rows.push(row);
@@ -6656,27 +6652,10 @@ impl AppUi {
             });
         }
 
-        // The console switch on both kinds of strip. The switch itself is all
-        // that travels; the buffer its encoded output lands in is reconciled
-        // by `sync_console_sums` on the next pump tick, which is why neither
-        // of these has to know anything about which buses need one.
-        {
-            let tx = cmd_tx.clone();
-            let weak = window.as_weak();
-            let st = state.clone();
-            window.on_channel_console_toggled(move |channel| {
-                let mut guard = st.borrow_mut();
-                let Some(command) = guard.session.toggle_channel_console(channel) else {
-                    return;
-                };
-                guard.session.dirty = true;
-                guard.sync_row_flags();
-                if let Some(w) = weak.upgrade() {
-                    guard.update_document_title(&w);
-                }
-                let _ = tx.send(command);
-            });
-        }
+        // The analog-sum switch. The switch itself is all that travels; the
+        // buffer its encoded output lands in is reconciled by
+        // `sync_console_sums` on the next pump tick, which is why this does
+        // not have to know which tracks need one.
         {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();

@@ -166,7 +166,9 @@ Alphabetical by model name, then by harness.
   half of the obvious idea, and the protocol for measuring the plugins those
   numbers should have come from -- whose first version priced hosting a plugin
   against writing a JUCE host and reached for rendered WAVs, when Adam knew it
-  was a pip install and a for-loop.
+  was a pip install and a for-loop, and then taking the analog-sum switch back
+  off the channels, because a console puts its Channel stage on a mixer strip
+  and mooloop's mixer strip is a track.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

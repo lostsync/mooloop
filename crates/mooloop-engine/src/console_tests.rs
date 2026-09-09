@@ -71,17 +71,35 @@ fn peak_of(samples: &[f32]) -> f32 {
     samples.iter().fold(0.0f32, |p, s| p.max(s.abs()))
 }
 
-/// Two sustained notes a fifth apart, so the mix has a waveform rather than a
-/// transient and the summing law has something to act on for two seconds.
-fn two_channel_project(console: [bool; 2]) -> Project {
+/// Two sustained notes a fifth apart, each on its own **track**, both tracks
+/// feeding the master.
+///
+/// One channel per track is what makes this a test of analog sum rather than
+/// of routing: analog sum is a track's switch and only a track's, so the two
+/// signals have to reach the master as two tracks to interact at all. Adam,
+/// 2026-09-09: *"the summing thing for now is tracks-only."*
+fn two_track_project(console: [bool; 2]) -> Project {
     let mut low = one_note_channel(DeviceKind::PolySynth, 40);
     let mut high = one_note_channel(DeviceKind::PolySynth, 47);
-    low.setup.channel.console = console[0];
-    high.setup.channel.console = console[1];
-    Project {
+    low.setup.channel.bus = 1;
+    high.setup.channel.bus = 2;
+    let mut project = Project {
         channels: vec![low, high],
         ..Project::default()
+    };
+    project.buses[1].bus.console = console[0];
+    project.buses[2].bus.console = console[1];
+    project
+}
+
+/// The same pair muted individually, so all three renders walk the same
+/// graph -- the trick `gain_structure_tests::pad_and_drums` uses.
+fn two_track_project_muted(console: [bool; 2], muted: [bool; 2]) -> Project {
+    let mut project = two_track_project(console);
+    for (channel, muted) in project.channels.iter_mut().zip(muted) {
+        channel.setup.channel.muted = muted;
     }
+    project
 }
 
 /// **The claim the whole design rests on.** A strip on its own is not
@@ -93,10 +111,10 @@ fn two_channel_project(console: [bool; 2]) -> Project {
 /// has to show up here.
 #[test]
 fn one_console_strip_alone_nulls_against_console_off() {
-    let mut on = two_channel_project([true, false]);
-    on.channels.truncate(1);
-    let mut off = two_channel_project([false, false]);
-    off.channels.truncate(1);
+    // The second track silenced by its channel's mute rather than removed,
+    // so both renders walk the same graph and only the switch differs.
+    let on = two_track_project_muted([true, false], [false, true]);
+    let off = two_track_project_muted([false, false], [false, true]);
 
     let (on_l, on_r) = render_master(&on, 2.0);
     let (off_l, off_r) = render_master(&off, 2.0);
@@ -116,8 +134,8 @@ fn one_console_strip_alone_nulls_against_console_off() {
 /// sum. If this ever passes at 0.0 the feature has quietly become a no-op.
 #[test]
 fn two_console_strips_are_not_the_linear_sum() {
-    let (on_l, _) = render_master(&two_channel_project([true, true]), 2.0);
-    let (off_l, _) = render_master(&two_channel_project([false, false]), 2.0);
+    let (on_l, _) = render_master(&two_track_project([true, true]), 2.0);
+    let (off_l, _) = render_master(&two_track_project([false, false]), 2.0);
 
     let peak = peak_of(&off_l);
     let difference = worst_difference(&on_l, &off_l);
@@ -146,20 +164,25 @@ fn two_console_strips_are_not_the_linear_sum() {
 /// whose switch is *off* through an `asin` it never opted into.
 #[test]
 fn the_linear_group_and_the_console_group_superpose() {
-    // Three sustained notes. The first two are console-encoded and interact;
-    // the third is linear and must arrive untouched.
+    // Three sustained notes on three tracks. The first two tracks are
+    // analog-summed and interact; the third is linear and must arrive
+    // untouched.
     let project = |console: [bool; 3], muted: [bool; 3]| {
         let mut channels = Vec::new();
         for (index, pitch) in [40u8, 47, 52].into_iter().enumerate() {
             let mut channel = one_note_channel(DeviceKind::PolySynth, pitch);
-            channel.setup.channel.console = console[index];
+            channel.setup.channel.bus = index as u8 + 1;
             channel.setup.channel.muted = muted[index];
             channels.push(channel);
         }
-        Project {
+        let mut project = Project {
             channels,
             ..Project::default()
+        };
+        for (index, on) in console.into_iter().enumerate() {
+            project.buses[index + 1].bus.console = on;
         }
+        project
     };
     let consoles = [true, true, false];
 
@@ -205,8 +228,8 @@ fn the_linear_group_and_the_console_group_superpose() {
 /// Console summing is a property of strips that opted in *together*.
 #[test]
 fn one_console_strip_among_linear_ones_is_still_transparent() {
-    let (mixed_l, mixed_r) = render_master(&two_channel_project([true, false]), 2.0);
-    let (linear_l, linear_r) = render_master(&two_channel_project([false, false]), 2.0);
+    let (mixed_l, mixed_r) = render_master(&two_track_project([true, false]), 2.0);
+    let (linear_l, linear_r) = render_master(&two_track_project([false, false]), 2.0);
     let peak = peak_of(&linear_l);
     let error = worst_difference(&mixed_l, &linear_l).max(worst_difference(&mixed_r, &linear_r));
     println!("one of two switched on: {error:.3e} against a {peak:.3} peak");
@@ -221,14 +244,10 @@ fn one_console_strip_among_linear_ones_is_still_transparent() {
 /// `gain_structure_tests.rs` stand unchanged.
 #[test]
 fn console_off_is_the_default_and_changes_nothing() {
-    let project = two_channel_project([false, false]);
+    let project = two_track_project([false, false]);
     assert!(
-        project.channels.iter().all(|c| !c.setup.channel.console),
-        "a channel came into existence with console on"
-    );
-    assert!(
-        project.buses.iter().all(|b| !b.bus.console),
-        "a bus came into existence with console on"
+        Project::default().buses.iter().all(|b| !b.bus.console),
+        "a track came into existence with analog sum on"
     );
     // Two block sizes, because a project with no encoded feed must not have
     // allocated an accumulator that could hold audio across a boundary.
@@ -247,7 +266,7 @@ fn console_off_is_the_default_and_changes_nothing() {
 /// renderer is this path at a different block size.
 #[test]
 fn console_renders_the_same_at_any_block_size() {
-    let project = two_channel_project([true, true]);
+    let project = two_track_project([true, true]);
     let (reference_l, reference_r) = render_master_in_blocks(&project, 1.0, 1024);
     for block in [1, 17, 64, 512, 2048] {
         let (l, r) = render_master_in_blocks(&project, 1.0, block);
@@ -274,13 +293,13 @@ fn the_bus_fader_is_volume_and_the_channel_faders_are_drive() {
         l.into_iter().map(|s| s * gain).collect::<Vec<_>>()
     };
 
-    let reference = two_channel_project([true, true]);
+    let reference = two_track_project([true, true]);
     let (reference_l, _) = render_master(&reference, 2.0);
     let peak = peak_of(&reference_l);
 
     // Half on the master fader: the same waveform, half the size. The decode
     // has already happened by the time the fader is reached.
-    let mut master_down = two_channel_project([true, true]);
+    let mut master_down = two_track_project([true, true]);
     master_down.buses[0].bus.volume = 0.5;
     let (master_down_l, _) = render_master(&master_down, 2.0);
     let volume_error = worst_difference(&master_down_l, &scaled(&reference, 0.5));
@@ -292,7 +311,7 @@ fn the_bus_fader_is_volume_and_the_channel_faders_are_drive() {
 
     // Half on both channel faders: *not* the same waveform, because they
     // arrive at the decode smaller and the summing law does less to them.
-    let mut channels_down = two_channel_project([true, true]);
+    let mut channels_down = two_track_project([true, true]);
     for channel in &mut channels_down.channels {
         channel.setup.channel.volume = 0.5;
     }
@@ -314,19 +333,20 @@ fn the_bus_fader_is_volume_and_the_channel_faders_are_drive() {
 /// special case. This is what makes step 04's groups free.
 #[test]
 fn a_console_bus_nests_inside_another_summing_point() {
-    let group_project = |bus_console: bool| {
-        let mut project = two_channel_project([true, true]);
-        for channel in &mut project.channels {
-            channel.setup.channel.bus = 1;
-        }
-        project.buses[1].bus.console = bus_console;
+    // Two analog-summed tracks into a third, and that third into the master.
+    let group_project = |group_console: bool| {
+        let mut project = two_track_project([true, true]);
+        project.buses[1].bus.output = 3;
+        project.buses[2].bus.output = 3;
+        project.buses[3].bus.console = group_console;
         project
     };
 
-    // A group whose own output is linear, versus one that is console-encoded
-    // into the master. The group is alone at the master, so the encode and
-    // the master's decode must cancel exactly -- the same null as a lone
-    // channel, one level up.
+    // A group track whose own output is linear, versus one that is
+    // analog-summed into the master. The group is alone at the master, so its
+    // encode and the master's decode must cancel exactly -- the same null as
+    // a lone track, one level up, and with the two tracks *inside* the group
+    // still interacting.
     let (linear_l, _) = render_master(&group_project(false), 2.0);
     let (encoded_l, _) = render_master(&group_project(true), 2.0);
     let peak = peak_of(&linear_l);

@@ -232,15 +232,19 @@ pub enum EngineCommand {
         from: u8,
         to: u8,
     },
-    /// Switch one strip's output between console-encoded and linear.
+    /// Switch one track's output between console-encoded and linear.
+    ///
+    /// Names a track rather than an `EffectTarget`, because a sequencer
+    /// channel does not have this: the console being modelled puts its
+    /// Channel stage on a mixer strip, and mooloop's mixer strip is a track.
     ///
     /// POD and live, like a fader: the switch is a branch in the summing
     /// step, not an allocation. The *buffer* the encoded sum lands in is a
     /// separate structural command, for the reason `SetCompensation` is one.
-    /// A strip switched on before its destination's accumulator arrives sums
+    /// A track switched on before its destination's accumulator arrives sums
     /// linearly for that tick, which is the same either-order tolerance
     /// `SetSamplerStretch` documents.
-    SetStripConsole { target: EffectTarget, enabled: bool },
+    SetTrackConsole { bus: u8, enabled: bool },
     /// Bypass or re-enable one effect slot. While bypassed the slot's
     /// parameter events keep accumulating and flush on re-enable.
     SetEffectBypassed {

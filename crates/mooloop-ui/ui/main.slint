@@ -3,7 +3,7 @@ import { Theme, Motion, StatusHint } from "theme.slint";
 import { GainMath } from "gain.slint";
 export { DisplayPrefs, Motion } from "theme.slint";
 import {
-    AudioOrientation, ConsoleButton, IconButton, InstrumentModule, MiniKnob, ParameterFader, ParameterKnob, PeakMeter,
+    AudioOrientation, IconButton, InstrumentModule, MiniKnob, ParameterFader, ParameterKnob, PeakMeter,
     PickerChip, SegmentedControl, SelectorBank, StereoPeakMeter, ZoomScrollBar,
     ToggleButton, ToolButton, TransportButton, ValueScale, MuteButton as DesignMuteButton, TrimKnob
 } from "controls.slint";
@@ -113,8 +113,6 @@ struct ChannelRow {
     selected: bool,
     // Mixer bus this channel feeds; 0 is the master.
     bus: int,
-    // Whether this channel's output is console-encoded into that bus.
-    console: bool,
     steps: [StepCell],
 }
 
@@ -811,8 +809,6 @@ export component MainWindow inherits Window {
     callback channel-volume-changed(int, float);
     callback channel-pan-changed(int, float);
     callback channel-bus-changed(int, int); // channel, bus
-    // Flip whether this channel sums into its bus through the console curve.
-    callback channel-console-toggled(int);
     callback add-channel-clicked(int); // 0=Sampler, 1=Drum, 2=Mono, 3=Poly
     callback remove-channel-clicked();
     // A channel was dragged from one row to another. Both indices, because a
@@ -2815,24 +2811,6 @@ export component MainWindow inherits Window {
                                             value: row.bus;
                                             tooltip: "Mixer bus for this channel";
                                             picked(b) => { root.channel-bus-changed(ch, b); }
-                                        }
-
-                                        // Beside the destination, because it
-                                        // is a property of how this channel
-                                        // reaches it rather than a separate
-                                        // idea. A lone channel's mixer strip
-                                        // *is* the channel, which is the
-                                        // decision `docs/plans/console/` rests
-                                        // on -- so its console switch lives
-                                        // here rather than waiting for a strip
-                                        // in the mixer to appear.
-                                        ConsoleButton {
-                                            on: row.console;
-                                            tooltip: "Analog sum";
-                                            hint: "Sum this channel into its bus through the analog "
-                                                + "summing curve, together with everything else feeding "
-                                                + "that bus with this on. Alone it changes nothing.";
-                                            toggled(v) => { root.channel-console-toggled(ch); }
                                         }
 
                                         // Beat grouping remains visible at any pattern length.

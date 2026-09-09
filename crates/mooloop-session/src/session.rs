@@ -485,7 +485,6 @@ impl Session {
                             volume: channel.volume,
                             pan: channel.pan,
                             bus: channel.bus,
-                            console: channel.console,
                         },
                         source,
                         effects: channel.effects.clone(),
@@ -1226,7 +1225,6 @@ impl Session {
                     next_device_id: setup.next_device_id,
                     modulation: setup.modulation,
                     bus: setup.channel.bus,
-                    console: setup.channel.console,
                 }
             })
             .collect::<Vec<_>>();

@@ -184,17 +184,22 @@ is written up in `THE-STRIP.md`.
 
 ### Where the controls went
 
-A `ConsoleButton` at the foot of the mixer strip, and on a channel's rack row
-after the destination picker, which is the same position a row that tall can
-offer.
+A `ConsoleButton` at the foot of the mixer strip, set apart from mute, where
+Adam's mockup puts it.
 
-A channel's switch is on the rack row rather than in the mixer because **the
-mixer does not draw a track for it yet** -- that is step 04.
+**A channel briefly had one too, and it was removed the same day.** Adam:
+*"the summing thing for now is tracks-only."* That is the right reading of the
+model this is after -- the console puts its Channel stage on a mixer strip,
+and mooloop's mixer strip is a track -- and it resolves the discomfort that
+had already been noted here without its cause: the switch had gone on a
+channel's *rack row*, which is the instrument's room rather than the console's,
+because the mixer draws no channel tracks for it to live on.
 
-This was the symptom that led to the plan's decisions being rewritten on
-2026-09-09, and it was noticed before the cause: the rack is the instrument's
-room, the mixer is the console's, and analog sum belongs in the console's.
-It moves when step 04 lands. It draws the curve rather than
+Several channels on one track now reach it linearly and the track encodes
+their sum, which is what a desk does with a group. The engine tests were
+rewritten around tracks and every measured number came back identical, which
+is the useful confirmation: the mechanism did not change, only where the
+switch lives. It draws the curve rather than
 wearing a word: a straight line when off, a sine when on, which is
 `reference/ADAM.md`'s "controls should communicate behaviour visually" and its
 explicit dislike of tiny low-contrast labels.

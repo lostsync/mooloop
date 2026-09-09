@@ -64,7 +64,6 @@ fn channels() -> ModelRc<ChannelRow> {
         pan: 0.0,
         selected: true,
         bus: 0,
-        console: false,
         steps: ModelRc::from(Rc::new(VecModel::from(vec![
             StepCell {
                 active: false,

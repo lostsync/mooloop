@@ -58,12 +58,18 @@ pub struct MixerBus {
     /// Destination bus index. Any other bus is legal when it does not close a
     /// cycle; the master's value is unused.
     pub output: u8,
-    /// Whether this bus's *output* is console-encoded, exactly as a channel's
-    /// can be. Nesting needs no special case: a console-on bus encodes at its
-    /// own output and whatever it feeds decodes it.
+    /// Whether this track's *output* is console-encoded, so the summing point
+    /// it reaches decodes it together with everything else that opted in.
     ///
-    /// Meaningless on the master, which feeds nothing, and ignored there.
-    /// Defaulted on load; `false` reproduces today exactly.
+    /// **A track's switch, and only a track's.** A sequencer channel has no
+    /// analog sum of its own: the console this models puts its Channel stage
+    /// on a mixer strip, and mooloop's mixer strip is a track. Adam,
+    /// 2026-09-09: *"the summing thing for now is tracks-only."*
+    ///
+    /// Nesting needs no special case: a console-on track encodes at its own
+    /// output and whatever it feeds decodes it. Meaningless on the master,
+    /// which feeds nothing, and ignored there. Defaulted on load; `false`
+    /// reproduces a linear mixer exactly.
     #[serde(default)]
     pub console: bool,
 }
