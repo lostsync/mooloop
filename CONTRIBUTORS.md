@@ -145,7 +145,10 @@ Alphabetical by model name, then by harness.
   been failing CI for two days while a bare `cargo clippy` reported it green,
   and the console plan, which is what four items on one morning's list turn
   into once the policy `MIXER_PLAN.md` was missing is written down -- that a
-  mixer strip is created by a musical act rather than an administrative one.
+  mixer strip is created by a musical act rather than an administrative one --
+  and its first step, the channel reorder that could not be composed from a
+  removal and an insertion, which found six things the session had been
+  mis-keying through every channel edit there has ever been.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

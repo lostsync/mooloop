@@ -772,6 +772,63 @@ impl Session {
         }
     }
 
+    /// Follow a channel edit through everything on *this* side that names a
+    /// channel by position.
+    ///
+    /// `Project::rescope_after` covers the durable half -- routes, lanes and
+    /// Aux In subscriptions, all of which are saved with the song. This is
+    /// the session half, which is not saved and so was never in that walk:
+    /// six things here are keyed by a channel index, or by an `EffectTarget`
+    /// holding one.
+    ///
+    /// It is not a bug the reorder introduced. An insert or a delete moves
+    /// every channel past it too, and has silently mis-keyed all six since
+    /// they were written; the reorder is just the first edit that makes it
+    /// visible, because it is the first one a user performs *while looking
+    /// at* the device the labels belong to.
+    ///
+    /// [`Self::effect_target`] is deliberately not here: `replace_project`
+    /// re-points it at the project's own selected channel on every install,
+    /// and the edit sets that to wherever the moved channel landed.
+    pub fn rescope_after(&mut self, edit: mooloop_core::ChannelEdit) {
+        fn moved(edit: mooloop_core::ChannelEdit, target: EffectTarget) -> Option<EffectTarget> {
+            match target {
+                EffectTarget::Channel(channel) => {
+                    edit.channel(channel).map(EffectTarget::Channel)
+                }
+                // A bus exists independently of which channels feed it, and
+                // is untouched for the same reason `ChannelEdit::address`
+                // leaves a bus scope alone.
+                EffectTarget::Bus(_) => Some(target),
+            }
+        }
+
+        self.selected_device = self
+            .selected_device
+            .and_then(|(target, device)| Some((moved(edit, target)?, device)));
+        self.selected_source = self.selected_source.and_then(|target| moved(edit, target));
+        self.automation_target
+            .set(self.automation_target.get().and_then(|addr| edit.address(addr)));
+        self.pending_preset_save = match self.pending_preset_save {
+            Some(PresetSaveTarget::Effect { target, device }) => {
+                moved(edit, target).map(|target| PresetSaveTarget::Effect { target, device })
+            }
+            other => other,
+        };
+        self.effect_preset_names = self
+            .effect_preset_names
+            .drain()
+            .filter_map(|((target, device), name)| {
+                Some(((moved(edit, target)?, device), name))
+            })
+            .collect();
+        self.source_preset_names = self
+            .source_preset_names
+            .drain()
+            .filter_map(|(channel, name)| Some((edit.channel(channel)?, name)))
+            .collect();
+    }
+
     /// Let go of `device` everywhere on this side that could still be naming
     /// it: the channel's routes, every lane in every pattern, the lane the
     /// editor is showing, a save dialog left open on it, and the preset label

@@ -593,6 +593,15 @@ pub fn drop_lanes_for_device(
 pub enum ChannelEdit {
     Removed(u8),
     Inserted(u8),
+    /// The channel at `from` was lifted out and put back down at `to`,
+    /// carrying everything that named it.
+    ///
+    /// **Not composable from [`Self::Removed`] plus [`Self::Inserted`]**, and
+    /// that is the whole reason it exists: `Removed` drops the moved
+    /// channel's own lanes and routes by design, so a reorder built from the
+    /// pair would arrive at the right seat with nothing in it. This is the
+    /// only variant that never returns `None` -- a move loses nobody.
+    Moved { from: u8, to: u8 },
 }
 
 impl ChannelEdit {
@@ -602,6 +611,12 @@ impl ChannelEdit {
             Self::Removed(at) if old == at => None,
             Self::Removed(at) if old > at => Some(old - 1),
             Self::Inserted(at) if old >= at => old.checked_add(1),
+            // Remove-then-insert renumbering, which is what the `Vec` does:
+            // the mover lands on `to`, everything it passed shifts one seat
+            // the other way, and everything outside the span is untouched.
+            Self::Moved { from, to } if old == from => Some(to),
+            Self::Moved { from, to } if from < to && old > from && old <= to => Some(old - 1),
+            Self::Moved { from, to } if from > to && old >= to && old < from => Some(old + 1),
             _ => Some(old),
         }
     }
@@ -662,6 +677,38 @@ mod tests {
     }
 
     const SCOPE: EffectTarget = EffectTarget::Channel(2);
+
+    /// A move is remove-then-insert renumbering, and the mover keeps
+    /// everything that named it -- which is what makes it a third variant
+    /// rather than a pair of the other two.
+    #[test]
+    fn a_moved_channel_renumbers_everyone_it_passed_and_drops_nobody() {
+        let forward = ChannelEdit::Moved { from: 1, to: 3 };
+        // [0 1 2 3 4] -> [0 2 3 1 4]
+        let seats: Vec<Option<u8>> = (0..5).map(|old| forward.channel(old)).collect();
+        assert_eq!(seats, [Some(0), Some(3), Some(1), Some(2), Some(4)]);
+
+        let backward = ChannelEdit::Moved { from: 3, to: 1 };
+        // [0 1 2 3 4] -> [0 3 1 2 4]
+        let seats: Vec<Option<u8>> = (0..5).map(|old| backward.channel(old)).collect();
+        assert_eq!(seats, [Some(0), Some(2), Some(3), Some(1), Some(4)]);
+
+        // Nobody is ever dropped, at any index, in either direction. This is
+        // the property `Removed` deliberately does not have, and the reason
+        // a reorder cannot be built from `Removed` + `Inserted`.
+        for from in 0..8u8 {
+            for to in 0..8u8 {
+                let edit = ChannelEdit::Moved { from, to };
+                assert!((0..8u8).all(|old| edit.channel(old).is_some()));
+            }
+        }
+
+        // A bus scope is untouched by a move for the same reason it is
+        // untouched by a removal: a bus exists independently of which
+        // channels feed it.
+        let bus = ParamAddr::strip(EffectTarget::Bus(2), crate::STRIP_PARAM_PAN);
+        assert_eq!(forward.address(bus), Some(bus));
+    }
 
     #[test]
     fn a_move_carries_the_identity_with_the_device() {

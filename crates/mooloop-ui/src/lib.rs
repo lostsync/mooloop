@@ -30,7 +30,7 @@ use mooloop_core::log::Level;
 use mooloop_core::{log_debug, log_error, log_info, log_warn};
 use mooloop_core::{
     snap_bars_to_power_of_two,
-    BufferDuration, BufferEvent, BusSetup, ENV_MAX_SECONDS, ENV_MIN_SECONDS,
+    BufferDuration, BufferEvent, BusSetup, ChannelEdit, ENV_MAX_SECONDS, ENV_MIN_SECONDS,
     DeviceKind, DrumMode, DrumSynthParams, EffectKind,
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, FilterModel,
     GeneratorParams, GlideMode, HatCharacter,
@@ -486,6 +486,19 @@ fn queue_project_edit(
     after: ProjectSnapshot,
     status: &'static str,
 ) -> bool {
+    queue_structural_edit(tx, before, after, status, None)
+}
+
+/// [`queue_project_edit`] for an edit that moved the channel list, carrying
+/// the edit so the pump can renumber the session state the snapshot does not
+/// contain. See `ProjectEdit::channel_edit`.
+fn queue_structural_edit(
+    tx: &ProjectEditSender,
+    before: ProjectSnapshot,
+    after: ProjectSnapshot,
+    status: &'static str,
+    channel_edit: Option<ChannelEdit>,
+) -> bool {
     let entry = HistoryEntry {
         before,
         after: after.clone(),
@@ -497,6 +510,7 @@ fn queue_project_edit(
         samples: after.samples,
         status: status.into(),
         history: Some((HistoryMove::Record, entry)),
+        channel_edit,
     })
 }
 
@@ -520,6 +534,9 @@ fn queue_history_target(
         samples: snapshot.samples,
         status,
         history: Some((movement, entry)),
+        // An undo restores a whole document rather than applying an edit to
+        // one, so there is no edit to follow.
+        channel_edit: None,
     })
 }
 
@@ -669,7 +686,13 @@ fn queue_channel_insert(
     };
     samples.insert(index, clipboard.sample);
     project.selected_channel = index as u8;
-    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
+    queue_structural_edit(
+        tx,
+        before,
+        ProjectSnapshot { project, samples },
+        status,
+        Some(ChannelEdit::Inserted(index as u8)),
+    )
 }
 
 fn queue_channel_delete(
@@ -696,7 +719,53 @@ fn queue_channel_delete(
     }
     samples.remove(index);
     project.selected_channel = index.min(project.channels.len() - 1) as u8;
-    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
+    queue_structural_edit(
+        tx,
+        before,
+        ProjectSnapshot { project, samples },
+        status,
+        Some(ChannelEdit::Removed(index as u8)),
+    )
+}
+
+/// Move the channel at `from` to `to`, undoably.
+///
+/// The third channel edit, built on the same snapshot path as the two above
+/// rather than on an incremental engine command, and the reason is that those
+/// two do not have one either: `install_project_in_ui` rebuilds the whole
+/// `RenderState`. A move through the same door is consistent with a paste
+/// rather than being a special case, and an incremental rotate would have to
+/// rotate `EngineHandle`'s sample and slice slots with the strips or hand the
+/// moved channel its neighbour's audio. See
+/// `docs/plans/console/01-a-channel-can-be-moved.md`.
+fn queue_channel_move(
+    tx: &ProjectEditSender,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    from: usize,
+    to: usize,
+    status: &'static str,
+) -> bool {
+    let before = {
+        let state = state.borrow();
+        project_snapshot(&state, window)
+    };
+    let mut project = before.project.clone();
+    let mut samples = before.samples.clone();
+    // The song renumbers every route, lane and Aux In subscription that named
+    // a channel the move passed, and carries the mover's own with it.
+    let Some(edit) = project.move_channel(from, to) else {
+        return false;
+    };
+    // The sample sidecar is parallel to `project.channels` and hand
+    // maintained, so it has to make the same move or every sampler between
+    // the two seats plays the wrong file.
+    if from < samples.len() && to < samples.len() {
+        let sample = samples.remove(from);
+        samples.insert(to, sample);
+    }
+    project.selected_channel = to as u8;
+    queue_structural_edit(tx, before, ProjectSnapshot { project, samples }, status, Some(edit))
 }
 
 /// Duplicates pattern `index`'s length and every channel's notes for it,
@@ -6252,6 +6321,25 @@ impl AppUi {
                 }
             });
         }
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let tx = project_edit_tx.clone();
+            let weak = window.as_weak();
+            window.on_channel_reorder_requested(move |from, to| {
+                let Some(window) = weak.upgrade() else { return };
+                if commands.borrow().project_edit_pending {
+                    return;
+                }
+                let (Ok(from), Ok(to)) = (usize::try_from(from), usize::try_from(to)) else {
+                    return;
+                };
+                if queue_channel_move(&tx, &st, &window, from, to, "Channel moved") {
+                    commands.borrow_mut().project_edit_pending = true;
+                    sync_command_availability(&window, &commands.borrow());
+                }
+            });
+        }
         // All channel-edit surfaces arrive here.  The menu bar, Ctrl keys,
         // and per-row context menu deliberately know only command ids; they
         // cannot grow separate mutation paths.
@@ -10368,6 +10456,14 @@ impl AppUi {
                                 &edit.samples,
                             ) {
                                 let mut state = st.borrow_mut();
+                                // The song's own addresses were renumbered
+                                // before this was queued; the session's --
+                                // the selected device, the open lane, the
+                                // preset labels -- are not in the snapshot
+                                // and are renumbered here.
+                                if let Some(edit) = edit.channel_edit {
+                                    state.session.rescope_after(edit);
+                                }
                                 state.session.dirty = true;
                                 state.session.revision = state.session.revision.wrapping_add(1);
                                 state.update_document_title(&window);

@@ -24,6 +24,7 @@ import {
     ContainerEnclosure, DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DeviceOutputRail,
     DevicePageButton, DeviceRackMetrics, RackDrag
 } from "device-rack.slint";
+import { ChannelDrag } from "channel-rack.slint";
 import { DrumDeviceFace } from "drum-device.slint";
 import { FilterDeviceFace } from "filter-device.slint";
 import { DriveDeviceFace } from "drive-device.slint";
@@ -810,6 +811,11 @@ export component MainWindow inherits Window {
     callback channel-bus-changed(int, int); // channel, bus
     callback add-channel-clicked(int); // 0=Sampler, 1=Drum, 2=Mono, 3=Poly
     callback remove-channel-clicked();
+    // A channel was dragged from one row to another. Both indices, because a
+    // reorder is a relationship between two seats and the drag knows both --
+    // the alternative, "move the selected channel to here", would make the
+    // gesture depend on a selection that the same press is setting.
+    callback channel-reorder-requested(int, int); // from, to
     // Channel structure is a project edit, so these callbacks carry the
     // clicked row rather than relying on whichever row was selected before a
     // context menu opened.
@@ -2631,7 +2637,50 @@ export component MainWindow inherits Window {
                                     spacing: 2px;
                                     padding: 8px;
 
-                                    for row[ch] in root.channels : HorizontalBox {
+                                    // The row keeps its seat in the layout and its
+                                    // *contents* slide, which is how the device rack
+                                    // does it and is not a stylistic echo: `hot` is
+                                    // answered from `absolute-position`, so the thing
+                                    // that answers it must not be the thing that moves.
+                                    for row[ch] in root.channels : channel-row := Rectangle {
+                                        property <bool> dragging: ChannelDrag.source == ch;
+                                        // Which row the pointer is over, answered by the
+                                        // row itself from its own bounds. One row is hot
+                                        // at a time because the rows tile the rack.
+                                        property <bool> hot: ChannelDrag.active
+                                            && ChannelDrag.pointer-y >= self.absolute-position.y
+                                            && ChannelDrag.pointer-y < self.absolute-position.y + self.height;
+                                        changed hot => { if (self.hot) { ChannelDrag.target = ch; } }
+                                        changed dragging => {
+                                            if (self.dragging) { ChannelDrag.source-height = self.height; }
+                                        }
+                                        // The rows between the grab and the landing slide
+                                        // aside. The gap *is* the drop indicator: it opens
+                                        // exactly one row's pitch, where the dragged row is
+                                        // about to sit, so there is nothing to reconcile
+                                        // between a marker and the result.
+                                        property <length> shift:
+                                            !ChannelDrag.active || ChannelDrag.target < 0 || self.dragging ? 0px
+                                            : (ChannelDrag.source < ChannelDrag.target
+                                                && ch > ChannelDrag.source
+                                                && ch <= ChannelDrag.target) ? -ChannelDrag.source-height
+                                            : (ChannelDrag.target < ChannelDrag.source
+                                                && ch >= ChannelDrag.target
+                                                && ch < ChannelDrag.source) ? ChannelDrag.source-height
+                                            : 0px;
+                                        animate shift { duration: Motion.duration; easing: Motion.curve; }
+                                        // No `z` here to lift the dragged row over the ones
+                                        // it passes: Slint 1.17 requires `z` to be a number
+                                        // *literal*, so it cannot be conditional. The device
+                                        // rack has the same constraint and answers it the
+                                        // same way -- the held row is marked out by its own
+                                        // chrome (the plate's shadow below) rather than by
+                                        // stacking order, and the gap that opens under it is
+                                        // the drop indicator either way.
+
+                                        HorizontalBox {
+                                        y: channel-row.shift + (channel-row.dragging ? ChannelDrag.dy : 0px);
+                                        opacity: channel-row.dragging ? 0.95 : 1.0;
                                         padding: 2px;
                                         spacing: 6px;
                                         alignment: start;
@@ -2642,6 +2691,11 @@ export component MainWindow inherits Window {
                                             min-height: 24px;
                                             border-radius: Theme.radius-md;
                                             background: row.selected ? Theme.surface-active : Theme.surface;
+                                            // The plate is what the pointer is holding, so it
+                                            // is what says it is being held.
+                                            drop-shadow-blur: channel-row.dragging ? 16px : 0px;
+                                            drop-shadow-color: #00000099;
+                                            drop-shadow-offset-y: channel-row.dragging ? 6px : 0px;
                                             Text {
                                                 text: row.name;
                                                 color: row.selected ? Theme.text : Theme.text-muted;
@@ -2650,14 +2704,44 @@ export component MainWindow inherits Window {
                                                 vertical-alignment: center;
                                                 x: 6px;
                                             }
+                                            // Selects on press and reorders on release, the
+                                            // way the device rack's header handle does. A press
+                                            // that never left its own row is a selection and
+                                            // nothing else: the row under the pointer *is* the
+                                            // answer, so staying put already means "no move"
+                                            // however far the pointer wandered inside it.
                                             TouchArea {
-                                                mouse-cursor: pointer;
+                                                mouse-cursor: move;
                                                 pointer-event(e) => {
                                                     if (e.kind == PointerEventKind.down) {
                                                         root.channel-selected(ch);
                                                         if (e.button == PointerEventButton.right) {
                                                             channel-context-menu.show();
+                                                        } else if (!root.project-edit-pending) {
+                                                            ChannelDrag.source = ch;
+                                                            ChannelDrag.target = ch;
+                                                            ChannelDrag.dy = 0px;
+                                                            // Seeded here as well as in `moved`, so
+                                                            // the rows do not decide who is under
+                                                            // the pointer from the last drag's
+                                                            // position before this one has moved.
+                                                            ChannelDrag.grab-y = self.absolute-position.y + self.mouse-y;
+                                                            ChannelDrag.pointer-y = ChannelDrag.grab-y;
+                                                            ChannelDrag.active = true;
                                                         }
+                                                    }
+                                                    if (e.kind == PointerEventKind.up && ChannelDrag.active) {
+                                                        if (ChannelDrag.target != ch && ChannelDrag.target >= 0) {
+                                                            root.channel-reorder-requested(ch,
+                                                                clamp(ChannelDrag.target, 0, root.channels.length - 1));
+                                                        }
+                                                        ChannelDrag.end();
+                                                    }
+                                                }
+                                                moved => {
+                                                    if (ChannelDrag.active) {
+                                                        ChannelDrag.pointer-y = self.absolute-position.y + self.mouse-y;
+                                                        ChannelDrag.dy = ChannelDrag.pointer-y - ChannelDrag.grab-y;
                                                     }
                                                 }
                                             }
@@ -2864,6 +2948,7 @@ export component MainWindow inherits Window {
                                                         : root.hover-hint == self.hint ? "" : root.hover-hint;
                                                 }
                                             }
+                                        }
                                         }
                                     }
 

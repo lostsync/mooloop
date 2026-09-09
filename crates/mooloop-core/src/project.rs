@@ -877,6 +877,34 @@ impl Project {
         Some(index)
     }
 
+    /// Move the channel at `from` to `to`, carrying everything that named
+    /// it.
+    ///
+    /// The third channel edit, and the one that could not be composed from
+    /// the other two: `remove_channel` drops the departing channel's own
+    /// routes and lanes on purpose, so a reorder built from a removal and an
+    /// insertion would put the channel back with its own automation missing.
+    ///
+    /// `None` when either index is out of range or they are the same, which
+    /// is the drag that landed where it started.
+    pub fn move_channel(&mut self, from: usize, to: usize) -> Option<ChannelEdit> {
+        let count = self.channels.len();
+        if from >= count || to >= count || from == to {
+            return None;
+        }
+        let channel = self.channels.remove(from);
+        self.channels.insert(to, channel);
+        let edit = ChannelEdit::Moved {
+            from: from as u8,
+            to: to as u8,
+        };
+        self.rescope_after(edit);
+        // The selection is one more thing that named a channel. Nothing can
+        // be dropped by a move, so this never has to clamp.
+        self.selected_channel = edit.channel(self.selected_channel).unwrap_or(self.selected_channel);
+        Some(edit)
+    }
+
     /// The audio edges this project's channels compile to, and the order
     /// that satisfies them.
     ///
@@ -1114,6 +1142,53 @@ mod tests {
             assert_eq!(channel.automation[0][0].target, strip(index));
         }
         assert!(project.remove_channel(9).is_none());
+
+        // And a move, which is the edit neither of the two above can
+        // express. Channel 0 also subscribes to channel 3's outlet, so the
+        // one address that names *another* channel rides along too.
+        project.channels[0].setup.source = ChannelSource::AuxIn(Default::default());
+        project.channels[0]
+            .setup
+            .source
+            .aux_in_state_mut()
+            .expect("aux in")
+            .params
+            .source_channel = 3;
+
+        let moved = project.channels[3].setup.channel.name.clone();
+        assert_eq!(
+            project.move_channel(3, 1),
+            Some(ChannelEdit::Moved { from: 3, to: 1 })
+        );
+        assert_eq!(project.channels[1].setup.channel.name, moved);
+        for index in 0..4u8 {
+            let channel = &project.channels[index as usize];
+            assert_eq!(
+                channel.setup.modulation.routes[0].unwrap().destination,
+                strip(index),
+                "route on channel {index} after move"
+            );
+            assert_eq!(channel.automation[0][0].target, strip(index));
+            assert_eq!(channel.automation[0][1].target, bus);
+        }
+        // The subscription followed the channel it named, which is now in
+        // seat 1 -- not seat 3, where a stranger is sitting.
+        assert_eq!(
+            project.channels[0]
+                .setup
+                .source
+                .aux_in_state()
+                .expect("aux in")
+                .params
+                .source_channel,
+            1
+        );
+
+        // A move that lands where it started, or names a seat that is not
+        // there, is not an edit.
+        assert!(project.move_channel(2, 2).is_none());
+        assert!(project.move_channel(0, 9).is_none());
+        assert!(project.move_channel(9, 0).is_none());
     }
 
     #[test]

@@ -371,3 +371,69 @@ fn the_starting_document_round_trips() {
     assert_eq!(reloaded.pattern_lengths, saved.pattern_lengths);
     assert_eq!(Project::default().ppq, reloaded.ppq);
 }
+
+/// The session half of a channel edit, which `Project::rescope_after` cannot
+/// reach because none of it is in the document.
+///
+/// Six things here are keyed by a channel index or by an `EffectTarget`
+/// holding one, and all six were wrong after *any* structural channel edit
+/// until `Session::rescope_after` existed -- an insert and a delete have been
+/// mis-keying them for as long as they have existed. The reorder is only the
+/// first edit that makes it visible, because it is the first one performed
+/// while looking at the device the labels belong to.
+#[test]
+fn the_session_follows_a_channel_move_too() {
+    let mut session = Session::default();
+    session.add_channel(DeviceKind::Sampler);
+    session.add_channel(DeviceKind::Sampler);
+    session.add_channel(DeviceKind::Sampler);
+
+    let third = EffectTarget::Channel(3);
+    let device = DeviceId(7);
+    session.effect_target = third;
+    session.selected_device = Some((third, device));
+    session.selected_source = Some(third);
+    session
+        .automation_target
+        .set(Some(ParamAddr::strip(third, mooloop_core::STRIP_PARAM_VOLUME)));
+    session.set_effect_preset_name(third, device, "Wide Plate");
+    session.set_source_preset_name(3, "Deep Kick");
+    // A bus-scoped label, which must be left exactly where it is: a bus
+    // exists independently of which channels feed it.
+    let bus = EffectTarget::Bus(2);
+    session.set_effect_preset_name(bus, device, "Glue");
+
+    session.rescope_after(mooloop_core::ChannelEdit::Moved { from: 3, to: 0 });
+
+    let first = EffectTarget::Channel(0);
+    assert_eq!(session.selected_device, Some((first, device)));
+    assert_eq!(session.selected_source, Some(first));
+    assert_eq!(
+        session.automation_target.get(),
+        Some(ParamAddr::strip(first, mooloop_core::STRIP_PARAM_VOLUME)),
+        "the open automation lane stayed on the seat rather than the channel"
+    );
+    assert_eq!(
+        session.effect_preset_name(first, device),
+        Some("Wide Plate"),
+        "a rack row's preset label did not follow its channel"
+    );
+    assert_eq!(session.effect_preset_name(third, device), None);
+    assert_eq!(session.source_preset_name(0), Some("Deep Kick"));
+    assert_eq!(session.source_preset_name(3), None);
+    assert_eq!(session.effect_preset_name(bus, device), Some("Glue"));
+
+    // A removal is the same walk with a different answer: what named the
+    // departed channel is dropped rather than moved.
+    session.rescope_after(mooloop_core::ChannelEdit::Removed(0));
+    assert_eq!(session.selected_device, None);
+    assert_eq!(session.selected_source, None);
+    assert_eq!(session.automation_target.get(), None);
+    assert_eq!(session.effect_preset_name(first, device), None);
+    assert_eq!(session.source_preset_name(0), None);
+    assert_eq!(
+        session.effect_preset_name(bus, device),
+        Some("Glue"),
+        "a bus label was dropped by a channel removal"
+    );
+}

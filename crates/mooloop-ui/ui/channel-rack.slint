@@ -1,0 +1,49 @@
+// The channel rack's shared vocabulary.
+//
+// `device-rack.slint` is the same thing for the device rack, and this file
+// exists for the same two reasons: the rack's drag state has to be reachable
+// from two places that do not contain each other, and a test harness has to
+// be able to import it without pulling in the whole of `main.slint`.
+
+// Live state of a channel-rack reorder.
+//
+// The third global of this shape, and deliberately the same shape:
+// `RackDrag` reorders devices along a row and this reorders channels down a
+// column, so it is `RackDrag` with `y` where the `x` is. The two halves sit
+// in different places for the same reason -- the **grab** is the name plate,
+// which knows which channel it is and nothing about the rack's geometry, and
+// the **landing** is worked out by whichever row the pointer is over, which
+// knows its own bounds and nothing about the grab.
+//
+// `absolute-position.y + mouse-y`, never `mouse-y - pressed-y`. That lesson
+// is recorded twice already, in `RackDrag.dx` and in `PaneDrag`: a touch
+// area's `mouse-y` is measured against a ruler the previous frame already
+// slid, so the difference reports each move's increment instead of the
+// travel, and the face twitches and stays put.
+export global ChannelDrag {
+    // Channel index being dragged, or -1.
+    in-out property <int> source: -1;
+    // Channel index the pointer is currently over. Set by the row itself
+    // from its own bounds, so a row that is taller than its neighbours still
+    // counts as its own height.
+    in-out property <int> target: -1;
+    // Pointer travel since the grab, applied to the dragged row's contents.
+    in-out property <length> dy: 0px;
+    // Where the grab started and where the pointer is now, both in window
+    // coordinates -- the frame every row's `absolute-position` is in.
+    in-out property <length> grab-y: 0px;
+    in-out property <length> pointer-y: 0px;
+    // Full pitch of the dragged row, which is the size of the gap the rows
+    // between the grab and the landing open up. Published by the row itself
+    // rather than assumed, for the reason `RackDrag.source-width` gives.
+    in-out property <length> source-height: 0px;
+    in-out property <bool> active: false;
+
+    public function end() {
+        active = false;
+        source = -1;
+        target = -1;
+        dy = 0px;
+    }
+}
+

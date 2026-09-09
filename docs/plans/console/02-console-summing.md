@@ -37,6 +37,43 @@ encoded feed.
 own output; its destination decodes. No special case, and no parallel
 decoders.
 
+## The bus is invisible, and that is the requirement
+
+Adam, 2026-09-09, on how the Airwindows pair is actually used: *"you put a
+'Channel' plugin on the individual tracks, generally last in the chain. that's
+the encode step. then you bus that and whatever else you want to a single buss
+where you have the 'Buss' plugin ... a buss like that would decode on input.
+i think what i was trying to communicate is that i want that buss to be
+invisible."*
+
+So the mechanism is the plugin pair's and the *gesture* is not. There is no
+device to place and no bus to make: the decode happens at whatever summing
+point the encoded strips converge at, and the master is already one. Two
+channels switched to console-on glue with nothing created and nothing
+configured, which is the whole difference from the plugins.
+
+It also composes with step 04 for free. Group some channels and the group's
+strip becomes their decode point, with its own fader as the level.
+
+## Which fader is the drive and which is the volume
+
+This is the part worth being deliberate about, because it is what the ceiling
+above turns into at the controls.
+
+A bus's fader sits **after** its input sum in the block order -- input
+accumulate, then decode, then the insert chain, then the output stage. So:
+
+- **Turning a channel down is less drive.** It arrives at the decode smaller,
+  further from the bound, and the summing law does less to it.
+- **Turning the bus down is volume.** The drive is already decided by the time
+  the fader is reached, so the character does not change.
+
+Which is Adam's own instruction for using it: *"if I want those sources to be
+quieter I need to turn down the mixer busses that have this analog/nonlinear
+summing mode enabled."* Nothing has to be built to make that true -- it falls
+out of where the decode goes -- but it does have to be true, so it is an
+acceptance case rather than a note.
+
 ## The shape of the setting
 
 One algorithm for the whole mixer -- a `ConsoleMode` on the project -- and a
@@ -55,15 +92,27 @@ rather than being decorative -- which is the glue people want it for. But it
 does mean switching it on changes the summing law from honest-and-unbounded to
 bounded-at-every-decode.
 
-**Recommendation: accept it, say so in `GAIN_STRUCTURE.md`, and meter it,**
-since that ceiling *is* the effect. The alternative -- a hidden headroom trim
--- buries a gain, which is the thing this codebase keeps refusing to do.
+**Adam accepted it, 2026-09-09**, and on the product's grounds rather than the
+engine's: *"the goal with the mixer is that, yeah you can do a perfectly clean
+mix on it if you want but you could also drive it and get something nice in
+return."* Console-off stays the clean path and stays the default; console-on
+is a thing you drive. So the bound is not a cost of the feature, it is the
+feature.
+
+It is therefore said out loud in `GAIN_STRUCTURE.md` and metered, rather than
+softened. The alternative -- a hidden headroom trim -- buries a gain, which is
+the thing this codebase keeps refusing to do, and it would have removed the
+one control that makes the drive playable.
 
 ## Acceptance
 
 - Two channels console-on, summing into master, audibly glue and are
-  measurably not the linear sum.
+  measurably not the linear sum -- **with no bus created and nothing placed in
+  a chain**.
 - One channel alone nulls sample-for-sample against console-off.
+- Pulling the destination bus down is level and not character; pulling its
+  feeders down is character. Measurable as well as audible: the bus-fader case
+  scales the output and leaves the ratio between harmonics where it was.
 - A bounce matches a live take.
 
 ## Verification

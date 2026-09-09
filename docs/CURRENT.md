@@ -91,6 +91,13 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   synth, the ML-M1, the v1 poly synth, the ML-P8, or Aux In, which plays
   another channel's published audio outlet — and every rack row exposes mute,
   output volume, and constant-power stereo pan.
+- Channels can be reordered by dragging a rack row's name plate. The rows
+  between the grab and the landing slide aside, and the gap that opens is the
+  drop indicator. Every address in the song that named a channel follows it —
+  automation lanes, modulation routes, an Aux In's subscription — and so does
+  the session's own state: the selected device, the open automation lane, and
+  the preset labels a channel and its rack rows are wearing. The move is one
+  undoable edit.
 - Patterns are created explicitly from a one-pattern project, with up to 256
   addressable pattern IDs and independent logical lengths from 1 to 256 steps.
   Hidden steps survive shortening and re-extending a pattern.

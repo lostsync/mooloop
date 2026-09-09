@@ -144,19 +144,32 @@ duplicated.
   the same answer, and they are recorded together so they are not decided
   separately.
 
-## Open, and Adam's call
+## Settled, 2026-09-09
 
-1. **Order.** The recommendation is 01 -> 02 -> 03 -> 04 -> 05, character
-   before structure. The brief's order is defensible and just means 04 moves
-   up.
-2. **The console ceiling.** `GAIN_STRUCTURE.md` says *"Nothing bounds a sample
-   in the live path"*, and console decode is `asin`, whose domain is +/-1: a
-   decode point therefore **hard-limits at 0 dBFS**. Recommendation: accept
-   it, say so in `GAIN_STRUCTURE.md`, and meter it, since that ceiling *is*
-   the effect. Step 02 states the case in full.
-3. **Console scope.** One algorithm for the whole mixer, a switch per strip,
-   decode at each bus input rather than one global decoder.
-4. **`FOCUS.md`.** This is a new sequence and it displaces or joins step 3
-   (the interface iteration), which still has two open steps. Rewriting
-   `FOCUS.md` is Adam's call and is deliberately not done inside the first
-   branch.
+The four questions this plan opened, and Adam's answers.
+
+1. **Order.** 01 -> 02 -> 03 -> 04 -> 05, as recommended. Character before
+   structure.
+2. **The console ceiling.** Accepted, and the reason is the product's rather
+   than the engine's: *"you can do a perfectly clean mix on it if you want but
+   you could also drive it and get something nice in return."* The bound is
+   the effect. `GAIN_STRUCTURE.md` says so and step 02 meters it.
+3. **Console scope.** Confirmed, with a correction to how it was written down.
+   The Airwindows gesture is a `Channel` plugin last on each track and a
+   `Buss` plugin on the bus they all reach, and *"a buss like that would
+   decode on input"* -- so decode-at-every-bus-input is the right mechanism.
+   What Adam wants that the plugin pair does not give is that **the bus is
+   invisible**: there is no device to place and no bus to create. Master is
+   already a summing point, so switching console on for two channels makes
+   them glue with nothing configured.
+
+   The consequence, which is the useful half: **the channel faders are the
+   drive and the bus fader is the volume.** A bus's fader is already after its
+   input sum in the block order, so turning a bus down is level without
+   changing character, and turning its feeders down is less drive. *"If I want
+   those sources to be quieter I need to turn down the mixer busses that have
+   this analog/nonlinear summing mode enabled."*
+4. **`FOCUS.md`.** Left alone. Adam: *"that document exists because i ignore
+   it. i dont think there is anything in it that can't wait."* So this plan
+   does not appear there, and `docs/plans/README.md` is where its state is
+   recorded.
