@@ -10,12 +10,12 @@
 //! engine pre-allocates pools at startup so these commands only mutate.
 
 use crate::{
-    AutomationPoint, BufferEvent, CompiledBusGraph, DeviceKind, DrumSynthParams, EffectTarget,
+    AutomationPoint, BufferEvent, DeviceKind, DrumSynthParams, EffectTarget,
     LoopRange, MlP8Route, ModRoute, ModSourceId, ModSourceRef, ModulatorParams, MonoSynthParams,
     MlM1Params,
     NoteEvent,
     NoteId,
-    ParamAddr, PlaybackMode, PointId, PolySynthParams, SamplerParams,
+    ParamAddr, PlaybackMode, PointId, PolySynthParams, SamplerParams, SendTap,
 };
 
 /// GUI -> audio. Drained at the top of each process callback.
@@ -92,10 +92,41 @@ pub enum EngineCommand {
     SetBusVolume { bus: u8, volume: f32 },
     /// Set a bus's stereo pan in [-1, 1].
     SetBusPan { bus: u8, pan: f32 },
-    /// Atomically replace bus destinations and the render order compiled for
-    /// them. The audio thread installs this fixed-size value and never reasons
-    /// about editable graph topology.
-    InstallBusGraph { graph: CompiledBusGraph },
+    /// Set a send's level, addressed by its producer and its position in
+    /// that producer's own run of sends.
+    ///
+    /// POD and high-rate, like a fader: the routing a send belongs to is
+    /// structural (`StructuralCommand::SetTrackGraph`, which carries the
+    /// compensation rings a second outgoing edge needs), but its level is
+    /// dragged and must not rebuild a plan on every frame of the drag.
+    ///
+    /// The index is the send's position in the order it was authored in,
+    /// which survives a plan rebuild -- so a drag keeps addressing the same
+    /// send while the graph around it changes.
+    SetSendLevel {
+        producer: EffectTarget,
+        index: u8,
+        level: f32,
+    },
+    /// Switch a send on or off without disturbing the plan.
+    ///
+    /// Separate from a level of zero, and POD rather than structural on
+    /// purpose: a disabled send stays in the graph, so switching it cannot
+    /// re-time the mix and cannot reset another send's ring.
+    SetSendEnabled {
+        producer: EffectTarget,
+        index: u8,
+        enabled: bool,
+    },
+    /// Move a send between the pre-fader and post-fader taps.
+    ///
+    /// POD because it changes no timing: both taps are after the strip's
+    /// chain and a fader declares no latency, so the two arrive together.
+    SetSendTap {
+        producer: EffectTarget,
+        index: u8,
+        tap: SendTap,
+    },
     /// Toggle or set a step. Addresses the pattern bank so edits to
     /// non-playing patterns take effect when selected.
     SetStep {

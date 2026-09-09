@@ -451,6 +451,72 @@ fn track_memory() {
     }
 }
 
+/// What a send costs, which is the figure `docs/CAPACITY_POLICY.md` asks for
+/// before anything reserves for one.
+///
+/// Two numbers matter and they are different in kind. The **floor** is what a
+/// project pays for the feature existing while it uses none of it, and it has
+/// to be zero: a `Vec` that is empty and a scratch that is not allocated. The
+/// **marginal** cost is what one send costs when somebody makes one, and it is
+/// a compensation ring plus a `Smoothed` plus a few bytes of routing.
+///
+/// The three 64 KB scratch buffers are the one lump, and they are per *engine*
+/// rather than per send -- so they land on the first send a project makes and
+/// never again.
+#[test]
+#[ignore = "measures memory; run deliberately"]
+fn send_memory() {
+    use mooloop_core::{AuxSend, MAX_BUSES, MAX_CHANNELS};
+    println!();
+
+    let mut project = idle_sampler_project(1);
+    project.ensure_tracks(4);
+
+    let before = crate::COUNTING.live();
+    let none = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    let floor = crate::COUNTING.live().saturating_sub(before);
+    drop(none);
+
+    project.buses[1].sends.push(AuxSend::new(2));
+    let before = crate::COUNTING.live();
+    let one = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    let with_one = crate::COUNTING.live().saturating_sub(before);
+    drop(one);
+
+    for target in 0..8 {
+        project.buses[1].sends.push(AuxSend::new(2 + (target % 2)));
+    }
+    let before = crate::COUNTING.live();
+    let many = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    let with_nine = crate::COUNTING.live().saturating_sub(before);
+    drop(many);
+
+    println!("  a project with no sends       {:>9.2} MB", floor as f64 / 1048576.0);
+    println!("  ...with one send              {:>9.2} MB", with_one as f64 / 1048576.0);
+    println!("  ...with nine                  {:>9.2} MB", with_nine as f64 / 1048576.0);
+    println!();
+    println!(
+        "  the first send costs          {:>9.1} KB   (three shared scratch buffers, once)",
+        with_one.saturating_sub(floor) as f64 / 1024.0,
+    );
+    println!(
+        "  each one after                {:>9.1} B",
+        with_nine.saturating_sub(with_one) as f64 / 8.0,
+    );
+    println!(
+        "    SendSpec                    {:>9} B",
+        std::mem::size_of::<crate::SendSpec>(),
+    );
+    println!(
+        "    the producer start table    {:>9} B   ({} slots, allocated only when a send exists)",
+        (MAX_CHANNELS + MAX_BUSES + 1) * 4,
+        MAX_CHANNELS + MAX_BUSES + 1,
+    );
+    println!();
+    println!("  Nothing here is dimensioned by a maximum number of sends, because");
+    println!("  there is not one. `docs/CAPACITY_POLICY.md` is why.");
+}
+
 /// What installing a project costs the thread that does it.
 ///
 /// Every `PendingEngineMessage::ProjectEdit` reaches

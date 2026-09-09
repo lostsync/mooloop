@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-09
-- Sessions: 79
+- Sessions: 80
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -171,7 +171,10 @@ Alphabetical by model name, then by harness.
   and mooloop's mixer strip is a track, and then the mixer becoming a list of
   tracks somebody made rather than a fixed bank of seventeen -- which turned up
   a render loop that walked a prefix of a whole-address-space permutation, so a
-  short bank would have dropped tracks silently.
+  short bank would have dropped tracks silently, and then sends -- where the
+  step's own plan turned out to have named the wrong three files, so the
+  change that was scheduled last for forcing a rewrite of the realtime
+  schedule did not touch it.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

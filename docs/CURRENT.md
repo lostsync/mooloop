@@ -571,6 +571,38 @@ land on its own when it starts to matter:
   volume, pan, and mute, and may feed another track. The addressable space is
   the master plus sixteen; strips are materialised per track as a project
   loads rather than preallocated, which `CAPACITY_POLICY.md` measures.
+- **Sends.** A track can route a copy of itself to another track, in addition
+  to its output. The track's face carries a `Send to…` picker that offers the
+  legal targets, and each send it gains draws a row there: the target's name,
+  where it taps, a switch, a remove, and a fader. The sends area draws exactly
+  the sends that exist and scrolls when they outgrow the room — there is no
+  ceiling on how many a track has.
+
+  **A send is a route, not a kind of track.** The track at the far end is an
+  ordinary track that happens to be fed by sends, which is what makes it an
+  effects return; there is no return object and nothing to create. The starter
+  kit opens with one: `Reverb`, fully wet, fed post-fader by `Drums` and
+  `Bass`.
+
+  Two tap points: **post-fader** (the default, so the send follows the track's
+  fader) and **pre-fader** (after the track's devices, before its fader, so it
+  holds its level while the fader moves). Both are after the chain, so they
+  arrive at the same time. Mute silences a track's sends, pre-fader ones
+  included.
+
+  A send is **always linear** — analog sum is what a strip does to its own
+  output, and a send is a feed into another strip's input. A send whose target
+  already leads back would loop and is refused, greyed in the picker with the
+  reason, under exactly the rule the output picker uses. Switching a send off
+  is not the same as turning it down: it keeps its level and stays in the
+  routing, so nothing re-times.
+
+  Send levels are **smoothed**, per sample. They are the first gain at strip
+  level that is: a fader still stamps its value per block.
+- Each send is compensated on its own edge. A producer with a send reaches two
+  summing points, which generally arrive at different times and are owed
+  different delays, so a track feeding a latency-bearing return waits for it
+  on its dry path and stays sample-aligned where the two meet again.
 - Any bus may feed any other. The realtime thread still never sorts a graph:
   `mooloop_core::compile_bus_graph` normalizes and topologically sorts the bank
   off the audio thread (Kahn's algorithm over fixed-size arrays, no allocation)
@@ -581,9 +613,14 @@ land on its own when it starts to matter:
   buffer and no two nodes ever share one, which removes the pooled,
   reference-counted buffer assignment a general graph engine needs.
 - Destinations and their matching render order are one fixed-size compiled
-  value. A routing change installs the whole value atomically, so no block can
-  render edges against a stale order. Short stored banks are padded and invalid
-  individual routes are repaired to the master at this compilation boundary.
+  value, and a track's sends travel with it as one command, so no block can
+  render edges against a stale order or a send whose target the order has not
+  been told about. Short stored banks are padded, invalid individual routes are
+  repaired to the master, and a send naming a track that is gone is dropped, at
+  this compilation boundary.
+- A send orders its target after its source, the same way an output does, and
+  a cycle closed through a send is refused the same way one closed through an
+  output is.
 - **Analog sum.** Any mixer track can be switched to sum into its destination
   through a non-linear encode, decoded at that destination together with
   everything else feeding it that has the switch on. The control is a small

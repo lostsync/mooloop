@@ -259,6 +259,24 @@ before any of them existed still loads:
   and a `console_mode` added later with `#[serde(default)]` is the same no-op
   migration whenever it lands, so a saved field with one legal value would buy
   nothing now. See `docs/plans/console/02-console-summing.md`.
+- **A track's sends are a defaulted list.** `buses[].sends` is `{ target,
+  level, tap, enabled }` per send, where `target` is a track index, `tap` is
+  `post_fader` (the default) or `pre_fader`, and `enabled` defaults to `true`
+  so that a hand-written send without one passes audio rather than silently
+  not. The list defaults to empty, so every manifest written before sends
+  existed loads with none and plays bit-identically.
+
+  **`level` and `enabled` are both stored** because a send turned down and a
+  send switched off are different statements: the disabled one keeps its
+  level and gets it back when it is switched on.
+
+  Repair on load is deliberately not the repair an *output* gets. A send
+  naming a track that is not there is **dropped**, where an output naming one
+  falls back to the master: a producer with nowhere to go must still be heard,
+  and a send with nowhere to go is simply not a send — re-pointing it at the
+  master would put a wet path into the mix at full level. A bank whose sends
+  close a loop has its sends cleared along with its outputs, so the file still
+  opens. See `docs/plans/console/05-sends.md`.
 - **Two effects follow the transport, and both persist a division rather
   than its result.** A delay carries `tempo_sync` and `time_division`, and a
   modulation effect carries `tempo_sync` and `rate_division`; all four
@@ -395,5 +413,8 @@ audio file.
   padded, an out-of-range destination is repaired to the master, and a bank
   whose routing contains a cycle is flattened to everything-to-master so the
   file still opens.
+- **No limit on sends.** Nothing in the format, the plan or the face reserves
+  for a number of them; a track carries as many as it was given.
+  `docs/CAPACITY_POLICY.md` is why.
 
 The loader validates these limits before changing the running document.

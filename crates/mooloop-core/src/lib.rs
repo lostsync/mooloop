@@ -143,10 +143,11 @@ pub use effect::{
 };
 pub use mixer::{
     chain_latency, run_latency, clamp_bus, compile_audio_graph, compile_bus_graph, compile_latency,
-    compile_render_order, default_buses, default_render_order, is_legal_route, sanitize_bank, sanitize_route,
-    would_create_cycle, AudioEdge, AudioOrder, BusSetup, CompiledAudioGraph, CompiledBusGraph,
-    CompiledLatency, EdgeRefusal, EffectTarget, MixerBus, RenderOrder, INSERT_BUSES, MASTER_BUS,
-    MAX_BUSES,
+    compile_render_order, default_buses, default_render_order, is_legal_route, is_legal_send,
+    sanitize_bank, sanitize_route, send_edges,
+    would_create_cycle, AudioEdge, AudioOrder, AuxSend, BusSetup, CompiledAudioGraph, CompiledBusGraph,
+    CompiledLatency, EdgeRefusal, EffectTarget, MixerBus, RenderOrder, SendEdge, SendTap,
+    INSERT_BUSES, MASTER_BUS, MAX_BUSES,
 };
 pub use pattern::{
     ChannelPattern, NoteEvent, NoteId, Pattern, Step, DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS,

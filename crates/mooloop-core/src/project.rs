@@ -953,13 +953,27 @@ impl Project {
 
     /// Re-scope every track-addressed thing in the song after a track edit.
     ///
-    /// Three kinds of address name a track: a channel's destination, a track's
-    /// own destination, and anything scoped to a track's effect chain -- which
-    /// is automation lanes and modulation routes, in any channel, because a
-    /// track's chain can be automated from any channel's clip.
+    /// Four kinds of address name a track: a channel's destination, a track's
+    /// own destination, a track's **sends**, and anything scoped to a track's
+    /// effect chain -- which is automation lanes and modulation routes, in any
+    /// channel, because a track's chain can be automated from any channel's
+    /// clip.
     fn rescope_tracks_after(&mut self, edit: TrackEdit) {
         for setup in &mut self.buses {
             setup.bus.output = edit.destination(setup.bus.output);
+            // A send whose target went is **dropped**, where an output that
+            // lost its target falls back to the master. `TrackEdit::track`
+            // rather than `destination` is that difference: a producer with
+            // nowhere to go must still be heard, and a send with nowhere to go
+            // is simply not a send. Silently re-pointing it at the master
+            // would put a wet path into the mix at full level.
+            setup.sends.retain_mut(|send| match edit.track(send.target) {
+                Some(target) => {
+                    send.target = target;
+                    true
+                }
+                None => false,
+            });
         }
         for channel in &mut self.channels {
             channel.setup.channel.bus = edit.destination(channel.setup.channel.bus);
@@ -1072,6 +1086,13 @@ impl Project {
 /// The track a starter kit's drums are grouped onto.
 const DRUM_TRACK: u8 = 1;
 
+/// The track the starter kit's second voice would land on.
+const BASS_TRACK: u8 = 2;
+
+/// The track the starter kit's two others send to, which is what makes it a
+/// return. Nothing about the track itself says so.
+const REVERB_TRACK: u8 = 3;
+
 /// The tracks a new song opens with.
 ///
 /// Adam's sketch, and the reason he wanted channel grouping at all: *"a drum
@@ -1080,16 +1101,39 @@ const DRUM_TRACK: u8 = 1;
 /// modest default that sort of also demonstrates what can be done just by
 /// already having had it done to it."*
 ///
-/// A blank project teaches nothing; this one shows a group and a bus by
-/// having already done them. The reverb send is the third track and waits on
-/// step 05, because a send is what would feed it -- see
-/// `docs/plans/console/04-the-mixer-is-tracks.md`.
+/// A blank project teaches nothing; this one shows a group, a bus and a send
+/// by having already done them.
+///
+/// **Reverb is not a fourth kind of track.** It is an ordinary track with a
+/// Reverb device on it that two other tracks send to, which is what makes it
+/// an effects return -- `docs/TERMINOLOGY.md`. Nothing here creates a "send"
+/// or a "return"; two tracks route to a third and the third is thereby one.
+///
+/// The send is post-fader, so pulling Drums down takes its reverb with it,
+/// and the device is fully wet, because the dry path is already in the mix
+/// through each track's own output. Turning the wet/dry knob down on it would
+/// be the mistake the arrangement exists to avoid.
 fn starter_tracks() -> Vec<crate::BusSetup> {
     let mut tracks = default_buses();
-    for name in ["Drums", "Bass"] {
+    for name in ["Drums", "Bass", "Reverb"] {
         let mut track = crate::BusSetup::new(tracks.len());
         track.bus.name = name.into();
         tracks.push(track);
+    }
+    tracks[REVERB_TRACK as usize].push_effect(crate::EffectSlotState {
+        id: crate::DeviceId::default(),
+        params: crate::EffectParams::Reverb(crate::ReverbParams::default()),
+        bypassed: false,
+        // Fully wet: the dry signal reaches the master by each track's own
+        // output, so a return that passed any of it through would double it.
+        wet_dry: 1.0,
+        input_trim: 1.0,
+        output_trim: 1.0,
+    });
+    for track in [DRUM_TRACK, BASS_TRACK] {
+        tracks[track as usize]
+            .sends
+            .push(crate::AuxSend::new(REVERB_TRACK));
     }
     tracks
 }

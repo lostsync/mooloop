@@ -2,9 +2,15 @@
 
 use crate::session::Session;
 use mooloop_core::{
-    compile_bus_graph, sanitize_route, would_create_cycle, BusSetup, EffectParams, EffectTarget,
-    EngineCommand, MAX_BUSES, MAX_LINEAR_GAIN,
+    compile_bus_graph, is_legal_send, sanitize_route, would_create_cycle, AuxSend, BusSetup,
+    EffectParams, EffectTarget, EngineCommand, SendTap, MAX_BUSES, MAX_LINEAR_GAIN,
 };
+
+/// A send is addressed by its track and its position in that track's own run,
+/// which is the order it was authored in. Both arrive from the face as `i32`.
+fn send_address(bus: i32, send: i32) -> Option<(usize, usize)> {
+    Some((usize::try_from(bus).ok()?, usize::try_from(send).ok()?))
+}
 
 /// Why a routing edit was refused, for the status bar to say.
 pub struct RoutingLoop {
@@ -129,11 +135,14 @@ impl Session {
     /// looping destinations already, but this is the boundary the engine's
     /// schedule rests on, so a graph that cannot be sorted is refused here as
     /// well rather than shipped.
-    pub fn set_bus_output(
-        &mut self,
-        bus: i32,
-        output: i32,
-    ) -> Option<Result<EngineCommand, RoutingLoop>> {
+    ///
+    /// **Returns no command.** It used to hand back an
+    /// `EngineCommand::InstallBusGraph` for the caller to send; the graph now
+    /// travels with the sends that ride on it, which carry compensation rings
+    /// and so must be prepared and reclaimed off the audio thread. The pump's
+    /// `Session::sync_track_graph` derives and sends it, which is where the
+    /// console accumulators and the audio edges already go.
+    pub fn set_bus_output(&mut self, bus: i32, output: i32) -> Option<Result<(), RoutingLoop>> {
         let index = usize::try_from(bus).ok()?;
         let output = u8::try_from(output).ok()?;
         let output = sanitize_route(index as u8, output);
@@ -144,15 +153,105 @@ impl Session {
             }));
         }
         let previous = std::mem::replace(&mut self.buses[index].bus.output, output);
-        match compile_bus_graph(&self.buses) {
-            Some(graph) => Some(Ok(EngineCommand::InstallBusGraph { graph })),
-            None => {
-                // Unreachable given the check above. Restore the visible graph
-                // rather than letting the model and the audio diverge.
-                self.buses[index].bus.output = previous;
-                None
-            }
+        if compile_bus_graph(&self.buses).is_none() {
+            // Unreachable given the check above. Restore the visible graph
+            // rather than letting the model and the audio diverge.
+            self.buses[index].bus.output = previous;
+            return None;
         }
+        // Explicitly, because this used to happen by accident: the command
+        // this handed back travelled through `apply_engine_message`, which
+        // marks every non-transport command as an edit. Nothing is handed
+        // back now, so a routing change would have stopped making the
+        // document look unsaved.
+        self.mark_dirty();
+        Some(Ok(()))
+    }
+
+    /// Routes a send from `bus` to `target`, returning where it landed in
+    /// that track's own run of sends.
+    ///
+    /// This is the whole of "creating a send": there is no send object to
+    /// make and no track to create. `docs/TERMINOLOGY.md` -- what a track
+    /// *is* is decided by what routes into it, so the track at the far end
+    /// becomes an effects return by being sent to, and stops being one when
+    /// the last send goes away.
+    ///
+    /// `Err` for the same reason [`Self::set_bus_output`] has one: a send
+    /// into something that already reaches this track closes a loop, and it
+    /// is refused rather than delayed.
+    pub fn add_send(&mut self, bus: i32, target: i32) -> Option<Result<usize, RoutingLoop>> {
+        let index = usize::try_from(bus).ok()?;
+        let target = u8::try_from(target).ok()?;
+        self.buses.get(index)?;
+        self.buses.get(target as usize)?;
+        if !is_legal_send(index as u8, target) {
+            return None;
+        }
+        if would_create_cycle(&self.buses, index as u8, target) {
+            return Some(Err(RoutingLoop {
+                feeder: self.buses[target as usize].bus.name.clone(),
+            }));
+        }
+        self.buses[index].sends.push(AuxSend::new(target));
+        // Routing does not travel as a command, so the edit is marked here
+        // rather than falling out of one. See `set_bus_output`.
+        self.mark_dirty();
+        Some(Ok(self.buses[index].sends.len() - 1))
+    }
+
+    /// Removes one of `bus`'s sends. The ones after it move up, which is why
+    /// the engine is told through the plan rather than by index.
+    pub fn remove_send(&mut self, bus: i32, send: i32) -> bool {
+        let (Ok(index), Ok(send)) = (usize::try_from(bus), usize::try_from(send)) else {
+            return false;
+        };
+        let Some(setup) = self.buses.get_mut(index) else {
+            return false;
+        };
+        if send >= setup.sends.len() {
+            return false;
+        }
+        setup.sends.remove(send);
+        self.mark_dirty();
+        true
+    }
+
+    /// Sets a send's level. The same range a fader has: a send is a gain
+    /// stage too, and one that could not reach unity would be a trim.
+    pub fn set_send_level(&mut self, bus: i32, send: i32, level: f32) -> Option<EngineCommand> {
+        let (index, send) = send_address(bus, send)?;
+        let entry = self.buses.get_mut(index)?.sends.get_mut(send)?;
+        entry.level = level.clamp(0.0, MAX_LINEAR_GAIN);
+        Some(EngineCommand::SetSendLevel {
+            producer: EffectTarget::Bus(index as u8),
+            index: send as u8,
+            level: entry.level,
+        })
+    }
+
+    /// Switches a send on or off, which is not the same as turning it down.
+    pub fn set_send_enabled(&mut self, bus: i32, send: i32, enabled: bool) -> Option<EngineCommand> {
+        let (index, send) = send_address(bus, send)?;
+        let entry = self.buses.get_mut(index)?.sends.get_mut(send)?;
+        entry.enabled = enabled;
+        Some(EngineCommand::SetSendEnabled {
+            producer: EffectTarget::Bus(index as u8),
+            index: send as u8,
+            enabled,
+        })
+    }
+
+    /// Moves a send between the pre-fader and post-fader taps.
+    pub fn set_send_tap(&mut self, bus: i32, send: i32, tap: SendTap) -> Option<EngineCommand> {
+        let (index, send) = send_address(bus, send)?;
+        let entry = self.buses.get_mut(index)?.sends.get_mut(send)?;
+        entry.tap = tap;
+        Some(EngineCommand::SetSendTap {
+            producer: EffectTarget::Bus(index as u8),
+            index: send as u8,
+            tap,
+        })
     }
 
     /// Turns an EQ slot's spectrum analyzer on or off.

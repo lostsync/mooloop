@@ -107,7 +107,7 @@ rather than an adjective.
 | [02](02-console-summing.md) | two channels glue when summed | nothing |
 | [03](03-the-channel-strip-device.md) | EQ + comp in one face, four voicings | nothing |
 | [04](04-the-mixer-is-tracks.md) | channels assign to tracks, and the mixer draws them | 01
-| [05](05-sends-and-returns.md) | a reverb return fed from two strips | 04 |
+| [05](05-sends.md) | a reverb track fed by two tracks' sends | 04 |
 | [06](06-preamp-modelling.md) | not designed here | 02, 03 |
 
 Nothing in 02 or 03 gets rebuilt if Adam prefers the brief's order and 04
@@ -120,8 +120,11 @@ depends on, and rediscovering them is the expensive part.
 
 - **`OutletTap::Output` is declared and nothing publishes one**
   (`outlet.rs`). `compile_audio_graph` refuses it as
-  `EdgeRefusal::TapIsLate`. That is the hook a post-fader send needs, already
-  named.
+  `EdgeRefusal::TapIsLate`. ~~That is the hook a post-fader send needs,
+  already named.~~ **It is not.** `TapIsLate` is a rule about the *consumer*:
+  an aux-in edge lands pre-chain, where there is nowhere to put a delay. A
+  send carries its own compensation, so it never asks the question. Step 05
+  left both alone; see `05-sends.md`.
 - **`compile_latency` collapses per-edge into per-producer on purpose**, and
   says so in its own doc comment: *"Each producer has exactly one destination,
   so 'per edge' and 'per producer' are the same thing."* Sends delete that
@@ -131,7 +134,9 @@ depends on, and rediscovering them is the expensive part.
 - **There is no gain smoothing at strip level at all.** `OutputStage` stamps
   raw gain per block, or per 32-frame control tick when modulated.
   `MIXER_PLAN.md` requires send levels to be smoothed -- that is a gap to
-  fill, not an addition. `mooloop-dsp/src/smooth.rs::Smoothed` exists.
+  fill, not an addition. `mooloop-dsp/src/smooth.rs::Smoothed` exists. Step 05
+  put it on the *send* rather than on `OutputStage`, because a send level is
+  per-edge state; the fader's own zipper is still there.
 - **`AudioTapBank` (`render.rs`) is already the buffer-ownership prototype**
   the general plan needs: conditional, deduplicated, plan-driven allocation
   with a reclaim path. Extend it; do not invent a second mechanism.

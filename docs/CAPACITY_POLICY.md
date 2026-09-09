@@ -207,6 +207,37 @@ the decision has a before to point at.
   the Aux In selector can name, eight times the widest table declared, with a
   test that fails the day a device publishes an id past it.
 
+- **Sends reserve nothing**, the way typed audio edges do not. A track's
+  sends are a `Vec` in the document and a `Vec` in the prepared plan; the
+  audio thread holds one compensation ring and one `Smoothed` per send that
+  exists, and three 64 KB scratch buffers for the *whole engine* — allocated
+  only when a project has a send at all. `block_cost::send_memory`, measured
+  2026-09-09:
+
+  ```text
+    a project with no sends         1055.49 MB   (the floor above, unmoved)
+    ...with one send                1055.68 MB
+    ...with nine                    1055.68 MB
+
+    the first send costs              193.2 KB   (three shared scratch buffers, once)
+    each one after                     24.0 B
+  ```
+
+  The shape is what this policy asks for and the numbers say it plainly: the
+  floor does not move at all, the *first* send buys the shared scratch, and
+  the ninth is indistinguishable from the first. What a send costs beyond
+  those bytes is its compensation ring, which is as long as the alignment it
+  is owed and nothing at all when it is owed none.
+  `render::tests::a_project_with_no_sends_allocates_nothing` guards the zero.
+
+  The drawn side matters here too, and is the half this document does not
+  usually get to state. `docs/plans/console/THE-STRIP.md` first fixed the face
+  at four send bars — a *drawn* limit rather than an engine one, which this
+  document's own distinction would have permitted. Adam retired it on
+  2026-09-09: the area draws exactly the sends that exist and scrolls past the
+  room it has. A drawn ceiling is cheaper to remove than a dimensioned one and
+  it is still a ceiling, and there was no reason to have one.
+
 ## Rule for new work
 
 Before adding a numerical cap to a user-created collection, first use an

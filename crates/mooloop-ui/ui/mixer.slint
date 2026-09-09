@@ -44,19 +44,42 @@ export struct MixerStripRow {
 // edge. An empty mask permits everything, which is the channel case: a channel
 // is never part of a bus cycle. Disallowed entries are shown greyed rather
 // than hidden, so the reason a destination is unavailable stays visible.
+// One send on a track's strip: where it goes, how loud, where it taps, and
+// whether it is passing audio.
+//
+// `target` is a track index and `target-name` its name, carried together so
+// the row can draw the name without indexing `bus-names` -- a send survives
+// track edits by being renumbered in the model, and a row that looked its own
+// name up would be the one place that renumbering could be seen to lag.
+export struct MixerSendRow {
+    target: int,
+    target-name: string,
+    level: float,
+    pre-fader: bool,
+    enabled: bool,
+}
+
 export component BusPicker inherits Rectangle {
     in property <[string]> bus-names;
     in property <int> value;
     in property <[bool]> allowed;
     in property <string> tooltip: "Destination bus";
     in property <bool> enabled: true;
+    // Static text instead of the current destination, for the one use that
+    // has no current destination: adding a send. The list, the legality mask
+    // and the report-before-close fix are all the same, so this is a label
+    // rather than a second picker.
+    in property <string> label;
+    in property <length> chip-width: 30px;
     callback picked(int);
 
     // The mute button on the same strip already reads "M", so the
     // destination carries an arrow rather than repeating a bare letter.
-    private property <string> short-label: "\u{2192}" + (root.value == 0 ? "M" : root.value);
+    private property <string> short-label: root.label != ""
+        ? root.label
+        : "\u{2192}" + (root.value == 0 ? "M" : root.value);
 
-    width: 30px;
+    width: root.chip-width;
     height: 22px;
     border-radius: Theme.radius-md;
     background: pick-touch.has-hover && root.enabled ? Theme.surface-active : Theme.surface;

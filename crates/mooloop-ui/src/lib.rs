@@ -36,7 +36,8 @@ use mooloop_core::{
     GeneratorParams, GlideMode, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor,
     ModPolarity, ModRack, ModRandomTrigger, ModStepTrigger,
-    ControlRate, ModulatorKind, ModulatorParams, OutletDescriptor, PublishesOutlets, SignalShape,
+    ControlRate, ModulatorKind, ModulatorParams, OutletDescriptor, PublishesOutlets, SendTap,
+    SignalShape,
     modulation::outlet_slot,
     aux_in, AuxInParams, EdgeRefusal,
     ds01, Ds01Params,
@@ -3376,6 +3377,39 @@ impl UiState {
         window.set_editing_bus_console(setup.bus.console);
         window.set_editing_bus_can_remove(self.session.can_remove_track(index));
         window.set_editing_bus_allowed(self.allowed_destinations(index));
+        window.set_editing_bus_send_feed_count(self.session.track_send_count(index) as i32);
+        window.set_editing_bus_sends(self.send_rows(index));
+        // The same mask the output picker uses: an output and a send are
+        // legal under one rule, so a send cannot creep past a check the
+        // picker makes.
+        window.set_editing_bus_send_allowed(self.allowed_destinations(index));
+    }
+
+    /// The sends on `bus`, in the order they were authored -- which is the
+    /// order the engine's bank groups them in, so a row's position is the
+    /// address a level change is sent to.
+    fn send_rows(&self, bus: usize) -> ModelRc<MixerSendRow> {
+        let Some(setup) = self.session.buses.get(bus) else {
+            return ModelRc::from(Rc::new(VecModel::from(Vec::new())));
+        };
+        let rows: Vec<MixerSendRow> = setup
+            .sends
+            .iter()
+            .map(|send| MixerSendRow {
+                target: send.target as i32,
+                target_name: self
+                    .session
+                    .buses
+                    .get(send.target as usize)
+                    .map(|track| track.bus.name.as_str())
+                    .unwrap_or("--")
+                    .into(),
+                level: send.level,
+                pre_fader: send.tap == SendTap::PreFader,
+                enabled: send.enabled,
+            })
+            .collect();
+        ModelRc::from(Rc::new(VecModel::from(rows)))
     }
 
     /// Push the selected channel's Aux In into its face.
@@ -6633,18 +6667,28 @@ impl AppUi {
         }
 
         {
-            let tx = cmd_tx.clone();
+            // No command sender: a routing edit sends nothing itself now. The
+            // schedule travels with the sends that ride on it, and the pump's
+            // `sync_track_graph` derives and installs both.
             let weak = window.as_weak();
             let st = state.clone();
             window.on_bus_output_changed(move |bus, output| {
                 let mut guard = st.borrow_mut();
                 match guard.session.set_bus_output(bus, output) {
-                    Some(Ok(command)) => {
+                    Some(Ok(())) => {
                         // Every strip's legal destinations move when an edge does.
                         if let Some(w) = weak.upgrade() {
                             guard.sync_mixer(&w);
+                            // The session marks the edit; the title is
+                            // refreshed here because this no longer travels
+                            // through the pump's command drain, which is what
+                            // used to do it.
+                            guard.update_document_title(&w);
                         }
-                        let _ = tx.send(command);
+                        // The schedule itself is not sent from here any more:
+                        // it travels with the sends that ride on it, which
+                        // carry compensation rings, so the pump's
+                        // `sync_track_graph` derives and installs both.
                     }
                     Some(Err(refused)) => {
                         if let Some(w) = weak.upgrade() {
@@ -6659,6 +6703,110 @@ impl AppUi {
                     }
                     None => {}
                 }
+            });
+        }
+
+        // Sends. Adding and removing one is a routing change, so it goes
+        // through the same door the output picker does and sends no command
+        // of its own -- the pump's `sync_track_graph` derives the plan and
+        // installs it with the compensation rings a send needs. Level, tap
+        // and enable are POD and reach audio directly, so a drag does not
+        // rebuild a plan sixty times a second.
+        {
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_send_added(move |bus, target| {
+                let mut guard = st.borrow_mut();
+                match guard.session.add_send(bus, target) {
+                    Some(Ok(_)) => {
+                        if let Some(w) = weak.upgrade() {
+                            guard.sync_bus_editor(&w);
+                            guard.update_document_title(&w);
+                        }
+                    }
+                    Some(Err(refused)) => {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_status_message(
+                                format!(
+                                    "{} already leads back here - the send would loop",
+                                    refused.feeder
+                                )
+                                .into(),
+                            );
+                        }
+                    }
+                    None => {}
+                }
+            });
+        }
+        {
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_send_removed(move |bus, send| {
+                let mut guard = st.borrow_mut();
+                if guard.session.remove_send(bus, send) {
+                    if let Some(w) = weak.upgrade() {
+                        guard.sync_bus_editor(&w);
+                        guard.update_document_title(&w);
+                    }
+                }
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_send_level_changed(move |bus, send, level| {
+                let mut guard = st.borrow_mut();
+                let Some(command) = guard.session.set_send_level(bus, send, level) else {
+                    return;
+                };
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_bus_editor(&w);
+                }
+                let _ = tx.send(command);
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_send_tap_picked(move |bus, send, tap| {
+                let mut guard = st.borrow_mut();
+                let tap = if tap == 1 {
+                    SendTap::PreFader
+                } else {
+                    SendTap::PostFader
+                };
+                let Some(command) = guard.session.set_send_tap(bus, send, tap) else {
+                    return;
+                };
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_bus_editor(&w);
+                }
+                let _ = tx.send(command);
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_send_enable_toggled(move |bus, send| {
+                let mut guard = st.borrow_mut();
+                let wanted = guard
+                    .session
+                    .buses
+                    .get(bus.max(0) as usize)
+                    .and_then(|setup| setup.sends.get(send.max(0) as usize))
+                    .map(|entry| !entry.enabled);
+                let Some(wanted) = wanted else { return };
+                let Some(command) = guard.session.set_send_enabled(bus, send, wanted) else {
+                    return;
+                };
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_bus_editor(&w);
+                }
+                let _ = tx.send(command);
             });
         }
 
@@ -10738,6 +10886,15 @@ impl AppUi {
                 // buffer only for the buses something encoded actually
                 // reaches, so a project with console off costs nothing.
                 st.borrow_mut().session.sync_console_sums(&mut handle);
+                // And the track graph, which is the fourth of these and the
+                // one that used to be sent from the edit that caused it.
+                // Routing stopped being one `u8` per track when a send became
+                // a second outgoing edge: the plan now carries a compensation
+                // ring per send, which is a heap object, so it is derived and
+                // installed here like the rest. **Last of the four**, so the
+                // compensation a send's arrival moves has already been sent
+                // for the generation this schedule belongs to.
+                st.borrow_mut().session.sync_track_graph(&mut handle);
                 if document_title_needs_refresh {
                     let Some(window) = weak.upgrade() else { return };
                     st.borrow().update_document_title(&window);

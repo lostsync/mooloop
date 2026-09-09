@@ -11,8 +11,8 @@ use mooloop_core::{
     LoopRange, ModDestinationDescriptor, PlaybackMode,
     ModRack, MonoSynthParams, MlM1Params, MlP8Params, ParamAddr, ParamOwner, PolySynthParams,
     Project,
-    SamplerParams, SliceMap,
-    chain_latency, clamp_bus, compile_latency, DEFAULT_STEPS, MAX_CONTAINER_DEPTH, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
+    SamplerParams, SendTap, SliceMap,
+    chain_latency, clamp_bus, compile_latency, send_edges, DEFAULT_STEPS, MAX_CONTAINER_DEPTH, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
     MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS, STRIP_PARAM_VOLUME,
 };
 use mooloop_core::modulation::{CONTROL_SOURCE_SLOTS, MAX_GENERATOR_OUTLETS};
@@ -27,6 +27,7 @@ use mooloop_dsp::{
     ProcessContext, SampleData, Sampler, SpectrumAnalyzer, StereoBus, StretchPool, TimedEvent,
     CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE, SILENCE_PEAK,
 };
+use mooloop_dsp::smooth::Smoothed;
 
 use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
 use crate::sequencer::Sequencer;
@@ -116,6 +117,293 @@ impl AudioTapBank {
         for buffer in &mut self.buffers {
             buffer.clear(frames);
         }
+    }
+}
+
+/// Lag on a send's level, in seconds.
+///
+/// The same figure every other gain that scales the signal directly uses
+/// (`mooloop_dsp::synth_voice::PARAM_SMOOTH_S`). It is here rather than
+/// borrowed because this is the first *strip-level* gain in the engine that
+/// smooths at all: a fader still stamps its value per block, or per control
+/// tick when something drives it, and that zipper is a separate known gap.
+const SEND_LEVEL_SMOOTH_S: f32 = 0.005;
+
+/// Where a strip's send reads from, and what it owes when it arrives.
+///
+/// One of these per authored send. It holds the two things a second outgoing
+/// edge needs and a single one never did: its own gain, and its own delay --
+/// the strip's `compensation` is what its *output* waits, and a send reaching
+/// a different summing point is generally owed something else.
+struct CompiledSend {
+    /// Track this send sums into.
+    target: u8,
+    tap: SendTap,
+    enabled: bool,
+    /// Smoothed, because unlike a fader a send level has no automation path
+    /// stepping it per control tick -- an unsmoothed one would zipper on
+    /// every drag.
+    level: Smoothed,
+    /// What this send waits before summing into `target`, from
+    /// `mooloop_core::compile_latency`'s per-send answer.
+    compensation: Option<Box<IntegerDelay>>,
+}
+
+/// Scratch buffers a block's sends work in.
+///
+/// Three, and only when a project has a send at all. A strip's own buffer
+/// cannot be used: it is still owed to the strip's output, and each send
+/// applies its own level and its own delay, so each one needs a copy. The two
+/// tap buffers are captured while the strip is mid-block; `work` is where one
+/// send at a time is prepared.
+struct SendScratch {
+    pre: StereoBus,
+    post: StereoBus,
+    work: StereoBus,
+}
+
+impl SendScratch {
+    fn new() -> Self {
+        Self {
+            pre: StereoBus::with_capacity(MAX_BLOCK_SIZE),
+            post: StereoBus::with_capacity(MAX_BLOCK_SIZE),
+            work: StereoBus::with_capacity(MAX_BLOCK_SIZE),
+        }
+    }
+}
+
+/// One generation's sends, prepared whole on the control thread.
+///
+/// The same shape and the same reason as [`AudioTapBank`]: rings and buffers
+/// are allocated where allocation is allowed, and the whole generation
+/// crosses as one value so the executor can never hold one generation's
+/// delays against another's routing.
+///
+/// **A project with no sends allocates nothing**, which is the "free while it
+/// is out" rule `docs/plans/console/` is held to, and is exactly the derived
+/// `Default`: two empty `Vec`s and no scratch. `a_project_with_no_sends_
+/// allocates_nothing` is the test that says so.
+#[derive(Default)]
+pub struct SendBank {
+    /// Every send, grouped by producer and in bank order, which is the order
+    /// `mooloop_core::send_edges` flattens them in.
+    sends: Vec<CompiledSend>,
+    /// Where each producer's run starts in `sends`, plus a final end marker.
+    /// Empty when `sends` is, so an unused feature is not a kilobyte of
+    /// zeroes either.
+    starts: Vec<u32>,
+    scratch: Option<Box<SendScratch>>,
+}
+
+/// One authored send, flattened for the crossing. POD: the rings and the
+/// smoothing are built from it on the control thread.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SendSpec {
+    pub producer: EffectTarget,
+    pub target: u8,
+    pub tap: SendTap,
+    pub enabled: bool,
+    pub level: f32,
+    /// Frames this send waits before it sums, from `compile_latency`.
+    pub delay: u32,
+}
+
+/// Index of `producer` in the flat producer space the bank is grouped by:
+/// every channel, then every track.
+fn producer_slot(producer: EffectTarget) -> usize {
+    match producer {
+        EffectTarget::Channel(channel) => channel as usize,
+        EffectTarget::Bus(bus) => MAX_CHANNELS + bus as usize,
+    }
+}
+
+const PRODUCER_SLOTS: usize = MAX_CHANNELS + MAX_BUSES;
+
+impl SendBank {
+    /// Prepare `specs` for the audio thread. Control thread only: this is
+    /// where the rings and the scratch are allocated.
+    ///
+    /// `specs` need not arrive grouped; they are sorted by producer here, and
+    /// a producer's own sends keep the order they were authored in, which is
+    /// what makes an index into that run a stable address for a level change.
+    pub fn new(specs: &[SendSpec], sample_rate: u32) -> Self {
+        if specs.is_empty() {
+            return Self::default();
+        }
+        // A producer outside the address space is dropped rather than
+        // indexed with. Nothing in the model can mint one -- a producer is a
+        // bank position -- but this is a public constructor, and the
+        // alternative to a filter here is a panic while preparing a plan.
+        let mut ordered: Vec<&SendSpec> = specs
+            .iter()
+            .filter(|spec| producer_slot(spec.producer) < PRODUCER_SLOTS)
+            .collect();
+        if ordered.is_empty() {
+            return Self::default();
+        }
+        ordered.sort_by_key(|spec| producer_slot(spec.producer));
+
+        let mut starts = vec![0u32; PRODUCER_SLOTS + 1];
+        for spec in &ordered {
+            starts[producer_slot(spec.producer) + 1] += 1;
+        }
+        for slot in 1..starts.len() {
+            starts[slot] += starts[slot - 1];
+        }
+
+        Self {
+            sends: ordered
+                .iter()
+                .map(|spec| CompiledSend {
+                    target: spec.target,
+                    tap: spec.tap,
+                    enabled: spec.enabled,
+                    level: Smoothed::new(spec.level, SEND_LEVEL_SMOOTH_S, sample_rate),
+                    compensation: IntegerDelay::new(spec.delay).map(Box::new),
+                })
+                .collect(),
+            starts,
+            scratch: Some(Box::new(SendScratch::new())),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.sends.is_empty()
+    }
+
+    fn range(&self, producer: EffectTarget) -> std::ops::Range<usize> {
+        if self.starts.is_empty() {
+            return 0..0;
+        }
+        let slot = producer_slot(producer);
+        match (self.starts.get(slot), self.starts.get(slot + 1)) {
+            (Some(&start), Some(&end)) => start as usize..end as usize,
+            _ => 0..0,
+        }
+    }
+
+    /// Whether `producer` has a send reading `tap` this block. What decides
+    /// whether the capture below is worth the copy.
+    fn taps(&self, producer: EffectTarget, tap: SendTap) -> bool {
+        self.sends[self.range(producer)]
+            .iter()
+            .any(|send| send.tap == tap && send.enabled)
+    }
+
+    /// Keep a copy of `bus` as `producer`'s `tap` signal.
+    ///
+    /// Called from inside the block loop, where the strip that owns `bus` is
+    /// still borrowed and the tracks its sends reach are not reachable. The
+    /// copy is what lets the emission happen afterwards, and it is skipped
+    /// entirely when nothing reads that tap.
+    fn capture(&mut self, producer: EffectTarget, tap: SendTap, bus: &StereoBus, frames: usize) {
+        if self.is_empty() || !self.taps(producer, tap) {
+            return;
+        }
+        let Some(scratch) = self.scratch.as_mut() else {
+            return;
+        };
+        match tap {
+            SendTap::PreFader => scratch.pre.copy_from(bus, frames),
+            SendTap::PostFader => scratch.post.copy_from(bus, frames),
+        }
+    }
+
+    /// Sum `producer`'s captured sends into the tracks they feed.
+    ///
+    /// Called once the strip's own borrow has ended. A disabled send resets
+    /// its ring rather than advancing it, so re-enabling one does not emit the
+    /// audio it was holding when it was switched off.
+    fn emit(&mut self, producer: EffectTarget, buses: &mut [BusStrip], frames: usize) {
+        if self.is_empty() {
+            return;
+        }
+        let range = self.range(producer);
+        let Self { sends, scratch, .. } = self;
+        let Some(scratch) = scratch.as_mut() else {
+            return;
+        };
+        for send in &mut sends[range] {
+            if !send.enabled {
+                if let Some(delay) = send.compensation.as_mut() {
+                    delay.reset();
+                }
+                continue;
+            }
+            let Some(destination) = buses.get_mut(send.target as usize) else {
+                continue;
+            };
+            let SendScratch { pre, post, work } = &mut **scratch;
+            work.copy_from(
+                match send.tap {
+                    SendTap::PreFader => &*pre,
+                    SendTap::PostFader => &*post,
+                },
+                frames,
+            );
+            apply_send_level(&mut send.level, work, frames);
+            if let Some(delay) = send.compensation.as_mut() {
+                delay.process(&mut work.l[..frames], &mut work.r[..frames]);
+            }
+            // Always linear, for the reason a channel reaching a track is:
+            // analog sum is what a strip does to its *output*, and a send is
+            // a feed into another strip's input, which encodes on its own
+            // switch or not at all.
+            destination.bus.add_from(work, frames);
+            destination.dirty = true;
+        }
+    }
+
+    /// Aim a send at a new level, which it reaches over
+    /// [`SEND_LEVEL_SMOOTH_S`].
+    ///
+    /// `index` is the send's position in its own producer's run, which is the
+    /// order it was authored in and survives a bank rebuild -- so a fader drag
+    /// keeps addressing the same send while the plan around it changes.
+    fn set_level(&mut self, producer: EffectTarget, index: usize, level: f32) {
+        let range = self.range(producer);
+        if let Some(send) = self.sends[range].get_mut(index) {
+            send.level.set_target(level);
+        }
+    }
+
+    fn set_enabled(&mut self, producer: EffectTarget, index: usize, enabled: bool) {
+        let range = self.range(producer);
+        if let Some(send) = self.sends[range].get_mut(index) {
+            send.enabled = enabled;
+        }
+    }
+
+    fn set_tap(&mut self, producer: EffectTarget, index: usize, tap: SendTap) {
+        let range = self.range(producer);
+        if let Some(send) = self.sends[range].get_mut(index) {
+            send.tap = tap;
+        }
+    }
+}
+
+/// Apply a smoothed level to a block.
+///
+/// A settled level is one pass over the block, which is what it is on every
+/// block but the few after a drag -- so the ordinary case costs exactly what
+/// an unsmoothed gain would.
+///
+/// A moving one steps **per sample**, not per control tick. That is the one
+/// place this deliberately does not copy `OutputStage::apply_pan_segments`:
+/// that stepper is 32 frames wide because its values come from the control
+/// rate and it has no finer answer to give, where a `Smoothed` does. Reusing
+/// the coarse subdivision here would throw away the resolution that is the
+/// whole reason to smooth.
+fn apply_send_level(level: &mut Smoothed, bus: &mut StereoBus, frames: usize) {
+    if level.is_settled() {
+        let gain = level.value();
+        bus.apply_stereo_gain(gain, gain, frames);
+        return;
+    }
+    for frame in 0..frames {
+        let gain = level.advance();
+        bus.l[frame] *= gain;
+        bus.r[frame] *= gain;
     }
 }
 
@@ -2115,6 +2403,15 @@ pub(crate) struct RenderState {
     /// Destinations and their matching render order, compiled together off the
     /// audio thread. The executor only installs or walks this value.
     bus_graph: CompiledBusGraph,
+    /// This generation's sends. Installed with `bus_graph` as one value, so
+    /// the executor never holds a send whose target the render order has not
+    /// been told about.
+    ///
+    /// Boxed for the reason `audio` is: the swap that installs a new
+    /// generation hands the old one back through the reclaim ring, and a
+    /// box-for-box exchange is the only way to do that without the audio
+    /// thread allocating.
+    sends: Box<SendBank>,
     /// The channels' audio edges, the order that satisfies them, and the
     /// buffers they carry. Boxed so a whole generation crosses to the
     /// executor as one pointer swap and the displaced one is freed off the
@@ -2250,6 +2547,7 @@ impl RenderState {
                 buses
             },
             bus_graph: CompiledBusGraph::default(),
+            sends: Box::new(SendBank::default()),
             // A project with no subscriptions holds no buffers at all, which
             // is the whole design: the identity order costs nothing and
             // renders exactly what the engine rendered before this existed.
@@ -2638,11 +2936,24 @@ impl RenderState {
         for (index, bus) in project.buses.iter().take(MAX_BUSES).enumerate() {
             bus_latency[index] = chain_latency(&bus.effects);
         }
+        // A bank whose routing does not sort is running the
+        // everything-to-master repair, and a send compiled against an order
+        // that is not the one being walked would arrive a block late. So it
+        // has no sends here either, which is the repair `sanitize_bank` makes
+        // on the document -- made again on the plan, for the offline path
+        // that builds its own state and never goes through the session.
+        let sorts = compile_bus_graph(&project.buses).is_some();
+        let edges = if sorts {
+            send_edges(&project.buses)
+        } else {
+            Vec::new()
+        };
         let plan = compile_latency(
             &self.bus_graph,
             &channel_latency,
             &channel_bus,
             &bus_latency,
+            &edges,
         );
         for (index, strip) in self.strips.iter_mut().enumerate() {
             strip.compensation = IntegerDelay::new(plan.channel(index)).map(Box::new);
@@ -2650,6 +2961,27 @@ impl RenderState {
         for (index, strip) in self.buses.iter_mut().enumerate() {
             strip.compensation = IntegerDelay::new(plan.bus(index)).map(Box::new);
         }
+        // The sends belong to the same plan, so they are built from the same
+        // pass rather than a second one that could disagree with it.
+        let specs: Vec<SendSpec> = project
+            .buses
+            .iter()
+            .take(if sorts { MAX_BUSES } else { 0 })
+            .enumerate()
+            .flat_map(|(index, setup)| {
+                setup.sends.iter().map(move |send| (index, send))
+            })
+            .zip(0..)
+            .map(|((index, send), edge)| SendSpec {
+                producer: EffectTarget::Bus(index as u8),
+                target: send.target,
+                tap: send.tap,
+                enabled: send.enabled,
+                level: send.level,
+                delay: plan.send(edge),
+            })
+            .collect();
+        *self.sends = SendBank::new(&specs, self.sample_rate);
     }
 
     /// Resolve an effect address to the chain that owns it. Both arms are
@@ -3112,6 +3444,17 @@ impl RenderState {
                 std::mem::replace(&mut strip.console_sum, buffer)
                     .map(StructuralReclaim::ConsoleSum)
             }
+            StructuralCommand::SetTrackGraph { graph, sends } => {
+                // One swap, for the reason `SetAudioGraph` is one: a send
+                // whose target the render order has not been told about would
+                // arrive a block late, and the two must never be observed
+                // from different generations.
+                self.bus_graph = graph;
+                Some(StructuralReclaim::TrackGraph(std::mem::replace(
+                    &mut self.sends,
+                    sends,
+                )))
+            }
             StructuralCommand::SetAudioGraph { bank } => {
                 // One swap: the executor never sees an edge without its
                 // schedule or a schedule against another generation's
@@ -3200,7 +3543,23 @@ impl RenderState {
                     strip.output.set_pan(pan);
                 }
             }
-            EngineCommand::InstallBusGraph { graph } => self.bus_graph = graph,
+            EngineCommand::SetSendLevel {
+                producer,
+                index,
+                level,
+            } => self
+                .sends
+                .set_level(producer, index as usize, level.clamp(0.0, MAX_LINEAR_GAIN)),
+            EngineCommand::SetSendEnabled {
+                producer,
+                index,
+                enabled,
+            } => self.sends.set_enabled(producer, index as usize, enabled),
+            EngineCommand::SetSendTap {
+                producer,
+                index,
+                tap,
+            } => self.sends.set_tap(producer, index as usize, tap),
             EngineCommand::SetStep {
                 pattern,
                 channel,
@@ -4096,9 +4455,23 @@ impl RenderState {
                 automation.as_ref(),
                 skip_idle,
             );
+            // A pre-fader send leaves from here: after the chain, before the
+            // fader and the pan. Copied rather than emitted, because the
+            // tracks it reaches are not reachable while this strip is
+            // borrowed -- and skipped entirely when nothing reads this tap,
+            // which is every strip in a project that has no sends.
+            let producer = EffectTarget::Channel(index as u8);
+            self.sends
+                .capture(producer, SendTap::PreFader, &strip.bus, frames);
             strip
                 .output
                 .apply_pan_segments(&mut strip.bus, frames, strip_segments.as_ref());
+            // And a post-fader one from here, which is the same signal the
+            // strip's own output carries -- but *before* the compensation
+            // below, because that is what this strip's output owes its own
+            // summing point and a send generally owes a different one.
+            self.sends
+                .capture(producer, SendTap::PostFader, &strip.bus, frames);
             // Wait, if this channel is shorter than something else feeding the
             // same bus. Last, so what waits is the finished channel, and
             // immediately before the sum it is being aligned for.
@@ -4113,6 +4486,7 @@ impl RenderState {
                 destination.bus.add_from(&strip.bus, frames);
                 destination.dirty = true;
             }
+            self.sends.emit(producer, &mut self.buses, frames);
         }
 
         // Walk the compiled schedule. Every bus is guaranteed to appear after
@@ -4215,7 +4589,21 @@ impl RenderState {
                 automation.as_ref(),
                 skip_idle,
             );
+            let producer = EffectTarget::Bus(index as u8);
+            let muted = strip.output.muted;
+            // Mute silences a track's sends, pre-fader ones included. That is
+            // the reading a desk gives -- a muted strip contributes nothing
+            // anywhere -- and it is what the channel loop already does by
+            // skipping the whole tail of its body on a muted channel.
+            if !muted {
+                self.sends
+                    .capture(producer, SendTap::PreFader, &strip.bus, frames);
+            }
             strip.output.apply_balance(&mut strip.bus, frames);
+            if !muted {
+                self.sends
+                    .capture(producer, SendTap::PostFader, &strip.bus, frames);
+            }
             // Before the meter and before the mute check on purpose: from here
             // the bus's audio genuinely *is* delayed, so metering the delayed
             // signal is honest, and a muted bus still advances its ring rather
@@ -4235,10 +4623,13 @@ impl RenderState {
 
             if index == MASTER_BUS as usize {
                 master_peak = (peak_l, peak_r);
-            } else if !strip.output.muted {
+            } else if !muted {
                 let console = strip.console;
                 let destination = self.bus_graph.destination(index) as usize;
                 mix_into(&mut self.buses, index, destination, frames, console);
+            }
+            if !muted {
+                self.sends.emit(producer, &mut self.buses, frames);
             }
         }
         // After the walk on purpose: the preview bypasses every chain, so it
@@ -6562,8 +6953,38 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     /// schedule for the resulting graph and send both together.
     fn route(render: &mut RenderState, buses: &mut [mooloop_core::BusSetup], bus: u8, output: u8) {
         buses[bus as usize].bus.output = output;
+        install_track_graph(render, buses);
+    }
+
+    /// Compile a bank and install it the way the pump does: the graph and the
+    /// sends that ride on it, as one value.
+    fn install_track_graph(render: &mut RenderState, buses: &[mooloop_core::BusSetup]) {
         let graph = compile_bus_graph(buses).expect("test graph should be acyclic");
-        render.apply_command(EngineCommand::InstallBusGraph { graph });
+        let edges = send_edges(buses);
+        let mut bus_latency = [0u32; MAX_BUSES];
+        for (index, setup) in buses.iter().take(MAX_BUSES).enumerate() {
+            bus_latency[index] = chain_latency(&setup.effects);
+        }
+        let plan = compile_latency(&graph, &[], &[], &bus_latency, &edges);
+        let specs: Vec<SendSpec> = buses
+            .iter()
+            .take(MAX_BUSES)
+            .enumerate()
+            .flat_map(|(index, setup)| setup.sends.iter().map(move |send| (index, send)))
+            .zip(0..)
+            .map(|((index, send), edge)| SendSpec {
+                producer: EffectTarget::Bus(index as u8),
+                target: send.target,
+                tap: send.tap,
+                enabled: send.enabled,
+                level: send.level,
+                delay: plan.send(edge),
+            })
+            .collect();
+        let _ = render.apply_structural(StructuralCommand::SetTrackGraph {
+            graph,
+            sends: Box::new(SendBank::new(&specs, 48_000)),
+        });
     }
 
     fn rendered_energy(project: &Project, configure: impl FnOnce(&mut RenderState)) -> f32 {
@@ -6618,6 +7039,274 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             analyzer: Box::new(SpectrumAnalyzer::new()),
             state: Box::new(EffectSlot::for_device(device)),
         }
+    }
+
+    // --- Sends -------------------------------------------------------------
+
+    /// A kick on channel 0 feeding track 1, with the bank routed
+    /// everything-to-master. What every send test below is measured against.
+    fn send_project() -> Project {
+        let mut project = synth_project(ProjectChannel::sampler(0, 1));
+        project.channels[0].setup.channel.bus = 1;
+        project
+    }
+
+    /// Energy in a track's own buffer after a block. A track's buffer still
+    /// holds its output when the block ends -- the next one empties it -- so
+    /// this reads what the track produced without having to unpick it from
+    /// the master's sum.
+    fn track_energy(render: &RenderState, track: usize, frames: usize) -> f32 {
+        render.buses[track].bus.l[..frames]
+            .iter()
+            .map(|s| s * s)
+            .sum()
+    }
+
+    /// Render `project` for one block and report what reached `track`.
+    fn wet_energy(project: &Project, track: usize, configure: impl FnOnce(&mut RenderState)) -> f32 {
+        let mut render = RenderState::from_project(48_000, project, &[]);
+        configure(&mut render);
+        render.play();
+        render.process_block(1024);
+        track_energy(&render, track, 1024)
+    }
+
+    /// The ordinary case, and the one the default song is: a track sends to
+    /// another and pulling its fader down takes the send with it.
+    #[test]
+    fn a_post_fader_send_follows_the_fader() {
+        let mut project = send_project();
+        project.buses[1].sends.push(mooloop_core::AuxSend::new(2));
+
+        let unity = wet_energy(&project, 2, |_| {});
+        let halved = wet_energy(&project, 2, |render| {
+            render.apply_command(EngineCommand::SetBusVolume { bus: 1, volume: 0.5 });
+        });
+
+        assert!(unity > 0.0, "the send carried nothing at all");
+        let ratio = halved / unity;
+        assert!(
+            (0.2..0.3).contains(&ratio),
+            "half the fader should be a quarter of the energy, got {ratio}"
+        );
+    }
+
+    /// The documented different result. A pre-fader send is after the chain
+    /// and before the fader, so the fader moves the main output and leaves
+    /// the send where it was.
+    #[test]
+    fn a_pre_fader_send_holds_its_level_while_the_fader_moves() {
+        let mut project = send_project();
+        let mut send = mooloop_core::AuxSend::new(2);
+        send.tap = mooloop_core::SendTap::PreFader;
+        project.buses[1].sends.push(send);
+
+        let unity = wet_energy(&project, 2, |_| {});
+        let faded = wet_energy(&project, 2, |render| {
+            render.apply_command(EngineCommand::SetBusVolume { bus: 1, volume: 0.25 });
+        });
+
+        assert!(unity > 0.0, "the send carried nothing at all");
+        let ratio = faded / unity;
+        assert!(
+            (0.99..1.01).contains(&ratio),
+            "a pre-fader send should not have moved, got {ratio}"
+        );
+    }
+
+    /// Mute silences a track's sends, pre-fader ones included. A desk's mute
+    /// is "this strip contributes nothing anywhere", not "its main output is
+    /// off and its sends carry on".
+    #[test]
+    fn mute_silences_a_tracks_sends() {
+        let mut project = send_project();
+        let mut send = mooloop_core::AuxSend::new(2);
+        send.tap = mooloop_core::SendTap::PreFader;
+        project.buses[1].sends.push(send);
+
+        let heard = wet_energy(&project, 2, |_| {});
+        let muted = wet_energy(&project, 2, |render| {
+            render.apply_command(EngineCommand::SetBusMuted {
+                bus: 1,
+                muted: true,
+            });
+        });
+
+        assert!(heard > 0.0);
+        assert_eq!(muted, 0.0, "a muted track still fed its send");
+    }
+
+    /// A send at zero and a send switched off are both silent, and they are
+    /// not the same statement: the disabled one keeps its level, so turning
+    /// it back on returns it to where it was.
+    #[test]
+    fn a_disabled_send_is_silent_without_forgetting_its_level() {
+        let mut project = send_project();
+        let mut send = mooloop_core::AuxSend::new(2);
+        send.enabled = false;
+        send.level = 0.75;
+        project.buses[1].sends.push(send);
+
+        assert_eq!(wet_energy(&project, 2, |_| {}), 0.0);
+        let reenabled = wet_energy(&project, 2, |render| {
+            render.apply_command(EngineCommand::SetSendEnabled {
+                producer: EffectTarget::Bus(1),
+                index: 0,
+                enabled: true,
+            });
+        });
+        assert!(reenabled > 0.0, "the send did not come back");
+    }
+
+    /// A send is linear even when the track sending it is analog-summed.
+    ///
+    /// The two are about different things and it is easy to conflate them:
+    /// analog sum is what a strip does to its own *output*, on its way into
+    /// the summing point it feeds. A send is a feed into a *different*
+    /// strip's input, which encodes on its own switch or not at all. So
+    /// switching the source's analog sum on must not change a byte of what
+    /// its send carries.
+    #[test]
+    fn a_send_is_linear_whatever_the_track_sending_it_does() {
+        let mut project = send_project();
+        project.buses[1].sends.push(mooloop_core::AuxSend::new(2));
+
+        let linear = wet_energy(&project, 2, |_| {});
+        let summed = wet_energy(&project, 2, |render| {
+            render.apply_command(EngineCommand::SetTrackConsole {
+                bus: 1,
+                enabled: true,
+            });
+        });
+
+        assert!(linear > 0.0);
+        assert_eq!(
+            linear, summed,
+            "analog sum reached the send, which is a strip's output decision"
+        );
+    }
+
+    /// **The alignment null test.** A latency-bearing device on the track a
+    /// send feeds moves the summing point both paths meet at, so the dry path
+    /// owes the difference.
+    ///
+    /// The send is *disabled*, which isolates timing from level: it is still
+    /// in the graph and still moves the arrival, but contributes no audio. So
+    /// the master's output must be the un-sent render delayed by exactly the
+    /// return's latency, sample for sample -- not merely "about right".
+    ///
+    /// At three block sizes, because a compensation that happened to be a
+    /// whole number of blocks would pass at one and fail at the others.
+    #[test]
+    fn a_dry_path_waits_for_a_latency_bearing_return() {
+        let plain = send_project();
+        let mut sent = plain.clone();
+        let mut send = mooloop_core::AuxSend::new(2);
+        send.enabled = false;
+        sent.buses[1].sends.push(send);
+        // The one device in the catalogue that declares a latency.
+        sent.buses[2].push_effect(mooloop_core::EffectSlotState {
+            id: mooloop_core::DeviceId::default(),
+            params: mooloop_core::EffectParams::Drive(mooloop_core::DriveParams::default()),
+            bypassed: false,
+            wet_dry: 1.0,
+            input_trim: 1.0,
+            output_trim: 1.0,
+        });
+        let latency = mooloop_core::EffectKind::Drive.latency_frames() as usize;
+        assert!(latency > 0, "the alignment case needs a device that declares one");
+
+        for frames in [128, 256, 1024] {
+            let reference = master_run(&plain, frames);
+            let delayed = master_run(&sent, frames);
+            for frame in latency..frames {
+                let expected = reference[frame - latency];
+                let actual = delayed[frame];
+                assert!(
+                    (expected - actual).abs() < 1e-6,
+                    "at {frames} frames, sample {frame}: expected {expected}, got {actual}"
+                );
+            }
+        }
+    }
+
+    /// One block of the master, for the alignment test above.
+    fn master_run(project: &Project, frames: usize) -> Vec<f32> {
+        let mut render = RenderState::from_project(48_000, project, &[]);
+        render.play();
+        render.process_block(frames);
+        render.master().l[..frames].to_vec()
+    }
+
+    /// A level change ramps rather than steps. There is no gain smoothing at
+    /// strip level at all today -- a fader stamps its value per block -- so a
+    /// send is the first place in the engine this is true, and it is asserted
+    /// rather than assumed.
+    #[test]
+    fn a_send_level_is_smoothed() {
+        let mut level = Smoothed::new(0.0, SEND_LEVEL_SMOOTH_S, 48_000);
+        level.set_target(1.0);
+        let mut bus = StereoBus::with_capacity(512);
+        for frame in 0..512 {
+            bus.l[frame] = 1.0;
+            bus.r[frame] = 1.0;
+        }
+        apply_send_level(&mut level, &mut bus, 512);
+
+        let biggest_step = bus.l[..512]
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            biggest_step < 0.01,
+            "a level change stepped by {biggest_step}, which is a click"
+        );
+        assert!(bus.l[0] < 0.02, "it did not start from where it was");
+        assert!(bus.l[511] > 0.85, "it never arrived");
+    }
+
+    /// The rule `docs/CAPACITY_POLICY.md` asks for, stated as a test: an
+    /// unused feature reserves nothing. No sends means no bank, no rings, and
+    /// none of the three scratch buffers.
+    #[test]
+    fn a_project_with_no_sends_allocates_nothing() {
+        let bank = SendBank::new(&[], 48_000);
+        assert!(bank.is_empty());
+        assert!(bank.starts.is_empty());
+        assert!(bank.scratch.is_none());
+        assert_eq!(bank.range(EffectTarget::Bus(1)), 0..0);
+    }
+
+    /// A bank groups its sends by producer, and a producer's own run keeps
+    /// the order it was authored in -- which is what makes an index into that
+    /// run a stable address for a level change.
+    #[test]
+    fn a_bank_groups_sends_by_producer() {
+        let spec = |producer, target| SendSpec {
+            producer,
+            target,
+            tap: SendTap::PostFader,
+            enabled: true,
+            level: 1.0,
+            delay: 0,
+        };
+        let bank = SendBank::new(
+            &[
+                spec(EffectTarget::Bus(3), 5),
+                spec(EffectTarget::Channel(1), 4),
+                spec(EffectTarget::Bus(3), 6),
+            ],
+            48_000,
+        );
+        let bus_three = bank.range(EffectTarget::Bus(3));
+        assert_eq!(bus_three.len(), 2);
+        assert_eq!(bank.sends[bus_three.clone()][0].target, 5);
+        assert_eq!(bank.sends[bus_three][1].target, 6);
+        assert_eq!(bank.range(EffectTarget::Channel(1)).len(), 1);
+        // A producer with no sends gets an empty run where its run would
+        // start, which is what a prefix-sum table gives and is what the
+        // emission loop wants: a zero-length slice, not a special case.
+        assert!(bank.range(EffectTarget::Bus(4)).is_empty());
     }
 
     #[test]
@@ -6866,8 +7555,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             buses[1].bus.output = 4;
             buses[4].bus.output = 11;
             buses[11].bus.output = MASTER_BUS;
-            let graph = compile_bus_graph(&buses).expect("acyclic");
-            render.apply_command(EngineCommand::InstallBusGraph { graph });
+            install_track_graph(render, &buses);
         });
         // Three unity-gain buses in series should not change the level.
         let ratio = routed / dry;

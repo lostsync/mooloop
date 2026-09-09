@@ -1,10 +1,109 @@
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { ConsoleButton, MixerFader, MiniKnob, MuteButton, SectionLabel, ToolButton } from "controls.slint";
+import { ConsoleButton, MixerFader, MiniKnob, MuteButton, ParameterFader, PickerChip, SectionLabel, ToolButton } from "controls.slint";
 import { NameField } from "toolbar.slint";
 import { GainMath } from "gain.slint";
 import { ChannelMeter } from "meters.slint";
 import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
-import { BusPicker } from "mixer.slint";
+import { BusPicker, MixerSendRow } from "mixer.slint";
+
+// One send, drawn as Adam's bar: the target, where it taps, whether it is
+// passing, and a fader.
+//
+// Two lines rather than one because the strip is narrow and a send has four
+// things to say. The bar is a `ParameterFader` -- the same horizontal fader
+// the rest of the interface uses -- rather than a bespoke one, so a send
+// level drags, fine-drags and resets to default like every other value.
+component SendRow inherits Rectangle {
+    in property <MixerSendRow> send;
+    callback level-changed(float);
+    callback tap-picked(int);
+    callback enable-toggled();
+    callback removed();
+
+    height: 42px;
+    background: hover.has-hover ? Theme.surface-raised : transparent;
+    border-radius: Theme.radius-sm;
+
+    hover := TouchArea { }
+
+    VerticalLayout {
+        padding-left: 4px;
+        // Room for the scroll bar, which is drawn over the right edge of the
+        // viewport: at 2px the remove button sat under it and could not be
+        // clicked at all, while the switch beside it worked. Found by the
+        // test below, which is why it clicks rather than invoking.
+        padding-right: 12px;
+        padding-top: 2px;
+        spacing: 1px;
+
+        HorizontalLayout {
+            spacing: 3px;
+            height: 18px;
+            Text {
+                horizontal-stretch: 1;
+                text: root.send.target-name;
+                color: root.send.enabled ? Theme.text : Theme.text-faint;
+                font-size: 9px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            // Post-fader first and pre-fader second, which is the order they
+            // are reached for. The deeper tap points -- after a named device,
+            // or at one of its declared outlets -- are the second half of
+            // this step and become further rows in this same list.
+            PickerChip {
+                width: 46px;
+                options: ["Post", "Pre"];
+                selected-index: root.send.pre-fader ? 1 : 0;
+                tooltip: root.send.pre-fader
+                    ? "Pre-fader: after this track's devices, before its fader"
+                    : "Post-fader: follows this track's fader";
+                picked(i) => { root.tap-picked(i); }
+            }
+            // The bypass dot, in the shape the device frame already uses for
+            // it. Switched off is not the same as turned down: this keeps the
+            // level, and keeps the send in the graph, so nothing re-times.
+            ToolButton {
+                text: root.send.enabled ? "\u{25cf}" : "\u{25cb}";
+                tooltip: root.send.enabled ? "Switch this send off" : "Switch this send on";
+                hint: "A send switched off keeps its level and stays in the routing, so nothing else moves in time.";
+                min-width: 20px;
+                max-width: 20px;
+                min-height: 18px;
+                max-height: 18px;
+                text-color: root.send.enabled ? Theme.accent : Theme.text-faint;
+                clicked => { root.enable-toggled(); }
+            }
+            ToolButton {
+                text: "\u{00d7}";
+                tooltip: "Remove this send";
+                hint: "Remove this send. The track it fed keeps everything else routed to it.";
+                min-width: 18px;
+                max-width: 18px;
+                min-height: 18px;
+                max-height: 18px;
+                text-color: Theme.text-muted;
+                clicked => { root.removed(); }
+            }
+        }
+        ParameterFader {
+            min-width: 60px;
+            min-height: 20px;
+            label-width: 0px;
+            track-min-width: 40px;
+            layout-spacing: 4px;
+            value: root.send.level;
+            maximum: GainMath.db-to-linear(6.0);
+            default-value: 1.0;
+            enabled: root.send.enabled;
+            fill: root.send.enabled ? Theme.accent : Theme.text-faint;
+            tooltip: "Level sent to " + root.send.target-name;
+            value-text: GainMath.format-db(GainMath.linear-to-db(root.send.level));
+            changed(v) => { root.level-changed(v); }
+        }
+    }
+}
 
 // The head of a bus's device chain, standing where a channel's source face
 // stands. A bus has no generator, so what occupies that position is the thing
@@ -18,12 +117,25 @@ export component BusDeviceFace inherits Rectangle {
     in property <int> output;
     in property <int> index;
     in property <int> feed-count;
+    // Sends reaching this track. Counted apart from `feed-count` because
+    // being fed by channels and being fed by sends are different facts -- the
+    // second is what makes a track a return, and a track can be both.
+    in property <int> send-feed-count;
     in property <[string]> bus-names;
     in property <[bool]> allowed;
     in property <float> left-db: -60;
     in property <float> right-db: -60;
     in property <bool> console;
     in property <bool> can-remove: true;
+    in property <[MixerSendRow]> sends;
+    // Which tracks this one may send to. The same mask the output picker
+    // uses, because a send and an output are legal under the same rule.
+    in property <[bool]> send-allowed;
+    callback send-added(int);
+    callback send-removed(int);
+    callback send-level-changed(int, float);
+    callback send-tap-picked(int, int);
+    callback send-enable-toggled(int);
     callback renamed(string);
     callback removed();
     callback volume-changed(float);
@@ -108,20 +220,35 @@ export component BusDeviceFace inherits Rectangle {
                 }
             }
 
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 6px;
+
             Rectangle {
                 background: Theme.panel;
                 border-radius: Theme.radius-sm;
                 horizontal-stretch: 1;
+                // The master has no sends area under it, so it keeps the
+                // slack; every other track gives it to the rows.
+                vertical-stretch: root.is-master ? 1 : 0;
                 VerticalLayout {
                     padding: 6px;
                     spacing: 4px;
                     SectionLabel { text: "ROUTING"; }
                     Text {
-                        text: root.feed-count == 0
-                            ? "No channels feed this bus"
-                            : root.feed-count + (root.feed-count == 1
-                                ? " channel feeds this bus" : " channels feed this bus");
-                        color: root.feed-count == 0 ? Theme.text-faint : Theme.text-muted;
+                        text: (root.feed-count == 0 && root.send-feed-count == 0)
+                                ? "Nothing feeds this track yet"
+                            : root.feed-count == 0
+                                ? (root.send-feed-count == 1
+                                    ? "1 send feeds this track" : root.send-feed-count + " sends feed this track")
+                            : root.send-feed-count == 0
+                                ? (root.feed-count == 1
+                                    ? "1 channel feeds this track" : root.feed-count + " channels feed this track")
+                            : root.feed-count + (root.feed-count == 1 ? " channel and " : " channels and ")
+                                + root.send-feed-count + (root.send-feed-count == 1 ? " send" : " sends")
+                                + " feed this track";
+                        color: (root.feed-count == 0 && root.send-feed-count == 0)
+                            ? Theme.text-faint : Theme.text-muted;
                         font-size: 9px;
                         wrap: word-wrap;
                     }
@@ -130,8 +257,12 @@ export component BusDeviceFace inherits Rectangle {
                     if !root.is-master : HorizontalLayout {
                         spacing: 6px;
                         alignment: start;
+                        // "Output", not "Sends to": a send is a specific
+                        // thing now and this is not one. A track's output is
+                        // where all of it goes; a send is a copy of some of
+                        // it, and the two must not wear one word.
                         Text {
-                            text: "Sends to";
+                            text: "Output";
                             color: Theme.text-muted;
                             font-size: 9px;
                             vertical-alignment: center;
@@ -140,7 +271,7 @@ export component BusDeviceFace inherits Rectangle {
                             bus-names: root.bus-names;
                             value: root.output;
                             allowed: root.allowed;
-                            tooltip: "Bus this one feeds";
+                            tooltip: "Track this one's output feeds";
                             picked(i) => { root.output-picked(i); }
                         }
                         Text {
@@ -196,12 +327,87 @@ export component BusDeviceFace inherits Rectangle {
                         }
                     }
                     if root.is-master : Text {
-                        text: "Sends to the audio outputs";
+                        text: "Feeds the audio outputs";
                         color: Theme.text-muted;
                         font-size: 9px;
                     }
-                    Rectangle { vertical-stretch: 1; }
+                    if root.is-master : Rectangle { vertical-stretch: 1; }
                 }
+            }
+
+            // The sends area. It draws the sends that exist and no more:
+            // there is no fixed number of bars, and when they outgrow the
+            // room it scrolls rather than the strip growing or the faders
+            // shrinking. Adam, 2026-09-09: *"i drew 4 sends bc that's how
+            // many fit in my drawing... we're not limiting to 4."*
+            //
+            // The master has none, because every track reaches it and so a
+            // send from it could only close a loop.
+            if !root.is-master : Rectangle {
+                background: Theme.panel;
+                border-radius: Theme.radius-sm;
+                vertical-stretch: 1;
+                VerticalLayout {
+                    padding: 6px;
+                    spacing: 4px;
+                    // The label and the add affordance share a row, because
+                    // the row it would have had below the list is a row the
+                    // list wants: this face is two rack units tall and the
+                    // sends area is what is left of it.
+                    HorizontalLayout {
+                        spacing: 6px;
+                        height: 18px;
+                        SectionLabel {
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                            text: root.sends.length == 0
+                                ? "SENDS"
+                                : root.sends.length + (root.sends.length == 1 ? " SEND" : " SENDS");
+                        }
+                        // Not a `+ Send` button. `docs/TERMINOLOGY.md`
+                        // retires that because it would create a *track*
+                        // called a send; this creates a **route**, and the
+                        // track at the far end becomes an effects return by
+                        // being sent to.
+                        BusPicker {
+                            bus-names: root.bus-names;
+                            value: root.index;
+                            allowed: root.send-allowed;
+                            label: "Send to\u{2026}";
+                            chip-width: 62px;
+                            height: 18px;
+                            tooltip: "Route a copy of this track to another one";
+                            picked(i) => { root.send-added(i); }
+                        }
+                    }
+                    if root.sends.length == 0 : Text {
+                        text: "Route this track to another and it gains a fader here.";
+                        color: Theme.text-faint;
+                        font-size: 9px;
+                        wrap: word-wrap;
+                        vertical-stretch: 1;
+                    }
+                    // Viewport height from the rows rather than a constant,
+                    // for the reason the mixer's own scroll derives its
+                    // width: a hardcoded one is exactly what left the device
+                    // rack unscrollable.
+                    if root.sends.length > 0 : ScrollView {
+                        vertical-stretch: 1;
+                        viewport-width: self.visible-width;
+                        viewport-height: max(self.visible-height, root.sends.length * 41px);
+                        VerticalLayout {
+                            spacing: 1px;
+                            for send[i] in root.sends : SendRow {
+                                send: send;
+                                level-changed(v) => { root.send-level-changed(i, v); }
+                                tap-picked(t) => { root.send-tap-picked(i, t); }
+                                enable-toggled => { root.send-enable-toggled(i); }
+                                removed => { root.send-removed(i); }
+                            }
+                        }
+                    }
+                }
+            }
             }
         }
     }

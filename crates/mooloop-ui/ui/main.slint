@@ -40,7 +40,7 @@ import { ReverbDeviceFace } from "reverb-device.slint";
 import { PlateDeviceFace } from "plate-device.slint";
 import { ModulationDeviceFace } from "modulation-device.slint";
 import { ModulationShelf, ModulationShelfMetrics, ModulationSourceRow, ModulationOutletRow, ModulationRouteRow } from "modulation-shelf.slint";
-import { MixerPane, MixerStripRow, BusPicker } from "mixer.slint";
+import { MixerPane, MixerSendRow, MixerStripRow, BusPicker } from "mixer.slint";
 import { BusDeviceFace } from "bus-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
 import { MlM1DeviceFace } from "mlm1-device.slint";
@@ -59,6 +59,7 @@ export { DeviceRackConcepts } from "device-concepts.slint";
 // instead of invoking their callbacks, which would pass even if event
 // routing to the handle were broken.
 export { CompressorDeviceDragHarness, Ds01DeviceDragHarness, EqDeviceDragHarness, FilterDeviceDragHarness } from "device-drag-harness.slint";
+export { MixerSendRow }
 export { MixerStripRow }
 export { OutputTargetRow }
 export { ShortcutRow }
@@ -874,6 +875,17 @@ export component MainWindow inherits Window {
     in property <float> editing-bus-right-db: -60;
     in property <float> editing-bus-input-left-db: -60;
     in property <float> editing-bus-input-right-db: -60;
+    // The sends this track has, and which tracks it may gain one to. Exactly
+    // the sends that exist: the face draws no empty bays and there is no
+    // drawn ceiling on how many there are.
+    in property <int> editing-bus-send-feed-count;
+    in property <[MixerSendRow]> editing-bus-sends;
+    in property <[bool]> editing-bus-send-allowed;
+    callback send-added(int, int);
+    callback send-removed(int, int);
+    callback send-level-changed(int, int, float);
+    callback send-tap-picked(int, int, int);
+    callback send-enable-toggled(int, int);
 
     // ---- lower editor ----
     //
@@ -3265,6 +3277,14 @@ export component MainWindow inherits Window {
                                                 console-toggled => { root.bus-console-toggled(root.editing-bus-index); }
                                                 renamed(v) => { root.track-renamed(root.editing-bus-index, v); }
                                                 removed => { root.track-removed(root.editing-bus-index); }
+                                                send-feed-count: root.editing-bus-send-feed-count;
+                                                sends: root.editing-bus-sends;
+                                                send-allowed: root.editing-bus-send-allowed;
+                                                send-added(t) => { root.send-added(root.editing-bus-index, t); }
+                                                send-removed(i) => { root.send-removed(root.editing-bus-index, i); }
+                                                send-level-changed(i, v) => { root.send-level-changed(root.editing-bus-index, i, v); }
+                                                send-tap-picked(i, t) => { root.send-tap-picked(root.editing-bus-index, i, t); }
+                                                send-enable-toggled(i) => { root.send-enable-toggled(root.editing-bus-index, i); }
                                             }
 
                                             if !root.editing-bus && root.source-kind == 0 : SamplerDeviceFace {

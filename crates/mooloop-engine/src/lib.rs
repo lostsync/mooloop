@@ -19,7 +19,7 @@ use jack::{AudioOut, Client, ClientOptions, MidiIn};
 use mooloop_core::{
     BufferParams, EffectKind, EffectParams, EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS,
     modulation::CONTROL_SOURCE_SLOTS,
-    DeviceKind, SliceMap,
+    CompiledBusGraph, DeviceKind, SliceMap,
 };
 use mooloop_dsp::{
     buffer_allocation_key, build_effect_at_tempo, AudioNode, IntegerDelay, SampleData,
@@ -89,7 +89,7 @@ mod idle_skip_tests;
 
 use graph::{AsyncClient, Graph};
 use render::{ReclaimedEffect, RenderState};
-pub use render::{AudioTapBank, ChannelStorage, ContainerScratch, EffectSlot};
+pub use render::{AudioTapBank, ChannelStorage, ContainerScratch, EffectSlot, SendBank, SendSpec};
 
 pub use driver::{AudioConfig, DriverStatus, OutputTarget};
 pub use meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
@@ -228,6 +228,22 @@ pub enum StructuralCommand {
     /// the answer is a property of every channel at once and a per-edit call
     /// site is a list that grows silently.
     SetAudioGraph { bank: Box<AudioTapBank> },
+    /// Install the track graph and the sends that ride on it, as one value.
+    ///
+    /// This replaces `EngineCommand::InstallBusGraph`, which was POD because
+    /// a track's routing was a `[u8; MAX_BUSES]` permutation and nothing
+    /// else. A send is a producer's *second* outgoing edge: it carries a
+    /// compensation ring, which is a heap object the audio thread may neither
+    /// allocate nor free, so the whole plan becomes structural.
+    ///
+    /// Whole rather than incremental, and one command rather than two, for
+    /// the reason [`Self::SetAudioGraph`] gives: a send whose target the
+    /// render order has not been told about would arrive a block late, and
+    /// that is not a state the executor may observe even briefly.
+    SetTrackGraph {
+        graph: CompiledBusGraph,
+        sends: Box<SendBank>,
+    },
 }
 
 /// GUI -> audio for the sample browser's audition voice. Owned here rather
@@ -267,6 +283,8 @@ pub(crate) enum StructuralReclaim {
     /// The audio-edge plan a newer one replaced. Its buffers are 64 KB each
     /// and must not be freed on the audio thread.
     AudioGraph(Box<AudioTapBank>),
+    /// The previous generation's sends, with their compensation rings.
+    TrackGraph(Box<SendBank>),
     /// A container's dry-path ring displaced by a resize, or the per-depth
     /// scratch handed to a chain that already had it. Same rule as every
     /// other box that reaches the audio thread: it comes back to be dropped.
@@ -578,6 +596,7 @@ impl EngineHandle {
                 StructuralReclaim::Compensation(delay) => drop(delay),
                 StructuralReclaim::ConsoleSum(buffer) => drop(buffer),
                 StructuralReclaim::AudioGraph(bank) => drop(bank),
+                StructuralReclaim::TrackGraph(bank) => drop(bank),
                 StructuralReclaim::Container { align, scratch } => {
                     drop(align);
                     drop(scratch);

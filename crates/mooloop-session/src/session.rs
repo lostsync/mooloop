@@ -6,6 +6,7 @@
 //! `mooloop-ui` projects this into Slint models and never the other way
 //! round.
 
+use crate::engine::SendRoute;
 use crate::channel::ChannelState;
 use crate::sample::{sample_description, sample_duration, sample_files_in_directory, sample_index, waveform_peaks};
 use crate::notes::ScaleBase;
@@ -119,6 +120,13 @@ pub struct Session {
     /// [`Self::compensation_sent`]: a record of what has been said to the
     /// audio thread, not document state.
     pub console_sums_sent: [bool; MAX_BUSES],
+    /// The track graph and the send routing the engine has been told about.
+    ///
+    /// The key deliberately holds only what is *structural* about a send --
+    /// where it goes and what it waits -- and not its level, tap or enable,
+    /// which travel as POD commands. Otherwise every frame of a send-fader
+    /// drag would rebuild a plan and reallocate every ring in it.
+    pub track_graph_sent: (mooloop_core::CompiledBusGraph, Vec<SendRoute>),
     /// The audio-edge plan the engine has been told about, so the pump's
     /// reconcile sends only what changed. Same status as
     /// [`Self::compensation_sent`]: a record of what has been said to the
@@ -217,6 +225,7 @@ impl Default for Session {
             modulation_ui_channel: Cell::new(None),
             compensation_sent: mooloop_core::CompiledLatency::default(),
             console_sums_sent: [false; MAX_BUSES],
+            track_graph_sent: (mooloop_core::CompiledBusGraph::default(), Vec::new()),
             audio_graph_sent: mooloop_core::CompiledAudioGraph::default(),
             modulation_edit_before: None,
             modulation_edit_changed: false,
@@ -982,6 +991,21 @@ impl Session {
             .count()
     }
 
+    /// How many sends reach `bus`, which is the count that makes it a return.
+    ///
+    /// Separate from [`Self::bus_feed_count`] rather than added to it,
+    /// because they are different facts about a track: being fed by channels
+    /// makes it an ordinary track or a bus, and being fed by sends makes it a
+    /// return. `docs/TERMINOLOGY.md` -- a track can be both at once, and a
+    /// single number could not say so.
+    pub fn track_send_count(&self, bus: usize) -> usize {
+        self.buses
+            .iter()
+            .flat_map(|setup| setup.sends.iter())
+            .filter(|send| send.target as usize == bus)
+            .count()
+    }
+
     /// Retunes every tempo-synced effect to `bpm`, returning the parameter
     /// changes the engine has to be told about.
     ///
@@ -1235,6 +1259,10 @@ impl Session {
         // allocates its own, so this side must re-derive rather than trust a
         // plan for the document that just left.
         self.audio_graph_sent = mooloop_core::CompiledAudioGraph::default();
+        // Same for the track graph and its sends: `RenderState::load_project`
+        // compiles and allocates its own bank, so this side must re-derive
+        // rather than trust a plan for the document that just left.
+        self.track_graph_sent = (mooloop_core::CompiledBusGraph::default(), Vec::new());
         // A load points the device rack back at a channel; the bus the
         // previous document had open means nothing in this one.
         self.effect_target = EffectTarget::Channel(project.selected_channel);
@@ -1380,7 +1408,12 @@ impl Session {
         offsets
     }
 
-    /// Which buses `bus` may be routed to without closing a loop.
+    /// Which tracks `bus` may reach without closing a loop.
+    ///
+    /// One answer for both of a track's outgoing edges: an output and a send
+    /// are legal under the same rule, so the send target menu and the output
+    /// picker grey the same rows and a send cannot creep past a check the
+    /// picker makes.
     pub fn allowed_destinations(&self, bus: usize) -> Vec<bool> {
         (0..self.buses.len())
             .map(|candidate| {

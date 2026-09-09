@@ -258,3 +258,94 @@ ceiling is free — raising it before would be paying to keep a mistake.
 
 So the cap is unchanged at seventeen and is now written down with the
 measurement needed to lift it, rather than being a number nobody had priced.
+
+
+## Step 05 — sends
+
+Landed on `feat/sends` (2026-09-09). A track routes a copy of itself to
+another track; the source gains a fader for it; the track at the far end is an
+effects return by virtue of being sent to and by nothing else. The starter
+kit's last third arrives with it: `Reverb`, fully wet, fed post-fader by
+`Drums` and `Bass`.
+
+### The step doc was wrong in four places, and three of them made it look bigger
+
+`05-sends-and-returns.md` was written before `docs/TERMINOLOGY.md` and Adam
+corrected it on sight. It is rewritten as [`05-sends.md`](05-sends.md), which
+keeps the original at the bottom. The correction worth carrying:
+
+**`CompiledBusGraph::destinations` did not have to be replaced.** The doc said
+it must be replaced rather than widened, and that claim is what made this the
+step "that forces the compiler change" and the reason it was scheduled last. A
+track still has exactly one *output* — sends are extra edges, not extra
+outputs — so the `[u8; MAX_BUSES]` permutation was never in question. What
+died was one *edge* per node, which lives in `compile_latency`, in `reaches`,
+and in the block loop.
+
+The other two: `SetCompensation` did not need an edge id, because a producer's
+main edge is still one per producer; and `OutletTap::Output` / `TapIsLate` are
+not this feature's vocabulary at all. `TapIsLate` is a rule about the
+*consumer* — an aux-in edge lands pre-chain, where there is nowhere to put a
+delay — and a send carries its own compensation, so it never asks. Two edge
+systems wearing one word, and the word was doing the arguing.
+
+### Adam's four rulings
+
+1. **Four is not a limit.** *"i drew 4 sends bc that's how many fit in my
+   drawing… we're not limiting to 4."* The area draws the sends that exist and
+   scrolls. `THE-STRIP.md` is amended rather than quietly contradicted.
+2. **A send is a route to a track, not a kind of track.** Reaper's model, and
+   already what `TERMINOLOGY.md` said.
+3. **No send device.** The tap point is chosen in the interface. Post-fader
+   and pre-fader are built; the drill-down into a device's output or one of
+   its declared outlets is stage 2, and `05-sends.md` says what it needs.
+4. **Returns are not a thing.** *"i dont really know why we need it. i dont
+   think we do?"* Nothing was built for them. A send that would feed back is a
+   cycle and is refused under the same rule an output is, and the answer to
+   "process the dry and the wet together" is to route both to a third track.
+
+### The measurement that split the work cleanly
+
+**Pre-fader and post-fader arrive at the same time.** Both are after the
+chain, and a fader declares no latency. So the two taps Adam wanted first
+needed no new latency arithmetic beyond a per-edge delay, and the taps that do
+need chain prefix sums — after a named device, or at one of its outlets — fall
+out as a separately shippable stage rather than as a thing to cut.
+
+### What the block loop actually gained
+
+Two capture points and one emission point per loop, and a strip with no sends
+walks a zero-length slice. A project with no sends holds no bank, no rings and
+none of the three scratch buffers, which is a test rather than a claim.
+
+`EngineCommand::InstallBusGraph` is retired: routing stopped being POD the
+moment a send carried a compensation ring, so the graph and its sends are
+derived and diffed once a pump tick as `StructuralCommand::SetTrackGraph`,
+beside the three reconciles already there. Level, tap and enable stay POD, or
+a fader drag would rebuild every ring in the plan sixty times a second.
+
+### What is not in it
+
+Named here rather than left to be discovered.
+
+**The drill-down tap points.** Adam asked for a menu that reaches past
+pre-fader into "individual signal outs if those exist, or the output of any
+device in the chain", with a mark in the chain where the send taps. Stage 1
+ships the top two entries of that menu and neither the deeper ones nor the
+mark — there is no device to mark yet, because both taps this step has are the
+strip's own output. `05-sends.md` says what stage 2 needs: a chain that can
+emit a copy after slot *k*, and a prefix variant of `chain_latency` so the tap
+has an arrival.
+
+**Sends from a channel.** The engine is strip-level: `SendBank` is keyed by
+`EffectTarget`, the channel block loop walks its run, and `compile_latency`
+compiles a channel's send. Nothing authors one, because the mixer draws no
+channel strips for the control to live on. That is where the drill-down has
+anything to drill into, so the two are one decision and it is Adam's.
+
+**A send has no pan.** Level and a tap, which is what the mockup drew.
+
+**Sends are not undoable**, because routing was not. A send edit marks the
+document dirty and reaches audio, like `set_bus_output` beside it; a track
+*add* still goes through the project-edit path and is. Worth unifying, and not
+here.

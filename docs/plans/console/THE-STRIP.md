@@ -56,11 +56,20 @@ plan parked it — not as a separate device at the head of a chain, but as the
 strip's own input stage, which is the same control the voicing selector is
 already next to.
 
-**Sends are four bars, inline.** Not a list, not a dialog: four horizontal
-faders in the strip. That is a capacity decision as well as a layout one, and
-it belongs in `CAPACITY_POLICY.md` terms — four is a *drawn* limit rather than
-an engine one, so the model should still carry a `Vec` and the face should
-show four.
+**Sends are bars, inline.** Not a list of names, not a dialog: horizontal
+faders in the strip.
+
+~~four horizontal faders … four is a *drawn* limit rather than an engine one,
+so the model should still carry a `Vec` and the face should show four.~~
+**Amended by Adam, 2026-09-09**, reading step 05: *"i drew 4 sends bc that's
+how many fit in my drawing. if there are no sends, we wouldnt show any. we're
+not limiting to 4… if we gain more than will fit, that area should scroll."*
+
+So there is no drawn ceiling either. The area draws exactly the sends that
+exist and scrolls past the room it has, rather than the strip growing or the
+faders shrinking. `CAPACITY_POLICY.md` gets the plainer version of its own
+rule: nothing reserves for a number of sends anywhere, in the model, in the
+plan or in the face. See [`05-sends.md`](05-sends.md).
 
 **"Analog sum" is the name, and it goes at the foot.** Adopted in step 02 on
 the day the mockup arrived: the mixer strip now carries the switch at the

@@ -43,6 +43,16 @@ impl StereoBus {
         }
     }
 
+    /// Replace the first `frames` samples with another bus's.
+    ///
+    /// What a send needs and a sum does not: a strip with two outgoing edges
+    /// has to keep its own buffer intact while each edge is given its own
+    /// level and its own delay, so each one works on a copy.
+    pub fn copy_from(&mut self, other: &StereoBus, frames: usize) {
+        self.l[..frames].copy_from_slice(&other.l[..frames]);
+        self.r[..frames].copy_from_slice(&other.r[..frames]);
+    }
+
     /// Sum another bus into this one (unity gain), first `frames` samples.
     pub fn add_from(&mut self, other: &StereoBus, frames: usize) {
         for i in 0..frames {

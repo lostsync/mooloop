@@ -8,14 +8,38 @@
 use crate::channel::ChannelState;
 use crate::project::ProjectEdit;
 use mooloop_core::{
-    chain_latency, compile_audio_graph, compile_bus_graph, compile_latency, CompiledAudioGraph,
+    chain_latency, compile_audio_graph, compile_bus_graph, compile_latency, send_edges,
+    CompiledAudioGraph,
     CompiledLatency, DeviceKind, EffectTarget, EngineCommand, OutletDescriptor, PublishesOutlets,
     SliceMap, MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
 };
 use mooloop_dsp::{IntegerDelay, SampleData, StereoBus, MAX_BLOCK_SIZE};
 use crate::session::Session;
-use mooloop_engine::{AudioTapBank, EngineHandle, StructuralCommand};
+use mooloop_engine::{AudioTapBank, EngineHandle, SendBank, SendSpec, StructuralCommand};
 use std::sync::Arc;
+
+/// What is *structural* about one send: where it goes and what it waits.
+///
+/// The key `Session::sync_track_graph` diffs on. Level, tap and enable are
+/// deliberately absent -- they travel as POD commands, so including them here
+/// would rebuild the whole plan, and every compensation ring in it, on every
+/// frame of a send-fader drag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SendRoute {
+    producer: EffectTarget,
+    target: u8,
+    delay: u32,
+}
+
+impl SendRoute {
+    fn of(spec: &SendSpec) -> Self {
+        Self {
+            producer: spec.producer,
+            target: spec.target,
+            delay: spec.delay,
+        }
+    }
+}
 
 /// UI callbacks all run on one thread, but boxed structural edits and POD
 /// commands used to enter separate relay queues and lose their relative
@@ -205,7 +229,62 @@ impl Session {
         for (index, bus) in self.buses.iter().take(MAX_BUSES).enumerate() {
             bus_latency[index] = chain_latency(&bus.effects);
         }
-        compile_latency(&graph, &channel_latency, &channel_bus, &bus_latency)
+        compile_latency(
+            &graph,
+            &channel_latency,
+            &channel_bus,
+            &bus_latency,
+            &send_edges(&self.buses),
+        )
+    }
+
+    /// Every send in the document, prepared for the engine's bank.
+    ///
+    /// `plan` is [`Self::latency_plan`]'s answer, whose per-send entries are
+    /// in the same order `send_edges` flattens them -- that shared order is
+    /// the contract, and reading both from one pass is what keeps it true.
+    fn send_specs(&self, plan: &CompiledLatency) -> Vec<SendSpec> {
+        let mut specs = Vec::new();
+        for (index, setup) in self.buses.iter().take(MAX_BUSES).enumerate() {
+            for send in &setup.sends {
+                let edge = specs.len();
+                specs.push(SendSpec {
+                    producer: EffectTarget::Bus(index as u8),
+                    target: send.target,
+                    tap: send.tap,
+                    enabled: send.enabled,
+                    level: send.level,
+                    delay: plan.send(edge),
+                });
+            }
+        }
+        specs
+    }
+
+    /// Reconcile the engine's track graph and sends with the document.
+    ///
+    /// Called from the pump beside [`Self::sync_compensation`] and for the
+    /// same reasons. It replaces `EngineCommand::InstallBusGraph`, which the
+    /// routing edit used to hand back for the caller to send: routing is no
+    /// longer one `u8` per track, because a send is a second outgoing edge
+    /// that carries a compensation ring, and a ring is a heap object that has
+    /// to be built here and reclaimed here.
+    ///
+    /// The graph and its sends go as **one** command. A send whose target the
+    /// render order has not been told about would arrive a block late, and
+    /// two commands leave exactly that window open.
+    pub fn sync_track_graph(&mut self, handle: &mut EngineHandle) {
+        let graph = compile_bus_graph(&self.buses).unwrap_or_default();
+        let specs = self.send_specs(&self.latency_plan());
+        let routes: Vec<SendRoute> = specs.iter().map(SendRoute::of).collect();
+        if (graph, &routes) == (self.track_graph_sent.0, &self.track_graph_sent.1) {
+            return;
+        }
+        handle.send_structural(StructuralCommand::SetTrackGraph {
+            graph,
+            sends: Box::new(SendBank::new(&specs, handle.sample_rate())),
+        });
+        self.track_graph_sent = (graph, routes);
     }
 
     /// Reconcile the engine's compensation delays with the plan.
