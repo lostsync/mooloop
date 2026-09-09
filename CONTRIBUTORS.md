@@ -67,8 +67,8 @@ Alphabetical by model name, then by harness.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-09-08
-- Sessions: 78
+- Last seen: 2026-09-09
+- Sessions: 79
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -142,7 +142,10 @@ Alphabetical by model name, then by harness.
   had been two bugs in four lines and no test covering pane moves at all, and
   the drag's own geometry tested at last, led by the check that says the
   measured tab coordinates still land on tabs, and the clippy lint that had
-  been failing CI for two days while a bare `cargo clippy` reported it green.
+  been failing CI for two days while a bare `cargo clippy` reported it green,
+  and the console plan, which is what four items on one morning's list turn
+  into once the policy `MIXER_PLAN.md` was missing is written down -- that a
+  mixer strip is created by a musical act rather than an administrative one.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

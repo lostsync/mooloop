@@ -65,7 +65,10 @@ ends.
 **Buses cannot be renamed.** `MixerBus.name` is in the project format, saves
 and loads fine, and defaults to `"Bus 1".."Bus 16"` (`mixer.rs:64`). There is
 no command, action, or Slint field that sets it — grep finds no `RenameBus` or
-`SetBusName` anywhere. For a drum bus you would want "Drums".
+`SetBusName` anywhere. For a drum bus you would want "Drums". Two plans now
+say they close it: `interface-iteration/03-channel-identity.md` and, if
+grouping arrives first, `console/04-groups-and-a-dynamic-bus-list.md`, where a
+group without a name is useless.
 
 **Buffer MIDI mapping has no UI.** `EngineHandle::set_buffer_midi_map`
 (`mooloop-engine/src/lib.rs:622`) is the only way to install one, and neither
