@@ -536,6 +536,14 @@ columns with tiny `+` and `-` glyphs.
   Do not thread a `hover-hint` property up through a device face. That was
   tried, exactly one face grew it, and every other sentence in the program
   stayed in a tooltip.
+- **A mode or a preset that goes for a familiar sound is named for the sound,
+  not for the hardware.** Adam's instruction, 2026-09-09, naming the channel
+  strip's four voicings: *"dont reference these by name, can use a 'character
+  name' that sorta describes what we've gone for in the sound."* So the strip
+  mode reads `Moo / Grip / Punch / Iron` rather than naming three consoles.
+  This is a standing rule for shipped strings, and it is also the more useful
+  label: a character name says what to expect from a control the user has not
+  used before, where a brand name only helps someone who already owns one.
 - The first click acts. Focus acquisition must not consume it.
 
 ## Agent Acceptance Checklist

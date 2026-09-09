@@ -13,6 +13,11 @@ A strip gains `sends: Vec<AuxSend { target, level, tap: Pre | Post, enabled }>`,
 per `MIXER_PLAN.md`. An explicit `enabled` because a zero level is a valid
 setting and not the same statement.
 
+Adam's mockup ([`THE-STRIP.md`](THE-STRIP.md)) draws **four send bars inline
+on the strip** -- horizontal faders, not a list and not a dialog. Keep the
+`Vec` in the model and draw four: that is a drawn limit rather than an engine
+one, which is the distinction `CAPACITY_POLICY.md` exists to hold.
+
 ## Three things have to change shape, not stretch
 
 **`CompiledBusGraph::destinations: [u8; MAX_BUSES]`** is one output per node

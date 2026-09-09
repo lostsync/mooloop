@@ -78,7 +78,10 @@ just not reachable from the app.
 **Solo is a button with nothing behind it.** `SoloButton` exists in
 `controls.slint:1856` with a `soloed` property; `mooloop-core` has no solo
 state at all. `MIXER_PLAN.md` specifies the intended behaviour (an AFL-style
-monitor tap, not a routing change). Also standing in `ENHANCEMENTS.md`.
+monitor tap, not a routing change). Also standing in `ENHANCEMENTS.md`, and
+now drawn on Adam's strip mockup — `docs/plans/console/THE-STRIP.md` says why
+it is the largest unbuilt thing on it: a monitor tap is a second output path,
+not a control.
 
 ---
 

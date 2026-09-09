@@ -23,7 +23,7 @@ use mooloop_core::{
 };
 use mooloop_dsp::{
     buffer_allocation_key, build_effect_at_tempo, AudioNode, IntegerDelay, SampleData,
-    SpectrumAnalyzer, StretchPool, SPECTRUM_BINS,
+    SpectrumAnalyzer, StereoBus, StretchPool, SPECTRUM_BINS,
 };
 use rtrb::{Consumer, Producer};
 
@@ -78,6 +78,8 @@ mod audio_edge_tests;
 mod block_cost;
 #[cfg(test)]
 mod container_tests;
+#[cfg(test)]
+mod console_tests;
 #[cfg(test)]
 mod ds01_tests;
 #[cfg(test)]
@@ -180,6 +182,24 @@ pub enum StructuralCommand {
         target: EffectTarget,
         delay: Option<Box<IntegerDelay>>,
     },
+    /// Give a bus its second input accumulator -- the sum of everything
+    /// feeding it that opted into console summing -- or take it away.
+    ///
+    /// Structural for the same reason [`Self::SetCompensation`] is: the 64 KB
+    /// buffer is allocated on the control thread and the displaced one is
+    /// reclaimed there, because the audio thread may do neither. `None` means
+    /// nothing encoded reaches this bus, which is every bus in a project that
+    /// has not switched console on -- so the feature costs nothing while it
+    /// is out, which is the rule everything in `docs/plans/console/` is held
+    /// to.
+    ///
+    /// The switch itself is a POD `EngineCommand::SetStripConsole`, and the
+    /// two may arrive in either order: a strip encoding into a bus with no
+    /// accumulator sums linearly until one turns up.
+    SetConsoleSum {
+        bus: u8,
+        buffer: Option<Box<StereoBus>>,
+    },
     /// Give a channel's sampler its time-stretch state, or take it away.
     ///
     /// Structural rather than a parameter because the pool is ~1.6 MB and has
@@ -240,6 +260,10 @@ pub(crate) enum StructuralReclaim {
     /// A compensation delay displaced by a new one, or surrendered when a
     /// producer became the longest path and stopped needing one.
     Compensation(Box<IntegerDelay>),
+    /// A bus's encoded-sum accumulator, surrendered when nothing console
+    /// encoded feeds it any more. Same rule as the rest: 64 KB must not be
+    /// freed on the audio thread.
+    ConsoleSum(Box<StereoBus>),
     /// The audio-edge plan a newer one replaced. Its buffers are 64 KB each
     /// and must not be freed on the audio thread.
     AudioGraph(Box<AudioTapBank>),
@@ -552,6 +576,7 @@ impl EngineHandle {
                 StructuralReclaim::PreviewSample { sample } => drop(sample),
                 StructuralReclaim::SamplerStretch(pool) => drop(pool),
                 StructuralReclaim::Compensation(delay) => drop(delay),
+                StructuralReclaim::ConsoleSum(buffer) => drop(buffer),
                 StructuralReclaim::AudioGraph(bank) => drop(bank),
                 StructuralReclaim::Container { align, scratch } => {
                     drop(align);

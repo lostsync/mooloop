@@ -10,9 +10,9 @@ use crate::project::ProjectEdit;
 use mooloop_core::{
     chain_latency, compile_audio_graph, compile_bus_graph, compile_latency, CompiledAudioGraph,
     CompiledLatency, DeviceKind, EffectTarget, EngineCommand, OutletDescriptor, PublishesOutlets,
-    SliceMap, MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
+    clamp_bus, SliceMap, MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
 };
-use mooloop_dsp::{IntegerDelay, SampleData};
+use mooloop_dsp::{IntegerDelay, SampleData, StereoBus, MAX_BLOCK_SIZE};
 use crate::session::Session;
 use mooloop_engine::{AudioTapBank, EngineHandle, StructuralCommand};
 use std::sync::Arc;
@@ -248,6 +248,66 @@ impl Session {
             }
         }
         self.compensation_sent = plan;
+    }
+
+    /// Which buses need a second input accumulator: the ones something
+    /// console-encoded actually reaches.
+    ///
+    /// Derived rather than tracked, for the reason [`Self::latency_plan`]
+    /// gives. Four different edits change the answer -- switching a strip's
+    /// console on or off, re-routing a channel to another bus, re-routing a
+    /// bus, and loading a project -- so a flag each of them had to remember
+    /// to set is a list that grows silently.
+    ///
+    /// The master is included like any other bus: it is the summing point a
+    /// default project already has, which is what lets two channels glue with
+    /// no bus created and nothing placed in a chain.
+    pub fn console_plan(&self) -> [bool; MAX_BUSES] {
+        let mut wanted = [false; MAX_BUSES];
+        for channel in self.channels.iter().take(MAX_CHANNELS) {
+            if channel.console {
+                wanted[clamp_bus(channel.bus) as usize] = true;
+            }
+        }
+        let graph = compile_bus_graph(&self.buses).unwrap_or_default();
+        for (index, setup) in self.buses.iter().enumerate().take(MAX_BUSES).skip(1) {
+            if setup.bus.console {
+                wanted[graph.destination(index) as usize] = true;
+            }
+        }
+        wanted
+    }
+
+    /// Reconcile the engine's console accumulators with the plan.
+    ///
+    /// Called from the pump beside [`Self::sync_compensation`] and for the
+    /// same reasons: deriving and diffing once a tick cannot be forgotten,
+    /// costs a comparison when nothing changed, and converges within one
+    /// frame of any edit.
+    ///
+    /// The buffers are allocated here, on the pump thread, and only for the
+    /// buses the plan names: a project that has never switched console on
+    /// allocates nothing and this sends nothing, which is the "free while it
+    /// is out" rule `docs/plans/console/` is held to. Deliberately does not
+    /// mark the document dirty -- this is derived state, not something the
+    /// user did.
+    pub fn sync_console_sums(&mut self, handle: &mut EngineHandle) {
+        let plan = self.console_plan();
+        if plan == self.console_sums_sent {
+            return;
+        }
+        for (bus, (&wanted, &sent)) in
+            plan.iter().zip(self.console_sums_sent.iter()).enumerate()
+        {
+            if wanted == sent {
+                continue;
+            }
+            handle.send_structural(StructuralCommand::SetConsoleSum {
+                bus: bus as u8,
+                buffer: wanted.then(|| Box::new(StereoBus::with_capacity(MAX_BLOCK_SIZE))),
+            });
+        }
+        self.console_sums_sent = plan;
     }
 
     /// The audio edges this project's channels compile to, from the model as

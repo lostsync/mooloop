@@ -58,6 +58,14 @@ pub struct MixerBus {
     /// Destination bus index. Any other bus is legal when it does not close a
     /// cycle; the master's value is unused.
     pub output: u8,
+    /// Whether this bus's *output* is console-encoded, exactly as a channel's
+    /// can be. Nesting needs no special case: a console-on bus encodes at its
+    /// own output and whatever it feeds decodes it.
+    ///
+    /// Meaningless on the master, which feeds nothing, and ignored there.
+    /// Defaulted on load; `false` reproduces today exactly.
+    #[serde(default)]
+    pub console: bool,
 }
 
 impl MixerBus {
@@ -76,6 +84,7 @@ impl MixerBus {
             volume: 1.0,
             pan: 0.0,
             output: MASTER_BUS,
+            console: false,
         }
     }
 }

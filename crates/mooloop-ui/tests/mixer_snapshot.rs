@@ -26,6 +26,7 @@ fn rack_rows() -> ModelRc<ChannelRow> {
             pan: 0.0,
             selected: index == 0,
             bus,
+            console: false,
             steps: ModelRc::from(Rc::new(VecModel::from(vec![
                 StepCell {
                     active: false,
@@ -68,6 +69,7 @@ fn strips(selected: usize) -> Rc<VecModel<MixerStripRow>> {
                 output: 0,
                 selected: index == selected,
                 is_master: index == 0,
+                console: false,
                 feed_count: match index {
                     0 => 1,
                     3 => 2,

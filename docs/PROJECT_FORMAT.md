@@ -243,6 +243,18 @@ before any of them existed still loads:
   ids takes its **positions** as its ids — which is exactly what the routes
   and lanes in such a project already mean by `slot`, so an older song loads
   pointing where it pointed.
+- **Console summing is one defaulted boolean per strip.**
+  `channels[].setup.channel.console` and `buses[].bus.console` say whether
+  that strip's output is encoded on its way into its destination, to be
+  decoded there with everything else that opted in. Both default to `false`,
+  which is a linear mixer and is what every manifest written before this
+  existed reads as. The master's value is ignored, because the master feeds
+  nothing.
+
+  There is deliberately **no field naming the algorithm**. One curve exists,
+  and a `console_mode` added later with `#[serde(default)]` is the same no-op
+  migration whenever it lands, so a saved field with one legal value would buy
+  nothing now. See `docs/plans/console/02-console-summing.md`.
 - **Two effects follow the transport, and both persist a division rather
   than its result.** A delay carries `tempo_sync` and `time_division`, and a
   modulation effect carries `tempo_sync` and `rate_division`; all four

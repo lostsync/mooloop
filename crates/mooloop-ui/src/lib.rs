@@ -2123,6 +2123,7 @@ impl UiState {
                 pan: channel.pan,
                 selected: index == self.session.selected,
                 bus: channel.bus as i32,
+                console: channel.console,
                 steps: ModelRc::from(self.step_models[index].clone()),
             })
             .collect();
@@ -2165,6 +2166,7 @@ impl UiState {
                 row.volume_db = linear_to_db(ch.volume);
                 row.pan = ch.pan;
                 row.bus = ch.bus as i32;
+                row.console = ch.console;
                 row.name = ch.name.as_str().into();
                 self.rows.set_row_data(i, row);
             }
@@ -3255,6 +3257,7 @@ impl UiState {
             output: setup.bus.output as i32,
             selected: self.session.effect_target == EffectTarget::Bus(index as u8),
             is_master: index == MASTER_BUS as usize,
+            console: setup.bus.console,
             feed_count: self.session.bus_feed_count(index) as i32,
             allowed: self.allowed_destinations(index),
             // Levels are owned by the metering timer, which writes them in
@@ -3325,6 +3328,7 @@ impl UiState {
         window.set_editing_bus_pan(setup.bus.pan);
         window.set_editing_bus_output(setup.bus.output as i32);
         window.set_editing_bus_feed_count(self.session.bus_feed_count(index) as i32);
+        window.set_editing_bus_console(setup.bus.console);
         window.set_editing_bus_allowed(self.allowed_destinations(index));
     }
 
@@ -3841,6 +3845,7 @@ impl AppUi {
             pan: first.pan,
             selected: true,
             bus: first.bus as i32,
+            console: first.console,
             steps: ModelRc::from(step_model.clone()),
         };
         let rows_model = Rc::new(VecModel::from(vec![row]));
@@ -6290,6 +6295,7 @@ impl AppUi {
                     pan: ch.pan,
                     selected: true,
                     bus: ch.bus as i32,
+                    console: ch.console,
                     steps: ModelRc::from(model.clone()),
                 };
                 st.rows.push(row);
@@ -6645,6 +6651,48 @@ impl AppUi {
                 // Feed counts moved, so both the old and new bus restate them.
                 if let Some(w) = weak.upgrade() {
                     guard.sync_mixer(&w);
+                }
+                let _ = tx.send(command);
+            });
+        }
+
+        // The console switch on both kinds of strip. The switch itself is all
+        // that travels; the buffer its encoded output lands in is reconciled
+        // by `sync_console_sums` on the next pump tick, which is why neither
+        // of these has to know anything about which buses need one.
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_channel_console_toggled(move |channel| {
+                let mut guard = st.borrow_mut();
+                let Some(command) = guard.session.toggle_channel_console(channel) else {
+                    return;
+                };
+                guard.session.dirty = true;
+                guard.sync_row_flags();
+                if let Some(w) = weak.upgrade() {
+                    guard.update_document_title(&w);
+                }
+                let _ = tx.send(command);
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_bus_console_toggled(move |bus| {
+                let mut guard = st.borrow_mut();
+                let Some(command) = guard.session.toggle_bus_console(bus) else {
+                    return;
+                };
+                guard.session.dirty = true;
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_mixer(&w);
+                    // The bus device face carries the same switch, so it has
+                    // to restate it -- the toggle can be thrown from either.
+                    guard.sync_bus_editor(&w);
+                    guard.update_document_title(&w);
                 }
                 let _ = tx.send(command);
             });
@@ -10599,6 +10647,12 @@ impl AppUi {
                 // can. Allocates the taps only when the plan says somebody is
                 // listening.
                 st.borrow_mut().session.sync_audio_graph(&mut handle);
+                // And beside both, for the third time and the same reason:
+                // which buses need a console accumulator is a property of
+                // every strip's switch and every route at once. Allocates a
+                // buffer only for the buses something encoded actually
+                // reaches, so a project with console off costs nothing.
+                st.borrow_mut().session.sync_console_sums(&mut handle);
                 if document_title_needs_refresh {
                     let Some(window) = weak.upgrade() else { return };
                     st.borrow().update_document_title(&window);

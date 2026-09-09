@@ -1433,6 +1433,85 @@ export component MuteButton inherits ToolButton {
     max-height: 18px;
 }
 
+/// The analog-sum switch for one strip: does this strip's output go into its
+/// destination encoded, to be decoded there with everything else that opted
+/// in?
+///
+/// **"Analog sum" in the interface, `console` in the code**, and the split is
+/// deliberate rather than drift. Console summing is the technique's name and
+/// is what `mooloop_dsp::console` and every document about it are written
+/// around; "analog sum" is the label on Adam's mixer mockup, which is what
+/// the strip actually says. Do not "fix" one to match the other.
+///
+/// It draws the curve rather than wearing a word, because the curve *is* what
+/// the control does -- `ADAM.md` asks for controls that communicate behaviour
+/// visually and specifically not for tiny low-contrast labels, and "CON" or
+/// "∿" would be both. Straight when it is off, a sine when it is on: the line
+/// the signal takes out of this strip.
+///
+/// It sits beside the strip's destination picker on purpose. This is a
+/// property of how a strip reaches its bus, so it belongs with the control
+/// that says which bus that is.
+export component ConsoleButton inherits Rectangle {
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <string> tooltip: "Analog sum";
+    in property <string> hint;
+    callback toggled(bool);
+
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 18px;
+    max-height: 18px;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: root.on ? Theme.accent : Theme.border;
+    background: root.on ? Theme.accent-active
+        : touch.has-hover ? Theme.surface-raised : Theme.surface;
+    opacity: root.enabled ? 1.0 : 0.4;
+    accessible-role: button;
+    accessible-label: root.tooltip;
+    accessible-checkable: true;
+    accessible-checked: root.on;
+
+    curve := Path {
+        x: 3px;
+        y: (parent.height - 10px) / 2;
+        width: 16px;
+        height: 10px;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 16;
+        viewbox-height: 10;
+        stroke: root.on ? Theme.text : Theme.text-faint;
+        stroke-width: 1.5px;
+        MoveTo { x: 1; y: 5; }
+        // Off is a straight line through the middle -- linear summing, drawn
+        // as a line. On bows the same two segments into a full period.
+        CubicTo {
+            control-1-x: 3.5; control-1-y: root.on ? 0 : 5;
+            control-2-x: 5.5; control-2-y: root.on ? 0 : 5;
+            x: 8; y: 5;
+        }
+        CubicTo {
+            control-1-x: 10.5; control-1-y: root.on ? 10 : 5;
+            control-2-x: 12.5; control-2-y: root.on ? 10 : 5;
+            x: 15; y: 5;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
+        enabled: root.enabled;
+        clicked => { root.toggled(!root.on); }
+        changed has-hover => {
+            if (self.has-hover) { StatusHint.show(root.hint); }
+            else { StatusHint.clear(root.hint); }
+        }
+    }
+    Tooltip { text: @markdown("\{root.tooltip}"); }
+}
+
 // Compact knob for dense rows (a rack channel, a step inspector) where a
 // labelled ParameterKnob would not fit. Name and value live in the tooltip
 // instead of taking layout space.

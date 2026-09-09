@@ -83,8 +83,12 @@ what makes the null test meaningful rather than approximate.
 ## The thing to decide first, because it contradicts a standing rule
 
 `GAIN_STRUCTURE.md` says *"Nothing bounds a sample in the live path"* -- the
-only clip in the tree is the 24-bit WAV encoder. Console decode is `asin`,
-whose domain is +/-1, so **a decode point hard-limits at 0 dBFS**.
+only clip in the tree is the 24-bit WAV encoder. Console decode is `asin`, so
+**a decode point hard-limits at `PI/2`, which is +3.92 dBFS.**
+
+(This plan first said 0 dBFS, reading the unscaled `asin`'s *input* domain as
+its output range. Corrected while building it; the real figure is more
+headroom than was agreed to, not less.)
 
 At mooloop's -12 dBFS operating level a full mix of 8-16 sources lands right
 at that ceiling, so console mode will be doing real work at default levels

@@ -75,6 +75,15 @@ reorders it once, deliberately, and the reason is `FOCUS.md`'s own rule:
 capacity.* Steps 01, 02 and 03 all end in something audible on today's tree.
 Steps 04-06 are the structural block, and none of them makes a new sound.
 
+**[`THE-STRIP.md`](THE-STRIP.md) is Adam's mockup of the finished strip**,
+drawn 2026-09-09 while step 02 was being built, plus the rulings he gave on it
+the same day. Read it before steps 03, 05 or 06: it reshapes all three, and it
+settles the one thing this plan had left implicit -- the channel strip is not
+a device you insert, it is what every strip has. It also names the four
+voicings (**Moo / Grip / Punch / Iron**, for the sound rather than for any
+hardware) and records how their distortion becomes a specified, tested number
+rather than an adjective.
+
 | Step | What it ends in | Needs |
 | --- | --- | --- |
 | [01](01-a-channel-can-be-moved.md) | a channel can be dragged to another row | nothing |

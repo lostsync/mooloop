@@ -29,6 +29,7 @@ pub mod aux_in;
 pub mod biquad;
 pub mod buffer_device;
 pub mod commit;
+pub mod console;
 pub mod bus;
 pub mod delayline;
 pub mod drumsynth;

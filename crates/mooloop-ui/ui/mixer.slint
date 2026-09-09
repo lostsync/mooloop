@@ -1,6 +1,6 @@
 import { Theme } from "theme.slint";
 import { ScrollView } from "std-widgets.slint";
-import { MixerFader, MiniKnob, MuteButton, ToolButton } from "controls.slint";
+import { ConsoleButton, MixerFader, MiniKnob, MuteButton, ToolButton } from "controls.slint";
 import { GainMath } from "gain.slint";
 import { ChannelMeter } from "meters.slint";
 
@@ -16,6 +16,9 @@ export struct MixerStripRow {
     selected: bool,
     // The master is bus 0. It has no output of its own and cannot be routed.
     is-master: bool,
+    // Whether this bus's own output is console-encoded. Never set on the
+    // master, which feeds nothing.
+    console: bool,
     // Sequencer channels feeding this bus directly. Drawn so an empty bus is
     // distinguishable from a loaded one at a glance.
     feed-count: int,
@@ -128,6 +131,7 @@ component MixerStrip inherits Rectangle {
     callback volume-changed(float);
     callback pan-changed(float);
     callback output-picked(int);
+    callback console-toggled();
     callback clip-reset();
 
     width: 62px;
@@ -243,6 +247,31 @@ component MixerStrip inherits Rectangle {
                 width: 100%;
             }
         }
+
+        // Analog sum, at the foot of the strip and set apart from mute --
+        // which is where Adam's mockup puts it, and it is the honest place:
+        // this is the last thing that happens on the way out, after the
+        // fader, and it is not an output control in the way mute and pan are.
+        // The master has none, because it feeds nothing.
+        Rectangle {
+            height: 20px;
+            if !root.strip.is-master : ConsoleButton {
+                // Sized and placed by coordinate rather than by a layout, so
+                // it needs an explicit size: outside a layout an element
+                // fills its parent and `min-width`/`max-width` constrain
+                // nothing, which drew the switch as a 62px slab across the
+                // whole strip the first time.
+                x: (parent.width - 22px) / 2;
+                y: 1px;
+                width: 22px;
+                height: 18px;
+                on: root.strip.console;
+                tooltip: "Analog sum";
+                hint: "Sum this bus into its destination through the analog summing "
+                    + "curve, together with everything else feeding it that has this on.";
+                toggled(v) => { root.console-toggled(); }
+            }
+        }
     }
 }
 
@@ -256,6 +285,7 @@ export component MixerPane inherits Rectangle {
     callback bus-volume-changed(int, float);
     callback bus-pan-changed(int, float);
     callback bus-output-changed(int, int);
+    callback bus-console-toggled(int);
     callback bus-clip-reset(int);
 
     background: Theme.panel;
@@ -286,6 +316,7 @@ export component MixerPane inherits Rectangle {
                     volume-changed(v) => { root.bus-volume-changed(i, v); }
                     pan-changed(v) => { root.bus-pan-changed(i, v); }
                     output-picked(o) => { root.bus-output-changed(i, o); }
+                    console-toggled => { root.bus-console-toggled(i); }
                     clip-reset => { root.bus-clip-reset(i); }
                 }
             }

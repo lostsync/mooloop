@@ -16,6 +16,7 @@ use mooloop_core::{
     MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS, STRIP_PARAM_VOLUME,
 };
 use mooloop_core::modulation::{CONTROL_SOURCE_SLOTS, MAX_GENERATOR_OUTLETS};
+use mooloop_dsp::console;
 #[cfg(test)]
 use mooloop_dsp::build_effect;
 use mooloop_dsp::{
@@ -1484,6 +1485,31 @@ struct BusStrip {
     /// contract as a channel's, and always `None` on the master, which feeds
     /// nothing.
     compensation: Option<Box<IntegerDelay>>,
+    /// Whether this bus's *output* is console-encoded. Nesting needs no
+    /// special case: whatever this bus feeds decodes it exactly as it decodes
+    /// a channel. Meaningless and ignored on the master, which feeds nothing.
+    console: bool,
+    /// The second input accumulator: the sum of everything feeding this bus
+    /// that opted into console summing, held apart from the linear sum in
+    /// `bus` so it can be decoded before the two are added.
+    ///
+    /// **This is the whole mechanism.** Decoding one sum and adding the other
+    /// is Adam's *"the decode stage is mixed with master to pick up any
+    /// channels that don't have it switched on"*, generalised from the master
+    /// to every summing point -- which is what makes the decoding bus
+    /// invisible: there is no device to place and no bus to create, because
+    /// every bus already is one.
+    ///
+    /// `None` unless something console-encoded actually feeds this bus. The
+    /// buffer is 64 KB and is allocated on the control thread by
+    /// `Session::sync_console_sums`, exactly as a compensation ring is; a
+    /// strip whose switch is on but whose buffer has not arrived sums
+    /// linearly for the tick it takes to converge, which is the same
+    /// either-order tolerance `SetSamplerStretch` documents.
+    console_sum: Option<Box<StereoBus>>,
+    /// Whether anything was written into `console_sum` this block. Read
+    /// instead of scanning the buffer, for the reason `dirty` exists.
+    console_dirty: bool,
     /// Whether `bus` may hold anything but zeros: set when something sums
     /// into it and when the strip runs, since a chain with a tail writes into
     /// a buffer nothing fed. Read at the top of the next block to decide
@@ -1506,6 +1532,9 @@ impl BusStrip {
             // Unity, not a channel's 0.8: see `mooloop_core::MixerBus::new`.
             output: OutputStage::new(1.0),
             compensation: None,
+            console: false,
+            console_sum: None,
+            console_dirty: false,
             // Nothing has been written yet, but the first block empties it
             // anyway rather than reasoning about a buffer it did not fill.
             dirty: true,
@@ -1588,6 +1617,9 @@ pub struct ChannelStrip {
     output: OutputStage,
     /// Mixer bus this channel feeds.
     destination: u8,
+    /// Whether this strip's output is console-encoded on the way into its
+    /// bus. See `mooloop_dsp::console`.
+    console: bool,
     /// How long this channel waits before summing into its bus, so that
     /// everything arriving there comes from the same moment.
     ///
@@ -1631,6 +1663,7 @@ impl ChannelStrip {
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             output: OutputStage::new(0.8),
             destination: MASTER_BUS,
+            console: false,
             compensation: None,
             source_silent_frames: 0,
             sleeping: false,
@@ -1663,6 +1696,7 @@ impl ChannelStrip {
         self.effects.clear(reclaim);
         self.output = OutputStage::new(0.8);
         self.destination = MASTER_BUS;
+        self.console = false;
     }
 
     /// Move one internal route's depth on both the base and the running node.
@@ -1928,19 +1962,39 @@ impl ChannelStrip {
 /// Sum one bus into another. The two indices are unrelated now that routing
 /// is arbitrary, so the disjoint borrow is taken by splitting at whichever is
 /// higher rather than assuming the destination is lower.
-fn mix_into(buses: &mut [BusStrip], from: usize, into: usize, frames: usize) {
+fn mix_into(buses: &mut [BusStrip], from: usize, into: usize, frames: usize, console: bool) {
     if from == into || from >= buses.len() || into >= buses.len() {
         return;
     }
     let (left, right) = buses.split_at_mut(from.max(into));
-    if from < into {
-        let source = &left[from];
-        right[0].bus.add_from(&source.bus, frames);
-        right[0].dirty = true;
+    let (source, destination) = if from < into {
+        (&left[from], &mut right[0])
     } else {
-        let source = &right[0];
-        left[into].bus.add_from(&source.bus, frames);
-        left[into].dirty = true;
+        (&right[0], &mut left[into])
+    };
+    // The same two-accumulator rule a channel follows, which is why nesting
+    // needs no special case: a console-on bus is a producer like any other
+    // and whatever it feeds decodes it.
+    match (console, destination.console_sum.as_mut()) {
+        (true, Some(sum)) => {
+            add_encoded(sum, &source.bus, frames);
+            destination.console_dirty = true;
+        }
+        _ => destination.bus.add_from(&source.bus, frames),
+    }
+    destination.dirty = true;
+}
+
+/// Sum `source` into `sum` through the console encode, in one pass.
+///
+/// One pass rather than encode-then-add because the alternative would have to
+/// write the encoded signal somewhere, and the only buffer available is the
+/// producer's own -- which the meters and, for the master, the caller still
+/// read.
+fn add_encoded(sum: &mut StereoBus, source: &StereoBus, frames: usize) {
+    for index in 0..frames {
+        sum.l[index] += console::encode(source.l[index]);
+        sum.r[index] += console::encode(source.r[index]);
     }
 }
 
@@ -2489,11 +2543,61 @@ impl RenderState {
         // opens and makes sound.
         self.bus_graph = compile_bus_graph(&project.buses).unwrap_or_default();
         self.install_compensation(project);
+        self.install_console(project);
         // Here as well as through the session's incremental sync, and for the
         // same reason `install_compensation` is: an offline render builds its
         // own `RenderState` and never runs a pump, so without this an export
         // would be the one place the channels rendered in index order.
         *self.audio = AudioTapBank::new(project.audio_graph());
+    }
+
+    /// Install the console switches from `project`, and the second input
+    /// accumulator for every bus something encoded actually reaches.
+    ///
+    /// Here as well as through the session's incremental sync, for the reason
+    /// [`Self::install_compensation`] gives: an **offline render** builds its
+    /// own `RenderState` and never runs a pump, so without this a bounce
+    /// would be the one place console summing did not happen -- which is the
+    /// export-versus-live disagreement everything in this engine is arranged
+    /// to prevent, and it is one of step 02's acceptance cases.
+    ///
+    /// Allocates, and is allowed to: `load_project` runs on the control
+    /// thread while a state is prepared, never from the callback.
+    fn install_console(&mut self, project: &Project) {
+        for (index, strip) in self.strips.iter_mut().enumerate() {
+            strip.console = project
+                .channels
+                .get(index)
+                .is_some_and(|channel| channel.setup.channel.console);
+        }
+        for (index, strip) in self.buses.iter_mut().enumerate() {
+            // The master feeds nothing, so a switch on it would encode into a
+            // sum that is never decoded. Refused here rather than hidden in
+            // the UI, so a hand-edited file cannot make the master inaudible.
+            strip.console = index != MASTER_BUS as usize
+                && project.buses.get(index).is_some_and(|setup| setup.bus.console);
+        }
+        let mut wanted = [false; MAX_BUSES];
+        for channel in project.channels.iter().take(MAX_CHANNELS) {
+            if channel.setup.channel.console {
+                wanted[clamp_bus(channel.setup.channel.bus) as usize] = true;
+            }
+        }
+        for index in 1..self.buses.len().min(MAX_BUSES) {
+            if self.buses[index].console {
+                wanted[self.bus_graph.destination(index) as usize] = true;
+            }
+        }
+        for (index, strip) in self.buses.iter_mut().enumerate() {
+            match (wanted.get(index).copied().unwrap_or(false), strip.console_sum.is_some()) {
+                (true, false) => {
+                    strip.console_sum = Some(Box::new(StereoBus::with_capacity(MAX_BLOCK_SIZE)))
+                }
+                (false, true) => strip.console_sum = None,
+                _ => {}
+            }
+            strip.console_dirty = false;
+        }
     }
 
     /// Build and install the tree's latency compensation from `project`.
@@ -2977,6 +3081,21 @@ impl RenderState {
                 };
                 std::mem::replace(slot, delay).map(StructuralReclaim::Compensation)
             }
+            StructuralCommand::SetConsoleSum { bus, buffer } => {
+                let Some(strip) = self.buses.get_mut(bus as usize) else {
+                    // Hand it straight back rather than dropping it here:
+                    // this is the realtime thread, and an unaddressable bus is
+                    // not a reason to free 64 KB on it.
+                    return buffer.map(StructuralReclaim::ConsoleSum);
+                };
+                // A fresh accumulator starts empty and nothing has fed it
+                // yet, so the flag has to come back with it -- otherwise the
+                // first block would decode whatever the arriving buffer
+                // happened to contain.
+                strip.console_dirty = false;
+                std::mem::replace(&mut strip.console_sum, buffer)
+                    .map(StructuralReclaim::ConsoleSum)
+            }
             StructuralCommand::SetAudioGraph { bank } => {
                 // One swap: the executor never sees an edge without its
                 // schedule or a schedule against another generation's
@@ -3265,6 +3384,22 @@ impl RenderState {
                     chain.move_slot(from as usize, to as usize);
                 }
             }
+            EngineCommand::SetStripConsole { target, enabled } => match target {
+                EffectTarget::Channel(index) => {
+                    if let Some(strip) = self.strips.get_mut(index as usize) {
+                        strip.console = enabled;
+                    }
+                }
+                EffectTarget::Bus(index) => {
+                    // The master feeds nothing, so encoding its output would
+                    // put the mix into a sum nothing decodes.
+                    if index != MASTER_BUS {
+                        if let Some(strip) = self.buses.get_mut(index as usize) {
+                            strip.console = enabled;
+                        }
+                    }
+                }
+            },
             EngineCommand::SetEffectBypassed {
                 target,
                 slot,
@@ -3674,6 +3809,16 @@ impl RenderState {
                 strip.bus.clear(frames);
                 strip.dirty = false;
             }
+            // The encoded accumulator empties on its own flag: it is written
+            // by a different set of feeders than `bus` and is usually absent
+            // altogether, so hanging it off `dirty` would clear a buffer that
+            // does not exist on every block a bus is used at all.
+            if strip.console_dirty {
+                if let Some(sum) = strip.console_sum.as_mut() {
+                    sum.clear(frames);
+                }
+                strip.console_dirty = false;
+            }
         }
         // Emptied before anything renders, so a producer that stopped playing
         // -- or a channel that stopped existing -- publishes silence rather
@@ -3952,7 +4097,18 @@ impl RenderState {
                 delay.process(&mut strip.bus.l[..frames], &mut strip.bus.r[..frames]);
             }
             if let Some(destination) = self.buses.get_mut(strip.destination as usize) {
-                destination.bus.add_from(&strip.bus, frames);
+                // A console-on strip encodes on the way out and lands in the
+                // destination's *second* accumulator, so the destination can
+                // decode this and only this. A strip whose switch is on but
+                // whose destination has no accumulator yet sums linearly for
+                // the tick it takes `sync_console_sums` to converge.
+                match (strip.console, destination.console_sum.as_mut()) {
+                    (true, Some(sum)) => {
+                        add_encoded(sum, &strip.bus, frames);
+                        destination.console_dirty = true;
+                    }
+                    _ => destination.bus.add_from(&strip.bus, frames),
+                }
                 destination.dirty = true;
             }
         }
@@ -3992,6 +4148,10 @@ impl RenderState {
                     // audio from before the silence.
                     let capacity = strip.bus.capacity();
                     strip.bus.clear(capacity);
+                    if let Some(sum) = strip.console_sum.as_mut() {
+                        sum.clear(capacity);
+                    }
+                    strip.console_dirty = false;
                 }
                 // Written rather than left alone: a meter that stops being
                 // published holds its last value, and a silent bus reading
@@ -4009,6 +4169,27 @@ impl RenderState {
             // tail writes into one nothing fed -- so the next block empties it.
             strip.dirty = true;
             strip.sleeping = false;
+            // **The decode, and the whole of console summing on this side.**
+            //
+            // Decode the encoded sum, then add the linear one -- which is
+            // Adam's "the decode stage is mixed with master to pick up any
+            // channels that don't have it switched on", generalised from the
+            // master to every summing point. Doing it here rather than in a
+            // device is what makes the decoding bus invisible: every bus
+            // already is one, so nothing has to be placed or created.
+            //
+            // Before the input meter on purpose: the meter then reads what
+            // the chain is actually handed, so the ceiling is visible as a
+            // needle that stops climbing rather than as a number nothing
+            // reports.
+            if strip.console_dirty {
+                if let Some(sum) = strip.console_sum.as_mut() {
+                    console::decode_block(&mut sum.l[..frames], &mut sum.r[..frames]);
+                    strip.bus.add_from(sum, frames);
+                    sum.clear(frames);
+                }
+                strip.console_dirty = false;
+            }
             // The bus head's input meter reads what the bus received this
             // block, before its own chain touches it.
             let (input_l, input_r) = strip.bus.peak(frames);
@@ -4048,8 +4229,9 @@ impl RenderState {
             if index == MASTER_BUS as usize {
                 master_peak = (peak_l, peak_r);
             } else if !strip.output.muted {
+                let console = strip.console;
                 let destination = self.bus_graph.destination(index) as usize;
-                mix_into(&mut self.buses, index, destination, frames);
+                mix_into(&mut self.buses, index, destination, frames, console);
             }
         }
         // After the walk on purpose: the preview bypasses every chain, so it

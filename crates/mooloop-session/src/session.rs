@@ -114,6 +114,11 @@ pub struct Session {
     /// record of what has been said to the audio thread, and a fresh session
     /// has said nothing.
     pub compensation_sent: mooloop_core::CompiledLatency,
+    /// Which buses the engine has been given a console accumulator for, so
+    /// the pump's reconcile sends only what changed. Same status as
+    /// [`Self::compensation_sent`]: a record of what has been said to the
+    /// audio thread, not document state.
+    pub console_sums_sent: [bool; MAX_BUSES],
     /// The audio-edge plan the engine has been told about, so the pump's
     /// reconcile sends only what changed. Same status as
     /// [`Self::compensation_sent`]: a record of what has been said to the
@@ -208,6 +213,7 @@ impl Default for Session {
             modulation_outputs: Cell::new([0.0; CONTROL_SOURCE_SLOTS]),
             modulation_ui_channel: Cell::new(None),
             compensation_sent: mooloop_core::CompiledLatency::default(),
+            console_sums_sent: [false; MAX_BUSES],
             audio_graph_sent: mooloop_core::CompiledAudioGraph::default(),
             modulation_edit_before: None,
             modulation_edit_changed: false,
@@ -479,6 +485,7 @@ impl Session {
                             volume: channel.volume,
                             pan: channel.pan,
                             bus: channel.bus,
+                            console: channel.console,
                         },
                         source,
                         effects: channel.effects.clone(),
@@ -1219,6 +1226,7 @@ impl Session {
                     next_device_id: setup.next_device_id,
                     modulation: setup.modulation,
                     bus: setup.channel.bus,
+                    console: setup.channel.console,
                 }
             })
             .collect::<Vec<_>>();
@@ -1244,6 +1252,10 @@ impl Session {
         // what this side thinks was sent so the next reconcile re-derives
         // against the new project rather than trusting a plan for the old one.
         self.compensation_sent = mooloop_core::CompiledLatency::default();
+        // Same for the console accumulators: `RenderState::load_project`
+        // installs its own through `install_console`, so this side must
+        // re-derive rather than trust a plan for the document that just left.
+        self.console_sums_sent = [false; MAX_BUSES];
         // Same for the audio edges: `RenderState::load_project` compiles and
         // allocates its own, so this side must re-derive rather than trust a
         // plan for the document that just left.

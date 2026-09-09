@@ -148,7 +148,11 @@ Alphabetical by model name, then by harness.
   mixer strip is created by a musical act rather than an administrative one --
   and its first step, the channel reorder that could not be composed from a
   removal and an insertion, which found six things the session had been
-  mis-keying through every channel edit there has ever been.
+  mis-keying through every channel edit there has ever been, and then its
+  second -- console summing, where the requirement turned out to be that the
+  decoding bus is invisible, and where normalizing the curve to put its knee
+  on full scale was built, measured, and rejected because it is worst exactly
+  where music is loudest.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

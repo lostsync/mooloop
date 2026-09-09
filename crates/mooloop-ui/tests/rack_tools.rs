@@ -25,7 +25,11 @@ use std::rc::Rc;
 /// down and no longer exist, so the row is back where it was. Measured
 /// rather than assumed, at the same 960x760 the snapshot test renders:
 /// the first cell spans y=108..130.
-const GRID_ORIGIN_X: f32 = 228.0;
+///
+/// The console-summing switch moved it right again, by its 22px plus the
+/// row's 6px spacing, when it landed beside the bus picker
+/// (`docs/plans/console/02-console-summing.md`).
+const GRID_ORIGIN_X: f32 = 256.0;
 const CELL_PITCH: f32 = 27.0;
 const ROW_CENTRE_Y: f32 = 119.0;
 const STEPS: usize = 8;
@@ -55,6 +59,7 @@ fn harness() -> MainWindow {
         pan: 0.0,
         selected: true,
         bus: 0,
+        console: false,
         steps: ModelRc::from(Rc::new(VecModel::from(steps))),
     }]))));
     ui

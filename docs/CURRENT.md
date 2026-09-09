@@ -556,7 +556,8 @@ land on its own when it starts to matter:
 ### Mixing, Routing, And Effects
 
 - Channel mute, volume, and pan are exposed, as compact knobs in the rack row,
-  alongside the bus the channel feeds.
+  alongside the bus the channel feeds and the analog-sum switch that says how
+  it gets there.
 - Every channel names one mixer bus. The bank is the master plus sixteen
   inserts, all preallocated, so assigning a channel to any bus is a bounded
   mutation rather than an allocation. Buses carry their own effect chain,
@@ -574,6 +575,30 @@ land on its own when it starts to matter:
   value. A routing change installs the whole value atomically, so no block can
   render edges against a stale order. Short stored banks are padded and invalid
   individual routes are repaired to the master at this compilation boundary.
+- **Analog sum.** Any channel or bus can be switched to sum into its
+  destination through a non-linear encode, decoded at that destination
+  together with everything else feeding it that has the switch on. The control
+  is a small button drawing a straight line when it is off and a sine when it
+  is on: at the foot of a mixer strip, set apart from mute, and at the end of
+  a channel's rack row. The master has none, because it feeds nothing.
+
+  There is no device to place and no bus to create: every summing point
+  decodes, and the master is already one, so two channels switched on glue
+  with nothing configured. Nesting needs no special case either — a
+  console-on bus encodes at its own output and whatever it feeds decodes it.
+  A strip switched on **alone** changes nothing, exactly; the character is
+  entirely in the interaction between strips that opted in together.
+
+  Off is the default and is bit-identical to a linear mixer. Switched on, the
+  summing law separates a sparse mix and bounds a dense one at +3.92 dBFS —
+  see `GAIN_STRUCTURE.md`, which records that ceiling as a deliberate
+  exception to "nothing bounds a sample in the live path". A bus's fader sits
+  after its decode, so pulling a bus down is level and pulling its feeders
+  down is drive.
+
+  Called *analog sum* in the interface and *console summing* everywhere in the
+  source and the documents; the technique is the Airwindows Console idea, and
+  `mooloop_dsp::console` is where the curve lives.
 - Cycles are refused rather than delayed, at the picker (looping destinations
   are shown greyed with the reason), at the command boundary, and on load,
   where a cyclic file is flattened to everything-to-master so it still opens

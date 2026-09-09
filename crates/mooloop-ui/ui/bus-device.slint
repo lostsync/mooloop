@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { MixerFader, MiniKnob, MuteButton, SectionLabel } from "controls.slint";
+import { ConsoleButton, MixerFader, MiniKnob, MuteButton, SectionLabel } from "controls.slint";
 import { GainMath } from "gain.slint";
 import { ChannelMeter } from "meters.slint";
 import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
@@ -21,10 +21,12 @@ export component BusDeviceFace inherits Rectangle {
     in property <[bool]> allowed;
     in property <float> left-db: -60;
     in property <float> right-db: -60;
+    in property <bool> console;
     callback volume-changed(float);
     callback pan-changed(float);
     callback mute-toggled();
     callback output-picked(int);
+    callback console-toggled();
 
     VerticalLayout {
         padding: 8px;
@@ -140,6 +142,23 @@ export component BusDeviceFace inherits Rectangle {
                         Text {
                             text: root.bus-names[root.output];
                             color: Theme.text;
+                            font-size: 9px;
+                            vertical-alignment: center;
+                        }
+                        // The same control the mixer strip carries, in the
+                        // same place relative to the destination: how this
+                        // bus reaches the next one belongs beside which one
+                        // that is.
+                        ConsoleButton {
+                            on: root.console;
+                            tooltip: "Analog sum";
+                            hint: "Sum this bus into its destination through the analog summing "
+                                + "curve, together with everything else feeding it that has this on.";
+                            toggled(v) => { root.console-toggled(); }
+                        }
+                        Text {
+                            text: root.console ? "analog sum" : "linear";
+                            color: root.console ? Theme.accent : Theme.text-faint;
                             font-size: 9px;
                             vertical-alignment: center;
                         }

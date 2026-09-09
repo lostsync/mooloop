@@ -83,3 +83,118 @@ device rack has the same constraint and answers it the same way — the held
 thing is marked out by its own chrome (here a shadow under the name plate)
 rather than by stacking order, and the gap that opens under it is the drop
 indicator either way.
+
+## Step 02 — console summing
+
+Landed on `feat/console-summing` (2026-09-09). Any channel or bus can be
+switched to sum into its destination through a non-linear encode, decoded
+there together with everything else that opted in. Off by default and
+bit-identical to a linear mixer while it is off.
+
+### The requirement that shaped it: the bus is invisible
+
+Adam, on how the Airwindows pair is actually used and what he wanted
+differently: *"you put a 'Channel' plugin on the individual tracks ... then
+you bus that ... to a single buss where you have the 'Buss' plugin ... i think
+what i was trying to communicate is that i want that buss to be invisible."*
+
+So the mechanism is the plugin pair's and the gesture is not. **Every summing
+point decodes**, and the master is already a summing point, so two channels
+switched on glue with nothing created and nothing placed in a chain. The whole
+of it on the engine side is one extra accumulator per bus that actually has an
+encoded feed: decode that, add the linear one. That is Adam's *"the decode
+stage is mixed with master to pick up any channels that don't have it switched
+on"*, generalised from the master to every bus.
+
+Nesting fell out for free, as the plan predicted, and there is a test that says
+so — a console-on bus encodes at its own output and whatever it feeds decodes
+it, with no parallel decoder and no special case. That is what makes step 04's
+groups free.
+
+### Two measurements changed the design
+
+**The pair is unscaled.** The plan implied `asin`'s domain bounded the decode
+at 0 dBFS; it does not, it bounds the *input*, and the decode's range is
+`PI/2` = **+3.92 dBFS**. The obvious fix — normalize to `sin(x * PI/2)` and
+`asin(y) / (PI/2)` so the knee lands on full scale — was built and rejected on
+two numbers. It clips two sources at -8 dBFS, which is a limiter rather than a
+summing law. And its round trip is worst exactly where music is loudest: the
+conditioning is `1 / cos`, the normalized curve's `cos` goes to zero at full
+scale, and `decode(encode(0.999))` came back wrong in the fifth decimal place,
+so the null test could not hold. The unscaled pair nulls to **1.5e-8 against a
+0.251 peak (about -156 dBFS)** across the whole range.
+
+The correction is *more* headroom than Adam agreed to, not less, so it needed
+no second ruling. `GAIN_STRUCTURE.md` now carries the ceiling as a deliberate
+exception to "nothing bounds a sample in the live path", with the reason: the
+bound is the effect.
+
+**Which fader is which is a test, not a note.** A bus's fader is after its
+decode in the block order, so pulling a bus down is level (measured: 0.0
+departure from a pure scale) and pulling its feeders down is drive (0.0064
+against a 0.508 peak). Nothing was built to make that true — it falls out of
+where the decode goes — but Adam's stated way of using it depends on it, so it
+is asserted.
+
+### The test that was wrong, and what it taught
+
+`a_console_strip_and_a_linear_one_share_a_summing_point` was written to assert
+that one console strip beside a linear one changes the mix. It failed, and it
+was the test that was wrong: a lone console strip is alone in the encoded
+accumulator, so it nulls *whether or not* linear strips share its summing
+point. That is the design working, and it is now two tests — one saying a lone
+switch is transparent (the case a user meets first, where "nothing happened"
+is the right answer), and one stating the real property as **superposition
+between the two groups**: two console strips plus a linear one must equal the
+two console strips alone plus the linear one alone. Measured at 3e-8.
+
+That second form is the one that catches the plausible wrong implementation —
+a single accumulator decoded at the summing point, which would pass every
+other test in the file while putting a strip whose switch is *off* through an
+`asin` it never opted into.
+
+### What was deferred, and why it costs nothing
+
+**`ConsoleMode` on the project.** The plan wanted an enum naming the algorithm
+so a second curve would be a defaulted field rather than a format change.
+Adding it *later* is the same no-op migration, so shipping a saved field with
+one possible value and no control behind it would be capacity without a
+decision. Recorded in `02-console-summing.md`.
+
+### Adam's mockup arrived mid-step, and two things changed
+
+He drew the finished strip while this was being built
+([`THE-STRIP.md`](THE-STRIP.md), `img/strip-mockup.png`). Two things in it
+apply to step 02 rather than to a later one, and both were adopted the same
+day:
+
+- **The feature is called "analog sum"**, not "console summing". That is the
+  interface word from here; `console` stays the code word, because it is the
+  technique's name and what `mooloop_dsp::console` and every document about it
+  are written around. `ConsoleButton`'s doc comment records the split so
+  nobody reconciles it in the wrong direction.
+- **It goes at the foot of the strip, set apart from mute**, not beside the
+  destination picker where it was first put. Set apart is the honest place: it
+  is the last thing that happens on the way out, after the fader, and it is
+  not an output control the way mute and pan are.
+
+The rest of the mockup reshapes steps 03, 05 and 06 rather than this one, and
+is written up in `THE-STRIP.md`.
+
+### Where the controls went
+
+A `ConsoleButton` at the foot of the mixer strip, and on a channel's rack row
+after the destination picker, which is the same position a row that tall can
+offer.
+
+A channel's switch is on the rack row rather than in the mixer because **the
+mixer does not draw channels yet** -- that is step 04, where a lone channel's
+strip becomes its own. Until then the rack row is the channel's strip, which
+is decision 1 of the `README.md` meeting the surface that exists. It draws the curve rather than
+wearing a word: a straight line when off, a sine when on, which is
+`reference/ADAM.md`'s "controls should communicate behaviour visually" and its
+explicit dislike of tiny low-contrast labels.
+
+The master has no switch, because it feeds nothing and an encode there would
+go into a sum nothing decodes. Refused in the engine as well as absent from
+the face, so a hand-edited file cannot make the master inaudible.
