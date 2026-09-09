@@ -106,7 +106,7 @@ rather than an adjective.
 | [01](01-a-channel-can-be-moved.md) | a channel can be dragged to another row | nothing |
 | [02](02-console-summing.md) | two channels glue when summed | nothing |
 | [03](03-the-channel-strip-device.md) | EQ + comp in one face, four voicings | nothing |
-| [04](04-the-mixer-is-tracks.md) | every channel has a track, and the mixer draws them | 01 |
+| [04](04-the-mixer-is-tracks.md) | channels assign to tracks, and the mixer draws them | 01 |
 | [05](05-sends-and-returns.md) | a reverb return fed from two strips | 04 |
 | [06](06-preamp-modelling.md) | not designed here | 02, 03 |
 

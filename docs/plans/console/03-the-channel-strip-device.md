@@ -79,6 +79,27 @@ The EQ inside it reads **left to right, top to bottom**: high shelf, high mid,
 low mid, low shelf. Say so in the markup, because two columns of three knobs
 invite the assumption that the columns mean something.
 
+## Every track has one, and it is off
+
+Adam, 2026-09-09: *"comp and eq yes, every track, but defaults to turned off.
+control for this is via the 'eq in'/'comp in' buttons."*
+
+So the EQ and the compressor are present on all 256 tracks and neither runs
+until its `in` button is pressed. That is a stronger and simpler rule than
+"free when flat": there is no threshold to test against and no state to reason
+about, because an EQ that is out is *out*.
+
+Those two buttons are already drawn on the mockup, at the head of their
+sections. They are the same switch `analog sum` is -- a per-track boolean that
+the engine reads and skips on -- so they cost a defaulted field each and
+nothing at all while they are off.
+
+The consequence for [`06`](06-preamp-modelling.md) is worth stating: the
+voicing selector still governs the strip, but a track with both sections out
+and `Moo` selected is bit-identical to no strip. Any voicing's *character*
+therefore has to arrive through a control that was deliberately turned on,
+which is the same shape as `analog sum` and the same reason it is defensible.
+
 ## Free while it is out
 
 `is_at_rest` / `skip_block` are what make an idle device cost nothing, and a

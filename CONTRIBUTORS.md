@@ -156,7 +156,10 @@ Alphabetical by model name, then by harness.
   sound like iron" into a number a test can check, which found on the way that
   there is no simple level law once a profile has more than one term, and then
   `docs/TERMINOLOGY.md`, after the console plan's own first decision turned out
-  to be a spreadsheet's idea of a mixer rather than a console's.
+  to be a spreadsheet's idea of a mixer rather than a console's, and then the
+  default new song as the specification for what a track is, which is the
+  question "why did you want channel groups" turning out to have a concrete
+  answer.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

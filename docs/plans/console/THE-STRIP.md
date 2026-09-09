@@ -189,11 +189,21 @@ under `COMPOSABLE_DEVICE_UNITS.md` — the detector, the gain computer, the
 shared `Biquad` — are still what it is built from. What it is not is a wrapper
 around the existing device.
 
+## Both sections default to out
+
+Adam: *"comp and eq yes, every track, but defaults to turned off. control for
+this is via the 'eq in'/'comp in' buttons."* The two toggles the mockup
+already draws are the whole mechanism, and they answer the 256-track cost
+question outright -- a section that is out does not run, so the price of the
+strip existing everywhere is two booleans per track.
+
 ## Still open
 
-- **How much a rack row shows.** Section toggles answer the mixer strip's
-  height; they do not answer what a channel's *rack row* shows, which is the
-  same question step 04 asks about a track that several channels feed.
+- **Whether the sequencer rack draws a group.** Routing several channels to
+  one track is all grouping needs to *work* (step 04's default project is made
+  of it), but a "Drums" header with its channels nested under it is a real
+  convenience once a kit is eight channels. Presentation, separable, and its
+  own decision.
 - **How each voicing's harmonic profile travels with level**, per the first
   limit above. That is authoring, and it wants ears.
 
