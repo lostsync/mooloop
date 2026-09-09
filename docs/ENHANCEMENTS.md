@@ -159,3 +159,31 @@ i think i want to expand our use of color. some of the app is ide-inspired so ma
   grow a second form and the shading-pattern item further up this file wants
   the same thing. base16 and pywal/wallust both answer "full ramp", so they
   decide it. That question is worth answering before any of it is built.
+
+---
+
+the eq analyzer (pre-fix) seems unusually heavy to me. its eye candy so i
+havent decided to care yet but it kinda just looks like my its running on a
+computer thats too slow. not very fluid. its pretty blocky for eq work. it
+does seem like we should have a cheap way to draw spectrums on deck.
+  DIAGNOSED 2026-09-09, and it is four separate causes rather than one:
+  - **The bottom two octaves are fiction.** `SPECTRUM_WINDOW` is 512 samples,
+    which resolves about 94 Hz at 48 kHz -- so nothing below that is being
+    measured at all, whatever the display draws there.
+  - **Blocky in frequency**: `SPECTRUM_BINS` is 48 over roughly ten octaves,
+    which is 4.7 bins per octave. EQ work wants 1/6 to 1/12 octave, so 60-120+.
+  - **Not fluid in time**: `SPECTRUM_HOP` is 2048, so it publishes at 23.4 Hz,
+    with no per-bin ballistics and no interpolation between frames. That is
+    the "slow computer" feel, and per-bin attack/release is the cheapest large
+    win available.
+  - **Blocky in the drawing**: `eq-device.slint` renders `for bar in 48 :
+    Rectangle`. Forty-eight boxes.
+  What made it look expensive to fix was the storage, and that is no longer
+  true: the spectrum array used to be dimensioned by two ceilings multiplied
+  (12.85 MB, whether or not an analyzer was ever on), so 256 bins would have
+  been 68 MB. It is a pool now, so 256 bins is 64 KB. **The resolution is the
+  cheap part; the FFT is the interesting part.** A Goertzel bank costs
+  `bins x window`, so 128 bins over a 2048 window is 262k operations a hop,
+  where a radix-2 FFT of the same window is about 33k and yields every bin --
+  cheaper *and* better, and about sixty allocation-free lines with no new
+  dependency. Step 03's channel strip wants this display anyway.

@@ -718,15 +718,25 @@ impl EngineHandle {
         self.device_meters.take_dynamics(target, stage)
     }
 
-    /// Subscribe an effect stage's input to compact spectrum telemetry. This
-    /// is observation-only: it never participates in audio or modulation
-    /// signal flow, and disabled stages do not run spectral analysis.
-    pub fn set_effect_spectrum_enabled(&self, target: EffectTarget, slot: u8, enabled: bool) {
+    /// Subscribe an effect stage's input to compact spectrum telemetry,
+    /// returning whether it is subscribed afterwards. This is
+    /// observation-only: it never participates in audio or modulation signal
+    /// flow, and disabled stages do not run spectral analysis.
+    ///
+    /// `false` from an `enabled: true` call means the spectrum pool was full.
+    /// Worth propagating rather than swallowing: the display is then reading
+    /// zeros, and a caller that wanted to say so has the answer.
+    pub fn set_effect_spectrum_enabled(
+        &self,
+        target: EffectTarget,
+        slot: u8,
+        enabled: bool,
+    ) -> bool {
         self.device_telemetry.set_spectrum_enabled(
             effect_target_index(target),
             usize::from(slot) + 1,
             enabled,
-        );
+        )
     }
 
     /// The latest normalized log-frequency spectrum for one effect input.
