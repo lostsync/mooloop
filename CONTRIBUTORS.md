@@ -164,8 +164,9 @@ Alphabetical by model name, then by harness.
   and so it saturates from the bottom up -- and then the filter sandwich that
   does it, where boosting the bottom into the curve turned out to be the wrong
   half of the obvious idea, and the protocol for measuring the plugins those
-  numbers should have come from, whose main decision is that mooloop never
-  hosts one.
+  numbers should have come from -- whose first version priced hosting a plugin
+  against writing a JUCE host and reached for rendered WAVs, when Adam knew it
+  was a pip install and a for-loop.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
