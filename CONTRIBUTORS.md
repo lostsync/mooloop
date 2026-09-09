@@ -159,7 +159,9 @@ Alphabetical by model name, then by harness.
   to be a spreadsheet's idea of a mixer rather than a console's, and then the
   default new song as the specification for what a track is, which is the
   question "why did you want channel groups" turning out to have a concrete
-  answer.
+  answer, and then how you actually model a preamp, which is mostly one
+  structure -- tilt, shape, untilt -- because a transformer's flux goes as V/f
+  and so it saturates from the bottom up.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

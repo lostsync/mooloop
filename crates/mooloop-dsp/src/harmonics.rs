@@ -54,13 +54,20 @@
 //! gain into this curve, so driving it harder walks the profile back up
 //! toward its stated shape rather than fading in a wet/dry mix.
 //!
-//! **2. It is memoryless, so it cannot be frequency-dependent.** Real
-//! transformer distortion rises steeply toward low frequencies -- most of why
-//! an iron-sounding stage is obvious on a kick and nearly clean on a hat --
-//! and it is hysteretic besides. A polynomial is neither. The cheap and
-//! well-understood approximation is a tilt into the shaper and its inverse
-//! after, which is worth building for the `IRON` voicing specifically rather
-//! than for all four. It is not built here.
+//! **2. It is memoryless, so it cannot be frequency-dependent.** A
+//! transformer's core flux goes as `V/f`, so for a constant voltage it
+//! saturates *from the bottom up* -- which is most of why an iron-sounding
+//! stage is obvious on a kick and nearly clean on a hat. A polynomial has no
+//! opinion about frequency at all, and real cores are hysteretic besides.
+//!
+//! The cheap and standard fix is a **filter sandwich**: tilt the lows up into
+//! the shaper and back down after, so what survives is frequency-dependent
+//! *distortion* rather than frequency-dependent *level*. That is a
+//! Wiener-Hammerstein model -- linear, static nonlinear, linear -- and it is
+//! two biquads around this module. It is not built here;
+//! `docs/plans/console/06-preamp-modelling.md` is where it belongs, along
+//! with the frequency-dependent THD test that is what makes "warm on a kick,
+//! clean on a hat" a number.
 //!
 //! What is *not* claimed anywhere is a match to a measured unit. The claim is
 //! a stated harmonic target, hit at a stated level, and tested.
