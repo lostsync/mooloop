@@ -80,6 +80,10 @@
 //! lets just pick some."* So [`PreampVoicing`] is a plain table of numbers
 //! with no behaviour attached, and a measured fit replaces its rows without
 //! touching anything else in this file.
+//!
+//! `docs/REFERENCE_MEASUREMENTS.md` is the protocol for taking those
+//! measurements, including the four ways a session can produce plausible
+//! numbers that are wrong.
 
 use crate::biquad::Biquad;
 use crate::harmonics::{DcBlocker, HarmonicProfile, HarmonicShaper, GRIP, IRON, MOO, PUNCH};

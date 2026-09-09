@@ -133,6 +133,14 @@ impl HarmonicProfile {
 // device -- +12 dB brings operating-level material to where these profiles
 // are stated. Authoring the two together, with ears, is step 03's job; this
 // module exists to prove that the target *can* be stated and hit.
+//
+// When the numbers stop being picked they will come from a rendered
+// measurement rather than from taste: `docs/REFERENCE_MEASUREMENTS.md` is the
+// protocol, and because a profile is authored through its Chebyshev
+// decomposition, measured harmonic amplitudes *are* the coefficients. Fit at
+// one level and check the others rather than least-squares over the whole
+// surface -- for the interaction reason above, a fit that averages across
+// levels lands somewhere that matches nothing.
 
 /// `Moo` — the house voicing. Calibrated and uncoloured.
 pub const MOO: HarmonicProfile = HarmonicProfile::TRANSPARENT;
