@@ -109,7 +109,8 @@ on"*, generalised from the master to every bus.
 Nesting fell out for free, as the plan predicted, and there is a test that says
 so — a console-on bus encodes at its own output and whatever it feeds decodes
 it, with no parallel decoder and no special case. That is what makes step 04's
-groups free.
+routing free: a track several others feed is a decode point, with nothing
+added.
 
 ### Two measurements changed the design
 
@@ -188,9 +189,12 @@ after the destination picker, which is the same position a row that tall can
 offer.
 
 A channel's switch is on the rack row rather than in the mixer because **the
-mixer does not draw channels yet** -- that is step 04, where a lone channel's
-strip becomes its own. Until then the rack row is the channel's strip, which
-is decision 1 of the `README.md` meeting the surface that exists. It draws the curve rather than
+mixer does not draw a track for it yet** -- that is step 04.
+
+This was the symptom that led to the plan's decisions being rewritten on
+2026-09-09, and it was noticed before the cause: the rack is the instrument's
+room, the mixer is the console's, and analog sum belongs in the console's.
+It moves when step 04 lands. It draws the curve rather than
 wearing a word: a straight line when off, a sine when on, which is
 `reference/ADAM.md`'s "controls should communicate behaviour visually" and its
 explicit dislike of tiny low-contrast labels.

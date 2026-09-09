@@ -193,7 +193,7 @@ around the existing device.
 
 - **How much a rack row shows.** Section toggles answer the mixer strip's
   height; they do not answer what a channel's *rack row* shows, which is the
-  same question step 04 asks about groups.
+  same question step 04 asks about a track that several channels feed.
 - **How each voicing's harmonic profile travels with level**, per the first
   limit above. That is authoring, and it wants ears.
 

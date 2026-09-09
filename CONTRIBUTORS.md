@@ -154,7 +154,9 @@ Alphabetical by model name, then by harness.
   on full scale was built, measured, and rejected because it is worst exactly
   where music is loudest, and the harmonic target that turns "we want it to
   sound like iron" into a number a test can check, which found on the way that
-  there is no simple level law once a profile has more than one term.
+  there is no simple level law once a profile has more than one term, and then
+  `docs/TERMINOLOGY.md`, after the console plan's own first decision turned out
+  to be a spreadsheet's idea of a mixer rather than a console's.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

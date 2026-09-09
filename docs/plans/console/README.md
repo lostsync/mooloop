@@ -21,6 +21,10 @@ Adam's policy closes it:
 > Channels group; the group is summed; the group owns the strip; a grouped
 > channel has no direct out.
 
+**That policy is retired.** See "What the first draft of this file said" at the
+bottom, and `docs/TERMINOLOGY.md`: grouping is routing several tracks to one
+track, and it takes nothing away.
+
 That is the missing half of `MIXER_PLAN.md`, and this plan is what follows
 from it. On top of it sits the part that is actually about sound: a per-strip
 channel strip device, preamp modelling later, and Airwindows-style **console
@@ -31,41 +35,54 @@ by making music, not a routing spreadsheet you configured.
 
 ## Two decisions this plan makes, before the steps
 
-### 1. The mixer is a *view of strips*, not a second set of objects
+**Rewritten 2026-09-09**, after Adam described the model plainly and the first
+pair turned out to be a spreadsheet's idea of a console rather than a console.
+`docs/TERMINOLOGY.md` is the vocabulary; read it first. The originals are kept
+at the bottom of this file, because knowing which way the mistake ran is worth
+more than a clean page.
 
-A channel already has everything a strip has: fader, pan, mute, an insert
-chain, a compensation delay, meters, and one output edge. So does a bus. The
-existing `EffectTarget { Channel(u8), Bus(u8) }` (`mixer.rs`) is already "a
-strip is a strip", and it is the address used by every effect command, by
-`ParamAddr::scope`, and by the meter cell layout (`meters.rs`, where a bus is
-`MAX_CHANNELS + index`).
+### 1. The mixer is tracks. All of them. Always.
 
-So: **do not auto-create a bus per channel.** A lone channel's mixer strip *is*
-that channel. Grouping creates a bus, and the group's members drop out of the
-mixer because their out is now the group. The mixer's strip list is therefore
+Every channel has a track, permanently. A track has a fader, pan, mute, its
+own device rack, a strip, sends and one output, and **it keeps all of that
+when it is grouped** — grouping changes where a track's output goes, it does
+not take the track away.
 
-```text
-[MASTER] | one strip per group | one strip per ungrouped channel | manual buses
-```
+There are also tracks that no channel feeds. They are made the same way, drawn
+the same way, and run the same code.
 
-This is what avoids the double fader FL gets wrong, and it means the three
-strip-level features below -- **sends, the console switch, the channel-strip
-device** -- land on channels *and* buses at once. "A way to do sends and
-returns without a mixer bus", which the brief asked for, then costs nothing
-extra.
+**Bus and send are roles, not types.** A track fed by other tracks' outputs is
+being used as a bus; one fed by their sends is a send; one fed by a channel is
+an ordinary track; and a track can be all three at once. Adam: *"if you set it
+up as a send, it is a send. if it is a bus, it is a bus. i dont really want to
+have to make an fx/aux channel specifically. it just isn't needed."*
 
-### 2. Keep `EffectTarget`; make the bus list dynamic. Do not do the full slot rewrite yet.
+So `MIXER_PLAN.md`'s `+ Track` / `+ Bus` / `+ Send` is retired outright, and
+so is the *signal slot* name — the unification was right and the word for it
+is **track**.
 
-`MIXER_PLAN.md`'s `SignalSlotId` unification replaces `EffectTarget`
-everywhere at once, including the meter address space, both compilers, and the
-two block loops. It is the right eventual shape and the wrong first move. The
-incremental path -- buses become a `Vec` with stable ids and group membership,
-channels keep their own strip -- delivers every item on the list while
-preserving `compile_bus_graph`'s shape, the meter layout, and the
-realtime/offline equality harness that would otherwise all move at once.
+### 2. Two racks, on purpose, and that is why channel and track stay separate
 
-Sends are the one item that *does* force a compiler change (step 05). That is
-priced there rather than smuggled in early.
+A channel's rack is part of the instrument: *"plugged in and 'captured to
+tape' — part of the instrument signal."* A track's rack is glue and post.
+The distinction is a convention rather than an enforcement — *"you could still
+throw buffer on the drum buss or whatever"* — and nothing refuses a device in
+either place.
+
+This is Maschine's arrangement, and it is the reason mooloop keeps two words
+where most DAWs have one. It also means the existing shape is already right:
+`Channel { source, effects, output, bus }` feeding `MixerBus { effects, output
+}` **is** the two-rack model. What is missing is that a track is not presented
+as one, cannot be freely made, named or routed, and there is not one per
+channel.
+
+### 3. Keep `EffectTarget`; make the track list dynamic. Do not rename the code mid-feature.
+
+The incremental path still holds, and now for a plainer reason: the target
+shape is one species of thing, and `EffectTarget { Channel, Bus }` is two. That
+rename is mechanical, it touches the meter address space, both compilers and
+both block loops, and it should be its own change rather than a rider on a
+feature. `docs/TERMINOLOGY.md` carries the mapping until then.
 
 ## The sequence, and why it is not the brief's order
 
@@ -89,7 +106,7 @@ rather than an adjective.
 | [01](01-a-channel-can-be-moved.md) | a channel can be dragged to another row | nothing |
 | [02](02-console-summing.md) | two channels glue when summed | nothing |
 | [03](03-the-channel-strip-device.md) | EQ + comp in one face, four voicings | nothing |
-| [04](04-groups-and-a-dynamic-bus-list.md) | channels group; the group owns the strip | 01 |
+| [04](04-the-mixer-is-tracks.md) | every channel has a track, and the mixer draws them | 01 |
 | [05](05-sends-and-returns.md) | a reverb return fed from two strips | 04 |
 | [06](06-preamp-modelling.md) | not designed here | 02, 03 |
 
@@ -182,3 +199,30 @@ The four questions this plan opened, and Adam's answers.
    it. i dont think there is anything in it that can't wait."* So this plan
    does not appear there, and `docs/plans/README.md` is where its state is
    recorded.
+
+## What the first draft of this file said, and why it was wrong
+
+Kept rather than deleted, because the shape of the mistake is the useful part.
+
+> **1. The mixer is a *view of strips*, not a second set of objects.** […] do
+> not auto-create a bus per channel. A lone channel's mixer strip *is* that
+> channel. Grouping creates a bus, and the group's members drop out of the
+> mixer because their out is now the group.
+>
+> `[MASTER] | one strip per group | one strip per ungrouped channel | manual buses`
+
+Two things are wrong with it. **A grouped channel does not lose its strip** —
+on a desk you still want its fader, its EQ and its sends after you have routed
+it to the drum bus, and a mixer that removes it is deriving a view rather than
+modelling a console. And **the strip list is not derived at all**; it is just
+the tracks, in order, which is what makes it a place you can learn.
+
+The policy it was built on — *a mixer strip is created by a musical act, not
+an administrative one* — was an answer to a problem that does not arise once
+every channel simply has a track: there is no auto-assignment to undo, because
+there is no assignment step.
+
+The symptom, noticed before the cause: step 02's analog-sum switch had to go
+on a channel's **rack row**, because the mixer draws no channel tracks for it
+to live on. That is the instrument's room, not the mixer's. It moves when
+step 04 lands.

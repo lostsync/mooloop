@@ -52,8 +52,8 @@ point the encoded strips converge at, and the master is already one. Two
 channels switched to console-on glue with nothing created and nothing
 configured, which is the whole difference from the plugins.
 
-It also composes with step 04 for free. Group some channels and the group's
-strip becomes their decode point, with its own fader as the level.
+It also composes with step 04 for free. Route some channels to one track and
+that track becomes their decode point, with its own fader as the level.
 
 ## Which fader is the drive and which is the volume
 

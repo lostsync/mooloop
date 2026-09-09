@@ -2,7 +2,8 @@
 
 The warm-up, and the only item on Adam's list with no dependencies. It is
 also the half of step 04 that can be built and listened to before the
-structural half exists: grouping is a drag, and this is the drag.
+structural half exists: reordering is a drag, and so is routing a channel
+to a track by hand.
 
 ## The one thing that is genuinely missing
 
