@@ -1,0 +1,5 @@
+{
+ "error": "TypeError: report() got an unexpected keyword argument 'flush'",
+ "slug": "puigtec_eqp1a",
+ "traceback": "Traceback (most recent call last):\n  File \"/Users/lost/mooloop-measure/measure_eqc.py\", line 157, in <module>\n    out = measure(slug)\n  File \"/Users/lost/mooloop-measure/measure_eqc.py\", line 132, in measure\n    mlab.report(\"  %-22s %-12s %d gains%s\"\n    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^\n          % (slug, key, len(rows),\n          ^^^^^^^^^^^^^^^^^^^^^^^^\n             \" + distortion\" if band.get(\"distortion_at\") else \"\"),\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n          flush=True)\n          ^^^^^^^^^^^\nTypeError: report() got an unexpected keyword argument 'flush'\n"
+}

@@ -1,0 +1,5 @@
+{
+ "error": "KeyError: \"Airwindows Consolidated has no 'Pop3' (still on 'Mackity')\"",
+ "slug": "aw_pop3",
+ "traceback": "Traceback (most recent call last):\n  File \"/Users/lost/mooloop-measure/survey.py\", line 61, in <module>\n    out = survey(slug)\n  File \"/Users/lost/mooloop-measure/survey.py\", line 23, in survey\n    plugin = roster.open_unit(slug)\n  File \"/Users/lost/mooloop-measure/roster.py\", line 308, in open_unit\n    return aw.select(name)\n           ~~~~~~~~~^^^^^^\n  File \"/Users/lost/mooloop-measure/aw.py\", line 104, in select\n    raise KeyError(\"Airwindows Consolidated has no %r (still on %r)\"\n                   % (name, got))\nKeyError: \"Airwindows Consolidated has no 'Pop3' (still on 'Mackity')\"\n"
+}

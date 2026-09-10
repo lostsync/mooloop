@@ -31,16 +31,29 @@ SR = 48000.0
 
 @contextlib.contextmanager
 def muffled():
-    """Silence the objc/JUCE chatter plugins emit on load, at the fd level."""
-    saved = os.dup(2)
+    """Silence the chatter plugins emit on load and on render, at the fd level.
+
+    Both descriptors, because the two makers that talk do it differently: the
+    objc/JUCE noise goes to stderr, and UAD's plugins print a page of logger
+    configuration to *stdout* every time one is instantiated. A survey of a
+    hundred units emitted enough of it to bury its own report.
+    """
+    # Flush first: stdout is block-buffered when it is a pipe, so anything
+    # still pending would be written after the swap and land in devnull.
+    sys.stdout.flush()
+    saved = [os.dup(1), os.dup(2)]
     devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, 1)
     os.dup2(devnull, 2)
     try:
         yield
     finally:
-        os.dup2(saved, 2)
+        sys.stdout.flush()
+        os.dup2(saved[0], 1)
+        os.dup2(saved[1], 2)
         os.close(devnull)
-        os.close(saved)
+        for fd in saved:
+            os.close(fd)
 
 
 def open_plugin(path, name=None):
@@ -225,11 +238,23 @@ def envelope_db(y, sr=SR, window_ms=1.0):
     return lin_to_db(np.sqrt(np.maximum(p, 1e-30)))
 
 
+def report(msg):
+    """Progress, on stderr.
+
+    Not stdout, because UAD's plugins print a page of logger configuration
+    the moment one is instantiated and some of it escapes `muffled` -- it is
+    emitted from a C stream whose buffer is flushed after the redirect has
+    been put back. So the runs send stdout to /dev/null and read stderr, and
+    every progress line in this directory goes through here.
+    """
+    print(msg, file=sys.stderr, flush=True)
+
+
 def write_json(path, payload):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as fh:
         json.dump(payload, fh, indent=1, sort_keys=True)
-    print("wrote %s" % path, file=sys.stdout)
+    report("wrote %s" % path)
 
 
 def stable_harmonics(plugin, freq, k, n, db, settle, repeats=4, sr=SR):

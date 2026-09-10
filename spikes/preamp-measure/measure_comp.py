@@ -33,7 +33,7 @@ POST_S = 6.0            # an LA-2A's release runs to several seconds
 def mirrored(unit, settings):
     """Some units have per-channel duplicates of every control."""
     out = dict(settings)
-    for src, dst in unit.get("mirror", {}).items():
+    for src, dst in (unit.get("mirror") or {}).items():
         if src in settings:
             out[dst] = settings[src]
     return out

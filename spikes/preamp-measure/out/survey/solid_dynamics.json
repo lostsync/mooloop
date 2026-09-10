@@ -1,0 +1,406 @@
+{
+ "at_-18_dbfs": {
+  "fundamental_dbfs": -18.7744004433736,
+  "gain_db": -0.688,
+  "h2": -192.69967120960882,
+  "h3": -65.7548418224144,
+  "h4": -199.31440626975507,
+  "h5": -81.08938215770272,
+  "h6": -198.16612245229695,
+  "h7": -90.51019718829032,
+  "h8": -200.0,
+  "noise_floor_db": -200.0,
+  "thd_db": -65.61542037530188,
+  "thd_pct": 0.05238765770671058
+ },
+ "at_-30_dbfs": {
+  "fundamental_dbfs": -26.597352618316243,
+  "gain_db": 3.429,
+  "h2": -199.1525652976495,
+  "h3": -72.66264481555086,
+  "h4": -200.0,
+  "h5": -90.57791719726659,
+  "h6": -200.0,
+  "h7": -102.88421792036183,
+  "h8": -200.0,
+  "noise_floor_db": -200.0,
+  "thd_db": -72.5889594710116,
+  "thd_pct": 0.023472104306856104
+ },
+ "at_-6_dbfs": {
+  "fundamental_dbfs": -13.857089719157699,
+  "gain_db": -7.674,
+  "h2": -186.30141252445299,
+  "h3": -62.250493219949405,
+  "h4": -199.10120999055158,
+  "h5": -76.25642548188888,
+  "h6": -200.0,
+  "h7": -85.0295401239735,
+  "h8": -197.09481234210682,
+  "noise_floor_db": -200.0,
+  "thd_db": -62.059206344373365,
+  "thd_pct": 0.07889322014120959
+ },
+ "bit_identical_to_input": false,
+ "family": "comp",
+ "group": "vca-sslchannel",
+ "latency_samples": 0,
+ "maker": "Softube",
+ "models": "SSL 4000 channel dynamics",
+ "name": "Solid Dynamics",
+ "note": "",
+ "parameters": {
+  "atk_mode_comp": {
+   "key": "atk_mode_comp",
+   "max_value": true,
+   "min_value": false,
+   "name": "Atk Mode Comp",
+   "raw_value": 0.0,
+   "step_size": 1,
+   "string": "False",
+   "type": "bool",
+   "valid_values": [
+    "False",
+    "True"
+   ],
+   "value": null
+  },
+  "atk_mode_g_e": {
+   "key": "atk_mode_g_e",
+   "max_value": true,
+   "min_value": false,
+   "name": "Atk Mode G/E",
+   "raw_value": 0.0,
+   "step_size": 1,
+   "string": "False",
+   "type": "bool",
+   "valid_values": [
+    "False",
+    "True"
+   ],
+   "value": null
+  },
+  "boost": {
+   "key": "boost",
+   "max_value": true,
+   "min_value": false,
+   "name": "Boost",
+   "raw_value": 0.0,
+   "step_size": 1,
+   "string": "False",
+   "type": "bool",
+   "valid_values": [
+    "False",
+    "True"
+   ],
+   "value": null
+  },
+  "bypass": {
+   "key": "bypass",
+   "max_value": true,
+   "min_value": false,
+   "name": "Bypass",
+   "raw_value": 0.0,
+   "step_size": 1,
+   "string": "False",
+   "type": "bool",
+   "valid_values": [
+    "False",
+    "True"
+   ],
+   "value": null
+  },
+  "default": {
+   "key": "default",
+   "name": "Default",
+   "raw_value": 0.0,
+   "string": "INIT - Solid Dynamics",
+   "type": "str",
+   "valid_values": [
+    "INIT - Solid Dynamics",
+    "Punchy Drums",
+    "Parallel Drums",
+    "Cranked",
+    "Electric Guitar",
+    "Acoustic Guitar",
+    "Electric Bass",
+    "Vocal",
+    "Vocal Parallel",
+    "Kick",
+    "Kick Gate",
+    "-"
+   ],
+   "value": null
+  },
+  "dry": {
+   "key": "dry",
+   "label": "dB",
+   "max_value": -90.0,
+   "min_value": -Infinity,
+   "name": "Dry",
+   "raw_value": 0.0,
+   "step_size": Infinity,
+   "string": "-inf",
+   "type": "float",
+   "units": "dB",
+   "valid_values": [
+    "-inf",
+    "-90.0"
+   ],
+   "value": null
+  },
+  "knee_type": {
+   "key": "knee_type",
+   "name": "Knee Type",
+   "raw_value": 0.0,
+   "string": "Soft",
+   "type": "str",
+   "valid_values": [
+    "Soft",
+    "Hard"
+   ],
+   "value": null
+  },
+  "link_l_r": {
+   "key": "link_l_r",
+   "max_value": true,
+   "min_value": false,
+   "name": "Link L/R",
+   "raw_value": 1.0,
+   "step_size": 1,
+   "string": "True",
+   "type": "bool",
+   "valid_values": [
+    "False",
+    "True"
+   ],
+   "value": null
+  },
+  "mode": {
+   "key": "mode",
+   "name": "Mode",
+   "raw_value": 0.0,
+   "string": "Gate",
+   "type": "str",
+   "valid_values": [
+    "Gate",
+    "Expand"
+   ],
+   "value": null
+  },
+  "output": {
+   "key": "output",
+   "label": "dB",
+   "max_value": 0.0,
+   "min_value": -Infinity,
+   "name": "Output",
+   "raw_value": 0.8050000071525574,
+   "step_size": Infinity,
+   "string": "0.0",
+   "type": "float",
+   "units": "dB",
+   "valid_values": [
+    "-inf",
+    "0.0"
+   ],
+   "value": null
+  },
+  "range": {
+   "key": "range",
+   "max_value": 0.0,
+   "min_value": 0.0,
+   "name": "Range",
+   "raw_value": 0.0,
+   "string": "0.0",
+   "type": "float",
+   "valid_values": [
+    "0.0"
+   ],
+   "value": null
+  },
+  "ratio": {
+   "key": "ratio",
+   "max_value": Infinity,
+   "min_value": 4.0,
+   "name": "Ratio",
+   "raw_value": 0.7739999890327454,
+   "step_size": Infinity,
+   "string": "4.0",
+   "type": "float",
+   "valid_values": [
+    "4.0",
+    "inf"
+   ],
+   "value": null
+  },
+  "rel_mode": {
+   "key": "rel_mode",
+   "max_value": true,
+   "min_value": false,
+   "name": "Rel.Mode",
+   "raw_value": 0.0,
+   "step_size": 1,
+   "string": "False",
+   "type": "bool",
+   "valid_values": [
+    "False",
+    "True"
+   ],
+   "value": null
+  },
+  "release_comp": {
+   "key": "release_comp",
+   "name": "Release Comp",
+   "raw_value": 0.0,
+   "string": "0.10 s",
+   "type": "str",
+   "valid_values": [
+    "0.10 s"
+   ],
+   "value": null
+  },
+  "release_g_e": {
+   "key": "release_g_e",
+   "name": "Release G/E",
+   "raw_value": 0.5,
+   "string": "0.63 s",
+   "type": "str",
+   "valid_values": [
+    "0.63 s"
+   ],
+   "value": null
+  },
+  "sc_gain": {
+   "approximate_step_size": 0.05,
+   "key": "sc_gain",
+   "label": "dB",
+   "max_value": 20.0,
+   "min_value": -20.0,
+   "name": "SC Gain",
+   "raw_value": 0.5,
+   "string": "0.0",
+   "type": "float",
+   "units": "dB",
+   "valid_values": [
+    "-20.0",
+    "-19.9",
+    "-19.8",
+    "-19.7",
+    "-19.6",
+    "-19.5",
+    "-19.4",
+    "-19.3",
+    "-19.2",
+    "-19.1",
+    "-19.0",
+    "-18.9",
+    "-18.8",
+    "-18.7",
+    "-18.6",
+    "-18.5",
+    "-18.4",
+    "-18.3",
+    "-18.2",
+    "-18.1",
+    "-18.0",
+    "-17.9",
+    "-17.8",
+    "-17.7",
+    "-17.6",
+    "-17.5",
+    "-17.4",
+    "-17.3",
+    "-17.2",
+    "-17.1",
+    "-17.0",
+    "-16.9",
+    "-16.8",
+    "-16.7",
+    "-16.6",
+    "-16.5",
+    "-16.4",
+    "-16.3",
+    "-16.2",
+    "-16.1",
+    "-16.0",
+    "-15.9",
+    "-15.8",
+    "-15.7",
+    "-15.6",
+    "-15.5",
+    "-15.4",
+    "-15.3",
+    "-15.2",
+    "-15.1",
+    "-15.0",
+    "-14.9",
+    "-14.8",
+    "-14.7",
+    "-14.6",
+    "-14.5",
+    "-14.4",
+    "-14.3",
+    "-14.2",
+    "-14.1",
+    "-14.0",
+    "-13.9",
+    "-13.8",
+    "-13.7"
+   ],
+   "value": null
+  },
+  "sc_mode": {
+   "key": "sc_mode",
+   "max_value": true,
+   "min_value": false,
+   "name": "SC Mode",
+   "raw_value": 0.0,
+   "step_size": 1,
+   "string": "False",
+   "type": "bool",
+   "valid_values": [
+    "False",
+    "True"
+   ],
+   "value": null
+  },
+  "threshold_comp": {
+   "key": "threshold_comp",
+   "label": "dB",
+   "max_value": -17.9,
+   "min_value": -17.9,
+   "name": "Threshold Comp",
+   "raw_value": 0.9300199747085571,
+   "string": "-17.9",
+   "type": "float",
+   "units": "dB",
+   "valid_values": [
+    "-17.9"
+   ],
+   "value": null
+  },
+  "threshold_g_e": {
+   "key": "threshold_g_e",
+   "label": "dB",
+   "max_value": 0.0,
+   "min_value": 0.0,
+   "name": "Threshold G/E",
+   "raw_value": 0.75,
+   "string": "0.0",
+   "type": "float",
+   "units": "dB",
+   "valid_values": [
+    "0.0"
+   ],
+   "value": null
+  }
+ },
+ "seconds": 0.1,
+ "silent": false,
+ "slug": "solid_dynamics",
+ "spec": [
+  "/Library/Audio/Plug-Ins/VST3/Solid Dynamics.vst3",
+  null
+ ],
+ "voice": null
+}

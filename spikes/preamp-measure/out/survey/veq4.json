@@ -1,0 +1,2128 @@
+{
+ "at_-18_dbfs": {
+  "fundamental_dbfs": -17.996207842515165,
+  "gain_db": 0.004,
+  "h2": -101.54591303267132,
+  "h3": -111.42705194331054,
+  "h4": -145.10596843741502,
+  "h5": -156.61779751922649,
+  "h6": -200.0,
+  "h7": -190.9047271061181,
+  "h8": -200.0,
+  "noise_floor_db": -200.0,
+  "thd_db": -101.12085944763919,
+  "thd_pct": 0.000878935543995234
+ },
+ "at_-30_dbfs": {
+  "fundamental_dbfs": -29.99614181543713,
+  "gain_db": 0.004,
+  "h2": -113.33227075583426,
+  "h3": -135.2245821170673,
+  "h4": -180.04402175914694,
+  "h5": -192.9407377269784,
+  "h6": -194.88882029476915,
+  "h7": -194.52890897127799,
+  "h8": -199.01996731329345,
+  "noise_floor_db": -200.0,
+  "thd_db": -113.30427007442735,
+  "thd_pct": 0.00021616555699232562
+ },
+ "at_-6_dbfs": {
+  "fundamental_dbfs": -5.996958289123592,
+  "gain_db": 0.003,
+  "h2": -93.90374128561038,
+  "h3": -91.89638861954055,
+  "h4": -109.09783608792424,
+  "h5": -108.74675989880839,
+  "h6": -200.0,
+  "h7": -197.1238905088582,
+  "h8": -200.0,
+  "noise_floor_db": -200.0,
+  "thd_db": -89.67028943300741,
+  "thd_pct": 0.0032846229903218073
+ },
+ "bit_identical_to_input": false,
+ "family": "eq",
+ "group": "eq-neve",
+ "latency_samples": 0,
+ "maker": "Waves",
+ "models": "Neve 1081 EQ",
+ "name": "VEQ4 Stereo",
+ "note": "",
+ "parameters": {
+  "after_touch": {
+   "key": "after_touch",
+   "name": "After Touch",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "all_notes_off": {
+   "key": "all_notes_off",
+   "name": "All Notes Off",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "all_sound_off": {
+   "key": "all_sound_off",
+   "name": "All Sound Off",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "analog": {
+   "key": "analog",
+   "name": "Analog",
+   "raw_value": 0.0,
+   "string": "Out ",
+   "type": "str",
+   "valid_values": [
+    "Out ",
+    "In "
+   ],
+   "value": null
+  },
+  "attack_time": {
+   "key": "attack_time",
+   "name": "Attack Time",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "balance": {
+   "key": "balance",
+   "name": "Balance",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "bank": {
+   "key": "bank",
+   "name": "Bank",
+   "raw_value": 0.0,
+   "string": "Full reset",
+   "type": "str",
+   "valid_values": [
+    "Full reset",
+    "PA Default",
+    "Kick",
+    "kick 1",
+    "kick 2",
+    "Snr Drum",
+    "Snare 2",
+    "Hi Hat",
+    "OverHeads",
+    "Room",
+    "Rack Tom",
+    "Floor Tom",
+    "Bass",
+    "Lead Vocal",
+    "Backing Vocals",
+    "Acc guitar",
+    "Classical Guitar",
+    "Rythm Guitar",
+    "Gtr enhance subtle",
+    "Violin",
+    "Strings",
+    "Piano",
+    "Guitar",
+    "Clap_1_VEQ4",
+    "Pensado Start",
+    "Pensado Distroto",
+    "Hogarth E Guitar 1",
+    "Hogarth E Guitar 2",
+    "Hogarth E Guitar 3",
+    "Hogarth E Guitar 4",
+    "Hogarth E Guitar 5",
+    "Hogarth E Guitar 6",
+    "Hogarth Bass Guitar",
+    "Lillywhite Male Vocal",
+    "Gtr Chain",
+    "Mighty Kick",
+    "Russo Heavy Guitars"
+   ],
+   "value": null
+  },
+  "bank_select": {
+   "key": "bank_select",
+   "name": "Bank Select",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "breath_controller": {
+   "key": "breath_controller",
+   "name": "Breath Controller",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "brightness": {
+   "key": "brightness",
+   "name": "Brightness",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "bypass": {
+   "key": "bypass",
+   "max_value": true,
+   "min_value": false,
+   "name": "Bypass",
+   "raw_value": 0.0,
+   "step_size": 1,
+   "string": "False",
+   "type": "bool",
+   "valid_values": [
+    "False",
+    "True"
+   ],
+   "value": null
+  },
+  "celeste_depth": {
+   "key": "celeste_depth",
+   "name": "Celeste Depth",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "channel_volume": {
+   "key": "channel_volume",
+   "name": "Channel Volume",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "chorus_depth": {
+   "key": "chorus_depth",
+   "name": "Chorus Depth",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_102": {
+   "key": "control_102",
+   "name": "Control 102",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_103": {
+   "key": "control_103",
+   "name": "Control 103",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_104": {
+   "key": "control_104",
+   "name": "Control 104",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_105": {
+   "key": "control_105",
+   "name": "Control 105",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_106": {
+   "key": "control_106",
+   "name": "Control 106",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_107": {
+   "key": "control_107",
+   "name": "Control 107",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_108": {
+   "key": "control_108",
+   "name": "Control 108",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_109": {
+   "key": "control_109",
+   "name": "Control 109",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_110": {
+   "key": "control_110",
+   "name": "Control 110",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_111": {
+   "key": "control_111",
+   "name": "Control 111",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_112": {
+   "key": "control_112",
+   "name": "Control 112",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_113": {
+   "key": "control_113",
+   "name": "Control 113",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_114": {
+   "key": "control_114",
+   "name": "Control 114",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_115": {
+   "key": "control_115",
+   "name": "Control 115",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_116": {
+   "key": "control_116",
+   "name": "Control 116",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_117": {
+   "key": "control_117",
+   "name": "Control 117",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_118": {
+   "key": "control_118",
+   "name": "Control 118",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_119": {
+   "key": "control_119",
+   "name": "Control 119",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_14": {
+   "key": "control_14",
+   "name": "Control 14",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_15": {
+   "key": "control_15",
+   "name": "Control 15",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_20": {
+   "key": "control_20",
+   "name": "Control 20",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_21": {
+   "key": "control_21",
+   "name": "Control 21",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_22": {
+   "key": "control_22",
+   "name": "Control 22",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_23": {
+   "key": "control_23",
+   "name": "Control 23",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_24": {
+   "key": "control_24",
+   "name": "Control 24",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_25": {
+   "key": "control_25",
+   "name": "Control 25",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_26": {
+   "key": "control_26",
+   "name": "Control 26",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_27": {
+   "key": "control_27",
+   "name": "Control 27",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_28": {
+   "key": "control_28",
+   "name": "Control 28",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_29": {
+   "key": "control_29",
+   "name": "Control 29",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_3": {
+   "key": "control_3",
+   "name": "Control 3",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_30": {
+   "key": "control_30",
+   "name": "Control 30",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_31": {
+   "key": "control_31",
+   "name": "Control 31",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_32": {
+   "key": "control_32",
+   "name": "Control 32",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_33": {
+   "key": "control_33",
+   "name": "Control 33",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_34": {
+   "key": "control_34",
+   "name": "Control 34",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_35": {
+   "key": "control_35",
+   "name": "Control 35",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_36": {
+   "key": "control_36",
+   "name": "Control 36",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_37": {
+   "key": "control_37",
+   "name": "Control 37",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_39": {
+   "key": "control_39",
+   "name": "Control 39",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_40": {
+   "key": "control_40",
+   "name": "Control 40",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_41": {
+   "key": "control_41",
+   "name": "Control 41",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_42": {
+   "key": "control_42",
+   "name": "Control 42",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_43": {
+   "key": "control_43",
+   "name": "Control 43",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_44": {
+   "key": "control_44",
+   "name": "Control 44",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_45": {
+   "key": "control_45",
+   "name": "Control 45",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_46": {
+   "key": "control_46",
+   "name": "Control 46",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_47": {
+   "key": "control_47",
+   "name": "Control 47",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_48": {
+   "key": "control_48",
+   "name": "Control 48",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_49": {
+   "key": "control_49",
+   "name": "Control 49",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_50": {
+   "key": "control_50",
+   "name": "Control 50",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_51": {
+   "key": "control_51",
+   "name": "Control 51",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_52": {
+   "key": "control_52",
+   "name": "Control 52",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_53": {
+   "key": "control_53",
+   "name": "Control 53",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_54": {
+   "key": "control_54",
+   "name": "Control 54",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_55": {
+   "key": "control_55",
+   "name": "Control 55",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_56": {
+   "key": "control_56",
+   "name": "Control 56",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_57": {
+   "key": "control_57",
+   "name": "Control 57",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_58": {
+   "key": "control_58",
+   "name": "Control 58",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_59": {
+   "key": "control_59",
+   "name": "Control 59",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_60": {
+   "key": "control_60",
+   "name": "Control 60",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_61": {
+   "key": "control_61",
+   "name": "Control 61",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_62": {
+   "key": "control_62",
+   "name": "Control 62",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_63": {
+   "key": "control_63",
+   "name": "Control 63",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_85": {
+   "key": "control_85",
+   "name": "Control 85",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_86": {
+   "key": "control_86",
+   "name": "Control 86",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_87": {
+   "key": "control_87",
+   "name": "Control 87",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_88": {
+   "key": "control_88",
+   "name": "Control 88",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_89": {
+   "key": "control_89",
+   "name": "Control 89",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_9": {
+   "key": "control_9",
+   "name": "Control 9",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "control_90": {
+   "key": "control_90",
+   "name": "Control 90",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "data_decrement": {
+   "key": "data_decrement",
+   "name": "Data Decrement",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "data_entry": {
+   "key": "data_entry",
+   "name": "Data Entry",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "data_increment": {
+   "key": "data_increment",
+   "name": "Data Increment",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "effect_control_1": {
+   "key": "effect_control_1",
+   "name": "Effect Control 1",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "effect_control_2": {
+   "key": "effect_control_2",
+   "name": "Effect Control 2",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "eq": {
+   "key": "eq",
+   "name": "EQ",
+   "raw_value": 1.0,
+   "string": "In ",
+   "type": "str",
+   "valid_values": [
+    "Out ",
+    "In "
+   ],
+   "value": null
+  },
+  "expression_control": {
+   "key": "expression_control",
+   "name": "Expression Control",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "foot_controller": {
+   "key": "foot_controller",
+   "name": "Foot Controller",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "general_control_1": {
+   "key": "general_control_1",
+   "name": "General Control 1",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "general_control_2": {
+   "key": "general_control_2",
+   "name": "General Control 2",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "general_control_3": {
+   "key": "general_control_3",
+   "name": "General Control 3",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "general_control_4": {
+   "key": "general_control_4",
+   "name": "General Control 4",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "general_control_5": {
+   "key": "general_control_5",
+   "name": "General Control 5",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "general_control_6": {
+   "key": "general_control_6",
+   "name": "General Control 6",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "general_control_7": {
+   "key": "general_control_7",
+   "name": "General Control 7",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "general_control_8": {
+   "key": "general_control_8",
+   "name": "General Control 8",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "hf_bell": {
+   "key": "hf_bell",
+   "name": "HF Bell",
+   "raw_value": 0.0,
+   "string": "Out ",
+   "type": "str",
+   "valid_values": [
+    "Out ",
+    "In "
+   ],
+   "value": null
+  },
+  "hff": {
+   "key": "hff",
+   "name": "HFF",
+   "raw_value": 0.0,
+   "string": "OFF ",
+   "type": "str",
+   "valid_values": [
+    "OFF ",
+    "3.3 kHz ",
+    "4.7 kHz ",
+    "6.8 kHz ",
+    "10.0kHz ",
+    "15.0kHz "
+   ],
+   "value": null
+  },
+  "hfg": {
+   "key": "hfg",
+   "label": "dB",
+   "max_value": 18.0,
+   "min_value": -18.0,
+   "name": "HFG",
+   "raw_value": 0.5,
+   "step_size": 0.1,
+   "string": "0.0",
+   "type": "float",
+   "units": "dB",
+   "valid_values": [
+    "-18.0",
+    "-17.9",
+    "-17.8",
+    "-17.7",
+    "-17.6",
+    "-17.5",
+    "-17.4",
+    "-17.3",
+    "-17.2",
+    "-17.1",
+    "-17.0",
+    "-16.9",
+    "-16.8",
+    "-16.7",
+    "-16.6",
+    "-16.5",
+    "-16.4",
+    "-16.3",
+    "-16.2",
+    "-16.1",
+    "-16.0",
+    "-15.9",
+    "-15.8",
+    "-15.7",
+    "-15.6",
+    "-15.5",
+    "-15.4",
+    "-15.3",
+    "-15.2",
+    "-15.1",
+    "-15.0",
+    "-14.9",
+    "-14.8",
+    "-14.7",
+    "-14.6",
+    "-14.5",
+    "-14.4",
+    "-14.3",
+    "-14.2",
+    "-14.1",
+    "-14.0",
+    "-13.9",
+    "-13.8",
+    "-13.7",
+    "-13.6",
+    "-13.5",
+    "-13.4",
+    "-13.3",
+    "-13.2",
+    "-13.1",
+    "-13.0",
+    "-12.9",
+    "-12.8",
+    "-12.7",
+    "-12.6",
+    "-12.5",
+    "-12.4",
+    "-12.3",
+    "-12.2",
+    "-12.1",
+    "-12.0",
+    "-11.9",
+    "-11.8",
+    "-11.7"
+   ],
+   "value": null
+  },
+  "hmff": {
+   "key": "hmff",
+   "name": "HMFF",
+   "raw_value": 0.0,
+   "string": "OFF ",
+   "type": "str",
+   "valid_values": [
+    "OFF ",
+    "1.5 kHz ",
+    "1.8 kHz ",
+    "2.2 kHz ",
+    "2.7 kHz ",
+    "3.3 kHz ",
+    "3.9 kHz ",
+    "4.7 kHz ",
+    "5.6 kHz ",
+    "6.8 kHz ",
+    "8.2 kHz "
+   ],
+   "value": null
+  },
+  "hmfg": {
+   "key": "hmfg",
+   "label": "dB",
+   "max_value": 18.0,
+   "min_value": -18.0,
+   "name": "HMFG",
+   "raw_value": 0.5,
+   "step_size": 0.1,
+   "string": "0.0",
+   "type": "float",
+   "units": "dB",
+   "valid_values": [
+    "-18.0",
+    "-17.9",
+    "-17.8",
+    "-17.7",
+    "-17.6",
+    "-17.5",
+    "-17.4",
+    "-17.3",
+    "-17.2",
+    "-17.1",
+    "-17.0",
+    "-16.9",
+    "-16.8",
+    "-16.7",
+    "-16.6",
+    "-16.5",
+    "-16.4",
+    "-16.3",
+    "-16.2",
+    "-16.1",
+    "-16.0",
+    "-15.9",
+    "-15.8",
+    "-15.7",
+    "-15.6",
+    "-15.5",
+    "-15.4",
+    "-15.3",
+    "-15.2",
+    "-15.1",
+    "-15.0",
+    "-14.9",
+    "-14.8",
+    "-14.7",
+    "-14.6",
+    "-14.5",
+    "-14.4",
+    "-14.3",
+    "-14.2",
+    "-14.1",
+    "-14.0",
+    "-13.9",
+    "-13.8",
+    "-13.7",
+    "-13.6",
+    "-13.5",
+    "-13.4",
+    "-13.3",
+    "-13.2",
+    "-13.1",
+    "-13.0",
+    "-12.9",
+    "-12.8",
+    "-12.7",
+    "-12.6",
+    "-12.5",
+    "-12.4",
+    "-12.3",
+    "-12.2",
+    "-12.1",
+    "-12.0",
+    "-11.9",
+    "-11.8",
+    "-11.7"
+   ],
+   "value": null
+  },
+  "hmhq": {
+   "key": "hmhq",
+   "name": "HMHQ",
+   "raw_value": 0.0,
+   "string": "Out ",
+   "type": "str",
+   "valid_values": [
+    "Out ",
+    "In "
+   ],
+   "value": null
+  },
+  "hold2_pedal_on_off": {
+   "key": "hold2_pedal_on_off",
+   "name": "Hold2 Pedal On/Off",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "hpf": {
+   "key": "hpf",
+   "name": "HPF",
+   "raw_value": 0.0,
+   "string": "OFF ",
+   "type": "str",
+   "valid_values": [
+    "OFF ",
+    "27 Hz ",
+    "47 Hz ",
+    "82 Hz ",
+    "150Hz ",
+    "270Hz "
+   ],
+   "value": null
+  },
+  "legato_pedal_on_off": {
+   "key": "legato_pedal_on_off",
+   "name": "Legato Pedal On/Off",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "lf_bell": {
+   "key": "lf_bell",
+   "name": "LF Bell",
+   "raw_value": 0.0,
+   "string": "Out ",
+   "type": "str",
+   "valid_values": [
+    "Out ",
+    "In "
+   ],
+   "value": null
+  },
+  "lff": {
+   "key": "lff",
+   "name": "LFF",
+   "raw_value": 0.0,
+   "string": "OFF ",
+   "type": "str",
+   "valid_values": [
+    "OFF ",
+    "33 Hz ",
+    "56 Hz ",
+    "100Hz ",
+    "180Hz ",
+    "330Hz "
+   ],
+   "value": null
+  },
+  "lfg": {
+   "key": "lfg",
+   "label": "dB",
+   "max_value": 18.0,
+   "min_value": -18.0,
+   "name": "LFG",
+   "raw_value": 0.5,
+   "step_size": 0.1,
+   "string": "0.0",
+   "type": "float",
+   "units": "dB",
+   "valid_values": [
+    "-18.0",
+    "-17.9",
+    "-17.8",
+    "-17.7",
+    "-17.6",
+    "-17.5",
+    "-17.4",
+    "-17.3",
+    "-17.2",
+    "-17.1",
+    "-17.0",
+    "-16.9",
+    "-16.8",
+    "-16.7",
+    "-16.6",
+    "-16.5",
+    "-16.4",
+    "-16.3",
+    "-16.2",
+    "-16.1",
+    "-16.0",
+    "-15.9",
+    "-15.8",
+    "-15.7",
+    "-15.6",
+    "-15.5",
+    "-15.4",
+    "-15.3",
+    "-15.2",
+    "-15.1",
+    "-15.0",
+    "-14.9",
+    "-14.8",
+    "-14.7",
+    "-14.6",
+    "-14.5",
+    "-14.4",
+    "-14.3",
+    "-14.2",
+    "-14.1",
+    "-14.0",
+    "-13.9",
+    "-13.8",
+    "-13.7",
+    "-13.6",
+    "-13.5",
+    "-13.4",
+    "-13.3",
+    "-13.2",
+    "-13.1",
+    "-13.0",
+    "-12.9",
+    "-12.8",
+    "-12.7",
+    "-12.6",
+    "-12.5",
+    "-12.4",
+    "-12.3",
+    "-12.2",
+    "-12.1",
+    "-12.0",
+    "-11.9",
+    "-11.8",
+    "-11.7"
+   ],
+   "value": null
+  },
+  "lmff": {
+   "key": "lmff",
+   "name": "LMFF",
+   "raw_value": 0.0,
+   "string": "OFF ",
+   "type": "str",
+   "valid_values": [
+    "OFF ",
+    "220 Hz ",
+    "270 Hz ",
+    "330 Hz ",
+    "390 Hz ",
+    "470 Hz ",
+    "560 Hz ",
+    "680 Hz ",
+    "820 Hz ",
+    "1000 Hz ",
+    "1200 Hz "
+   ],
+   "value": null
+  },
+  "lmfg": {
+   "key": "lmfg",
+   "label": "dB",
+   "max_value": 18.0,
+   "min_value": -18.0,
+   "name": "LMFG",
+   "raw_value": 0.5,
+   "step_size": 0.1,
+   "string": "0.0",
+   "type": "float",
+   "units": "dB",
+   "valid_values": [
+    "-18.0",
+    "-17.9",
+    "-17.8",
+    "-17.7",
+    "-17.6",
+    "-17.5",
+    "-17.4",
+    "-17.3",
+    "-17.2",
+    "-17.1",
+    "-17.0",
+    "-16.9",
+    "-16.8",
+    "-16.7",
+    "-16.6",
+    "-16.5",
+    "-16.4",
+    "-16.3",
+    "-16.2",
+    "-16.1",
+    "-16.0",
+    "-15.9",
+    "-15.8",
+    "-15.7",
+    "-15.6",
+    "-15.5",
+    "-15.4",
+    "-15.3",
+    "-15.2",
+    "-15.1",
+    "-15.0",
+    "-14.9",
+    "-14.8",
+    "-14.7",
+    "-14.6",
+    "-14.5",
+    "-14.4",
+    "-14.3",
+    "-14.2",
+    "-14.1",
+    "-14.0",
+    "-13.9",
+    "-13.8",
+    "-13.7",
+    "-13.6",
+    "-13.5",
+    "-13.4",
+    "-13.3",
+    "-13.2",
+    "-13.1",
+    "-13.0",
+    "-12.9",
+    "-12.8",
+    "-12.7",
+    "-12.6",
+    "-12.5",
+    "-12.4",
+    "-12.3",
+    "-12.2",
+    "-12.1",
+    "-12.0",
+    "-11.9",
+    "-11.8",
+    "-11.7"
+   ],
+   "value": null
+  },
+  "lmhq": {
+   "key": "lmhq",
+   "name": "LMHQ",
+   "raw_value": 0.0,
+   "string": "Out ",
+   "type": "str",
+   "valid_values": [
+    "Out ",
+    "In "
+   ],
+   "value": null
+  },
+  "local_control_on_off": {
+   "key": "local_control_on_off",
+   "name": "Local Control On/Off",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "lpf": {
+   "key": "lpf",
+   "name": "LPF",
+   "raw_value": 1.0,
+   "string": "OFF ",
+   "type": "str",
+   "valid_values": [
+    "3.9 kHz ",
+    "5.6 kHz ",
+    "8.2 kHz ",
+    "12.0 kHz ",
+    "18.0 kHz ",
+    "OFF "
+   ],
+   "value": null
+  },
+  "modulation_wheel": {
+   "key": "modulation_wheel",
+   "name": "Modulation Wheel",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "mono_mode_on": {
+   "key": "mono_mode_on",
+   "name": "Mono Mode On",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "nrpn_1": {
+   "key": "nrpn_1",
+   "name": "NRPN 1",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "nrpn_2": {
+   "key": "nrpn_2",
+   "name": "NRPN 2",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "omni_mode_off": {
+   "key": "omni_mode_off",
+   "name": "Omni Mode Off",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "omni_mode_on": {
+   "key": "omni_mode_on",
+   "name": "Omni Mode On",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "output": {
+   "key": "output",
+   "label": "dB",
+   "max_value": 18.0,
+   "min_value": -18.0,
+   "name": "Output",
+   "raw_value": 0.5,
+   "step_size": 0.1,
+   "string": "0.0",
+   "type": "float",
+   "units": "dB",
+   "valid_values": [
+    "-18.0",
+    "-17.9",
+    "-17.8",
+    "-17.7",
+    "-17.6",
+    "-17.5",
+    "-17.4",
+    "-17.3",
+    "-17.2",
+    "-17.1",
+    "-17.0",
+    "-16.9",
+    "-16.8",
+    "-16.7",
+    "-16.6",
+    "-16.5",
+    "-16.4",
+    "-16.3",
+    "-16.2",
+    "-16.1",
+    "-16.0",
+    "-15.9",
+    "-15.8",
+    "-15.7",
+    "-15.6",
+    "-15.5",
+    "-15.4",
+    "-15.3",
+    "-15.2",
+    "-15.1",
+    "-15.0",
+    "-14.9",
+    "-14.8",
+    "-14.7",
+    "-14.6",
+    "-14.5",
+    "-14.4",
+    "-14.3",
+    "-14.2",
+    "-14.1",
+    "-14.0",
+    "-13.9",
+    "-13.8",
+    "-13.7",
+    "-13.6",
+    "-13.5",
+    "-13.4",
+    "-13.3",
+    "-13.2",
+    "-13.1",
+    "-13.0",
+    "-12.9",
+    "-12.8",
+    "-12.7",
+    "-12.6",
+    "-12.5",
+    "-12.4",
+    "-12.3",
+    "-12.2",
+    "-12.1",
+    "-12.0",
+    "-11.9",
+    "-11.8",
+    "-11.7"
+   ],
+   "value": null
+  },
+  "pan_position": {
+   "key": "pan_position",
+   "name": "Pan Position",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "phase": {
+   "key": "phase",
+   "name": "Phase",
+   "raw_value": 0.0,
+   "string": "Out ",
+   "type": "str",
+   "valid_values": [
+    "Out ",
+    "In "
+   ],
+   "value": null
+  },
+  "phaser_depth": {
+   "key": "phaser_depth",
+   "name": "Phaser Depth",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "pitch_bend": {
+   "key": "pitch_bend",
+   "name": "Pitch Bend",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "poly_mode_on": {
+   "key": "poly_mode_on",
+   "name": "Poly Mode On",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "portamento_on_off": {
+   "key": "portamento_on_off",
+   "name": "Portamento On/Off",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "portamento_source": {
+   "key": "portamento_source",
+   "name": "Portamento Source",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "portamento_time": {
+   "key": "portamento_time",
+   "name": "Portamento Time",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "release_time": {
+   "key": "release_time",
+   "name": "Release Time",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "reset_all": {
+   "key": "reset_all",
+   "name": "Reset All",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "reverb_depth": {
+   "key": "reverb_depth",
+   "name": "Reverb Depth",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "rpn_1": {
+   "key": "rpn_1",
+   "name": "RPN 1",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "rpn_2": {
+   "key": "rpn_2",
+   "name": "RPN 2",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "soft_pedal_on_off": {
+   "key": "soft_pedal_on_off",
+   "name": "Soft Pedal On/Off",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "sostenuto_pedal_on_off": {
+   "key": "sostenuto_pedal_on_off",
+   "name": "Sostenuto Pedal On/Off",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "sound_control_10": {
+   "key": "sound_control_10",
+   "name": "Sound Control 10",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "sound_control_6": {
+   "key": "sound_control_6",
+   "name": "Sound Control 6",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "sound_control_7": {
+   "key": "sound_control_7",
+   "name": "Sound Control 7",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "sound_control_8": {
+   "key": "sound_control_8",
+   "name": "Sound Control 8",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "sound_control_9": {
+   "key": "sound_control_9",
+   "name": "Sound Control 9",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "sound_variation": {
+   "key": "sound_variation",
+   "name": "Sound Variation",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "sustain_pedal_on_off": {
+   "key": "sustain_pedal_on_off",
+   "name": "Sustain Pedal On/Off",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "timbre": {
+   "key": "timbre",
+   "name": "Timbre",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  },
+  "tremolo_depth": {
+   "key": "tremolo_depth",
+   "name": "Tremolo Depth",
+   "raw_value": 0.0,
+   "string": "",
+   "type": "str",
+   "valid_values": [
+    ""
+   ],
+   "value": null
+  }
+ },
+ "seconds": 8.5,
+ "silent": false,
+ "slug": "veq4",
+ "spec": [
+  "/Library/Audio/Plug-Ins/VST3/WaveShell1-VST3 16.7.vst3",
+  "VEQ4 Stereo"
+ ],
+ "voice": null
+}

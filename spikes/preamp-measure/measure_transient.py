@@ -19,50 +19,15 @@ import time
 import numpy as np
 
 import mlab
+# The stimulus and the metrics live in `analysis` so that the chart suite and
+# this script drive the units with the same click train; nothing about them
+# changed in the move.
+from analysis import (click_train, crest_db, max_slope, square,
+                      _best_render as best_render)
 from units import PREAMPS
 
 SR = mlab.SR
 AMPS = [-24.0, -18.0, -12.0, -6.0, -3.0, 0.0]
-
-
-def max_slope(y):
-    """Largest sample-to-sample change, as full scale per millisecond."""
-    return float(np.max(np.abs(np.diff(y))) * SR / 1000.0)
-
-
-def best_render(plugin, x, tries=2):
-    """Render more than once and keep the loudest, rejecting a dropout.
-
-    Same glitch as everywhere else, and it matters more here: a dropout in
-    the click train removes the very peak the measurement is about.
-    """
-    best = None
-    for _ in range(tries):
-        y = mlab.render(plugin, x)
-        if best is None or np.max(np.abs(y)) > np.max(np.abs(best)):
-            best = y
-    return best
-
-
-def crest_db(x):
-    rms = np.sqrt(np.mean(np.square(x)))
-    return float(mlab.lin_to_db(np.max(np.abs(x)) / max(rms, 1e-12)))
-
-
-def click_train(amp_db, n, period_s=0.25, width=8):
-    """Short shaped bursts: high crest factor, no DC, nothing to ring on."""
-    x = np.zeros(n)
-    env = np.hanning(2 * width)[width:]
-    t = np.arange(width) / SR
-    burst = env * np.sin(2 * np.pi * 3000.0 * t)
-    for start in range(int(SR * 0.05), n - width, int(SR * period_s)):
-        x[start:start + width] = burst
-    return x * (mlab.db_to_lin(amp_db) / np.max(np.abs(x)))
-
-
-def square(amp_db, n, freq=500.0):
-    t = np.arange(n) / SR
-    return mlab.db_to_lin(amp_db) * np.sign(np.sin(2 * np.pi * freq * t))
 
 
 def measure(slug):

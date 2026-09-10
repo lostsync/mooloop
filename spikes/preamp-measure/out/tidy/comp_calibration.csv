@@ -1,0 +1,21 @@
+slug,maker,models,group,element,gr_target_db,gr_measured_db,reached,control,value,refined
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,10.0,9.93,True,input,-35.0,True
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,15.0,14.54,True,input,-30.0,True
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,6.94,False,input,-40.0,True
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,6.0,6.94,True,input,-40.0,True
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,10.0,10.37,True,input,-30.0,True
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,15.0,14.99,True,input,-26.25,True
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,4.8,False,input,-40.0,True
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,6.0,6.0,True,input,-36.640625,True
+1176ln,UAD,UREI 1176LN Rev E,fet-1176,fet,10.0,10.25,True,input,-30.0,True
+1176ln,UAD,UREI 1176LN Rev E,fet-1176,fet,15.0,15.0,True,input,-27.109375,True
+1176ln,UAD,UREI 1176LN Rev E,fet-1176,fet,3.0,2.79,True,input,-40.0,True
+1176ln,UAD,UREI 1176LN Rev E,fet-1176,fet,6.0,6.02,True,input,-36.484375,True
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,10.0,9.74,True,thresh,-25.0,
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,13.46,False,thresh,-30.0,
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,2.25,True,thresh,-15.0,
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,6.0,6.0,True,thresh,-20.0,
+vc76,Softube,UREI 1176,fet-1176,fet,10.0,8.94,True,input,"('raw', 0.6)",False
+vc76,Softube,UREI 1176,fet-1176,fet,15.0,16.69,False,input,"('raw', 0.8)",False
+vc76,Softube,UREI 1176,fet-1176,fet,3.0,1.55,True,input,"('raw', 0.4)",False
+vc76,Softube,UREI 1176,fet-1176,fet,6.0,5.11,True,input,"('raw', 0.5)",False

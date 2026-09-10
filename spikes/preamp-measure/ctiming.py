@@ -67,23 +67,36 @@ def sample_curve(g, start, sr=mlab.SR, grid_ms=TIME_GRID_MS):
     return out
 
 
-def crossing_ms(g, start, final, fraction, sr=mlab.SR, skip_ms=0.0):
-    """When the trace first reaches `fraction` of its final excursion.
+def crossing_ms(g, start, final, fraction, sr=mlab.SR, skip_ms=0.0,
+                dwell_ms=0.0):
+    """When the trace reaches `fraction` of its final excursion and stays.
 
-    `skip_ms` ignores the moments right after the step. The analytic
-    envelope rings at a sudden amplitude discontinuity, and on the release
-    edge that ring crosses the target immediately -- which is how every
-    Fairchild time constant first measured a release of 0.729 ms.
+    `skip_ms` ignores the moments right after the step. The analytic envelope
+    rings at a sudden amplitude discontinuity, and on the release edge that
+    ring crosses the target immediately -- which is how every Fairchild time
+    constant first measured a release of 0.729 ms.
+
+    `dwell_ms` is the rest of that defence and the reason skipping alone was
+    not enough: the ring does not stop at the skip, it keeps going, and a
+    1176 at 3 dB of reduction reported a 0.17 ms release off a single
+    ringing sample while its own release curve plainly took half a second.
+    So the trace has to be past the target *and stay there* for this long
+    before the crossing counts.
     """
     base = g[start]
     target = base + fraction * (final - base)
-    skip = int(sr * skip_ms / 1000.0)
-    start = start + skip
+    start = start + int(sr * skip_ms / 1000.0)
     seg = g[start:]
-    if final < base:
-        hit = np.where(seg <= target)[0]
+    ok = (seg <= target) if final < base else (seg >= target)
+    ok = np.nan_to_num(ok.astype(float))
+    dwell = max(1, int(sr * dwell_ms / 1000.0))
+    if dwell > 1:
+        if len(ok) < dwell:
+            return None
+        run = np.convolve(ok, np.ones(dwell), mode="valid")
+        hit = np.where(run >= dwell)[0]
     else:
-        hit = np.where(seg >= target)[0]
+        hit = np.where(ok > 0.5)[0]
     if not len(hit):
         return None
     return float(hit[0] * 1000.0 / sr)
@@ -130,12 +143,18 @@ def step_response(plugin, low_db, high_db, hold_s, post_s, pre_s=1.0,
                             for k, v in sample_curve(g, a, sr).items()},
         "release_curve_db": {k: quiet - v
                              for k, v in sample_curve(g, b, sr).items()},
-        "attack_t63_ms": crossing_ms(g, a, settled, 0.63, sr),
-        "attack_t90_ms": crossing_ms(g, a, settled, 0.90, sr),
+        "attack_t63_ms": crossing_ms(g, a, settled, 0.63, sr, dwell_ms=0.1),
+        "attack_t90_ms": crossing_ms(g, a, settled, 0.90, sr, dwell_ms=0.1),
         # Nothing analogue releases in under a millisecond, so skipping that
         # long costs no real measurement and removes the edge artifact.
-        "release_t63_ms": crossing_ms(g, b, quiet, 0.63, sr, skip_ms=1.0),
-        "release_t90_ms": crossing_ms(g, b, quiet, 0.90, sr, skip_ms=1.0),
+        "release_t63_ms": crossing_ms(g, b, quiet, 0.63, sr, skip_ms=1.0,
+                                      dwell_ms=2.0),
+        "release_t90_ms": crossing_ms(g, b, quiet, 0.90, sr, skip_ms=1.0,
+                                      dwell_ms=2.0),
+        # Below about two dB of excursion the trace is mostly the envelope's
+        # own ripple, so the times above are noise however carefully they are
+        # read. Recorded rather than blanked, with this to filter on.
+        "timing_reliable": bool(abs(quiet - settled) >= 2.0),
     }
 
 
@@ -162,14 +181,61 @@ def calibrate(plugin, control, values, target_gr_db, level_db, sr=mlab.SR,
             settings[mirror[control]] = v
         mlab.set_params(plugin, settings)
 
-    best = None
-    for v in values:
+    def gr_at(v):
         apply(v)
         ref = mlab.rms_db(mlab.render(plugin, quiet, sr)[tail]) - (level_db - 40.0)
         out = mlab.rms_db(mlab.render(plugin, loud, sr)[tail]) - level_db
-        gr = ref - out
-        if best is None or abs(gr - target_gr_db) < abs(best[1] - target_gr_db):
-            best = (v, gr)
+        return ref - out
+
+    measured = [(v, gr_at(v)) for v in values]
+    best = min(measured, key=lambda p: abs(p[1] - target_gr_db))
+
+    # The marked stops are usually a few dB apart, so landing on the nearest
+    # one can still be two dB from the target -- and two dB of depth is the
+    # difference between two timings that are then compared as if they were
+    # taken alike. Where the control is a plain number, bisect between the
+    # stops that bracket the target and get there properly.
+    numeric = all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                  for v, _ in measured)
+    if numeric and abs(best[1] - target_gr_db) > 1.0:
+        # The marked stops may not bracket the target at all -- an 1176 whose
+        # Input list stops at -40 is already at 7 dB of reduction there and
+        # cannot be asked for 3 -- so first walk outward from whichever end
+        # is nearest, in the spacing the list already uses.
+        ordered = sorted(measured, key=lambda p: p[0])
+        step = abs(ordered[1][0] - ordered[0][0]) if len(ordered) > 1 else 1.0
+        rising = ordered[-1][1] > ordered[0][1]
+        need_more = target_gr_db > best[1]
+        outward = 1 if (rising == need_more) else -1
+        end = ordered[-1] if outward > 0 else ordered[0]
+        if abs(end[1] - target_gr_db) <= abs(best[1] - target_gr_db):
+            v = end[0]
+            for _ in range(6):
+                v += outward * step
+                gr = gr_at(v)
+                measured.append((v, gr))
+                if abs(gr - target_gr_db) < abs(best[1] - target_gr_db):
+                    best = (v, gr)
+                if (gr > target_gr_db) == need_more:
+                    break
+
+    if numeric and abs(best[1] - target_gr_db) > 0.5:
+        below = [p for p in measured if p[1] <= target_gr_db]
+        above = [p for p in measured if p[1] > target_gr_db]
+        if below and above:
+            lo = max(below, key=lambda p: p[1])[0]
+            hi = min(above, key=lambda p: p[1])[0]
+            for _ in range(6):
+                mid = 0.5 * (lo + hi)
+                gr = gr_at(mid)
+                if abs(gr - target_gr_db) < abs(best[1] - target_gr_db):
+                    best = (mid, gr)
+                if gr < target_gr_db:
+                    lo = mid
+                else:
+                    hi = mid
+
     apply(best[0])
     return {"control": control, "value": mlab._plain(best[0]),
-            "measured_gr_db": round(best[1], 2), "target_gr_db": target_gr_db}
+            "measured_gr_db": round(best[1], 2), "target_gr_db": target_gr_db,
+            "refined": bool(numeric)}

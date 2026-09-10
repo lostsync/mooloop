@@ -1,0 +1,431 @@
+slug,maker,models,group,setting,depth,matched,test,level_dbfs,imd_pct,imd_db
+api_vision,UAD,API 1608 console channel,console-api,line_gain_0,full,,ccif_19_20k,-30.0,0.0975,-60.22
+api_vision,UAD,API 1608 console channel,console-api,line_gain_0,full,,ccif_19_20k,-18.0,0.0429,-67.35
+api_vision,UAD,API 1608 console channel,console-api,line_gain_0,full,,ccif_19_20k,-12.0,0.02459,-72.19
+api_vision,UAD,API 1608 console channel,console-api,line_gain_0,full,,ccif_19_20k,-6.0,0.02082,-73.63
+api_vision,UAD,API 1608 console channel,console-api,line_gain_0,full,,ccif_19_20k,-3.0,0.02426,-72.3
+api_vision,UAD,API 1608 console channel,console-api,line_gain_0,full,,smpte_60_7k,-30.0,0.32934,-49.65
+api_vision,UAD,API 1608 console channel,console-api,line_gain_0,full,,smpte_60_7k,-18.0,0.11239,-58.99
+api_vision,UAD,API 1608 console channel,console-api,line_gain_0,full,,smpte_60_7k,-12.0,0.05268,-65.57
+api_vision,UAD,API 1608 console channel,console-api,line_gain_0,full,,smpte_60_7k,-6.0,0.01937,-74.26
+api_vision,UAD,API 1608 console channel,console-api,line_gain_0,full,,smpte_60_7k,-3.0,0.01379,-77.21
+api_vision,UAD,API 1608 console channel,console-api,line_gain_12,full,,ccif_19_20k,-30.0,0.04291,-67.35
+api_vision,UAD,API 1608 console channel,console-api,line_gain_12,full,,ccif_19_20k,-18.0,0.02081,-73.63
+api_vision,UAD,API 1608 console channel,console-api,line_gain_12,full,,ccif_19_20k,-12.0,0.03096,-70.18
+api_vision,UAD,API 1608 console channel,console-api,line_gain_12,full,,ccif_19_20k,-6.0,6.3393,-23.96
+api_vision,UAD,API 1608 console channel,console-api,line_gain_12,full,,ccif_19_20k,-3.0,15.45976,-16.22
+api_vision,UAD,API 1608 console channel,console-api,line_gain_12,full,,smpte_60_7k,-30.0,0.11226,-59.0
+api_vision,UAD,API 1608 console channel,console-api,line_gain_12,full,,smpte_60_7k,-18.0,0.01941,-74.24
+api_vision,UAD,API 1608 console channel,console-api,line_gain_12,full,,smpte_60_7k,-12.0,0.02169,-73.28
+api_vision,UAD,API 1608 console channel,console-api,line_gain_12,full,,smpte_60_7k,-6.0,40.80682,-7.79
+api_vision,UAD,API 1608 console channel,console-api,line_gain_12,full,,smpte_60_7k,-3.0,95.62239,-0.39
+api_vision,UAD,API 1608 console channel,console-api,line_gain_6,full,,ccif_19_20k,-30.0,0.07504,-62.49
+api_vision,UAD,API 1608 console channel,console-api,line_gain_6,full,,ccif_19_20k,-18.0,0.02458,-72.19
+api_vision,UAD,API 1608 console channel,console-api,line_gain_6,full,,ccif_19_20k,-12.0,0.02081,-73.63
+api_vision,UAD,API 1608 console channel,console-api,line_gain_6,full,,ccif_19_20k,-6.0,0.03096,-70.18
+api_vision,UAD,API 1608 console channel,console-api,line_gain_6,full,,ccif_19_20k,-3.0,0.04128,-67.69
+api_vision,UAD,API 1608 console channel,console-api,line_gain_6,full,,smpte_60_7k,-30.0,0.21411,-53.39
+api_vision,UAD,API 1608 console channel,console-api,line_gain_6,full,,smpte_60_7k,-18.0,0.05266,-65.57
+api_vision,UAD,API 1608 console channel,console-api,line_gain_6,full,,smpte_60_7k,-12.0,0.01937,-74.26
+api_vision,UAD,API 1608 console channel,console-api,line_gain_6,full,,smpte_60_7k,-6.0,0.02172,-73.26
+api_vision,UAD,API 1608 console channel,console-api,line_gain_6,full,,smpte_60_7k,-3.0,0.03684,-68.67
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-30,full,,ccif_19_20k,-30.0,0.00346,-89.21
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-30,full,,ccif_19_20k,-18.0,0.04529,-66.88
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-30,full,,ccif_19_20k,-12.0,0.17984,-54.9
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-30,full,,ccif_19_20k,-6.0,0.70395,-43.05
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-30,full,,ccif_19_20k,-3.0,1.37387,-37.24
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-30,full,,smpte_60_7k,-30.0,0.01219,-78.28
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-30,full,,smpte_60_7k,-18.0,0.16523,-55.64
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-30,full,,smpte_60_7k,-12.0,0.65311,-43.7
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-30,full,,smpte_60_7k,-6.0,2.57633,-31.78
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-30,full,,smpte_60_7k,-3.0,5.0812,-25.88
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-60,full,,ccif_19_20k,-30.0,0.00197,-94.1
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-60,full,,ccif_19_20k,-18.0,0.00125,-98.07
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-60,full,,ccif_19_20k,-12.0,0.00472,-86.52
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-60,full,,ccif_19_20k,-6.0,0.01881,-74.51
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-60,full,,ccif_19_20k,-3.0,0.03744,-68.53
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-60,full,,smpte_60_7k,-30.0,0.01266,-77.95
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-60,full,,smpte_60_7k,-18.0,0.00455,-86.84
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-60,full,,smpte_60_7k,-12.0,0.01761,-75.09
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-60,full,,smpte_60_7k,-6.0,0.06837,-63.3
+bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-60,full,,smpte_60_7k,-3.0,0.13571,-57.35
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.00464,-86.68
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.02173,-73.26
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.06166,-64.2
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.26392,-51.57
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.48867,-46.22
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.01404,-77.06
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.06616,-63.59
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.24121,-52.35
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.9378,-40.56
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,1.8091,-34.85
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-30.0,0.0,-192.88
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-18.0,0.0,-190.76
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-12.0,0.0,-189.22
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-6.0,0.0,-196.74
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-3.0,0.0,-191.68
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-30.0,0.0,-172.81
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-18.0,0.0,-173.84
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-12.0,0.0,-176.57
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-6.0,0.0,-173.74
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-3.0,0.0,-173.12
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-30.0,0.03233,-69.81
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-18.0,0.1577,-56.04
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-12.0,0.53702,-45.4
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-6.0,1.74195,-35.18
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-3.0,3.26022,-29.74
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-30.0,0.10651,-59.45
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-18.0,0.59258,-44.55
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-12.0,1.71151,-35.33
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-6.0,5.87094,-24.63
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-3.0,11.75349,-18.6
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-30.0,0.01898,-74.43
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-18.0,0.10586,-59.51
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-12.0,0.32775,-49.69
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-6.0,1.12317,-38.99
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-3.0,2.14643,-33.37
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-30.0,0.06438,-63.82
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-18.0,0.29902,-50.49
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-12.0,1.01769,-39.85
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-6.0,3.81482,-28.37
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-3.0,7.74291,-22.22
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_0,full,,ccif_19_20k,-30.0,0.37503,-48.52
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_0,full,,ccif_19_20k,-18.0,1.07068,-39.41
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_0,full,,ccif_19_20k,-12.0,1.49265,-36.52
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_0,full,,ccif_19_20k,-6.0,1.72492,-35.26
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_0,full,,ccif_19_20k,-3.0,1.71851,-35.3
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_0,full,,smpte_60_7k,-30.0,0.24219,-52.32
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_0,full,,smpte_60_7k,-18.0,0.80607,-41.87
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_0,full,,smpte_60_7k,-12.0,1.30181,-37.71
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_0,full,,smpte_60_7k,-6.0,1.8203,-34.8
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_0,full,,smpte_60_7k,-3.0,2.00979,-33.94
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_12,full,,ccif_19_20k,-30.0,6.39756,-23.88
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_12,full,,ccif_19_20k,-18.0,15.81681,-16.02
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_12,full,,ccif_19_20k,-12.0,13.6229,-17.31
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_12,full,,ccif_19_20k,-6.0,18.96982,-14.44
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_12,full,,ccif_19_20k,-3.0,25.83645,-11.76
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_12,full,,smpte_60_7k,-30.0,4.5317,-26.87
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_12,full,,smpte_60_7k,-18.0,10.04419,-19.96
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_12,full,,smpte_60_7k,-12.0,15.09351,-16.42
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_12,full,,smpte_60_7k,-6.0,104.58446,0.39
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_12,full,,smpte_60_7k,-3.0,137.48276,2.76
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_6,full,,ccif_19_20k,-30.0,2.55278,-31.86
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_6,full,,ccif_19_20k,-18.0,6.36117,-23.93
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_6,full,,ccif_19_20k,-12.0,7.78258,-22.18
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_6,full,,ccif_19_20k,-6.0,7.75591,-22.21
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_6,full,,ccif_19_20k,-3.0,5.71736,-24.86
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_6,full,,smpte_60_7k,-30.0,1.15639,-38.74
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_6,full,,smpte_60_7k,-18.0,3.60539,-28.86
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_6,full,,smpte_60_7k,-12.0,5.45082,-25.27
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_6,full,,smpte_60_7k,-6.0,6.97144,-23.13
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_6,full,,smpte_60_7k,-3.0,11.50614,-18.78
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.55227,-45.16
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,1.54872,-36.2
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,2.12601,-33.45
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,2.41369,-32.35
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,2.38419,-32.45
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.35066,-49.1
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,1.15291,-38.76
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,1.83857,-34.71
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,2.52577,-31.95
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,2.76063,-31.18
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,5.72966,-24.84
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,13.46673,-17.41
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,13.68346,-17.28
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,12.51267,-18.05
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,21.72148,-13.26
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,3.54235,-29.01
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,8.52143,-21.39
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,10.35741,-19.69
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,81.82847,-1.74
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,120.56443,1.62
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,6.17147,-24.19
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,14.92729,-16.52
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,14.28845,-16.9
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,16.7377,-15.53
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,24.45435,-12.23
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,4.14433,-27.65
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,9.47388,-20.47
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,11.80642,-18.56
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,96.7912,-0.28
+nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,131.7612,2.4
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_0,full,,ccif_19_20k,-30.0,0.00011,-118.83
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_0,full,,ccif_19_20k,-18.0,0.00032,-110.02
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_0,full,,ccif_19_20k,-12.0,0.00058,-104.8
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_0,full,,ccif_19_20k,-6.0,0.00104,-99.69
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_0,full,,ccif_19_20k,-3.0,0.00137,-97.3
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_0,full,,smpte_60_7k,-30.0,0.0016,-95.91
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_0,full,,smpte_60_7k,-18.0,0.0053,-85.51
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_0,full,,smpte_60_7k,-12.0,0.0084,-81.51
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_0,full,,smpte_60_7k,-6.0,0.01143,-78.84
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_0,full,,smpte_60_7k,-3.0,0.01242,-78.12
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_12,full,,ccif_19_20k,-30.0,0.0034,-89.38
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_12,full,,ccif_19_20k,-18.0,0.01291,-77.78
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_12,full,,ccif_19_20k,-12.0,0.0244,-72.25
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_12,full,,ccif_19_20k,-6.0,4.1995,-27.54
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_12,full,,ccif_19_20k,-3.0,12.17958,-18.29
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_12,full,,smpte_60_7k,-30.0,0.15545,-56.17
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_12,full,,smpte_60_7k,-18.0,0.4236,-47.46
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_12,full,,smpte_60_7k,-12.0,0.56759,-44.92
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_12,full,,smpte_60_7k,-6.0,29.73538,-10.53
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_12,full,,smpte_60_7k,-3.0,68.475,-3.29
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_6,full,,ccif_19_20k,-30.0,0.00055,-105.14
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_6,full,,ccif_19_20k,-18.0,0.00206,-93.72
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_6,full,,ccif_19_20k,-12.0,0.00392,-88.12
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_6,full,,ccif_19_20k,-6.0,0.00722,-82.83
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_6,full,,ccif_19_20k,-3.0,0.67181,-43.46
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_6,full,,smpte_60_7k,-30.0,0.01573,-76.07
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_6,full,,smpte_60_7k,-18.0,0.04966,-66.08
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_6,full,,smpte_60_7k,-12.0,0.07593,-62.39
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_6,full,,smpte_60_7k,-6.0,0.09853,-60.13
+nls_nevo,Waves,Neve 5116 console channel,console-neve,drive_6,full,,smpte_60_7k,-3.0,7.2025,-22.85
+nls_nevo,Waves,Neve 5116 console channel,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.00299,-90.48
+nls_nevo,Waves,Neve 5116 console channel,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.01137,-78.88
+nls_nevo,Waves,Neve 5116 console channel,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.02151,-73.35
+nls_nevo,Waves,Neve 5116 console channel,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,3.49304,-29.14
+nls_nevo,Waves,Neve 5116 console channel,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,11.2669,-18.96
+nls_nevo,Waves,Neve 5116 console channel,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.13301,-57.52
+nls_nevo,Waves,Neve 5116 console channel,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.3668,-48.71
+nls_nevo,Waves,Neve 5116 console channel,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.4964,-46.08
+nls_nevo,Waves,Neve 5116 console channel,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,25.48661,-11.87
+nls_nevo,Waves,Neve 5116 console channel,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,63.75281,-3.91
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_0,full,,ccif_19_20k,-30.0,0.00501,-86.0
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_0,full,,ccif_19_20k,-18.0,0.01904,-74.4
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_0,full,,ccif_19_20k,-12.0,0.03588,-68.9
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_0,full,,ccif_19_20k,-6.0,0.06444,-63.82
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_0,full,,ccif_19_20k,-3.0,0.08406,-61.51
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_0,full,,smpte_60_7k,-30.0,0.01524,-76.34
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_0,full,,smpte_60_7k,-18.0,0.05707,-64.87
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_0,full,,smpte_60_7k,-12.0,0.10556,-59.53
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_0,full,,smpte_60_7k,-6.0,0.18358,-54.72
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_0,full,,smpte_60_7k,-3.0,0.23415,-52.61
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_12,full,,ccif_19_20k,-30.0,0.2082,-53.63
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_12,full,,ccif_19_20k,-18.0,0.74657,-42.54
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_12,full,,ccif_19_20k,-12.0,1.31548,-37.62
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_12,full,,ccif_19_20k,-6.0,2.12623,-33.45
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_12,full,,ccif_19_20k,-3.0,3.57374,-28.94
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_12,full,,smpte_60_7k,-30.0,0.62831,-44.04
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_12,full,,smpte_60_7k,-18.0,2.17472,-33.25
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_12,full,,smpte_60_7k,-12.0,3.68854,-28.66
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_12,full,,smpte_60_7k,-6.0,5.63706,-24.98
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_12,full,,smpte_60_7k,-3.0,16.30806,-15.75
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_6,full,,ccif_19_20k,-30.0,0.04502,-66.93
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_6,full,,ccif_19_20k,-18.0,0.1696,-55.41
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_6,full,,ccif_19_20k,-12.0,0.31589,-50.01
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_6,full,,ccif_19_20k,-6.0,0.55633,-45.09
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_6,full,,ccif_19_20k,-3.0,0.71616,-42.9
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_6,full,,smpte_60_7k,-30.0,0.13678,-57.28
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_6,full,,smpte_60_7k,-18.0,0.50577,-45.92
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_6,full,,smpte_60_7k,-12.0,0.92123,-40.71
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_6,full,,smpte_60_7k,-6.0,1.56274,-36.12
+nls_spike,Waves,EMI TG12345 console channel,console-emi,drive_6,full,,smpte_60_7k,-3.0,1.96105,-34.15
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.01232,-78.19
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.04669,-66.62
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.0876,-61.15
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.15619,-56.13
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.20276,-53.86
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.03746,-68.53
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.13967,-57.1
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.25692,-51.8
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.44278,-47.08
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,0.56138,-45.01
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.13363,-57.48
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.48767,-46.24
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,0.87585,-41.15
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,1.45621,-36.74
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,1.80671,-34.86
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.40429,-47.87
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,1.43255,-36.88
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,2.48945,-32.08
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,3.93463,-28.1
+nls_spike,Waves,EMI TG12345 console channel,console-emi,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,4.73016,-26.5
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_0,full,,ccif_19_20k,-30.0,0.07106,-62.97
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_0,full,,ccif_19_20k,-18.0,0.25495,-51.87
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_0,full,,ccif_19_20k,-12.0,0.44748,-46.98
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_0,full,,ccif_19_20k,-6.0,0.71057,-42.97
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_0,full,,ccif_19_20k,-3.0,0.84945,-41.42
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_0,full,,smpte_60_7k,-30.0,0.04485,-66.97
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_0,full,,smpte_60_7k,-18.0,0.17157,-55.31
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_0,full,,smpte_60_7k,-12.0,0.32542,-49.75
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_0,full,,smpte_60_7k,-6.0,0.58982,-44.59
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_0,full,,smpte_60_7k,-3.0,0.77289,-42.24
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_12,full,,ccif_19_20k,-30.0,4.7636,-26.44
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_12,full,,ccif_19_20k,-18.0,15.07322,-16.44
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_12,full,,ccif_19_20k,-12.0,18.21987,-14.79
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_12,full,,ccif_19_20k,-6.0,17.77555,-15.0
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_12,full,,ccif_19_20k,-3.0,23.26336,-12.67
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_12,full,,smpte_60_7k,-30.0,1.14506,-38.82
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_12,full,,smpte_60_7k,-18.0,4.11333,-27.72
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_12,full,,smpte_60_7k,-12.0,7.20021,-22.85
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_12,full,,smpte_60_7k,-6.0,47.52203,-6.46
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_12,full,,smpte_60_7k,-3.0,95.70744,-0.38
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_6,full,,ccif_19_20k,-30.0,0.42371,-47.46
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_6,full,,ccif_19_20k,-18.0,1.45349,-36.75
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_6,full,,ccif_19_20k,-12.0,2.42836,-32.29
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_6,full,,ccif_19_20k,-6.0,3.58052,-28.92
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_6,full,,ccif_19_20k,-3.0,4.08852,-27.77
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_6,full,,smpte_60_7k,-30.0,0.21758,-53.25
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_6,full,,smpte_60_7k,-18.0,0.82373,-41.68
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_6,full,,smpte_60_7k,-12.0,1.54124,-36.24
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_6,full,,smpte_60_7k,-6.0,2.72534,-31.29
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,drive_6,full,,smpte_60_7k,-3.0,3.50698,-29.1
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.12243,-58.24
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.43631,-47.2
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.75991,-42.38
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,1.19203,-38.47
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,1.41391,-36.99
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.07699,-62.27
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.29379,-50.64
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.55528,-45.11
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,1.0,-40.0
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,1.30419,-37.69
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,4.72956,-26.5
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,14.32251,-16.88
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,17.30567,-15.24
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,17.75757,-15.01
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,22.99609,-12.77
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,1.11254,-39.07
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,4.00007,-27.96
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,7.01107,-23.08
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,45.43379,-6.85
+nlsbuss_mike,Waves,SSL 4000 G+ console buss,console-ssl,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,93.87784,-0.55
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_0,full,,ccif_19_20k,-30.0,0.0057,-84.88
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_0,full,,ccif_19_20k,-18.0,0.00909,-80.83
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_0,full,,ccif_19_20k,-12.0,0.01001,-79.99
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_0,full,,ccif_19_20k,-6.0,0.01048,-79.59
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_0,full,,ccif_19_20k,-3.0,0.01061,-79.48
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_0,full,,smpte_60_7k,-30.0,0.01384,-77.18
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_0,full,,smpte_60_7k,-18.0,0.01748,-75.15
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_0,full,,smpte_60_7k,-12.0,0.01811,-74.84
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_0,full,,smpte_60_7k,-6.0,0.01836,-74.72
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_0,full,,smpte_60_7k,-3.0,0.01842,-74.69
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_12,full,,ccif_19_20k,-30.0,0.23659,-52.52
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_12,full,,ccif_19_20k,-18.0,0.3455,-49.23
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_12,full,,ccif_19_20k,-12.0,0.37104,-48.61
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_12,full,,ccif_19_20k,-6.0,0.38319,-48.33
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_12,full,,ccif_19_20k,-3.0,0.39297,-48.11
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_12,full,,smpte_60_7k,-30.0,0.81786,-41.75
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_12,full,,smpte_60_7k,-18.0,0.91251,-40.8
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_12,full,,smpte_60_7k,-12.0,0.9247,-40.68
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_12,full,,smpte_60_7k,-6.0,0.92913,-40.64
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_12,full,,smpte_60_7k,-3.0,1.65523,-35.62
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_6,full,,ccif_19_20k,-30.0,0.0417,-67.6
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_6,full,,ccif_19_20k,-18.0,0.06677,-63.51
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_6,full,,ccif_19_20k,-12.0,0.07366,-62.66
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_6,full,,ccif_19_20k,-6.0,0.07723,-62.24
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_6,full,,ccif_19_20k,-3.0,0.07821,-62.13
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_6,full,,smpte_60_7k,-30.0,0.12222,-58.26
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_6,full,,smpte_60_7k,-18.0,0.14894,-56.54
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_6,full,,smpte_60_7k,-12.0,0.15319,-56.3
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_6,full,,smpte_60_7k,-6.0,0.15487,-56.2
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,drive_6,full,,smpte_60_7k,-3.0,0.15525,-56.18
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.06225,-64.12
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.09764,-60.21
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.10702,-59.41
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.11182,-59.03
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.11312,-58.93
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.19092,-54.38
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.22708,-52.88
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.23254,-52.67
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.23465,-52.59
+nlsbuss_nevo,Waves,Neve 5116 console buss,console-neve,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,0.23511,-52.57
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_0,full,,ccif_19_20k,-30.0,0.79161,-42.03
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_0,full,,ccif_19_20k,-18.0,1.67434,-35.52
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_0,full,,ccif_19_20k,-12.0,2.04701,-33.78
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_0,full,,ccif_19_20k,-6.0,2.28909,-32.81
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_0,full,,ccif_19_20k,-3.0,2.36494,-32.52
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_0,full,,smpte_60_7k,-30.0,2.7392,-31.25
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_0,full,,smpte_60_7k,-18.0,4.66902,-26.62
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_0,full,,smpte_60_7k,-12.0,5.2294,-25.63
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_0,full,,smpte_60_7k,-6.0,5.52187,-25.16
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_0,full,,smpte_60_7k,-3.0,5.60063,-25.04
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_12,full,,ccif_19_20k,-30.0,5.19284,-25.69
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_12,full,,ccif_19_20k,-18.0,8.4752,-21.44
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_12,full,,ccif_19_20k,-12.0,9.39519,-20.54
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_12,full,,ccif_19_20k,-6.0,9.87117,-20.11
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_12,full,,ccif_19_20k,-3.0,9.99915,-20.0
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_12,full,,smpte_60_7k,-30.0,15.87725,-15.98
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_12,full,,smpte_60_7k,-18.0,21.41023,-13.39
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_12,full,,smpte_60_7k,-12.0,22.49716,-12.96
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_12,full,,smpte_60_7k,-6.0,22.96673,-12.78
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_12,full,,smpte_60_7k,-3.0,23.07792,-12.74
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_6,full,,ccif_19_20k,-30.0,2.28229,-32.83
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_6,full,,ccif_19_20k,-18.0,4.53489,-26.87
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_6,full,,ccif_19_20k,-12.0,5.39655,-25.36
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_6,full,,ccif_19_20k,-6.0,5.92411,-24.55
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_6,full,,ccif_19_20k,-3.0,6.08285,-24.32
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_6,full,,smpte_60_7k,-30.0,7.67326,-22.3
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_6,full,,smpte_60_7k,-18.0,12.30003,-18.2
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_6,full,,smpte_60_7k,-12.0,13.51778,-17.38
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_6,full,,smpte_60_7k,-6.0,14.12285,-17.0
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,drive_6,full,,smpte_60_7k,-3.0,14.28042,-16.91
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,1.2732,-37.9
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,2.61974,-31.63
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,3.16404,-30.0
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,3.50843,-29.1
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,3.61441,-28.84
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,4.35151,-27.23
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,7.21582,-22.83
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,8.01187,-21.93
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,8.41829,-21.5
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,8.52612,-21.38
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,4.73647,-26.49
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,7.90446,-22.04
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,8.82481,-21.09
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,9.30983,-20.62
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,9.44185,-20.5
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,14.64834,-16.68
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,20.11269,-13.93
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,21.22156,-13.46
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,21.70801,-13.27
+nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,21.82442,-13.22
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,analog_off,full,,ccif_19_20k,-30.0,0.00016,-115.87
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,analog_off,full,,ccif_19_20k,-18.0,0.00016,-115.87
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,analog_off,full,,ccif_19_20k,-12.0,0.00016,-115.87
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,analog_off,full,,ccif_19_20k,-6.0,0.00016,-115.87
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,analog_off,full,,ccif_19_20k,-3.0,0.00016,-115.87
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,analog_off,full,,smpte_60_7k,-30.0,3e-05,-130.85
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,analog_off,full,,smpte_60_7k,-18.0,3e-05,-130.86
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,analog_off,full,,smpte_60_7k,-12.0,3e-05,-130.86
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,analog_off,full,,smpte_60_7k,-6.0,3e-05,-130.88
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,analog_off,full,,smpte_60_7k,-3.0,3e-05,-130.83
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_0,full,,ccif_19_20k,-30.0,0.0002,-113.92
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_0,full,,ccif_19_20k,-18.0,0.00105,-99.56
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_0,full,,ccif_19_20k,-12.0,0.00429,-87.36
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_0,full,,ccif_19_20k,-6.0,0.01834,-74.73
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_0,full,,ccif_19_20k,-3.0,0.03439,-69.27
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_0,full,,smpte_60_7k,-30.0,0.01125,-78.98
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_0,full,,smpte_60_7k,-18.0,0.15451,-56.22
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_0,full,,smpte_60_7k,-12.0,0.42694,-47.39
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_0,full,,smpte_60_7k,-6.0,0.71517,-42.91
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_0,full,,smpte_60_7k,-3.0,0.75468,-42.44
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_10,full,,ccif_19_20k,-30.0,0.0007,-103.13
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_10,full,,ccif_19_20k,-18.0,0.01151,-78.78
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_10,full,,ccif_19_20k,-12.0,0.04159,-67.62
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_10,full,,ccif_19_20k,-6.0,0.10867,-59.28
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_10,full,,ccif_19_20k,-3.0,3.79214,-28.42
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_10,full,,smpte_60_7k,-30.0,0.10289,-59.75
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_10,full,,smpte_60_7k,-18.0,0.64199,-43.85
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_10,full,,smpte_60_7k,-12.0,0.74961,-42.5
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_10,full,,smpte_60_7k,-6.0,0.60897,-44.31
+ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,line_10,full,,smpte_60_7k,-3.0,42.92278,-7.35
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,default,full,,ccif_19_20k,-30.0,0.0,-192.08
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,default,full,,ccif_19_20k,-18.0,0.0,-193.75
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,default,full,,ccif_19_20k,-12.0,0.0,-191.31
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,default,full,,ccif_19_20k,-6.0,0.0,-189.28
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,default,full,,ccif_19_20k,-3.0,0.0,-186.89
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,default,full,,smpte_60_7k,-30.0,0.0,-172.87
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,default,full,,smpte_60_7k,-18.0,0.0,-178.34
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,default,full,,smpte_60_7k,-12.0,0.0,-178.81
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,default,full,,smpte_60_7k,-6.0,0.0,-174.8
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,default,full,,smpte_60_7k,-3.0,0.0,-178.67
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,trim_+10,full,,ccif_19_20k,-30.0,0.0,-200.0
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,trim_+10,full,,ccif_19_20k,-18.0,0.0,-188.06
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,trim_+10,full,,ccif_19_20k,-12.0,0.0,-195.08
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,trim_+10,full,,ccif_19_20k,-6.0,0.0,-184.58
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,trim_+10,full,,ccif_19_20k,-3.0,0.0,-183.74
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,trim_+10,full,,smpte_60_7k,-30.0,0.0,-175.19
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,trim_+10,full,,smpte_60_7k,-18.0,0.0,-171.3
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,trim_+10,full,,smpte_60_7k,-12.0,0.0,-175.25
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,trim_+10,full,,smpte_60_7k,-6.0,0.0,-172.72
+ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,trim_+10,full,,smpte_60_7k,-3.0,0.0,-173.38
