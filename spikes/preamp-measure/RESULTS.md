@@ -604,14 +604,20 @@ and cannot cite this document.
 ### If someone re-runs this
 
 The scripts take a slug and write JSON; adding a unit is a dict entry in
-`units.py`, `eq_units.py` or `comp_units.py`. What is *not* measured, and
-would be worth having:
+`units.py`, `eq_units.py` or `comp_units.py`.
+
+**Most of what this section used to ask for now exists.** A second, wider
+pass on 2026-09-10 measured 106 units on shared axes for comparison rather
+than for these arguments — including the units listed here as probed but not
+swept, and including the two-tone test — and it is documented separately in
+[DATA.md](DATA.md), with its own roster in `roster.py` and its own settings
+in `voicings.py`. The tables above are unchanged and still say what they say;
+the wider set is beside them, not instead of them.
+
+What is still *not* measured:
 
 - **Supply sag**, item 4 on 06's list. It needs a different stimulus again —
   a sustained tone with a loud interruption, watching the gain of the tone
-  rather than of the interruption — and nothing here does that.
-- **Intermodulation.** Everything here is single-tone. A two-tone test says
-  things about a nonlinearity that harmonics do not, and it is the same rig.
-- **The remaining UAD units.** 610-B, Century, API Vision, Fairchild 660,
-  Studer A800 and the Distressor's `Dist 2`/`Dist 3` audio modes are all
-  loaded and licensed and were probed but not swept.
+  rather than of the interruption — and neither pass does that.
+- **Stereo behaviour.** Everything in both passes is mono.
+- **The Distressor's `Dist 2` and `Dist 3` audio modes.**

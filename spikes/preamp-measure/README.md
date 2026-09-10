@@ -12,6 +12,15 @@ instead of authored.
 
 Results are in [RESULTS.md](RESULTS.md). This file is how to re-run them.
 
+A second pass on 2026-09-10 widened it from 25 units to 106 and rebuilt the
+settings so that two makers' boxes land on one axis — for a reader choosing a
+plugin rather than for a question about mooloop's modules. That set has its
+own roster (`roster.py`), its own settings (`voicings.py`), its own scripts
+(`measure_colour.py`, `measure_eqc.py`, `measure_compc.py`,
+`measure_noise.py`) and its own documentation in [DATA.md](DATA.md), which is
+where to look for the schema, the grids and the traps. Everything below still
+applies to both.
+
 ## What it runs on
 
 A Mac, because that is where the plugins are licensed. Nothing here is
@@ -58,6 +67,13 @@ it would leave the document unable to check itself.
 | `eq_units.py`, `measure_eq.py` | EQ curves, and whether the distortion is band-dependent. |
 | `comp_units.py`, `ctiming.py`, `measure_comp.py` | Compressor timing, static curve, detector shape. |
 | `measure_transient.py` | Slew and crest-factor retention, for `PreampVoicing::slew`. |
+| `roster.py`, `voicings.py` | The 2026-09-10 survey: which units, and how each is set. |
+| `survey.py`, `dump_params.py` | Licence check and parameter dump for the whole roster. |
+| `analysis.py` | Response, intermodulation, noise, wow and flutter, THD matching. |
+| `aw.py` | Selecting one Airwindows processor out of the consolidated build. |
+| `measure_colour.py`, `measure_eqc.py`, `measure_compc.py`, `measure_noise.py` | The survey's four suites. |
+| `rerun_failed.py` | Re-measures anything whose result file is an error stub. |
+| `export.py` | Flattens `out/chart/` into the long-format CSV in `out/tidy/`. |
 
 ## Four things that will bite the next person
 
