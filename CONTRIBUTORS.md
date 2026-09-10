@@ -67,8 +67,8 @@ Alphabetical by model name, then by harness.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-09-08
-- Sessions: 81
+- Last seen: 2026-09-10
+- Sessions: 86
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -146,7 +146,73 @@ Alphabetical by model name, then by harness.
   and then the bisection that found the gigabyte was a pattern bank and
   not the strips it had twice been blamed on, and the saved audio output that
   had stopped existing and took the sound with it, and the pricing that showed
-  the cheap half of that fix buys almost none of what it was wanted for.
+  the cheap half of that fix buys almost none of what it was wanted for,
+  and the console plan, which is what four items on one morning's list turn
+  into once the policy `MIXER_PLAN.md` was missing is written down -- that a
+  mixer strip is created by a musical act rather than an administrative one --
+  and its first step, the channel reorder that could not be composed from a
+  removal and an insertion, which found six things the session had been
+  mis-keying through every channel edit there has ever been, and then its
+  second -- console summing, where the requirement turned out to be that the
+  decoding bus is invisible, and where normalizing the curve to put its knee
+  on full scale was built, measured, and rejected because it is worst exactly
+  where music is loudest, and the harmonic target that turns "we want it to
+  sound like iron" into a number a test can check, which found on the way that
+  there is no simple level law once a profile has more than one term, and then
+  `docs/TERMINOLOGY.md`, after the console plan's own first decision turned out
+  to be a spreadsheet's idea of a mixer rather than a console's, and then the
+  default new song as the specification for what a track is, which is the
+  question "why did you want channel groups" turning out to have a concrete
+  answer, and then how you actually model a preamp, which is mostly one
+  structure -- tilt, shape, untilt -- because a transformer's flux goes as V/f
+  and so it saturates from the bottom up -- and then the filter sandwich that
+  does it, where boosting the bottom into the curve turned out to be the wrong
+  half of the obvious idea, and the protocol for measuring the plugins those
+  numbers should have come from -- whose first version priced hosting a plugin
+  against writing a JUCE host and reached for rendered WAVs, when Adam knew it
+  was a pip install and a for-loop, and then taking the analog-sum switch back
+  off the channels, because a console puts its Channel stage on a mixer strip
+  and mooloop's mixer strip is a track, and then the mixer becoming a list of
+  tracks somebody made rather than a fixed bank of seventeen -- which turned up
+  a render loop that walked a prefix of a whole-address-space permutation, so a
+  short bank would have dropped tracks silently, and then sends -- where the
+  step's own plan turned out to have named the wrong three files, so the
+  change that was scheduled last for forcing a rewrite of the realtime
+  schedule did not touch it, and then verifying that step, which found the
+  audio complete against its own acceptance list and the gaps everywhere else
+  -- one picker behind four controls calling every destination a send, two
+  acceptance cases true but untested, and four documents still saying sends
+  were absent, and then four interface regressions off one screenshot, of
+  which the fourth was that a channel had never been renameable at all and
+  the real fault under the other three was that a Slint `TextInput` replaces
+  its binding the moment somebody types into it, so every rename field in the
+  application had been going stale on its first keystroke, and then a detail
+  pass over the metering and gain vocabulary, which found the shared dB
+  formatter dropping the tenth on a whole value -- so a fader read `+6 dB` at
+  full throw and `-12.4 dB` a nudge below it, against a `GAIN_STRUCTURE.md`
+  that had specified one decimal all along -- the master peak readout
+  spelling that number a second time and rounding for itself, a gain-reduction
+  meter whose vertical bar grew from the middle of its track, and a meter
+  scale drawing its tick marks through its own labels so `-12` read as `+2`,
+  all three because a sized child of a plain `Rectangle` is centred in it
+  rather than placed at its origin, and then the agreement test that guards
+  that vocabulary, which parsed its own source two different ways and could
+  have read a comment recording a value in place of the value, and the
+  automation lane's own readout, the one value path in the program that
+  printed a descriptor's raw units, so a lane on a five-millisecond envelope
+  attack showed `0.01 s` and everything faster than it showed `0.00 s`, and
+  then the half of the face-agreement test that was never written: the
+  generators had their ranges checked against the table and the effects did
+  not, though eight of their faces spell a range out as a ratio inside a
+  `pow()`, where it does not look like a range and nothing draws the eye to
+  it when the table moves, and the modulation shelf, which reports every
+  parameter twice -- once as the knob's value-text and once as the caption
+  under it -- and had drifted on one of the fifteen, so the LFO's Smoothing
+  said `150 ms` to the tooltip and `150ms` to the eye, and then the piano
+  roll's two test suites, which each held their own copy of `TICKS_PER_STEP`
+  and so would have gone on passing while the roll drew every note in the
+  wrong place, and the roll's keyboard, the one place in the program naming a
+  note without asking the shared namer.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

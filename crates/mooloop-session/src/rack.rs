@@ -25,6 +25,30 @@ impl Session {
         Some(channel)
     }
 
+    /// Renames a channel. `true` when the name actually changed.
+    ///
+    /// The same gap `rename_track` closed, one level down: a channel's name
+    /// saved, loaded, and drew on its rack plate, and nothing could set it.
+    ///
+    /// An empty name is refused rather than stored, because the rack plate is
+    /// the only thing that identifies a row and a blank one identifies
+    /// nothing. A pattern may go nameless -- there the number is right beside
+    /// it -- which is why `rename_pattern` accepts what this rejects.
+    pub fn rename_channel(&mut self, channel: i32, name: &str) -> bool {
+        let name = name.trim();
+        let Ok(channel) = usize::try_from(channel) else {
+            return false;
+        };
+        let Some(state) = self.channels.get_mut(channel) else {
+            return false;
+        };
+        if name.is_empty() || state.name == name {
+            return false;
+        }
+        state.name = name.to_string();
+        true
+    }
+
     /// Flips a channel's mute.
     pub fn toggle_channel_mute(&mut self, channel: i32) -> Option<EngineCommand> {
         let channel = usize::try_from(channel).ok()?;
@@ -204,6 +228,24 @@ mod tests {
         assert!(session.set_channel_bus(0, MAX_BUSES as i32).is_none());
         assert!(session.set_channel_bus(0, -1).is_none());
         assert_eq!(session.channels[0].bus, 1, "a refused bus was still applied");
+    }
+
+    /// Renaming, from the side that stores the name. The UI half of this --
+    /// that the field keeps showing the name after the edit rather than the
+    /// keystrokes -- is `NameField`'s, and is what made a rename look broken
+    /// even where the store was correct.
+    #[test]
+    fn a_channel_takes_a_name_and_refuses_a_blank_one() {
+        let mut session = Session::default();
+        assert!(session.rename_channel(0, "  Kick  "), "a real name was refused");
+        assert_eq!(session.channels[0].name, "Kick", "the name was not trimmed");
+
+        assert!(!session.rename_channel(0, "Kick"), "an unchanged name reported a change");
+        assert!(!session.rename_channel(0, "   "), "a blank name was stored");
+        assert_eq!(session.channels[0].name, "Kick", "a refused name was still applied");
+
+        assert!(!session.rename_channel(-1, "Snare"));
+        assert!(!session.rename_channel(session.channels.len() as i32, "Snare"));
     }
 
     /// Changing the generator drops the note selection with it, since the

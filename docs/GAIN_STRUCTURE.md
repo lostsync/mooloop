@@ -85,14 +85,42 @@ channel moves them 0.00 dB. The bus walk itself adds nothing either: the
 same superposition holds with the pad routed down a two-hop insert chain,
 which is what puts audio through `mix_into`.
 
-**Nothing bounds a sample in the live path.** The engine's only writes into
-a bus buffer are the effect container's input trim, its wet/dry blend and
-output trim, the dry-path delay ring, and `StereoBus`'s add and multiply —
-every one of them linear in the signal. The single place a sample is
-clipped anywhere in the codebase is `pcm24`, in
-`mooloop-engine/src/offline.rs`: that is the 24-bit WAV encoder, so exports
-hard-clip at full scale and live playback does not. Sums above 0 dBFS reach
-the output device intact, and pulling them down is the user's business.
+**Nothing bounds a sample in the live path — unless console summing is
+switched on.** The engine's only writes into a bus buffer are the effect
+container's input trim, its wet/dry blend and output trim, the dry-path delay
+ring, and `StereoBus`'s add and multiply — every one of them linear in the
+signal. The single place a sample is clipped anywhere else in the codebase is
+`pcm24`, in `mooloop-engine/src/offline.rs`: that is the 24-bit WAV encoder,
+so exports hard-clip at full scale and live playback does not. Sums above
+0 dBFS reach the output device intact, and pulling them down is the user's
+business.
+
+**The exception, and it is deliberate.** A strip switched to console summing
+(`mooloop_dsp::console`) leaves through `sin` and is decoded at its
+destination through `asin`, so **every summing point a console strip reaches
+hard-limits at `PI/2`, which is +3.92 dBFS.** That bound *is* the effect
+rather than a cost of it — Adam's ruling, 2026-09-09: *"you can do a perfectly
+clean mix on it if you want but you could also drive it and get something nice
+in return."*
+
+Three things keep it honest rather than hidden:
+
+- **Off is the default, and off is this document's linear path unchanged.**
+  `summing_stays_linear_however_the_faders_sit` still holds sample for sample,
+  and console-on gets its own tests rather than a tolerance added to that one.
+- **A lone console strip is the identity**, measured at 1.5e-8 against a 0.251
+  peak — about -156 dBFS — so switching one on and hearing nothing is correct.
+  The character is entirely in the interaction between strips.
+- **No hidden headroom trim.** The alternative to the bound was scaling the
+  encode's input so the knee landed somewhere flattering, which is burying a
+  gain, and it would also have removed the control that makes the drive
+  playable. Which control that is, is worth stating: a bus's fader is *after*
+  its decode, so **turning a bus down is volume and turning its feeders down
+  is drive.**
+
+The ceiling is visible rather than merely documented: a bus's input meter
+reads the signal after the decode, so it stops climbing exactly where the
+summing law stops.
 
 **Per-oscillator unity reference.** A synth oscillator's 0 dB knob position
 *is* the device reference: one oscillator at full peaks at

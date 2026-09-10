@@ -23,6 +23,18 @@ use crate::render::RenderState;
 
 const SAMPLE_RATE: u32 = 48_000;
 
+/// A project with the whole track address space materialised.
+///
+/// `Project::default()` is the master alone since tracks stopped being a
+/// fixed bank (`docs/CAPACITY_POLICY.md`), and the tests below are about the
+/// *graph* rather than about how many tracks a song has, so they ask for the
+/// bank they route through.
+fn full_bank_project() -> Project {
+    let mut project = Project::default();
+    project.ensure_tracks(mooloop_core::MAX_BUSES);
+    project
+}
+
 /// Three channels with gaps in them: a drum machine with a long reverb and a
 /// delay behind it, a polyphonic synth playing two chords a bar apart, and a
 /// third channel that is never played at all.
@@ -68,7 +80,7 @@ fn sparse_project() -> Project {
 
     Project {
         channels: vec![drums, keys, silent],
-        ..Project::default()
+        ..full_bank_project()
     }
 }
 
@@ -219,7 +231,7 @@ fn an_aux_in_channel_is_never_slept_out_of_its_producer() {
     aux.setup.channel.volume = 1.0;
     let project = Project {
         channels: vec![producer, aux],
-        ..Project::default()
+        ..full_bank_project()
     };
 
     let out = render_blocks(&project, 2.5, 256, true);
@@ -286,7 +298,7 @@ fn a_note_off_on_the_pattern_boundary_does_not_depend_on_the_block_size() {
     lead.notes[0].push(NoteEvent::new(2, 288, 96, 55, 110));
     let project = Project {
         channels: vec![lead],
-        ..Project::default()
+        ..full_bank_project()
     };
 
     // Skipping off, so what is left is the scheduler and nothing else.
@@ -319,7 +331,7 @@ fn bussed_project() -> Project {
 
     let mut project = Project {
         channels: vec![drums],
-        ..Project::default()
+        ..full_bank_project()
     };
     project.buses[1]
         .push_effect(EffectSlotState::new(mooloop_core::EffectParams::Reverb(

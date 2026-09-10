@@ -8,14 +8,38 @@
 use crate::channel::ChannelState;
 use crate::project::ProjectEdit;
 use mooloop_core::{
-    chain_latency, compile_audio_graph, compile_bus_graph, compile_latency, CompiledAudioGraph,
+    chain_latency, compile_audio_graph, compile_bus_graph, compile_latency, send_edges,
+    CompiledAudioGraph,
     CompiledLatency, DeviceKind, EffectTarget, EngineCommand, OutletDescriptor, PublishesOutlets,
     SliceMap, MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
 };
-use mooloop_dsp::{IntegerDelay, SampleData};
+use mooloop_dsp::{IntegerDelay, SampleData, StereoBus, MAX_BLOCK_SIZE};
 use crate::session::Session;
-use mooloop_engine::{AudioTapBank, EngineHandle, StructuralCommand};
+use mooloop_engine::{AudioTapBank, EngineHandle, SendBank, SendSpec, StructuralCommand};
 use std::sync::Arc;
+
+/// What is *structural* about one send: where it goes and what it waits.
+///
+/// The key `Session::sync_track_graph` diffs on. Level, tap and enable are
+/// deliberately absent -- they travel as POD commands, so including them here
+/// would rebuild the whole plan, and every compensation ring in it, on every
+/// frame of a send-fader drag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SendRoute {
+    producer: EffectTarget,
+    target: u8,
+    delay: u32,
+}
+
+impl SendRoute {
+    fn of(spec: &SendSpec) -> Self {
+        Self {
+            producer: spec.producer,
+            target: spec.target,
+            delay: spec.delay,
+        }
+    }
+}
 
 /// UI callbacks all run on one thread, but boxed structural edits and POD
 /// commands used to enter separate relay queues and lose their relative
@@ -205,7 +229,62 @@ impl Session {
         for (index, bus) in self.buses.iter().take(MAX_BUSES).enumerate() {
             bus_latency[index] = chain_latency(&bus.effects);
         }
-        compile_latency(&graph, &channel_latency, &channel_bus, &bus_latency)
+        compile_latency(
+            &graph,
+            &channel_latency,
+            &channel_bus,
+            &bus_latency,
+            &send_edges(&self.buses),
+        )
+    }
+
+    /// Every send in the document, prepared for the engine's bank.
+    ///
+    /// `plan` is [`Self::latency_plan`]'s answer, whose per-send entries are
+    /// in the same order `send_edges` flattens them -- that shared order is
+    /// the contract, and reading both from one pass is what keeps it true.
+    fn send_specs(&self, plan: &CompiledLatency) -> Vec<SendSpec> {
+        let mut specs = Vec::new();
+        for (index, setup) in self.buses.iter().take(MAX_BUSES).enumerate() {
+            for send in &setup.sends {
+                let edge = specs.len();
+                specs.push(SendSpec {
+                    producer: EffectTarget::Bus(index as u8),
+                    target: send.target,
+                    tap: send.tap,
+                    enabled: send.enabled,
+                    level: send.level,
+                    delay: plan.send(edge),
+                });
+            }
+        }
+        specs
+    }
+
+    /// Reconcile the engine's track graph and sends with the document.
+    ///
+    /// Called from the pump beside [`Self::sync_compensation`] and for the
+    /// same reasons. It replaces `EngineCommand::InstallBusGraph`, which the
+    /// routing edit used to hand back for the caller to send: routing is no
+    /// longer one `u8` per track, because a send is a second outgoing edge
+    /// that carries a compensation ring, and a ring is a heap object that has
+    /// to be built here and reclaimed here.
+    ///
+    /// The graph and its sends go as **one** command. A send whose target the
+    /// render order has not been told about would arrive a block late, and
+    /// two commands leave exactly that window open.
+    pub fn sync_track_graph(&mut self, handle: &mut EngineHandle) {
+        let graph = compile_bus_graph(&self.buses).unwrap_or_default();
+        let specs = self.send_specs(&self.latency_plan());
+        let routes: Vec<SendRoute> = specs.iter().map(SendRoute::of).collect();
+        if (graph, &routes) == (self.track_graph_sent.0, &self.track_graph_sent.1) {
+            return;
+        }
+        handle.send_structural(StructuralCommand::SetTrackGraph {
+            graph,
+            sends: Box::new(SendBank::new(&specs, handle.sample_rate())),
+        });
+        self.track_graph_sent = (graph, routes);
     }
 
     /// Reconcile the engine's compensation delays with the plan.
@@ -248,6 +327,61 @@ impl Session {
             }
         }
         self.compensation_sent = plan;
+    }
+
+    /// Which tracks need a second input accumulator: the ones something
+    /// analog-summed actually reaches.
+    ///
+    /// Derived rather than tracked, for the reason [`Self::latency_plan`]
+    /// gives. Three different edits change the answer -- switching a track's
+    /// analog sum on or off, re-routing a track, and loading a project -- so
+    /// a flag each of them had to remember to set is a list that grows
+    /// silently.
+    ///
+    /// The master is included like any other track: it is the summing point a
+    /// default project already has, which is what lets two tracks glue with
+    /// nothing created and nothing placed in a chain.
+    pub fn console_plan(&self) -> [bool; MAX_BUSES] {
+        let mut wanted = [false; MAX_BUSES];
+        let graph = compile_bus_graph(&self.buses).unwrap_or_default();
+        for (index, setup) in self.buses.iter().enumerate().take(MAX_BUSES).skip(1) {
+            if setup.bus.console {
+                wanted[graph.destination(index) as usize] = true;
+            }
+        }
+        wanted
+    }
+
+    /// Reconcile the engine's console accumulators with the plan.
+    ///
+    /// Called from the pump beside [`Self::sync_compensation`] and for the
+    /// same reasons: deriving and diffing once a tick cannot be forgotten,
+    /// costs a comparison when nothing changed, and converges within one
+    /// frame of any edit.
+    ///
+    /// The buffers are allocated here, on the pump thread, and only for the
+    /// buses the plan names: a project that has never switched console on
+    /// allocates nothing and this sends nothing, which is the "free while it
+    /// is out" rule `docs/plans/console/` is held to. Deliberately does not
+    /// mark the document dirty -- this is derived state, not something the
+    /// user did.
+    pub fn sync_console_sums(&mut self, handle: &mut EngineHandle) {
+        let plan = self.console_plan();
+        if plan == self.console_sums_sent {
+            return;
+        }
+        for (bus, (&wanted, &sent)) in
+            plan.iter().zip(self.console_sums_sent.iter()).enumerate()
+        {
+            if wanted == sent {
+                continue;
+            }
+            handle.send_structural(StructuralCommand::SetConsoleSum {
+                bus: bus as u8,
+                buffer: wanted.then(|| Box::new(StereoBus::with_capacity(MAX_BLOCK_SIZE))),
+            });
+        }
+        self.console_sums_sent = plan;
     }
 
     /// The audio edges this project's channels compile to, from the model as
@@ -541,6 +675,7 @@ mod tests {
     fn a_channel_waits_for_a_latent_bus_it_does_not_use() {
         let latency = mooloop_core::effect::OVERSAMPLER_LATENCY_FRAMES;
         let mut session = Session::default();
+        session.ensure_tracks(2);
         session.add_channel(mooloop_core::DeviceKind::Sampler);
         session.channels[0].bus = 1;
         session.buses[1].effects.push(transparent_drive().with_id(mooloop_core::DeviceId(0)));

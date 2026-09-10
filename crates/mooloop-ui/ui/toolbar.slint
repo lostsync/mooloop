@@ -330,12 +330,35 @@ export component MenuField inherits Rectangle {
     Tooltip { text: @markdown("\{root.tooltip}"); }
 }
 
-// Editable single-line field, for the pattern name.
+// Editable single-line field. Every rename in the application is one of
+// these -- patterns in the transport toolbar, tracks on the bus face,
+// channels on the device-chain header -- plus the mockup tool's filter.
 export component NameField inherits Rectangle {
-    in-out property <string> text;
+    // What the app says the name is. Deliberately `in`, and deliberately not
+    // bound two-way to the input below.
+    //
+    // A `TextInput`'s `text` is an ordinary property, so typing into it does
+    // not update a binding -- it *replaces* it. Wired `text <=> input.text`,
+    // this field tracked whatever the app pushed until the first keystroke
+    // and never again: rename a pattern, switch to another pattern, and the
+    // box still showed what you had typed while the toolbar, the menu and the
+    // playlist all showed the real name. So the app drives the input through
+    // `changed`, the input reports back through `edited`, and the only writer
+    // of `text` is the app.
+    in property <string> text;
     in property <string> placeholder;
     in property <string> tooltip: "Rename";
+    // What is actually in the box right now, which is `text` only between
+    // edits. Exists so a test can ask the field what it is showing without
+    // reading pixels, and so the placeholder condition has one source.
+    out property <string> current-text: input.text;
     callback edited(string);
+
+    // Guarded, because re-assigning a `TextInput`'s text moves the cursor. An
+    // accepted rename comes straight back as the value already in the box.
+    changed text => {
+        if (input.text != root.text) { input.text = root.text; }
+    }
 
     height: ToolbarMetrics.control-height;
     width: 104px;
@@ -347,7 +370,11 @@ export component NameField inherits Rectangle {
     accessible-label: root.tooltip;
     forward-focus: input;
 
-    if root.text == "" && !input.has-focus : Text {
+    // Asks the box what is in it, not the app what it thinks is in it: the
+    // two differ for every keystroke between typing and acceptance, and a
+    // placeholder that reappeared under half-typed text would be the visible
+    // half of the bug above.
+    if root.current-text == "" && !input.has-focus : Text {
         x: 6px;
         text: root.placeholder;
         color: Theme.text-faint;
@@ -360,7 +387,8 @@ export component NameField inherits Rectangle {
         x: 6px;
         width: parent.width - 12px;
         height: 100%;
-        text <=> root.text;
+        // The initial value only; `changed text` above owns it from then on.
+        text: root.text;
         color: Theme.text;
         font-size: 11px;
         vertical-alignment: center;

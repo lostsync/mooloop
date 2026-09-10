@@ -14,9 +14,11 @@ table of which document to read for which task. Start there, not here.
 | Document | Job |
 | --- | --- |
 | [CURRENT.md](CURRENT.md) | The implemented surface and its known gaps. The one to update when behaviour changes. |
+| [TERMINOLOGY.md](TERMINOLOGY.md) | Channel, track, bus, send — which word means what, and why channel and track are not one word. Settled by Adam; read before naming anything in the mixer. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Crates, components, and the data crossing between them, in one diagram. |
 | [PROJECT_FORMAT.md](PROJECT_FORMAT.md) | The on-disk song, kit, and channel documents, and what each defaulted field is for. |
 | [GAIN_STRUCTURE.md](GAIN_STRUCTURE.md) | Operating level, summing, taper, wet/dry, metering. `gain.rs` is the authority. |
+| [REFERENCE_MEASUREMENTS.md](REFERENCE_MEASUREMENTS.md) | How to measure a reference plugin on the studio machine, and what to capture for which kind of device. Read before booking studio time for it. |
 | [REVERB.md](REVERB.md) | The FDN reverb's realtime contract, its parameters, and why it is not a convolver. |
 | [ACTIONS.md](ACTIONS.md) | The action registry: how a shortcut, menu row, or future console command is added. |
 | [WIDGET_INVENTORY.md](WIDGET_INVENTORY.md) | UI patterns duplicated in `.slint` with no component behind them. Read before writing a new widget. |

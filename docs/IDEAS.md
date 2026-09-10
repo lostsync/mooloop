@@ -82,3 +82,36 @@ That is the thing to settle before either is built, and it is a real fork:
 one tracker widget over two different backing models, or one of them borrowing
 the other's look and nothing else. `FOCUS.md` step 3 names it as the first
 question the modulation-rack redesign has to answer.
+
+**2026-09-09, a third thing that wants the same answer.** Adam's morning list
+asked for the playlist to work "more like DAW lanes", to zoom to fit the
+patterns in a song, and to carry **song-level automation** -- automation
+authored against the arrangement rather than against a pattern.
+
+The first two are layout and are not this entry's business. The third is,
+because it is the same fork one level up. Today automation is
+`AutomationLane`s stored per channel per pattern, so a curve is a property of
+a pattern and is replayed wherever that pattern is placed. Song-level
+automation is a curve that belongs to the *timeline*, and it needs the same
+three things the entry above is arguing about: a canonical event
+representation, an editor notation, and a decision about whether the
+tracker/curve editor is one widget over several backing models or several
+widgets that resemble each other.
+
+So the fork is not two-sided, it is three:
+
+| | Backed by | Lives on |
+| --- | --- | --- |
+| Automation events | document data | a pattern's timeline |
+| A modulator | a realtime control signal, no document | nothing; it is bounded and free-running |
+| Song automation | document data | the arrangement's timeline |
+
+Song automation is much closer to the first than to the second, which is
+mildly good news: if the tracker is built for automation events, song
+automation is the same widget over a longer timeline and a different address
+space. It is recorded here rather than in a plan because it is *the same
+question*, and answering it separately is how a project ends up with two
+editors that nearly agree.
+
+Recorded while writing `docs/plans/console/`, which is the mixer half of the
+same morning list and which deliberately does not touch the playlist.

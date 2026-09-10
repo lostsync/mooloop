@@ -1,6 +1,6 @@
 import { Theme } from "theme.slint";
 import { ScrollView } from "std-widgets.slint";
-import { MixerFader, MiniKnob, MuteButton, ToolButton } from "controls.slint";
+import { ConsoleButton, MixerFader, MiniKnob, MuteButton, ToolButton } from "controls.slint";
 import { GainMath } from "gain.slint";
 import { ChannelMeter } from "meters.slint";
 
@@ -16,6 +16,9 @@ export struct MixerStripRow {
     selected: bool,
     // The master is bus 0. It has no output of its own and cannot be routed.
     is-master: bool,
+    // Whether this bus's own output is console-encoded. Never set on the
+    // master, which feeds nothing.
+    console: bool,
     // Sequencer channels feeding this bus directly. Drawn so an empty bus is
     // distinguishable from a loaded one at a glance.
     feed-count: int,
@@ -33,6 +36,21 @@ export struct MixerStripRow {
     clipping: bool,
 }
 
+// One send on a track's strip: where it goes, how loud, where it taps, and
+// whether it is passing audio.
+//
+// `target` is a track index and `target-name` its name, carried together so
+// the row can draw the name without indexing `bus-names` -- a send survives
+// track edits by being renumbered in the model, and a row that looked its own
+// name up would be the one place that renumbering could be seen to lag.
+export struct MixerSendRow {
+    target: int,
+    target-name: string,
+    level: float,
+    pre-fader: bool,
+    enabled: bool,
+}
+
 // Shared bus chooser. Used both to assign a channel to a bus and to route one
 // bus into another; the two differ only in which destinations are offered.
 //
@@ -47,13 +65,21 @@ export component BusPicker inherits Rectangle {
     in property <[bool]> allowed;
     in property <string> tooltip: "Destination bus";
     in property <bool> enabled: true;
+    // Static text instead of the current destination, for the one use that
+    // has no current destination: adding a send. The list, the legality mask
+    // and the report-before-close fix are all the same, so this is a label
+    // rather than a second picker.
+    in property <string> label;
+    in property <length> chip-width: 30px;
     callback picked(int);
 
     // The mute button on the same strip already reads "M", so the
     // destination carries an arrow rather than repeating a bare letter.
-    private property <string> short-label: "\u{2192}" + (root.value == 0 ? "M" : root.value);
+    private property <string> short-label: root.label != ""
+        ? root.label
+        : "\u{2192}" + (root.value == 0 ? "M" : root.value);
 
-    width: 30px;
+    width: root.chip-width;
     height: 22px;
     border-radius: Theme.radius-md;
     background: pick-touch.has-hover && root.enabled ? Theme.surface-active : Theme.surface;
@@ -105,8 +131,22 @@ export component BusPicker inherits Rectangle {
                         text: name;
                         active: i == root.value;
                         enabled: parent.permitted;
+                        // Not "Send to \{name}". This picker is four
+                        // controls -- three output pickers and one send
+                        // picker -- and since step 05 a send is a specific
+                        // thing that three of them are not. The name is
+                        // already the visible text, so when the row is legal
+                        // the tooltip stays the label and adds nothing.
+                        //
+                        // The refused row is the one place in the interface
+                        // where a sentence belongs in a tooltip rather than
+                        // the status bar: `hint` is published from
+                        // `ToolButton`'s TouchArea, which is disabled here,
+                        // so the status bar would never hear it. `Tooltip`
+                        // lowers to its own hover area and still shows. Do
+                        // not "correct" this to a `hint`.
                         tooltip: parent.permitted
-                            ? "Send to " + name
+                            ? name
                             : name + " already leads back here";
                         clicked => {
                             root.picked(i);
@@ -128,6 +168,7 @@ component MixerStrip inherits Rectangle {
     callback volume-changed(float);
     callback pan-changed(float);
     callback output-picked(int);
+    callback console-toggled();
     callback clip-reset();
 
     width: 62px;
@@ -243,6 +284,31 @@ component MixerStrip inherits Rectangle {
                 width: 100%;
             }
         }
+
+        // Analog sum, at the foot of the strip and set apart from mute --
+        // which is where Adam's mockup puts it, and it is the honest place:
+        // this is the last thing that happens on the way out, after the
+        // fader, and it is not an output control in the way mute and pan are.
+        // The master has none, because it feeds nothing.
+        Rectangle {
+            height: 20px;
+            if !root.strip.is-master : ConsoleButton {
+                // Sized and placed by coordinate rather than by a layout, so
+                // it needs an explicit size: outside a layout an element
+                // fills its parent and `min-width`/`max-width` constrain
+                // nothing, which drew the switch as a 62px slab across the
+                // whole strip the first time.
+                x: (parent.width - 22px) / 2;
+                y: 1px;
+                width: 22px;
+                height: 18px;
+                on: root.strip.console;
+                tooltip: "Analog sum";
+                hint: "Sum this bus into its destination through the analog summing "
+                    + "curve, together with everything else feeding it that has this on.";
+                toggled(v) => { root.console-toggled(); }
+            }
+        }
     }
 }
 
@@ -256,7 +322,10 @@ export component MixerPane inherits Rectangle {
     callback bus-volume-changed(int, float);
     callback bus-pan-changed(int, float);
     callback bus-output-changed(int, int);
+    callback bus-console-toggled(int);
     callback bus-clip-reset(int);
+    callback track-added();
+    in property <bool> can-add-track: true;
 
     background: Theme.panel;
 
@@ -286,7 +355,28 @@ export component MixerPane inherits Rectangle {
                     volume-changed(v) => { root.bus-volume-changed(i, v); }
                     pan-changed(v) => { root.bus-pan-changed(i, v); }
                     output-picked(o) => { root.bus-output-changed(i, o); }
+                    console-toggled => { root.bus-console-toggled(i); }
                     clip-reset => { root.bus-clip-reset(i); }
+                }
+
+                // One `+`, one kind of thing. What a track *is* -- an
+                // ordinary track, a bus, a send -- is decided by what routes
+                // into it, not by which button made it, which is why there
+                // is no `+ Bus` and no `+ Send` beside this
+                // (`docs/TERMINOLOGY.md`).
+                Rectangle {
+                    width: 34px;
+                    ToolButton {
+                        y: 4px;
+                        width: 26px;
+                        height: 26px;
+                        text: "+";
+                        tooltip: "Add track";
+                        hint: "Add a mixer track. Route channels or other tracks into it to "
+                            + "make it a bus; feed it from a send to make it a return.";
+                        enabled: root.can-add-track;
+                        clicked => { root.track-added(); }
+                    }
                 }
             }
         }

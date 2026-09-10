@@ -438,9 +438,10 @@ export component MockupCanvas inherits Window {
                 }
                 NameField {
                     horizontal-stretch: 0;
-                    text <=> root.layout-name;
+                    text: root.layout-name;
                     placeholder: "layout";
                     tooltip: "Layout name, saved under the UI settings directory";
+                    edited(t) => { root.layout-name = t; }
                 }
                 ToolButton { text: "Load"; width: 52px; clicked => { root.load-requested(root.layout-name); } }
                 ToolButton { text: "Save"; width: 52px; clicked => { root.save-requested(root.layout-name); } }
@@ -468,10 +469,10 @@ export component MockupCanvas inherits Window {
                     }
                     if root.sidebar-tab == 0: NameField {
                         width: 100%;
-                        text <=> root.palette-filter;
+                        text: root.palette-filter;
                         placeholder: "Filter";
                         tooltip: "Filter the palette by name";
-                        edited(t) => { root.palette-query-changed(); }
+                        edited(t) => { root.palette-filter = t; root.palette-query-changed(); }
                     }
                     if root.sidebar-tab == 0: ScrollView {
                         vertical-stretch: 1;

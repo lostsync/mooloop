@@ -19,6 +19,18 @@ use std::sync::Arc;
 
 const SAMPLE_RATE: u32 = 48_000;
 
+/// A project with the whole track address space materialised.
+///
+/// `Project::default()` is the master alone since tracks stopped being a
+/// fixed bank (`docs/CAPACITY_POLICY.md`), and the tests below are about the
+/// *graph* rather than about how many tracks a song has, so they ask for the
+/// bank they route through.
+fn full_bank_project() -> Project {
+    let mut project = Project::default();
+    project.ensure_tracks(mooloop_core::MAX_BUSES);
+    project
+}
+
 /// Render the project offline and return the master peak in dBFS.
 fn peak_dbfs(project: &Project, seconds: f32) -> f32 {
     let mut render = RenderState::from_project(SAMPLE_RATE, project, &[]);
@@ -129,7 +141,7 @@ fn full_scale_fixture() -> Arc<SampleData> {
 fn single_channel_project(channel: ProjectChannel) -> Project {
     Project {
         channels: vec![channel],
-        ..Project::default()
+        ..full_bank_project()
     }
 }
 
@@ -221,7 +233,7 @@ fn kick_and_snare_reproduces_adam_s_measurement() {
     snare.notes[0][0].start_tick = 0;
     let project = Project {
         channels: vec![kick, snare],
-        ..Project::default()
+        ..full_bank_project()
     };
     let peak = peak_dbfs(&project, 2.0);
     println!("kick + snare master peak (downbeat, unity): {peak:.1} dBFS");
@@ -247,7 +259,7 @@ fn channel_summing_is_honest_today() {
             .collect();
         let project = Project {
             channels,
-            ..Project::default()
+            ..full_bank_project()
         };
         let peak = peak_dbfs(&project, 2.0);
         println!("sum of {n} identical channels: {peak:.1} dBFS");
@@ -512,7 +524,7 @@ fn pad_and_drums(pad_volume: f32, pad_muted: bool, drums_muted: bool) -> Project
     drums.setup.channel.muted = drums_muted;
     Project {
         channels: vec![pad, drums],
-        ..Project::default()
+        ..full_bank_project()
     }
 }
 

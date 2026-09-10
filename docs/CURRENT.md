@@ -59,7 +59,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   With `STEPS` up it carries pattern selection, the cursor tools and pattern
   length; with `MIXER` up, nothing, because the mixer's controls are on its
   strips; with `DEVICES` up, the device chain's source picker and, at the far
-  end, the channel name and its preset browser.
+  end, the field that renames the channel and its preset browser.
   The dock used to stack **two** rows -- a header with the switcher, the
   channel name and the preset browser, and a per-page row under it. Merging
   them returned 34px and removed a `SONG ARRANGEMENT` label that named the
@@ -91,9 +91,22 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   synth, the ML-M1, the v1 poly synth, the ML-P8, or Aux In, which plays
   another channel's published audio outlet — and every rack row exposes mute,
   output volume, and constant-power stereo pan.
+- Channels can be reordered by dragging a rack row's name plate. The rows
+  between the grab and the landing slide aside, and the gap that opens is the
+  drop indicator. Every address in the song that named a channel follows it —
+  automation lanes, modulation routes, an Aux In's subscription — and so does
+  the session's own state: the selected device, the open automation lane, and
+  the preset labels a channel and its rack rows are wearing. The move is one
+  undoable edit.
 - Patterns are created explicitly from a one-pattern project, with up to 256
   addressable pattern IDs and independent logical lengths from 1 to 256 steps.
   Hidden steps survive shortening and re-extending a pattern.
+- **Channels, tracks and patterns can each be named.** A channel is renamed on the
+  `DEVICES` toolbar, a track on its own device face, a pattern in the
+  transport toolbar. A channel or a track refuses a blank name, because its
+  rack plate or its mixer column is the only thing identifying it; a pattern
+  accepts one and reads as `Pattern N` wherever it is drawn -- the pattern
+  menu and the playlist's gutter -- because its number is beside it there.
 - Pattern and Song transport modes are independent of the visible editor.
   The playlist is a lower-pane tab, supports layered tick-addressed pattern
   instances, and remains editable while either mode plays. Clip width follows
@@ -549,11 +562,53 @@ land on its own when it starts to matter:
 ### Mixing, Routing, And Effects
 
 - Channel mute, volume, and pan are exposed, as compact knobs in the rack row,
-  alongside the bus the channel feeds.
-- Every channel names one mixer bus. The bank is the master plus sixteen
-  inserts, all preallocated, so assigning a channel to any bus is a bounded
-  mutation rather than an allocation. Buses carry their own effect chain,
-  volume, pan, and mute, and may feed another bus.
+  alongside the mixer track the channel feeds.
+- **The mixer is a list of tracks, and a track is made because somebody made
+  it.** A new song opens with the master; the starter kit adds `Drums` and
+  `Bass`, with its four drum channels grouped onto the first. `+` in the mixer
+  adds a track, and a track's device face renames it or removes it — both
+  undoable. Removing one falls anything routed to it back to the master rather
+  than leaving it unheard.
+
+  **There is no `+ Bus` and no `+ Send`.** What a track *is* — an ordinary
+  track, a bus, a send return — is decided entirely by what routes into it.
+  See `TERMINOLOGY.md`.
+- Every channel names one mixer track. Tracks carry their own effect chain,
+  volume, pan, and mute, and may feed another track. The addressable space is
+  the master plus sixteen; strips are materialised per track as a project
+  loads rather than preallocated, which `CAPACITY_POLICY.md` measures.
+- **Sends.** A track can route a copy of itself to another track, in addition
+  to its output. The track's face carries a `Send to…` picker that offers the
+  legal targets, and each send it gains draws a row there: the target's name,
+  where it taps, a switch, a remove, and a fader. The sends area draws exactly
+  the sends that exist and scrolls when they outgrow the room — there is no
+  ceiling on how many a track has.
+
+  **A send is a route, not a kind of track.** The track at the far end is an
+  ordinary track that happens to be fed by sends, which is what makes it an
+  effects return; there is no return object and nothing to create. The starter
+  kit opens with one: `Reverb`, fully wet, fed post-fader by `Drums` and
+  `Bass`.
+
+  Two tap points: **post-fader** (the default, so the send follows the track's
+  fader) and **pre-fader** (after the track's devices, before its fader, so it
+  holds its level while the fader moves). Both are after the chain, so they
+  arrive at the same time. Mute silences a track's sends, pre-fader ones
+  included.
+
+  A send is **always linear** — analog sum is what a strip does to its own
+  output, and a send is a feed into another strip's input. A send whose target
+  already leads back would loop and is refused, greyed in the picker with the
+  reason, under exactly the rule the output picker uses. Switching a send off
+  is not the same as turning it down: it keeps its level and stays in the
+  routing, so nothing re-times.
+
+  Send levels are **smoothed**, per sample. They are the first gain at strip
+  level that is: a fader still stamps its value per block.
+- Each send is compensated on its own edge. A producer with a send reaches two
+  summing points, which generally arrive at different times and are owed
+  different delays, so a track feeding a latency-bearing return waits for it
+  on its dry path and stays sample-aligned where the two meet again.
 - Any bus may feed any other. The realtime thread still never sorts a graph:
   `mooloop_core::compile_bus_graph` normalizes and topologically sorts the bank
   off the audio thread (Kahn's algorithm over fixed-size arrays, no allocation)
@@ -564,9 +619,44 @@ land on its own when it starts to matter:
   buffer and no two nodes ever share one, which removes the pooled,
   reference-counted buffer assignment a general graph engine needs.
 - Destinations and their matching render order are one fixed-size compiled
-  value. A routing change installs the whole value atomically, so no block can
-  render edges against a stale order. Short stored banks are padded and invalid
-  individual routes are repaired to the master at this compilation boundary.
+  value, and a track's sends travel with it as one command, so no block can
+  render edges against a stale order or a send whose target the order has not
+  been told about. Short stored banks are padded, invalid individual routes are
+  repaired to the master, and a send naming a track that is gone is dropped, at
+  this compilation boundary.
+- A send orders its target after its source, the same way an output does, and
+  a cycle closed through a send is refused the same way one closed through an
+  output is.
+- **Analog sum.** Any mixer track can be switched to sum into its destination
+  through a non-linear encode, decoded at that destination together with
+  everything else feeding it that has the switch on. The control is a small
+  button at the foot of the strip, set apart from mute, drawing a straight
+  line when it is off and a sine when it is on. The master has none, because
+  it feeds nothing.
+
+  **A track's switch, and only a track's.** A sequencer channel has none: the
+  console this models puts its Channel stage on a mixer strip, and mooloop's
+  mixer strip is a track (`TERMINOLOGY.md`). Several channels on one track
+  therefore reach it linearly and the track encodes their sum, which is what a
+  desk does with a group.
+
+  There is no device to place and no bus to create: every summing point
+  decodes, and the master is already one, so two channels switched on glue
+  with nothing configured. Nesting needs no special case either — a
+  console-on bus encodes at its own output and whatever it feeds decodes it.
+  A strip switched on **alone** changes nothing, exactly; the character is
+  entirely in the interaction between strips that opted in together.
+
+  Off is the default and is bit-identical to a linear mixer. Switched on, the
+  summing law separates a sparse mix and bounds a dense one at +3.92 dBFS —
+  see `GAIN_STRUCTURE.md`, which records that ceiling as a deliberate
+  exception to "nothing bounds a sample in the live path". A bus's fader sits
+  after its decode, so pulling a bus down is level and pulling its feeders
+  down is drive.
+
+  Called *analog sum* in the interface and *console summing* everywhere in the
+  source and the documents; the technique is the Airwindows Console idea, and
+  `mooloop_dsp::console` is where the curve lives.
 - Cycles are refused rather than delayed, at the picker (looping destinations
   are shown greyed with the reason), at the command boundary, and on load,
   where a cyclic file is flattened to everything-to-master so it still opens
@@ -870,8 +960,12 @@ land on its own when it starts to matter:
 
   It is not a send: the producing channel does not know it is being read and
   its own routing does not move. It is not a router either — one subscription,
-  one channel, one outlet. Parallel sends and sidechain key inputs are still
-  absent and are what the compiled edge model exists for next.
+  one channel, one outlet. **Parallel sends are no longer absent**, but they are
+  a second edge system rather than this one: a send is a producer-side edge that
+  carries its own compensation, where an aux-in subscription lands pre-chain in
+  the consumer and has nowhere to put a delay, which is why it is refused when
+  its tap is late instead. Unifying the two is recorded and not done. Sidechain
+  key inputs are still absent.
 - The ML-P8 has a device output stage: Volume and Pan, before the channel
   strip's own. They exist to be the base its per-voice `VcaLevel` and `Pan`
   modulation destinations offset from, which resolved from hardcoded unity and
@@ -928,18 +1022,24 @@ land on its own when it starts to matter:
   same tick land in the same frame even when one carries an oversampled device
   and the other does not. Only Drive costs anything today (fifteen frames), so
   the audible effect is small; what it removes is the comb filtering that was
-  worst exactly when two channels were most alike, and what it unblocks is
-  parallel sends and sidechains, which are untrustworthy without it.
+  worst exactly when two channels were most alike, and what it unblocked is
+  parallel sends — now built, and compensated per edge rather than per producer,
+  because a track with a send reaches two summing points that owe it different
+  delays — and sidechains, which are untrustworthy without it and are still
+  absent.
   Bypass keeps its device's latency — a bypassed node's signal goes through
   the same delay rather than past it — so A/B-ing an effect A/Bs the effect
   and not the timing. Removing the device is what gives the latency back. The
   plan is derived from the project rather than tracked alongside it, so no
   edit path can forget to update it, and an offline render compiles the same
   plan as a live one.
-- Buses are insert points, not sends: a channel feeds exactly one, with no
-  parallel send, return, or wet/dry split. There are no sidechains, external
-  inputs, solo, or per-bus stem export, and buses cannot be renamed from the
-  interface yet.
+- **A channel** feeds exactly one track and cannot author a send of its own.
+  The engine's sends are strip-level and a channel's compiles correctly, but
+  nothing authors one, because the mixer draws no channel strips for the control
+  to live on — that and the tap points below pre-fader are stage 2 of the send
+  work. A send has a level and a tap, and no pan and no wet/dry split of its
+  own. There are no sidechains, external inputs, solo, or per-track stem
+  export.
 - Latency compensation is the mixer's own, not a hosted plugin's. `AudioNode`
   reports integer processing latency and `EffectKind` declares it without
   being built; the drive is the only kind that costs anything, at the measured

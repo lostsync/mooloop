@@ -58,6 +58,20 @@ pub struct MixerBus {
     /// Destination bus index. Any other bus is legal when it does not close a
     /// cycle; the master's value is unused.
     pub output: u8,
+    /// Whether this track's *output* is console-encoded, so the summing point
+    /// it reaches decodes it together with everything else that opted in.
+    ///
+    /// **A track's switch, and only a track's.** A sequencer channel has no
+    /// analog sum of its own: the console this models puts its Channel stage
+    /// on a mixer strip, and mooloop's mixer strip is a track. Adam,
+    /// 2026-09-09: *"the summing thing for now is tracks-only."*
+    ///
+    /// Nesting needs no special case: a console-on track encodes at its own
+    /// output and whatever it feeds decodes it. Meaningless on the master,
+    /// which feeds nothing, and ignored there. Defaulted on load; `false`
+    /// reproduces a linear mixer exactly.
+    #[serde(default)]
+    pub console: bool,
 }
 
 impl MixerBus {
@@ -76,8 +90,91 @@ impl MixerBus {
             volume: 1.0,
             pan: 0.0,
             output: MASTER_BUS,
+            console: false,
         }
     }
+}
+
+/// Where on a strip a send takes its signal.
+///
+/// Both taps are *after* the effect chain, because the fader is: in the block
+/// loop a strip's chain runs, then its fader and pan, then its compensation.
+/// So the only difference between the two is whether the fader and pan have
+/// been applied, and — worth stating because the latency plan depends on it —
+/// **they arrive at the same time**, since a fader declares no latency.
+///
+/// Taps further up the chain (after a named device, or at one of a device's
+/// declared audio outlets) are the second half of `docs/plans/console/`'s
+/// step 05 and are not here yet: they need a per-tap chain prefix latency,
+/// where these two need none.
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SendTap {
+    /// After the fader and pan, so the send follows the strip's own level.
+    /// The default, and what a reverb send usually wants.
+    #[default]
+    PostFader,
+    /// After the chain but before the fader and pan, so the send holds its
+    /// level while the strip's fader moves.
+    PreFader,
+}
+
+/// One route from a strip to a track, in addition to that strip's output.
+///
+/// A send is a *route*, not a kind of track: `docs/TERMINOLOGY.md` is the
+/// vocabulary, and the track a send arrives at is an ordinary track that
+/// happens to be fed by sends. There is no return object, and there is no
+/// upper bound on how many of these a strip has -- `docs/CAPACITY_POLICY.md`
+/// forbids one, and nothing here reserves for them.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AuxSend {
+    /// Track this send feeds. Not the strip's own index, and never a track
+    /// that reaches this one -- see [`would_create_cycle`].
+    pub target: u8,
+    /// Linear send level in [0, `crate::gain::MAX_LINEAR_GAIN`], the same
+    /// range a fader gets.
+    pub level: f32,
+    #[serde(default)]
+    pub tap: SendTap,
+    /// Whether the send passes audio.
+    ///
+    /// Separate from `level` because a level of zero is a valid setting and
+    /// not the same statement -- a send turned down is still routed, and gets
+    /// its level back when it is turned up.
+    ///
+    /// A disabled send is still **part of the graph**: it orders its target
+    /// after its source and it still counts at the summing point it reaches.
+    /// The alternative -- dropping it from the plan -- would make a mute
+    /// switch re-time the whole mix, which is a surprise nobody asked for.
+    #[serde(default = "crate::mixer::enabled_by_default")]
+    pub enabled: bool,
+}
+
+pub(crate) fn enabled_by_default() -> bool {
+    true
+}
+
+impl AuxSend {
+    /// A new post-fader send to `target`, at unity.
+    ///
+    /// Unity rather than silence because a send you have just made and cannot
+    /// hear is indistinguishable from one that did not work.
+    pub fn new(target: u8) -> Self {
+        Self {
+            target,
+            level: 1.0,
+            tap: SendTap::PostFader,
+            enabled: true,
+        }
+    }
+}
+
+/// Whether `from` could send to `target` at all, ignoring the rest of the
+/// graph. Nothing sends to itself, and both ends must be addressable.
+pub fn is_legal_send(from: u8, target: u8) -> bool {
+    from != target && (from as usize) < MAX_BUSES && (target as usize) < MAX_BUSES
 }
 
 /// A bus plus the effect chain inserted on it, mirroring `ChannelSetup`.
@@ -90,6 +187,12 @@ pub struct BusSetup {
     /// with the same defaulting as `ChannelSetup::next_device_id`.
     #[serde(default)]
     pub next_device_id: u32,
+    /// Routes from this track to other tracks, in addition to its output.
+    ///
+    /// Defaulted, so every project written before sends existed loads with
+    /// none and plays identically.
+    #[serde(default)]
+    pub sends: Vec<AuxSend>,
 }
 
 impl BusSetup {
@@ -98,6 +201,7 @@ impl BusSetup {
             bus: MixerBus::new(index),
             effects: Vec::new(),
             next_device_id: 0,
+            sends: Vec::new(),
         }
     }
 
@@ -115,10 +219,65 @@ impl BusSetup {
     }
 }
 
-/// The full bus bank a project starts with. Every index exists whether or not
-/// anything feeds it, so assigning a channel to bus 12 never has to create one.
+/// The tracks a project starts with: the master, and nothing else.
+///
+/// **This used to return all seventeen**, on the reasoning that assigning a
+/// channel to bus 12 should never have to create one. That is a fixed bank
+/// wearing a `Vec`, and `docs/CAPACITY_POLICY.md` is about exactly this:
+/// reserving an address space is free, dimensioning by it is not. A track now
+/// exists because somebody made it.
+///
+/// The master is not optional -- it is the sink every route eventually
+/// reaches, and a project without one has nowhere to send audio -- so it is
+/// the one entry a bank always has. [`sanitize_bank`] enforces that on load.
 pub fn default_buses() -> Vec<BusSetup> {
-    (0..MAX_BUSES).map(BusSetup::new).collect()
+    vec![BusSetup::new(MASTER_BUS as usize)]
+}
+
+/// Repair a loaded track bank: guarantee the master, drop anything past the
+/// addressable space, and coerce individually illegal routing to the master.
+///
+/// Per-edge nonsense is fixed first and the graph as a whole second, so a file
+/// whose routing contains a loop is flattened to everything-to-master rather
+/// than rejected -- it still opens and plays, which is the same treatment the
+/// engine gives it.
+pub fn sanitize_bank(buses: &[BusSetup]) -> Vec<BusSetup> {
+    let mut bank: Vec<BusSetup> = buses
+        .iter()
+        .take(MAX_BUSES)
+        .enumerate()
+        .map(|(index, setup)| {
+            let mut setup = setup.clone();
+            setup.bus.output = sanitize_route(index as u8, setup.bus.output);
+            setup
+        })
+        .collect();
+    if bank.is_empty() {
+        bank.push(BusSetup::new(MASTER_BUS as usize));
+    }
+    // A route naming a track that is not there lands on the master, the same
+    // repair `sanitize_route` makes for an out-of-range one.
+    let count = bank.len();
+    for (index, setup) in bank.iter_mut().enumerate() {
+        if index != MASTER_BUS as usize && setup.bus.output as usize >= count {
+            setup.bus.output = MASTER_BUS;
+        }
+        // A send naming a track that is not there is **dropped**, not
+        // re-pointed at the master. A channel's output has to land somewhere
+        // or the channel is silently unheard, which is why that one falls
+        // back; a send is an addition, and the honest repair for one whose
+        // destination is gone is that it is gone too.
+        setup
+            .sends
+            .retain(|send| is_legal_send(index as u8, send.target) && (send.target as usize) < count);
+    }
+    if compile_bus_graph(&bank).is_none() {
+        for setup in &mut bank {
+            setup.bus.output = MASTER_BUS;
+            setup.sends.clear();
+        }
+    }
+    bank
 }
 
 /// Whether `bus` could address `output` at all, ignoring what the rest of the
@@ -143,20 +302,53 @@ pub fn sanitize_route(bus: u8, output: u8) -> u8 {
     }
 }
 
-/// Whether `from` reaches `target` by following outputs. Bounded by the bank
-/// size, so a graph that is already cyclic terminates instead of spinning.
+/// Whether `from` reaches `target` by following outputs **or sends**.
+///
+/// This used to walk a single-successor chain, which was exact while a track
+/// had one outgoing edge. A send is a second one, so it is a search: depth
+/// first over a fixed visited set, which needs no allocation and terminates on
+/// a graph that is already cyclic because a node is only pushed once.
 fn reaches(buses: &[BusSetup], from: u8, target: u8) -> bool {
-    let mut at = from;
-    for _ in 0..MAX_BUSES {
-        if at == target {
-            return true;
-        }
+    let mut seen = [false; MAX_BUSES];
+    let mut stack = [MASTER_BUS; MAX_BUSES];
+    let mut depth = 0usize;
+
+    if from == target {
+        return true;
+    }
+    if (from as usize) < MAX_BUSES {
+        seen[from as usize] = true;
+        stack[depth] = from;
+        depth += 1;
+    }
+
+    while depth > 0 {
+        depth -= 1;
+        let at = stack[depth];
+        // The master is a sink: its `output` is unused, and a send from it
+        // could only ever close a loop, so neither is followed.
         if at == MASTER_BUS {
-            return false;
+            continue;
         }
-        match buses.get(at as usize) {
-            Some(setup) => at = setup.bus.output,
-            None => return false,
+        let Some(setup) = buses.get(at as usize) else {
+            continue;
+        };
+        let successors = std::iter::once(setup.bus.output)
+            .chain(setup.sends.iter().map(|send| send.target))
+            .filter(|&next| is_legal_send(at, next));
+        for next in successors {
+            if next == target {
+                return true;
+            }
+            if seen[next as usize] {
+                continue;
+            }
+            seen[next as usize] = true;
+            // Each node is pushed at most once, so this cannot run past the
+            // stack: that is also what terminates the walk on a bank whose
+            // routing is already cyclic.
+            stack[depth] = next;
+            depth += 1;
         }
     }
     false
@@ -165,6 +357,11 @@ fn reaches(buses: &[BusSetup], from: u8, target: u8) -> bool {
 /// Whether routing `bus` into `output` would close a loop. The interface uses
 /// this to decline the connection rather than offering it and then silently
 /// rewriting it to something the user did not ask for.
+///
+/// The same question answers a send: adding a send from `bus` to `output`
+/// loops exactly when `output` already reaches `bus`, which is what this is.
+/// One rule for both edges, so a send cannot creep past a check the output
+/// picker makes.
 pub fn would_create_cycle(buses: &[BusSetup], bus: u8, output: u8) -> bool {
     reaches(buses, output, bus)
 }
@@ -225,11 +422,23 @@ pub fn compile_bus_graph(buses: &[BusSetup]) -> Option<CompiledBusGraph> {
         destinations[index] = sanitize_route(index as u8, setup.bus.output);
     }
 
-    // Number of buses feeding each bus. Channels are not counted: they are all
-    // rendered before any bus, so they constrain nothing.
-    let mut feeding = [0u8; MAX_BUSES];
+    // Number of buses feeding each bus, by output **or by send**. Channels are
+    // not counted: they are all rendered before any bus, so they constrain
+    // nothing, and that stays true of a channel's sends.
+    //
+    // `u16` rather than `u8` because the outputs are one per track and the
+    // sends are not: nothing bounds how many a track has, and a count that
+    // wrapped would emit a schedule in the wrong order rather than refuse.
+    let mut feeding = [0u16; MAX_BUSES];
     for &destination in destinations.iter().skip(1) {
         feeding[destination as usize] += 1;
+    }
+    for (index, setup) in buses.iter().take(MAX_BUSES).enumerate() {
+        for send in &setup.sends {
+            if is_legal_send(index as u8, send.target) {
+                feeding[send.target as usize] += 1;
+            }
+        }
     }
 
     let mut queue = [MASTER_BUS; MAX_BUSES];
@@ -252,14 +461,34 @@ pub fn compile_bus_graph(buses: &[BusSetup]) -> Option<CompiledBusGraph> {
         if node == MASTER_BUS {
             continue;
         }
-        let destination = destinations[node as usize] as usize;
-        feeding[destination] -= 1;
-        if feeding[destination] == 0 {
-            queue[tail] = destination as u8;
-            tail += 1;
+        let release = |destination: usize, feeding: &mut [u16; MAX_BUSES], queue: &mut [u8; MAX_BUSES], tail: &mut usize| {
+            feeding[destination] -= 1;
+            if feeding[destination] == 0 {
+                queue[*tail] = destination as u8;
+                *tail += 1;
+            }
+        };
+        release(
+            destinations[node as usize] as usize,
+            &mut feeding,
+            &mut queue,
+            &mut tail,
+        );
+        if let Some(setup) = buses.get(node as usize) {
+            for send in &setup.sends {
+                if is_legal_send(node, send.target) {
+                    release(send.target as usize, &mut feeding, &mut queue, &mut tail);
+                }
+            }
         }
     }
 
+    // Every slot in the fixed address space is sorted, present or not: an
+    // absent track is a phantom feeding the master, which constrains nothing
+    // and keeps `render_order` a complete permutation. The executor skips the
+    // ones that do not exist, and must walk the *whole* order to do that --
+    // iterating only the first `buses.len()` slots would visit an arbitrary
+    // subset and silently drop real tracks.
     (emitted == MAX_BUSES).then_some(CompiledBusGraph {
         destinations,
         render_order,
@@ -320,10 +549,20 @@ pub fn run_latency(effects: &[EffectSlotState], slot: usize) -> u32 {
 /// executor by value, so it can never observe one generation's delays against
 /// another's edges. What allocates is the delay *storage* the engine sizes
 /// from this, never this.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledLatency {
     channels: [u32; MAX_CHANNELS],
     buses: [u32; MAX_BUSES],
+    /// One entry per send, in the order the sends were handed to
+    /// [`compile_latency`]. A `Vec` rather than a fixed bank because nothing
+    /// bounds how many sends a project has, and this is the *answer* rather
+    /// than the storage -- what allocates on the audio thread's behalf is the
+    /// ring the engine sizes from it, off the audio thread, as before.
+    ///
+    /// This is the sentence that used to say "per edge" and "per producer" are
+    /// the same thing. A send is a producer's second outgoing edge, and the
+    /// two arrive at different summing points, so they are not.
+    sends: Vec<u32>,
     total: u32,
 }
 
@@ -337,6 +576,17 @@ impl CompiledLatency {
     /// The master feeds nothing and is always zero.
     pub fn bus(&self, bus: usize) -> u32 {
         self.buses.get(bus).copied().unwrap_or(0)
+    }
+
+    /// Frames to delay send `index` before it sums into the track it feeds,
+    /// indexed as the sends were handed to [`compile_latency`].
+    pub fn send(&self, index: usize) -> u32 {
+        self.sends.get(index).copied().unwrap_or(0)
+    }
+
+    /// How many sends this plan was compiled for.
+    pub fn send_count(&self) -> usize {
+        self.sends.len()
     }
 
     /// The whole graph's latency: how far behind the input the master's output
@@ -353,9 +603,43 @@ impl Default for CompiledLatency {
         Self {
             channels: [0; MAX_CHANNELS],
             buses: [0; MAX_BUSES],
+            sends: Vec::new(),
             total: 0,
         }
     }
+}
+
+/// One send flattened out of the model for compilation: who emits it and
+/// which track it reaches.
+///
+/// The tap is not here because it does not change the answer. Both taps this
+/// step has are after the strip's chain and a fader declares no latency, so a
+/// pre-fader send and a post-fader one from the same strip arrive at the same
+/// moment. A tap *inside* the chain would not, and is what would put a tap
+/// point in this type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SendEdge {
+    pub producer: EffectTarget,
+    pub target: u8,
+}
+
+/// Every send in a track bank, flattened in bank order.
+///
+/// The order is the contract between [`compile_latency`]'s answer and the
+/// engine's bank: entry `n` here is entry `n` there. Bank order -- track by
+/// track, and within a track the order the user made them in -- is the one
+/// order both sides can derive without being told.
+pub fn send_edges(buses: &[BusSetup]) -> Vec<SendEdge> {
+    let mut edges = Vec::new();
+    for (index, setup) in buses.iter().take(MAX_BUSES).enumerate() {
+        for send in &setup.sends {
+            edges.push(SendEdge {
+                producer: EffectTarget::Bus(index as u8),
+                target: send.target,
+            });
+        }
+    }
+    edges
 }
 
 /// Compile the tree's cumulative latency into a per-producer compensation.
@@ -367,19 +651,26 @@ impl Default for CompiledLatency {
 ///
 /// The rule is the general one from `AUDIO_ARCHITECTURE.md` -- at every
 /// summing point, delay each input by the difference between it and the
-/// longest one -- collapsed to the tree the mixer actually is. Each producer
-/// has exactly one destination, so "per edge" and "per producer" are the same
-/// thing and the simpler one is honest until step 6 makes them differ.
+/// longest one. **`sends` is what makes this a graph rather than a tree**: a
+/// producer with a send has two outgoing edges reaching two summing points,
+/// which arrive at different times and are owed different delays. The answer
+/// is still one number per edge; there are simply more edges than producers
+/// now, which is the sentence this doc comment used to deny.
+///
+/// A *disabled* send belongs in `sends` like any other. Leaving it out would
+/// mean a mute switch re-timed the mix.
 ///
 /// One descending pass over `graph.render_order()`, which is already
-/// topological: every bus feeding `b` is visited before `b`, so `b`'s input
-/// arrival is complete by the time it is read. No recursion, no second sort,
-/// and no allocation.
+/// topological **over sends as well** -- `compile_bus_graph` counts them in
+/// its in-degree -- so every track feeding `b` by either kind of edge is
+/// visited before `b`, and `b`'s input arrival is complete by the time it is
+/// read. No recursion, no second sort, and the only allocation is the answer.
 pub fn compile_latency(
     graph: &CompiledBusGraph,
     channel_latency: &[u32],
     channel_bus: &[u8],
     bus_latency: &[u32],
+    sends: &[SendEdge],
 ) -> CompiledLatency {
     let at = |table: &[u32], index: usize| table.get(index).copied().unwrap_or(0);
 
@@ -391,6 +682,16 @@ pub fn compile_latency(
         let bus = clamp_bus(channel_bus[channel]) as usize;
         input_arrival[bus] = input_arrival[bus].max(channel_latency[channel]);
     }
+    // A channel's sends are known here for the same reason its output is:
+    // channels all render before any track, so nothing they emit waits on a
+    // track's arrival.
+    for edge in sends {
+        if let EffectTarget::Channel(channel) = edge.producer {
+            let arrival = at(channel_latency, channel as usize);
+            let target = clamp_bus(edge.target) as usize;
+            input_arrival[target] = input_arrival[target].max(arrival);
+        }
+    }
 
     let mut arrival = [0u32; MAX_BUSES];
     for &bus in graph.render_order() {
@@ -401,6 +702,14 @@ pub fn compile_latency(
         }
         let destination = graph.destination(bus) as usize;
         input_arrival[destination] = input_arrival[destination].max(arrival[bus]);
+        // A track's sends leave from the same place its output does, so they
+        // carry the same arrival to a different summing point.
+        for edge in sends {
+            if edge.producer == EffectTarget::Bus(bus as u8) {
+                let target = clamp_bus(edge.target) as usize;
+                input_arrival[target] = input_arrival[target].max(arrival[bus]);
+            }
+        }
     }
 
     let mut channels_out = [0u32; MAX_CHANNELS];
@@ -418,9 +727,24 @@ pub fn compile_latency(
         buses_out[bus] = input_arrival[destination].saturating_sub(arrival[bus]);
     }
 
+    // Each send waits by the difference between the summing point it reaches
+    // and its own arrival -- the same subtraction the two edge kinds above
+    // make, against a different destination.
+    let sends_out = sends
+        .iter()
+        .map(|edge| {
+            let departs = match edge.producer {
+                EffectTarget::Channel(channel) => at(channel_latency, channel as usize),
+                EffectTarget::Bus(bus) => arrival[clamp_bus(bus) as usize],
+            };
+            input_arrival[clamp_bus(edge.target) as usize].saturating_sub(departs)
+        })
+        .collect();
+
     CompiledLatency {
         channels: channels_out,
         buses: buses_out,
+        sends: sends_out,
         total: arrival[MASTER_BUS as usize],
     }
 }
@@ -1055,14 +1379,63 @@ mod tests {
     }
     use super::*;
 
+    /// A bank the size of the whole address space, for the tests that are
+    /// about the *compiler* rather than about how many tracks a project has.
+    /// `default_buses` no longer returns one, and that is the point of it.
+    fn full_bank() -> Vec<BusSetup> {
+        (0..MAX_BUSES).map(BusSetup::new).collect()
+    }
+
+    /// A new song has one track, and it is the master.
+    ///
+    /// This used to assert the opposite -- seventeen, every index
+    /// materialised -- which was a fixed bank wearing a `Vec` and is what
+    /// `docs/CAPACITY_POLICY.md` calls dimensioning by a ceiling.
     #[test]
-    fn the_bank_is_master_plus_every_insert() {
+    fn a_new_bank_is_the_master_alone() {
         let buses = default_buses();
-        assert_eq!(buses.len(), MAX_BUSES);
+        assert_eq!(buses.len(), 1);
         assert_eq!(buses[MASTER_BUS as usize].bus.name, "Master");
-        assert_eq!(buses[1].bus.name, "Bus 1");
-        assert_eq!(buses[INSERT_BUSES].bus.name, format!("Bus {INSERT_BUSES}"));
-        assert!(buses.iter().all(|setup| setup.bus.output == MASTER_BUS));
+        assert_eq!(buses[MASTER_BUS as usize].bus.output, MASTER_BUS);
+    }
+
+    /// The master is not optional: a bank without one has nowhere to send
+    /// audio, so an empty or hand-emptied file gets one back.
+    #[test]
+    fn a_bank_always_has_a_master() {
+        assert_eq!(sanitize_bank(&[]).len(), 1);
+        assert_eq!(sanitize_bank(&[])[0].bus.name, "Master");
+    }
+
+    /// A route naming a track that is not there lands on the master, the same
+    /// repair an out-of-range one gets. Without this a bank could be shorter
+    /// than one of its own edges.
+    #[test]
+    fn a_route_to_a_track_that_is_not_there_falls_back() {
+        let mut bank = full_bank();
+        bank[1].bus.output = 9;
+        bank.truncate(3);
+        let repaired = sanitize_bank(&bank);
+        assert_eq!(repaired.len(), 3);
+        assert_eq!(repaired[1].bus.output, MASTER_BUS);
+    }
+
+    /// A short bank still compiles, and every track in it is rendered before
+    /// what it feeds. The absent indices are phantoms feeding the master;
+    /// what must not happen is a real track being left out of the order.
+    #[test]
+    fn a_short_bank_still_sorts_every_track_it_has() {
+        let mut bank = full_bank();
+        bank[1].bus.output = 2;
+        bank.truncate(3);
+        let graph = compile_bus_graph(&bank).expect("a short bank sorts");
+        let order = graph.render_order();
+        let position = |bus: u8| order.iter().position(|slot| *slot == bus).unwrap();
+        assert!(position(1) < position(2), "1 feeds 2 and must render first");
+        assert!(position(2) < position(MASTER_BUS));
+        for track in 0..bank.len() as u8 {
+            assert!(order.contains(&track), "track {track} was left out of the order");
+        }
     }
 
     #[test]
@@ -1084,21 +1457,268 @@ mod tests {
     }
 
     fn routed(edges: &[(usize, u8)]) -> Vec<BusSetup> {
-        let mut buses = default_buses();
+        let mut buses = full_bank();
         for (bus, output) in edges {
             buses[*bus].bus.output = *output;
         }
         buses
     }
 
+    // --- Sends -----------------------------------------------------------
+
+    /// `full_bank()` with sends added, as `(from, target)` pairs.
+    fn sending(edges: &[(usize, u8)]) -> Vec<BusSetup> {
+        let mut buses = full_bank();
+        for (from, target) in edges {
+            buses[*from].sends.push(AuxSend::new(*target));
+        }
+        buses
+    }
+
+    /// A send is a second outgoing edge, so it constrains the schedule the
+    /// same way an output does. Without this the track a send feeds could
+    /// render *before* the track sending to it and be a block late, which is
+    /// silence on the first block and a smeared tail after.
+    #[test]
+    fn a_send_orders_its_target_after_its_source() {
+        let bank = sending(&[(1, 5)]);
+        let graph = compile_bus_graph(&bank).expect("a send is not a cycle");
+        let order = graph.render_order();
+        let position = |bus: u8| order.iter().position(|slot| *slot == bus).unwrap();
+        assert!(
+            position(1) < position(5),
+            "1 sends to 5 and must render first"
+        );
+        // And the outputs are untouched: a send is an addition, not a move.
+        assert_eq!(graph.destination(1), MASTER_BUS);
+        assert_eq!(graph.destination(5), MASTER_BUS);
+    }
+
+    /// The one Adam asked about: a send from a track back into something that
+    /// already reaches it. It is refused rather than delayed, which is the
+    /// whole answer to "or it'd feedback like crazy" -- there is no return
+    /// object to get this wrong with.
+    #[test]
+    fn a_send_that_would_loop_is_refused() {
+        // 3 feeds 4, so a send from 4 back to 3 closes the ring.
+        let bank = routed(&[(3, 4)]);
+        assert!(would_create_cycle(&bank, 4, 3));
+        // The other way round is fine: 3 already reaches 4, and a send along
+        // the way it already goes adds no loop.
+        assert!(!would_create_cycle(&bank, 3, 4));
+        // Reachability now follows sends as well as outputs, which is the
+        // half a single-successor walk could not see: 3 -> 4 by output,
+        // 4 -> 6 by send, so a send from 6 to 3 loops.
+        let mut bank = routed(&[(3, 4)]);
+        bank[4].sends.push(AuxSend::new(6));
+        assert!(would_create_cycle(&bank, 6, 3), "a loop closed through a send");
+    }
+
+    /// A bank whose sends loop has no valid schedule, and the repair is the
+    /// one a looping output already gets: it opens and plays.
+    #[test]
+    fn a_cyclic_send_has_no_plan_and_is_repaired() {
+        let mut bank = full_bank();
+        bank[1].sends.push(AuxSend::new(2));
+        bank[2].sends.push(AuxSend::new(1));
+        assert!(compile_bus_graph(&bank).is_none());
+        let repaired = sanitize_bank(&bank);
+        assert!(repaired[1].sends.is_empty());
+        assert!(repaired[2].sends.is_empty());
+        assert!(compile_bus_graph(&repaired).is_some());
+    }
+
+    /// A send naming a track that is not there is dropped, where an *output*
+    /// naming one falls back to the master. The asymmetry is deliberate: a
+    /// channel with nowhere to go is silently unheard, and a send with
+    /// nowhere to go is simply not a send.
+    #[test]
+    fn a_send_to_a_track_that_is_gone_is_dropped() {
+        let mut bank = full_bank();
+        bank.truncate(3);
+        bank[1].sends.push(AuxSend::new(9));
+        bank[1].sends.push(AuxSend::new(1));
+        bank[1].sends.push(AuxSend::new(2));
+        let repaired = sanitize_bank(&bank);
+        assert_eq!(repaired[1].sends.len(), 1, "only the reachable one survives");
+        assert_eq!(repaired[1].sends[0].target, 2);
+    }
+
+    /// A send is enabled and at unity when it is made. A send you have just
+    /// created and cannot hear is indistinguishable from one that did not
+    /// work.
+    #[test]
+    fn a_new_send_is_audible() {
+        let send = AuxSend::new(4);
+        assert!(send.enabled);
+        assert_eq!(send.level, 1.0);
+        assert_eq!(send.tap, SendTap::PostFader);
+    }
+
+    /// A song written before sends existed loads with none, plays identically,
+    /// and does not have to be migrated. The defaulted-field rule
+    /// `docs/PROJECT_FORMAT.md` asks for, stated where it can fail.
+    #[test]
+    fn a_track_written_before_sends_existed_loads_with_none() {
+        let manifest = r#"
+            [bus]
+            name = "Drums"
+            muted = false
+            volume = 1.0
+            pan = 0.0
+            output = 0
+        "#;
+        let setup: BusSetup = toml::from_str(manifest).expect("a pre-sends track still loads");
+        assert!(setup.sends.is_empty());
+    }
+
+    /// A hand-written send without an `enabled` passes audio. The other
+    /// default would be a send that is routed, drawn, and silent for a reason
+    /// nothing states.
+    #[test]
+    fn a_send_without_an_enabled_flag_is_on() {
+        let manifest = r#"
+            [bus]
+            name = "Drums"
+            muted = false
+            volume = 1.0
+            pan = 0.0
+            output = 0
+
+            [[sends]]
+            target = 3
+            level = 0.5
+        "#;
+        let setup: BusSetup = toml::from_str(manifest).expect("a minimal send loads");
+        assert_eq!(setup.sends.len(), 1);
+        assert!(setup.sends[0].enabled);
+        assert_eq!(setup.sends[0].tap, SendTap::PostFader);
+    }
+
+    /// The starter song's last third: a Reverb track two others send to, and
+    /// nothing anywhere that says "return".
+    #[test]
+    fn the_starter_song_has_a_reverb_send() {
+        let project = crate::Project::starter_kit(7);
+        let reverb = project
+            .buses
+            .iter()
+            .position(|track| track.bus.name == "Reverb")
+            .expect("the starter song has a reverb track");
+        let feeding: Vec<usize> = project
+            .buses
+            .iter()
+            .enumerate()
+            .filter(|(_, track)| track.sends.iter().any(|send| send.target as usize == reverb))
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(feeding.len(), 2, "two tracks send to it");
+        assert!(
+            project.buses[reverb].effects.len() == 1,
+            "the return carries the device that makes it one"
+        );
+        // Fully wet, because the dry path is already in the mix through each
+        // track's own output.
+        assert_eq!(project.buses[reverb].effects[0].wet_dry, 1.0);
+        // And it is an ordinary track in every other way -- nothing marks it.
+        assert_eq!(project.buses[reverb].bus.output, MASTER_BUS);
+        assert!(compile_bus_graph(&project.buses).is_some());
+    }
+
+    /// Sends flatten in bank order, which is the contract between the plan's
+    /// answer and the engine's bank: entry `n` here is entry `n` there.
+    #[test]
+    fn sends_flatten_in_bank_order() {
+        let bank = sending(&[(1, 5), (3, 5), (1, 2)]);
+        let edges = send_edges(&bank);
+        assert_eq!(
+            edges,
+            vec![
+                SendEdge { producer: EffectTarget::Bus(1), target: 5 },
+                SendEdge { producer: EffectTarget::Bus(1), target: 2 },
+                SendEdge { producer: EffectTarget::Bus(3), target: 5 },
+            ]
+        );
+    }
+
     // --- Latency compensation ------------------------------------------
+
+    /// The reverb-send case, which is what the default song is waiting on: a
+    /// track sends to a track carrying a Drive, and both reach the master.
+    /// The dry path has to wait for the wet one or the two are fifteen frames
+    /// apart at the summing point where they meet again.
+    #[test]
+    fn a_dry_path_waits_for_the_send_it_will_meet_again() {
+        let bank = sending(&[(1, 2)]);
+        let graph = compile_bus_graph(&bank).expect("a send is not a cycle");
+        let mut bus_latency = [0u32; MAX_BUSES];
+        bus_latency[2] = 15;
+        let sends = send_edges(&bank);
+        let plan = compile_latency(&graph, &[0], &[1], &bus_latency, &sends);
+
+        assert_eq!(plan.bus(1), 15, "the dry path waits for the wet one");
+        assert_eq!(plan.bus(2), 0, "the wet path is the longest and does not");
+        assert_eq!(plan.send(0), 0, "nothing else feeds the send's target");
+        assert_eq!(plan.total(), 15);
+    }
+
+    /// Two sends into one track, from strips of different length. The shorter
+    /// one waits by the difference -- the general rule, now applied at a
+    /// summing point that only sends reach.
+    #[test]
+    fn two_sends_into_one_track_align() {
+        let bank = sending(&[(1, 3), (2, 3)]);
+        let graph = compile_bus_graph(&bank).expect("two sends are not a cycle");
+        // Channel 0 carries a Drive and feeds track 1; channel 1 is clean and
+        // feeds track 2.
+        let sends = send_edges(&bank);
+        let plan = compile_latency(&graph, &[15, 0], &[1, 2], &[0; MAX_BUSES], &sends);
+
+        assert_eq!(plan.send(0), 0, "the long strip's send sets the arrival");
+        assert_eq!(plan.send(1), 15, "the short strip's send waits for it");
+        assert_eq!(plan.send_count(), 2);
+    }
+
+    /// A producer's two edges are owed different delays, which is the whole
+    /// reason `CompiledLatency` grew a per-send answer. Track 1 sends to a
+    /// track nothing else reaches, and outputs into one something long does.
+    #[test]
+    fn a_producers_two_edges_are_compensated_apart() {
+        let mut bank = sending(&[(1, 3)]);
+        bank[2].bus.output = MASTER_BUS;
+        let graph = compile_bus_graph(&bank).expect("acyclic");
+        // Channel 1 carries a Drive into the master, which track 1 also feeds.
+        let sends = send_edges(&bank);
+        let plan = compile_latency(&graph, &[0, 15], &[1, MASTER_BUS], &[0; MAX_BUSES], &sends);
+
+        assert_eq!(plan.bus(1), 15, "its output waits for the Drive at the master");
+        assert_eq!(plan.send(0), 0, "its send reaches a point nothing else does");
+    }
+
+    /// A send from a channel is known before any track renders, the same way
+    /// its output is, so it needs no ordering and gets the same arrival.
+    #[test]
+    fn a_channels_send_carries_its_chain() {
+        let bank = full_bank();
+        let graph = compile_bus_graph(&bank).expect("acyclic");
+        let sends = [SendEdge {
+            producer: EffectTarget::Channel(0),
+            target: 4,
+        }];
+        // Channel 0 has a Drive; channel 1 is clean and feeds the same track.
+        let plan = compile_latency(&graph, &[15, 0], &[4, 4], &[0; MAX_BUSES], &sends);
+
+        assert_eq!(plan.channel(0), 0, "the long channel sets the arrival");
+        assert_eq!(plan.channel(1), 15);
+        assert_eq!(plan.send(0), 0, "its send leaves from the same moment");
+    }
 
     /// The plan for a flat bank: `channels` channels, all on the master,
     /// carrying the given latencies and no bus latency anywhere.
     fn flat(channel_latency: &[u32]) -> CompiledLatency {
         let graph = compile_bus_graph(&default_buses()).expect("a default bank is acyclic");
         let on_master = vec![MASTER_BUS; channel_latency.len()];
-        compile_latency(&graph, channel_latency, &on_master, &[])
+        compile_latency(&graph, channel_latency, &on_master, &[], &[])
     }
 
     /// The case that is silently wrong today: one channel carries a Drive and
@@ -1141,7 +1761,7 @@ mod tests {
         // own; channel 1 goes straight to the master with nothing.
         let mut bus_latency = vec![0; MAX_BUSES];
         bus_latency[1] = 15;
-        let plan = compile_latency(&graph, &[0, 0], &[1, MASTER_BUS], &bus_latency);
+        let plan = compile_latency(&graph, &[0, 0], &[1, MASTER_BUS], &bus_latency, &[]);
 
         // Nothing else feeds bus 1, so its own input needs no delay.
         assert_eq!(plan.channel(0), 0);
@@ -1162,7 +1782,7 @@ mod tests {
         let mut bus_latency = vec![0; MAX_BUSES];
         bus_latency[1] = 20;
         // Channel 0 into the deep bus 1; channel 1 into the shallow bus 2.
-        let plan = compile_latency(&graph, &[0, 0], &[1, 2], &bus_latency);
+        let plan = compile_latency(&graph, &[0, 0], &[1, 2], &bus_latency, &[]);
 
         assert_eq!(plan.bus(1), 0, "the deepest bus must not move");
         assert_eq!(plan.bus(2), 20, "the shallow bus waits for the deep one");
@@ -1185,7 +1805,7 @@ mod tests {
         bus_latency[1] = 10;
         bus_latency[2] = 10;
         // Channel 0 at the top of the chain, channel 1 straight to master.
-        let plan = compile_latency(&graph, &[0, 0], &[2, MASTER_BUS], &bus_latency);
+        let plan = compile_latency(&graph, &[0, 0], &[2, MASTER_BUS], &bus_latency, &[]);
 
         // Channel 0 travels 10 (bus 2) + 10 (bus 1) = 20 frames.
         assert_eq!(plan.total(), 20);
@@ -1207,7 +1827,7 @@ mod tests {
         bus_latency[3] = 15;
         // A channel naming a bus that does not exist lands on the master, the
         // same way the executor clamps it.
-        let plan = compile_latency(&graph, &[0, 0], &[3, 250], &bus_latency);
+        let plan = compile_latency(&graph, &[0, 0], &[3, 250], &bus_latency, &[]);
         assert_eq!(plan.channel(1), 15, "the clamped channel waits for bus 3");
         assert_eq!(plan.total(), 15);
     }
@@ -1223,7 +1843,7 @@ mod tests {
         assert_eq!(plan.bus(MAX_BUSES + 10), 0);
 
         let graph = compile_bus_graph(&default_buses()).expect("acyclic");
-        let empty = compile_latency(&graph, &[], &[], &[]);
+        let empty = compile_latency(&graph, &[], &[], &[], &[]);
         assert_eq!(empty, CompiledLatency::default());
     }
 

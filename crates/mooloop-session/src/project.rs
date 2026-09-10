@@ -81,6 +81,20 @@ pub struct ProjectEdit {
     pub samples: Vec<Option<Arc<SampleData>>>,
     pub status: String,
     pub history: Option<(HistoryMove, HistoryEntry<ProjectSnapshot>)>,
+    /// The structural channel edit that produced `project`, when there was
+    /// one.
+    ///
+    /// `Project::rescope_after` has already renumbered everything the *song*
+    /// holds by the time this is sent. This carries the same edit forward so
+    /// the pump can run `Session::rescope_after` over the things the session
+    /// holds -- the selected device, the open lane, the preset labels -- none
+    /// of which are in the snapshot and all of which are keyed by a channel
+    /// index.
+    ///
+    /// `None` for an undo or a redo, which restore a whole document rather
+    /// than applying an edit to one. The session labels do not survive undo,
+    /// which `Session::effect_preset_name` already says in as many words.
+    pub channel_edit: Option<mooloop_core::ChannelEdit>,
 }
 
 #[cfg(test)]

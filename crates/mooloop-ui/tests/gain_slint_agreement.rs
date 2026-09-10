@@ -8,6 +8,32 @@ use mooloop_core::gain::FADER_BREAKPOINTS;
 
 const GAIN_SLINT: &str = include_str!("../ui/gain.slint");
 
+/// Whether `line` is the *declaration* of property `name`, whatever
+/// visibility qualifier it carries.
+///
+/// Anchored on the declaration rather than on the name alone, because a
+/// comment or an expression that merely mentions a property is not where its
+/// value lives. Both checks below share this, which is the point: they used
+/// to parse the file two different ways. The taper check guarded on
+/// `starts_with("property")` and the threshold check guarded on nothing, so
+/// the latter took whichever line mentioned the name first and parsed after
+/// its last colon -- a comment added above the property block would have
+/// silently changed what it asserted, and it would still have passed.
+///
+/// The qualifier has to be stripped rather than ignored: the three meter
+/// constants are `in property` and the two taper lists are bare `property`,
+/// so guarding on `starts_with("property")` alone finds neither set of the
+/// other's kind.
+fn declares(line: &str, name: &str) -> bool {
+    let trimmed = line.trim_start();
+    let unqualified = trimmed
+        .strip_prefix("in-out ")
+        .or_else(|| trimmed.strip_prefix("in "))
+        .or_else(|| trimmed.strip_prefix("out "))
+        .unwrap_or(trimmed);
+    unqualified.starts_with("property") && line.contains(&format!("{name}:"))
+}
+
 /// Extract one `property <[float]> name: [a, b, c];` list from the slint
 /// source. Parsing text rather than evaluating Slint keeps the check
 /// independent of any particular backend.
@@ -15,7 +41,7 @@ fn slint_float_list(name: &str) -> Vec<f32> {
     let marker = format!("{name}:");
     let line = GAIN_SLINT
         .lines()
-        .find(|line| line.trim_start().starts_with("property") && line.contains(&marker))
+        .find(|line| declares(line, name))
         .unwrap_or_else(|| panic!("gain.slint no longer declares {name}"));
     let marker_at = line.find(&marker).unwrap_or(0) + marker.len();
     let start = line[marker_at..]
@@ -35,6 +61,35 @@ fn slint_float_list(name: &str) -> Vec<f32> {
                 .unwrap_or_else(|error| panic!("{name} holds a non-number {value:?}: {error}"))
         })
         .collect()
+}
+
+/// The guard above, tested directly, because what it prevents is this file
+/// passing while checking nothing.
+///
+/// The threshold check used to match any line mentioning the name. Most
+/// accidents that causes are loud -- a comment parses to garbage and panics
+/// on "not a plain float literal", which sends you to the wrong file. The one
+/// that matters is quiet: a comment recording the value parses cleanly, so
+/// the check reads the comment, agrees with `gain.rs`, and goes green while
+/// the real property drifts underneath it unchecked.
+#[test]
+fn a_comment_is_not_a_declaration() {
+    assert!(
+        declares("    in property <float> meter-warning-db: -10.0;", "meter-warning-db"),
+        "a qualified declaration is still a declaration"
+    );
+    assert!(
+        declares("    property <[float]> fader-db: [6.0, 0.0];", "fader-db"),
+        "an unqualified declaration is still a declaration"
+    );
+    assert!(
+        !declares("    // meter-warning-db: -10.0 (matches gain.rs)", "meter-warning-db"),
+        "a comment that records the value must not be mistaken for it"
+    );
+    assert!(
+        !declares("        warning-db: root.meter-warning-db;", "meter-warning-db"),
+        "a binding that reads the property is not where it is declared"
+    );
 }
 
 #[test]
@@ -99,10 +154,9 @@ fn slint_meter_thresholds_match_the_rust_constants() {
         ("meter-hot-db", METER_HOT_DB),
         ("reference-peak-dbfs", REFERENCE_PEAK_DBFS),
     ] {
-        let marker = format!("{name}: ");
         let line = GAIN_SLINT
             .lines()
-            .find(|line| line.contains(&marker))
+            .find(|line| declares(line, name))
             .unwrap_or_else(|| panic!("gain.slint no longer declares {name}"));
         let value: f32 = line
             .rsplit(':')

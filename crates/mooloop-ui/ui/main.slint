@@ -3,7 +3,8 @@ import { Theme, Motion, StatusHint } from "theme.slint";
 import { GainMath } from "gain.slint";
 export { DisplayPrefs, Motion } from "theme.slint";
 import {
-    AudioOrientation, IconButton, InstrumentModule, MiniKnob, ParameterFader, ParameterKnob, PeakMeter,
+    AudioOrientation, IconButton, InstrumentModule, MiniKnob, NoteFormat, ParameterFader,
+    ParameterKnob, PeakMeter,
     PickerChip, SegmentedControl, SelectorBank, StereoPeakMeter, ZoomScrollBar,
     ToggleButton, ToolButton, TransportButton, ValueScale, MuteButton as DesignMuteButton, TrimKnob
 } from "controls.slint";
@@ -24,6 +25,7 @@ import {
     ContainerEnclosure, DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DeviceOutputRail,
     DevicePageButton, DeviceRackMetrics, RackDrag
 } from "device-rack.slint";
+import { ChannelDrag } from "channel-rack.slint";
 import { DrumDeviceFace } from "drum-device.slint";
 import { FilterDeviceFace } from "filter-device.slint";
 import { DriveDeviceFace } from "drive-device.slint";
@@ -39,7 +41,7 @@ import { ReverbDeviceFace } from "reverb-device.slint";
 import { PlateDeviceFace } from "plate-device.slint";
 import { ModulationDeviceFace } from "modulation-device.slint";
 import { ModulationShelf, ModulationShelfMetrics, ModulationSourceRow, ModulationOutletRow, ModulationRouteRow } from "modulation-shelf.slint";
-import { MixerPane, MixerStripRow, BusPicker } from "mixer.slint";
+import { MixerPane, MixerSendRow, MixerStripRow, BusPicker } from "mixer.slint";
 import { BusDeviceFace } from "bus-device.slint";
 import { MonoDeviceFace } from "mono-device.slint";
 import { MlM1DeviceFace } from "mlm1-device.slint";
@@ -58,6 +60,7 @@ export { DeviceRackConcepts } from "device-concepts.slint";
 // instead of invoking their callbacks, which would pass even if event
 // routing to the handle were broken.
 export { CompressorDeviceDragHarness, Ds01DeviceDragHarness, EqDeviceDragHarness, FilterDeviceDragHarness } from "device-drag-harness.slint";
+export { MixerSendRow }
 export { MixerStripRow }
 export { OutputTargetRow }
 export { ShortcutRow }
@@ -750,7 +753,21 @@ export component MainWindow inherits Window {
     // number so an unnamed pattern is never blank.
     in-out property <string> current-pattern-name;
     in-out property <[string]> pattern-menu-options;
+    // The raw names, one per pattern, for the surfaces that draw a row per
+    // pattern rather than a menu. `pattern-menu-options` cannot serve them:
+    // it is decorated with the two-digit index a menu needs and would read
+    // "05  Chorus" in a playlist gutter that already numbers its own rows.
+    in-out property <[string]> pattern-names;
     callback pattern-renamed(int, string);
+
+    // The name to draw for a pattern, or its number when it has none. The
+    // fallback lives here rather than at each call site so the playlist, the
+    // menu and the toolbar placeholder cannot drift apart.
+    pure function pattern-label(index: int) -> string {
+        root.pattern-names[index] == ""
+            ? "Pattern " + (index + 1)
+            : root.pattern-names[index]
+    }
 
     // Editing tool: 0=Select 1=Paint 2=Slice 3=Stretch.
     in-out property <int> tool-mode;
@@ -810,6 +827,16 @@ export component MainWindow inherits Window {
     callback channel-bus-changed(int, int); // channel, bus
     callback add-channel-clicked(int); // 0=Sampler, 1=Drum, 2=Mono, 3=Poly
     callback remove-channel-clicked();
+    // A channel was dragged from one row to another. Both indices, because a
+    // reorder is a relationship between two seats and the drag knows both --
+    // the alternative, "move the selected channel to here", would make the
+    // gesture depend on a selection that the same press is setting.
+    callback channel-reorder-requested(int, int); // from, to
+    // A channel was renamed. It carries the index rather than acting on the
+    // selection for the same reason `track-renamed` does: the field edits a
+    // named thing, and which thing that is must not depend on what happens to
+    // be selected when the keystroke lands.
+    callback channel-renamed(int, string);
     // Channel structure is a project edit, so these callbacks carry the
     // clicked row rather than relying on whichever row was selected before a
     // context menu opened.
@@ -843,7 +870,13 @@ export component MainWindow inherits Window {
     callback bus-volume-changed(int, float);
     callback bus-pan-changed(int, float);
     callback bus-output-changed(int, int);
+    callback bus-console-toggled(int);
     callback bus-clip-reset(int);
+    // Track structure. One `+`; routing decides what a track is.
+    callback track-added();
+    callback track-renamed(int, string);
+    callback track-removed(int);
+    in property <bool> can-add-track: true;
 
     // ---- the bus the device rack is editing, when it is editing one ----
     in property <bool> editing-bus;
@@ -855,11 +888,24 @@ export component MainWindow inherits Window {
     in property <float> editing-bus-pan;
     in property <int> editing-bus-output;
     in property <int> editing-bus-feed-count;
+    in property <bool> editing-bus-console;
+    in property <bool> editing-bus-can-remove;
     in property <[bool]> editing-bus-allowed;
     in property <float> editing-bus-left-db: -60;
     in property <float> editing-bus-right-db: -60;
     in property <float> editing-bus-input-left-db: -60;
     in property <float> editing-bus-input-right-db: -60;
+    // The sends this track has, and which tracks it may gain one to. Exactly
+    // the sends that exist: the face draws no empty bays and there is no
+    // drawn ceiling on how many there are.
+    in property <int> editing-bus-send-feed-count;
+    in property <[MixerSendRow]> editing-bus-sends;
+    in property <[bool]> editing-bus-send-allowed;
+    callback send-added(int, int);
+    callback send-removed(int, int);
+    callback send-level-changed(int, int, float);
+    callback send-tap-picked(int, int, int);
+    callback send-enable-toggled(int, int);
 
     // ---- lower editor ----
     //
@@ -2533,7 +2579,7 @@ export component MainWindow inherits Window {
                                 }
                                 NameField {
                                     text: root.current-pattern-name;
-                                    placeholder: "Pattern " + (root.current-pattern + 1);
+                                    placeholder: root.pattern-label(root.current-pattern);
                                     tooltip: "Name this pattern";
                                     edited(t) => { root.pattern-renamed(root.current-pattern, t); }
                                 }
@@ -2631,7 +2677,71 @@ export component MainWindow inherits Window {
                                     spacing: 2px;
                                     padding: 8px;
 
-                                    for row[ch] in root.channels : HorizontalBox {
+                                    // The row keeps its seat in the layout and its
+                                    // *contents* slide, which is how the device rack
+                                    // does it and is not a stylistic echo: `hot` is
+                                    // answered from `absolute-position`, so the thing
+                                    // that answers it must not be the thing that moves.
+                                    for row[ch] in root.channels : channel-row := Rectangle {
+                                        // A row is as tall as its contents and no
+                                        // taller. This wrapper replaced a bare
+                                        // `HorizontalBox` when the drag landed, and a
+                                        // `Rectangle` stretches by default where a
+                                        // layout does not -- four channels in a tall
+                                        // rack became four 80px slabs.
+                                        //
+                                        // Three things had to be true, and refusing to
+                                        // stretch is only the first. A `VerticalBox`
+                                        // whose children *all* refuse divides the slack
+                                        // between them anyway, which the spacer below
+                                        // the add row absorbs. And a wrapper with
+                                        // nothing to size to collapses to nothing: the
+                                        // contents carry an explicit `y` so the drag
+                                        // can slide them, and an explicitly positioned
+                                        // child does not report a height to its parent.
+                                        // Hence the height is asked for by name. The
+                                        // rows drew four names on one line before this
+                                        // line existed.
+                                        vertical-stretch: 0;
+                                        height: row-content.preferred-height;
+                                        property <bool> dragging: ChannelDrag.source == ch;
+                                        // Which row the pointer is over, answered by the
+                                        // row itself from its own bounds. One row is hot
+                                        // at a time because the rows tile the rack.
+                                        property <bool> hot: ChannelDrag.active
+                                            && ChannelDrag.pointer-y >= self.absolute-position.y
+                                            && ChannelDrag.pointer-y < self.absolute-position.y + self.height;
+                                        changed hot => { if (self.hot) { ChannelDrag.target = ch; } }
+                                        changed dragging => {
+                                            if (self.dragging) { ChannelDrag.source-height = self.height; }
+                                        }
+                                        // The rows between the grab and the landing slide
+                                        // aside. The gap *is* the drop indicator: it opens
+                                        // exactly one row's pitch, where the dragged row is
+                                        // about to sit, so there is nothing to reconcile
+                                        // between a marker and the result.
+                                        property <length> shift:
+                                            !ChannelDrag.active || ChannelDrag.target < 0 || self.dragging ? 0px
+                                            : (ChannelDrag.source < ChannelDrag.target
+                                                && ch > ChannelDrag.source
+                                                && ch <= ChannelDrag.target) ? -ChannelDrag.source-height
+                                            : (ChannelDrag.target < ChannelDrag.source
+                                                && ch >= ChannelDrag.target
+                                                && ch < ChannelDrag.source) ? ChannelDrag.source-height
+                                            : 0px;
+                                        animate shift { duration: Motion.duration; easing: Motion.curve; }
+                                        // No `z` here to lift the dragged row over the ones
+                                        // it passes: Slint 1.17 requires `z` to be a number
+                                        // *literal*, so it cannot be conditional. The device
+                                        // rack has the same constraint and answers it the
+                                        // same way -- the held row is marked out by its own
+                                        // chrome (the plate's shadow below) rather than by
+                                        // stacking order, and the gap that opens under it is
+                                        // the drop indicator either way.
+
+                                        row-content := HorizontalBox {
+                                        y: channel-row.shift + (channel-row.dragging ? ChannelDrag.dy : 0px);
+                                        opacity: channel-row.dragging ? 0.95 : 1.0;
                                         padding: 2px;
                                         spacing: 6px;
                                         alignment: start;
@@ -2642,6 +2752,11 @@ export component MainWindow inherits Window {
                                             min-height: 24px;
                                             border-radius: Theme.radius-md;
                                             background: row.selected ? Theme.surface-active : Theme.surface;
+                                            // The plate is what the pointer is holding, so it
+                                            // is what says it is being held.
+                                            drop-shadow-blur: channel-row.dragging ? 16px : 0px;
+                                            drop-shadow-color: #00000099;
+                                            drop-shadow-offset-y: channel-row.dragging ? 6px : 0px;
                                             Text {
                                                 text: row.name;
                                                 color: row.selected ? Theme.text : Theme.text-muted;
@@ -2650,14 +2765,44 @@ export component MainWindow inherits Window {
                                                 vertical-alignment: center;
                                                 x: 6px;
                                             }
+                                            // Selects on press and reorders on release, the
+                                            // way the device rack's header handle does. A press
+                                            // that never left its own row is a selection and
+                                            // nothing else: the row under the pointer *is* the
+                                            // answer, so staying put already means "no move"
+                                            // however far the pointer wandered inside it.
                                             TouchArea {
-                                                mouse-cursor: pointer;
+                                                mouse-cursor: move;
                                                 pointer-event(e) => {
                                                     if (e.kind == PointerEventKind.down) {
                                                         root.channel-selected(ch);
                                                         if (e.button == PointerEventButton.right) {
                                                             channel-context-menu.show();
+                                                        } else if (!root.project-edit-pending) {
+                                                            ChannelDrag.source = ch;
+                                                            ChannelDrag.target = ch;
+                                                            ChannelDrag.dy = 0px;
+                                                            // Seeded here as well as in `moved`, so
+                                                            // the rows do not decide who is under
+                                                            // the pointer from the last drag's
+                                                            // position before this one has moved.
+                                                            ChannelDrag.grab-y = self.absolute-position.y + self.mouse-y;
+                                                            ChannelDrag.pointer-y = ChannelDrag.grab-y;
+                                                            ChannelDrag.active = true;
                                                         }
+                                                    }
+                                                    if (e.kind == PointerEventKind.up && ChannelDrag.active) {
+                                                        if (ChannelDrag.target != ch && ChannelDrag.target >= 0) {
+                                                            root.channel-reorder-requested(ch,
+                                                                clamp(ChannelDrag.target, 0, root.channels.length - 1));
+                                                        }
+                                                        ChannelDrag.end();
+                                                    }
+                                                }
+                                                moved => {
+                                                    if (ChannelDrag.active) {
+                                                        ChannelDrag.pointer-y = self.absolute-position.y + self.mouse-y;
+                                                        ChannelDrag.dy = ChannelDrag.pointer-y - ChannelDrag.grab-y;
                                                     }
                                                 }
                                             }
@@ -2865,6 +3010,7 @@ export component MainWindow inherits Window {
                                                 }
                                             }
                                         }
+                                        }
                                     }
 
                                     HorizontalBox {
@@ -2952,7 +3098,10 @@ export component MainWindow inherits Window {
                                 bus-volume-changed(i, v) => { root.bus-volume-changed(i, v); }
                                 bus-pan-changed(i, v) => { root.bus-pan-changed(i, v); }
                                 bus-output-changed(i, o) => { root.bus-output-changed(i, o); }
+                                bus-console-toggled(i) => { root.bus-console-toggled(i); }
                                 bus-clip-reset(i) => { root.bus-clip-reset(i); }
+                                can-add-track: root.can-add-track;
+                                track-added => { root.track-added(); }
                             }
                         }
                     }
@@ -3031,11 +3180,29 @@ export component MainWindow inherits Window {
                                 // is the channel's sound, and this is the view whose subject is the
                                 // channel's sound. On the piano roll it was noise.
                                 Rectangle { horizontal-stretch: 1; }
-                                Text {
-                                    text: root.editing-bus ? root.editing-bus-name : root.selected-channel-name;
+                                // A bus reads its name here and renames it on its
+                                // own face, which has room for a labelled field. A
+                                // channel has no face of its own -- the face in this
+                                // slot belongs to its *source* -- so the field is
+                                // here, on the one view whose subject is the channel.
+                                // Until this it could not be renamed at all: the name
+                                // saved, loaded and drew on the rack plate, and the
+                                // only way to change it was to make a different
+                                // channel. Same gap `rename_track` closed for tracks.
+                                if root.editing-bus : Text {
+                                    text: root.editing-bus-name;
                                     color: Theme.text-muted;
                                     font-size: 10px;
                                     vertical-alignment: center;
+                                }
+                                if !root.editing-bus : NameField {
+                                    text: root.selected-channel-name;
+                                    placeholder: "Channel";
+                                    width: 96px;
+                                    tooltip: "Rename this channel";
+                                    edited(value) => {
+                                        root.channel-renamed(root.selected-channel, value);
+                                    }
                                 }
                                 if !root.editing-bus : MenuField {
                                     label: "CHANNEL PRESET";
@@ -3163,7 +3330,20 @@ export component MainWindow inherits Window {
                                                 volume-changed(v) => { root.bus-volume-changed(root.editing-bus-index, v); }
                                                 pan-changed(v) => { root.bus-pan-changed(root.editing-bus-index, v); }
                                                 mute-toggled => { root.bus-muted(root.editing-bus-index); }
+                                                console: root.editing-bus-console;
+                                                can-remove: root.editing-bus-can-remove;
                                                 output-picked(o) => { root.bus-output-changed(root.editing-bus-index, o); }
+                                                console-toggled => { root.bus-console-toggled(root.editing-bus-index); }
+                                                renamed(v) => { root.track-renamed(root.editing-bus-index, v); }
+                                                removed => { root.track-removed(root.editing-bus-index); }
+                                                send-feed-count: root.editing-bus-send-feed-count;
+                                                sends: root.editing-bus-sends;
+                                                send-allowed: root.editing-bus-send-allowed;
+                                                send-added(t) => { root.send-added(root.editing-bus-index, t); }
+                                                send-removed(i) => { root.send-removed(root.editing-bus-index, i); }
+                                                send-level-changed(i, v) => { root.send-level-changed(root.editing-bus-index, i, v); }
+                                                send-tap-picked(i, t) => { root.send-tap-picked(root.editing-bus-index, i, t); }
+                                                send-enable-toggled(i) => { root.send-enable-toggled(root.editing-bus-index, i); }
                                             }
 
                                             if !root.editing-bus && root.source-kind == 0 : SamplerDeviceFace {
@@ -4493,7 +4673,13 @@ export component MainWindow inherits Window {
                                                         || mod(note-number, 12) == 10)
                                                         ? Theme.panel : Theme.surface;
                                                     if mod(note-number, 12) == 0 : Text {
-                                                        text: "C" + (floor(note-number / 12) - 1);
+                                                        // Through the shared namer, which already
+                                                        // knows that middle C is C4 -- the same
+                                                        // convention `note_to_freq` puts A4 at MIDI
+                                                        // 69. Spelled out here, the octave was that
+                                                        // convention written a second time, and the
+                                                        // copy that would not move if it ever did.
+                                                        text: NoteFormat.midi-name(note-number);
                                                         color: Theme.text-muted;
                                                         font-size: min(9px, root.piano-row-height - 1px);
                                                         vertical-alignment: center;
@@ -5076,6 +5262,15 @@ export component MainWindow inherits Window {
                                     30px + root.pattern-count * 28px);
 
                                 playlist-canvas := Rectangle {
+                                    // Pinned, because a sized child of an unsized
+                                    // parent is *centred* in Slint, not placed at the
+                                    // origin. The canvas is shorter than the viewport
+                                    // whenever there are few patterns, and the song
+                                    // started at bar 1 somewhere down the middle of
+                                    // the pane with the ruler floating away from the
+                                    // toolbar above it.
+                                    x: 0px;
+                                    y: 0px;
                                     width: 104px + root.playlist-bars * root.playlist-bar-width;
                                     height: max(346px, 30px + root.pattern-count * 28px);
 
@@ -5246,10 +5441,12 @@ export component MainWindow inherits Window {
                                                 ? Theme.surface-active : Theme.surface;
                                             Text {
                                                 x: 6px;
-                                                text: "Pattern " + (pattern + 1);
+                                                width: parent.width - 12px;
+                                                text: root.pattern-label(pattern);
                                                 color: root.current-pattern == pattern
                                                     ? Theme.text : Theme.text-muted;
                                                 font-size: 10px;
+                                                overflow: elide;
                                                 vertical-alignment: center;
                                             }
                                             TouchArea {

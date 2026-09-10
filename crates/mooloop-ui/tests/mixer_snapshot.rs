@@ -1,5 +1,5 @@
 use mooloop_core::MAX_BUSES;
-use mooloop_ui::{view, ChannelRow, EffectSlotRow, MainWindow, MixerStripRow, StepCell};
+use mooloop_ui::{view, ChannelRow, EffectSlotRow, MainWindow, MixerSendRow, MixerStripRow, StepCell};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
 use std::cell::Cell;
@@ -68,6 +68,7 @@ fn strips(selected: usize) -> Rc<VecModel<MixerStripRow>> {
                 output: 0,
                 selected: index == selected,
                 is_master: index == 0,
+                console: false,
                 feed_count: match index {
                     0 => 1,
                     3 => 2,
@@ -260,6 +261,16 @@ fn channel_bus_picker_reports_the_selected_destination() {
     let ui = headless();
     ui.invoke_show_view(view::STEPS);
 
+    // How the three constants below were measured, kept rather than deleted:
+    // they are rack-row geometry, and the rack row moved on 2026-09-09 when
+    // the reorder wrapped it, again on 2026-09-10 when that wrapper stopped
+    // stretching, and twice before that. Render with
+    // `MOOLOOP_RACK_ROW_SNAPSHOT` and read the picker's centre off the image.
+    write_snapshot(
+        &ui.window().take_snapshot().unwrap(),
+        "MOOLOOP_RACK_ROW_SNAPSHOT",
+    );
+
     let picked = Rc::new(Cell::new(-1));
     let sink = picked.clone();
     ui.on_channel_bus_changed(move |channel, bus| {
@@ -290,3 +301,129 @@ const CHANNEL_ROW_Y: f32 = 116.0;
 /// Centre of Bus 3 in the picker popup. The menu opens directly below its
 /// 22px owner and each option is 21px tall after 4px top padding.
 const CHANNEL_MENU_BUS_3_Y: f32 = 216.0;
+
+/// The three sends a track's face is given, drawn in the real window and the
+/// real layout.
+///
+/// The face draws exactly the sends it has -- there is no fixed number of
+/// bars and no empty bays -- so this is what says the model reaches it and
+/// that three rows, a scroll and the add affordance fit the room the face
+/// has. Render it with `MOOLOOP_SENDS_SNAPSHOT` to probe the coordinates the
+/// test below uses.
+fn face_with_sends() -> MainWindow {
+    let ui = headless();
+    ui.invoke_show_view(view::MIXER);
+    ui.invoke_show_view(view::DEVICES);
+    ui.set_editing_bus(true);
+    ui.set_editing_bus_index(1);
+    ui.set_editing_bus_name(SharedString::from("Drums"));
+    ui.set_editing_bus_volume(1.0);
+    ui.set_editing_bus_feed_count(2);
+    ui.set_editing_bus_send_allowed(ModelRc::from(vec![true, false, true, true].as_slice()));
+    ui.set_editing_bus_sends(ModelRc::from(Rc::new(VecModel::from(vec![
+        MixerSendRow {
+            target: 3,
+            target_name: SharedString::from("Reverb"),
+            level: 0.5,
+            pre_fader: false,
+            enabled: true,
+        },
+        MixerSendRow {
+            target: 2,
+            target_name: SharedString::from("Duck"),
+            level: 1.0,
+            pre_fader: true,
+            enabled: false,
+        },
+        MixerSendRow {
+            target: 3,
+            target_name: SharedString::from("Plate"),
+            level: 0.25,
+            pre_fader: false,
+            enabled: true,
+        },
+    ]))));
+    ui
+}
+
+#[test]
+fn render_a_tracks_sends() {
+    let ui = face_with_sends();
+    let snapshot = ui.window().take_snapshot().unwrap();
+    write_snapshot(&snapshot, "MOOLOOP_SENDS_SNAPSHOT");
+    assert!(snapshot.width() > 0 && snapshot.height() > 0);
+}
+
+/// Where the send rows' switches land, measured from
+/// `MOOLOOP_SENDS_SNAPSHOT` rather than derived. Probe it again if these move.
+const SEND_ENABLE_X: f32 = 433.0;
+const SEND_ROW_0_Y: f32 = 580.0;
+const SEND_ROW_1_Y: f32 = 623.0;
+
+/// A send row reports **its own** index.
+///
+/// The failure this exists for is the one Slint makes easy and this codebase
+/// has already been bitten by three times in popups: a `for` body that closes
+/// over the wrong thing draws perfectly and acts on somebody else's row. A
+/// send that removed its neighbour, or turned down the one above it, would
+/// look like a mix that changed on its own.
+#[test]
+fn a_send_row_reports_its_own_index() {
+    let ui = face_with_sends();
+
+    let toggled = Rc::new(Cell::new((-1, -1)));
+    let sink = toggled.clone();
+    ui.on_send_enable_toggled(move |bus, send| sink.set((bus, send)));
+
+    click(&ui, SEND_ENABLE_X, SEND_ROW_0_Y);
+    assert_eq!(
+        toggled.get(),
+        (1, 0),
+        "the first row switched something other than itself"
+    );
+
+    click(&ui, SEND_ENABLE_X, SEND_ROW_1_Y);
+    assert_eq!(
+        toggled.get(),
+        (1, 1),
+        "the second row switched something other than itself"
+    );
+}
+
+/// The remove button, one gap to the right of the switch above.
+const SEND_REMOVE_X: f32 = 455.0;
+
+/// The remove button is **reachable**, which is the half of the row the test
+/// above does not cover.
+///
+/// This is not a duplicate of it. The scroll bar is drawn over the right edge
+/// of the viewport rather than beside it, so the rightmost control in a send
+/// row can sit underneath it and stop receiving clicks entirely while every
+/// control to its left keeps working -- which is exactly what happened at the
+/// row's first padding, and why `SendRow` reserves 12px on the right and why
+/// this dispatches a real pointer event instead of invoking the callback.
+///
+/// A remove button that cannot be clicked is a send that cannot be undone,
+/// and nothing else in the interface would look wrong.
+#[test]
+fn a_send_row_can_be_removed_from_under_the_scroll_bar() {
+    let ui = face_with_sends();
+
+    let removed = Rc::new(Cell::new((-1, -1)));
+    let sink = removed.clone();
+    ui.on_send_removed(move |bus, send| sink.set((bus, send)));
+
+    click(&ui, SEND_REMOVE_X, SEND_ROW_0_Y);
+    assert_eq!(
+        removed.get(),
+        (1, 0),
+        "the remove button did not report -- it is most likely under the scroll bar again"
+    );
+
+    click(&ui, SEND_REMOVE_X, SEND_ROW_1_Y);
+    assert_eq!(
+        removed.get(),
+        (1, 1),
+        "the second row removed something other than itself"
+    );
+}

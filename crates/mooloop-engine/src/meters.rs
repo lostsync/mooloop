@@ -40,6 +40,21 @@ pub struct DeviceMeters {
     cells: Vec<AtomicU32>,
 }
 
+/// How many device stages may have a live spectrum at once.
+///
+/// A pool, not a ceiling on anything a user can make: every addressable stage
+/// can still subscribe, and what is bounded is how many are drawn at the same
+/// moment.
+///
+/// The array this replaced was `(MAX_CHANNELS + MAX_BUSES) *
+/// (MAX_EFFECTS_PER_CHANNEL + 1) * SPECTRUM_BINS` -- **12.85 MB allocated
+/// whether or not a single analyzer was ever switched on**, growing with two
+/// ceilings multiplied together. `docs/CAPACITY_POLICY.md` is about that exact
+/// shape. Sixty-four slots is twelve kilobytes, and it is what makes a *better*
+/// analyzer affordable: at 256 bins the old array would have been 68 MB and
+/// this one is 64 KB.
+pub const SPECTRUM_SLOTS: usize = 64;
+
 /// Latest display-oriented data for every device stage.
 ///
 /// This is intentionally a distinct transport from `EngineEvent`: analyzer
@@ -47,8 +62,21 @@ pub struct DeviceMeters {
 /// rather than every historical frame. More display features can be added to
 /// this stable device-stage address space without exposing PCM to the UI.
 pub struct DeviceTelemetry {
+    /// Which pool slot each device stage's spectrum lives in, plus one, so
+    /// that zero means "not subscribed". One `u32` per addressable stage.
+    ///
+    /// **This doubles as the subscription flag**, which is what makes the
+    /// pool below cost nothing to look up: the audio thread already loads
+    /// this cell to decide whether to analyse at all, and the same load tells
+    /// it where to publish.
     spectrum_enabled: Vec<AtomicU32>,
+    /// The pool. [`SPECTRUM_SLOTS`] spectra, handed out to whichever stages
+    /// are subscribed.
     spectrum: Vec<AtomicU32>,
+    /// Which stage owns each pool slot, plus one; zero is free. Only the
+    /// control thread allocates, so a scan and a store is enough and no
+    /// compare-and-swap is needed.
+    spectrum_slot_owner: Vec<AtomicU32>,
     /// Running count of retained-audio writer/read-head collisions per device
     /// stage. A monotonic counter rather than a flag: the UI compares it
     /// against the value it last saw, so a forced return landing between two
@@ -65,61 +93,101 @@ impl DeviceTelemetry {
             spectrum_enabled: (0..Self::TARGETS * Self::STAGES)
                 .map(|_| AtomicU32::new(0))
                 .collect(),
-            spectrum: (0..Self::TARGETS * Self::STAGES * SPECTRUM_BINS)
+            spectrum: (0..SPECTRUM_SLOTS * SPECTRUM_BINS)
                 .map(|_| AtomicU32::new(0))
                 .collect(),
+            spectrum_slot_owner: (0..SPECTRUM_SLOTS).map(|_| AtomicU32::new(0)).collect(),
             buffer_collisions: (0..Self::TARGETS * Self::STAGES)
                 .map(|_| AtomicU32::new(0))
                 .collect(),
         })
     }
 
-    fn base(target: usize, stage: usize) -> Option<usize> {
-        (target < Self::TARGETS && stage < Self::STAGES)
-            .then_some((target * Self::STAGES + stage) * SPECTRUM_BINS)
-    }
-
     fn enabled_index(target: usize, stage: usize) -> Option<usize> {
         (target < Self::TARGETS && stage < Self::STAGES).then_some(target * Self::STAGES + stage)
     }
 
-    /// Subscribe or unsubscribe a device stage. Disabled stages have no DSP
-    /// analysis cost beyond one atomic load at the host boundary.
-    pub fn set_spectrum_enabled(&self, target: usize, stage: usize, enabled: bool) {
-        if let Some(index) = Self::enabled_index(target, stage) {
-            self.spectrum_enabled[index].store(u32::from(enabled), Ordering::Relaxed);
-            if !enabled {
-                if let Some(base) = Self::base(target, stage) {
-                    for cell in &self.spectrum[base..base + SPECTRUM_BINS] {
-                        cell.store(0, Ordering::Relaxed);
-                    }
-                }
-            }
+    /// Where this stage's spectrum lives in the pool, if it is subscribed.
+    fn slot_of(&self, target: usize, stage: usize) -> Option<usize> {
+        let index = Self::enabled_index(target, stage)?;
+        match self.spectrum_enabled[index].load(Ordering::Relaxed) {
+            0 => None,
+            slot => Some(slot as usize - 1),
         }
     }
 
+    fn clear_slot(&self, slot: usize) {
+        let base = slot * SPECTRUM_BINS;
+        for cell in &self.spectrum[base..base + SPECTRUM_BINS] {
+            cell.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Subscribe or unsubscribe a device stage, returning whether it is
+    /// subscribed afterwards.
+    ///
+    /// Subscribing takes a pool slot, and `false` means the pool was full.
+    /// That is a real answer rather than a failure to hide: the display reads
+    /// zeros, which is what an analyzer that is not running looks like. With
+    /// [`SPECTRUM_SLOTS`] slots against the handful of analyzers a person can
+    /// look at, it should not arise.
+    ///
+    /// Control thread only, which is what lets the scan below be a scan.
+    pub fn set_spectrum_enabled(&self, target: usize, stage: usize, enabled: bool) -> bool {
+        let Some(index) = Self::enabled_index(target, stage) else {
+            return false;
+        };
+        let held = self.spectrum_enabled[index].load(Ordering::Relaxed);
+        if !enabled {
+            // Clear the flag before freeing the slot, so the audio thread has
+            // stopped publishing into it before it can be handed to someone
+            // else. A relaxed store is enough for a display: the worst a race
+            // can produce is one stale frame in a meter.
+            self.spectrum_enabled[index].store(0, Ordering::Relaxed);
+            if held != 0 {
+                let slot = held as usize - 1;
+                self.spectrum_slot_owner[slot].store(0, Ordering::Relaxed);
+                self.clear_slot(slot);
+            }
+            return false;
+        }
+        if held != 0 {
+            return true;
+        }
+        let Some(slot) = self
+            .spectrum_slot_owner
+            .iter()
+            .position(|owner| owner.load(Ordering::Relaxed) == 0)
+        else {
+            return false;
+        };
+        self.spectrum_slot_owner[slot].store(index as u32 + 1, Ordering::Relaxed);
+        self.clear_slot(slot);
+        self.spectrum_enabled[index].store(slot as u32 + 1, Ordering::Relaxed);
+        true
+    }
+
     pub fn spectrum_enabled(&self, target: usize, stage: usize) -> bool {
-        Self::enabled_index(target, stage)
-            .is_some_and(|index| self.spectrum_enabled[index].load(Ordering::Relaxed) != 0)
+        self.slot_of(target, stage).is_some()
     }
 
     /// Publish a normalized log-frequency level vector from the audio thread.
     pub fn publish_spectrum(&self, target: usize, stage: usize, levels: &[f32; SPECTRUM_BINS]) {
-        if let Some(base) = Self::base(target, stage) {
-            for (cell, level) in self.spectrum[base..base + SPECTRUM_BINS].iter().zip(levels) {
-                cell.store(level.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
-            }
+        let Some(slot) = self.slot_of(target, stage) else {
+            return;
+        };
+        let base = slot * SPECTRUM_BINS;
+        for (cell, level) in self.spectrum[base..base + SPECTRUM_BINS].iter().zip(levels) {
+            cell.store(level.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
         }
     }
 
     /// Latest normalized log-frequency levels for a device stage.
     pub fn read_spectrum(&self, target: usize, stage: usize) -> [f32; SPECTRUM_BINS] {
         let mut levels = [0.0; SPECTRUM_BINS];
-        if let Some(base) = Self::base(target, stage) {
-            for (level, cell) in levels
-                .iter_mut()
-                .zip(&self.spectrum[base..base + SPECTRUM_BINS])
-            {
+        if let Some(slot) = self.slot_of(target, stage) {
+            let base = slot * SPECTRUM_BINS;
+            for (level, cell) in levels.iter_mut().zip(&self.spectrum[base..base + SPECTRUM_BINS]) {
                 *level = f32::from_bits(cell.load(Ordering::Relaxed));
             }
         }
@@ -147,6 +215,9 @@ impl DeviceTelemetry {
     /// replacement. The UI re-subscribes the new project after it is visible.
     pub fn clear_spectra(&self) {
         for cell in &self.spectrum_enabled {
+            cell.store(0, Ordering::Relaxed);
+        }
+        for cell in &self.spectrum_slot_owner {
             cell.store(0, Ordering::Relaxed);
         }
         for cell in &self.spectrum {
@@ -392,6 +463,66 @@ impl ModulatorMeters {
 
 #[cfg(test)]
 mod tests {
+
+    /// A slot is taken on subscribe and given back on unsubscribe, so the
+    /// pool does not leak across a session of opening and closing EQ faces.
+    #[test]
+    fn a_spectrum_slot_is_returned_when_the_stage_unsubscribes() {
+        let telemetry = DeviceTelemetry::new();
+        for stage in 0..SPECTRUM_SLOTS {
+            assert!(telemetry.set_spectrum_enabled(0, stage, true), "stage {stage}");
+        }
+        // Full: one more gets no slot, and says so rather than pretending.
+        assert!(!telemetry.set_spectrum_enabled(1, 0, true));
+
+        for stage in 0..SPECTRUM_SLOTS {
+            telemetry.set_spectrum_enabled(0, stage, false);
+        }
+        assert!(telemetry.set_spectrum_enabled(1, 0, true));
+    }
+
+    /// Two subscribed stages get different slots, so one analyzer's spectrum
+    /// is not another's. A pool that shared them would be worse than the
+    /// array it replaced.
+    #[test]
+    fn two_stages_do_not_share_a_spectrum() {
+        let telemetry = DeviceTelemetry::new();
+        assert!(telemetry.set_spectrum_enabled(0, 1, true));
+        assert!(telemetry.set_spectrum_enabled(0, 2, true));
+
+        let mut loud = [0.0; SPECTRUM_BINS];
+        loud[3] = 1.0;
+        telemetry.publish_spectrum(0, 1, &loud);
+
+        assert_eq!(telemetry.read_spectrum(0, 1)[3], 1.0);
+        assert_eq!(telemetry.read_spectrum(0, 2)[3], 0.0);
+    }
+
+    /// An unsubscribed stage reads zeros and its publishes go nowhere, which
+    /// is what lets a stage that could not get a slot look exactly like one
+    /// whose analyzer is switched off.
+    #[test]
+    fn an_unsubscribed_stage_publishes_nothing() {
+        let telemetry = DeviceTelemetry::new();
+        let mut loud = [0.0; SPECTRUM_BINS];
+        loud[7] = 1.0;
+        telemetry.publish_spectrum(0, 5, &loud);
+        assert_eq!(telemetry.read_spectrum(0, 5)[7], 0.0);
+    }
+
+    /// Re-subscribing an already-subscribed stage keeps its slot rather than
+    /// taking a second one. `sync_effect_spectrum_subscriptions` re-asserts
+    /// every enabled analyzer on each project install, so this is the common
+    /// path rather than an edge case -- and getting it wrong would drain the
+    /// pool on the fourth project load.
+    #[test]
+    fn re_subscribing_does_not_take_a_second_slot() {
+        let telemetry = DeviceTelemetry::new();
+        for _ in 0..SPECTRUM_SLOTS * 2 {
+            assert!(telemetry.set_spectrum_enabled(0, 1, true));
+        }
+        assert!(telemetry.set_spectrum_enabled(0, 2, true));
+    }
     use super::*;
     use mooloop_dsp::dynamics::lin_to_db;
 

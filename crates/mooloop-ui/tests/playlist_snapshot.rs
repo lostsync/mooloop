@@ -91,10 +91,14 @@ fn render_playlist_snapshot() {
     assert_ne!(pixel(160, 426), clip_color);
 
     // The step grid starts after the rack row's name, mute, the volume/pan
-    // knobs and the mixer-bus picker, so these x coordinates move whenever
+    // knobs and the mixer-track picker, so these x coordinates move whenever
     // that prefix is resized -- the picker's 30px plus its 6px of spacing is
     // why they sit 36px further right than they used to. The first cell spans
     // 228..=251 and the second 255..=278 at 24px per cell.
+    //
+    // They moved out and back on 2026-09-09: an analog-sum switch was added to
+    // the rack row and then removed again once Adam settled that the switch
+    // belongs to a track and not to a channel.
     const FIRST_CELL_X: usize = 229;
     const FIRST_CELL_LAST_X: usize = 251;
     const CELL_GAP_X: usize = 252;

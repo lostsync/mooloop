@@ -6,14 +6,15 @@
 //! `mooloop-ui` projects this into Slint models and never the other way
 //! round.
 
+use crate::engine::SendRoute;
 use crate::channel::ChannelState;
 use crate::sample::{sample_description, sample_duration, sample_files_in_directory, sample_index, waveform_peaks};
 use crate::notes::ScaleBase;
 use crate::project::ProjectSnapshot;
 use crate::values::descriptor_slots;
 use mooloop_core::{
-    compile_bus_graph, default_buses, sanitize_route, would_create_cycle, DEFAULT_STEPS,
-    MASTER_BUS, MAX_BUSES, MAX_PLAYLIST_PLACEMENTS,
+    default_buses, sanitize_bank, would_create_cycle, DEFAULT_STEPS,
+    MAX_BUSES, MAX_PLAYLIST_PLACEMENTS,
     drop_lanes_for_device, strip_descriptor, AutomationLane, BusSetup, Channel, ChannelSetup,
     DeviceId,
     AuxInParams, AuxInState, ChannelSource, DeviceKind, DrumSynthParams, DrumSynthState, Ds01Params, Ds01State,
@@ -114,6 +115,18 @@ pub struct Session {
     /// record of what has been said to the audio thread, and a fresh session
     /// has said nothing.
     pub compensation_sent: mooloop_core::CompiledLatency,
+    /// Which buses the engine has been given a console accumulator for, so
+    /// the pump's reconcile sends only what changed. Same status as
+    /// [`Self::compensation_sent`]: a record of what has been said to the
+    /// audio thread, not document state.
+    pub console_sums_sent: [bool; MAX_BUSES],
+    /// The track graph and the send routing the engine has been told about.
+    ///
+    /// The key deliberately holds only what is *structural* about a send --
+    /// where it goes and what it waits -- and not its level, tap or enable,
+    /// which travel as POD commands. Otherwise every frame of a send-fader
+    /// drag would rebuild a plan and reallocate every ring in it.
+    pub track_graph_sent: (mooloop_core::CompiledBusGraph, Vec<SendRoute>),
     /// The audio-edge plan the engine has been told about, so the pump's
     /// reconcile sends only what changed. Same status as
     /// [`Self::compensation_sent`]: a record of what has been said to the
@@ -132,8 +145,11 @@ pub struct Session {
     pub default_waveform: Vec<f32>,
     pub default_sample_description: String,
     pub default_sample_duration: f32,
-    /// Mirror of the project's bus bank, master first. Always `MAX_BUSES`
-    /// long, matching the engine's preallocated bank.
+    /// Mirror of the project's track bank, master first.
+    ///
+    /// As long as the song says, not a fixed seventeen: a track exists
+    /// because somebody made it. `mooloop_core::sanitize_bank` guarantees the
+    /// master and repairs routing on the way in.
     pub buses: Vec<BusSetup>,
     pub pattern_lengths: Vec<usize>,
     pub pattern_names: Vec<String>,
@@ -208,6 +224,8 @@ impl Default for Session {
             modulation_outputs: Cell::new([0.0; CONTROL_SOURCE_SLOTS]),
             modulation_ui_channel: Cell::new(None),
             compensation_sent: mooloop_core::CompiledLatency::default(),
+            console_sums_sent: [false; MAX_BUSES],
+            track_graph_sent: (mooloop_core::CompiledBusGraph::default(), Vec::new()),
             audio_graph_sent: mooloop_core::CompiledAudioGraph::default(),
             modulation_edit_before: None,
             modulation_edit_changed: false,
@@ -246,32 +264,6 @@ impl Default for Session {
 /// Bins the stored channel waveform is reduced to. A fixed overview; the
 /// editor re-derives real detail for whatever range it is zoomed to.
 pub const WAVEFORM_BINS: usize = 256;
-
-/// Coerce a loaded bus bank to the fixed size the engine preallocates,
-/// padding a short one and repairing any routing an older or hand-edited file
-/// left illegal. Everything downstream can then index the bank directly.
-///
-/// Per-edge nonsense is fixed first, then the graph as a whole: a file whose
-/// routing contains a loop is flattened to everything-to-master rather than
-/// rejected, matching what the engine does with the same file.
-fn normalized_buses(buses: &[BusSetup]) -> Vec<BusSetup> {
-    let mut normalized: Vec<BusSetup> = (0..MAX_BUSES)
-        .map(|index| match buses.get(index) {
-            Some(setup) => {
-                let mut setup = setup.clone();
-                setup.bus.output = sanitize_route(index as u8, setup.bus.output);
-                setup
-            }
-            None => BusSetup::new(index),
-        })
-        .collect();
-    if compile_bus_graph(&normalized).is_none() {
-        for setup in &mut normalized {
-            setup.bus.output = MASTER_BUS;
-        }
-    }
-    normalized
-}
 
 /// What `Session::arm_modulation_route` did.
 pub enum ArmedRoute {
@@ -772,6 +764,63 @@ impl Session {
         }
     }
 
+    /// Follow a channel edit through everything on *this* side that names a
+    /// channel by position.
+    ///
+    /// `Project::rescope_after` covers the durable half -- routes, lanes and
+    /// Aux In subscriptions, all of which are saved with the song. This is
+    /// the session half, which is not saved and so was never in that walk:
+    /// six things here are keyed by a channel index, or by an `EffectTarget`
+    /// holding one.
+    ///
+    /// It is not a bug the reorder introduced. An insert or a delete moves
+    /// every channel past it too, and has silently mis-keyed all six since
+    /// they were written; the reorder is just the first edit that makes it
+    /// visible, because it is the first one a user performs *while looking
+    /// at* the device the labels belong to.
+    ///
+    /// [`Self::effect_target`] is deliberately not here: `replace_project`
+    /// re-points it at the project's own selected channel on every install,
+    /// and the edit sets that to wherever the moved channel landed.
+    pub fn rescope_after(&mut self, edit: mooloop_core::ChannelEdit) {
+        fn moved(edit: mooloop_core::ChannelEdit, target: EffectTarget) -> Option<EffectTarget> {
+            match target {
+                EffectTarget::Channel(channel) => {
+                    edit.channel(channel).map(EffectTarget::Channel)
+                }
+                // A bus exists independently of which channels feed it, and
+                // is untouched for the same reason `ChannelEdit::address`
+                // leaves a bus scope alone.
+                EffectTarget::Bus(_) => Some(target),
+            }
+        }
+
+        self.selected_device = self
+            .selected_device
+            .and_then(|(target, device)| Some((moved(edit, target)?, device)));
+        self.selected_source = self.selected_source.and_then(|target| moved(edit, target));
+        self.automation_target
+            .set(self.automation_target.get().and_then(|addr| edit.address(addr)));
+        self.pending_preset_save = match self.pending_preset_save {
+            Some(PresetSaveTarget::Effect { target, device }) => {
+                moved(edit, target).map(|target| PresetSaveTarget::Effect { target, device })
+            }
+            other => other,
+        };
+        self.effect_preset_names = self
+            .effect_preset_names
+            .drain()
+            .filter_map(|((target, device), name)| {
+                Some(((moved(edit, target)?, device), name))
+            })
+            .collect();
+        self.source_preset_names = self
+            .source_preset_names
+            .drain()
+            .filter_map(|(channel, name)| Some((edit.channel(channel)?, name)))
+            .collect();
+    }
+
     /// Let go of `device` everywhere on this side that could still be naming
     /// it: the channel's routes, every lane in every pattern, the lane the
     /// editor is showing, a save dialog left open on it, and the preset label
@@ -939,6 +988,21 @@ impl Session {
         self.channels
             .iter()
             .filter(|channel| channel.bus as usize == bus)
+            .count()
+    }
+
+    /// How many sends reach `bus`, which is the count that makes it a return.
+    ///
+    /// Separate from [`Self::bus_feed_count`] rather than added to it,
+    /// because they are different facts about a track: being fed by channels
+    /// makes it an ordinary track or a bus, and being fed by sends makes it a
+    /// return. `docs/TERMINOLOGY.md` -- a track can be both at once, and a
+    /// single number could not say so.
+    pub fn track_send_count(&self, bus: usize) -> usize {
+        self.buses
+            .iter()
+            .flat_map(|setup| setup.sends.iter())
+            .filter(|send| send.target as usize == bus)
             .count()
     }
 
@@ -1166,7 +1230,7 @@ impl Session {
             })
             .collect::<Vec<_>>();
 
-        self.buses = normalized_buses(&project.buses);
+        self.buses = sanitize_bank(&project.buses);
         self.pattern_lengths = project
             .pattern_lengths
             .iter()
@@ -1187,10 +1251,18 @@ impl Session {
         // what this side thinks was sent so the next reconcile re-derives
         // against the new project rather than trusting a plan for the old one.
         self.compensation_sent = mooloop_core::CompiledLatency::default();
+        // Same for the console accumulators: `RenderState::load_project`
+        // installs its own through `install_console`, so this side must
+        // re-derive rather than trust a plan for the document that just left.
+        self.console_sums_sent = [false; MAX_BUSES];
         // Same for the audio edges: `RenderState::load_project` compiles and
         // allocates its own, so this side must re-derive rather than trust a
         // plan for the document that just left.
         self.audio_graph_sent = mooloop_core::CompiledAudioGraph::default();
+        // Same for the track graph and its sends: `RenderState::load_project`
+        // compiles and allocates its own bank, so this side must re-derive
+        // rather than trust a plan for the document that just left.
+        self.track_graph_sent = (mooloop_core::CompiledBusGraph::default(), Vec::new());
         // A load points the device rack back at a channel; the bus the
         // previous document had open means nothing in this one.
         self.effect_target = EffectTarget::Channel(project.selected_channel);
@@ -1336,7 +1408,12 @@ impl Session {
         offsets
     }
 
-    /// Which buses `bus` may be routed to without closing a loop.
+    /// Which tracks `bus` may reach without closing a loop.
+    ///
+    /// One answer for both of a track's outgoing edges: an output and a send
+    /// are legal under the same rule, so the send target menu and the output
+    /// picker grey the same rows and a send cannot creep past a check the
+    /// picker makes.
     pub fn allowed_destinations(&self, bus: usize) -> Vec<bool> {
         (0..self.buses.len())
             .map(|candidate| {

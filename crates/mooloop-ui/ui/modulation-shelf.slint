@@ -1290,7 +1290,7 @@ export component ModulationShelf inherits Rectangle {
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            Text { height: 8px; text: root.selected-values[LfoParam.smoothing] <= 0.0001 ? "OFF" : round(root.selected-values[LfoParam.smoothing] * 1000) + "ms"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: root.selected-values[LfoParam.smoothing] <= 0.0001 ? "OFF" : round(root.selected-values[LfoParam.smoothing] * 1000) + " ms"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
                         }
                         VerticalLayout {
                             width: 40px;

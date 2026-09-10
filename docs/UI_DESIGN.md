@@ -137,6 +137,16 @@ Use contrast and spacing to show hierarchy, not floating cards within cards.
 - Module titles are quieter than parameter labels; parameter labels are quieter
   than values that need active reading.
 - Avoid isolated tiny controls surrounded by large dark fields.
+- **A list of things a user makes draws exactly the ones that exist, and
+  scrolls.** It does not reserve empty bays for a number somebody drew once,
+  and it does not shrink its rows to fit more in. Adam, 2026-09-09, on the
+  sends area his own mockup had drawn as four bars: *"i drew 4 sends bc that's
+  how many fit in my drawing. if there are no sends, we wouldnt show any. we're
+  not limiting to 4… if we gain more than will fit, that area should scroll."*
+  A track with no sends draws a line saying so, which is smaller than one empty
+  bay would be. Note that a scroll bar drawn *over* the viewport's right edge
+  will swallow the rightmost control in a row -- reserve for it in the row's
+  padding, and test the reachability with a click rather than an invoke.
 
 The source editor should feel like one instrument front panel. It should not
 look like several cards dropped into the center of a page.
@@ -222,7 +232,7 @@ alignment, and height contract as effects.
 The device rack is one of five **views**, and a view has exactly one toolbar
 row, led by its slot's tab strip:
 
-`[DEVICES NOTES PLAYLIST] | [DEVICE CHAIN] [source type] ··· [channel name] [channel preset browser/actions]`
+`[DEVICES NOTES PLAYLIST] | [DEVICE CHAIN] [source type] ··· [channel name field] [channel preset browser/actions]`
 
 This used to be two stacked rows — a slot header carrying the switcher, the
 channel name and the preset browser, and a device-chain row under it. They
@@ -234,6 +244,21 @@ document's own stated symptom for a control in the wrong place.
 The channel preset browser is on this view and no other. A channel preset is
 the channel's sound, and this is the view whose subject is the channel's
 sound; on the piano roll it was noise beside a stretch.
+
+The channel name is a **field** here and a label on the piano roll, and that
+asymmetry is the same rule: a name is edited where its subject is edited. A
+track's name sits on its device face for the same reason, rather than on the
+mixer strip, which stays compact. A bus showing in this slot keeps the label,
+because its own face already carries the field.
+
+**A rename field is fed one way and reports through `edited`.** A Slint
+`TextInput`'s `text` is an ordinary property, so typing into it does not
+update a binding — it replaces it. A field bound `text <=> input.text`
+tracks what the application pushes right up until the first keystroke and
+never again, which looks like "renaming is broken" while every store behind
+it is correct. `NameField` therefore drives its input from a `changed`
+handler and never writes back to `text`; `current-text` is what is actually
+in the box, and is what a test should read.
 
 ### Piano roll gestures
 
@@ -536,6 +561,14 @@ columns with tiny `+` and `-` glyphs.
   Do not thread a `hover-hint` property up through a device face. That was
   tried, exactly one face grew it, and every other sentence in the program
   stayed in a tooltip.
+- **A mode or a preset that goes for a familiar sound is named for the sound,
+  not for the hardware.** Adam's instruction, 2026-09-09, naming the channel
+  strip's four voicings: *"dont reference these by name, can use a 'character
+  name' that sorta describes what we've gone for in the sound."* So the strip
+  mode reads `Moo / Grip / Punch / Iron` rather than naming three consoles.
+  This is a standing rule for shipped strings, and it is also the more useful
+  label: a character name says what to expect from a control the user has not
+  used before, where a brand name only helps someone who already owns one.
 - The first click acts. Focus acquisition must not consume it.
 
 ## Agent Acceptance Checklist

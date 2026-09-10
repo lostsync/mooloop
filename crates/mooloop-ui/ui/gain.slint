@@ -62,9 +62,38 @@ export global GainMath {
     }
 
     // The one dB readout format: "-inf", "±0.0 dB", "+3.0 dB", "-12.4 dB".
+    //
+    // Always one decimal place, spelled out by hand because Slint's
+    // number-to-string drops a trailing zero: `round(db * 10) / 10` renders
+    // 6.0 as "6". So a fader read "+6 dB" at full throw and "-12.4 dB" a
+    // nudge below unity -- two conventions on one strip, and a readout that
+    // changed width while it was being dragged. "±0.0 dB" had always spelled
+    // its tenth out; so does the Rust side, which formats dB with `{:.1}`.
     public pure function format-db(db: float) -> string {
+        return GainMath.format-db-value(db) + (db <= -59.95 ? "" : " dB");
+    }
+
+    // The same number without its unit, for a readout too narrow to carry one:
+    // the master meter's, which sits under a scale already labelled in dB.
+    // Sharing it is the point. That readout spelled the number itself, and had
+    // drifted to a bare `round(db * 10) / 10` -- so a peak at -12 read "-12"
+    // and a peak at -12.4 read "-12.4", and the field, which is right-aligned,
+    // changed width as the peak moved.
+    public pure function format-db-value(db: float) -> string {
         if (db <= -59.95) { return "-inf"; }
-        if (abs(db) < 0.05) { return "±0.0 dB"; }
-        return (db > 0 ? "+" : "") + (round(db * 10) / 10) + " dB";
+        if (abs(db) < 0.05) { return "±0.0"; }
+        return (db > 0 ? "+" : "-") + GainMath.one-decimal(abs(db));
+    }
+
+    // A non-negative number to exactly one decimal place. The tenth is
+    // rounded first and the whole part taken from it, so a tenth that rounds
+    // up carries: 12.96 is "13.0", where taking the two halves separately
+    // would read "12.10".
+    pure function tenths(v: float) -> float {
+        return round(v * 10);
+    }
+
+    pure function one-decimal(v: float) -> string {
+        return floor(GainMath.tenths(v) / 10) + "." + mod(GainMath.tenths(v), 10);
     }
 }

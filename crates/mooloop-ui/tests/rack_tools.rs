@@ -25,6 +25,10 @@ use std::rc::Rc;
 /// down and no longer exist, so the row is back where it was. Measured
 /// rather than assumed, at the same 960x760 the snapshot test renders:
 /// the first cell spans y=108..130.
+///
+/// It moved out and back on 2026-09-09: an analog-sum switch was added to the
+/// rack row and then removed again once Adam settled that the switch belongs
+/// to a track and not to a channel.
 const GRID_ORIGIN_X: f32 = 228.0;
 const CELL_PITCH: f32 = 27.0;
 const ROW_CENTRE_Y: f32 = 119.0;

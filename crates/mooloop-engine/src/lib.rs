@@ -19,11 +19,11 @@ use jack::{AudioOut, Client, ClientOptions, MidiIn};
 use mooloop_core::{
     BufferParams, EffectKind, EffectParams, EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS,
     modulation::CONTROL_SOURCE_SLOTS,
-    DeviceKind, SliceMap,
+    CompiledBusGraph, DeviceKind, SliceMap,
 };
 use mooloop_dsp::{
     buffer_allocation_key, build_effect_at_tempo, AudioNode, IntegerDelay, SampleData,
-    SpectrumAnalyzer, StretchPool, SPECTRUM_BINS,
+    SpectrumAnalyzer, StereoBus, StretchPool, SPECTRUM_BINS,
 };
 use rtrb::{Consumer, Producer};
 
@@ -79,6 +79,8 @@ mod block_cost;
 #[cfg(test)]
 mod container_tests;
 #[cfg(test)]
+mod console_tests;
+#[cfg(test)]
 mod ds01_tests;
 #[cfg(test)]
 mod gain_structure_tests;
@@ -87,7 +89,7 @@ mod idle_skip_tests;
 
 use graph::{AsyncClient, Graph};
 use render::{ReclaimedEffect, RenderState};
-pub use render::{AudioTapBank, ChannelStorage, ContainerScratch, EffectSlot};
+pub use render::{AudioTapBank, ChannelStorage, ContainerScratch, EffectSlot, SendBank, SendSpec};
 
 pub use driver::{AudioConfig, DriverStatus, OutputTarget};
 pub use meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
@@ -180,6 +182,24 @@ pub enum StructuralCommand {
         target: EffectTarget,
         delay: Option<Box<IntegerDelay>>,
     },
+    /// Give a bus its second input accumulator -- the sum of everything
+    /// feeding it that opted into console summing -- or take it away.
+    ///
+    /// Structural for the same reason [`Self::SetCompensation`] is: the 64 KB
+    /// buffer is allocated on the control thread and the displaced one is
+    /// reclaimed there, because the audio thread may do neither. `None` means
+    /// nothing encoded reaches this bus, which is every bus in a project that
+    /// has not switched console on -- so the feature costs nothing while it
+    /// is out, which is the rule everything in `docs/plans/console/` is held
+    /// to.
+    ///
+    /// The switch itself is a POD `EngineCommand::SetStripConsole`, and the
+    /// two may arrive in either order: a strip encoding into a bus with no
+    /// accumulator sums linearly until one turns up.
+    SetConsoleSum {
+        bus: u8,
+        buffer: Option<Box<StereoBus>>,
+    },
     /// Give a channel's sampler its time-stretch state, or take it away.
     ///
     /// Structural rather than a parameter because the pool is ~1.6 MB and has
@@ -208,6 +228,22 @@ pub enum StructuralCommand {
     /// the answer is a property of every channel at once and a per-edit call
     /// site is a list that grows silently.
     SetAudioGraph { bank: Box<AudioTapBank> },
+    /// Install the track graph and the sends that ride on it, as one value.
+    ///
+    /// This replaces `EngineCommand::InstallBusGraph`, which was POD because
+    /// a track's routing was a `[u8; MAX_BUSES]` permutation and nothing
+    /// else. A send is a producer's *second* outgoing edge: it carries a
+    /// compensation ring, which is a heap object the audio thread may neither
+    /// allocate nor free, so the whole plan becomes structural.
+    ///
+    /// Whole rather than incremental, and one command rather than two, for
+    /// the reason [`Self::SetAudioGraph`] gives: a send whose target the
+    /// render order has not been told about would arrive a block late, and
+    /// that is not a state the executor may observe even briefly.
+    SetTrackGraph {
+        graph: CompiledBusGraph,
+        sends: Box<SendBank>,
+    },
 }
 
 /// GUI -> audio for the sample browser's audition voice. Owned here rather
@@ -240,9 +276,15 @@ pub(crate) enum StructuralReclaim {
     /// A compensation delay displaced by a new one, or surrendered when a
     /// producer became the longest path and stopped needing one.
     Compensation(Box<IntegerDelay>),
+    /// A bus's encoded-sum accumulator, surrendered when nothing console
+    /// encoded feeds it any more. Same rule as the rest: 64 KB must not be
+    /// freed on the audio thread.
+    ConsoleSum(Box<StereoBus>),
     /// The audio-edge plan a newer one replaced. Its buffers are 64 KB each
     /// and must not be freed on the audio thread.
     AudioGraph(Box<AudioTapBank>),
+    /// The previous generation's sends, with their compensation rings.
+    TrackGraph(Box<SendBank>),
     /// A container's dry-path ring displaced by a resize, or the per-depth
     /// scratch handed to a chain that already had it. Same rule as every
     /// other box that reaches the audio thread: it comes back to be dropped.
@@ -672,7 +714,9 @@ impl EngineHandle {
                 StructuralReclaim::PreviewSample { sample } => drop(sample),
                 StructuralReclaim::SamplerStretch(pool) => drop(pool),
                 StructuralReclaim::Compensation(delay) => drop(delay),
+                StructuralReclaim::ConsoleSum(buffer) => drop(buffer),
                 StructuralReclaim::AudioGraph(bank) => drop(bank),
+                StructuralReclaim::TrackGraph(bank) => drop(bank),
                 StructuralReclaim::Container { align, scratch } => {
                     drop(align);
                     drop(scratch);
@@ -813,15 +857,25 @@ impl EngineHandle {
         self.device_meters.take_dynamics(target, stage)
     }
 
-    /// Subscribe an effect stage's input to compact spectrum telemetry. This
-    /// is observation-only: it never participates in audio or modulation
-    /// signal flow, and disabled stages do not run spectral analysis.
-    pub fn set_effect_spectrum_enabled(&self, target: EffectTarget, slot: u8, enabled: bool) {
+    /// Subscribe an effect stage's input to compact spectrum telemetry,
+    /// returning whether it is subscribed afterwards. This is
+    /// observation-only: it never participates in audio or modulation signal
+    /// flow, and disabled stages do not run spectral analysis.
+    ///
+    /// `false` from an `enabled: true` call means the spectrum pool was full.
+    /// Worth propagating rather than swallowing: the display is then reading
+    /// zeros, and a caller that wanted to say so has the answer.
+    pub fn set_effect_spectrum_enabled(
+        &self,
+        target: EffectTarget,
+        slot: u8,
+        enabled: bool,
+    ) -> bool {
         self.device_telemetry.set_spectrum_enabled(
             effect_target_index(target),
             usize::from(slot) + 1,
             enabled,
-        );
+        )
     }
 
     /// The latest normalized log-frequency spectrum for one effect input.

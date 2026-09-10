@@ -67,6 +67,66 @@ Not yet done. The sequencer is indexed by pattern and channel throughout, so
 this is a real change rather than a one-line one, and the measurements are
 committed so it has a before to point at.
 
+### The track bank, measured 2026-09-09
+
+The same lesson again, found and half-fixed the same day. `MAX_BUSES` was
+seventeen -- a small product cap of exactly the kind this document opens by
+forbidding -- *and* the engine preallocated all seventeen strips whether or
+not a song had them. `block_cost::track_memory` measures both halves:
+
+```text
+  a project with 1 track          1067.95 MB
+  a project with 17 tracks        1069.95 MB
+  marginal cost of one track        128.0 KB
+
+  dimensioned by MAX_BUSES = 17, whatever the song holds:
+    DeviceMeters spectrum           12.85 MB   (273 targets x 257 stages x 48 bins)
+    ...of which per bus              48.2 KB
+```
+
+**Making strips arrive with the project saved 2.00 MB of pure floor**, which
+is the reserving-versus-dimensioning distinction applied to tracks. It is a
+small number beside the gigabyte above and it is the whole of what a fixed
+bank was buying.
+
+**Raising the ceiling is the other half and is not free.** At 48.2 KB per bus
+of fixed cost, taking `MAX_BUSES` to the `u8` address space would add 11.25 MB
+before anybody makes anything:
+
+```text
+  MAX_BUSES =  32  adds    0.71 MB      MAX_BUSES = 128  adds    5.22 MB
+  MAX_BUSES =  64  adds    2.21 MB      MAX_BUSES = 256  adds   11.25 MB
+```
+
+The reason was this document's own subject one level down: almost all of it
+was `DeviceMeters`'s spectrum array, `(MAX_CHANNELS + MAX_BUSES) * (MAX_EFFECTS_
+PER_CHANNEL + 1) * SPECTRUM_BINS` -- 12.85 MB of storage for analyzers that are
+individually gated by `spectrum_enabled` and almost never on.
+
+**Fixed the same day**, and the numbers moved as predicted. The spectra are a
+pool of `SPECTRUM_SLOTS` now, handed to whichever stages are subscribed, and
+the subscription flag doubles as the slot index so the audio thread's existing
+atomic load is also the lookup:
+
+```text
+                          before        after
+  spectrum storage       12.85 MB      12.0 KB   (a pool; does not scale)
+  per-bus ceiling cost    48.2 KB       8.0 KB
+  MAX_BUSES = 256 adds   11.25 MB       1.87 MB
+  a 1-track project      1067.95 MB   1055.11 MB
+```
+
+So the ceiling is now liftable for under two megabytes rather than eleven, and
+what remains dimensioned by it is honest: six meter cells, a subscription flag
+and a collision counter per addressable stage.
+
+It also unblocked something that was not the point and turned out to matter
+more. The analyzer is blocky and unfluid (`ENHANCEMENTS.md` has the diagnosis),
+and the fix wants far more bins -- which at the old array would have been 68 MB
+at 256 bins, and is 64 KB now. **The capacity mistake was holding the display
+quality hostage**, which is worth noticing: dimensioning by a ceiling does not
+just cost memory, it makes the thing it dimensions unimprovable.
+
 ### What the floor costs per edit, which is the part that hurts
 
 The gigabyte would be affordable if it were paid once. It is not.
@@ -159,6 +219,37 @@ the decision has a before to point at.
   outlets silently; `aux_in::MAX_SOURCE_OUTLET` (63) is the highest outlet id
   the Aux In selector can name, eight times the widest table declared, with a
   test that fails the day a device publishes an id past it.
+
+- **Sends reserve nothing**, the way typed audio edges do not. A track's
+  sends are a `Vec` in the document and a `Vec` in the prepared plan; the
+  audio thread holds one compensation ring and one `Smoothed` per send that
+  exists, and three 64 KB scratch buffers for the *whole engine* — allocated
+  only when a project has a send at all. `block_cost::send_memory`, measured
+  2026-09-09:
+
+  ```text
+    a project with no sends         1055.49 MB   (the floor above, unmoved)
+    ...with one send                1055.68 MB
+    ...with nine                    1055.68 MB
+
+    the first send costs              193.2 KB   (three shared scratch buffers, once)
+    each one after                     24.0 B
+  ```
+
+  The shape is what this policy asks for and the numbers say it plainly: the
+  floor does not move at all, the *first* send buys the shared scratch, and
+  the ninth is indistinguishable from the first. What a send costs beyond
+  those bytes is its compensation ring, which is as long as the alignment it
+  is owed and nothing at all when it is owed none.
+  `render::tests::a_project_with_no_sends_allocates_nothing` guards the zero.
+
+  The drawn side matters here too, and is the half this document does not
+  usually get to state. `docs/plans/console/THE-STRIP.md` first fixed the face
+  at four send bars — a *drawn* limit rather than an engine one, which this
+  document's own distinction would have permitted. Adam retired it on
+  2026-09-09: the area draws exactly the sends that exist and scrolls past the
+  room it has. A drawn ceiling is cheaper to remove than a dimensioned one and
+  it is still a ceiling, and there was no reason to have one.
 
 ## Rule for new work
 

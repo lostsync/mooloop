@@ -30,13 +30,14 @@ use mooloop_core::log::Level;
 use mooloop_core::{log_debug, log_error, log_info, log_warn};
 use mooloop_core::{
     snap_bars_to_power_of_two,
-    BufferDuration, BufferEvent, BusSetup, ENV_MAX_SECONDS, ENV_MIN_SECONDS,
+    BufferDuration, BufferEvent, BusSetup, ChannelEdit, ENV_MAX_SECONDS, ENV_MIN_SECONDS,
     DeviceKind, DrumMode, DrumSynthParams, EffectKind,
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, FilterModel,
     GeneratorParams, GlideMode, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor,
     ModPolarity, ModRack, ModRandomTrigger, ModStepTrigger,
-    ControlRate, ModulatorKind, ModulatorParams, OutletDescriptor, PublishesOutlets, SignalShape,
+    ControlRate, ModulatorKind, ModulatorParams, OutletDescriptor, PublishesOutlets, SendTap,
+    SignalShape,
     modulation::outlet_slot,
     aux_in, AuxInParams, EdgeRefusal,
     ds01, Ds01Params,
@@ -486,6 +487,19 @@ fn queue_project_edit(
     after: ProjectSnapshot,
     status: &'static str,
 ) -> bool {
+    queue_structural_edit(tx, before, after, status, None)
+}
+
+/// [`queue_project_edit`] for an edit that moved the channel list, carrying
+/// the edit so the pump can renumber the session state the snapshot does not
+/// contain. See `ProjectEdit::channel_edit`.
+fn queue_structural_edit(
+    tx: &ProjectEditSender,
+    before: ProjectSnapshot,
+    after: ProjectSnapshot,
+    status: &'static str,
+    channel_edit: Option<ChannelEdit>,
+) -> bool {
     let entry = HistoryEntry {
         before,
         after: after.clone(),
@@ -497,6 +511,7 @@ fn queue_project_edit(
         samples: after.samples,
         status: status.into(),
         history: Some((HistoryMove::Record, entry)),
+        channel_edit,
     })
 }
 
@@ -520,6 +535,9 @@ fn queue_history_target(
         samples: snapshot.samples,
         status,
         history: Some((movement, entry)),
+        // An undo restores a whole document rather than applying an edit to
+        // one, so there is no edit to follow.
+        channel_edit: None,
     })
 }
 
@@ -669,7 +687,13 @@ fn queue_channel_insert(
     };
     samples.insert(index, clipboard.sample);
     project.selected_channel = index as u8;
-    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
+    queue_structural_edit(
+        tx,
+        before,
+        ProjectSnapshot { project, samples },
+        status,
+        Some(ChannelEdit::Inserted(index as u8)),
+    )
 }
 
 fn queue_channel_delete(
@@ -696,7 +720,99 @@ fn queue_channel_delete(
     }
     samples.remove(index);
     project.selected_channel = index.min(project.channels.len() - 1) as u8;
-    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
+    queue_structural_edit(
+        tx,
+        before,
+        ProjectSnapshot { project, samples },
+        status,
+        Some(ChannelEdit::Removed(index as u8)),
+    )
+}
+
+/// Move the channel at `from` to `to`, undoably.
+///
+/// The third channel edit, built on the same snapshot path as the two above
+/// rather than on an incremental engine command, and the reason is that those
+/// two do not have one either: `install_project_in_ui` rebuilds the whole
+/// `RenderState`. A move through the same door is consistent with a paste
+/// rather than being a special case, and an incremental rotate would have to
+/// rotate `EngineHandle`'s sample and slice slots with the strips or hand the
+/// moved channel its neighbour's audio. See
+/// `docs/plans/console/01-a-channel-can-be-moved.md`.
+fn queue_channel_move(
+    tx: &ProjectEditSender,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    from: usize,
+    to: usize,
+    status: &'static str,
+) -> bool {
+    let before = {
+        let state = state.borrow();
+        project_snapshot(&state, window)
+    };
+    let mut project = before.project.clone();
+    let mut samples = before.samples.clone();
+    // The song renumbers every route, lane and Aux In subscription that named
+    // a channel the move passed, and carries the mover's own with it.
+    let Some(edit) = project.move_channel(from, to) else {
+        return false;
+    };
+    // The sample sidecar is parallel to `project.channels` and hand
+    // maintained, so it has to make the same move or every sampler between
+    // the two seats plays the wrong file.
+    if from < samples.len() && to < samples.len() {
+        let sample = samples.remove(from);
+        samples.insert(to, sample);
+    }
+    project.selected_channel = to as u8;
+    queue_structural_edit(tx, before, ProjectSnapshot { project, samples }, status, Some(edit))
+}
+
+/// Add a mixer track, undoably.
+///
+/// A whole-document edit rather than an incremental command, because the
+/// engine builds a strip per track when a project loads -- `grow_buses` --
+/// and there is no structural command that adds one. The same door
+/// `queue_channel_insert` uses, and undoable for the same reason.
+fn queue_track_add(
+    tx: &ProjectEditSender,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+) -> bool {
+    let before = {
+        let state = state.borrow();
+        project_snapshot(&state, window)
+    };
+    let mut project = before.project.clone();
+    let samples = before.samples.clone();
+    if project.add_track().is_none() {
+        return false;
+    }
+    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, "Track added")
+}
+
+/// Remove a mixer track, undoably.
+///
+/// `Project::remove_track` renumbers everything that named a later track and
+/// falls anything routed *here* back to the master, so a channel does not go
+/// silently unheard.
+fn queue_track_remove(
+    tx: &ProjectEditSender,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    track: usize,
+) -> bool {
+    let before = {
+        let state = state.borrow();
+        project_snapshot(&state, window)
+    };
+    let mut project = before.project.clone();
+    let samples = before.samples.clone();
+    if project.remove_track(track).is_none() {
+        return false;
+    }
+    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, "Track removed")
 }
 
 /// Duplicates pattern `index`'s length and every channel's notes for it,
@@ -1440,20 +1556,36 @@ fn rack_cell(notes: &[NoteEvent], step: usize) -> StepCell {
 /// bar carries the explanation.
 fn format_param_value(descriptor: &ParamDescriptor, normalized: f32) -> String {
     let natural = descriptor.from_normalized(normalized);
-    let magnitude = natural.abs();
+    // Through `display_unit`, like every other value readout in the program.
+    // Printing the descriptor's own units directly is what made this the one
+    // path that could not show the range it was editing: an envelope attack
+    // of 5 ms read `0.01 s`, and everything below 5 ms read `0.00 s`, so a
+    // lane on the fastest part of an envelope was a row of identical zeroes.
+    let (scale, unit) = display_unit(descriptor, natural);
+    let shown = natural / scale;
+    let magnitude = shown.abs();
     let text = if magnitude >= 10_000.0 {
-        format!("{:.2}k", natural / 1_000.0)
+        format!("{:.2}k", shown / 1_000.0)
+    } else if unit == "ms" {
+        // Milliseconds are already the small unit, so they get the rule the
+        // DS-01 face uses rather than the general one: `240`, `45`, `5`,
+        // and a tenth only below 1 ms, where it is the whole value.
+        if magnitude >= 1.0 || magnitude == 0.0 {
+            format!("{shown:.0}")
+        } else {
+            format!("{shown:.1}")
+        }
     } else if magnitude >= 100.0 {
-        format!("{natural:.0}")
+        format!("{shown:.0}")
     } else if magnitude >= 10.0 {
-        format!("{natural:.1}")
+        format!("{shown:.1}")
     } else {
-        format!("{natural:.2}")
+        format!("{shown:.2}")
     };
-    if descriptor.unit.is_empty() {
+    if unit.is_empty() {
         text
     } else {
-        format!("{text} {}", descriptor.unit)
+        format!("{text} {unit}")
     }
 }
 
@@ -2068,6 +2200,14 @@ impl UiState {
         self.sync_row_flags();
         self.sync_mixer(window);
         self.sync_playlist(window);
+        // Belongs with the other three, and was the one missing: pattern
+        // names arrive with the document like everything else here, and only
+        // `on_pattern_selected`, `on_add_pattern` and `on_pattern_renamed`
+        // pushed them. So opening a song, starting a new kit, or any edit
+        // that reinstalls the project -- a channel paste, an undo -- left the
+        // toolbar field and the pattern menu naming the *previous* document's
+        // patterns until something happened to select one.
+        self.sync_pattern_menu(window);
         self.refresh_editor(window);
     }
 
@@ -2135,6 +2275,15 @@ impl UiState {
             })
             .collect();
         window.set_pattern_menu_options(ModelRc::from(Rc::new(VecModel::from(options))));
+        // The undecorated names, for the surfaces that draw a row per pattern
+        // and number it themselves. The playlist gutter drew "Pattern N" from
+        // its own loop index and so was the one place a rename never reached.
+        let names: Vec<slint::SharedString> = self
+            .session.pattern_names
+            .iter()
+            .map(|name| name.as_str().into())
+            .collect();
+        window.set_pattern_names(ModelRc::from(Rc::new(VecModel::from(names))));
         let current = self
             .session.pattern_names
             .get(self.session.current_pattern)
@@ -3165,6 +3314,7 @@ impl UiState {
             .map(|(index, setup)| self.mixer_strip_row(index, setup))
             .collect();
         self.mixer_strip_model.set_vec(strips);
+        window.set_can_add_track(self.session.buses.len() < MAX_BUSES);
         self.sync_bus_editor(window);
     }
 
@@ -3186,6 +3336,7 @@ impl UiState {
             output: setup.bus.output as i32,
             selected: self.session.effect_target == EffectTarget::Bus(index as u8),
             is_master: index == MASTER_BUS as usize,
+            console: setup.bus.console,
             feed_count: self.session.bus_feed_count(index) as i32,
             allowed: self.allowed_destinations(index),
             // Levels are owned by the metering timer, which writes them in
@@ -3256,7 +3407,42 @@ impl UiState {
         window.set_editing_bus_pan(setup.bus.pan);
         window.set_editing_bus_output(setup.bus.output as i32);
         window.set_editing_bus_feed_count(self.session.bus_feed_count(index) as i32);
+        window.set_editing_bus_console(setup.bus.console);
+        window.set_editing_bus_can_remove(self.session.can_remove_track(index));
         window.set_editing_bus_allowed(self.allowed_destinations(index));
+        window.set_editing_bus_send_feed_count(self.session.track_send_count(index) as i32);
+        window.set_editing_bus_sends(self.send_rows(index));
+        // The same mask the output picker uses: an output and a send are
+        // legal under one rule, so a send cannot creep past a check the
+        // picker makes.
+        window.set_editing_bus_send_allowed(self.allowed_destinations(index));
+    }
+
+    /// The sends on `bus`, in the order they were authored -- which is the
+    /// order the engine's bank groups them in, so a row's position is the
+    /// address a level change is sent to.
+    fn send_rows(&self, bus: usize) -> ModelRc<MixerSendRow> {
+        let Some(setup) = self.session.buses.get(bus) else {
+            return ModelRc::from(Rc::new(VecModel::from(Vec::new())));
+        };
+        let rows: Vec<MixerSendRow> = setup
+            .sends
+            .iter()
+            .map(|send| MixerSendRow {
+                target: send.target as i32,
+                target_name: self
+                    .session
+                    .buses
+                    .get(send.target as usize)
+                    .map(|track| track.bus.name.as_str())
+                    .unwrap_or("--")
+                    .into(),
+                level: send.level,
+                pre_fader: send.tap == SendTap::PreFader,
+                enabled: send.enabled,
+            })
+            .collect();
+        ModelRc::from(Rc::new(VecModel::from(rows)))
     }
 
     /// Push the selected channel's Aux In into its face.
@@ -6252,6 +6438,25 @@ impl AppUi {
                 }
             });
         }
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let tx = project_edit_tx.clone();
+            let weak = window.as_weak();
+            window.on_channel_reorder_requested(move |from, to| {
+                let Some(window) = weak.upgrade() else { return };
+                if commands.borrow().project_edit_pending {
+                    return;
+                }
+                let (Ok(from), Ok(to)) = (usize::try_from(from), usize::try_from(to)) else {
+                    return;
+                };
+                if queue_channel_move(&tx, &st, &window, from, to, "Channel moved") {
+                    commands.borrow_mut().project_edit_pending = true;
+                    sync_command_availability(&window, &commands.borrow());
+                }
+            });
+        }
         // All channel-edit surfaces arrive here.  The menu bar, Ctrl keys,
         // and per-row context menu deliberately know only command ids; they
         // cannot grow separate mutation paths.
@@ -6495,18 +6700,28 @@ impl AppUi {
         }
 
         {
-            let tx = cmd_tx.clone();
+            // No command sender: a routing edit sends nothing itself now. The
+            // schedule travels with the sends that ride on it, and the pump's
+            // `sync_track_graph` derives and installs both.
             let weak = window.as_weak();
             let st = state.clone();
             window.on_bus_output_changed(move |bus, output| {
                 let mut guard = st.borrow_mut();
                 match guard.session.set_bus_output(bus, output) {
-                    Some(Ok(command)) => {
+                    Some(Ok(())) => {
                         // Every strip's legal destinations move when an edge does.
                         if let Some(w) = weak.upgrade() {
                             guard.sync_mixer(&w);
+                            // The session marks the edit; the title is
+                            // refreshed here because this no longer travels
+                            // through the pump's command drain, which is what
+                            // used to do it.
+                            guard.update_document_title(&w);
                         }
-                        let _ = tx.send(command);
+                        // The schedule itself is not sent from here any more:
+                        // it travels with the sends that ride on it, which
+                        // carry compensation rings, so the pump's
+                        // `sync_track_graph` derives and installs both.
                     }
                     Some(Err(refused)) => {
                         if let Some(w) = weak.upgrade() {
@@ -6521,6 +6736,110 @@ impl AppUi {
                     }
                     None => {}
                 }
+            });
+        }
+
+        // Sends. Adding and removing one is a routing change, so it goes
+        // through the same door the output picker does and sends no command
+        // of its own -- the pump's `sync_track_graph` derives the plan and
+        // installs it with the compensation rings a send needs. Level, tap
+        // and enable are POD and reach audio directly, so a drag does not
+        // rebuild a plan sixty times a second.
+        {
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_send_added(move |bus, target| {
+                let mut guard = st.borrow_mut();
+                match guard.session.add_send(bus, target) {
+                    Some(Ok(_)) => {
+                        if let Some(w) = weak.upgrade() {
+                            guard.sync_bus_editor(&w);
+                            guard.update_document_title(&w);
+                        }
+                    }
+                    Some(Err(refused)) => {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_status_message(
+                                format!(
+                                    "{} already leads back here - the send would loop",
+                                    refused.feeder
+                                )
+                                .into(),
+                            );
+                        }
+                    }
+                    None => {}
+                }
+            });
+        }
+        {
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_send_removed(move |bus, send| {
+                let mut guard = st.borrow_mut();
+                if guard.session.remove_send(bus, send) {
+                    if let Some(w) = weak.upgrade() {
+                        guard.sync_bus_editor(&w);
+                        guard.update_document_title(&w);
+                    }
+                }
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_send_level_changed(move |bus, send, level| {
+                let mut guard = st.borrow_mut();
+                let Some(command) = guard.session.set_send_level(bus, send, level) else {
+                    return;
+                };
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_bus_editor(&w);
+                }
+                let _ = tx.send(command);
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_send_tap_picked(move |bus, send, tap| {
+                let mut guard = st.borrow_mut();
+                let tap = if tap == 1 {
+                    SendTap::PreFader
+                } else {
+                    SendTap::PostFader
+                };
+                let Some(command) = guard.session.set_send_tap(bus, send, tap) else {
+                    return;
+                };
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_bus_editor(&w);
+                }
+                let _ = tx.send(command);
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_send_enable_toggled(move |bus, send| {
+                let mut guard = st.borrow_mut();
+                let wanted = guard
+                    .session
+                    .buses
+                    .get(bus.max(0) as usize)
+                    .and_then(|setup| setup.sends.get(send.max(0) as usize))
+                    .map(|entry| !entry.enabled);
+                let Some(wanted) = wanted else { return };
+                let Some(command) = guard.session.set_send_enabled(bus, send, wanted) else {
+                    return;
+                };
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_bus_editor(&w);
+                }
+                let _ = tx.send(command);
             });
         }
 
@@ -6559,6 +6878,112 @@ impl AppUi {
                     guard.sync_mixer(&w);
                 }
                 let _ = tx.send(command);
+            });
+        }
+
+        // The analog-sum switch. The switch itself is all that travels; the
+        // buffer its encoded output lands in is reconciled by
+        // `sync_console_sums` on the next pump tick, which is why this does
+        // not have to know which tracks need one.
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_bus_console_toggled(move |bus| {
+                let mut guard = st.borrow_mut();
+                let Some(command) = guard.session.toggle_bus_console(bus) else {
+                    return;
+                };
+                guard.session.dirty = true;
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_mixer(&w);
+                    // The bus device face carries the same switch, so it has
+                    // to restate it -- the toggle can be thrown from either.
+                    guard.sync_bus_editor(&w);
+                    guard.update_document_title(&w);
+                }
+                let _ = tx.send(command);
+            });
+        }
+
+        // Track structure. Adding and removing a track reinstalls the
+        // document, because the engine materialises a strip per track when a
+        // project loads and everything that named a later track has to
+        // renumber -- the same path a channel paste takes, and undoable for
+        // the same reason. A rename touches neither, so it is a plain session
+        // edit like a pattern rename.
+        {
+            let tx = project_edit_tx.clone();
+            let commands = command_state.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_track_added(move || {
+                let Some(window) = weak.upgrade() else { return };
+                if commands.borrow().project_edit_pending {
+                    return;
+                }
+                if queue_track_add(&tx, &st, &window) {
+                    commands.borrow_mut().project_edit_pending = true;
+                    sync_command_availability(&window, &commands.borrow());
+                }
+            });
+        }
+        {
+            let tx = project_edit_tx.clone();
+            let commands = command_state.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_track_removed(move |track| {
+                let Some(window) = weak.upgrade() else { return };
+                if commands.borrow().project_edit_pending {
+                    return;
+                }
+                let Ok(track) = usize::try_from(track) else {
+                    return;
+                };
+                if queue_track_remove(&tx, &st, &window, track) {
+                    commands.borrow_mut().project_edit_pending = true;
+                    sync_command_availability(&window, &commands.borrow());
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_track_renamed(move |track, name| {
+                let mut guard = st.borrow_mut();
+                if !guard.session.rename_track(track, &name) {
+                    return;
+                }
+                guard.session.dirty = true;
+                if let Some(window) = weak.upgrade() {
+                    guard.sync_mixer(&window);
+                    guard.sync_bus_editor(&window);
+                    guard.update_document_title(&window);
+                }
+            });
+        }
+
+        // Channel renaming, the same shape as a track rename and for the same
+        // reason: the name is not in the render graph, so nothing has to reach
+        // the engine and nothing has to reinstall the document.
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_channel_renamed(move |channel, name| {
+                let mut guard = st.borrow_mut();
+                if !guard.session.rename_channel(channel, &name) {
+                    return;
+                }
+                guard.session.dirty = true;
+                if let Some(window) = weak.upgrade() {
+                    // The rack plate is the name's home, and the device-chain
+                    // header is where it was just typed; both are redrawn
+                    // because neither reads the other.
+                    guard.sync_row_flags();
+                    guard.refresh_editor(&window);
+                    guard.update_document_title(&window);
+                }
             });
         }
 
@@ -10368,6 +10793,14 @@ impl AppUi {
                                 &edit.samples,
                             ) {
                                 let mut state = st.borrow_mut();
+                                // The song's own addresses were renumbered
+                                // before this was queued; the session's --
+                                // the selected device, the open lane, the
+                                // preset labels -- are not in the snapshot
+                                // and are renumbered here.
+                                if let Some(edit) = edit.channel_edit {
+                                    state.session.rescope_after(edit);
+                                }
                                 state.session.dirty = true;
                                 state.session.revision = state.session.revision.wrapping_add(1);
                                 state.update_document_title(&window);
@@ -10503,6 +10936,21 @@ impl AppUi {
                 // can. Allocates the taps only when the plan says somebody is
                 // listening.
                 st.borrow_mut().session.sync_audio_graph(&mut handle);
+                // And beside both, for the third time and the same reason:
+                // which buses need a console accumulator is a property of
+                // every strip's switch and every route at once. Allocates a
+                // buffer only for the buses something encoded actually
+                // reaches, so a project with console off costs nothing.
+                st.borrow_mut().session.sync_console_sums(&mut handle);
+                // And the track graph, which is the fourth of these and the
+                // one that used to be sent from the edit that caused it.
+                // Routing stopped being one `u8` per track when a send became
+                // a second outgoing edge: the plan now carries a compensation
+                // ring per send, which is a heap object, so it is derived and
+                // installed here like the rest. **Last of the four**, so the
+                // compensation a send's arrival moves has already been sent
+                // for the generation this schedule belongs to.
+                st.borrow_mut().session.sync_track_graph(&mut handle);
                 if document_title_needs_refresh {
                     let Some(window) = weak.upgrade() else { return };
                     st.borrow().update_document_title(&window);
@@ -11747,6 +12195,55 @@ mod tests {
     }
 
     use super::*;
+
+    /// A lane readout must show the range it is editing.
+    ///
+    /// `format_param_value` printed the descriptor's own units directly, so a
+    /// time parameter -- always declared in seconds -- was rendered at two
+    /// decimal places. An envelope attack of 5 ms read `0.01 s` and anything
+    /// shorter read `0.00 s`, which makes the fastest and most-edited part of
+    /// an envelope a row of identical zeroes. Every other readout in the
+    /// program already went through `display_unit`; this was the one that
+    /// did not.
+    #[test]
+    fn a_lane_reads_a_short_time_in_milliseconds() {
+        let seconds = ParamDescriptor {
+            id: 0,
+            name: "Attack",
+            unit: "s",
+            min: 0.0,
+            max: 2.0,
+            curve: ParamCurve::Linear,
+            default: 0.0,
+        };
+
+        // The cases that used to collapse to "0.01 s" and "0.00 s".
+        assert_eq!(super::format_param_value(&seconds, 0.0025), "5 ms");
+        assert_eq!(super::format_param_value(&seconds, 0.00025), "0.5 ms");
+        // A second and over keeps its own unit, and its two decimals.
+        assert_eq!(super::format_param_value(&seconds, 0.75), "1.50 s");
+    }
+
+    /// The other half of `display_unit`: a frequency at or above a kilohertz
+    /// reads in kHz. Without it the general formatter's own large-number
+    /// branch produced `12.00k Hz`, which is a magnitude prefix and a unit
+    /// that disagree about the scale of the same number.
+    #[test]
+    fn a_lane_reads_a_high_frequency_in_kilohertz() {
+        let hertz = ParamDescriptor {
+            id: 1,
+            name: "Cutoff",
+            unit: "Hz",
+            min: 0.0,
+            max: 20_000.0,
+            curve: ParamCurve::Linear,
+            default: 0.0,
+        };
+
+        assert_eq!(super::format_param_value(&hertz, 0.6), "12.0 kHz");
+        // Below a kilohertz it stays in hertz, whole numbers at that size.
+        assert_eq!(super::format_param_value(&hertz, 0.022), "440 Hz");
+    }
 
     #[test]
     fn musical_divisions_match_the_snap_table_in_main_slint() {

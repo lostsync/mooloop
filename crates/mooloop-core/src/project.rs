@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::structure::{rescope_lanes, ChannelEdit};
+use crate::structure::{rescope_lanes, rescope_lanes_for_track, ChannelEdit, TrackEdit};
 use crate::{
     default_buses, BusSetup, Channel, DeviceKind, Ds01Params, DrumMode, DrumSynthParams,
     EffectTarget,
@@ -877,6 +877,116 @@ impl Project {
         Some(index)
     }
 
+    /// Move the channel at `from` to `to`, carrying everything that named
+    /// it.
+    ///
+    /// The third channel edit, and the one that could not be composed from
+    /// the other two: `remove_channel` drops the departing channel's own
+    /// routes and lanes on purpose, so a reorder built from a removal and an
+    /// insertion would put the channel back with its own automation missing.
+    ///
+    /// `None` when either index is out of range or they are the same, which
+    /// is the drag that landed where it started.
+    pub fn move_channel(&mut self, from: usize, to: usize) -> Option<ChannelEdit> {
+        let count = self.channels.len();
+        if from >= count || to >= count || from == to {
+            return None;
+        }
+        let channel = self.channels.remove(from);
+        self.channels.insert(to, channel);
+        let edit = ChannelEdit::Moved {
+            from: from as u8,
+            to: to as u8,
+        };
+        self.rescope_after(edit);
+        // The selection is one more thing that named a channel. Nothing can
+        // be dropped by a move, so this never has to clamp.
+        self.selected_channel = edit.channel(self.selected_channel).unwrap_or(self.selected_channel);
+        Some(edit)
+    }
+
+    /// Add a track, returning where it landed. Refused when the bank is full.
+    ///
+    /// Appends rather than inserting, because appending renumbers nothing and
+    /// a mixer's order is not yet something a user arranges. When it becomes
+    /// one, `TrackEdit::Inserted` is already the edit for it.
+    pub fn add_track(&mut self) -> Option<usize> {
+        if self.buses.len() >= crate::MAX_BUSES {
+            return None;
+        }
+        let index = self.buses.len();
+        self.buses.push(crate::BusSetup::new(index));
+        Some(index)
+    }
+
+    /// Make sure the bank has at least `count` tracks, adding plain ones to
+    /// reach it. Returns how many there are now.
+    ///
+    /// Useful beyond tests: a hand-edited or future-format file can name a
+    /// track it did not save, and materialising it is a kinder repair than
+    /// dropping the routing that named it.
+    pub fn ensure_tracks(&mut self, count: usize) -> usize {
+        while self.buses.len() < count.min(crate::MAX_BUSES) {
+            self.add_track();
+        }
+        self.buses.len()
+    }
+
+    /// Remove the track at `index`, closing the gap.
+    ///
+    /// Everything that named a later track is renumbered to follow it, and
+    /// anything that named *this* one is dealt with rather than left dangling:
+    /// a channel routed here falls back to the master, a track feeding here
+    /// falls back to the master, and a lane or route scoped to its chain is
+    /// dropped with the chain it drove.
+    ///
+    /// The master cannot be removed -- it is the sink every route reaches.
+    pub fn remove_track(&mut self, index: usize) -> Option<crate::BusSetup> {
+        if index == crate::MASTER_BUS as usize || index >= self.buses.len() {
+            return None;
+        }
+        let removed = self.buses.remove(index);
+        let edit = TrackEdit::Removed(index as u8);
+        self.rescope_tracks_after(edit);
+        Some(removed)
+    }
+
+    /// Re-scope every track-addressed thing in the song after a track edit.
+    ///
+    /// Four kinds of address name a track: a channel's destination, a track's
+    /// own destination, a track's **sends**, and anything scoped to a track's
+    /// effect chain -- which is automation lanes and modulation routes, in any
+    /// channel, because a track's chain can be automated from any channel's
+    /// clip.
+    fn rescope_tracks_after(&mut self, edit: TrackEdit) {
+        for setup in &mut self.buses {
+            setup.bus.output = edit.destination(setup.bus.output);
+            // A send whose target went is **dropped**, where an output that
+            // lost its target falls back to the master. `TrackEdit::track`
+            // rather than `destination` is that difference: a producer with
+            // nowhere to go must still be heard, and a send with nowhere to go
+            // is simply not a send. Silently re-pointing it at the master
+            // would put a wet path into the mix at full level.
+            setup.sends.retain_mut(|send| match edit.track(send.target) {
+                Some(target) => {
+                    send.target = target;
+                    true
+                }
+                None => false,
+            });
+        }
+        for channel in &mut self.channels {
+            channel.setup.channel.bus = edit.destination(channel.setup.channel.bus);
+            channel.setup.modulation.rescope_tracks(edit);
+            for lanes in &mut channel.automation {
+                rescope_lanes_for_track(lanes, edit);
+            }
+        }
+        // A track that fed the removed one, or the removed one itself, may
+        // have left the graph in a shape that no longer sorts.
+        self.buses = crate::sanitize_bank(&self.buses);
+    }
+
     /// The audio edges this project's channels compile to, and the order
     /// that satisfies them.
     ///
@@ -946,7 +1056,7 @@ impl Project {
         open_hat.hat_hp_hz = random.range(6_000.0, 9_500.0);
         open_hat.hat_metallic = random.range(0.3, 0.68);
 
-        Self {
+        let mut project = Self {
             channels: [
                 ("Kick", kick),
                 ("Snare", snare),
@@ -961,9 +1071,71 @@ impl Project {
                 next_note_id: 1,
             })
             .collect(),
+            buses: starter_tracks(),
             ..Self::default()
+        };
+        // Four drum channels onto one track, which is the grouping: it is the
+        // `bus` field several channels share and needs no other concept.
+        for channel in &mut project.channels {
+            channel.setup.channel.bus = DRUM_TRACK;
         }
+        project
     }
+}
+
+/// The track a starter kit's drums are grouped onto.
+const DRUM_TRACK: u8 = 1;
+
+/// The track the starter kit's second voice would land on.
+const BASS_TRACK: u8 = 2;
+
+/// The track the starter kit's two others send to, which is what makes it a
+/// return. Nothing about the track itself says so.
+const REVERB_TRACK: u8 = 3;
+
+/// The tracks a new song opens with.
+///
+/// Adam's sketch, and the reason he wanted channel grouping at all: *"a drum
+/// kit, grouped, sent to mixer track 1, and then a monosynth or something on
+/// mixer 2, and maybe one track set up as a reverb send -- a reasonable,
+/// modest default that sort of also demonstrates what can be done just by
+/// already having had it done to it."*
+///
+/// A blank project teaches nothing; this one shows a group, a bus and a send
+/// by having already done them.
+///
+/// **Reverb is not a fourth kind of track.** It is an ordinary track with a
+/// Reverb device on it that two other tracks send to, which is what makes it
+/// an effects return -- `docs/TERMINOLOGY.md`. Nothing here creates a "send"
+/// or a "return"; two tracks route to a third and the third is thereby one.
+///
+/// The send is post-fader, so pulling Drums down takes its reverb with it,
+/// and the device is fully wet, because the dry path is already in the mix
+/// through each track's own output. Turning the wet/dry knob down on it would
+/// be the mistake the arrangement exists to avoid.
+fn starter_tracks() -> Vec<crate::BusSetup> {
+    let mut tracks = default_buses();
+    for name in ["Drums", "Bass", "Reverb"] {
+        let mut track = crate::BusSetup::new(tracks.len());
+        track.bus.name = name.into();
+        tracks.push(track);
+    }
+    tracks[REVERB_TRACK as usize].push_effect(crate::EffectSlotState {
+        id: crate::DeviceId::default(),
+        params: crate::EffectParams::Reverb(crate::ReverbParams::default()),
+        bypassed: false,
+        // Fully wet: the dry signal reaches the master by each track's own
+        // output, so a return that passed any of it through would double it.
+        wet_dry: 1.0,
+        input_trim: 1.0,
+        output_trim: 1.0,
+    });
+    for track in [DRUM_TRACK, BASS_TRACK] {
+        tracks[track as usize]
+            .sends
+            .push(crate::AuxSend::new(REVERB_TRACK));
+    }
+    tracks
 }
 
 struct StarterRandom(u64);
@@ -1114,6 +1286,53 @@ mod tests {
             assert_eq!(channel.automation[0][0].target, strip(index));
         }
         assert!(project.remove_channel(9).is_none());
+
+        // And a move, which is the edit neither of the two above can
+        // express. Channel 0 also subscribes to channel 3's outlet, so the
+        // one address that names *another* channel rides along too.
+        project.channels[0].setup.source = ChannelSource::AuxIn(Default::default());
+        project.channels[0]
+            .setup
+            .source
+            .aux_in_state_mut()
+            .expect("aux in")
+            .params
+            .source_channel = 3;
+
+        let moved = project.channels[3].setup.channel.name.clone();
+        assert_eq!(
+            project.move_channel(3, 1),
+            Some(ChannelEdit::Moved { from: 3, to: 1 })
+        );
+        assert_eq!(project.channels[1].setup.channel.name, moved);
+        for index in 0..4u8 {
+            let channel = &project.channels[index as usize];
+            assert_eq!(
+                channel.setup.modulation.routes[0].unwrap().destination,
+                strip(index),
+                "route on channel {index} after move"
+            );
+            assert_eq!(channel.automation[0][0].target, strip(index));
+            assert_eq!(channel.automation[0][1].target, bus);
+        }
+        // The subscription followed the channel it named, which is now in
+        // seat 1 -- not seat 3, where a stranger is sitting.
+        assert_eq!(
+            project.channels[0]
+                .setup
+                .source
+                .aux_in_state()
+                .expect("aux in")
+                .params
+                .source_channel,
+            1
+        );
+
+        // A move that lands where it started, or names a seat that is not
+        // there, is not an edit.
+        assert!(project.move_channel(2, 2).is_none());
+        assert!(project.move_channel(0, 9).is_none());
+        assert!(project.move_channel(9, 0).is_none());
     }
 
     #[test]

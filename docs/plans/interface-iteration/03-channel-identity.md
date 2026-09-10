@@ -31,6 +31,48 @@ adds persisted state, and `PROJECT_FORMAT.md`'s defaulted-field rule applies:
 an old project must load without one and be indistinguishable from a new
 project that has not chosen one.
 
+## The bug this step has to fix, found 2026-09-09
+
+`Session::reset_channel_source` (`crates/mooloop-session/src/session.rs`)
+rewrites the channel's name from its index whenever the source device changes:
+
+```rust
+channel.name = match kind {
+    DeviceKind::Sampler => format!("Sampler {}", index + 1),
+    ...
+```
+
+So a channel called "Kick" that is switched from the sampler to the DS-01
+comes back called "DS-01 1". **A name the user typed is thrown away by a
+gesture that is not about the name.** That is fine while a name is derived
+from the device, which is what it is today, and stops being fine the moment
+this step says a name is a thing you chose.
+
+The fix belongs here rather than in its own branch: this step is where the
+name stops being derived. A default name still comes from the device for a
+channel that has never been named, so the distinguishing question is whether
+the current name is still the default one for the *outgoing* device -- if it
+is, re-derive it; if it is not, the user named it and it stays.
+
+Found while writing `docs/plans/console/`, which is why it is dated later than
+the rest of this file.
+
+## Pattern colour comes with channel colour
+
+Adam's 2026-09-09 list asked for pattern colours as well. Patterns can already
+be *renamed* (`main.slint`, `pattern-renamed`); colour is missing in exactly
+the same way it is missing for a channel, and it is the same defaulted-field
+shape in `PROJECT_FORMAT.md` terms: absent means "no colour chosen", an old
+project loads without one, and opening it does not rewrite it.
+
+It is folded in here rather than given a `LOOSE_ENDS.md` entry of its own
+because the two share the whole design -- the storage rule, the "a colour the
+project owns, not a palette index" ruling below, and the judgement about how a
+chosen colour sits against a theme it was not chosen under. Deciding those
+twice is how they end up decided differently.
+
+The "do not colour-code everything at once" rule below applies to both.
+
 ## The colour question this must not answer
 
 `ENHANCEMENTS.md` holds an open design question — whether a named scheme like
@@ -87,4 +129,6 @@ expensive crossing and moving a control within the file is not.
 A channel's name and colour are set from the interface and survive save,
 reload and offline render; a project written before this step loads with a
 default colour and is not rewritten by having been opened; a bus can be called
-"Drums"; and the MIDI rows exist, are inert, and look it.
+"Drums"; and the MIDI rows exist, are inert, and look it. A pattern can be given a colour on the
+same terms as a channel, and a channel that has been named keeps its name when
+its device is changed.

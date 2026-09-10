@@ -368,6 +368,167 @@ fn prepared_project_memory() {
     }
 }
 
+/// What a track costs, and what raising `MAX_BUSES` would cost.
+///
+/// `docs/CAPACITY_POLICY.md` forbids small product caps and warns, in the same
+/// breath, that the expensive mistake is *dimensioning by* a ceiling rather
+/// than reserving one. `MAX_BUSES` is currently seventeen, which is a small
+/// product cap; raising it is the obvious fix and is exactly the move that
+/// document says to measure first, because several fixed arrays multiply by
+/// it and none of them looks expensive where it is defined.
+///
+/// So this prints both halves: what one track costs when it is made, and what
+/// the ceiling costs whether or not any track exists. `MAX_BUSES` is a
+/// compile-time constant and cannot be swept in one run, so the second half is
+/// arithmetic against the current value -- which is the point, since it makes
+/// the price of any candidate ceiling readable rather than a guess.
+#[test]
+#[ignore = "measures live allocation; run deliberately in release"]
+fn track_memory() {
+    use mooloop_core::{MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL};
+    println!();
+
+    // --- the marginal cost of a track that exists -----------------------
+    let mut project = idle_sampler_project(1);
+    let before = crate::COUNTING.live();
+    let one = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    let with_one_track = crate::COUNTING.live().saturating_sub(before);
+    drop(one);
+
+    project.ensure_tracks(MAX_BUSES);
+    let before = crate::COUNTING.live();
+    let full = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    let with_full_bank = crate::COUNTING.live().saturating_sub(before);
+    drop(full);
+
+    let marginal = with_full_bank.saturating_sub(with_one_track) as f64 / (MAX_BUSES - 1) as f64;
+    println!("  a project with 1 track        {:>9.2} MB", with_one_track as f64 / 1048576.0);
+    println!("  a project with {MAX_BUSES} tracks       {:>9.2} MB", with_full_bank as f64 / 1048576.0);
+    println!("  marginal cost of one track    {:>9.1} KB", marginal / 1024.0);
+    println!();
+
+    // --- the cost of the ceiling itself ---------------------------------
+    //
+    // These are allocated from `MAX_BUSES` whether or not a track exists, so
+    // they are what a larger address space would cost before anybody made
+    // anything.
+    let targets = MAX_CHANNELS + MAX_BUSES;
+    let stages = MAX_EFFECTS_PER_CHANNEL + 1;
+    // What is still dimensioned by the ceilings, now that the spectrum is a
+    // pool: one `u32` per stage for the subscription, one for the buffer
+    // collision counter, and six for the meters.
+    let subscription = targets * stages * 4;
+    let collisions = targets * stages * 4;
+    let meters = targets * stages * 6 * 4;
+    let pool = crate::meters::SPECTRUM_SLOTS * mooloop_dsp::SPECTRUM_BINS * 4;
+    let per_bus_of_ceiling = stages * (4 + 4 + 6 * 4);
+    println!("  dimensioned by MAX_BUSES = {MAX_BUSES}, whatever the song holds:");
+    println!(
+        "    DeviceMeters cells          {:>9.2} MB   ({targets} targets x {stages} stages x 6)",
+        meters as f64 / 1048576.0,
+    );
+    println!(
+        "    spectrum subscriptions      {:>9.2} MB",
+        subscription as f64 / 1048576.0,
+    );
+    println!(
+        "    buffer collisions           {:>9.2} MB",
+        collisions as f64 / 1048576.0,
+    );
+    println!(
+        "    the spectra themselves      {:>9.1} KB   ({} slots x {} bins) -- a pool, so it does *not* scale",
+        pool as f64 / 1024.0,
+        crate::meters::SPECTRUM_SLOTS,
+        mooloop_dsp::SPECTRUM_BINS,
+    );
+    println!(
+        "    ...of which per bus         {:>9.1} KB   <- multiply this by any rise",
+        per_bus_of_ceiling as f64 / 1024.0,
+    );
+    println!(
+        "    CompiledBusGraph            {:>9} B",
+        std::mem::size_of::<mooloop_core::CompiledBusGraph>(),
+    );
+    println!(
+        "    CompiledLatency             {:>9} B",
+        std::mem::size_of::<mooloop_core::CompiledLatency>(),
+    );
+    println!();
+    for candidate in [32usize, 64, 128, 256] {
+        let rise = candidate.saturating_sub(MAX_BUSES);
+        println!(
+            "  MAX_BUSES = {candidate:>3}  adds {:>7.2} MB of fixed cost before a track exists",
+            (rise * per_bus_of_ceiling) as f64 / 1048576.0,
+        );
+    }
+}
+
+/// What a send costs, which is the figure `docs/CAPACITY_POLICY.md` asks for
+/// before anything reserves for one.
+///
+/// Two numbers matter and they are different in kind. The **floor** is what a
+/// project pays for the feature existing while it uses none of it, and it has
+/// to be zero: a `Vec` that is empty and a scratch that is not allocated. The
+/// **marginal** cost is what one send costs when somebody makes one, and it is
+/// a compensation ring plus a `Smoothed` plus a few bytes of routing.
+///
+/// The three 64 KB scratch buffers are the one lump, and they are per *engine*
+/// rather than per send -- so they land on the first send a project makes and
+/// never again.
+#[test]
+#[ignore = "measures memory; run deliberately"]
+fn send_memory() {
+    use mooloop_core::{AuxSend, MAX_BUSES, MAX_CHANNELS};
+    println!();
+
+    let mut project = idle_sampler_project(1);
+    project.ensure_tracks(4);
+
+    let before = crate::COUNTING.live();
+    let none = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    let floor = crate::COUNTING.live().saturating_sub(before);
+    drop(none);
+
+    project.buses[1].sends.push(AuxSend::new(2));
+    let before = crate::COUNTING.live();
+    let one = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    let with_one = crate::COUNTING.live().saturating_sub(before);
+    drop(one);
+
+    for target in 0..8 {
+        project.buses[1].sends.push(AuxSend::new(2 + (target % 2)));
+    }
+    let before = crate::COUNTING.live();
+    let many = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    let with_nine = crate::COUNTING.live().saturating_sub(before);
+    drop(many);
+
+    println!("  a project with no sends       {:>9.2} MB", floor as f64 / 1048576.0);
+    println!("  ...with one send              {:>9.2} MB", with_one as f64 / 1048576.0);
+    println!("  ...with nine                  {:>9.2} MB", with_nine as f64 / 1048576.0);
+    println!();
+    println!(
+        "  the first send costs          {:>9.1} KB   (three shared scratch buffers, once)",
+        with_one.saturating_sub(floor) as f64 / 1024.0,
+    );
+    println!(
+        "  each one after                {:>9.1} B",
+        with_nine.saturating_sub(with_one) as f64 / 8.0,
+    );
+    println!(
+        "    SendSpec                    {:>9} B",
+        std::mem::size_of::<crate::SendSpec>(),
+    );
+    println!(
+        "    the producer start table    {:>9} B   ({} slots, allocated only when a send exists)",
+        (MAX_CHANNELS + MAX_BUSES + 1) * 4,
+        MAX_CHANNELS + MAX_BUSES + 1,
+    );
+    println!();
+    println!("  Nothing here is dimensioned by a maximum number of sends, because");
+    println!("  there is not one. `docs/CAPACITY_POLICY.md` is why.");
+}
+
 /// What installing a project costs the thread that does it.
 ///
 /// Every `PendingEngineMessage::ProjectEdit` reaches

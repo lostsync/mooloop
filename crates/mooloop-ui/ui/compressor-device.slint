@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { GainMath } from "gain.slint";
 import { ParameterKnob } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 import { DynamicsCurveDisplay } from "device-displays.slint";
@@ -157,7 +158,7 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 tooltip: "Gain added after compression";
                 value <=> root.makeup;
                 default-value: 0.0;
-                value-text: round(root.makeup-db * 10) / 10 + " dB";
+                value-text: GainMath.format-db(root.makeup-db);
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[5];
                 modulation-depth: root.modulation-depths[5];

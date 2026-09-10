@@ -212,7 +212,16 @@ unchanged.
 
 The current mixer has the right broad shape—editable data compiled away from
 the callback—but its `[u8; MAX_BUSES]` destination permutation models one
-output per bus. It must be replaced, not stretched, before sends land.
+output per bus. ~~It must be replaced, not stretched, before sends land.~~
+
+**That was wrong, and sends landed without it** (2026-09-09,
+`docs/plans/console/05-sends.md`). A track has exactly one *output*; a send is
+an additional edge, not a second output, so the permutation stays true and is
+still what the callback walks. What the permutation could not express was the
+*order*, and that was answered by counting sends in the same Kahn pass rather
+than by replacing the value it produces. The one-output assumption really did
+have to go — from `compile_latency`, from the cycle check, and from the block
+loop, which are the three places it actually lived.
 
 The control thread builds a render plan with:
 
@@ -354,7 +363,12 @@ it as vertical slices:
    source and bus roles, main route picker, device-rack selection, and undo.
    This stage is useful by itself: it replaces the 16-bus bank with a coherent
    console.
-4. **Aux sends and returns.** Add Send A/B defaults, pre/post taps, send
+4. **Aux sends and returns.** *(Landed 2026-09-09 as
+   `docs/plans/console/05-sends.md`, and not in this shape: there are no
+   `Send A/B` defaults and no return object, because bus and send are roles a
+   track is put in by routing rather than species -- `docs/TERMINOLOGY.md`.
+   The pre/post taps, the per-send level and the general DAG latency rule are
+   the parts that survived.)* Add Send A/B defaults, pre/post taps, send
    targets, level smoothing, routing diagnostics, persistence, and the mixer
    strip affordances. Demonstrate delay/reverb-style returns audibly.
 5. **Solo and refinements.** Audible monitor solo, meter details, slot/bus

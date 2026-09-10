@@ -62,11 +62,6 @@ ends.
 
 ## Wired but unreachable
 
-**Buses cannot be renamed.** `MixerBus.name` is in the project format, saves
-and loads fine, and defaults to `"Bus 1".."Bus 16"` (`mixer.rs:64`). There is
-no command, action, or Slint field that sets it — grep finds no `RenameBus` or
-`SetBusName` anywhere. For a drum bus you would want "Drums".
-
 **Buffer MIDI mapping has no UI.** `EngineHandle::set_buffer_midi_map`
 (`mooloop-engine/src/lib.rs:622`) is the only way to install one, and neither
 `mooloop-ui` nor `mooloop-session` calls it. MIDI is decoded and routed; it is
@@ -75,7 +70,10 @@ just not reachable from the app.
 **Solo is a button with nothing behind it.** `SoloButton` exists in
 `controls.slint:1856` with a `soloed` property; `mooloop-core` has no solo
 state at all. `MIXER_PLAN.md` specifies the intended behaviour (an AFL-style
-monitor tap, not a routing change). Also standing in `ENHANCEMENTS.md`.
+monitor tap, not a routing change). Also standing in `ENHANCEMENTS.md`, and
+now drawn on Adam's strip mockup — `docs/plans/console/THE-STRIP.md` says why
+it is the largest unbuilt thing on it: a monitor tap is a second output path,
+not a control.
 
 ---
 
@@ -83,13 +81,24 @@ monitor tap, not a routing change). Also standing in `ENHANCEMENTS.md`.
 
 **A text field is left with Enter, and by nothing else.** The toolbar's search
 and rename fields and the knob/fader numeric entries all call `clear-focus()`
-on `accepted` (`toolbar.slint:316`, `controls.slint:922`,
-`controls.slint:1796`) and have no Escape handler, so clicking into one and
+on `accepted` (`toolbar.slint:395`, `controls.slint:959`,
+`controls.slint:2005`; the three line numbers this entry carried were all
+stale by 2026-09-10) and have no Escape handler, so clicking into one and
 then clicking away leaves the caret in it. While it is there, Space types a
 space instead of starting the transport — which is correct for a field being
 edited and wrong for a field nobody is editing. The 2026-09-07 focus fix made
 every *control* transparent to shortcuts; text fields are the remaining case,
 and they need a way out rather than a change to what they consume.
+
+**A name is renamed where its subject is edited, and nowhere nearer to it.**
+A channel is renamed on the `DEVICES` toolbar and a track on its own device
+face, so renaming either means opening the view that owns it. The obvious
+alternative — double-clicking the rack plate or the mixer strip — was not
+built: the plate already carries a press that selects, a drag that reorders
+and a right-click that opens a menu, and a fourth gesture on it needs a
+decision about which one loses rather than an implementation. Nothing is
+blocked by this; it is one more click than a user coming from FL will expect
+(`main.slint`, the `NameField` beside `CHANNEL PRESET`).
 
 ## Edits that do not undo
 
@@ -98,6 +107,14 @@ and they need a way out rather than a change to what they consume.
 `snap_all_markers` in `mooloop-session/src/sampler.rs` never touch history —
 the file has no reference to it. This is pre-existing rather than introduced
 by the slice work; wiring sampler params into undo is its own change.
+
+**Send edits are not undoable, because routing never was.** `add_send`,
+`remove_send`, `set_send_level`, `set_send_tap` and `set_send_enabled` in
+`mooloop-session/src/mixer.rs` mark the document dirty and return an
+`EngineCommand`, the same shape `set_bus_output` beside them has always had.
+A track *add* is undoable, because it goes through the project-edit path — so
+one mixer face now has both behaviours on it, which is the part worth fixing.
+Unifying them means routing joining `ProjectEdit`, not a per-callback patch.
 
 ---
 
@@ -211,6 +228,53 @@ most interesting part of the app. A fresh one can be rendered headlessly.
 limiter-lookahead sentence runs straight into "Each kind publishes a static
 `ParamDescriptor` table", which belongs to a separate bullet that lost its
 list marker in the 2026-09-05 edit.
+
+**Six dB readouts still round for themselves.** `GainMath.format-db` now
+covers every readout that is a *gain*, but six sites spell their own number
+because they are not gains and the shared formatter's signed, `-inf`-floored
+output would misreport them: a `+` on a knee width or a gate range is wrong,
+and `±0.0 dB` on a limiter ceiling parked at full scale reads oddly.
+`compressor-device.slint:70,142`, `gate-device.slint:68,140`,
+`limiter-device.slint:62`, `device-displays.slint:545`. Three of them use
+`round(x * 10) / 10`, which drops the tenth on a whole value — the same
+width-jitter this pass took out of `format-db` itself. What is missing is an
+unsigned one-decimal formatter to sit beside `format-db`; that is a decision
+about the dB vocabulary rather than a typo, which is why it was left.
+
+**Ticks-per-step is twenty-five bare `24`s in the markup.** `mooloop_core`
+owns `TICKS_PER_STEP`; the roll spells it as a literal `24` fifteen times in
+`piano-grid.slint` and ten in `main.slint`, because Slint has no shared
+constant for it the way `GainMath` and `DeviceRackMetrics` are shared for
+gain and rack geometry. Drift is now *detected* -- `piano_tools.rs` and
+`piano_drag.rs` compute from the engine's value since 2026-09-10, so a table
+edit that the markup does not follow fails them -- but acting on that
+failure means finding twenty-five literals by hand. A `RollMetrics`
+global beside the other two, with a test asserting it against
+`mooloop_core::TICKS_PER_STEP`, would make it one edit. Mechanical, and
+larger than a detail fix, which is why it is here.
+
+**A rack unit is two different widths.** A device's total width -- face plus
+both rails -- is computed twice and not the same way. An effect slot uses
+`unit-width * units + half-gap * (units - 1) + rail-width * 2`
+(`main.slint:3806`); the source device uses `unit-width * units + half-gap +
+rail-width * 2` (`main.slint:3283`), with the gap term not multiplied. They
+agree only at two units. A three-unit source is 724px where a three-unit
+effect is 728px, and a four-unit source is 944px against 952px -- so
+"3U" on a sampler and "3U" on a delay are not the same measurement.
+
+Nothing is visibly misaligned: the two sit side by side rather than stacked,
+and the drag hit-tests each row from its own `absolute-position + width`
+(`main.slint:3838`), which is what `CURRENT.md` means by "measured from that
+row's own bounds". The cost is only that the unit is not a unit.
+
+Which one is wrong is a design call rather than a reading of the code, which
+is why this is a note. Two of the three sites that size a face use
+`* (units - 1)`, so it has the majority. But `JOURNAL.md` records the
+three-unit source face at its inner 664px -- exactly what the source formula
+gives -- as measured and deliberate, and ML-P8 moved to four units on the
+finding that three had "no slack anywhere". Correcting the source formula
+widens every three-unit source face by 4px and every four-unit one by 8px,
+against faces that were sized by eye and signed off. Found 2026-09-10.
 
 **Two unmerged spikes and 39 unpushed commits on `main`.**
 `spike/egui-view-layer` and `spike/slint-split-build` are answers rather than
