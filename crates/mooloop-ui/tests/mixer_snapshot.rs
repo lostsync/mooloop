@@ -261,6 +261,16 @@ fn channel_bus_picker_reports_the_selected_destination() {
     let ui = headless();
     ui.invoke_show_view(view::STEPS);
 
+    // How the three constants below were measured, kept rather than deleted:
+    // they are rack-row geometry, and the rack row moved on 2026-09-09 when
+    // the reorder wrapped it, again on 2026-09-10 when that wrapper stopped
+    // stretching, and twice before that. Render with
+    // `MOOLOOP_RACK_ROW_SNAPSHOT` and read the picker's centre off the image.
+    write_snapshot(
+        &ui.window().take_snapshot().unwrap(),
+        "MOOLOOP_RACK_ROW_SNAPSHOT",
+    );
+
     let picked = Rc::new(Cell::new(-1));
     let sink = picked.clone();
     ui.on_channel_bus_changed(move |channel, bus| {

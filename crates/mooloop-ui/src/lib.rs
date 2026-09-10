@@ -2184,6 +2184,14 @@ impl UiState {
         self.sync_row_flags();
         self.sync_mixer(window);
         self.sync_playlist(window);
+        // Belongs with the other three, and was the one missing: pattern
+        // names arrive with the document like everything else here, and only
+        // `on_pattern_selected`, `on_add_pattern` and `on_pattern_renamed`
+        // pushed them. So opening a song, starting a new kit, or any edit
+        // that reinstalls the project -- a channel paste, an undo -- left the
+        // toolbar field and the pattern menu naming the *previous* document's
+        // patterns until something happened to select one.
+        self.sync_pattern_menu(window);
         self.refresh_editor(window);
     }
 
@@ -2251,6 +2259,15 @@ impl UiState {
             })
             .collect();
         window.set_pattern_menu_options(ModelRc::from(Rc::new(VecModel::from(options))));
+        // The undecorated names, for the surfaces that draw a row per pattern
+        // and number it themselves. The playlist gutter drew "Pattern N" from
+        // its own loop index and so was the one place a rename never reached.
+        let names: Vec<slint::SharedString> = self
+            .session.pattern_names
+            .iter()
+            .map(|name| name.as_str().into())
+            .collect();
+        window.set_pattern_names(ModelRc::from(Rc::new(VecModel::from(names))));
         let current = self
             .session.pattern_names
             .get(self.session.current_pattern)
@@ -6926,6 +6943,29 @@ impl AppUi {
                 if let Some(window) = weak.upgrade() {
                     guard.sync_mixer(&window);
                     guard.sync_bus_editor(&window);
+                    guard.update_document_title(&window);
+                }
+            });
+        }
+
+        // Channel renaming, the same shape as a track rename and for the same
+        // reason: the name is not in the render graph, so nothing has to reach
+        // the engine and nothing has to reinstall the document.
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_channel_renamed(move |channel, name| {
+                let mut guard = st.borrow_mut();
+                if !guard.session.rename_channel(channel, &name) {
+                    return;
+                }
+                guard.session.dirty = true;
+                if let Some(window) = weak.upgrade() {
+                    // The rack plate is the name's home, and the device-chain
+                    // header is where it was just typed; both are redrawn
+                    // because neither reads the other.
+                    guard.sync_row_flags();
+                    guard.refresh_editor(&window);
                     guard.update_document_title(&window);
                 }
             });

@@ -752,7 +752,21 @@ export component MainWindow inherits Window {
     // number so an unnamed pattern is never blank.
     in-out property <string> current-pattern-name;
     in-out property <[string]> pattern-menu-options;
+    // The raw names, one per pattern, for the surfaces that draw a row per
+    // pattern rather than a menu. `pattern-menu-options` cannot serve them:
+    // it is decorated with the two-digit index a menu needs and would read
+    // "05  Chorus" in a playlist gutter that already numbers its own rows.
+    in-out property <[string]> pattern-names;
     callback pattern-renamed(int, string);
+
+    // The name to draw for a pattern, or its number when it has none. The
+    // fallback lives here rather than at each call site so the playlist, the
+    // menu and the toolbar placeholder cannot drift apart.
+    pure function pattern-label(index: int) -> string {
+        root.pattern-names[index] == ""
+            ? "Pattern " + (index + 1)
+            : root.pattern-names[index]
+    }
 
     // Editing tool: 0=Select 1=Paint 2=Slice 3=Stretch.
     in-out property <int> tool-mode;
@@ -817,6 +831,11 @@ export component MainWindow inherits Window {
     // the alternative, "move the selected channel to here", would make the
     // gesture depend on a selection that the same press is setting.
     callback channel-reorder-requested(int, int); // from, to
+    // A channel was renamed. It carries the index rather than acting on the
+    // selection for the same reason `track-renamed` does: the field edits a
+    // named thing, and which thing that is must not depend on what happens to
+    // be selected when the keystroke lands.
+    callback channel-renamed(int, string);
     // Channel structure is a project edit, so these callbacks carry the
     // clicked row rather than relying on whichever row was selected before a
     // context menu opened.
@@ -2559,7 +2578,7 @@ export component MainWindow inherits Window {
                                 }
                                 NameField {
                                     text: root.current-pattern-name;
-                                    placeholder: "Pattern " + (root.current-pattern + 1);
+                                    placeholder: root.pattern-label(root.current-pattern);
                                     tooltip: "Name this pattern";
                                     edited(t) => { root.pattern-renamed(root.current-pattern, t); }
                                 }
@@ -2663,6 +2682,27 @@ export component MainWindow inherits Window {
                                     // answered from `absolute-position`, so the thing
                                     // that answers it must not be the thing that moves.
                                     for row[ch] in root.channels : channel-row := Rectangle {
+                                        // A row is as tall as its contents and no
+                                        // taller. This wrapper replaced a bare
+                                        // `HorizontalBox` when the drag landed, and a
+                                        // `Rectangle` stretches by default where a
+                                        // layout does not -- four channels in a tall
+                                        // rack became four 80px slabs.
+                                        //
+                                        // Three things had to be true, and refusing to
+                                        // stretch is only the first. A `VerticalBox`
+                                        // whose children *all* refuse divides the slack
+                                        // between them anyway, which the spacer below
+                                        // the add row absorbs. And a wrapper with
+                                        // nothing to size to collapses to nothing: the
+                                        // contents carry an explicit `y` so the drag
+                                        // can slide them, and an explicitly positioned
+                                        // child does not report a height to its parent.
+                                        // Hence the height is asked for by name. The
+                                        // rows drew four names on one line before this
+                                        // line existed.
+                                        vertical-stretch: 0;
+                                        height: row-content.preferred-height;
                                         property <bool> dragging: ChannelDrag.source == ch;
                                         // Which row the pointer is over, answered by the
                                         // row itself from its own bounds. One row is hot
@@ -2698,7 +2738,7 @@ export component MainWindow inherits Window {
                                         // stacking order, and the gap that opens under it is
                                         // the drop indicator either way.
 
-                                        HorizontalBox {
+                                        row-content := HorizontalBox {
                                         y: channel-row.shift + (channel-row.dragging ? ChannelDrag.dy : 0px);
                                         opacity: channel-row.dragging ? 0.95 : 1.0;
                                         padding: 2px;
@@ -3139,11 +3179,29 @@ export component MainWindow inherits Window {
                                 // is the channel's sound, and this is the view whose subject is the
                                 // channel's sound. On the piano roll it was noise.
                                 Rectangle { horizontal-stretch: 1; }
-                                Text {
-                                    text: root.editing-bus ? root.editing-bus-name : root.selected-channel-name;
+                                // A bus reads its name here and renames it on its
+                                // own face, which has room for a labelled field. A
+                                // channel has no face of its own -- the face in this
+                                // slot belongs to its *source* -- so the field is
+                                // here, on the one view whose subject is the channel.
+                                // Until this it could not be renamed at all: the name
+                                // saved, loaded and drew on the rack plate, and the
+                                // only way to change it was to make a different
+                                // channel. Same gap `rename_track` closed for tracks.
+                                if root.editing-bus : Text {
+                                    text: root.editing-bus-name;
                                     color: Theme.text-muted;
                                     font-size: 10px;
                                     vertical-alignment: center;
+                                }
+                                if !root.editing-bus : NameField {
+                                    text: root.selected-channel-name;
+                                    placeholder: "Channel";
+                                    width: 96px;
+                                    tooltip: "Rename this channel";
+                                    edited(value) => {
+                                        root.channel-renamed(root.selected-channel, value);
+                                    }
                                 }
                                 if !root.editing-bus : MenuField {
                                     label: "CHANNEL PRESET";
@@ -5197,6 +5255,15 @@ export component MainWindow inherits Window {
                                     30px + root.pattern-count * 28px);
 
                                 playlist-canvas := Rectangle {
+                                    // Pinned, because a sized child of an unsized
+                                    // parent is *centred* in Slint, not placed at the
+                                    // origin. The canvas is shorter than the viewport
+                                    // whenever there are few patterns, and the song
+                                    // started at bar 1 somewhere down the middle of
+                                    // the pane with the ruler floating away from the
+                                    // toolbar above it.
+                                    x: 0px;
+                                    y: 0px;
                                     width: 104px + root.playlist-bars * root.playlist-bar-width;
                                     height: max(346px, 30px + root.pattern-count * 28px);
 
@@ -5367,10 +5434,12 @@ export component MainWindow inherits Window {
                                                 ? Theme.surface-active : Theme.surface;
                                             Text {
                                                 x: 6px;
-                                                text: "Pattern " + (pattern + 1);
+                                                width: parent.width - 12px;
+                                                text: root.pattern-label(pattern);
                                                 color: root.current-pattern == pattern
                                                     ? Theme.text : Theme.text-muted;
                                                 font-size: 10px;
+                                                overflow: elide;
                                                 vertical-alignment: center;
                                             }
                                             TouchArea {

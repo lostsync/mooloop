@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-10
-- Sessions: 81
+- Sessions: 82
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -178,7 +178,11 @@ Alphabetical by model name, then by harness.
   audio complete against its own acceptance list and the gaps everywhere else
   -- one picker behind four controls calling every destination a send, two
   acceptance cases true but untested, and four documents still saying sends
-  were absent.
+  were absent, and then four interface regressions off one screenshot, of
+  which the fourth was that a channel had never been renameable at all and
+  the real fault under the other three was that a Slint `TextInput` replaces
+  its binding the moment somebody types into it, so every rename field in the
+  application had been going stale on its first keystroke.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

@@ -81,13 +81,24 @@ not a control.
 
 **A text field is left with Enter, and by nothing else.** The toolbar's search
 and rename fields and the knob/fader numeric entries all call `clear-focus()`
-on `accepted` (`toolbar.slint:316`, `controls.slint:922`,
-`controls.slint:1796`) and have no Escape handler, so clicking into one and
+on `accepted` (`toolbar.slint:395`, `controls.slint:959`,
+`controls.slint:2005`; the three line numbers this entry carried were all
+stale by 2026-09-10) and have no Escape handler, so clicking into one and
 then clicking away leaves the caret in it. While it is there, Space types a
 space instead of starting the transport — which is correct for a field being
 edited and wrong for a field nobody is editing. The 2026-09-07 focus fix made
 every *control* transparent to shortcuts; text fields are the remaining case,
 and they need a way out rather than a change to what they consume.
+
+**A name is renamed where its subject is edited, and nowhere nearer to it.**
+A channel is renamed on the `DEVICES` toolbar and a track on its own device
+face, so renaming either means opening the view that owns it. The obvious
+alternative — double-clicking the rack plate or the mixer strip — was not
+built: the plate already carries a press that selects, a drag that reorders
+and a right-click that opens a menu, and a fourth gesture on it needs a
+decision about which one loses rather than an implementation. Nothing is
+blocked by this; it is one more click than a user coming from FL will expect
+(`main.slint`, the `NameField` beside `CHANNEL PRESET`).
 
 ## Edits that do not undo
 

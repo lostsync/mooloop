@@ -59,7 +59,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   With `STEPS` up it carries pattern selection, the cursor tools and pattern
   length; with `MIXER` up, nothing, because the mixer's controls are on its
   strips; with `DEVICES` up, the device chain's source picker and, at the far
-  end, the channel name and its preset browser.
+  end, the field that renames the channel and its preset browser.
   The dock used to stack **two** rows -- a header with the switcher, the
   channel name and the preset browser, and a per-page row under it. Merging
   them returned 34px and removed a `SONG ARRANGEMENT` label that named the
@@ -101,6 +101,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - Patterns are created explicitly from a one-pattern project, with up to 256
   addressable pattern IDs and independent logical lengths from 1 to 256 steps.
   Hidden steps survive shortening and re-extending a pattern.
+- **Channels, tracks and patterns can each be named.** A channel is renamed on the
+  `DEVICES` toolbar, a track on its own device face, a pattern in the
+  transport toolbar. A channel or a track refuses a blank name, because its
+  rack plate or its mixer column is the only thing identifying it; a pattern
+  accepts one and reads as `Pattern N` wherever it is drawn -- the pattern
+  menu and the playlist's gutter -- because its number is beside it there.
 - Pattern and Song transport modes are independent of the visible editor.
   The playlist is a lower-pane tab, supports layered tick-addressed pattern
   instances, and remains editable while either mode plays. Clip width follows

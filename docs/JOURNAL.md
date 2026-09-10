@@ -1111,9 +1111,89 @@ The second is that the answer was in the vendored source the whole time, and
 `slint-sketch` type-checked the restructured `main.slint` in two seconds where
 believing the docs would have cost a four-minute build to find out.
 
+## Sep 10 — four regressions, and the one that was never a regression
+
+Adam sent a screenshot with a box drawn round the channel rack: four channels,
+each one an eighty-pixel slab. Four complaints came with it, and they turned
+out to be four different bugs with nothing in common except that every one of
+them was invisible to the tests already in the repo.
+
+**The rack rows.** `8cc4336` gave each row a wrapping `Rectangle` so the drag
+could answer `hot` from bounds that do not move. It replaced a `HorizontalBox`,
+and that is the cause: a layout's vertical stretch is computed from its
+children and came out zero, where a bare `Rectangle`'s is one, so the rows
+started sharing out every spare pixel in a rack that is usually mostly spare.
+
+Three things had to be true, and I found them one at a time, each by being
+wrong about the last. Refusing to stretch is the first. The second is that a
+`VerticalBox` whose children *all* refuse divides the slack between them
+anyway — `slint-sketch` reproduced the screenshot from forty lines in 0.2s and
+showed that in another 0.2s, and the trailing spacer that absorbs it was
+already in the file. The third only appeared on the box: the rows **collapsed
+to nothing**, all four channel names drawn on one line. The row's contents
+carry an explicit `y` so the drag can slide them, an explicitly positioned
+child reports no height to its parent, and a wrapper with nothing to size to
+is zero tall. The height has to be asked for by name.
+
+That third one is the interesting failure, because the sketch that found the
+first two could not have found it: I had left the `y` out of the reduction as
+irrelevant detail, and the `y` was the whole mechanism. A reduction is only
+evidence about what you kept in it. What did catch it was `mixer_snapshot.rs`
+reporting `channel == 3` where it wanted `0` — four zero-height rows stack at
+one coordinate and the last drawn wins the hit test, so the shape of the wrong
+answer named the bug before the screenshot of it did.
+
+**The playlist.** A sized child of an unsized parent is *centred* in Slint, not
+placed at the origin. The playlist canvas is shorter than its viewport whenever
+there are few patterns, so bar 1 sat somewhere down the middle of the pane with
+the ruler floating clear of the toolbar above it. Two lines. It never showed in
+`playlist_snapshot.rs` because that test renders the playlist in the 376px dock,
+where the canvas is 346px and there is nothing to centre it in.
+
+**The pattern names.** Two bugs stacked. The playlist gutter drew
+`"Pattern " + (pattern + 1)` from its own loop index, so it was the one surface
+a rename could not reach — the fix is a `pattern-names` model and one
+`pattern-label` function that owns the `Pattern N` fallback for everybody. And
+`sync_pattern_menu` was called from three callbacks and no loading path, so
+opening a song, starting a new kit, or *any* edit that reinstalls the project —
+a channel paste, an undo — left the toolbar field and the pattern menu naming
+the previous document's patterns. It belonged in `replace_project` with
+`sync_mixer` and `sync_playlist`, which is where it now is.
+
+**Renaming, which was the interesting one.** Tracks could be renamed. Patterns
+could be renamed. Channels could not, at all: the name saved, loaded, and drew
+on the rack plate, and nothing in the application could set it — the same gap
+`rename_track` closed for tracks on Sep 9, one level down, and unnoticed because
+a channel's name is *drawn* everywhere it matters.
+
+Underneath all three sat a fourth thing, and it is the one worth keeping. A
+Slint `TextInput`'s `text` is an ordinary property, so typing into it does not
+update a binding — it **replaces** it. `NameField` was wired `text <=> root.text`
+straight down to its input, which means every rename field in the application
+tracked what Rust pushed right up until the first keystroke and never again.
+Rename a pattern, switch to another pattern, and the box still read `Chorus`
+while the menu, the playlist and the document all read `Pattern 2`. The store
+was correct the entire time, which is why nothing caught it: a snapshot test
+renders one frame and one frame is always self-consistent, and a session test
+never touches the field. It only exists in the *sequence*. `NameField` now
+drives its input from a `changed` handler, never writes back to `text`, and
+publishes `current-text` so `name_field.rs` can assert the sequence without
+reading a single pixel.
+
+Three renames, three stores, and none of the three had a test. They do now.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.
+
+**A binding into a `TextInput` survives exactly until the first keystroke.**
+Slint's `text` is an ordinary property and typing *replaces* its binding rather
+than updating it, so a field fed from the application tracks it until somebody
+types and then silently stops. This is the fourth entry in the routing lesson
+below and the sharpest, because there is no wrong pixel to see: the field is
+self-consistent, the store is correct, and only the *sequence* — push, type,
+push again — is wrong. Drive the input from a `changed` handler and let the
+model be the only writer.
 
 **Slint input routing is where the bugs live.** Focus scopes eat the first press. `TouchArea.pressed` only tracks the left button, so right-drag-to-clear cleared exactly one step. Per-element hit areas can't survive a drag that moves the element. Three different symptoms, one lesson: test by dispatching real pointer events, because invoking callbacks directly passes even when routing is completely broken.
 

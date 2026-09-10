@@ -248,6 +248,23 @@ mod tests {
     use super::*;
     use mooloop_core::TICKS_PER_BAR;
 
+    /// A pattern may go nameless -- the playlist gutter and the pattern menu
+    /// both fall back to its number -- so blanking one is an edit, not a
+    /// refusal. That is the deliberate difference from `rename_channel` and
+    /// `rename_track`, which reject a blank.
+    #[test]
+    fn a_pattern_takes_a_name_and_may_give_it_back() {
+        let mut session = Session::default();
+
+        assert!(session.rename_pattern(0, "  Chorus  "), "a real name was refused");
+        assert_eq!(session.pattern_names[0], "Chorus", "the name was not trimmed");
+
+        assert!(session.rename_pattern(0, "   "), "blanking a pattern name was refused");
+        assert_eq!(session.pattern_names[0], "", "the name did not clear");
+
+        assert!(!session.rename_pattern(session.pattern_names.len(), "Nope"));
+    }
+
     /// Shortening a pattern must not leave the roll highlighting notes it has
     /// stopped drawing.
     #[test]

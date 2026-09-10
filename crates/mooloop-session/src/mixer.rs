@@ -287,6 +287,25 @@ mod tests {
     use super::*;
     use mooloop_core::{EffectKind, MASTER_BUS};
 
+    /// The rename this crate already had and nothing exercised. A blank name
+    /// is refused here where `rename_pattern` accepts one: a mixer column is
+    /// identified by its name alone, and a pattern has its number beside it.
+    #[test]
+    fn a_track_takes_a_name_and_refuses_a_blank_one() {
+        let mut session = Session::default();
+        session.ensure_tracks(2);
+
+        assert!(session.rename_track(1, "  Drum Bus  "), "a real name was refused");
+        assert_eq!(session.buses[1].bus.name, "Drum Bus", "the name was not trimmed");
+
+        assert!(!session.rename_track(1, "Drum Bus"), "an unchanged name reported a change");
+        assert!(!session.rename_track(1, "  "), "a blank name was stored");
+        assert_eq!(session.buses[1].bus.name, "Drum Bus", "a refused name was still applied");
+
+        assert!(!session.rename_track(-1, "Nope"));
+        assert!(!session.rename_track(session.buses.len() as i32, "Nope"));
+    }
+
     /// A bus fader that stops at unity leaves its top half dead; both gain
     /// stages share the container's headroom.
     #[test]
