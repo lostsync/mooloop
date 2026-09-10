@@ -2140,8 +2140,12 @@ export component MixerFader inherits Rectangle {
         width: 100%;
         height: 100%;
 
-        // Travel ticks: the taper's own breakpoints down the left, so throw
-        // is readable without a scale.
+        // Travel ticks: the taper's breakpoints down the left, so throw is
+        // readable without a scale -- all of them but 0.05, which is where
+        // -60 dB sits and is close enough to the bottom of the throw that a
+        // tick there and a tick at 0.0 read as one thick mark. This list is
+        // therefore a deliberate subset of `GainMath.fader-travel` and not a
+        // copy of it, which is worth knowing before "fixing" the difference.
         for tick[i] in root.tick-positions : Rectangle {
             x: 2px;
             y: (parent.height - root.cap-height) * (1 - tick) + root.cap-height / 2;
