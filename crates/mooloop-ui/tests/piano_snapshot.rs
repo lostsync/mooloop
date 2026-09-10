@@ -146,7 +146,7 @@ fn render_piano_lanes_snapshot() {
     ]));
     ui.set_automation_points(ModelRc::from(points.clone()));
     ui.set_automation_lane_name("Filter 1 · Cutoff".into());
-    ui.set_automation_value_text("1.20k Hz".into());
+    ui.set_automation_value_text("1.20 kHz".into());
     ui.set_automation_targets(ModelRc::from(Rc::new(VecModel::from(vec![
         AutomationTargetRow {
             param_name: "Cutoff".into(),

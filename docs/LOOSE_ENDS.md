@@ -241,16 +241,6 @@ width-jitter this pass took out of `format-db` itself. What is missing is an
 unsigned one-decimal formatter to sit beside `format-db`; that is a decision
 about the dB vocabulary rather than a typo, which is why it was left.
 
-**A `"s"`-unit parameter reads at two decimals in an automation lane.**
-`format_param_value` (`mooloop-ui/src/lib.rs:1557`) prints the descriptor's
-natural units directly, so an envelope attack of 5 ms reads `0.01 s` and
-everything below 5 ms reads `0.00 s` — the lane cannot show the range it is
-editing. The DS-01 face already solves this: `display_unit`
-(`lib.rs:1650`) converts a sub-second `"s"` to `ms` and a `>= 1 kHz` `"Hz"`
-to `kHz`, and `format_param_value` is the one value path that does not call
-it. Found 2026-09-10 during a metering pass; not fixed then only because
-`lib.rs` was owned by another session at the time.
-
 **Two unmerged spikes and 39 unpushed commits on `main`.**
 `spike/egui-view-layer` and `spike/slint-split-build` are answers rather than
 candidates — neither is waiting to land. Adam's call whether either goes

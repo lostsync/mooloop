@@ -1556,20 +1556,36 @@ fn rack_cell(notes: &[NoteEvent], step: usize) -> StepCell {
 /// bar carries the explanation.
 fn format_param_value(descriptor: &ParamDescriptor, normalized: f32) -> String {
     let natural = descriptor.from_normalized(normalized);
-    let magnitude = natural.abs();
+    // Through `display_unit`, like every other value readout in the program.
+    // Printing the descriptor's own units directly is what made this the one
+    // path that could not show the range it was editing: an envelope attack
+    // of 5 ms read `0.01 s`, and everything below 5 ms read `0.00 s`, so a
+    // lane on the fastest part of an envelope was a row of identical zeroes.
+    let (scale, unit) = display_unit(descriptor, natural);
+    let shown = natural / scale;
+    let magnitude = shown.abs();
     let text = if magnitude >= 10_000.0 {
-        format!("{:.2}k", natural / 1_000.0)
+        format!("{:.2}k", shown / 1_000.0)
+    } else if unit == "ms" {
+        // Milliseconds are already the small unit, so they get the rule the
+        // DS-01 face uses rather than the general one: `240`, `45`, `5`,
+        // and a tenth only below 1 ms, where it is the whole value.
+        if magnitude >= 1.0 || magnitude == 0.0 {
+            format!("{shown:.0}")
+        } else {
+            format!("{shown:.1}")
+        }
     } else if magnitude >= 100.0 {
-        format!("{natural:.0}")
+        format!("{shown:.0}")
     } else if magnitude >= 10.0 {
-        format!("{natural:.1}")
+        format!("{shown:.1}")
     } else {
-        format!("{natural:.2}")
+        format!("{shown:.2}")
     };
-    if descriptor.unit.is_empty() {
+    if unit.is_empty() {
         text
     } else {
-        format!("{text} {}", descriptor.unit)
+        format!("{text} {unit}")
     }
 }
 
@@ -12179,6 +12195,55 @@ mod tests {
     }
 
     use super::*;
+
+    /// A lane readout must show the range it is editing.
+    ///
+    /// `format_param_value` printed the descriptor's own units directly, so a
+    /// time parameter -- always declared in seconds -- was rendered at two
+    /// decimal places. An envelope attack of 5 ms read `0.01 s` and anything
+    /// shorter read `0.00 s`, which makes the fastest and most-edited part of
+    /// an envelope a row of identical zeroes. Every other readout in the
+    /// program already went through `display_unit`; this was the one that
+    /// did not.
+    #[test]
+    fn a_lane_reads_a_short_time_in_milliseconds() {
+        let seconds = ParamDescriptor {
+            id: 0,
+            name: "Attack",
+            unit: "s",
+            min: 0.0,
+            max: 2.0,
+            curve: ParamCurve::Linear,
+            default: 0.0,
+        };
+
+        // The cases that used to collapse to "0.01 s" and "0.00 s".
+        assert_eq!(super::format_param_value(&seconds, 0.0025), "5 ms");
+        assert_eq!(super::format_param_value(&seconds, 0.00025), "0.5 ms");
+        // A second and over keeps its own unit, and its two decimals.
+        assert_eq!(super::format_param_value(&seconds, 0.75), "1.50 s");
+    }
+
+    /// The other half of `display_unit`: a frequency at or above a kilohertz
+    /// reads in kHz. Without it the general formatter's own large-number
+    /// branch produced `12.00k Hz`, which is a magnitude prefix and a unit
+    /// that disagree about the scale of the same number.
+    #[test]
+    fn a_lane_reads_a_high_frequency_in_kilohertz() {
+        let hertz = ParamDescriptor {
+            id: 1,
+            name: "Cutoff",
+            unit: "Hz",
+            min: 0.0,
+            max: 20_000.0,
+            curve: ParamCurve::Linear,
+            default: 0.0,
+        };
+
+        assert_eq!(super::format_param_value(&hertz, 0.6), "12.0 kHz");
+        // Below a kilohertz it stays in hertz, whole numbers at that size.
+        assert_eq!(super::format_param_value(&hertz, 0.022), "440 Hz");
+    }
 
     #[test]
     fn musical_divisions_match_the_snap_table_in_main_slint() {

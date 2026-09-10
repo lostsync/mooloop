@@ -193,7 +193,10 @@ Alphabetical by model name, then by harness.
   all three because a sized child of a plain `Rectangle` is centred in it
   rather than placed at its origin, and then the agreement test that guards
   that vocabulary, which parsed its own source two different ways and could
-  have read a comment recording a value in place of the value.
+  have read a comment recording a value in place of the value, and the
+  automation lane's own readout, the one value path in the program that
+  printed a descriptor's raw units, so a lane on a five-millisecond envelope
+  attack showed `0.01 s` and everything faster than it showed `0.00 s`.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
