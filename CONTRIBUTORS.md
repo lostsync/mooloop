@@ -215,7 +215,9 @@ Alphabetical by model name, then by harness.
   note without asking the shared namer, and then `scripts/dupe-audit`, which
   is that whole pass turned into four searches so the next one does not have
   to re-derive them -- and which, run against the tree as it stood before the
-  pass, finds all four of the things the pass found by hand.
+  pass, finds all four of the things the pass found by hand, and then the
+  merge those eleven commits had been waiting on, which turned out to be
+  blocked by the pre-commit hook refusing the one write `main` accepts.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

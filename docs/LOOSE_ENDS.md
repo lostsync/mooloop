@@ -1,8 +1,14 @@
 # Loose Ends
 
 Small known gaps that agents flagged when handing work back, gathered into one
-place so they stop living in chat scrollback. Each one was **re-verified
-against the tree on 2026-09-06**; the file and line named is where to start.
+place so they stop living in chat scrollback. The file and line named is where
+to start.
+
+Everything here as of **2026-09-06** was re-verified against the tree that
+day. Entries added since carry their own date, and entries older than that
+sweep have not been checked against the tree since it — the spike list below
+was still claiming thirty-nine unpushed commits on `main` a day after `main`
+was pushed, which is what this paragraph is now careful about.
 
 This is not a roadmap and not a bug list. Everything here was a deliberate
 stopping point rather than an oversight, and none of it blocks the sequence in
@@ -276,10 +282,14 @@ finding that three had "no slack anywhere". Correcting the source formula
 widens every three-unit source face by 4px and every four-unit one by 8px,
 against faces that were sized by eye and signed off. Found 2026-09-10.
 
-**Two unmerged spikes and 39 unpushed commits on `main`.**
-`spike/egui-view-layer` and `spike/slint-split-build` are answers rather than
-candidates — neither is waiting to land. Adam's call whether either goes
-anywhere, and when `main` gets pushed.
+**Three unmerged spikes.** `spike/egui-view-layer` (3 commits),
+`spike/slint-split-build` (5) and `spike/pattern-bank-cost` (1) are answers
+rather than candidates — none is waiting to land. Adam's call whether any
+goes anywhere.
+
+There is also `claude/device-identity-rack-addressing-99yt4o` on the remote,
+one commit that is not in `origin/main` and has no local branch. Nobody has
+said whether it is wanted.
 
 ---
 
