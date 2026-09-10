@@ -137,6 +137,16 @@ Use contrast and spacing to show hierarchy, not floating cards within cards.
 - Module titles are quieter than parameter labels; parameter labels are quieter
   than values that need active reading.
 - Avoid isolated tiny controls surrounded by large dark fields.
+- **A list of things a user makes draws exactly the ones that exist, and
+  scrolls.** It does not reserve empty bays for a number somebody drew once,
+  and it does not shrink its rows to fit more in. Adam, 2026-09-09, on the
+  sends area his own mockup had drawn as four bars: *"i drew 4 sends bc that's
+  how many fit in my drawing. if there are no sends, we wouldnt show any. we're
+  not limiting to 4… if we gain more than will fit, that area should scroll."*
+  A track with no sends draws a line saying so, which is smaller than one empty
+  bay would be. Note that a scroll bar drawn *over* the viewport's right edge
+  will swallow the rightmost control in a row -- reserve for it in the row's
+  padding, and test the reachability with a click rather than an invoke.
 
 The source editor should feel like one instrument front panel. It should not
 look like several cards dropped into the center of a page.

@@ -954,8 +954,12 @@ land on its own when it starts to matter:
 
   It is not a send: the producing channel does not know it is being read and
   its own routing does not move. It is not a router either — one subscription,
-  one channel, one outlet. Parallel sends and sidechain key inputs are still
-  absent and are what the compiled edge model exists for next.
+  one channel, one outlet. **Parallel sends are no longer absent**, but they are
+  a second edge system rather than this one: a send is a producer-side edge that
+  carries its own compensation, where an aux-in subscription lands pre-chain in
+  the consumer and has nowhere to put a delay, which is why it is refused when
+  its tap is late instead. Unifying the two is recorded and not done. Sidechain
+  key inputs are still absent.
 - The ML-P8 has a device output stage: Volume and Pan, before the channel
   strip's own. They exist to be the base its per-voice `VcaLevel` and `Pan`
   modulation destinations offset from, which resolved from hardcoded unity and
@@ -1012,18 +1016,24 @@ land on its own when it starts to matter:
   same tick land in the same frame even when one carries an oversampled device
   and the other does not. Only Drive costs anything today (fifteen frames), so
   the audible effect is small; what it removes is the comb filtering that was
-  worst exactly when two channels were most alike, and what it unblocks is
-  parallel sends and sidechains, which are untrustworthy without it.
+  worst exactly when two channels were most alike, and what it unblocked is
+  parallel sends — now built, and compensated per edge rather than per producer,
+  because a track with a send reaches two summing points that owe it different
+  delays — and sidechains, which are untrustworthy without it and are still
+  absent.
   Bypass keeps its device's latency — a bypassed node's signal goes through
   the same delay rather than past it — so A/B-ing an effect A/Bs the effect
   and not the timing. Removing the device is what gives the latency back. The
   plan is derived from the project rather than tracked alongside it, so no
   edit path can forget to update it, and an offline render compiles the same
   plan as a live one.
-- Buses are insert points, not sends: a channel feeds exactly one, with no
-  parallel send, return, or wet/dry split. There are no sidechains, external
-  inputs, solo, or per-bus stem export, and buses cannot be renamed from the
-  interface yet.
+- **A channel** feeds exactly one track and cannot author a send of its own.
+  The engine's sends are strip-level and a channel's compiles correctly, but
+  nothing authors one, because the mixer draws no channel strips for the control
+  to live on — that and the tap points below pre-fader are stage 2 of the send
+  work. A send has a level and a tap, and no pan and no wet/dry split of its
+  own. There are no sidechains, external inputs, solo, or per-track stem
+  export.
 - Latency compensation is the mixer's own, not a hosted plugin's. `AudioNode`
   reports integer processing latency and `EffectKind` declares it without
   being built; the drive is the only kind that costs anything, at the measured

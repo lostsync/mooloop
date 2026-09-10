@@ -67,8 +67,8 @@ Alphabetical by model name, then by harness.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-09-09
-- Sessions: 80
+- Last seen: 2026-09-10
+- Sessions: 81
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -174,7 +174,11 @@ Alphabetical by model name, then by harness.
   short bank would have dropped tracks silently, and then sends -- where the
   step's own plan turned out to have named the wrong three files, so the
   change that was scheduled last for forcing a rewrite of the realtime
-  schedule did not touch it.
+  schedule did not touch it, and then verifying that step, which found the
+  audio complete against its own acceptance list and the gaps everywhere else
+  -- one picker behind four controls calling every destination a send, two
+  acceptance cases true but untested, and four documents still saying sends
+  were absent.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

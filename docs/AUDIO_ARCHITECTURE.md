@@ -325,14 +325,28 @@ sidechains and step 7 are next.
    so the whole-project null holds across block sizes and an export matches a
    live take sample for sample.
 
-   Two things it deliberately did not do. **Parallel sends** are still absent:
-   a channel feeds exactly one bus, and what landed is an auxiliary input to a
-   *device* rather than a second output from a strip. **Sidechain key inputs**
-   need the dependency-edge half — a signal that schedules a producer without
-   being summed into the consumer — which the compiled order built here is
-   what they would hang off. A cycle is refused and its subscription retained
-   as inspectable orphan state; external audio feedback still needs step 7's
-   general delay policy.
+   Two things it deliberately did not do, and **the first of them landed
+   2026-09-09**, in `docs/plans/console/` step 05. **Parallel sends** are a
+   second outgoing edge from a strip, and they turned out not to extend this
+   mechanism at all: a send is a producer-side edge that carries its own
+   compensation, so it is aligned by construction and never goes through
+   `compile_audio_graph`. What it did change is the three places the
+   one-edge-per-node assumption actually lived — `compile_latency` became
+   per-edge, `reaches` became a depth-first search, and the block loop gained
+   two capture points and one emission point. `CompiledBusGraph::destinations`
+   was not touched, because a track still has exactly one *output*. Sends are
+   strip-level and a channel's compiles, but only a track can author one today.
+
+   **Sidechain key inputs** are still absent. They need the dependency-edge
+   half — a signal that schedules a producer without being summed into the
+   consumer — which the compiled order built here is what they would hang off.
+   A cycle is refused and its subscription retained as inspectable orphan
+   state; external audio feedback still needs step 7's general delay policy.
+
+   That leaves two edge systems wearing one vocabulary, which is recorded
+   rather than resolved: `EdgeRefusal::TapIsLate` reads as a rule about taps
+   and is a rule about *consumers*, since an aux-in edge lands pre-chain where
+   no delay can go. Unifying them is its own change.
 7. Route retained-audio buffers and explicit feedback through the same port,
    timing, preparation, and reclamation contracts.
 

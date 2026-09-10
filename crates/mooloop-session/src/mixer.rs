@@ -325,6 +325,48 @@ mod tests {
         );
     }
 
+    /// The same refusal, reached through a **send** rather than an output.
+    ///
+    /// Not a duplicate of the test above: `add_send` builds its own
+    /// `RoutingLoop` rather than sharing `set_bus_output`'s, so the two could
+    /// name different tracks and only one of them would be caught. They are
+    /// one rule -- `would_create_cycle` -- and the step doc promises the send
+    /// menu greys exactly what the output picker greys, with the same
+    /// sentence, so the sentence is asserted rather than assumed.
+    #[test]
+    fn a_send_that_would_loop_is_refused_by_name() {
+        let mut session = Session::default();
+        session.ensure_tracks(3);
+        session.buses[2].bus.name = "Reverb".into();
+
+        // Track 2 already feeds track 1, so a send from 1 back into 2 closes
+        // the loop -- and it is the *send* that has to notice.
+        assert!(matches!(session.set_bus_output(2, 1), Some(Ok(_))));
+        let refusal = session.add_send(1, 2).expect("both tracks exist");
+        let Err(RoutingLoop { feeder }) = refusal else {
+            panic!("a send closed a loop and was accepted");
+        };
+        assert_eq!(feeder, session.buses[2].bus.name, "the refusal named the wrong track");
+        assert!(
+            session.buses[1].sends.is_empty(),
+            "the refused send was pushed anyway"
+        );
+    }
+
+    /// A track cannot send to itself, which is the degenerate loop and the
+    /// one a user reaches first by clicking their own row.
+    #[test]
+    fn a_track_cannot_send_to_itself() {
+        let mut session = Session::default();
+        session.ensure_tracks(3);
+        assert!(session.add_send(1, 1).is_none(), "a self-send was routed");
+        assert!(session.buses[1].sends.is_empty());
+        assert!(
+            !session.allowed_destinations(1)[1],
+            "the picker offered the track its own row"
+        );
+    }
+
     #[test]
     fn selecting_a_bus_points_the_rack_at_it() {
         let mut session = Session::default();

@@ -379,3 +379,41 @@ fn a_send_row_reports_its_own_index() {
         "the second row switched something other than itself"
     );
 }
+
+/// The remove button, one gap to the right of the switch above.
+const SEND_REMOVE_X: f32 = 455.0;
+
+/// The remove button is **reachable**, which is the half of the row the test
+/// above does not cover.
+///
+/// This is not a duplicate of it. The scroll bar is drawn over the right edge
+/// of the viewport rather than beside it, so the rightmost control in a send
+/// row can sit underneath it and stop receiving clicks entirely while every
+/// control to its left keeps working -- which is exactly what happened at the
+/// row's first padding, and why `SendRow` reserves 12px on the right and why
+/// this dispatches a real pointer event instead of invoking the callback.
+///
+/// A remove button that cannot be clicked is a send that cannot be undone,
+/// and nothing else in the interface would look wrong.
+#[test]
+fn a_send_row_can_be_removed_from_under_the_scroll_bar() {
+    let ui = face_with_sends();
+
+    let removed = Rc::new(Cell::new((-1, -1)));
+    let sink = removed.clone();
+    ui.on_send_removed(move |bus, send| sink.set((bus, send)));
+
+    click(&ui, SEND_REMOVE_X, SEND_ROW_0_Y);
+    assert_eq!(
+        removed.get(),
+        (1, 0),
+        "the remove button did not report -- it is most likely under the scroll bar again"
+    );
+
+    click(&ui, SEND_REMOVE_X, SEND_ROW_1_Y);
+    assert_eq!(
+        removed.get(),
+        (1, 1),
+        "the second row removed something other than itself"
+    );
+}

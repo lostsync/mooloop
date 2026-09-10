@@ -97,6 +97,14 @@ and they need a way out rather than a change to what they consume.
 the file has no reference to it. This is pre-existing rather than introduced
 by the slice work; wiring sampler params into undo is its own change.
 
+**Send edits are not undoable, because routing never was.** `add_send`,
+`remove_send`, `set_send_level`, `set_send_tap` and `set_send_enabled` in
+`mooloop-session/src/mixer.rs` mark the document dirty and return an
+`EngineCommand`, the same shape `set_bus_output` beside them has always had.
+A track *add* is undoable, because it goes through the project-edit path — so
+one mixer face now has both behaviours on it, which is the part worth fixing.
+Unifying them means routing joining `ProjectEdit`, not a per-callback patch.
+
 ---
 
 ## Ceilings and one-shots

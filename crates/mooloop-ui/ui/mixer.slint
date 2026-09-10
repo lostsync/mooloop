@@ -131,8 +131,22 @@ export component BusPicker inherits Rectangle {
                         text: name;
                         active: i == root.value;
                         enabled: parent.permitted;
+                        // Not "Send to \{name}". This picker is four
+                        // controls -- three output pickers and one send
+                        // picker -- and since step 05 a send is a specific
+                        // thing that three of them are not. The name is
+                        // already the visible text, so when the row is legal
+                        // the tooltip stays the label and adds nothing.
+                        //
+                        // The refused row is the one place in the interface
+                        // where a sentence belongs in a tooltip rather than
+                        // the status bar: `hint` is published from
+                        // `ToolButton`'s TouchArea, which is disabled here,
+                        // so the status bar would never hear it. `Tooltip`
+                        // lowers to its own hover area and still shows. Do
+                        // not "correct" this to a `hint`.
                         tooltip: parent.permitted
-                            ? "Send to " + name
+                            ? name
                             : name + " already leads back here";
                         clicked => {
                             root.picked(i);

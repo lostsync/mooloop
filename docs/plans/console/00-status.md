@@ -349,3 +349,56 @@ anything to drill into, so the two are one decision and it is Adam's.
 document dirty and reaches audio, like `set_bus_output` beside it; a track
 *add* still goes through the project-edit path and is. Worth unifying, and not
 here.
+
+### The verification pass, 2026-09-10
+
+The step landed and was then gone over against its own acceptance list, the
+tooltip rules in `UI_DESIGN.md`, and every document the feature could have
+invalidated. The engine half needed nothing: all seven acceptance cases were
+already asserted, including the alignment null at three block sizes with the
+send disabled. Four things were open, and three of them were in the interface
+or in the documents rather than in the audio.
+
+**The target picker said "Send to" in the three places that are not sends.**
+`BusPicker` is one component behind four controls — the mixer strip's
+destination, the track face's `Output`, `main.slint`'s channel destination,
+and the send picker — and every row in its popup was tooltipped `"Send to " +
+name`. That string predates this step and was harmless until it landed: what
+step 05 changed is that *send* became a specific thing three of those four
+controls are not, which is the same correction the step already made one level
+up when it labelled the track face `Output` rather than `Sends to`. The row
+tooltip is the track's name now.
+
+Its refused row keeps its sentence, and that is deliberate rather than an
+oversight against the tooltip rule. `ToolButton` publishes `hint` from its
+`TouchArea`, which is disabled on a refused row, so the status bar can never
+hear it — where Slint lowers `Tooltip` to a `TooltipArea` with its own hover
+detection, which still fires. It is the one place in the interface where a
+sentence in a tooltip is the only mechanism that works, and it now says so in
+a comment so the next audit does not "fix" it.
+
+**Two acceptance cases were true but untested, both on the half a test would
+not notice.** The send row's remove button had no test, although the row's own
+padding comment claims a test found it sitting under the scroll bar — which is
+the failure mode where every control to its left keeps working, so nothing
+looks wrong. And the loop refusal was asserted in `mooloop-core`, where the
+rule is, and in `mooloop-session` only for an *output*: `add_send` builds its
+own `RoutingLoop` rather than sharing `set_bus_output`'s, so the two could name
+different tracks and only one would be caught. Both are tests now, plus the
+degenerate self-send a user reaches first by clicking their own row.
+
+**Four documents still said sends were absent.** `CURRENT.md` in two places
+(its aux-in entry and its mixer-gaps entry, the second of which also still
+said tracks could not be renamed), `AUDIO_ARCHITECTURE.md`'s migration step 6,
+and `JOURNAL.md`'s open threads. The correction worth carrying out of them is
+the one step 6 had backwards: parallel sends were written there as the thing
+the typed-edge model existed to grow into, and they did not extend it at all.
+A send is a producer-side edge carrying its own compensation, so it never asks
+`compile_audio_graph` anything. Two edge systems, one vocabulary — which is
+recorded in all three now rather than resolved.
+
+`UI_DESIGN.md` also gained the rule this step's sends area is the first
+instance of: a list of things a user makes draws exactly the ones that exist
+and scrolls, rather than reserving bays for a number somebody drew once. The
+scroll-bar-over-the-viewport trap is recorded beside it, because that is what
+makes the rule cost a test rather than nothing.
