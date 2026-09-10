@@ -32,6 +32,12 @@ export component MeterScale inherits Rectangle {
             width: parent.width;
             height: 1px;
             Rectangle {
+                // Pinned to the left edge. Sized on one axis and unplaced on
+                // the other, this was centred across the scale's full width
+                // and landed on the label -- which starts at 6px precisely to
+                // clear a 4px tick sitting here. The stroke crossed the
+                // digits, so `-12` read as `+2` and `-18` as `+8`.
+                x: 0px;
                 width: 4px;
                 height: 1px;
                 background: Theme.text-faint;
@@ -52,6 +58,11 @@ export component MeterScale inherits Rectangle {
             width: 1px;
             height: parent.height;
             Rectangle {
+                // Pinned to the top, for the reason the vertical branch is
+                // pinned to the left: centred down the scale's full height it
+                // struck through the label below it, which sits at 5px to
+                // clear exactly this.
+                y: 0px;
                 width: 1px;
                 height: 4px;
                 background: Theme.text-faint;
