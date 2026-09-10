@@ -196,7 +196,12 @@ Alphabetical by model name, then by harness.
   have read a comment recording a value in place of the value, and the
   automation lane's own readout, the one value path in the program that
   printed a descriptor's raw units, so a lane on a five-millisecond envelope
-  attack showed `0.01 s` and everything faster than it showed `0.00 s`.
+  attack showed `0.01 s` and everything faster than it showed `0.00 s`, and
+  then the half of the face-agreement test that was never written: the
+  generators had their ranges checked against the table and the effects did
+  not, though eight of their faces spell a range out as a ratio inside a
+  `pow()`, where it does not look like a range and nothing draws the eye to
+  it when the table moves.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

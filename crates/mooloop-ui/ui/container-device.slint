@@ -149,7 +149,7 @@ export component ContainerDeviceFace inherits EffectDeviceShell {
                 tooltip: "Dry/wet across everything in this container";
                 value <=> root.mix;
                 default-value: 1.0;
-                value-text: round(root.mix * 100) + " %";
+                value-text: round(root.mix * 100) + "%";
                 changed(v) => { root.mix-changed(v); }
             }
             if root.mix-inert : Text {

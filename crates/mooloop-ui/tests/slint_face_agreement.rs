@@ -17,7 +17,12 @@
 //! it found: five faces declaring `0 .. 2` linear, or `0 .. 1` and a
 //! five-second display, against one table saying 1 ms to 8 s in ratio.
 
-use mooloop_core::{DeviceKind, ParamCurve, ParamDescriptor};
+use mooloop_core::{DeviceKind, EffectKind, ParamCurve, ParamDescriptor};
+use mooloop_core::{
+    BITCRUSH_PARAM_DOWNSAMPLE, COMP_PARAM_ATTACK_MS, COMP_PARAM_RATIO, COMP_PARAM_RELEASE_MS,
+    DELAY_PARAM_TIME_MS, DRIVE_PARAM_DRIVE, GATE_PARAM_ATTACK_MS, GATE_PARAM_RELEASE_MS,
+    LIMITER_PARAM_RELEASE_MS, PLATE_PARAM_DECAY_S, REVERB_PARAM_PREDELAY_MS,
+};
 
 const DRUM_SLINT: &str = include_str!("../ui/drum-device.slint");
 const SAMPLER_SLINT: &str = include_str!("../ui/sampler-device.slint");
@@ -25,6 +30,15 @@ const MONO_SLINT: &str = include_str!("../ui/mono-device.slint");
 const POLY_SLINT: &str = include_str!("../ui/poly-device.slint");
 const MLM1_SLINT: &str = include_str!("../ui/mlm1-device.slint");
 const MLP8_SLINT: &str = include_str!("../ui/mlp8-device.slint");
+
+const BITCRUSH_SLINT: &str = include_str!("../ui/bitcrush-device.slint");
+const DRIVE_SLINT: &str = include_str!("../ui/drive-device.slint");
+const COMPRESSOR_SLINT: &str = include_str!("../ui/compressor-device.slint");
+const DELAY_SLINT: &str = include_str!("../ui/delay-device.slint");
+const GATE_SLINT: &str = include_str!("../ui/gate-device.slint");
+const LIMITER_SLINT: &str = include_str!("../ui/limiter-device.slint");
+const PLATE_SLINT: &str = include_str!("../ui/plate-device.slint");
+const REVERB_SLINT: &str = include_str!("../ui/reverb-device.slint");
 
 /// The face's declaration for one knob: its bounds, its resting value, and
 /// whether it is drawn in ratio.
@@ -239,4 +253,121 @@ fn the_shared_envelope_range_is_what_the_faces_declare() {
     let descriptor = envelope_descriptor("mono", mooloop_core::SYNTH_PARAM_ATTACK);
     assert_eq!(descriptor.min, mooloop_core::ENV_MIN_SECONDS);
     assert_eq!(descriptor.max, mooloop_core::ENV_MAX_SECONDS);
+}
+
+
+// --- The effect faces ------------------------------------------------------
+//
+// The generators declare their ranges on the knob, where `knob_in` can read
+// them. An effect does not: its knob carries a plain normalized 0..1 and the
+// face converts for the readout, spelling the range as a multiplier and a
+// ratio. `0.05 * pow(4000, root.attack)` is `min * (max / min) ^ t`, which is
+// `ParamDescriptor::from_normalized` on an exponential curve written out by
+// hand -- so those two numbers are the descriptor's two ends, stated a second
+// time, which is the thing this file exists to catch.
+//
+// They needed catching separately because a `pow()` constant does not look
+// like a range. `4000` is a ratio, not a maximum; nothing about editing
+// `max: 200.0` in the table draws the eye to it.
+
+/// The range an effect face's ratio mapping implies.
+struct FaceRatio {
+    min: f32,
+    max: f32,
+}
+
+fn effect_markup(file: &str) -> &'static str {
+    match file {
+        "bitcrush-device.slint" => BITCRUSH_SLINT,
+        "drive-device.slint" => DRIVE_SLINT,
+        "compressor-device.slint" => COMPRESSOR_SLINT,
+        "delay-device.slint" => DELAY_SLINT,
+        "gate-device.slint" => GATE_SLINT,
+        "limiter-device.slint" => LIMITER_SLINT,
+        "plate-device.slint" => PLATE_SLINT,
+        "reverb-device.slint" => REVERB_SLINT,
+        other => panic!("no effect markup registered for {other}"),
+    }
+}
+
+/// Read `<float> name: [min *] pow(ratio, root.x);` back into a range.
+///
+/// An absent multiplier is 1, not a parse failure: `pow(2000, x)` is the
+/// ordinary spelling of a range that starts at one.
+fn face_ratio(markup: &str, file: &str, property: &str) -> FaceRatio {
+    let marker = format!("<float> {property}:");
+    let line = markup
+        .lines()
+        .find(|line| line.contains(&marker))
+        .unwrap_or_else(|| panic!("{file} no longer derives {property}"));
+    let body = line
+        .split_once(&marker)
+        .unwrap_or_else(|| panic!("{file} {property}: marker matched but would not split"))
+        .1;
+    let (before, after) = body
+        .split_once("pow(")
+        .unwrap_or_else(|| panic!("{file} {property}: no pow(ratio, ...) to read"));
+    let ratio: f32 = after
+        .split_once(',')
+        .and_then(|(ratio, _)| ratio.trim().parse().ok())
+        .unwrap_or_else(|| panic!("{file} {property}: pow's ratio is not a literal"));
+    let min: f32 = before
+        .trim()
+        .trim_end_matches('*')
+        .trim()
+        .parse()
+        .unwrap_or(1.0);
+    FaceRatio {
+        min,
+        max: min * ratio,
+    }
+}
+
+/// Every effect readout that spells its range out, against the table that
+/// owns it. The generators have had this since the drum synth; the effects
+/// are the other half, and nothing was checking them.
+#[test]
+fn every_effect_ratio_readout_agrees_with_its_table() {
+    let cases: &[(&str, &str, EffectKind, u32)] = &[
+        (
+            "bitcrush-device.slint",
+            "rate-natural",
+            EffectKind::Bitcrush,
+            BITCRUSH_PARAM_DOWNSAMPLE,
+        ),
+        ("drive-device.slint", "drive-natural", EffectKind::Drive, DRIVE_PARAM_DRIVE),
+        ("compressor-device.slint", "ratio-value", EffectKind::Compressor, COMP_PARAM_RATIO),
+        ("compressor-device.slint", "attack-ms", EffectKind::Compressor, COMP_PARAM_ATTACK_MS),
+        ("compressor-device.slint", "release-ms", EffectKind::Compressor, COMP_PARAM_RELEASE_MS),
+        ("delay-device.slint", "time-natural", EffectKind::Delay, DELAY_PARAM_TIME_MS),
+        ("gate-device.slint", "attack-ms", EffectKind::Gate, GATE_PARAM_ATTACK_MS),
+        ("gate-device.slint", "release-ms", EffectKind::Gate, GATE_PARAM_RELEASE_MS),
+        ("limiter-device.slint", "release-ms", EffectKind::Limiter, LIMITER_PARAM_RELEASE_MS),
+        ("plate-device.slint", "decay-natural", EffectKind::Plate, PLATE_PARAM_DECAY_S),
+        ("reverb-device.slint", "predelay-ms", EffectKind::Reverb, REVERB_PARAM_PREDELAY_MS),
+    ];
+
+    for (file, property, kind, id) in cases {
+        let descriptor = kind
+            .descriptor(*id)
+            .unwrap_or_else(|| panic!("{kind:?} has no descriptor for id {id}"));
+        let face = face_ratio(effect_markup(file), file, property);
+        assert!(
+            (descriptor.min - face.min).abs() < 1e-6,
+            "{file} {property}: face min {}, table min {}",
+            face.min,
+            descriptor.min
+        );
+        assert!(
+            (descriptor.max - face.max).abs() < 1e-2,
+            "{file} {property}: face max {}, table max {}",
+            face.max,
+            descriptor.max
+        );
+        assert_eq!(
+            descriptor.curve,
+            ParamCurve::Exponential,
+            "{file} {property}: the face maps it in ratio, so the table must too"
+        );
+    }
 }
