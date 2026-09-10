@@ -204,7 +204,10 @@ Alphabetical by model name, then by harness.
   it when the table moves, and the modulation shelf, which reports every
   parameter twice -- once as the knob's value-text and once as the caption
   under it -- and had drifted on one of the fifteen, so the LFO's Smoothing
-  said `150 ms` to the tooltip and `150ms` to the eye.
+  said `150 ms` to the tooltip and `150ms` to the eye, and then the piano
+  roll's two test suites, which each held their own copy of `TICKS_PER_STEP`
+  and so would have gone on passing while the roll drew every note in the
+  wrong place.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

@@ -22,7 +22,16 @@ const GRID_ORIGIN_X: f32 = 54.0;
 const GRID_TOP_Y: f32 = 349.0;
 const ROW_HEIGHT: f32 = 8.0;
 const STEP_WIDTH: f32 = 32.0;
-const TICKS_PER_STEP: i32 = 24;
+/// The engine's own value rather than a copy of it.
+///
+/// This is what makes the coordinate helpers below able to see a drift
+/// instead of sharing it. `piano-grid.slint` spells the same number as a
+/// bare `24` in fifteen places; if the table ever moves and the markup does
+/// not, the positions computed here stop matching where the grid draws and
+/// these tests fail -- which is the whole job. Held as its own `const 24`,
+/// they would have gone on passing while the roll drew every note in the
+/// wrong place.
+const TICKS_PER_STEP: i32 = mooloop_core::TICKS_PER_STEP as i32;
 /// The roll's default snap, 1/16, which at 96 PPQ is one step.
 const SNAP_TICKS: i32 = 24;
 const HIGH_NOTE: i32 = 84;
