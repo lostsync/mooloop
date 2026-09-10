@@ -201,7 +201,10 @@ Alphabetical by model name, then by harness.
   generators had their ranges checked against the table and the effects did
   not, though eight of their faces spell a range out as a ratio inside a
   `pow()`, where it does not look like a range and nothing draws the eye to
-  it when the table moves.
+  it when the table moves, and the modulation shelf, which reports every
+  parameter twice -- once as the knob's value-text and once as the caption
+  under it -- and had drifted on one of the fifteen, so the LFO's Smoothing
+  said `150 ms` to the tooltip and `150ms` to the eye.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
