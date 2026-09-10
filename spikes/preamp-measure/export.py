@@ -31,6 +31,10 @@ import sys
 
 OUT = "out/tidy"
 
+# Below this a harmonic reading is the analysis floor rather than a
+# measurement, and any difference taken between two of them is noise.
+FLOOR_DB = -120.0
+
 
 def _rows(path, fields, rows):
     os.makedirs(OUT, exist_ok=True)
@@ -267,7 +271,7 @@ def export_colour():
           ["slug", "maker", "models", "family", "group", "setting", "depth",
            "matched", "gain_1k_db", "thd_1k_pct", "thd_100_pct",
            "headroom_1pct_dbfs", "headroom_3pct_dbfs", "h2_80", "h3_80",
-           "h2_minus_h3_80", "h2_5k", "tilt_db", "imd_smpte_pct",
+           "h2_minus_h3_80", "h2_5k", "tilt_db", "tilt_valid", "imd_smpte_pct",
            "imd_ccif_pct", "noise_a_dbfs", "noise_under_tone_dbfs",
            "crest_change_12_db", "crest_change_3_db", "slew_index_3",
            "lf_shelf_db", "hf_shelf_db", "wow_pct", "flutter_pct",
@@ -304,6 +308,12 @@ def _colour_summary(base, s, d):
         # The "warm on a kick, clean on a hat" number: how much further down
         # the 2nd harmonic is at 5 kHz than at 80 Hz.
         row["tilt_db"] = round(row["h2_80"] - row["h2_5k"], 2)
+        # And a flag, because a symmetrical shaper makes no measurable 2nd
+        # harmonic at either end and the difference between two readings on
+        # the analysis floor is floor noise: Airwindows Desk4 computes to
+        # -88 dB of tilt out of two numbers that are both nothing at all.
+        row["tilt_valid"] = bool(row["h2_80"] > FLOOR_DB
+                                 and row["h2_5k"] > FLOOR_DB)
 
     for test, key in (("smpte_60_7k", "imd_smpte_pct"),
                       ("ccif_19_20k", "imd_ccif_pct")):

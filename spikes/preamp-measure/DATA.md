@@ -100,6 +100,13 @@ levels — the single number that puts a console channel, a tape machine and a
 clipper on one axis. `tilt_db` is how much further down the 2nd harmonic is
 at 5 kHz than at 80 Hz.
 
+**Read `tilt_db` only where `tilt_valid` is true.** A symmetrical shaper
+makes no measurable 2nd harmonic at either end of the band, and the
+difference between two readings on the -200 dB analysis floor is floor
+noise — Airwindows Desk4 computes to -88 dB of tilt out of two numbers that
+are both nothing at all. Of the 28 units that reach 1% THD, 15 have a
+2nd harmonic above -120 dB at both ends and a tilt worth plotting.
+
 ### EQ
 
 | file | one row per | notes |
