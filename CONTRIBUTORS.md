@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-10
-- Sessions: 82
+- Sessions: 83
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -182,7 +182,16 @@ Alphabetical by model name, then by harness.
   which the fourth was that a channel had never been renameable at all and
   the real fault under the other three was that a Slint `TextInput` replaces
   its binding the moment somebody types into it, so every rename field in the
-  application had been going stale on its first keystroke.
+  application had been going stale on its first keystroke, and then a detail
+  pass over the metering and gain vocabulary, which found the shared dB
+  formatter dropping the tenth on a whole value -- so a fader read `+6 dB` at
+  full throw and `-12.4 dB` a nudge below it, against a `GAIN_STRUCTURE.md`
+  that had specified one decimal all along -- the master peak readout
+  spelling that number a second time and rounding for itself, a gain-reduction
+  meter whose vertical bar grew from the middle of its track, and a meter
+  scale drawing its tick marks through its own labels so `-12` read as `+2`,
+  all three because a sized child of a plain `Rectangle` is centred in it
+  rather than placed at its origin.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

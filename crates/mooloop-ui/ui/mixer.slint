@@ -36,14 +36,6 @@ export struct MixerStripRow {
     clipping: bool,
 }
 
-// Shared bus chooser. Used both to assign a channel to a bus and to route one
-// bus into another; the two differ only in which destinations are offered.
-//
-// `allowed` masks the destinations that would close a loop, which only Rust
-// can work out because it is a property of the whole graph rather than of one
-// edge. An empty mask permits everything, which is the channel case: a channel
-// is never part of a bus cycle. Disallowed entries are shown greyed rather
-// than hidden, so the reason a destination is unavailable stays visible.
 // One send on a track's strip: where it goes, how loud, where it taps, and
 // whether it is passing audio.
 //
@@ -59,6 +51,14 @@ export struct MixerSendRow {
     enabled: bool,
 }
 
+// Shared bus chooser. Used both to assign a channel to a bus and to route one
+// bus into another; the two differ only in which destinations are offered.
+//
+// `allowed` masks the destinations that would close a loop, which only Rust
+// can work out because it is a property of the whole graph rather than of one
+// edge. An empty mask permits everything, which is the channel case: a channel
+// is never part of a bus cycle. Disallowed entries are shown greyed rather
+// than hidden, so the reason a destination is unavailable stays visible.
 export component BusPicker inherits Rectangle {
     in property <[string]> bus-names;
     in property <int> value;

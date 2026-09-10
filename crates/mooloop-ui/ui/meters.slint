@@ -257,7 +257,8 @@ export component MasterMeter inherits Rectangle {
         }
         if root.show-readout : Text {
             width: 34px;
-            text: root.peak-db <= root.minimum-db ? "-inf" : round(root.peak-db * 10) / 10;
+            text: root.peak-db <= root.minimum-db
+                ? "-inf" : GainMath.format-db-value(root.peak-db);
             color: root.left-clipping || root.right-clipping ? Theme.meter-clip : Theme.text-muted;
             font-size: 9px;
             horizontal-alignment: right;
@@ -322,6 +323,12 @@ export component GainReductionMeter inherits Rectangle {
         background: Theme.warning;
     }
     if root.orientation == AudioOrientation.vertical : Rectangle {
+        // Pinned to the top, because a child given a height inside a plain
+        // Rectangle is centred in it. Without this the bar grew from the
+        // middle outwards in both directions -- the one thing the comment
+        // above says this meter must not do, since growing downward from 0
+        // is what tells it apart from a level meter at a glance.
+        y: 0px;
         width: parent.width;
         height: parent.height * root.normalized;
         background: Theme.warning;
