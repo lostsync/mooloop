@@ -182,6 +182,9 @@ def calibrate(plugin, control, values, target_gr_db, level_db, sr=mlab.SR,
         mlab.set_params(plugin, settings)
 
     def gr_at(v):
+        # A rejected value is an answer: the outward search below walks past
+        # the ends of the marked list on purpose, and a plugin whose control
+        # stops at 10 refuses 11 rather than clamping it.
         apply(v)
         ref = mlab.rms_db(mlab.render(plugin, quiet, sr)[tail]) - (level_db - 40.0)
         out = mlab.rms_db(mlab.render(plugin, loud, sr)[tail]) - level_db
@@ -212,7 +215,10 @@ def calibrate(plugin, control, values, target_gr_db, level_db, sr=mlab.SR,
             v = end[0]
             for _ in range(6):
                 v += outward * step
-                gr = gr_at(v)
+                try:
+                    gr = gr_at(v)
+                except (ValueError, KeyError):
+                    break
                 measured.append((v, gr))
                 if abs(gr - target_gr_db) < abs(best[1] - target_gr_db):
                     best = (v, gr)

@@ -273,8 +273,8 @@ VOICINGS["aw_console7channel"] = _aw({"fader": 0.5}, unity="fader")
 VOICINGS["aw_console9channel"] = _aw({"fader": 0.5, "pan": 0.5},
                                      unity="fader")
 VOICINGS["aw_consolemcchannel"] = _aw(
-    {"fader": 0.5, "pan": 0.5, "treble": 0.5, "mid": 0.5, "bass": 0.5},
-    unity="fader")
+    {"fader": 0.5, "pan": 0.5, "treble": 0.5, "midfreq": 0.5,
+     "midpeak": 0.5, "bass": 0.5}, unity="fader")
 VOICINGS["aw_consolemdchannel"] = _aw(
     {"fader": 0.5, "pan": 0.5, "treble": 0.5, "midfreq": 0.5,
      "midpeak": 0.5, "bass": 0.5}, unity="fader")
@@ -1235,27 +1235,33 @@ VOICINGS["api_vision_comp"] = {
              "pad": False, "phase": "Normal", "cut_filter": "Off",
              "line_gain": 0.0, "level": ("raw", 1.0), "eq_on": False,
              "235_on": False, "215_on": False, "225_on": True,
-             "225_ratio": 4.0, "225_knee": "Hard", "225_type": "Old (FB)",
+             "225_ratio": "4.0", "225_knee": "Hard", "225_type": "Old (FB)",
              "225_attack": "Medium", "225_release": "0.50 s",
              "sc_link": True},
     "comp": {"element": "vca",
-             "amount": ("225_thresh", [10.0, 5.0, 0.0, -5.0, -10.0, -15.0,
-                                       -20.0, -25.0]),
+             # This control stops at -18 dB; the list stops with it.
+             "amount": ("225_thresh", [12.0, 9.0, 6.0, 3.0, 0.0, -3.0, -6.0,
+                                       -9.0, -12.0, -15.0, -18.0]),
              "attacks": ("225_attack", ["Fast", "Medium", "Slow"]),
-             "releases": ("225_release", ["50 ms", "0.10 s", "0.20 s",
-                                          "0.50 s", "1.00 s"]),
+             "releases": ("225_release", [("raw", r) for r in
+                                          (0.0, 0.25, 0.5, 0.75, 1.0)]),
              "fixed": {"225_attack": "Medium", "225_release": "0.50 s"}},
 }
 
 VOICINGS["fairchild660"] = {
-    "base": dict(_UAD, sc_filter="Off", output=0.0, input=0.0, dc_thr=8.6,
-                 timecnst=1.0),
+    # The mono 660 names its controls differently from the stereo 670: one
+    # `thresh` rather than a per-channel pair, `time_const` rather than
+    # `l_timecnst`, and no mix control.
+    "base": dict(_UAD, sc_filt="Off", meter="GR", output=0.0, bal=0.0,
+                 input=0.0, dc_thr=7.5, time_const=1.0),
     "comp": {"element": "vari-mu",
              "amount": ("thresh", [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0,
                                    10.0]),
-             "attacks": ("timecnst", [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+             # Six time constants are this unit's whole timing story, so
+             # they are swept as attacks and the release rides with them.
+             "attacks": ("time_const", [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
              "releases": None,
-             "fixed": {"timecnst": 1.0}},
+             "fixed": {"time_const": 1.0}},
 }
 
 VOICINGS["vari_comp"] = {
@@ -1271,42 +1277,57 @@ VOICINGS["vari_comp"] = {
 }
 
 VOICINGS["vcomp"] = {
-    "base": {"in": "In ", "ratio": "4:1 ", "analog": "Off ", "mix": 100.0,
-             "output": 0.0, "attack": 3.0, "release": 400.0},
+    # A 2254 has no threshold: you drive it with Input and the threshold is
+    # fixed, which is why the amount axis here is a gain.
+    "base": {"compress": "On ", "limit": "Off ", "deesser": "Off ",
+             "auto_makeup": "Off ", "analog": "OFF ", "mix": 100.0,
+             "output": 0.0, "trim": 0.0, "ratio": "4:1 ", "meter": "GR ",
+             "attack": "Fast ", "release_compressor": "400ms ", "input": 0.0},
     "comp": {"element": "diode-bridge",
-             "amount": ("thresh", [0.0, -3.0, -6.0, -9.0, -12.0, -15.0,
-                                   -18.0, -21.0]),
-             "attacks": ("attack", [0.5, 1.0, 3.0, 10.0, 30.0]),
-             "releases": ("release", [100.0, 200.0, 400.0, 800.0, 1500.0]),
-             "fixed": {"attack": 3.0, "release": 400.0}},
+             "amount": ("input", [-6.0, -3.0, 0.0, 3.0, 6.0, 9.0, 12.0,
+                                  15.0, 18.0]),
+             "attacks": ("attack", ["Fast ", "Slow "]),
+             "releases": ("release_compressor",
+                          ["400ms ", "800ms ", "1.5s ", "AUTO "]),
+             "fixed": {"attack": "Fast ", "release_compressor": "400ms "}},
 }
 
 VOICINGS["molotok"] = {
+    # Sidechain filter out, so `comp_sidechain.csv` reads the detector
+    # rather than the filter in front of it.
     "base": {"ratio": 4.0, "attack_ms": 10.0, "release_ms": 100.0,
-             "dry_mix": 0.0, "output_gain_db": 0.0},
+             "drymix": 0.0, "output_db": 0.0, "makeup_db": 0.0, "knee": 0.5,
+             "sc_filter_on": False, "quality": "Precise",
+             "stereo_mode": "Stereo", "mode": 0.0},
     "comp": {"element": "digital",
-             "amount": ("threshold_db", [-5.0, -10.0, -15.0, -20.0, -25.0,
-                                         -30.0, -35.0, -40.0]),
+             "amount": ("thresh_db", [-5.0, -10.0, -15.0, -20.0, -25.0,
+                                      -30.0, -35.0, -40.0]),
              "attacks": ("attack_ms", [0.5, 1.0, 3.0, 10.0, 30.0, 100.0]),
              "releases": ("release_ms", [20.0, 50.0, 100.0, 300.0, 1000.0]),
              "fixed": {"attack_ms": 10.0, "release_ms": 100.0}},
 }
 
 VOICINGS["kh_comp"] = {
-    "base": {},
+    "base": {"mode": "Peak", "attack": 10.0, "release": 100.0,
+             "makeup": 0.0, "ratio": ("raw", 0.4)},
     "comp": {"element": "digital",
              "amount": ("threshold", [("raw", r) for r in
                                       (0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3,
                                        0.2)]),
-             "attacks": None, "releases": None},
+             "attacks": ("attack", [1.0, 3.0, 10.0, 30.0, 100.0, 300.0]),
+             "releases": ("release", [10.0, 30.0, 100.0, 300.0, 500.0]),
+             "fixed": {"attack": 10.0, "release": 100.0}},
 }
 
 VOICINGS["rcomp"] = {
+    # Manual rather than ARC, so the release measured is the one that was
+    # set: ARC is an automatic release and would measure the programme.
     "base": {"ratio": 4.0, "attack": 5.0, "release": 200.0, "gain": 0.0,
-             "arc_manual": "Manual ", "electro_opto": "Electro "},
+             "trim": 0.0, "mix": 100.0, "arc_manual": "Manual ",
+             "electro_opto": "Electro ", "warm_smooth": "Warm "},
     "comp": {"element": "digital",
-             "amount": ("thresh", [0.0, -3.0, -6.0, -9.0, -12.0, -15.0,
-                                   -18.0, -21.0]),
+             "amount": ("threshold", [0.0, -3.0, -6.0, -9.0, -12.0, -15.0,
+                                      -18.0, -21.0]),
              "attacks": ("attack", [0.5, 1.0, 5.0, 20.0, 100.0]),
              "releases": ("release", [50.0, 100.0, 200.0, 500.0, 1000.0]),
              "fixed": {"attack": 5.0, "release": 200.0}},
@@ -1314,21 +1335,27 @@ VOICINGS["rcomp"] = {
 
 VOICINGS["h_comp"] = {
     "base": {"ratio": 4.0, "attack": 5.0, "release": 200.0, "analog": "Off ",
-             "mix": 100.0, "punch": 0.0, "output": 0.0},
+             "mix": 100.0, "punch": 0.0, "output": 0.0, "limiter": "Off ",
+             "sync": "ms ", "meter_select": "GR "},
     "comp": {"element": "hybrid",
-             "amount": ("thresh", [0.0, -3.0, -6.0, -9.0, -12.0, -15.0,
-                                   -18.0, -21.0]),
+             "amount": ("threshold", [0.0, -3.0, -6.0, -9.0, -12.0, -15.0,
+                                      -18.0, -21.0]),
              "attacks": ("attack", [0.5, 1.0, 5.0, 20.0, 100.0]),
              "releases": ("release", [50.0, 100.0, 200.0, 500.0, 1000.0]),
              "fixed": {"attack": 5.0, "release": 200.0}},
 }
 
 VOICINGS["c1_comp"] = {
-    "base": {"ratio": 4.0, "attack": 5.0, "release": 200.0, "gain": 0.0,
-             "knee": "Soft "},
+    # C1's ratio is a choice list whose entries pedalboard truncates below
+    # the useful part, so it is set raw and the ratio it actually delivered
+    # is read off the static curve -- which is where a ratio should be read
+    # from anyway.
+    "base": {"ratio": ("raw", 0.5), "attack": 5.0, "release": 200.0,
+             "makeup": 0.0, "output_gain": 0.0, "pdr_tc": 0.0,
+             "low_peak_ref": "Peak Ref "},
     "comp": {"element": "digital",
-             "amount": ("thresh", [0.0, -6.0, -12.0, -18.0, -24.0, -30.0,
-                                   -36.0, -42.0]),
+             "amount": ("threshold", [0.0, -6.0, -12.0, -18.0, -24.0, -30.0,
+                                      -36.0, -42.0]),
              "attacks": ("attack", [0.5, 1.0, 5.0, 20.0, 100.0]),
              "releases": ("release", [50.0, 100.0, 200.0, 500.0, 1000.0]),
              "fixed": {"attack": 5.0, "release": 200.0}},
@@ -1359,10 +1386,11 @@ VOICINGS["aw_pressure5"] = _aw_comp(
 VOICINGS["aw_blockparty"] = _aw_comp(
     {"pound": 0.5, "dry_wet": 1.0}, "pound")
 VOICINGS["aw_pop2"] = _aw_comp(
-    {"intense": 0.5, "attack": 0.5, "output": 1.0, "dry_wet": 1.0},
-    "intense",
+    {"compres": 0.5, "attack": 0.5, "release": 0.5, "drive": 0.5,
+     "dry_wet": 1.0}, "compres",
     attacks=("attack", [("raw", r) for r in (0.0, 0.25, 0.5, 0.75, 1.0)]),
-    fixed={"attack": ("raw", 0.5)})
+    releases=("release", [("raw", r) for r in (0.0, 0.25, 0.5, 0.75, 1.0)]),
+    fixed={"attack": ("raw", 0.5), "release": ("raw", 0.5)})
 VOICINGS["aw_logical4"] = _aw_comp(
     {"threshold": 0.5, "ratio": 0.5, "speed": 0.5, "makeupgn": 0.5,
      "dry_wet": 1.0}, "threshold",

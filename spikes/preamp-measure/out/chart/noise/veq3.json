@@ -1,0 +1,5 @@
+{
+ "error": "ValueError: Value received for parameter 'analog' ('In ') not in list of valid values: ['Off ', 'On ']",
+ "slug": "veq3",
+ "traceback": "Traceback (most recent call last):\n  File \"/Users/lost/mooloop-measure/measure_noise.py\", line 141, in <module>\n    out = measure(slug)\n  File \"/Users/lost/mooloop-measure/measure_noise.py\", line 109, in measure\n    \"base\": mlab.set_params(plugin, voicing[\"base\"]),\n            ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/lost/mooloop-measure/mlab.py\", line 132, in set_params\n    setattr(plugin, target, want)\n    ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/lost/mooloop-measure/venv/lib/python3.14/site-packages/pedalboard/_pedalboard.py\", line 735, in __setattr__\n    parameter.raw_value = parameter.get_raw_value_for(value)\n                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^\n  File \"/Users/lost/mooloop-measure/venv/lib/python3.14/site-packages/pedalboard/_pedalboard.py\", line 563, in get_raw_value_for\n    raise ValueError(\n    ...<3 lines>...\n    )\nValueError: Value received for parameter 'analog' ('In ') not in list of valid values: ['Off ', 'On ']\n"
+}

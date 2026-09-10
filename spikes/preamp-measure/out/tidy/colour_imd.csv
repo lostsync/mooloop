@@ -29,6 +29,896 @@ api_vision,UAD,API 1608 console channel,console-api,line_gain_6,full,,smpte_60_7
 api_vision,UAD,API 1608 console channel,console-api,line_gain_6,full,,smpte_60_7k,-12.0,0.01937,-74.26
 api_vision,UAD,API 1608 console channel,console-api,line_gain_6,full,,smpte_60_7k,-6.0,0.02172,-73.26
 api_vision,UAD,API 1608 console channel,console-api,line_gain_6,full,,smpte_60_7k,-3.0,0.03684,-68.67
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0,full,,ccif_19_20k,-30.0,59.25096,-4.55
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0,full,,ccif_19_20k,-18.0,115.01966,1.22
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0,full,,ccif_19_20k,-12.0,45.72309,-6.8
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0,full,,ccif_19_20k,-6.0,56.74171,-4.92
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0,full,,ccif_19_20k,-3.0,65.27936,-3.7
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0,full,,smpte_60_7k,-30.0,295.70016,9.42
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0,full,,smpte_60_7k,-18.0,231.25556,7.28
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0,full,,smpte_60_7k,-12.0,242.70026,7.7
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0,full,,smpte_60_7k,-6.0,304.39779,9.67
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0,full,,smpte_60_7k,-3.0,829.1504,18.37
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0.5,full,,ccif_19_20k,-30.0,0.00324,-89.78
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0.5,full,,ccif_19_20k,-18.0,0.00983,-80.15
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0.5,full,,ccif_19_20k,-12.0,1.60943,-35.87
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0.5,full,,ccif_19_20k,-6.0,20.20256,-13.89
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0.5,full,,ccif_19_20k,-3.0,27.15337,-11.32
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0.5,full,,smpte_60_7k,-30.0,0.01346,-77.42
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0.5,full,,smpte_60_7k,-18.0,0.01879,-74.52
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0.5,full,,smpte_60_7k,-12.0,0.01914,-74.36
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0.5,full,,smpte_60_7k,-6.0,0.02072,-73.67
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_0.5,full,,smpte_60_7k,-3.0,0.24576,-52.19
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_1,full,,ccif_19_20k,-30.0,0.00734,-82.69
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_1,full,,ccif_19_20k,-18.0,20.34038,-13.83
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_1,full,,ccif_19_20k,-12.0,30.31326,-10.37
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_1,full,,ccif_19_20k,-6.0,32.60713,-9.73
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_1,full,,ccif_19_20k,-3.0,33.11005,-9.6
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_1,full,,smpte_60_7k,-30.0,0.01956,-74.17
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_1,full,,smpte_60_7k,-18.0,0.03005,-70.44
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_1,full,,smpte_60_7k,-12.0,2.927,-30.67
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_1,full,,smpte_60_7k,-6.0,37.3753,-8.55
+aw_calibre,Airwindows,Calrec-ish console,aw-console,drive_1,full,,smpte_60_7k,-3.0,55.81899,-5.06
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.01207,-78.37
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.01597,-75.93
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,1.37346,-37.24
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,19.25102,-14.31
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,26.72296,-11.46
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.01172,-78.62
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.01937,-74.26
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.01926,-74.31
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.02269,-72.88
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,0.17273,-55.25
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.01011,-79.91
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.0254,-71.9
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,4.55036,-26.84
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,25.28215,-11.94
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,29.40226,-10.63
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.01379,-77.21
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.01587,-75.99
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,0.01935,-74.27
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,0.06214,-64.13
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,1.3998,-37.08
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.02095,-73.58
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,0.27105,-51.34
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,9.82556,-20.15
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,28.01701,-11.05
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,30.6852,-10.26
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.01341,-77.45
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,0.02049,-73.77
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,0.0195,-74.2
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,0.48249,-46.33
+aw_calibre,Airwindows,Calrec-ish console,aw-console,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,4.1877,-27.56
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0,full,,ccif_19_20k,-30.0,0.13457,-57.42
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0,full,,ccif_19_20k,-18.0,0.97615,-40.21
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0,full,,ccif_19_20k,-12.0,1.21878,-38.28
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0,full,,ccif_19_20k,-6.0,0.94363,-40.5
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0,full,,ccif_19_20k,-3.0,0.74063,-42.61
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0,full,,smpte_60_7k,-30.0,0.11968,-58.44
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0,full,,smpte_60_7k,-18.0,0.28108,-51.02
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0,full,,smpte_60_7k,-12.0,0.22881,-52.81
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0,full,,smpte_60_7k,-6.0,0.16813,-55.49
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0,full,,smpte_60_7k,-3.0,0.09099,-60.82
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0.5,full,,ccif_19_20k,-30.0,0.46277,-46.69
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0.5,full,,ccif_19_20k,-18.0,1.82432,-34.78
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0.5,full,,ccif_19_20k,-12.0,1.32951,-37.53
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0.5,full,,ccif_19_20k,-6.0,0.73309,-42.7
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0.5,full,,ccif_19_20k,-3.0,0.53797,-45.38
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0.5,full,,smpte_60_7k,-30.0,0.48304,-46.32
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0.5,full,,smpte_60_7k,-18.0,0.26539,-51.52
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0.5,full,,smpte_60_7k,-12.0,0.22395,-53.0
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0.5,full,,smpte_60_7k,-6.0,0.12878,-57.8
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_0.5,full,,smpte_60_7k,-3.0,0.13335,-57.5
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_1,full,,ccif_19_20k,-30.0,2.64741,-31.54
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_1,full,,ccif_19_20k,-18.0,0.84537,-41.46
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_1,full,,ccif_19_20k,-12.0,1.17819,-38.58
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_1,full,,ccif_19_20k,-6.0,4.4395,-27.05
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_1,full,,ccif_19_20k,-3.0,9.74003,-20.23
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_1,full,,smpte_60_7k,-30.0,0.63325,-43.97
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_1,full,,smpte_60_7k,-18.0,0.41214,-47.7
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_1,full,,smpte_60_7k,-12.0,0.29257,-50.68
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_1,full,,smpte_60_7k,-6.0,0.14038,-57.05
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,intense_1,full,,smpte_60_7k,-3.0,0.13552,-57.36
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.19795,-54.07
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,1.48999,-36.54
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,1.29513,-37.75
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,0.79488,-41.99
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,0.59183,-44.56
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.36594,-48.73
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.29793,-50.52
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,0.28674,-50.85
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,0.21386,-53.4
+aw_chromeoxide,Airwindows,cassette tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,0.08999,-60.92
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0,full,,ccif_19_20k,-30.0,4.0991,-27.75
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0,full,,ccif_19_20k,-18.0,4.0991,-27.75
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0,full,,ccif_19_20k,-12.0,4.0991,-27.75
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0,full,,ccif_19_20k,-6.0,4.0991,-27.75
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0,full,,ccif_19_20k,-3.0,4.0991,-27.75
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0,full,,smpte_60_7k,-30.0,1.22621,-38.23
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0,full,,smpte_60_7k,-18.0,1.22621,-38.23
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0,full,,smpte_60_7k,-12.0,1.22621,-38.23
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0,full,,smpte_60_7k,-6.0,1.22621,-38.23
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0,full,,smpte_60_7k,-3.0,1.22621,-38.23
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0.5,full,,ccif_19_20k,-30.0,0.0,-185.73
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0.5,full,,ccif_19_20k,-18.0,0.0,-190.1
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0.5,full,,ccif_19_20k,-12.0,0.0,-186.82
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0.5,full,,ccif_19_20k,-6.0,0.0,-188.07
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0.5,full,,ccif_19_20k,-3.0,0.0,-189.54
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0.5,full,,smpte_60_7k,-30.0,0.0,-171.61
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0.5,full,,smpte_60_7k,-18.0,0.0,-171.3
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0.5,full,,smpte_60_7k,-12.0,0.0,-170.12
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0.5,full,,smpte_60_7k,-6.0,0.0,-172.05
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_0.5,full,,smpte_60_7k,-3.0,0.0,-168.42
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_1,full,,ccif_19_20k,-30.0,0.69993,-43.1
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_1,full,,ccif_19_20k,-18.0,0.69993,-43.1
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_1,full,,ccif_19_20k,-12.0,0.69993,-43.1
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_1,full,,ccif_19_20k,-6.0,0.69993,-43.1
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_1,full,,ccif_19_20k,-3.0,0.69993,-43.1
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_1,full,,smpte_60_7k,-30.0,0.8939,-40.97
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_1,full,,smpte_60_7k,-18.0,0.8939,-40.97
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_1,full,,smpte_60_7k,-12.0,0.8939,-40.97
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_1,full,,smpte_60_7k,-6.0,0.8939,-40.97
+aw_cojones,Airwindows,midrange grit,aw-drive,cojones_1,full,,smpte_60_7k,-3.0,0.8939,-40.97
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.08947,-60.97
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.08947,-60.97
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.08947,-60.97
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.08947,-60.97
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.08947,-60.97
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.1073,-59.39
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.1073,-59.39
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.1073,-59.39
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.1073,-59.39
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,0.1073,-59.39
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.59868,-44.46
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.59868,-44.46
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,0.59868,-44.46
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,0.59868,-44.46
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,0.59868,-44.46
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.7724,-42.24
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.7724,-42.24
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,0.7724,-42.24
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,0.7724,-42.24
+aw_cojones,Airwindows,midrange grit,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,0.7724,-42.24
+aw_console7channel,Airwindows,Console7 channel encode,aw-console,mid,full,,ccif_19_20k,-30.0,0.00166,-95.61
+aw_console7channel,Airwindows,Console7 channel encode,aw-console,mid,full,,ccif_19_20k,-18.0,0.03047,-70.32
+aw_console7channel,Airwindows,Console7 channel encode,aw-console,mid,full,,ccif_19_20k,-12.0,0.17471,-55.15
+aw_console7channel,Airwindows,Console7 channel encode,aw-console,mid,full,,ccif_19_20k,-6.0,1.56333,-36.12
+aw_console7channel,Airwindows,Console7 channel encode,aw-console,mid,full,,ccif_19_20k,-3.0,5.56641,-25.09
+aw_console7channel,Airwindows,Console7 channel encode,aw-console,mid,full,,smpte_60_7k,-30.0,0.00227,-92.87
+aw_console7channel,Airwindows,Console7 channel encode,aw-console,mid,full,,smpte_60_7k,-18.0,0.03851,-68.29
+aw_console7channel,Airwindows,Console7 channel encode,aw-console,mid,full,,smpte_60_7k,-12.0,0.18505,-54.65
+aw_console7channel,Airwindows,Console7 channel encode,aw-console,mid,full,,smpte_60_7k,-6.0,1.25429,-38.03
+aw_console7channel,Airwindows,Console7 channel encode,aw-console,mid,full,,smpte_60_7k,-3.0,3.95273,-28.06
+aw_console9channel,Airwindows,Console9 channel,aw-console,mid,full,,ccif_19_20k,-30.0,0.08785,-61.12
+aw_console9channel,Airwindows,Console9 channel,aw-console,mid,full,,ccif_19_20k,-18.0,0.35797,-48.92
+aw_console9channel,Airwindows,Console9 channel,aw-console,mid,full,,ccif_19_20k,-12.0,0.73743,-42.65
+aw_console9channel,Airwindows,Console9 channel,aw-console,mid,full,,ccif_19_20k,-6.0,1.57478,-36.06
+aw_console9channel,Airwindows,Console9 channel,aw-console,mid,full,,ccif_19_20k,-3.0,2.36477,-32.52
+aw_console9channel,Airwindows,Console9 channel,aw-console,mid,full,,smpte_60_7k,-30.0,0.29123,-50.72
+aw_console9channel,Airwindows,Console9 channel,aw-console,mid,full,,smpte_60_7k,-18.0,1.19441,-38.46
+aw_console9channel,Airwindows,Console9 channel,aw-console,mid,full,,smpte_60_7k,-12.0,2.48347,-32.1
+aw_console9channel,Airwindows,Console9 channel,aw-console,mid,full,,smpte_60_7k,-6.0,5.41522,-25.33
+aw_console9channel,Airwindows,Console9 channel,aw-console,mid,full,,smpte_60_7k,-3.0,8.29731,-21.62
+aw_consolelachannel,Airwindows,ConsoleLA channel,aw-console,mid,full,,ccif_19_20k,-30.0,0.00068,-103.32
+aw_consolelachannel,Airwindows,ConsoleLA channel,aw-console,mid,full,,ccif_19_20k,-18.0,0.01154,-78.76
+aw_consolelachannel,Airwindows,ConsoleLA channel,aw-console,mid,full,,ccif_19_20k,-12.0,0.05505,-65.18
+aw_consolelachannel,Airwindows,ConsoleLA channel,aw-console,mid,full,,ccif_19_20k,-6.0,0.36511,-48.75
+aw_consolelachannel,Airwindows,ConsoleLA channel,aw-console,mid,full,,ccif_19_20k,-3.0,1.12307,-38.99
+aw_consolelachannel,Airwindows,ConsoleLA channel,aw-console,mid,full,,smpte_60_7k,-30.0,0.00175,-95.14
+aw_consolelachannel,Airwindows,ConsoleLA channel,aw-console,mid,full,,smpte_60_7k,-18.0,0.03092,-70.19
+aw_consolelachannel,Airwindows,ConsoleLA channel,aw-console,mid,full,,smpte_60_7k,-12.0,0.146,-56.71
+aw_consolelachannel,Airwindows,ConsoleLA channel,aw-console,mid,full,,smpte_60_7k,-6.0,0.93805,-40.56
+aw_consolelachannel,Airwindows,ConsoleLA channel,aw-console,mid,full,,smpte_60_7k,-3.0,2.85061,-30.9
+aw_consolemcchannel,Airwindows,ConsoleMC channel,aw-console,mid,full,,ccif_19_20k,-30.0,0.00236,-92.56
+aw_consolemcchannel,Airwindows,ConsoleMC channel,aw-console,mid,full,,ccif_19_20k,-18.0,0.03734,-68.56
+aw_consolemcchannel,Airwindows,ConsoleMC channel,aw-console,mid,full,,ccif_19_20k,-12.0,0.14888,-56.54
+aw_consolemcchannel,Airwindows,ConsoleMC channel,aw-console,mid,full,,ccif_19_20k,-6.0,0.59624,-44.49
+aw_consolemcchannel,Airwindows,ConsoleMC channel,aw-console,mid,full,,ccif_19_20k,-3.0,1.19915,-38.42
+aw_consolemcchannel,Airwindows,ConsoleMC channel,aw-console,mid,full,,smpte_60_7k,-30.0,0.00634,-83.96
+aw_consolemcchannel,Airwindows,ConsoleMC channel,aw-console,mid,full,,smpte_60_7k,-18.0,0.10047,-59.96
+aw_consolemcchannel,Airwindows,ConsoleMC channel,aw-console,mid,full,,smpte_60_7k,-12.0,0.40094,-47.94
+aw_consolemcchannel,Airwindows,ConsoleMC channel,aw-console,mid,full,,smpte_60_7k,-6.0,1.61285,-35.85
+aw_consolemcchannel,Airwindows,ConsoleMC channel,aw-console,mid,full,,smpte_60_7k,-3.0,3.26484,-29.72
+aw_consolemdchannel,Airwindows,ConsoleMD channel,aw-console,mid,full,,ccif_19_20k,-30.0,0.00236,-92.56
+aw_consolemdchannel,Airwindows,ConsoleMD channel,aw-console,mid,full,,ccif_19_20k,-18.0,0.03734,-68.56
+aw_consolemdchannel,Airwindows,ConsoleMD channel,aw-console,mid,full,,ccif_19_20k,-12.0,0.14888,-56.54
+aw_consolemdchannel,Airwindows,ConsoleMD channel,aw-console,mid,full,,ccif_19_20k,-6.0,0.59624,-44.49
+aw_consolemdchannel,Airwindows,ConsoleMD channel,aw-console,mid,full,,ccif_19_20k,-3.0,1.19915,-38.42
+aw_consolemdchannel,Airwindows,ConsoleMD channel,aw-console,mid,full,,smpte_60_7k,-30.0,0.00825,-81.67
+aw_consolemdchannel,Airwindows,ConsoleMD channel,aw-console,mid,full,,smpte_60_7k,-18.0,0.13086,-57.66
+aw_consolemdchannel,Airwindows,ConsoleMD channel,aw-console,mid,full,,smpte_60_7k,-12.0,0.52287,-45.63
+aw_consolemdchannel,Airwindows,ConsoleMD channel,aw-console,mid,full,,smpte_60_7k,-6.0,2.11264,-33.5
+aw_consolemdchannel,Airwindows,ConsoleMD channel,aw-console,mid,full,,smpte_60_7k,-3.0,4.30073,-27.33
+aw_density2,Airwindows,density saturation,aw-drive,density_0,full,,ccif_19_20k,-30.0,0.85062,-41.41
+aw_density2,Airwindows,density saturation,aw-drive,density_0,full,,ccif_19_20k,-18.0,3.02355,-30.39
+aw_density2,Airwindows,density saturation,aw-drive,density_0,full,,ccif_19_20k,-12.0,5.22871,-25.63
+aw_density2,Airwindows,density saturation,aw-drive,density_0,full,,ccif_19_20k,-6.0,7.99399,-21.94
+aw_density2,Airwindows,density saturation,aw-drive,density_0,full,,ccif_19_20k,-3.0,9.15571,-20.77
+aw_density2,Airwindows,density saturation,aw-drive,density_0,full,,smpte_60_7k,-30.0,8.94224,-20.97
+aw_density2,Airwindows,density saturation,aw-drive,density_0,full,,smpte_60_7k,-18.0,26.46624,-11.55
+aw_density2,Airwindows,density saturation,aw-drive,density_0,full,,smpte_60_7k,-12.0,35.67447,-8.95
+aw_density2,Airwindows,density saturation,aw-drive,density_0,full,,smpte_60_7k,-6.0,40.18381,-7.92
+aw_density2,Airwindows,density saturation,aw-drive,density_0,full,,smpte_60_7k,-3.0,40.16611,-7.92
+aw_density2,Airwindows,density saturation,aw-drive,density_0.5,full,,ccif_19_20k,-30.0,0.04438,-67.06
+aw_density2,Airwindows,density saturation,aw-drive,density_0.5,full,,ccif_19_20k,-18.0,0.68374,-43.3
+aw_density2,Airwindows,density saturation,aw-drive,density_0.5,full,,ccif_19_20k,-12.0,2.49691,-32.05
+aw_density2,Airwindows,density saturation,aw-drive,density_0.5,full,,ccif_19_20k,-6.0,7.39666,-22.62
+aw_density2,Airwindows,density saturation,aw-drive,density_0.5,full,,ccif_19_20k,-3.0,10.88937,-19.26
+aw_density2,Airwindows,density saturation,aw-drive,density_0.5,full,,smpte_60_7k,-30.0,0.19732,-54.1
+aw_density2,Airwindows,density saturation,aw-drive,density_0.5,full,,smpte_60_7k,-18.0,3.091,-30.2
+aw_density2,Airwindows,density saturation,aw-drive,density_0.5,full,,smpte_60_7k,-12.0,11.85747,-18.52
+aw_density2,Airwindows,density saturation,aw-drive,density_0.5,full,,smpte_60_7k,-6.0,40.90262,-7.76
+aw_density2,Airwindows,density saturation,aw-drive,density_0.5,full,,smpte_60_7k,-3.0,68.66242,-3.27
+aw_density2,Airwindows,density saturation,aw-drive,density_1,full,,ccif_19_20k,-30.0,32.86841,-9.66
+aw_density2,Airwindows,density saturation,aw-drive,density_1,full,,ccif_19_20k,-18.0,32.16812,-9.85
+aw_density2,Airwindows,density saturation,aw-drive,density_1,full,,ccif_19_20k,-12.0,31.19903,-10.12
+aw_density2,Airwindows,density saturation,aw-drive,density_1,full,,ccif_19_20k,-6.0,29.40562,-10.63
+aw_density2,Airwindows,density saturation,aw-drive,density_1,full,,ccif_19_20k,-3.0,28.03994,-11.04
+aw_density2,Airwindows,density saturation,aw-drive,density_1,full,,smpte_60_7k,-30.0,184.79757,5.33
+aw_density2,Airwindows,density saturation,aw-drive,density_1,full,,smpte_60_7k,-18.0,184.23677,5.31
+aw_density2,Airwindows,density saturation,aw-drive,density_1,full,,smpte_60_7k,-12.0,182.75429,5.24
+aw_density2,Airwindows,density saturation,aw-drive,density_1,full,,smpte_60_7k,-6.0,179.3923,5.08
+aw_density2,Airwindows,density saturation,aw-drive,density_1,full,,smpte_60_7k,-3.0,176.28914,4.92
+aw_density2,Airwindows,density saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.00857,-81.34
+aw_density2,Airwindows,density saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.13505,-57.39
+aw_density2,Airwindows,density saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,0.52797,-45.55
+aw_density2,Airwindows,density saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,1.96843,-34.12
+aw_density2,Airwindows,density saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,3.65383,-28.75
+aw_density2,Airwindows,density saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.04224,-67.48
+aw_density2,Airwindows,density saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.6683,-43.5
+aw_density2,Airwindows,density saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,2.64641,-31.55
+aw_density2,Airwindows,density saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,10.37403,-19.68
+aw_density2,Airwindows,density saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,20.56219,-13.74
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.35128,-49.09
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,5.80581,-24.72
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,19.40287,-14.24
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,29.74587,-10.53
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,28.16143,-11.01
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.07572,-62.42
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.74117,-42.6
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,2.87914,-30.81
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,10.57703,-19.51
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,19.07965,-14.39
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.37364,-48.55
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,5.34324,-25.44
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,19.40159,-14.24
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,29.73487,-10.53
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,28.15931,-11.01
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.17013,-55.38
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,2.09045,-33.6
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,8.43238,-21.48
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,35.63051,-8.96
+aw_desk4,Airwindows,desk colour,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,70.74675,-3.01
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0,full,,ccif_19_20k,-30.0,0.34228,-49.31
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0,full,,ccif_19_20k,-18.0,5.78476,-24.75
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0,full,,ccif_19_20k,-12.0,19.38162,-14.25
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0,full,,ccif_19_20k,-6.0,27.47244,-11.22
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0,full,,ccif_19_20k,-3.0,28.75631,-10.83
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0,full,,smpte_60_7k,-30.0,0.05092,-65.86
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0,full,,smpte_60_7k,-18.0,0.20744,-53.66
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0,full,,smpte_60_7k,-12.0,0.79396,-42.0
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0,full,,smpte_60_7k,-6.0,2.87833,-30.82
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0,full,,smpte_60_7k,-3.0,5.23687,-25.62
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0.5,full,,ccif_19_20k,-30.0,0.36106,-48.85
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0.5,full,,ccif_19_20k,-18.0,5.82694,-24.69
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0.5,full,,ccif_19_20k,-12.0,19.40246,-14.24
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0.5,full,,ccif_19_20k,-6.0,29.73119,-10.54
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0.5,full,,ccif_19_20k,-3.0,28.16024,-11.01
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0.5,full,,smpte_60_7k,-30.0,0.11483,-58.8
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0.5,full,,smpte_60_7k,-18.0,1.32725,-37.54
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0.5,full,,smpte_60_7k,-12.0,5.24008,-25.61
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0.5,full,,smpte_60_7k,-6.0,20.32025,-13.84
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_0.5,full,,smpte_60_7k,-3.0,38.8777,-8.21
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_1,full,,ccif_19_20k,-30.0,0.64393,-43.82
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_1,full,,ccif_19_20k,-18.0,5.53453,-25.14
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_1,full,,ccif_19_20k,-12.0,19.40617,-14.24
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_1,full,,ccif_19_20k,-6.0,29.76369,-10.53
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_1,full,,ccif_19_20k,-3.0,28.1597,-11.01
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_1,full,,smpte_60_7k,-30.0,1.15636,-38.74
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_1,full,,smpte_60_7k,-18.0,21.52305,-13.34
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_1,full,,smpte_60_7k,-12.0,100.77942,0.07
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_1,full,,smpte_60_7k,-6.0,155.86179,3.85
+aw_desk4,Airwindows,desk colour,aw-drive,overdrive_1,full,,smpte_60_7k,-3.0,166.60517,4.43
+aw_drive,Airwindows,distortion,aw-drive,drive_0,full,,ccif_19_20k,-30.0,0.0,-187.27
+aw_drive,Airwindows,distortion,aw-drive,drive_0,full,,ccif_19_20k,-18.0,0.0,-186.33
+aw_drive,Airwindows,distortion,aw-drive,drive_0,full,,ccif_19_20k,-12.0,0.0,-188.18
+aw_drive,Airwindows,distortion,aw-drive,drive_0,full,,ccif_19_20k,-6.0,0.0,-189.32
+aw_drive,Airwindows,distortion,aw-drive,drive_0,full,,ccif_19_20k,-3.0,0.0,-190.03
+aw_drive,Airwindows,distortion,aw-drive,drive_0,full,,smpte_60_7k,-30.0,0.0,-172.13
+aw_drive,Airwindows,distortion,aw-drive,drive_0,full,,smpte_60_7k,-18.0,0.0,-169.26
+aw_drive,Airwindows,distortion,aw-drive,drive_0,full,,smpte_60_7k,-12.0,0.0,-172.21
+aw_drive,Airwindows,distortion,aw-drive,drive_0,full,,smpte_60_7k,-6.0,0.0,-172.01
+aw_drive,Airwindows,distortion,aw-drive,drive_0,full,,smpte_60_7k,-3.0,0.0,-170.92
+aw_drive,Airwindows,distortion,aw-drive,drive_0.5,full,,ccif_19_20k,-30.0,0.01443,-76.82
+aw_drive,Airwindows,distortion,aw-drive,drive_0.5,full,,ccif_19_20k,-18.0,0.2281,-52.84
+aw_drive,Airwindows,distortion,aw-drive,drive_0.5,full,,ccif_19_20k,-12.0,0.90078,-40.91
+aw_drive,Airwindows,distortion,aw-drive,drive_0.5,full,,ccif_19_20k,-6.0,3.46514,-29.21
+aw_drive,Airwindows,distortion,aw-drive,drive_0.5,full,,ccif_19_20k,-3.0,6.58207,-23.63
+aw_drive,Airwindows,distortion,aw-drive,drive_0.5,full,,smpte_60_7k,-30.0,0.05225,-65.64
+aw_drive,Airwindows,distortion,aw-drive,drive_0.5,full,,smpte_60_7k,-18.0,0.82914,-41.63
+aw_drive,Airwindows,distortion,aw-drive,drive_0.5,full,,smpte_60_7k,-12.0,3.31426,-29.59
+aw_drive,Airwindows,distortion,aw-drive,drive_0.5,full,,smpte_60_7k,-6.0,13.36817,-17.48
+aw_drive,Airwindows,distortion,aw-drive,drive_0.5,full,,smpte_60_7k,-3.0,26.97907,-11.38
+aw_drive,Airwindows,distortion,aw-drive,drive_1,full,,ccif_19_20k,-30.0,1.95016,-34.2
+aw_drive,Airwindows,distortion,aw-drive,drive_1,full,,ccif_19_20k,-18.0,16.83643,-15.48
+aw_drive,Airwindows,distortion,aw-drive,drive_1,full,,ccif_19_20k,-12.0,26.75766,-11.45
+aw_drive,Airwindows,distortion,aw-drive,drive_1,full,,ccif_19_20k,-6.0,31.11839,-10.14
+aw_drive,Airwindows,distortion,aw-drive,drive_1,full,,ccif_19_20k,-3.0,32.12489,-9.86
+aw_drive,Airwindows,distortion,aw-drive,drive_1,full,,smpte_60_7k,-30.0,7.2877,-22.75
+aw_drive,Airwindows,distortion,aw-drive,drive_1,full,,smpte_60_7k,-18.0,82.31407,-1.69
+aw_drive,Airwindows,distortion,aw-drive,drive_1,full,,smpte_60_7k,-12.0,151.20889,3.59
+aw_drive,Airwindows,distortion,aw-drive,drive_1,full,,smpte_60_7k,-6.0,175.60928,4.89
+aw_drive,Airwindows,distortion,aw-drive,drive_1,full,,smpte_60_7k,-3.0,180.20228,5.12
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.00117,-98.62
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.01858,-74.62
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.0741,-62.6
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.29698,-50.55
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.59786,-44.47
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.00424,-87.45
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.06731,-63.44
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.26873,-51.41
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,1.0825,-39.31
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,2.19434,-33.17
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.012,-78.41
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.18989,-54.43
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,0.75122,-42.48
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,2.91647,-30.7
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,5.63709,-24.98
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.04347,-67.24
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.68979,-43.23
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,2.75668,-31.19
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,11.14258,-19.06
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,22.73007,-12.87
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.03765,-68.48
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,0.5894,-44.59
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,2.2569,-32.93
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,7.77355,-22.19
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,13.13539,-17.63
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.1364,-57.3
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,2.15481,-33.33
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,8.48793,-21.42
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,32.31784,-9.81
+aw_drive,Airwindows,distortion,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,60.81972,-4.32
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,10.40607,-19.65
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,0.52431,-45.61
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,3.04693,-30.32
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,10.96793,-19.2
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,18.30926,-14.75
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.10167,-59.86
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,2.21235,-33.1
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,8.77841,-21.13
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,41.61674,-7.61
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,88.03071,-1.11
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0,full,,ccif_19_20k,-30.0,106.74495,0.57
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0,full,,ccif_19_20k,-18.0,11.84965,-18.53
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0,full,,ccif_19_20k,-12.0,5.61476,-25.01
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0,full,,ccif_19_20k,-6.0,2.18459,-33.21
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0,full,,ccif_19_20k,-3.0,0.56176,-45.01
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0,full,,smpte_60_7k,-30.0,0.01805,-74.87
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0,full,,smpte_60_7k,-18.0,0.19679,-54.12
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0,full,,smpte_60_7k,-12.0,0.98612,-40.12
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0,full,,smpte_60_7k,-6.0,3.98675,-27.99
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0,full,,smpte_60_7k,-3.0,7.94486,-22.0
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0.5,full,,ccif_19_20k,-30.0,21.20958,-13.47
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0.5,full,,ccif_19_20k,-18.0,3.09333,-30.19
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0.5,full,,ccif_19_20k,-12.0,0.44763,-46.98
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0.5,full,,ccif_19_20k,-6.0,3.85896,-28.27
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0.5,full,,ccif_19_20k,-3.0,8.37187,-21.54
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0.5,full,,smpte_60_7k,-30.0,0.02814,-71.01
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0.5,full,,smpte_60_7k,-18.0,0.98806,-40.1
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0.5,full,,smpte_60_7k,-12.0,3.94415,-28.08
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0.5,full,,smpte_60_7k,-6.0,16.21413,-15.8
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_0.5,full,,smpte_60_7k,-3.0,36.0871,-8.85
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_1,full,,ccif_19_20k,-30.0,10.38248,-19.67
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_1,full,,ccif_19_20k,-18.0,0.52473,-45.6
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_1,full,,ccif_19_20k,-12.0,3.05851,-30.29
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_1,full,,ccif_19_20k,-6.0,11.00026,-19.17
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_1,full,,ccif_19_20k,-3.0,18.33877,-14.73
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_1,full,,smpte_60_7k,-30.0,0.10205,-59.82
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_1,full,,smpte_60_7k,-18.0,2.21797,-33.08
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_1,full,,smpte_60_7k,-12.0,8.80156,-21.11
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_1,full,,smpte_60_7k,-6.0,41.75537,-7.59
+aw_dubly2,Airwindows,companding noise reduction,aw-tape,tapedrv_1,full,,smpte_60_7k,-3.0,88.20942,-1.09
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0,full,,ccif_19_20k,-30.0,0.00029,-110.65
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0,full,,ccif_19_20k,-18.0,0.00461,-86.73
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0,full,,ccif_19_20k,-12.0,0.01783,-74.98
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0,full,,ccif_19_20k,-6.0,0.06333,-63.97
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0,full,,ccif_19_20k,-3.0,0.11041,-59.14
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0,full,,smpte_60_7k,-30.0,0.01234,-78.17
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0,full,,smpte_60_7k,-18.0,0.19513,-54.19
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0,full,,smpte_60_7k,-12.0,0.77143,-42.25
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0,full,,smpte_60_7k,-6.0,2.98632,-30.5
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0,full,,smpte_60_7k,-3.0,5.73858,-24.82
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0.5,full,,ccif_19_20k,-30.0,0.00521,-85.66
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0.5,full,,ccif_19_20k,-18.0,0.0824,-61.68
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0.5,full,,ccif_19_20k,-12.0,0.3258,-49.74
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0.5,full,,ccif_19_20k,-6.0,1.26026,-37.99
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0.5,full,,ccif_19_20k,-3.0,2.41206,-32.35
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0.5,full,,smpte_60_7k,-30.0,0.00301,-90.44
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0.5,full,,smpte_60_7k,-18.0,0.04778,-66.41
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0.5,full,,smpte_60_7k,-12.0,0.19215,-54.33
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0.5,full,,smpte_60_7k,-6.0,0.79382,-42.01
+aw_focus,Airwindows,focused saturation,aw-drive,boost_0.5,full,,smpte_60_7k,-3.0,1.65174,-35.64
+aw_focus,Airwindows,focused saturation,aw-drive,boost_1,full,,ccif_19_20k,-30.0,0.0259,-71.74
+aw_focus,Airwindows,focused saturation,aw-drive,boost_1,full,,ccif_19_20k,-18.0,0.41114,-47.72
+aw_focus,Airwindows,focused saturation,aw-drive,boost_1,full,,ccif_19_20k,-12.0,1.64561,-35.67
+aw_focus,Airwindows,focused saturation,aw-drive,boost_1,full,,ccif_19_20k,-6.0,6.65633,-23.54
+aw_focus,Airwindows,focused saturation,aw-drive,boost_1,full,,ccif_19_20k,-3.0,11.96083,-18.44
+aw_focus,Airwindows,focused saturation,aw-drive,boost_1,full,,smpte_60_7k,-30.0,0.00731,-82.73
+aw_focus,Airwindows,focused saturation,aw-drive,boost_1,full,,smpte_60_7k,-18.0,0.11626,-58.69
+aw_focus,Airwindows,focused saturation,aw-drive,boost_1,full,,smpte_60_7k,-12.0,0.46902,-46.58
+aw_focus,Airwindows,focused saturation,aw-drive,boost_1,full,,smpte_60_7k,-6.0,1.96905,-34.11
+aw_focus,Airwindows,focused saturation,aw-drive,boost_1,full,,smpte_60_7k,-3.0,4.20805,-27.52
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.00694,-83.17
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.10996,-59.18
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,0.43696,-47.19
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,1.72532,-35.26
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,3.39698,-29.38
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.00359,-88.89
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.05684,-64.91
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,0.22466,-52.97
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,0.87075,-41.2
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,1.68511,-35.47
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.02025,-73.87
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,0.32157,-49.85
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,1.28837,-37.8
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,5.25313,-25.59
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,10.61118,-19.48
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.00416,-87.63
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,0.06574,-63.64
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,0.26022,-51.69
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,1.01981,-39.83
+aw_focus,Airwindows,focused saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,2.02895,-33.85
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.06378,-63.91
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.25355,-51.92
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.51484,-45.77
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,1.04559,-39.61
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,1.49629,-36.5
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.00017,-115.21
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.00106,-99.5
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.00144,-96.86
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.00438,-87.16
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,0.00591,-84.57
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.2488,-52.08
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,1.02352,-39.8
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,2.12374,-33.46
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,4.62307,-26.7
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,6.90854,-23.21
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.00165,-95.66
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.00572,-84.85
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,0.01047,-79.6
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,0.02504,-72.03
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,0.03267,-69.72
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.38805,-48.22
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,1.62291,-35.79
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,3.4929,-29.14
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,8.12801,-21.8
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,12.8931,-17.79
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.00816,-81.77
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,0.03265,-69.72
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,0.06507,-63.73
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,0.13536,-57.37
+aw_fromtape,Airwindows,tape playback,aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,0.19538,-54.18
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0,full,,ccif_19_20k,-30.0,0.00586,-84.64
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0,full,,ccif_19_20k,-18.0,0.02335,-72.63
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0,full,,ccif_19_20k,-12.0,0.04662,-66.63
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0,full,,ccif_19_20k,-6.0,0.09312,-60.62
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0,full,,ccif_19_20k,-3.0,0.13162,-57.61
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0,full,,smpte_60_7k,-30.0,1e-05,-144.37
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0,full,,smpte_60_7k,-18.0,2e-05,-132.5
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0,full,,smpte_60_7k,-12.0,5e-05,-126.46
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0,full,,smpte_60_7k,-6.0,9e-05,-120.46
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0,full,,smpte_60_7k,-3.0,0.00013,-117.46
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0.5,full,,ccif_19_20k,-30.0,0.27108,-51.34
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0.5,full,,ccif_19_20k,-18.0,1.12088,-39.01
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0.5,full,,ccif_19_20k,-12.0,2.36426,-32.53
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0.5,full,,ccif_19_20k,-6.0,5.15308,-25.76
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0.5,full,,ccif_19_20k,-3.0,7.84654,-22.11
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0.5,full,,smpte_60_7k,-30.0,0.00189,-94.47
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0.5,full,,smpte_60_7k,-18.0,0.0081,-81.83
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0.5,full,,smpte_60_7k,-12.0,0.01558,-76.15
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0.5,full,,smpte_60_7k,-6.0,0.03167,-69.99
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_0.5,full,,smpte_60_7k,-3.0,0.04331,-67.27
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_1,full,,ccif_19_20k,-30.0,1.14746,-38.81
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_1,full,,ccif_19_20k,-18.0,2.76772,-31.16
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_1,full,,ccif_19_20k,-12.0,5.66864,-24.93
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_1,full,,ccif_19_20k,-6.0,14.17401,-16.97
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_1,full,,ccif_19_20k,-3.0,25.39512,-11.9
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_1,full,,smpte_60_7k,-30.0,2.19488,-33.17
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_1,full,,smpte_60_7k,-18.0,4.66008,-26.63
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_1,full,,smpte_60_7k,-12.0,8.50843,-21.4
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_1,full,,smpte_60_7k,-6.0,19.31091,-14.28
+aw_fromtape,Airwindows,tape playback,aw-tape,softer_1,full,,smpte_60_7k,-3.0,32.15133,-9.86
+aw_hype,Airwindows,hyped saturation,aw-drive,mid,full,,ccif_19_20k,-30.0,0.03012,-70.42
+aw_hype,Airwindows,hyped saturation,aw-drive,mid,full,,ccif_19_20k,-18.0,0.47872,-46.4
+aw_hype,Airwindows,hyped saturation,aw-drive,mid,full,,ccif_19_20k,-12.0,1.92265,-34.32
+aw_hype,Airwindows,hyped saturation,aw-drive,mid,full,,ccif_19_20k,-6.0,7.70661,-22.26
+aw_hype,Airwindows,hyped saturation,aw-drive,mid,full,,ccif_19_20k,-3.0,11.2875,-18.95
+aw_hype,Airwindows,hyped saturation,aw-drive,mid,full,,smpte_60_7k,-30.0,0.0,-171.08
+aw_hype,Airwindows,hyped saturation,aw-drive,mid,full,,smpte_60_7k,-18.0,0.0,-169.08
+aw_hype,Airwindows,hyped saturation,aw-drive,mid,full,,smpte_60_7k,-12.0,0.0,-170.4
+aw_hype,Airwindows,hyped saturation,aw-drive,mid,full,,smpte_60_7k,-6.0,0.0,-168.03
+aw_hype,Airwindows,hyped saturation,aw-drive,mid,full,,smpte_60_7k,-3.0,0.0,-169.04
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.25,full,,ccif_19_20k,-30.0,0.00072,-102.82
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.25,full,,ccif_19_20k,-18.0,0.00671,-83.47
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.25,full,,ccif_19_20k,-12.0,0.03944,-68.08
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.25,full,,ccif_19_20k,-6.0,0.15894,-55.98
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.25,full,,ccif_19_20k,-3.0,0.32678,-49.71
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.25,full,,smpte_60_7k,-30.0,0.09125,-60.8
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.25,full,,smpte_60_7k,-18.0,0.21403,-53.39
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.25,full,,smpte_60_7k,-12.0,0.24307,-52.29
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.25,full,,smpte_60_7k,-6.0,0.95308,-40.42
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.25,full,,smpte_60_7k,-3.0,1.92182,-34.33
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.5,full,,ccif_19_20k,-30.0,0.00783,-82.13
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.5,full,,ccif_19_20k,-18.0,0.08907,-61.01
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.5,full,,ccif_19_20k,-12.0,0.32862,-49.67
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.5,full,,ccif_19_20k,-6.0,1.23641,-38.16
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.5,full,,ccif_19_20k,-3.0,2.37987,-32.47
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.5,full,,smpte_60_7k,-30.0,0.18732,-54.55
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.5,full,,smpte_60_7k,-18.0,0.5535,-45.14
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.5,full,,smpte_60_7k,-12.0,1.91563,-34.35
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.5,full,,smpte_60_7k,-6.0,7.88119,-22.07
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.5,full,,smpte_60_7k,-3.0,16.41617,-15.69
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.75,full,,ccif_19_20k,-30.0,0.04167,-67.6
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.75,full,,ccif_19_20k,-18.0,0.65119,-43.73
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.75,full,,ccif_19_20k,-12.0,2.43828,-32.26
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.75,full,,ccif_19_20k,-6.0,8.01098,-21.93
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.75,full,,ccif_19_20k,-3.0,12.88128,-17.8
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.75,full,,smpte_60_7k,-30.0,0.24979,-52.05
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.75,full,,smpte_60_7k,-18.0,3.86875,-28.25
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.75,full,,smpte_60_7k,-12.0,16.42086,-15.69
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.75,full,,smpte_60_7k,-6.0,82.98559,-1.62
+aw_ironoxide5,Airwindows,tape,aw-tape,input_trim_0.75,full,,smpte_60_7k,-3.0,126.45673,2.04
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.00032,-110.03
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.00674,-83.42
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.01797,-74.91
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.0593,-64.54
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.12976,-57.74
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.07514,-62.48
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.08327,-61.59
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.18729,-54.55
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.37984,-48.41
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,0.77524,-42.21
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.01452,-76.76
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.05084,-65.88
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,0.16233,-55.79
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,0.62834,-44.04
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,1.26037,-37.99
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.22458,-52.97
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.30981,-50.18
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,0.98351,-40.14
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,3.8428,-28.31
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,7.83945,-22.11
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.01719,-75.29
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,0.11078,-59.11
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,0.46967,-46.56
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,1.79761,-34.91
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,3.47058,-29.19
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.05845,-64.66
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,0.71957,-42.86
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,2.84313,-30.92
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,11.85774,-18.52
+aw_ironoxide5,Airwindows,tape,aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,25.29558,-11.94
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.25,full,,ccif_19_20k,-30.0,0.00085,-101.46
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.25,full,,ccif_19_20k,-18.0,0.0134,-77.46
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.25,full,,ccif_19_20k,-12.0,0.05332,-65.46
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.25,full,,ccif_19_20k,-6.0,0.21179,-53.48
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.25,full,,ccif_19_20k,-3.0,0.42134,-47.51
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.25,full,,smpte_60_7k,-30.0,0.00252,-91.98
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.25,full,,smpte_60_7k,-18.0,0.03989,-67.98
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.25,full,,smpte_60_7k,-12.0,0.15887,-55.98
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.25,full,,smpte_60_7k,-6.0,0.63356,-43.96
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.25,full,,smpte_60_7k,-3.0,1.26705,-37.94
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.5,full,,ccif_19_20k,-30.0,0.00672,-83.46
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.5,full,,ccif_19_20k,-18.0,0.1063,-59.47
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.5,full,,ccif_19_20k,-12.0,0.42134,-47.51
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.5,full,,ccif_19_20k,-6.0,1.64817,-35.66
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.5,full,,ccif_19_20k,-3.0,3.21286,-29.86
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.5,full,,smpte_60_7k,-30.0,0.01999,-73.98
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.5,full,,smpte_60_7k,-18.0,0.31716,-49.97
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.5,full,,smpte_60_7k,-12.0,1.26705,-37.94
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.5,full,,smpte_60_7k,-6.0,5.11459,-25.82
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.5,full,,smpte_60_7k,-3.0,10.39444,-19.66
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.75,full,,ccif_19_20k,-30.0,0.05332,-65.46
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.75,full,,ccif_19_20k,-18.0,0.83577,-41.56
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.75,full,,ccif_19_20k,-12.0,3.21286,-29.86
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.75,full,,ccif_19_20k,-6.0,11.21414,-19.0
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.75,full,,ccif_19_20k,-3.0,19.01195,-14.42
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.75,full,,smpte_60_7k,-30.0,0.15887,-55.98
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.75,full,,smpte_60_7k,-18.0,2.53982,-31.9
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.75,full,,smpte_60_7k,-12.0,10.39444,-19.66
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.75,full,,smpte_60_7k,-6.0,46.0757,-6.73
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,input_trim_0.75,full,,smpte_60_7k,-3.0,94.25244,-0.51
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.0005,-105.96
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.00798,-81.96
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.03177,-69.96
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.12631,-57.97
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.25158,-51.99
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.0015,-96.48
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.02376,-72.48
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.09461,-60.48
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.37703,-48.47
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,0.75332,-42.46
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.0051,-85.85
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.08076,-61.86
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,0.32043,-49.89
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,1.25873,-38.0
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,2.46741,-32.16
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.01518,-76.37
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.24079,-52.37
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,0.96115,-40.34
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,3.86686,-28.25
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,7.82401,-22.13
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.01534,-76.29
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,0.24228,-52.31
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,0.95487,-40.4
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,3.65236,-28.75
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,6.91769,-23.2
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.04565,-66.81
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,0.72532,-42.79
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,2.91059,-30.72
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,11.95935,-18.45
+aw_ironoxideclassic2,Airwindows,"tape, the older algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,24.87807,-12.08
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0,full,,ccif_19_20k,-30.0,0.0,-186.15
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0,full,,ccif_19_20k,-18.0,0.0,-184.12
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0,full,,ccif_19_20k,-12.0,0.0,-193.19
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0,full,,ccif_19_20k,-6.0,8.63351,-21.28
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0,full,,ccif_19_20k,-3.0,26.5495,-11.52
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0,full,,smpte_60_7k,-30.0,0.0,-167.83
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0,full,,smpte_60_7k,-18.0,0.0,-166.57
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0,full,,smpte_60_7k,-12.0,0.0,-172.22
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0,full,,smpte_60_7k,-6.0,0.0,-171.47
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0,full,,smpte_60_7k,-3.0,0.0,-168.41
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0.5,full,,ccif_19_20k,-30.0,0.0,-184.31
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0.5,full,,ccif_19_20k,-18.0,59.45471,-4.52
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0.5,full,,ccif_19_20k,-12.0,153.30193,3.71
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0.5,full,,ccif_19_20k,-6.0,70.74191,-3.01
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0.5,full,,ccif_19_20k,-3.0,115.4444,1.25
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0.5,full,,smpte_60_7k,-30.0,0.0,-170.09
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0.5,full,,smpte_60_7k,-18.0,1.15586,-38.74
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0.5,full,,smpte_60_7k,-12.0,122.66847,1.77
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0.5,full,,smpte_60_7k,-6.0,176.60275,4.94
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_0.5,full,,smpte_60_7k,-3.0,182.35465,5.22
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_1,full,,ccif_19_20k,-30.0,69.67346,-3.14
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_1,full,,ccif_19_20k,-18.0,71.45475,-2.92
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_1,full,,ccif_19_20k,-12.0,141.16123,2.99
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_1,full,,ccif_19_20k,-6.0,164.83188,4.34
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_1,full,,ccif_19_20k,-3.0,183.26591,5.26
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_1,full,,smpte_60_7k,-30.0,9.99008,-20.01
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_1,full,,smpte_60_7k,-18.0,178.20531,5.02
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_1,full,,smpte_60_7k,-12.0,191.9503,5.66
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_1,full,,smpte_60_7k,-6.0,248.14522,7.89
+aw_loud,Airwindows,loudness saturation,aw-drive,boost_1,full,,smpte_60_7k,-3.0,216.60339,6.71
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.0,-189.64
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,8.31788,-21.6
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,66.0367,-3.6
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,148.29693,3.42
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,89.37202,-0.98
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.0,-171.07
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.0,-170.11
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,6.11921,-24.27
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,127.57365,2.12
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,161.57721,4.17
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.0,-189.74
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,8.98341,-20.93
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,68.869,-3.24
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,145.51366,3.26
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,87.21686,-1.19
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.0,-172.11
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.0,-169.96
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,9.11875,-20.8
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,129.43306,2.24
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,162.58248,4.22
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.0,-188.76
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,10.30281,-19.74
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,74.71669,-2.53
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,138.95805,2.86
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,83.0062,-1.62
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.0,-171.14
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,0.0,-172.88
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,15.51993,-16.18
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,133.05346,2.48
+aw_loud,Airwindows,loudness saturation,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,164.51889,4.32
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0,full,,ccif_19_20k,-30.0,159.35887,4.05
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0,full,,ccif_19_20k,-18.0,111.67303,0.96
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0,full,,ccif_19_20k,-12.0,88.21291,-1.09
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0,full,,ccif_19_20k,-6.0,95.1192,-0.43
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0,full,,ccif_19_20k,-3.0,88.99459,-1.01
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0,full,,smpte_60_7k,-30.0,228.06085,7.16
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0,full,,smpte_60_7k,-18.0,483.86487,13.69
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0,full,,smpte_60_7k,-12.0,1147.62905,21.2
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0,full,,smpte_60_7k,-6.0,452.96542,13.12
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0,full,,smpte_60_7k,-3.0,440.99259,12.89
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0.5,full,,ccif_19_20k,-30.0,0.03118,-70.12
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0.5,full,,ccif_19_20k,-18.0,8.15392,-21.77
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0.5,full,,ccif_19_20k,-12.0,22.93254,-12.79
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0.5,full,,ccif_19_20k,-6.0,30.98763,-10.18
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0.5,full,,ccif_19_20k,-3.0,33.0239,-9.62
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0.5,full,,smpte_60_7k,-30.0,5.3713,-25.4
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0.5,full,,smpte_60_7k,-18.0,150.14404,3.53
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0.5,full,,smpte_60_7k,-12.0,175.90772,4.91
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0.5,full,,smpte_60_7k,-6.0,182.99151,5.25
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_0.5,full,,smpte_60_7k,-3.0,184.20097,5.31
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_1,full,,ccif_19_20k,-30.0,8.26933,-21.65
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_1,full,,ccif_19_20k,-18.0,31.02136,-10.17
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_1,full,,ccif_19_20k,-12.0,34.27929,-9.3
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_1,full,,ccif_19_20k,-6.0,35.28138,-9.05
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_1,full,,ccif_19_20k,-3.0,35.45491,-9.01
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_1,full,,smpte_60_7k,-30.0,150.44465,3.55
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_1,full,,smpte_60_7k,-18.0,183.01436,5.25
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_1,full,,smpte_60_7k,-12.0,184.81507,5.33
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_1,full,,smpte_60_7k,-6.0,185.27059,5.36
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,in_trim_1,full,,smpte_60_7k,-3.0,185.34762,5.36
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,7e-05,-122.82
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,9e-05,-120.67
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.00147,-96.67
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.02327,-72.67
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.09276,-60.65
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,6e-05,-124.42
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.01511,-76.42
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.23998,-52.4
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,3.95317,-28.06
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,18.00122,-14.89
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.00014,-117.01
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.00087,-101.24
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,0.01375,-77.24
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,0.2188,-53.2
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,0.88301,-41.08
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.00056,-104.99
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.14167,-56.97
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,2.29671,-32.78
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,46.10424,-6.73
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,99.19995,-0.07
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.00018,-114.81
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,0.00259,-91.75
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,0.041,-67.74
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,0.65816,-43.63
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,2.7313,-31.27
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.00168,-95.5
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,0.42358,-47.46
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,7.19458,-22.86
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,89.98274,-0.92
+aw_mackity,Airwindows,Mackie 1202 preamp,aw-drive,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,128.48565,2.18
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0,full,,ccif_19_20k,-30.0,0.0,-186.73
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0,full,,ccif_19_20k,-18.0,0.0,-186.52
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0,full,,ccif_19_20k,-12.0,0.0,-181.79
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0,full,,ccif_19_20k,-6.0,0.0,-188.25
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0,full,,ccif_19_20k,-3.0,0.0,-193.78
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0,full,,smpte_60_7k,-30.0,0.0,-168.4
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0,full,,smpte_60_7k,-18.0,0.0,-169.67
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0,full,,smpte_60_7k,-12.0,0.0,-171.03
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0,full,,smpte_60_7k,-6.0,0.0,-167.4
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0,full,,smpte_60_7k,-3.0,0.0,-173.33
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0.5,full,,ccif_19_20k,-30.0,1e-05,-143.32
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0.5,full,,ccif_19_20k,-18.0,0.00043,-107.38
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0.5,full,,ccif_19_20k,-12.0,0.00334,-89.53
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0.5,full,,ccif_19_20k,-6.0,0.02477,-72.12
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0.5,full,,ccif_19_20k,-3.0,0.06356,-63.94
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0.5,full,,smpte_60_7k,-30.0,0.00019,-114.25
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0.5,full,,smpte_60_7k,-18.0,0.0122,-78.27
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0.5,full,,smpte_60_7k,-12.0,0.09599,-60.36
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0.5,full,,smpte_60_7k,-6.0,0.73713,-42.65
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_0.5,full,,smpte_60_7k,-3.0,1.99452,-34.0
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_1,full,,ccif_19_20k,-30.0,1e-05,-137.29
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_1,full,,ccif_19_20k,-18.0,0.00086,-101.36
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_1,full,,ccif_19_20k,-12.0,0.00668,-83.51
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_1,full,,ccif_19_20k,-6.0,0.04958,-66.09
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_1,full,,ccif_19_20k,-3.0,0.12731,-57.9
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_1,full,,smpte_60_7k,-30.0,0.00039,-108.23
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_1,full,,smpte_60_7k,-18.0,0.0244,-72.25
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_1,full,,smpte_60_7k,-12.0,0.19221,-54.32
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_1,full,,smpte_60_7k,-6.0,1.4875,-36.55
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,drive_1,full,,smpte_60_7k,-3.0,4.08844,-27.77
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,1e-05,-137.33
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.00085,-101.38
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.00667,-83.52
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.04948,-66.11
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.12706,-57.92
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.00039,-108.24
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.02435,-72.27
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.19183,-54.34
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,1.48454,-36.57
+aw_purestdrive,Airwindows,minimal tube-ish drive,aw-drive,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,4.08007,-27.79
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.11191,-59.02
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.49675,-46.08
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,1.55386,-36.17
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,10.75426,-19.37
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,20.07084,-13.95
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.00158,-96.04
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.20791,-53.64
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,3.46388,-29.21
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,71.92519,-2.86
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,128.16612,2.16
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.08991,-60.92
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,0.47108,-46.54
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,2.38526,-32.45
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,17.69371,-15.04
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,24.23417,-12.31
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.0013,-97.75
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,0.51585,-45.75
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,8.73151,-21.18
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,115.89039,1.28
+aw_tape,Airwindows,"tape, the simple one",aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,144.13654,3.18
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0,full,,ccif_19_20k,-30.0,1.31998,-37.59
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0,full,,ccif_19_20k,-18.0,6.46287,-23.79
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0,full,,ccif_19_20k,-12.0,17.90228,-14.94
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0,full,,ccif_19_20k,-6.0,64.51607,-3.81
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0,full,,ccif_19_20k,-3.0,52.76621,-5.55
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0,full,,smpte_60_7k,-30.0,0.01979,-74.07
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0,full,,smpte_60_7k,-18.0,0.0811,-61.82
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0,full,,smpte_60_7k,-12.0,0.18183,-54.81
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0,full,,smpte_60_7k,-6.0,0.46444,-46.66
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0,full,,smpte_60_7k,-3.0,0.84619,-41.45
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0.5,full,,ccif_19_20k,-30.0,0.31771,-49.96
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0.5,full,,ccif_19_20k,-18.0,1.32809,-37.54
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0.5,full,,ccif_19_20k,-12.0,2.80958,-31.03
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0.5,full,,ccif_19_20k,-6.0,6.26401,-24.06
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0.5,full,,ccif_19_20k,-3.0,9.59715,-20.36
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0.5,full,,smpte_60_7k,-30.0,0.00517,-85.73
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0.5,full,,smpte_60_7k,-18.0,0.01602,-75.91
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0.5,full,,smpte_60_7k,-12.0,0.02044,-73.79
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0.5,full,,smpte_60_7k,-6.0,0.77244,-42.24
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_0.5,full,,smpte_60_7k,-3.0,3.31672,-29.59
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_1,full,,ccif_19_20k,-30.0,0.07973,-61.97
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_1,full,,ccif_19_20k,-18.0,0.50218,-45.98
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_1,full,,ccif_19_20k,-12.0,3.46439,-29.21
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_1,full,,ccif_19_20k,-6.0,20.57888,-13.73
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_1,full,,ccif_19_20k,-3.0,25.94699,-11.72
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_1,full,,smpte_60_7k,-30.0,0.00233,-92.64
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_1,full,,smpte_60_7k,-18.0,0.85377,-41.37
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_1,full,,smpte_60_7k,-12.0,14.96506,-16.5
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_1,full,,smpte_60_7k,-6.0,128.02908,2.15
+aw_tape,Airwindows,"tape, the simple one",aw-tape,slam_1,full,,smpte_60_7k,-3.0,152.30135,3.65
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,1.42105,-36.95
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,3.1543,-30.02
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,5.03386,-25.96
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,10.33987,-19.71
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,15.9129,-15.97
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.08172,-61.75
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.52104,-45.66
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,1.655,-35.62
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,9.76926,-20.2
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,46.93193,-6.57
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,1.65514,-35.62
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,4.92002,-26.16
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,8.90264,-21.01
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,18.49876,-14.66
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,33.26578,-9.56
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.19503,-54.2
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,1.06381,-39.46
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,4.06856,-27.81
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,59.70272,-4.48
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,98.96256,-0.09
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0,full,,ccif_19_20k,-30.0,696.90974,16.86
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0,full,,ccif_19_20k,-18.0,2826.35991,29.02
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0,full,,ccif_19_20k,-12.0,845.67576,18.54
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0,full,,ccif_19_20k,-6.0,1058.39586,20.49
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0,full,,ccif_19_20k,-3.0,1021.02953,20.18
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0,full,,smpte_60_7k,-30.0,313.3824,9.92
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0,full,,smpte_60_7k,-18.0,312.90234,9.91
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0,full,,smpte_60_7k,-12.0,316.05316,10.0
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0,full,,smpte_60_7k,-6.0,317.81023,10.04
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0,full,,smpte_60_7k,-3.0,321.36149,10.14
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0.5,full,,ccif_19_20k,-30.0,3.99344,-27.97
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0.5,full,,ccif_19_20k,-18.0,1.42681,-36.91
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0.5,full,,ccif_19_20k,-12.0,1.9393,-34.25
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0.5,full,,ccif_19_20k,-6.0,3.94509,-28.08
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0.5,full,,ccif_19_20k,-3.0,5.39345,-25.36
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0.5,full,,smpte_60_7k,-30.0,0.19955,-54.0
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0.5,full,,smpte_60_7k,-18.0,0.18319,-54.74
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0.5,full,,smpte_60_7k,-12.0,0.43168,-47.3
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0.5,full,,smpte_60_7k,-6.0,1.26397,-37.97
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_0.5,full,,smpte_60_7k,-3.0,2.55181,-31.86
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_1,full,,ccif_19_20k,-30.0,1.76378,-35.07
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_1,full,,ccif_19_20k,-18.0,5.52354,-25.16
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_1,full,,ccif_19_20k,-12.0,10.42998,-19.63
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_1,full,,ccif_19_20k,-6.0,21.37923,-13.4
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_1,full,,ccif_19_20k,-3.0,44.0006,-7.13
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_1,full,,smpte_60_7k,-30.0,0.22585,-52.92
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_1,full,,smpte_60_7k,-18.0,1.30725,-37.67
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_1,full,,smpte_60_7k,-12.0,5.13858,-25.78
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_1,full,,smpte_60_7k,-6.0,74.83398,-2.52
+aw_totape7,Airwindows,"tape, the flagship algorithm",aw-tape,tapedrv_1,full,,smpte_60_7k,-3.0,109.00499,0.75
 bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-30,full,,ccif_19_20k,-30.0,0.00346,-89.21
 bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-30,full,,ccif_19_20k,-18.0,0.04529,-66.88
 bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-30,full,,ccif_19_20k,-12.0,0.17984,-54.9
@@ -49,16 +939,356 @@ bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-60,full,,smpte
 bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-60,full,,smpte_60_7k,-12.0,0.01761,-75.09
 bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-60,full,,smpte_60_7k,-6.0,0.06837,-63.3
 bx_console_n,Brainworx,Neve VXS console channel,console-neve,thd_-60,full,,smpte_60_7k,-3.0,0.13571,-57.35
-frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.00464,-86.68
-frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.02173,-73.26
-frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.06166,-64.2
-frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.26392,-51.57
-frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.48867,-46.22
-frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.01404,-77.06
-frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.06616,-63.59
-frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.24121,-52.35
-frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.9378,-40.56
-frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,1.8091,-34.85
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_0,full,,ccif_19_20k,-30.0,0.01949,-74.21
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_0,full,,ccif_19_20k,-18.0,0.01033,-79.72
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_0,full,,ccif_19_20k,-12.0,0.01967,-74.12
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_0,full,,ccif_19_20k,-6.0,0.04117,-67.71
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_0,full,,ccif_19_20k,-3.0,0.06208,-64.14
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_0,full,,smpte_60_7k,-30.0,0.01326,-77.55
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_0,full,,smpte_60_7k,-18.0,0.0309,-70.2
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_0,full,,smpte_60_7k,-12.0,0.06122,-64.26
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_0,full,,smpte_60_7k,-6.0,0.13256,-57.55
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_0,full,,smpte_60_7k,-3.0,0.21293,-53.44
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_10,full,,ccif_19_20k,-30.0,0.04055,-67.84
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_10,full,,ccif_19_20k,-18.0,0.23287,-52.66
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_10,full,,ccif_19_20k,-12.0,8.65403,-21.26
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_10,full,,ccif_19_20k,-6.0,20.78663,-13.64
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_10,full,,ccif_19_20k,-3.0,25.10948,-12.0
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_10,full,,smpte_60_7k,-30.0,0.19911,-54.02
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_10,full,,smpte_60_7k,-18.0,13.89668,-17.14
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_10,full,,smpte_60_7k,-12.0,83.03842,-1.61
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_10,full,,smpte_60_7k,-6.0,138.32149,2.82
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_10,full,,smpte_60_7k,-3.0,163.14221,4.25
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_5,full,,ccif_19_20k,-30.0,0.00583,-84.68
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_5,full,,ccif_19_20k,-18.0,0.01863,-74.59
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_5,full,,ccif_19_20k,-12.0,0.04012,-67.93
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_5,full,,ccif_19_20k,-6.0,0.08384,-61.53
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_5,full,,ccif_19_20k,-3.0,0.12393,-58.14
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_5,full,,smpte_60_7k,-30.0,0.01784,-74.97
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_5,full,,smpte_60_7k,-18.0,0.07957,-61.99
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_5,full,,smpte_60_7k,-12.0,0.16345,-55.73
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_5,full,,smpte_60_7k,-6.0,0.34775,-49.17
+century,UAD,Universal Audio Century tube strip,preamp-tube,level_5,full,,smpte_60_7k,-3.0,0.5408,-45.34
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.00663,-83.57
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.02769,-71.15
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.05758,-64.79
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.12176,-58.29
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.18619,-54.6
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.0237,-72.5
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.12093,-58.35
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.25082,-52.01
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.59037,-44.58
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,1.12537,-38.97
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.01849,-74.66
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.08218,-61.7
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,0.20285,-53.86
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,6.3367,-23.96
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,13.86642,-17.16
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.08989,-60.93
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.42883,-47.35
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,4.64531,-26.66
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,76.16429,-2.36
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,97.91866,-0.18
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.01988,-74.03
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,0.0885,-61.06
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,0.22958,-52.78
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,7.99648,-21.94
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,15.22236,-16.35
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.09639,-60.32
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,0.47472,-46.47
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,10.8391,-19.3
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,81.13574,-1.82
+century,UAD,Universal Audio Century tube strip,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,102.81799,0.24
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_0,full,,ccif_19_20k,-30.0,0.46981,-46.56
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_0,full,,ccif_19_20k,-18.0,1.86044,-34.61
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_0,full,,ccif_19_20k,-12.0,3.27198,-29.7
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_0,full,,ccif_19_20k,-6.0,4.74116,-26.48
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_0,full,,ccif_19_20k,-3.0,6.36077,-23.93
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_0,full,,smpte_60_7k,-30.0,0.9813,-40.16
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_0,full,,smpte_60_7k,-18.0,3.8223,-28.35
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_0,full,,smpte_60_7k,-12.0,7.35462,-22.67
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_0,full,,smpte_60_7k,-6.0,11.45898,-18.82
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_0,full,,smpte_60_7k,-3.0,14.02411,-17.06
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_10,full,,ccif_19_20k,-30.0,1.22443,-38.24
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_10,full,,ccif_19_20k,-18.0,3.8054,-28.39
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_10,full,,ccif_19_20k,-12.0,5.84974,-24.66
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_10,full,,ccif_19_20k,-6.0,12.3573,-18.16
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_10,full,,ccif_19_20k,-3.0,16.90892,-15.44
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_10,full,,smpte_60_7k,-30.0,2.49792,-32.05
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_10,full,,smpte_60_7k,-18.0,9.0099,-20.91
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_10,full,,smpte_60_7k,-12.0,13.2165,-17.58
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_10,full,,smpte_60_7k,-6.0,32.03926,-9.89
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_10,full,,smpte_60_7k,-3.0,58.06282,-4.72
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_5,full,,ccif_19_20k,-30.0,1.22443,-38.24
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_5,full,,ccif_19_20k,-18.0,3.8054,-28.39
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_5,full,,ccif_19_20k,-12.0,5.84974,-24.66
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_5,full,,ccif_19_20k,-6.0,12.3573,-18.16
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_5,full,,ccif_19_20k,-3.0,16.90892,-15.44
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_5,full,,smpte_60_7k,-30.0,2.49792,-32.05
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_5,full,,smpte_60_7k,-18.0,9.0099,-20.91
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_5,full,,smpte_60_7k,-12.0,13.2165,-17.58
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_5,full,,smpte_60_7k,-6.0,32.03926,-9.89
+decap_a,Soundtoys,Ampex 350 tape preamp (style A),style-decapitator,drive_5,full,,smpte_60_7k,-3.0,58.06282,-4.72
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_0,full,,ccif_19_20k,-30.0,0.35021,-49.11
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_0,full,,ccif_19_20k,-18.0,1.56678,-36.1
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_0,full,,ccif_19_20k,-12.0,2.73182,-31.27
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_0,full,,ccif_19_20k,-6.0,7.86488,-22.09
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_0,full,,ccif_19_20k,-3.0,13.93603,-17.12
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_0,full,,smpte_60_7k,-30.0,0.48132,-46.35
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_0,full,,smpte_60_7k,-18.0,1.92993,-34.29
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_0,full,,smpte_60_7k,-12.0,5.53497,-25.14
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_0,full,,smpte_60_7k,-6.0,7.82304,-22.13
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_0,full,,smpte_60_7k,-3.0,5.84545,-24.66
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_10,full,,ccif_19_20k,-30.0,0.9206,-40.72
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_10,full,,ccif_19_20k,-18.0,3.64174,-28.77
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_10,full,,ccif_19_20k,-12.0,12.29083,-18.21
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_10,full,,ccif_19_20k,-6.0,24.89177,-12.08
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_10,full,,ccif_19_20k,-3.0,33.03256,-9.62
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_10,full,,smpte_60_7k,-30.0,1.2554,-38.02
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_10,full,,smpte_60_7k,-18.0,7.02338,-23.07
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_10,full,,smpte_60_7k,-12.0,6.7749,-23.38
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_10,full,,smpte_60_7k,-6.0,60.99295,-4.29
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_10,full,,smpte_60_7k,-3.0,95.07681,-0.44
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_5,full,,ccif_19_20k,-30.0,0.9206,-40.72
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_5,full,,ccif_19_20k,-18.0,3.64174,-28.77
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_5,full,,ccif_19_20k,-12.0,12.29083,-18.21
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_5,full,,ccif_19_20k,-6.0,24.89177,-12.08
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_5,full,,ccif_19_20k,-3.0,33.03256,-9.62
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_5,full,,smpte_60_7k,-30.0,1.2554,-38.02
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_5,full,,smpte_60_7k,-18.0,7.02338,-23.07
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_5,full,,smpte_60_7k,-12.0,6.7749,-23.38
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_5,full,,smpte_60_7k,-6.0,60.99295,-4.29
+decap_e,Soundtoys,Chandler/EMI TG12413 (style E),style-decapitator,drive_5,full,,smpte_60_7k,-3.0,95.07681,-0.44
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_0,full,,ccif_19_20k,-30.0,0.14763,-56.62
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_0,full,,ccif_19_20k,-18.0,0.58857,-44.6
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_0,full,,ccif_19_20k,-12.0,1.01077,-39.91
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_0,full,,ccif_19_20k,-6.0,1.95129,-34.19
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_0,full,,ccif_19_20k,-3.0,5.50031,-25.19
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_0,full,,smpte_60_7k,-30.0,0.25353,-51.92
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_0,full,,smpte_60_7k,-18.0,1.01799,-39.85
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_0,full,,smpte_60_7k,-12.0,1.21572,-38.3
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_0,full,,smpte_60_7k,-6.0,4.20861,-27.52
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_0,full,,smpte_60_7k,-3.0,6.63857,-23.56
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_10,full,,ccif_19_20k,-30.0,0.3594,-48.89
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_10,full,,ccif_19_20k,-18.0,0.99763,-40.02
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_10,full,,ccif_19_20k,-12.0,3.60839,-28.85
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_10,full,,ccif_19_20k,-6.0,14.50717,-16.77
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_10,full,,ccif_19_20k,-3.0,17.75013,-15.02
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_10,full,,smpte_60_7k,-30.0,0.61791,-44.18
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_10,full,,smpte_60_7k,-18.0,2.89087,-30.78
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_10,full,,smpte_60_7k,-12.0,4.32234,-27.29
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_10,full,,smpte_60_7k,-6.0,41.35245,-7.67
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_10,full,,smpte_60_7k,-3.0,68.41468,-3.3
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_5,full,,ccif_19_20k,-30.0,0.3594,-48.89
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_5,full,,ccif_19_20k,-18.0,0.99763,-40.02
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_5,full,,ccif_19_20k,-12.0,3.60839,-28.85
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_5,full,,ccif_19_20k,-6.0,14.50717,-16.77
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_5,full,,ccif_19_20k,-3.0,17.75013,-15.02
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_5,full,,smpte_60_7k,-30.0,0.61791,-44.18
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_5,full,,smpte_60_7k,-18.0,2.89087,-30.78
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_5,full,,smpte_60_7k,-12.0,4.32234,-27.29
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_5,full,,smpte_60_7k,-6.0,41.35245,-7.67
+decap_n,Soundtoys,Neve 1057 (style N),style-decapitator,drive_5,full,,smpte_60_7k,-3.0,68.41468,-3.3
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_0,full,,ccif_19_20k,-30.0,1.2189,-38.28
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_0,full,,ccif_19_20k,-18.0,4.09564,-27.75
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_0,full,,ccif_19_20k,-12.0,6.83136,-23.31
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_0,full,,ccif_19_20k,-6.0,10.37,-19.68
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_0,full,,ccif_19_20k,-3.0,11.92402,-18.47
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_0,full,,smpte_60_7k,-30.0,2.68817,-31.41
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_0,full,,smpte_60_7k,-18.0,9.52076,-20.43
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_0,full,,smpte_60_7k,-12.0,16.86233,-15.46
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_0,full,,smpte_60_7k,-6.0,26.46055,-11.55
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_0,full,,smpte_60_7k,-3.0,30.05759,-10.44
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_10,full,,ccif_19_20k,-30.0,2.82864,-30.97
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_10,full,,ccif_19_20k,-18.0,7.89505,-22.05
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_10,full,,ccif_19_20k,-12.0,11.0819,-19.11
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_10,full,,ccif_19_20k,-6.0,16.20481,-15.81
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_10,full,,ccif_19_20k,-3.0,21.92109,-13.18
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_10,full,,smpte_60_7k,-30.0,6.46608,-23.79
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_10,full,,smpte_60_7k,-18.0,19.91747,-14.02
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_10,full,,smpte_60_7k,-12.0,29.27884,-10.67
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_10,full,,smpte_60_7k,-6.0,76.81283,-2.29
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_10,full,,smpte_60_7k,-3.0,100.70137,0.06
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_5,full,,ccif_19_20k,-30.0,2.82864,-30.97
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_5,full,,ccif_19_20k,-18.0,7.89505,-22.05
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_5,full,,ccif_19_20k,-12.0,11.0819,-19.11
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_5,full,,ccif_19_20k,-6.0,16.20481,-15.81
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_5,full,,ccif_19_20k,-3.0,21.92109,-13.18
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_5,full,,smpte_60_7k,-30.0,6.46608,-23.79
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_5,full,,smpte_60_7k,-18.0,19.91747,-14.02
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_5,full,,smpte_60_7k,-12.0,29.27884,-10.67
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_5,full,,smpte_60_7k,-6.0,76.81283,-2.29
+decap_p,Soundtoys,Thermionic Culture Vulture pentode (style P),style-decapitator,drive_5,full,,smpte_60_7k,-3.0,100.70137,0.06
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_0,full,,ccif_19_20k,-30.0,0.33974,-49.38
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_0,full,,ccif_19_20k,-18.0,2.07864,-33.64
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_0,full,,ccif_19_20k,-12.0,6.51062,-23.73
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_0,full,,ccif_19_20k,-6.0,9.3197,-20.61
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_0,full,,ccif_19_20k,-3.0,13.78558,-17.21
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_0,full,,smpte_60_7k,-30.0,0.63595,-43.93
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_0,full,,smpte_60_7k,-18.0,1.04438,-39.62
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_0,full,,smpte_60_7k,-12.0,7.03425,-23.06
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_0,full,,smpte_60_7k,-6.0,17.26636,-15.26
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_0,full,,smpte_60_7k,-3.0,21.66596,-13.28
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_10,full,,ccif_19_20k,-30.0,0.63775,-43.91
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_10,full,,ccif_19_20k,-18.0,6.51059,-23.73
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_10,full,,ccif_19_20k,-12.0,9.31966,-20.61
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_10,full,,ccif_19_20k,-6.0,20.72727,-13.67
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_10,full,,ccif_19_20k,-3.0,29.72729,-10.54
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_10,full,,smpte_60_7k,-30.0,1.01633,-39.86
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_10,full,,smpte_60_7k,-18.0,7.0342,-23.06
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_10,full,,smpte_60_7k,-12.0,17.26624,-15.26
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_10,full,,smpte_60_7k,-6.0,52.52428,-5.59
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_10,full,,smpte_60_7k,-3.0,85.1795,-1.39
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_5,full,,ccif_19_20k,-30.0,0.63775,-43.91
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_5,full,,ccif_19_20k,-18.0,6.51059,-23.73
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_5,full,,ccif_19_20k,-12.0,9.31966,-20.61
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_5,full,,ccif_19_20k,-6.0,20.72727,-13.67
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_5,full,,ccif_19_20k,-3.0,29.72729,-10.54
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_5,full,,smpte_60_7k,-30.0,1.01633,-39.86
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_5,full,,smpte_60_7k,-18.0,7.0342,-23.06
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_5,full,,smpte_60_7k,-12.0,17.26624,-15.26
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_5,full,,smpte_60_7k,-6.0,52.52428,-5.59
+decap_t,Soundtoys,Thermionic Culture Vulture triode (style T),style-decapitator,drive_5,full,,smpte_60_7k,-3.0,85.1795,-1.39
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_1,full,,ccif_19_20k,-30.0,2.51869,-31.98
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_1,full,,ccif_19_20k,-18.0,2.69266,-31.4
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_1,full,,ccif_19_20k,-12.0,2.63962,-31.57
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_1,full,,ccif_19_20k,-6.0,2.55396,-31.86
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_1,full,,ccif_19_20k,-3.0,2.50372,-32.03
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_1,full,,smpte_60_7k,-30.0,7.33133,-22.7
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_1,full,,smpte_60_7k,-18.0,8.28577,-21.63
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_1,full,,smpte_60_7k,-12.0,9.97844,-20.02
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_1,full,,smpte_60_7k,-6.0,11.72082,-18.62
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_1,full,,smpte_60_7k,-3.0,11.17975,-19.03
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_10,full,,ccif_19_20k,-30.0,2.69953,-31.37
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_10,full,,ccif_19_20k,-18.0,2.65904,-31.51
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_10,full,,ccif_19_20k,-12.0,2.59901,-31.7
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_10,full,,ccif_19_20k,-6.0,2.50516,-32.02
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_10,full,,ccif_19_20k,-3.0,2.44154,-32.25
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_10,full,,smpte_60_7k,-30.0,8.0457,-21.89
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_10,full,,smpte_60_7k,-18.0,9.85275,-20.13
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_10,full,,smpte_60_7k,-12.0,9.75273,-20.22
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_10,full,,smpte_60_7k,-6.0,10.33975,-19.71
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_10,full,,smpte_60_7k,-3.0,11.09206,-19.1
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_5,full,,ccif_19_20k,-30.0,2.69953,-31.37
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_5,full,,ccif_19_20k,-18.0,2.65904,-31.51
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_5,full,,ccif_19_20k,-12.0,2.59901,-31.7
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_5,full,,ccif_19_20k,-6.0,2.50516,-32.02
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_5,full,,ccif_19_20k,-3.0,2.44154,-32.25
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_5,full,,smpte_60_7k,-30.0,8.0457,-21.89
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_5,full,,smpte_60_7k,-18.0,9.85275,-20.13
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_5,full,,smpte_60_7k,-12.0,9.75273,-20.22
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_5,full,,smpte_60_7k,-6.0,10.33975,-19.71
+devil_loc,Soundtoys,Shure Level-Loc,crush,crush_5,full,,smpte_60_7k,-3.0,11.09206,-19.1
+devil_loc,Soundtoys,Shure Level-Loc,crush,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,2.69953,-31.37
+devil_loc,Soundtoys,Shure Level-Loc,crush,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,2.65904,-31.51
+devil_loc,Soundtoys,Shure Level-Loc,crush,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,2.59901,-31.7
+devil_loc,Soundtoys,Shure Level-Loc,crush,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,2.50516,-32.02
+devil_loc,Soundtoys,Shure Level-Loc,crush,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,2.44154,-32.25
+devil_loc,Soundtoys,Shure Level-Loc,crush,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,8.0457,-21.89
+devil_loc,Soundtoys,Shure Level-Loc,crush,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,9.85275,-20.13
+devil_loc,Soundtoys,Shure Level-Loc,crush,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,9.75273,-20.22
+devil_loc,Soundtoys,Shure Level-Loc,crush,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,10.33975,-19.71
+devil_loc,Soundtoys,Shure Level-Loc,crush,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,11.09206,-19.1
+driver,Native Instruments,analogue drive and filter,crush,distortion_0,full,,ccif_19_20k,-30.0,0.24518,-52.21
+driver,Native Instruments,analogue drive and filter,crush,distortion_0,full,,ccif_19_20k,-18.0,1.01315,-39.89
+driver,Native Instruments,analogue drive and filter,crush,distortion_0,full,,ccif_19_20k,-12.0,2.12919,-33.44
+driver,Native Instruments,analogue drive and filter,crush,distortion_0,full,,ccif_19_20k,-6.0,4.75504,-26.46
+driver,Native Instruments,analogue drive and filter,crush,distortion_0,full,,ccif_19_20k,-3.0,7.45425,-22.55
+driver,Native Instruments,analogue drive and filter,crush,distortion_0,full,,smpte_60_7k,-30.0,0.87243,-41.19
+driver,Native Instruments,analogue drive and filter,crush,distortion_0,full,,smpte_60_7k,-18.0,3.67511,-28.69
+driver,Native Instruments,analogue drive and filter,crush,distortion_0,full,,smpte_60_7k,-12.0,7.94821,-21.99
+driver,Native Instruments,analogue drive and filter,crush,distortion_0,full,,smpte_60_7k,-6.0,19.06141,-14.4
+driver,Native Instruments,analogue drive and filter,crush,distortion_0,full,,smpte_60_7k,-3.0,32.34747,-9.8
+driver,Native Instruments,analogue drive and filter,crush,distortion_10,full,,ccif_19_20k,-30.0,0.24518,-52.21
+driver,Native Instruments,analogue drive and filter,crush,distortion_10,full,,ccif_19_20k,-18.0,1.01315,-39.89
+driver,Native Instruments,analogue drive and filter,crush,distortion_10,full,,ccif_19_20k,-12.0,2.12919,-33.44
+driver,Native Instruments,analogue drive and filter,crush,distortion_10,full,,ccif_19_20k,-6.0,4.75504,-26.46
+driver,Native Instruments,analogue drive and filter,crush,distortion_10,full,,ccif_19_20k,-3.0,7.45425,-22.55
+driver,Native Instruments,analogue drive and filter,crush,distortion_10,full,,smpte_60_7k,-30.0,0.87243,-41.19
+driver,Native Instruments,analogue drive and filter,crush,distortion_10,full,,smpte_60_7k,-18.0,3.67511,-28.69
+driver,Native Instruments,analogue drive and filter,crush,distortion_10,full,,smpte_60_7k,-12.0,7.94821,-21.99
+driver,Native Instruments,analogue drive and filter,crush,distortion_10,full,,smpte_60_7k,-6.0,19.06141,-14.4
+driver,Native Instruments,analogue drive and filter,crush,distortion_10,full,,smpte_60_7k,-3.0,32.34747,-9.8
+driver,Native Instruments,analogue drive and filter,crush,distortion_5,full,,ccif_19_20k,-30.0,0.24518,-52.21
+driver,Native Instruments,analogue drive and filter,crush,distortion_5,full,,ccif_19_20k,-18.0,1.01315,-39.89
+driver,Native Instruments,analogue drive and filter,crush,distortion_5,full,,ccif_19_20k,-12.0,2.12919,-33.44
+driver,Native Instruments,analogue drive and filter,crush,distortion_5,full,,ccif_19_20k,-6.0,4.75504,-26.46
+driver,Native Instruments,analogue drive and filter,crush,distortion_5,full,,ccif_19_20k,-3.0,7.45425,-22.55
+driver,Native Instruments,analogue drive and filter,crush,distortion_5,full,,smpte_60_7k,-30.0,0.87243,-41.19
+driver,Native Instruments,analogue drive and filter,crush,distortion_5,full,,smpte_60_7k,-18.0,3.67511,-28.69
+driver,Native Instruments,analogue drive and filter,crush,distortion_5,full,,smpte_60_7k,-12.0,7.94821,-21.99
+driver,Native Instruments,analogue drive and filter,crush,distortion_5,full,,smpte_60_7k,-6.0,19.06141,-14.4
+driver,Native Instruments,analogue drive and filter,crush,distortion_5,full,,smpte_60_7k,-3.0,32.34747,-9.8
+driver,Native Instruments,analogue drive and filter,crush,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.24518,-52.21
+driver,Native Instruments,analogue drive and filter,crush,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,1.01315,-39.89
+driver,Native Instruments,analogue drive and filter,crush,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,2.12919,-33.44
+driver,Native Instruments,analogue drive and filter,crush,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,4.75504,-26.46
+driver,Native Instruments,analogue drive and filter,crush,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,7.45425,-22.55
+driver,Native Instruments,analogue drive and filter,crush,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.87243,-41.19
+driver,Native Instruments,analogue drive and filter,crush,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,3.67511,-28.69
+driver,Native Instruments,analogue drive and filter,crush,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,7.94821,-21.99
+driver,Native Instruments,analogue drive and filter,crush,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,19.06141,-14.4
+driver,Native Instruments,analogue drive and filter,crush,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,32.34747,-9.8
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.00873,-81.18
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.03753,-68.51
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.08094,-61.84
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.18893,-54.47
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.30429,-50.33
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.02428,-72.3
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.12303,-58.2
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.25424,-51.9
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.64174,-43.85
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,1.0557,-39.53
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.09133,-60.79
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.40418,-47.87
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,0.85145,-41.4
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,1.82697,-34.77
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,2.82029,-30.99
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.3088,-50.21
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,1.31878,-37.6
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,2.64106,-31.56
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,5.92865,-24.54
+frontdaw_american,Sonimus,American console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,9.63935,-20.32
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-30.0,0.0,-192.88
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-18.0,0.0,-190.76
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-12.0,0.0,-189.22
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-6.0,0.0,-196.74
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-3.0,0.0,-191.68
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-30.0,0.0,-172.81
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-18.0,0.0,-173.84
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-12.0,0.0,-176.57
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-6.0,0.0,-173.74
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-3.0,0.0,-173.12
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-30.0,0.11053,-59.13
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-18.0,0.46547,-46.64
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-12.0,0.95359,-40.41
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-6.0,2.03532,-33.83
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-3.0,3.09999,-30.17
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-30.0,0.35851,-48.91
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-18.0,1.5494,-36.2
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-12.0,3.02381,-30.39
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-6.0,6.32262,-23.98
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-3.0,10.32567,-19.72
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-30.0,0.0664,-63.56
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-18.0,0.28452,-50.92
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-12.0,0.6235,-44.1
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-6.0,1.36085,-37.32
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-3.0,2.20835,-33.12
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-30.0,0.22334,-53.02
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-18.0,0.95521,-40.4
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-12.0,1.94719,-34.21
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-6.0,4.59275,-26.76
+frontdaw_american,Sonimus,American console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-3.0,7.48574,-22.52
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.00467,-86.62
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.02389,-72.44
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.0728,-62.76
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.26384,-51.57
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.5035,-45.96
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.01495,-76.51
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.08262,-61.66
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.2348,-52.59
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.92472,-40.68
+frontdaw_british,Sonimus,British console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,1.75253,-35.13
 frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-30.0,0.0,-192.88
 frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-18.0,0.0,-190.76
 frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-12.0,0.0,-189.22
@@ -69,26 +1299,246 @@ frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,smpte
 frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-12.0,0.0,-176.57
 frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-6.0,0.0,-173.74
 frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-3.0,0.0,-173.12
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-30.0,0.03233,-69.81
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-18.0,0.1577,-56.04
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-12.0,0.53702,-45.4
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-6.0,1.74195,-35.18
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-3.0,3.26022,-29.74
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-30.0,0.10651,-59.45
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-18.0,0.59258,-44.55
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-12.0,1.71151,-35.33
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-6.0,5.87094,-24.63
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-3.0,11.75349,-18.6
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-30.0,0.01898,-74.43
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-18.0,0.10586,-59.51
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-12.0,0.32775,-49.69
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-6.0,1.12317,-38.99
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-3.0,2.14643,-33.37
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-30.0,0.06438,-63.82
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-18.0,0.29902,-50.49
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-12.0,1.01769,-39.85
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-6.0,3.81482,-28.37
-frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-3.0,7.74291,-22.22
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-30.0,0.03266,-69.72
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-18.0,0.17439,-55.17
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-12.0,0.53602,-45.42
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-6.0,1.69399,-35.42
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-3.0,3.17827,-29.96
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-30.0,0.10532,-59.55
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-18.0,0.57021,-44.88
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-12.0,1.56665,-36.1
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-6.0,5.9235,-24.55
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-3.0,11.48352,-18.8
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-30.0,0.01949,-74.2
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-18.0,0.10261,-59.78
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-12.0,0.32044,-49.89
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-6.0,1.10718,-39.12
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-3.0,2.1435,-33.38
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-30.0,0.06459,-63.8
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-18.0,0.35561,-48.98
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-12.0,1.03271,-39.72
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-6.0,3.87572,-28.23
+frontdaw_british,Sonimus,British console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-3.0,7.63349,-22.35
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.01386,-77.17
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.05087,-65.87
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.08337,-61.58
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.09918,-60.07
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.11875,-58.51
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.04283,-67.37
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.15341,-56.28
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.23893,-52.43
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.30687,-50.26
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,0.40434,-47.87
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.13225,-57.57
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.47514,-46.46
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,0.79033,-42.04
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,0.99592,-40.04
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,1.17421,-38.61
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.42201,-47.49
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,1.50344,-36.46
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,2.37952,-32.47
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,3.09586,-30.18
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,4.07554,-27.8
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.36272,-48.81
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,1.40511,-37.05
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,2.36613,-32.52
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,2.99762,-30.46
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,3.67727,-28.69
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,1.13748,-38.88
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,4.34572,-27.24
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,6.97544,-23.13
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,9.37779,-20.56
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,12.98109,-17.73
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_0,full,,ccif_19_20k,-30.0,0.0,-192.88
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_0,full,,ccif_19_20k,-18.0,0.0,-190.76
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_0,full,,ccif_19_20k,-12.0,0.0,-189.22
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_0,full,,ccif_19_20k,-6.0,0.0,-196.74
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_0,full,,ccif_19_20k,-3.0,0.0,-191.68
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_0,full,,smpte_60_7k,-30.0,0.0,-172.81
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_0,full,,smpte_60_7k,-18.0,0.0,-173.84
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_0,full,,smpte_60_7k,-12.0,0.0,-176.57
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_0,full,,smpte_60_7k,-6.0,0.0,-173.74
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_0,full,,smpte_60_7k,-3.0,0.0,-173.12
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_100,full,,ccif_19_20k,-30.0,1.09663,-39.2
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_100,full,,ccif_19_20k,-18.0,4.17422,-27.59
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_100,full,,ccif_19_20k,-12.0,6.81791,-23.33
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_100,full,,ccif_19_20k,-6.0,10.00903,-19.99
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_100,full,,ccif_19_20k,-3.0,12.35457,-18.16
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_100,full,,smpte_60_7k,-30.0,3.40193,-29.37
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_100,full,,smpte_60_7k,-18.0,13.20726,-17.58
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_100,full,,smpte_60_7k,-12.0,19.35915,-14.26
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_100,full,,smpte_60_7k,-6.0,29.91338,-10.48
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_100,full,,smpte_60_7k,-3.0,43.17347,-7.3
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_50,full,,ccif_19_20k,-30.0,0.79328,-42.01
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_50,full,,ccif_19_20k,-18.0,3.06598,-30.27
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_50,full,,ccif_19_20k,-12.0,5.495,-25.2
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_50,full,,ccif_19_20k,-6.0,7.52606,-22.47
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_50,full,,ccif_19_20k,-3.0,9.44088,-20.5
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_50,full,,smpte_60_7k,-30.0,2.69235,-31.4
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_50,full,,smpte_60_7k,-18.0,10.05561,-19.95
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_50,full,,smpte_60_7k,-12.0,16.22508,-15.8
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_50,full,,smpte_60_7k,-6.0,24.70969,-12.14
+frontdaw_clip,Sonimus,clipper style,style-frontdaw,mojo_50,full,,smpte_60_7k,-3.0,34.83164,-9.16
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.00836,-81.56
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.03438,-69.27
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.07334,-62.69
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.16444,-55.68
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.25799,-51.77
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.02801,-71.05
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.11228,-58.99
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.23324,-52.64
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.56169,-45.01
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,0.85009,-41.41
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.09418,-60.52
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.37465,-48.53
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,0.73671,-42.65
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,1.65078,-35.65
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,2.63887,-31.57
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.29188,-50.7
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,1.20428,-38.39
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,2.34691,-32.59
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,5.61084,-25.02
+frontdaw_german,Sonimus,German console style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,9.29489,-20.64
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-30.0,0.0,-192.88
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-18.0,0.0,-190.76
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-12.0,0.0,-189.22
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-6.0,0.0,-196.74
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_0,full,,ccif_19_20k,-3.0,0.0,-191.68
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-30.0,0.0,-172.81
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-18.0,0.0,-173.84
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-12.0,0.0,-176.57
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-6.0,0.0,-173.74
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_0,full,,smpte_60_7k,-3.0,0.0,-173.12
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-30.0,0.21267,-53.45
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-18.0,0.86443,-41.27
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-12.0,1.45936,-36.72
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-6.0,2.91336,-30.71
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_100,full,,ccif_19_20k,-3.0,4.27478,-27.38
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-30.0,0.62611,-44.07
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-18.0,2.45037,-32.22
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-12.0,4.60164,-26.74
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-6.0,8.95422,-20.96
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_100,full,,smpte_60_7k,-3.0,13.72281,-17.25
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-30.0,0.14116,-57.01
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-18.0,0.57378,-44.83
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-12.0,1.1098,-39.1
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-6.0,2.36489,-32.52
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_50,full,,ccif_19_20k,-3.0,3.67734,-28.69
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-30.0,0.43653,-47.2
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-18.0,1.7925,-34.93
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-12.0,3.41584,-29.33
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-6.0,7.6829,-22.29
+frontdaw_german,Sonimus,German console style,style-frontdaw,mojo_50,full,,smpte_60_7k,-3.0,12.99826,-17.72
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.00935,-80.58
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.04099,-67.75
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.06736,-63.43
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.09937,-60.05
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.11311,-58.93
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.03507,-69.1
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.12123,-58.33
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.19609,-54.15
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.30187,-50.4
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,0.37059,-48.62
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.12719,-57.91
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.4771,-46.43
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,0.8131,-41.8
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,1.15666,-38.74
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,1.36516,-37.3
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.40372,-47.88
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,1.47207,-36.64
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,2.41501,-32.34
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,3.80997,-28.38
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,4.58352,-26.78
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.37104,-48.61
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,1.37074,-37.26
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,2.42709,-32.3
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,3.66127,-28.73
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,4.28432,-27.36
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,1.17869,-38.57
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,4.29392,-27.34
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,7.30493,-22.73
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,12.21098,-18.26
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,15.57454,-16.15
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_0,full,,ccif_19_20k,-30.0,0.0,-192.88
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_0,full,,ccif_19_20k,-18.0,0.0,-190.76
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_0,full,,ccif_19_20k,-12.0,0.0,-189.22
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_0,full,,ccif_19_20k,-6.0,0.0,-196.74
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_0,full,,ccif_19_20k,-3.0,0.0,-191.68
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_0,full,,smpte_60_7k,-30.0,0.0,-172.81
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_0,full,,smpte_60_7k,-18.0,0.0,-173.84
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_0,full,,smpte_60_7k,-12.0,0.0,-176.57
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_0,full,,smpte_60_7k,-6.0,0.0,-173.74
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_0,full,,smpte_60_7k,-3.0,0.0,-173.12
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_100,full,,ccif_19_20k,-30.0,0.83438,-41.57
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_100,full,,ccif_19_20k,-18.0,3.14579,-30.05
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_100,full,,ccif_19_20k,-12.0,5.73967,-24.82
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_100,full,,ccif_19_20k,-6.0,7.56094,-22.43
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_100,full,,ccif_19_20k,-3.0,8.67287,-21.24
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_100,full,,smpte_60_7k,-30.0,2.60154,-31.7
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_100,full,,smpte_60_7k,-18.0,9.88976,-20.1
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_100,full,,smpte_60_7k,-12.0,16.21456,-15.8
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_100,full,,smpte_60_7k,-6.0,21.52593,-13.34
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_100,full,,smpte_60_7k,-3.0,25.74599,-11.79
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_50,full,,ccif_19_20k,-30.0,0.63927,-43.89
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_50,full,,ccif_19_20k,-18.0,2.36114,-32.54
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_50,full,,ccif_19_20k,-12.0,4.34878,-27.23
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_50,full,,ccif_19_20k,-6.0,6.59516,-23.62
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_50,full,,ccif_19_20k,-3.0,8.18286,-21.74
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_50,full,,smpte_60_7k,-30.0,2.07525,-33.66
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_50,full,,smpte_60_7k,-18.0,7.7678,-22.19
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_50,full,,smpte_60_7k,-12.0,13.05312,-17.69
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_50,full,,smpte_60_7k,-6.0,21.23164,-13.46
+frontdaw_magnetic,Sonimus,tape style,style-frontdaw,mojo_50,full,,smpte_60_7k,-3.0,28.53741,-10.89
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_-15,full,,ccif_19_20k,-30.0,0.09424,-60.52
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_-15,full,,ccif_19_20k,-18.0,0.25682,-51.81
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_-15,full,,ccif_19_20k,-12.0,0.51092,-45.83
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_-15,full,,ccif_19_20k,-6.0,0.77625,-42.2
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_-15,full,,ccif_19_20k,-3.0,1.08378,-39.3
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_-15,full,,smpte_60_7k,-30.0,0.20551,-53.74
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_-15,full,,smpte_60_7k,-18.0,0.61145,-44.27
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_-15,full,,smpte_60_7k,-12.0,1.20262,-38.4
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_-15,full,,smpte_60_7k,-6.0,1.78968,-34.94
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_-15,full,,smpte_60_7k,-3.0,2.18139,-33.23
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_0,full,,ccif_19_20k,-30.0,0.31741,-49.97
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_0,full,,ccif_19_20k,-18.0,1.08379,-39.3
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_0,full,,ccif_19_20k,-12.0,3.53375,-29.04
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_0,full,,ccif_19_20k,-6.0,11.44205,-18.83
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_0,full,,ccif_19_20k,-3.0,16.10599,-15.86
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_0,full,,smpte_60_7k,-30.0,0.74603,-42.54
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_0,full,,smpte_60_7k,-18.0,2.18142,-33.23
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_0,full,,smpte_60_7k,-12.0,7.35022,-22.67
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_0,full,,smpte_60_7k,-6.0,40.40215,-7.87
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_0,full,,smpte_60_7k,-3.0,72.06263,-2.85
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_15,full,,ccif_19_20k,-30.0,1.77755,-35.0
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_15,full,,ccif_19_20k,-18.0,16.10637,-15.86
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_15,full,,ccif_19_20k,-12.0,23.51887,-12.57
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_15,full,,ccif_19_20k,-6.0,26.9475,-11.39
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_15,full,,ccif_19_20k,-3.0,27.44911,-11.23
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_15,full,,smpte_60_7k,-30.0,3.72416,-28.58
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_15,full,,smpte_60_7k,-18.0,72.06347,-2.85
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_15,full,,smpte_60_7k,-12.0,121.05349,1.66
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_15,full,,smpte_60_7k,-6.0,141.5035,3.02
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,heat_db_15,full,,smpte_60_7k,-3.0,147.66191,3.39
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.22922,-52.79
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.70554,-43.03
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,1.22361,-38.25
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,4.29187,-27.35
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,8.10619,-21.82
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.52876,-45.53
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,1.65722,-35.61
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,2.55744,-31.84
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,9.47595,-20.47
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,23.15475,-12.71
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.35338,-49.04
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,1.18635,-38.52
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,4.09083,-27.76
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,12.37124,-18.15
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,16.99562,-15.39
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.7978,-41.96
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,2.45275,-32.21
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,8.89072,-21.02
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,46.15422,-6.72
+little_radiator,Soundtoys,Altec 1566A tube stage,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,78.54629,-2.1
 nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_0,full,,ccif_19_20k,-30.0,0.37503,-48.52
 nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_0,full,,ccif_19_20k,-18.0,1.07068,-39.41
 nls_mike,Waves,SSL 4000 G+ console channel,console-ssl,drive_0,full,,ccif_19_20k,-12.0,1.49265,-36.52
@@ -379,6 +1829,26 @@ nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_3_pct,full,
 nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,21.22156,-13.46
 nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,21.70801,-13.27
 nlsbuss_spike,Waves,EMI TG12345 console buss,console-emi,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,21.82442,-13.22
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_off,full,,ccif_19_20k,-30.0,0.00095,-100.4
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_off,full,,ccif_19_20k,-18.0,0.00133,-97.53
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_off,full,,ccif_19_20k,-12.0,0.0014,-97.06
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_off,full,,ccif_19_20k,-6.0,0.00144,-96.85
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_off,full,,ccif_19_20k,-3.0,0.00145,-96.8
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_off,full,,smpte_60_7k,-30.0,0.00271,-91.33
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_off,full,,smpte_60_7k,-18.0,0.00346,-89.22
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_off,full,,smpte_60_7k,-12.0,0.00356,-88.97
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_off,full,,smpte_60_7k,-6.0,0.0036,-88.88
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_off,full,,smpte_60_7k,-3.0,0.00361,-88.85
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_on,full,,ccif_19_20k,-30.0,6.09287,-24.3
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_on,full,,ccif_19_20k,-18.0,10.0736,-19.94
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_on,full,,ccif_19_20k,-12.0,9.23245,-20.69
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_on,full,,ccif_19_20k,-6.0,17.76204,-15.01
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_on,full,,ccif_19_20k,-3.0,24.68022,-12.15
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_on,full,,smpte_60_7k,-30.0,17.78191,-15.0
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_on,full,,smpte_60_7k,-18.0,26.33928,-11.59
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_on,full,,smpte_60_7k,-12.0,25.83034,-11.76
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_on,full,,smpte_60_7k,-6.0,100.82231,0.07
+scheps73,Waves,Neve 1073 mic preamp,preamp-neve,drive_on,full,,smpte_60_7k,-3.0,134.94158,2.6
 ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,analog_off,full,,ccif_19_20k,-30.0,0.00016,-115.87
 ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,analog_off,full,,ccif_19_20k,-18.0,0.00016,-115.87
 ssl_ev2,Waves,SSL 4000 E console channel,console-ssl,analog_off,full,,ccif_19_20k,-12.0,0.00016,-115.87
@@ -429,3 +1899,243 @@ ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,trim_+10,full,,smpte_60_7
 ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,trim_+10,full,,smpte_60_7k,-12.0,0.0,-175.25
 ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,trim_+10,full,,smpte_60_7k,-6.0,0.0,-172.72
 ssl_native,SSL,SSL 9000/4000 channel strip,console-ssl,trim_+10,full,,smpte_60_7k,-3.0,0.0,-173.38
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ccir_15,full,,ccif_19_20k,-30.0,0.2404,-52.38
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ccir_15,full,,ccif_19_20k,-18.0,0.74004,-42.61
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ccir_15,full,,ccif_19_20k,-12.0,1.18971,-38.49
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ccir_15,full,,ccif_19_20k,-6.0,2.82999,-30.96
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ccir_15,full,,ccif_19_20k,-3.0,5.90505,-24.58
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ccir_15,full,,smpte_60_7k,-30.0,0.4501,-46.93
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ccir_15,full,,smpte_60_7k,-18.0,1.53519,-36.28
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ccir_15,full,,smpte_60_7k,-12.0,2.54939,-31.87
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ccir_15,full,,smpte_60_7k,-6.0,4.16779,-27.6
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ccir_15,full,,smpte_60_7k,-3.0,6.29406,-24.02
+studer_a800,UAD,Studer A800 multitrack,tape-machine,hot_+6,full,,ccif_19_20k,-30.0,0.29196,-50.69
+studer_a800,UAD,Studer A800 multitrack,tape-machine,hot_+6,full,,ccif_19_20k,-18.0,0.85668,-41.34
+studer_a800,UAD,Studer A800 multitrack,tape-machine,hot_+6,full,,ccif_19_20k,-12.0,1.43775,-36.85
+studer_a800,UAD,Studer A800 multitrack,tape-machine,hot_+6,full,,ccif_19_20k,-6.0,4.43102,-27.07
+studer_a800,UAD,Studer A800 multitrack,tape-machine,hot_+6,full,,ccif_19_20k,-3.0,9.48289,-20.46
+studer_a800,UAD,Studer A800 multitrack,tape-machine,hot_+6,full,,smpte_60_7k,-30.0,1.09912,-39.18
+studer_a800,UAD,Studer A800 multitrack,tape-machine,hot_+6,full,,smpte_60_7k,-18.0,3.11423,-30.13
+studer_a800,UAD,Studer A800 multitrack,tape-machine,hot_+6,full,,smpte_60_7k,-12.0,5.61114,-25.02
+studer_a800,UAD,Studer A800 multitrack,tape-machine,hot_+6,full,,smpte_60_7k,-6.0,24.28851,-12.29
+studer_a800,UAD,Studer A800 multitrack,tape-machine,hot_+6,full,,smpte_60_7k,-3.0,60.68809,-4.34
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_15,full,,ccif_19_20k,-30.0,0.15493,-56.2
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_15,full,,ccif_19_20k,-18.0,0.52121,-45.66
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_15,full,,ccif_19_20k,-12.0,0.85668,-41.34
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_15,full,,ccif_19_20k,-6.0,1.43775,-36.85
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_15,full,,ccif_19_20k,-3.0,2.25451,-32.94
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_15,full,,smpte_60_7k,-30.0,0.58859,-44.6
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_15,full,,smpte_60_7k,-18.0,1.93074,-34.29
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_15,full,,smpte_60_7k,-12.0,3.11424,-30.13
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_15,full,,smpte_60_7k,-6.0,5.61114,-25.02
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_15,full,,smpte_60_7k,-3.0,10.22909,-19.8
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_30,full,,ccif_19_20k,-30.0,0.01349,-77.4
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_30,full,,ccif_19_20k,-18.0,0.04901,-66.19
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_30,full,,ccif_19_20k,-12.0,0.27089,-51.34
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_30,full,,ccif_19_20k,-6.0,1.41096,-37.01
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_30,full,,ccif_19_20k,-3.0,3.10802,-30.15
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_30,full,,smpte_60_7k,-30.0,0.02785,-71.1
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_30,full,,smpte_60_7k,-18.0,0.06375,-63.91
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_30,full,,smpte_60_7k,-12.0,0.40512,-47.85
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_30,full,,smpte_60_7k,-6.0,2.30576,-32.74
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_30,full,,smpte_60_7k,-3.0,5.25672,-25.59
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_7.5,full,,ccif_19_20k,-30.0,0.6091,-44.31
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_7.5,full,,ccif_19_20k,-18.0,0.43669,-47.2
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_7.5,full,,ccif_19_20k,-12.0,5.1174,-25.82
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_7.5,full,,ccif_19_20k,-6.0,16.84887,-15.47
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_7.5,full,,ccif_19_20k,-3.0,22.61571,-12.91
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_7.5,full,,smpte_60_7k,-30.0,1.10284,-39.15
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_7.5,full,,smpte_60_7k,-18.0,2.04316,-33.79
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_7.5,full,,smpte_60_7k,-12.0,1.78374,-34.97
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_7.5,full,,smpte_60_7k,-6.0,15.98631,-15.93
+studer_a800,UAD,Studer A800 multitrack,tape-machine,ips_7.5,full,,smpte_60_7k,-3.0,35.53533,-8.99
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.15296,-56.31
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.51568,-45.75
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,0.84896,-41.42
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,1.41845,-36.96
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,2.20528,-33.13
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.58117,-44.71
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,1.91104,-34.37
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,3.08666,-30.21
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,5.51337,-25.17
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,9.93348,-20.06
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.43641,-47.2
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,1.18452,-38.53
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,2.80778,-31.03
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,12.0578,-18.37
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,19.28848,-14.29
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,1.62651,-35.77
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,4.4036,-27.12
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,13.63855,-17.3
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,79.93597,-1.95
+studer_a800,UAD,Studer A800 multitrack,tape-machine,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,126.32425,2.03
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.2,full,,ccif_19_20k,-30.0,0.00785,-82.1
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.2,full,,ccif_19_20k,-18.0,0.02606,-71.68
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.2,full,,ccif_19_20k,-12.0,0.05588,-65.06
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.2,full,,ccif_19_20k,-6.0,0.12791,-57.86
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.2,full,,ccif_19_20k,-3.0,1.60942,-35.87
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.2,full,,smpte_60_7k,-30.0,0.02341,-72.61
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.2,full,,smpte_60_7k,-18.0,0.10076,-59.93
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.2,full,,smpte_60_7k,-12.0,0.21192,-53.48
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.2,full,,smpte_60_7k,-6.0,0.56336,-44.98
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.2,full,,smpte_60_7k,-3.0,21.8388,-13.22
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.6,full,,ccif_19_20k,-30.0,0.0224,-72.99
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.6,full,,ccif_19_20k,-18.0,0.09897,-60.09
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.6,full,,ccif_19_20k,-12.0,0.25662,-51.81
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.6,full,,ccif_19_20k,-6.0,8.51431,-21.4
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.6,full,,ccif_19_20k,-3.0,15.81288,-16.02
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.6,full,,smpte_60_7k,-30.0,0.10473,-59.6
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.6,full,,smpte_60_7k,-18.0,0.5161,-45.75
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.6,full,,smpte_60_7k,-12.0,13.17342,-17.61
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.6,full,,smpte_60_7k,-6.0,82.60242,-1.66
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_0.6,full,,smpte_60_7k,-3.0,104.5847,0.39
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_1,full,,ccif_19_20k,-30.0,0.36133,-48.84
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_1,full,,ccif_19_20k,-18.0,22.96946,-12.78
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_1,full,,ccif_19_20k,-12.0,29.48881,-10.61
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_1,full,,ccif_19_20k,-6.0,32.13427,-9.86
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_1,full,,ccif_19_20k,-3.0,32.78895,-9.69
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_1,full,,smpte_60_7k,-30.0,34.09883,-9.35
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_1,full,,smpte_60_7k,-18.0,152.3013,3.65
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_1,full,,smpte_60_7k,-12.0,179.72611,5.09
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_1,full,,smpte_60_7k,-6.0,186.45434,5.41
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,level_1,full,,smpte_60_7k,-3.0,187.83602,5.48
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.00804,-81.89
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.02942,-70.63
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.06245,-64.09
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.14133,-57.0
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,1.62612,-35.78
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.02596,-71.71
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.11644,-58.68
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.24312,-52.28
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.63755,-43.91
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,21.89308,-13.19
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.02082,-73.63
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.09158,-60.76
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,0.2243,-52.98
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,6.61779,-23.59
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,14.30334,-16.89
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.09717,-60.25
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.46165,-46.71
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,5.48365,-25.22
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,77.01069,-2.27
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,99.18232,-0.07
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.02243,-72.98
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,0.09887,-60.1
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,0.2561,-51.83
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,8.48841,-21.42
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,15.79321,-16.03
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.10475,-59.6
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,0.5153,-45.76
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,13.05161,-17.69
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,82.52874,-1.67
+ua610a,UAD,UA 610-A tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,104.50444,0.38
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_0,full,,ccif_19_20k,-30.0,0.02677,-71.45
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_0,full,,ccif_19_20k,-18.0,0.00647,-83.79
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_0,full,,ccif_19_20k,-12.0,0.0115,-78.78
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_0,full,,ccif_19_20k,-6.0,0.0249,-72.08
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_0,full,,ccif_19_20k,-3.0,0.11706,-58.63
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_0,full,,smpte_60_7k,-30.0,0.24628,-52.17
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_0,full,,smpte_60_7k,-18.0,0.02555,-71.85
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_0,full,,smpte_60_7k,-12.0,0.0319,-69.92
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_0,full,,smpte_60_7k,-6.0,0.07527,-62.47
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_0,full,,smpte_60_7k,-3.0,0.55292,-45.15
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_10,full,,ccif_19_20k,-30.0,0.20264,-53.87
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_10,full,,ccif_19_20k,-18.0,9.3877,-20.55
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_10,full,,ccif_19_20k,-12.0,21.29153,-13.44
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_10,full,,ccif_19_20k,-6.0,27.07238,-11.35
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_10,full,,ccif_19_20k,-3.0,29.24515,-10.68
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_10,full,,smpte_60_7k,-30.0,0.8264,-41.66
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_10,full,,smpte_60_7k,-18.0,58.51618,-4.65
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_10,full,,smpte_60_7k,-12.0,109.68214,0.8
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_10,full,,smpte_60_7k,-6.0,140.46019,2.95
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_10,full,,smpte_60_7k,-3.0,162.86285,4.24
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_5,full,,ccif_19_20k,-30.0,0.00798,-81.97
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_5,full,,ccif_19_20k,-18.0,0.04534,-66.87
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_5,full,,ccif_19_20k,-12.0,0.09378,-60.56
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_5,full,,ccif_19_20k,-6.0,0.20427,-53.8
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_5,full,,ccif_19_20k,-3.0,0.38,-48.4
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_5,full,,smpte_60_7k,-30.0,0.05624,-65.0
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_5,full,,smpte_60_7k,-18.0,0.1622,-55.8
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_5,full,,smpte_60_7k,-12.0,0.35782,-48.93
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_5,full,,smpte_60_7k,-6.0,0.79702,-41.97
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,level_5,full,,smpte_60_7k,-3.0,1.63071,-35.75
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-30.0,0.00139,-97.11
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-18.0,0.03188,-69.93
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-12.0,0.06171,-64.19
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-6.0,0.13353,-57.49
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,ccif_19_20k,-3.0,0.26581,-51.51
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-30.0,0.00973,-80.24
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-18.0,0.11432,-58.84
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-12.0,0.22697,-52.88
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-6.0,0.50175,-45.99
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_0.1_pct,full,thd_0.1_pct,smpte_60_7k,-3.0,1.09494,-39.21
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,0.0405,-67.85
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,0.18099,-54.85
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,0.46102,-46.73
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,7.02908,-23.06
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,13.89956,-17.14
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.14804,-56.59
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,0.72187,-42.83
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,2.45821,-32.19
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,52.01049,-5.68
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,74.44371,-2.56
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,0.04875,-66.24
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,0.22871,-52.81
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,0.7195,-42.86
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,11.1142,-19.08
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,17.49351,-15.14
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.18538,-54.64
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,0.94132,-40.53
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,6.88491,-23.24
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,63.58714,-3.93
+ua610b,UAD,UA 610-B tube preamp,preamp-tube,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,91.88299,-0.74
+verve,UAD,Verve analogue machines,tape-machine,machine_overdrive,full,,ccif_19_20k,-30.0,0.19246,-54.31
+verve,UAD,Verve analogue machines,tape-machine,machine_overdrive,full,,ccif_19_20k,-18.0,0.18934,-54.46
+verve,UAD,Verve analogue machines,tape-machine,machine_overdrive,full,,ccif_19_20k,-12.0,0.18558,-54.63
+verve,UAD,Verve analogue machines,tape-machine,machine_overdrive,full,,ccif_19_20k,-6.0,0.17867,-54.96
+verve,UAD,Verve analogue machines,tape-machine,machine_overdrive,full,,ccif_19_20k,-3.0,0.17374,-55.2
+verve,UAD,Verve analogue machines,tape-machine,machine_overdrive,full,,smpte_60_7k,-30.0,484.23524,13.7
+verve,UAD,Verve analogue machines,tape-machine,machine_overdrive,full,,smpte_60_7k,-18.0,479.52439,13.62
+verve,UAD,Verve analogue machines,tape-machine,machine_overdrive,full,,smpte_60_7k,-12.0,472.60619,13.49
+verve,UAD,Verve analogue machines,tape-machine,machine_overdrive,full,,smpte_60_7k,-6.0,456.15038,13.18
+verve,UAD,Verve analogue machines,tape-machine,machine_overdrive,full,,smpte_60_7k,-3.0,440.8809,12.89
+verve,UAD,Verve analogue machines,tape-machine,machine_thicken,full,,ccif_19_20k,-30.0,0.57188,-44.85
+verve,UAD,Verve analogue machines,tape-machine,machine_thicken,full,,ccif_19_20k,-18.0,0.57263,-44.84
+verve,UAD,Verve analogue machines,tape-machine,machine_thicken,full,,ccif_19_20k,-12.0,0.58034,-44.73
+verve,UAD,Verve analogue machines,tape-machine,machine_thicken,full,,ccif_19_20k,-6.0,0.57918,-44.74
+verve,UAD,Verve analogue machines,tape-machine,machine_thicken,full,,ccif_19_20k,-3.0,0.58133,-44.71
+verve,UAD,Verve analogue machines,tape-machine,machine_thicken,full,,smpte_60_7k,-30.0,6.97312,-23.13
+verve,UAD,Verve analogue machines,tape-machine,machine_thicken,full,,smpte_60_7k,-18.0,6.96041,-23.15
+verve,UAD,Verve analogue machines,tape-machine,machine_thicken,full,,smpte_60_7k,-12.0,6.97272,-23.13
+verve,UAD,Verve analogue machines,tape-machine,machine_thicken,full,,smpte_60_7k,-6.0,7.10352,-22.97
+verve,UAD,Verve analogue machines,tape-machine,machine_thicken,full,,smpte_60_7k,-3.0,7.32426,-22.7
+verve,UAD,Verve analogue machines,tape-machine,machine_warm,full,,ccif_19_20k,-30.0,1.05986,-39.5
+verve,UAD,Verve analogue machines,tape-machine,machine_warm,full,,ccif_19_20k,-18.0,6.1505,-24.22
+verve,UAD,Verve analogue machines,tape-machine,machine_warm,full,,ccif_19_20k,-12.0,17.5845,-15.1
+verve,UAD,Verve analogue machines,tape-machine,machine_warm,full,,ccif_19_20k,-6.0,31.81604,-9.95
+verve,UAD,Verve analogue machines,tape-machine,machine_warm,full,,ccif_19_20k,-3.0,36.47985,-8.76
+verve,UAD,Verve analogue machines,tape-machine,machine_warm,full,,smpte_60_7k,-30.0,0.7314,-42.72
+verve,UAD,Verve analogue machines,tape-machine,machine_warm,full,,smpte_60_7k,-18.0,1.23866,-38.14
+verve,UAD,Verve analogue machines,tape-machine,machine_warm,full,,smpte_60_7k,-12.0,5.23047,-25.63
+verve,UAD,Verve analogue machines,tape-machine,machine_warm,full,,smpte_60_7k,-6.0,23.93292,-12.42
+verve,UAD,Verve analogue machines,tape-machine,machine_warm,full,,smpte_60_7k,-3.0,45.06335,-6.92
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-30.0,1.07876,-39.34
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-18.0,6.39687,-23.88
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-12.0,18.05753,-14.87
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-6.0,32.19346,-9.84
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_1_pct,full,thd_1_pct,ccif_19_20k,-3.0,36.72014,-8.7
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-30.0,0.74295,-42.58
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-18.0,1.26298,-37.97
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-12.0,5.53048,-25.14
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-6.0,25.0479,-12.02
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_1_pct,full,thd_1_pct,smpte_60_7k,-3.0,46.76985,-6.6
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-30.0,1.51972,-36.36
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-18.0,12.24291,-18.24
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-12.0,26.68238,-11.48
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-6.0,37.24434,-8.58
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_3_pct,full,thd_3_pct,ccif_19_20k,-3.0,39.79246,-8.0
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-30.0,0.94082,-40.53
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-18.0,2.67701,-31.45
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-12.0,13.70684,-17.26
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-6.0,50.80394,-5.88
+verve,UAD,Verve analogue machines,tape-machine,matched_thd_3_pct,full,thd_3_pct,smpte_60_7k,-3.0,82.85205,-1.63

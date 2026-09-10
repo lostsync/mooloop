@@ -335,8 +335,8 @@ def noise_report(plugin, seconds=4.0, sr=SR, tone_db=None):
         # Notch the tone and its harmonics out rather than measuring them.
         spec = np.fft.rfft(y)
         bins = np.fft.rfftfreq(len(y), 1.0 / sr)
-        for m in range(1, 21):
-            spec[np.abs(bins - m * 1000.0) < 8.0] = 0.0
+        for m in range(1, 25):
+            spec[np.abs(bins - m * 1000.0) < 10.0] = 0.0
         y = np.fft.irfft(spec, len(y))
 
     nfft = 1 << int(np.floor(np.log2(len(y))))
@@ -399,7 +399,11 @@ def wow_flutter(plugin, freq=3150.0, seconds=12.0, db=-12.0, sr=SR):
     if len(y) < sr or np.max(np.abs(y)) < 1e-6:
         return None
     inst = np.gradient(np.unwrap(np.angle(hilbert(y)))) * sr / (2 * np.pi)
-    inst = inst[sr // 10:-(sr // 10)]
+    # The analytic phase is unreliable at both ends of the segment, so a
+    # tenth of a second goes at each. `sr` is a float here and a float is not
+    # a slice index -- which is how every tape unit in the first run died.
+    edge = int(sr) // 10
+    inst = inst[edge:-edge]
     mean = float(np.mean(inst))
     if not np.isfinite(mean) or mean <= 0:
         return None
@@ -409,6 +413,16 @@ def wow_flutter(plugin, freq=3150.0, seconds=12.0, db=-12.0, sr=SR):
     seg = dev[:nfft] * np.blackman(nfft)
     mag = np.abs(np.fft.rfft(seg)) * (2.0 / (nfft * 0.42))
     bins = np.fft.rfftfreq(nfft, 1.0 / sr)
+
+    # The total and peak figures are taken from the deviation band-limited to
+    # the same 0.1-1000 Hz the bands cover. Unfiltered, both are dominated by
+    # the analytic phase's behaviour at the ends of the segment: a machine
+    # with no modelled speed variation at all reported 0.0000% in every band
+    # and a 1.8% peak, which is the edge and not the tape.
+    spec = np.fft.rfft(dev)
+    fb = np.fft.rfftfreq(len(dev), 1.0 / sr)
+    spec[(fb < 0.1) | (fb > 1000.0)] = 0.0
+    limited = np.fft.irfft(spec, len(dev))
 
     def band(lo, hi):
         sel = (bins >= lo) & (bins < hi)
@@ -426,8 +440,9 @@ def wow_flutter(plugin, freq=3150.0, seconds=12.0, db=-12.0, sr=SR):
         "tone_hz": freq,
         "measured_hz": round(mean, 3),
         "speed_error_pct": round(100.0 * (mean - f) / f, 4),
-        "total_rms_pct": round(100.0 * float(np.std(dev)), 5),
-        "peak_pct": round(100.0 * float(np.max(np.abs(dev))), 5),
+        "total_rms_pct": round(100.0 * float(np.std(limited)), 5),
+        "peak_pct": round(100.0 * float(np.max(np.abs(limited))), 5),
+        "unfiltered_peak_pct": round(100.0 * float(np.max(np.abs(dev))), 5),
         "wow_pct_0p1_4hz": band(0.1, 4.0),
         "flutter_pct_4_100hz": band(4.0, 100.0),
         "scrape_pct_100_1000hz": band(100.0, 1000.0),

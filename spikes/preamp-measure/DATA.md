@@ -63,11 +63,16 @@ miss dressed up as one.
 
 | family | units | script | output |
 | --- | --- | --- | --- |
-| `colour` | preamps, console channels, saturation | `measure_colour.py` | `out/chart/colour/` |
-| `tape` | tape machines, measured on the same axes as the preamps | `measure_colour.py` | `out/chart/colour/` |
-| `eq` | equalisers, at matched band targets | `measure_eqc.py` | `out/chart/eq/` |
-| `comp` | compressors, at four depths | `measure_compc.py` | `out/chart/comp/` |
-| — | self-noise, model in and out | `measure_noise.py` | `out/chart/noise/` |
+| `colour` | 42 preamps, console channels and saturators | `measure_colour.py` | `out/chart/colour/` |
+| `tape` | 9 tape machines, on the same axes as the preamps | `measure_colour.py` | `out/chart/colour/` |
+| `eq` | 20 equalisers, at matched band targets | `measure_eqc.py` | `out/chart/eq/` |
+| `comp` | 35 compressors, at four depths | `measure_compc.py` | `out/chart/comp/` |
+| — | the 20 units with a noise model, in and out | `measure_noise.py` | `out/chart/noise/` |
+
+The 106 units fall into 33 `group`s, and the groups are the point: four
+emulations of an 1176, three of an LA-2A, two of a dbx 160, three SSL bus
+compressors, two Fairchilds, two Massive Passives, two Pultecs, three API
+550s. "Do these agree?" is a `GROUP BY` rather than a judgement.
 
 Tape is deliberately not a separate suite. A Studer and a 1073 are things a
 reader is choosing *between*, so they get the same response, THD, harmonic
@@ -79,12 +84,14 @@ and transient measurements and the tape machines get wow and flutter on top.
 
 | file | one row per | the chart it is for |
 | --- | --- | --- |
-| `colour_response.csv` | unit × setting × level × frequency | frequency response, and how it moves with level |
+| `colour_response.csv` | unit × setting × level × frequency | frequency response from a swept sine — dense, with phase and group delay |
+| `colour_response_by_tone.csv` | unit × setting × level × frequency | the same response measured tone by tone — coarser, and right for a unit the sweep cannot handle |
 | `colour_thd_vs_level.csv` | unit × setting × frequency × level | **THD against level** — the headline; where a unit starts to break up |
 | `colour_harmonics_vs_freq.csv` | unit × setting × frequency × level | harmonic tilt: warm on a kick, clean on a hat |
 | `colour_imd.csv` | unit × setting × test × level | intermodulation, SMPTE and CCIF |
 | `colour_noise.csv` | unit × setting × condition × band | noise floor by third octave |
 | `colour_transients.csv` | unit × setting × level | crest retention and the slew index |
+| `tape_wow_flutter.csv` | unit × setting × modulation rate | speed stability, and **at what rate** — two machines with the same 0.05% figure wobble differently |
 | `colour_summary.csv` | unit × setting | one row of headline numbers per setting |
 
 `colour_summary.csv` is the table to start from. `headroom_1pct_dbfs` is the
@@ -148,14 +155,32 @@ is true and is why this needed a pass of its own.
 
 **Measured on silence with the noise off, everything reads -200 dBFS.** That
 is the analysis floor, not a measurement. Use `noise_summary.csv` for noise,
-or the `under_tone_-12` condition, which is the floor beneath a signal and is
-where a unit that only hisses when passing audio shows up.
+and read both of its conditions: several models emit nothing at all until
+signal is passing. Waves NLS Channel is silent on silence at every setting
+and puts a floor 17 dB higher underneath a tone once its Drive is up.
 
-**A swept sine is one render, and one render is what the Waves glitch
-ruins.** Every dense response has nine tone-by-tone points measured beside
-it, each the best of three or four renders, and the disagreement is recorded
-as `sweep_check_worst_db`. On a clean unit it is under 0.1 dB. Filter on it
-before trusting a curve.
+**The `under_tone_-12` condition notches the tone and its first twenty-four
+harmonics out and measures what is left.** On a clean unit that is the noise
+floor. On a hard-driven one it is the noise floor plus any *non-harmonic*
+products the unit made — aliasing, mostly — which is a real thing to know
+about and is not hiss. Cross-check against `colour_imd.csv`'s CCIF row, which
+is the test aimed at aliasing directly.
+
+**A swept sine measures the response only while the unit is linear, and it
+is one render, which is what the Waves glitch ruins.** Both failures are
+caught the same way: every dense response has nine tone-by-tone points
+measured beside it, each the best of three or four renders, and the
+disagreement is in `sweep_check_worst_db`. **Filter on it before trusting a
+curve.** Thirty-seven of the fifty-one units agree within 0.5 dB in the
+linear region and most of the rest are Airwindows plugins that are nonlinear
+at every level — Mackity is 46 dB out at -40 dBFS, which is a fact about
+Mackity and not about the rig.
+
+For those, and for anything measured at -12 or -3 dBFS where a saturating
+stage's fundamental is not its linear part, use
+`colour_response_by_tone.csv`. It is coarser — 9 or 26 points against 73 —
+and it has no phase, but a tone's fundamental is its fundamental whatever
+else the stage is doing.
 
 **Waves plugins drop a glitch into roughly one render in eight.** A glitched
 render loses fundamental energy and lifts the broadband floor by tens of dB.
@@ -167,6 +192,20 @@ envelope's own ripple.** `timing_reliable` is false there. It is not a
 suggestion: before the crossing detector was given a dwell requirement, an
 1176 at 3 dB reported a 0.17 ms release while its own release curve plainly
 took half a second.
+
+**A Q above about 4 is under-read.** `eq_band_shape.csv` derives Q from where
+the curve crosses half the peak height, on a 1/24-decade grid — about a
+seventh of an octave between points. Checked against TDR Nova, which states
+its Q exactly, that is faithful to within 1% up to Q 2 (0.3 reads 0.306, 0.7
+reads 0.712, 2.0 reads 1.987) and starts losing the peak above it: a stated
+6.0 reads 5.1. Nothing analogue in this collection is that narrow, but a
+digital EQ set that way is.
+
+**Wow and flutter totals are band-limited to 0.1–1000 Hz**, the same range
+the bands cover. Unfiltered they are dominated by the analytic phase at the
+ends of the segment: a machine with no modelled speed variation reads
+0.0000% in every band and a 1.8% peak, which is the edge and not the tape.
+`unfiltered_peak_pct` keeps the raw figure for anyone who wants to see it.
 
 **Harmonics above Nyquist alias.** `valid_orders` says how many are real at
 each frequency; a 10 kHz fundamental has only the 2nd below 24 kHz.

@@ -29,21 +29,21 @@ slug,maker,models,group,element,gr_target_db,level_dbfs,out_db,gain_db,gr_db
 1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,15.0,-6.0,-18.008,-12.008,19.55
 1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,15.0,-9.0,-18.532,-9.532,17.074
 1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,15.0,0.0,-17.001,-17.001,24.543
-1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-12.0,-20.767,-8.767,6.974
-1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-15.0,-21.462,-6.462,4.669
-1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-18.0,-22.311,-4.311,2.518
-1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-21.0,-23.489,-2.489,0.696
-1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-24.0,-25.794,-1.794,0.001
-1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-27.0,-28.793,-1.793,0.0
-1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-3.0,-19.098,-16.098,14.305
-1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-30.0,-31.793,-1.793,0.0
-1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-36.0,-37.793,-1.793,0.0
-1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-42.0,-43.793,-1.793,0.0
-1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-48.0,-49.793,-1.793,0.0
-1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-54.0,-55.793,-1.793,0.0
-1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-6.0,-19.606,-13.606,11.813
-1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-9.0,-20.157,-11.157,9.364
-1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,0.0,-18.585,-18.585,16.792
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-12.0,-22.076,-10.076,3.014
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-15.0,-23.157,-8.157,1.095
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-18.0,-25.063,-7.063,0.001
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-21.0,-28.062,-7.062,0.0
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-24.0,-31.062,-7.062,0.0
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-27.0,-34.062,-7.062,0.0
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-3.0,-20.019,-17.019,9.957
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-30.0,-37.062,-7.062,0.0
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-36.0,-43.062,-7.062,0.0
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-42.0,-49.062,-7.062,0.0
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-48.0,-55.062,-7.062,0.0
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-54.0,-61.062,-7.062,0.0
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-6.0,-20.612,-14.612,7.55
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,-9.0,-21.283,-12.283,5.221
+1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,3.0,0.0,-19.466,-19.466,12.404
 1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,6.0,-12.0,-20.767,-8.767,6.974
 1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,6.0,-15.0,-21.462,-6.462,4.669
 1176a,UAD,UREI 1176 Rev A bluestripe,fet-1176,fet,6.0,-18.0,-22.311,-4.311,2.518
@@ -89,21 +89,21 @@ slug,maker,models,group,element,gr_target_db,level_dbfs,out_db,gain_db,gr_db
 1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,15.0,-6.0,-26.537,-20.537,20.19
 1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,15.0,-9.0,-26.921,-17.921,17.574
 1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,15.0,0.0,-25.731,-25.731,25.384
-1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-12.0,-29.25,-17.25,4.804
-1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-15.0,-29.959,-14.959,2.513
-1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-18.0,-30.916,-12.916,0.47
-1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-21.0,-33.468,-12.468,0.022
-1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-24.0,-36.462,-12.462,0.016
-1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-27.0,-39.457,-12.457,0.011
-1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-3.0,-27.768,-24.768,12.322
-1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-30.0,-42.454,-12.454,0.008
-1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-36.0,-48.45,-12.45,0.004
-1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-42.0,-54.448,-12.448,0.002
-1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-48.0,-60.447,-12.447,0.001
-1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-54.0,-66.446,-12.446,0.0
-1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-6.0,-28.226,-22.226,9.78
-1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-9.0,-28.698,-19.698,7.252
-1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,0.0,-27.355,-27.355,14.909
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-12.0,-29.628,-17.628,3.481
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-15.0,-30.455,-15.455,1.308
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-18.0,-32.173,-14.173,0.026
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-21.0,-35.165,-14.165,0.018
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-24.0,-38.159,-14.159,0.012
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-27.0,-41.155,-14.155,0.008
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-3.0,-28.023,-25.023,10.876
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-30.0,-44.153,-14.153,0.006
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-36.0,-50.149,-14.149,0.002
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-42.0,-56.148,-14.148,0.001
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-48.0,-62.147,-14.147,0.0
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-54.0,-68.147,-14.147,0.0
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-6.0,-28.489,-22.489,8.342
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,-9.0,-28.993,-19.993,5.846
+1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,3.0,0.0,-27.579,-27.579,13.432
 1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,6.0,-12.0,-28.959,-16.959,5.998
 1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,6.0,-15.0,-29.583,-14.583,3.622
 1176ae,UAD,UREI 1176AE anniversary,fet-1176,fet,6.0,-18.0,-30.401,-12.401,1.44
@@ -179,6 +179,726 @@ slug,maker,models,group,element,gr_target_db,level_dbfs,out_db,gain_db,gr_db
 1176ln,UAD,UREI 1176LN Rev E,fet-1176,fet,6.0,-6.0,-20.146,-14.146,11.24
 1176ln,UAD,UREI 1176LN Rev E,fet-1176,fet,6.0,-9.0,-20.677,-11.677,8.771
 1176ln,UAD,UREI 1176LN Rev E,fet-1176,fet,6.0,0.0,-19.102,-19.102,16.196
+api2500,Waves,API 2500,vca-api,vca,10.0,-12.0,-24.963,-12.963,9.995
+api2500,Waves,API 2500,vca-api,vca,10.0,-15.0,-25.803,-10.803,7.835
+api2500,Waves,API 2500,vca-api,vca,10.0,-18.0,-26.675,-8.675,5.707
+api2500,Waves,API 2500,vca-api,vca,10.0,-21.0,-27.609,-6.609,3.641
+api2500,Waves,API 2500,vca-api,vca,10.0,-24.0,-28.555,-4.555,1.587
+api2500,Waves,API 2500,vca-api,vca,10.0,-27.0,-29.976,-2.976,0.008
+api2500,Waves,API 2500,vca-api,vca,10.0,-3.0,-22.401,-19.401,16.433
+api2500,Waves,API 2500,vca-api,vca,10.0,-30.0,-32.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,10.0,-36.0,-38.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,10.0,-42.0,-44.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,10.0,-48.0,-50.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,10.0,-54.0,-56.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,10.0,-6.0,-23.264,-17.264,14.296
+api2500,Waves,API 2500,vca-api,vca,10.0,-9.0,-24.12,-15.12,12.152
+api2500,Waves,API 2500,vca-api,vca,10.0,0.0,-21.543,-21.543,18.575
+api2500,Waves,API 2500,vca-api,vca,15.0,-12.0,-29.969,-17.969,15.001
+api2500,Waves,API 2500,vca-api,vca,15.0,-15.0,-30.832,-15.832,12.864
+api2500,Waves,API 2500,vca-api,vca,15.0,-18.0,-31.675,-13.675,10.707
+api2500,Waves,API 2500,vca-api,vca,15.0,-21.0,-32.517,-11.517,8.549
+api2500,Waves,API 2500,vca-api,vca,15.0,-24.0,-33.363,-9.363,6.395
+api2500,Waves,API 2500,vca-api,vca,15.0,-27.0,-34.299,-7.299,4.331
+api2500,Waves,API 2500,vca-api,vca,15.0,-3.0,-27.398,-24.398,21.43
+api2500,Waves,API 2500,vca-api,vca,15.0,-30.0,-35.219,-5.219,2.251
+api2500,Waves,API 2500,vca-api,vca,15.0,-36.0,-38.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,15.0,-42.0,-44.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,15.0,-48.0,-50.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,15.0,-54.0,-56.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,15.0,-6.0,-28.251,-22.251,19.283
+api2500,Waves,API 2500,vca-api,vca,15.0,-9.0,-29.107,-20.107,17.139
+api2500,Waves,API 2500,vca-api,vca,15.0,0.0,-26.549,-26.549,23.581
+api2500,Waves,API 2500,vca-api,vca,3.0,-12.0,-17.959,-5.959,2.991
+api2500,Waves,API 2500,vca-api,vca,3.0,-15.0,-18.951,-3.951,0.983
+api2500,Waves,API 2500,vca-api,vca,3.0,-18.0,-20.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,3.0,-21.0,-23.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,3.0,-24.0,-26.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,3.0,-27.0,-29.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,3.0,-3.0,-15.294,-12.294,9.326
+api2500,Waves,API 2500,vca-api,vca,3.0,-30.0,-32.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,3.0,-36.0,-38.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,3.0,-42.0,-44.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,3.0,-48.0,-50.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,3.0,-54.0,-56.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,3.0,-6.0,-16.134,-10.134,7.166
+api2500,Waves,API 2500,vca-api,vca,3.0,-9.0,-17.038,-8.038,5.07
+api2500,Waves,API 2500,vca-api,vca,3.0,0.0,-14.452,-14.452,11.484
+api2500,Waves,API 2500,vca-api,vca,6.0,-12.0,-20.97,-8.97,6.002
+api2500,Waves,API 2500,vca-api,vca,6.0,-15.0,-21.906,-6.906,3.938
+api2500,Waves,API 2500,vca-api,vca,6.0,-18.0,-22.833,-4.833,1.865
+api2500,Waves,API 2500,vca-api,vca,6.0,-21.0,-24.108,-3.108,0.14
+api2500,Waves,API 2500,vca-api,vca,6.0,-24.0,-26.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,6.0,-27.0,-29.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,6.0,-3.0,-18.427,-15.427,12.459
+api2500,Waves,API 2500,vca-api,vca,6.0,-30.0,-32.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,6.0,-36.0,-38.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,6.0,-42.0,-44.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,6.0,-48.0,-50.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,6.0,-54.0,-56.968,-2.968,0.0
+api2500,Waves,API 2500,vca-api,vca,6.0,-6.0,-19.27,-13.27,10.302
+api2500,Waves,API 2500,vca-api,vca,6.0,-9.0,-20.111,-11.111,8.143
+api2500,Waves,API 2500,vca-api,vca,6.0,0.0,-17.569,-17.569,14.601
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,10.0,-12.0,-12.774,-0.774,10.015
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,10.0,-15.0,-13.973,1.027,8.214
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,10.0,-18.0,-15.183,2.817,6.424
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,10.0,-21.0,-16.412,4.588,4.653
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,10.0,-24.0,-17.676,6.324,2.917
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,10.0,-27.0,-19.02,7.98,1.261
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,10.0,-3.0,-9.215,-6.215,15.456
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,10.0,-30.0,-20.87,9.13,0.111
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,10.0,-36.0,-26.807,9.193,0.048
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,10.0,-42.0,-32.804,9.196,0.045
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,10.0,-48.0,-38.774,9.226,0.015
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,10.0,-54.0,-44.759,9.241,0.0
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,10.0,-6.0,-10.397,-4.397,13.638
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,10.0,-9.0,-11.583,-2.583,11.824
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,10.0,0.0,-8.037,-8.037,17.278
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,15.0,-12.0,-13.835,-1.835,11.386
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,15.0,-15.0,-15.028,-0.028,9.579
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,15.0,-18.0,-16.229,1.771,7.78
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,15.0,-21.0,-17.444,3.556,5.995
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,15.0,-24.0,-18.68,5.32,4.231
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,15.0,-27.0,-19.958,7.042,2.509
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,15.0,-3.0,-10.286,-7.286,16.837
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,15.0,-30.0,-21.347,8.653,0.898
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,15.0,-36.0,-26.497,9.503,0.048
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,15.0,-42.0,-32.494,9.506,0.045
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,15.0,-48.0,-38.464,9.536,0.015
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,15.0,-54.0,-44.449,9.551,0.0
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,15.0,-6.0,-11.465,-5.465,15.016
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,15.0,-9.0,-12.648,-3.648,13.199
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,15.0,0.0,-9.11,-9.11,18.661
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,3.0,-12.0,-7.499,4.501,3.162
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,3.0,-15.0,-8.822,6.178,1.485
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,3.0,-18.0,-10.512,7.488,0.175
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,3.0,-21.0,-13.334,7.666,-0.003
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,3.0,-24.0,-16.339,7.661,0.002
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,3.0,-27.0,-19.346,7.654,0.009
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,3.0,-3.0,-3.811,-0.811,8.474
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,3.0,-30.0,-22.356,7.644,0.019
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,3.0,-36.0,-28.384,7.616,0.047
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,3.0,-42.0,-34.381,7.619,0.044
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,3.0,-48.0,-40.351,7.649,0.014
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,3.0,-54.0,-46.337,7.663,0.0
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,3.0,-6.0,-5.019,0.981,6.682
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,3.0,-9.0,-6.243,2.757,4.906
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,3.0,0.0,-2.614,-2.614,10.277
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,6.0,-12.0,-9.682,2.318,6.009
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,6.0,-15.0,-10.916,4.084,4.243
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,6.0,-18.0,-12.192,5.808,2.519
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,6.0,-21.0,-13.574,7.426,0.901
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,6.0,-24.0,-15.7,8.3,0.027
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,6.0,-27.0,-18.682,8.318,0.009
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,6.0,-3.0,-6.076,-3.076,11.403
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,6.0,-30.0,-21.692,8.308,0.019
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,6.0,-36.0,-27.72,8.28,0.047
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,6.0,-42.0,-33.717,8.283,0.044
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,6.0,-48.0,-39.688,8.312,0.015
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,6.0,-54.0,-45.673,8.327,0.0
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,6.0,-6.0,-7.268,-1.268,9.595
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,6.0,-9.0,-8.469,0.531,7.796
+api_vision_comp,UAD,API 527 channel compressor,vca-api,vca,6.0,0.0,-4.889,-4.889,13.216
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,10.0,-12.0,-10.777,1.223,11.923
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,10.0,-15.0,-10.922,4.078,9.068
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,10.0,-18.0,-9.971,8.029,5.117
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,10.0,-21.0,-9.45,11.55,1.596
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,10.0,-24.0,-10.176,13.824,-0.678
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,10.0,-27.0,-13.178,13.822,-0.676
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,10.0,-3.0,-19.477,-16.477,29.623
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,10.0,-30.0,-16.183,13.817,-0.671
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,10.0,-36.0,-22.192,13.808,-0.662
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,10.0,-42.0,-28.224,13.776,-0.63
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,10.0,-48.0,-34.34,13.66,-0.514
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,10.0,-54.0,-40.854,13.146,0.0
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,10.0,-6.0,-16.724,-10.724,23.87
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,10.0,-9.0,-13.045,-4.045,17.191
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,10.0,0.0,-24.063,-24.063,37.209
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,15.0,-12.0,-10.777,1.223,11.923
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,15.0,-15.0,-10.922,4.078,9.068
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,15.0,-18.0,-9.971,8.029,5.117
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,15.0,-21.0,-9.45,11.55,1.596
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,15.0,-24.0,-10.176,13.824,-0.678
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,15.0,-27.0,-13.178,13.822,-0.676
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,15.0,-3.0,-19.477,-16.477,29.623
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,15.0,-30.0,-16.183,13.817,-0.671
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,15.0,-36.0,-22.192,13.808,-0.662
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,15.0,-42.0,-28.224,13.776,-0.63
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,15.0,-48.0,-34.34,13.66,-0.514
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,15.0,-54.0,-40.854,13.146,0.0
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,15.0,-6.0,-16.724,-10.724,23.87
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,15.0,-9.0,-13.045,-4.045,17.191
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,15.0,0.0,-24.063,-24.063,37.209
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,3.0,-12.0,-6.506,5.494,0.547
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,3.0,-15.0,-8.466,6.534,-0.493
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,3.0,-18.0,-11.466,6.534,-0.493
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,3.0,-21.0,-14.466,6.534,-0.493
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,3.0,-24.0,-17.467,6.533,-0.492
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,3.0,-27.0,-20.469,6.531,-0.49
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,3.0,-3.0,-9.919,-6.919,12.96
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,3.0,-30.0,-23.471,6.529,-0.488
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,3.0,-36.0,-29.477,6.523,-0.482
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,3.0,-42.0,-35.497,6.503,-0.462
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,3.0,-48.0,-41.573,6.427,-0.386
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,3.0,-54.0,-47.959,6.041,0.0
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,3.0,-6.0,-7.526,-1.526,7.567
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,3.0,-9.0,-6.756,2.244,3.797
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,3.0,0.0,-10.127,-10.127,16.168
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,6.0,-12.0,-8.081,3.919,4.848
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,6.0,-15.0,-7.667,7.333,1.434
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,6.0,-18.0,-8.671,9.329,-0.562
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,6.0,-21.0,-11.671,9.329,-0.562
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,6.0,-24.0,-14.672,9.328,-0.561
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,6.0,-27.0,-17.674,9.326,-0.559
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,6.0,-3.0,-12.285,-9.285,18.052
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,6.0,-30.0,-20.677,9.323,-0.556
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,6.0,-36.0,-26.684,9.316,-0.549
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,6.0,-42.0,-32.709,9.291,-0.524
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,6.0,-48.0,-38.8,9.2,-0.433
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,6.0,-54.0,-45.233,8.767,0.0
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,6.0,-6.0,-10.591,-4.591,13.358
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,6.0,-9.0,-9.008,-0.008,8.775
+aw_blockparty,Airwindows,blocky compressor,aw-comp,digital,6.0,0.0,-16.193,-16.193,24.96
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,10.0,-12.0,-14.288,-2.288,7.899
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,10.0,-15.0,-13.833,1.167,4.444
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,10.0,-18.0,-14.781,3.219,2.392
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,10.0,-21.0,-16.636,4.364,1.247
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,10.0,-24.0,-19.02,4.98,0.631
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,10.0,-27.0,-21.698,5.302,0.309
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,10.0,-3.0,-24.755,-21.755,27.366
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,10.0,-30.0,-24.526,5.474,0.137
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,10.0,-36.0,-30.402,5.598,0.013
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,10.0,-42.0,-36.37,5.63,-0.019
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,10.0,-48.0,-42.363,5.637,-0.026
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,10.0,-54.0,-48.389,5.611,0.0
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,10.0,-6.0,-19.92,-13.92,19.531
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,10.0,-9.0,-16.35,-7.35,12.961
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,10.0,0.0,-30.59,-30.59,36.201
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,15.0,-12.0,-14.288,-2.288,7.899
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,15.0,-15.0,-13.833,1.167,4.444
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,15.0,-18.0,-14.781,3.219,2.392
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,15.0,-21.0,-16.636,4.364,1.247
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,15.0,-24.0,-19.02,4.98,0.631
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,15.0,-27.0,-21.698,5.302,0.309
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,15.0,-3.0,-24.755,-21.755,27.366
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,15.0,-30.0,-24.526,5.474,0.137
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,15.0,-36.0,-30.402,5.598,0.013
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,15.0,-42.0,-36.37,5.63,-0.019
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,15.0,-48.0,-42.363,5.637,-0.026
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,15.0,-54.0,-48.389,5.611,0.0
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,15.0,-6.0,-19.92,-13.92,19.531
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,15.0,-9.0,-16.35,-7.35,12.961
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,15.0,0.0,-30.59,-30.59,36.201
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,3.0,-12.0,-14.288,-2.288,7.899
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,3.0,-15.0,-13.833,1.167,4.444
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,3.0,-18.0,-14.781,3.219,2.392
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,3.0,-21.0,-16.636,4.364,1.247
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,3.0,-24.0,-19.02,4.98,0.631
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,3.0,-27.0,-21.698,5.302,0.309
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,3.0,-3.0,-24.755,-21.755,27.366
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,3.0,-30.0,-24.526,5.474,0.137
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,3.0,-36.0,-30.402,5.598,0.013
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,3.0,-42.0,-36.37,5.63,-0.019
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,3.0,-48.0,-42.363,5.637,-0.026
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,3.0,-54.0,-48.389,5.611,0.0
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,3.0,-6.0,-19.92,-13.92,19.531
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,3.0,-9.0,-16.35,-7.35,12.961
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,3.0,0.0,-30.59,-30.59,36.201
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,6.0,-12.0,-14.288,-2.288,7.899
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,6.0,-15.0,-13.833,1.167,4.444
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,6.0,-18.0,-14.781,3.219,2.392
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,6.0,-21.0,-16.636,4.364,1.247
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,6.0,-24.0,-19.02,4.98,0.631
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,6.0,-27.0,-21.698,5.302,0.309
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,6.0,-3.0,-24.755,-21.755,27.366
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,6.0,-30.0,-24.526,5.474,0.137
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,6.0,-36.0,-30.402,5.598,0.013
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,6.0,-42.0,-36.37,5.63,-0.019
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,6.0,-48.0,-42.363,5.637,-0.026
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,6.0,-54.0,-48.389,5.611,0.0
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,6.0,-6.0,-19.92,-13.92,19.531
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,6.0,-9.0,-16.35,-7.35,12.961
+aw_buttercomp2,Airwindows,bidirectional compressor,aw-comp,digital,6.0,0.0,-30.59,-30.59,36.201
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,10.0,-12.0,-6.339,5.661,2.129
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,10.0,-15.0,-8.774,6.226,1.564
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,10.0,-18.0,-11.339,6.661,1.129
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,10.0,-21.0,-14.008,6.992,0.798
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,10.0,-24.0,-16.767,7.233,0.557
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,10.0,-27.0,-19.609,7.391,0.399
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,10.0,-3.0,-1.25,1.75,6.04
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,10.0,-30.0,-22.578,7.422,0.368
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,10.0,-36.0,-28.366,7.634,0.156
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,10.0,-42.0,-34.214,7.786,0.004
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,10.0,-48.0,-40.211,7.789,0.001
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,10.0,-54.0,-46.21,7.79,0.0
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,10.0,-6.0,-2.159,3.841,3.949
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,10.0,-9.0,-4.083,4.917,2.873
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,10.0,0.0,-0.741,-0.741,8.531
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,15.0,-12.0,-6.339,5.661,2.129
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,15.0,-15.0,-8.774,6.226,1.564
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,15.0,-18.0,-11.339,6.661,1.129
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,15.0,-21.0,-14.009,6.991,0.799
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,15.0,-24.0,-16.767,7.233,0.557
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,15.0,-27.0,-19.609,7.391,0.399
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,15.0,-3.0,-1.282,1.718,6.072
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,15.0,-30.0,-22.578,7.422,0.368
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,15.0,-36.0,-28.366,7.634,0.156
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,15.0,-42.0,-34.214,7.786,0.004
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,15.0,-48.0,-40.211,7.789,0.001
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,15.0,-54.0,-46.21,7.79,0.0
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,15.0,-6.0,-2.159,3.841,3.949
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,15.0,-9.0,-4.083,4.917,2.873
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,15.0,0.0,-0.733,-0.733,8.523
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,3.0,-12.0,-9.038,2.962,1.228
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,3.0,-15.0,-11.684,3.316,0.874
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,3.0,-18.0,-14.419,3.581,0.609
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,3.0,-21.0,-17.225,3.775,0.415
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,3.0,-24.0,-20.09,3.91,0.28
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,3.0,-27.0,-23.003,3.997,0.193
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,3.0,-3.0,-2.113,0.887,3.303
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,3.0,-30.0,-25.982,4.018,0.172
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,3.0,-36.0,-31.815,4.185,0.005
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,3.0,-42.0,-37.811,4.189,0.001
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,3.0,-48.0,-43.81,4.19,0.0
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,3.0,-54.0,-49.81,4.19,0.0
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,3.0,-6.0,-4.144,1.856,2.334
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,3.0,-9.0,-6.507,2.493,1.697
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,3.0,0.0,-1.174,-1.174,5.364
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,6.0,-12.0,-6.339,5.661,2.129
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,6.0,-15.0,-8.774,6.226,1.564
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,6.0,-18.0,-11.339,6.661,1.129
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,6.0,-21.0,-14.009,6.991,0.799
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,6.0,-24.0,-16.767,7.233,0.557
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,6.0,-27.0,-19.609,7.391,0.399
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,6.0,-3.0,-1.259,1.741,6.049
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,6.0,-30.0,-22.579,7.421,0.369
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,6.0,-36.0,-28.366,7.634,0.156
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,6.0,-42.0,-34.214,7.786,0.004
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,6.0,-48.0,-40.211,7.789,0.001
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,6.0,-54.0,-46.21,7.79,0.0
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,6.0,-6.0,-2.159,3.841,3.949
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,6.0,-9.0,-4.083,4.917,2.873
+aw_compresaturator,Airwindows,compression by saturation,aw-comp,digital,6.0,0.0,-0.739,-0.739,8.529
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,10.0,-12.0,-23.042,-11.042,8.031
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,10.0,-15.0,-22.734,-7.734,4.723
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,10.0,-18.0,-23.653,-5.653,2.642
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,10.0,-21.0,-25.434,-4.434,1.423
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,10.0,-24.0,-27.757,-3.757,0.746
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,10.0,-27.0,-30.396,-3.396,0.385
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,10.0,-3.0,-32.089,-29.089,26.078
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,10.0,-30.0,-33.208,-3.208,0.197
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,10.0,-36.0,-39.062,-3.062,0.051
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,10.0,-42.0,-45.024,-3.024,0.013
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,10.0,-48.0,-51.014,-3.014,0.003
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,10.0,-54.0,-57.011,-3.011,0.0
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,10.0,-6.0,-27.944,-21.944,18.933
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,10.0,-9.0,-24.814,-15.814,12.803
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,10.0,0.0,-36.622,-36.622,33.611
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,15.0,-12.0,-29.831,-17.831,14.818
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,15.0,-15.0,-27.494,-12.494,9.481
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,15.0,-18.0,-26.685,-8.685,5.672
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,15.0,-21.0,-27.228,-6.228,3.215
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,15.0,-24.0,-28.762,-4.762,1.749
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,15.0,-27.0,-30.936,-3.936,0.923
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,15.0,-3.0,-43.874,-40.874,37.861
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,15.0,-30.0,-33.49,-3.49,0.477
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,15.0,-36.0,-39.136,-3.136,0.123
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,15.0,-42.0,-45.043,-3.043,0.03
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,15.0,-48.0,-51.019,-3.019,0.006
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,15.0,-54.0,-57.013,-3.013,0.0
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,15.0,-6.0,-38.399,-32.399,29.386
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,15.0,-9.0,-33.552,-24.552,21.539
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,15.0,0.0,-49.286,-49.286,46.273
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,3.0,-12.0,-18.932,-6.932,3.921
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,3.0,-15.0,-20.18,-5.18,2.169
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,3.0,-18.0,-22.169,-4.169,1.158
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,3.0,-21.0,-24.615,-3.615,0.604
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,3.0,-24.0,-27.322,-3.322,0.311
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,3.0,-27.0,-30.17,-3.17,0.159
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,3.0,-3.0,-22.394,-19.394,16.383
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,3.0,-30.0,-33.092,-3.092,0.081
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,3.0,-36.0,-39.032,-3.032,0.021
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,3.0,-42.0,-45.016,-3.016,0.005
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,3.0,-48.0,-51.012,-3.012,0.001
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,3.0,-54.0,-57.011,-3.011,0.0
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,3.0,-6.0,-19.947,-13.947,10.936
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,3.0,-9.0,-18.769,-9.769,6.758
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,3.0,0.0,-25.614,-25.614,22.603
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,6.0,-12.0,-23.042,-11.042,8.031
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,6.0,-15.0,-22.734,-7.734,4.723
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,6.0,-18.0,-23.653,-5.653,2.642
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,6.0,-21.0,-25.434,-4.434,1.423
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,6.0,-24.0,-27.757,-3.757,0.746
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,6.0,-27.0,-30.396,-3.396,0.385
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,6.0,-3.0,-32.089,-29.089,26.078
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,6.0,-30.0,-33.208,-3.208,0.197
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,6.0,-36.0,-39.062,-3.062,0.051
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,6.0,-42.0,-45.024,-3.024,0.013
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,6.0,-48.0,-51.014,-3.014,0.003
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,6.0,-54.0,-57.011,-3.011,0.0
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,6.0,-6.0,-27.944,-21.944,18.933
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,6.0,-9.0,-24.814,-15.814,12.803
+aw_logical4,Airwindows,mastering compressor,aw-comp,digital,6.0,0.0,-36.622,-36.622,33.611
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,10.0,-12.0,-19.608,-7.608,-18.697
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,10.0,-15.0,-17.082,-2.082,-24.223
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,10.0,-18.0,-19.573,-1.573,-24.732
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,10.0,-21.0,-16.573,4.427,-30.732
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,10.0,-24.0,-16.188,7.812,-34.117
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,10.0,-27.0,-18.903,8.097,-34.402
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,10.0,-3.0,-18.368,-15.368,-10.937
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,10.0,-30.0,-54.744,-24.744,-1.561
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,10.0,-36.0,-61.12,-25.12,-1.185
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,10.0,-42.0,-67.505,-25.505,-0.8
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,10.0,-48.0,-73.9,-25.9,-0.405
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,10.0,-54.0,-80.305,-26.305,0.0
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,10.0,-6.0,-19.873,-13.873,-12.432
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,10.0,-9.0,-20.409,-11.409,-14.896
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,10.0,0.0,-15.804,-15.804,-10.501
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,15.0,-12.0,-26.084,-14.084,-6.545
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,15.0,-15.0,-25.672,-10.672,-9.957
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,15.0,-18.0,-23.542,-5.542,-15.087
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,15.0,-21.0,-20.542,0.458,-21.087
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,15.0,-24.0,-23.033,0.967,-21.596
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,15.0,-27.0,-20.033,6.967,-27.596
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,15.0,-3.0,-20.696,-17.696,-2.933
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,15.0,-30.0,-19.648,10.352,-30.981
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,15.0,-36.0,-55.444,-19.444,-1.185
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,15.0,-42.0,-61.829,-19.829,-0.8
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,15.0,-48.0,-68.224,-20.224,-0.405
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,15.0,-54.0,-74.629,-20.629,0.0
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,15.0,-6.0,-23.555,-17.555,-3.074
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,15.0,-9.0,-25.218,-16.218,-4.411
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,15.0,0.0,-17.696,-17.696,-2.933
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,3.0,-12.0,-14.474,-2.474,-32.97
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,3.0,-15.0,-47.131,-32.131,-3.313
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,3.0,-18.0,-50.466,-32.466,-2.978
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,3.0,-21.0,-53.808,-32.808,-2.636
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,3.0,-24.0,-57.158,-33.158,-2.286
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,3.0,-27.0,-60.516,-33.516,-1.928
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,3.0,-3.0,-11.268,-8.268,-27.176
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,3.0,-30.0,-63.883,-33.883,-1.561
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,3.0,-36.0,-70.259,-34.259,-1.185
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,3.0,-42.0,-76.644,-34.644,-0.8
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,3.0,-48.0,-83.039,-35.039,-0.405
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,3.0,-54.0,-89.444,-35.444,0.0
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,3.0,-6.0,-15.63,-9.63,-25.814
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,3.0,-9.0,-15.956,-6.956,-28.488
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,3.0,0.0,-10.77,-10.77,-24.674
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,6.0,-12.0,-29.16,-17.16,0.247
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,6.0,-15.0,-29.805,-14.805,-2.108
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,6.0,-18.0,-29.133,-11.133,-5.78
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,6.0,-21.0,-26.736,-5.736,-11.177
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,6.0,-24.0,-23.736,0.264,-17.177
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,6.0,-27.0,-20.736,6.264,-23.177
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,6.0,-3.0,-21.934,-18.934,2.021
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,6.0,-30.0,-23.226,6.774,-23.687
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,6.0,-36.0,-19.841,16.159,-33.072
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,6.0,-42.0,-58.113,-16.113,-0.8
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,6.0,-48.0,-64.508,-16.508,-0.405
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,6.0,-54.0,-70.913,-16.913,0.0
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,6.0,-6.0,-24.934,-18.934,2.021
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,6.0,-9.0,-27.601,-18.601,1.688
+aw_pop2,Airwindows,transient-preserving comp,aw-comp,digital,6.0,0.0,-18.934,-18.934,2.021
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,10.0,-12.0,-2.846,9.154,12.26
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,10.0,-15.0,-3.69,11.31,10.104
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,10.0,-18.0,-3.202,14.798,6.616
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,10.0,-21.0,-3.389,17.611,3.803
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,10.0,-24.0,-3.51,20.49,0.924
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,10.0,-27.0,-5.574,21.426,-0.012
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,10.0,-3.0,-1.497,1.503,19.911
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,10.0,-30.0,-8.574,21.426,-0.012
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,10.0,-36.0,-14.574,21.426,-0.012
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,10.0,-42.0,-20.574,21.426,-0.012
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,10.0,-48.0,-26.574,21.426,-0.012
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,10.0,-54.0,-32.586,21.414,0.0
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,10.0,-6.0,-2.158,3.842,17.572
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,10.0,-9.0,-2.523,6.477,14.937
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,10.0,0.0,-1.347,-1.347,22.761
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,15.0,-12.0,-7.107,4.893,23.806
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,15.0,-15.0,-9.014,5.986,22.713
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,15.0,-18.0,-10.145,7.855,20.844
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,15.0,-21.0,-10.234,10.766,17.933
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,15.0,-24.0,-9.693,14.307,14.392
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,15.0,-27.0,-8.981,18.019,10.68
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,15.0,-3.0,-1.828,1.172,27.527
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,15.0,-30.0,-11.491,18.509,10.19
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,15.0,-36.0,-11.202,24.798,3.901
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,15.0,-42.0,-12.818,29.182,-0.483
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,15.0,-48.0,-18.867,29.133,-0.434
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,15.0,-54.0,-25.301,28.699,0.0
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,15.0,-6.0,-2.641,3.359,25.34
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,15.0,-9.0,-4.796,4.204,24.495
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,15.0,0.0,-1.467,-1.467,30.166
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,3.0,-12.0,-1.809,10.191,2.992
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,3.0,-15.0,-2.613,12.387,0.796
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,3.0,-18.0,-4.817,13.183,0.0
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,3.0,-21.0,-7.817,13.183,0.0
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,3.0,-24.0,-10.817,13.183,0.0
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,3.0,-27.0,-13.817,13.183,0.0
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,3.0,-3.0,-1.273,1.727,11.456
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,3.0,-30.0,-16.817,13.183,0.0
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,3.0,-36.0,-22.817,13.183,0.0
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,3.0,-42.0,-28.817,13.183,0.0
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,3.0,-48.0,-34.817,13.183,0.0
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,3.0,-54.0,-40.817,13.183,0.0
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,3.0,-6.0,-1.448,4.552,8.631
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,3.0,-9.0,-1.458,7.542,5.641
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,3.0,0.0,-0.997,-0.997,14.18
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,6.0,-12.0,-2.056,9.944,7.433
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,6.0,-15.0,-1.851,13.149,4.228
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,6.0,-18.0,-2.118,15.882,1.495
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,6.0,-21.0,-3.622,17.378,-0.001
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,6.0,-24.0,-6.622,17.378,-0.001
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,6.0,-27.0,-9.622,17.378,-0.001
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,6.0,-3.0,-1.14,1.86,15.517
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,6.0,-30.0,-12.622,17.378,-0.001
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,6.0,-36.0,-18.622,17.378,-0.001
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,6.0,-42.0,-24.622,17.378,-0.001
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,6.0,-48.0,-30.622,17.378,-0.001
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,6.0,-54.0,-36.623,17.377,0.0
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,6.0,-6.0,-1.623,4.377,13.0
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,6.0,-9.0,-1.62,7.38,9.997
+aw_pressure5,Airwindows,peak compressor,aw-comp,digital,6.0,0.0,-0.928,-0.928,18.305
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,10.0,-12.0,-24.345,-12.345,13.474
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,10.0,-15.0,-23.938,-8.938,10.067
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,10.0,-18.0,-22.088,-4.088,5.217
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,10.0,-21.0,-21.296,-0.296,1.425
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,10.0,-24.0,-22.198,1.802,-0.673
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,10.0,-27.0,-25.201,1.799,-0.67
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,10.0,-3.0,-22.6,-19.6,20.729
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,10.0,-30.0,-28.205,1.795,-0.666
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,10.0,-36.0,-34.214,1.786,-0.657
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,10.0,-42.0,-40.245,1.755,-0.626
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,10.0,-48.0,-46.36,1.64,-0.511
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,10.0,-54.0,-52.871,1.129,0.0
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,10.0,-6.0,-22.715,-16.715,17.844
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,10.0,-9.0,-25.071,-16.071,17.2
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,10.0,0.0,-19.139,-19.139,20.268
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,15.0,-12.0,-27.562,-15.562,21.404
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,15.0,-15.0,-28.645,-13.645,19.487
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,15.0,-18.0,-27.473,-9.473,15.315
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,15.0,-21.0,-25.24,-4.24,10.082
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,15.0,-24.0,-25.066,-1.066,6.908
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,15.0,-27.0,-24.082,2.918,2.924
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,15.0,-3.0,-25.12,-22.12,27.962
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,15.0,-30.0,-23.228,6.772,-0.93
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,15.0,-36.0,-29.375,6.625,-0.783
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,15.0,-42.0,-35.414,6.586,-0.744
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,15.0,-48.0,-41.555,6.445,-0.603
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,15.0,-54.0,-48.158,5.842,0.0
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,15.0,-6.0,-25.328,-19.328,25.17
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,15.0,-9.0,-28.645,-19.645,25.487
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,15.0,0.0,-24.103,-24.103,29.945
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,3.0,-12.0,-19.941,-7.941,4.683
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,3.0,-15.0,-20.045,-5.045,1.787
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,3.0,-18.0,-20.702,-2.702,-0.556
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,3.0,-21.0,-23.702,-2.702,-0.556
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,3.0,-24.0,-26.703,-2.703,-0.555
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,3.0,-27.0,-29.705,-2.705,-0.553
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,3.0,-3.0,-21.848,-18.848,15.59
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,3.0,-30.0,-32.708,-2.708,-0.55
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,3.0,-36.0,-38.715,-2.715,-0.543
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,3.0,-42.0,-44.739,-2.739,-0.519
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,3.0,-48.0,-50.828,-2.828,-0.43
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,3.0,-54.0,-57.258,-3.258,0.0
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,3.0,-6.0,-21.58,-15.58,12.322
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,3.0,-9.0,-21.726,-12.726,9.468
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,3.0,0.0,-17.258,-17.258,14.0
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,6.0,-12.0,-19.941,-7.941,4.683
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,6.0,-15.0,-20.045,-5.045,1.787
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,6.0,-18.0,-20.702,-2.702,-0.556
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,6.0,-21.0,-23.702,-2.702,-0.556
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,6.0,-24.0,-26.703,-2.703,-0.555
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,6.0,-27.0,-29.705,-2.705,-0.553
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,6.0,-3.0,-21.848,-18.848,15.59
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,6.0,-30.0,-32.708,-2.708,-0.55
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,6.0,-36.0,-38.715,-2.715,-0.543
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,6.0,-42.0,-44.739,-2.739,-0.519
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,6.0,-48.0,-50.828,-2.828,-0.43
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,6.0,-54.0,-57.258,-3.258,0.0
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,6.0,-6.0,-21.58,-15.58,12.322
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,6.0,-9.0,-21.726,-12.726,9.468
+aw_purestsquish,Airwindows,minimal compressor,aw-comp,digital,6.0,0.0,-17.258,-17.258,14.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,10.0,-12.0,-25.179,-13.179,10.155
+bx_opto,Brainworx,opto pedal,opto-other,opto,10.0,-15.0,-25.996,-10.996,7.972
+bx_opto,Brainworx,opto pedal,opto-other,opto,10.0,-18.0,-26.861,-8.861,5.837
+bx_opto,Brainworx,opto pedal,opto-other,opto,10.0,-21.0,-27.816,-6.816,3.792
+bx_opto,Brainworx,opto pedal,opto-other,opto,10.0,-24.0,-28.982,-4.982,1.958
+bx_opto,Brainworx,opto pedal,opto-other,opto,10.0,-27.0,-30.516,-3.516,0.492
+bx_opto,Brainworx,opto pedal,opto-other,opto,10.0,-3.0,-22.671,-19.671,16.647
+bx_opto,Brainworx,opto pedal,opto-other,opto,10.0,-30.0,-33.027,-3.027,0.003
+bx_opto,Brainworx,opto pedal,opto-other,opto,10.0,-36.0,-39.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,10.0,-42.0,-45.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,10.0,-48.0,-51.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,10.0,-54.0,-57.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,10.0,-6.0,-23.53,-17.53,14.506
+bx_opto,Brainworx,opto pedal,opto-other,opto,10.0,-9.0,-24.359,-15.359,12.335
+bx_opto,Brainworx,opto pedal,opto-other,opto,10.0,0.0,-21.766,-21.766,18.742
+bx_opto,Brainworx,opto pedal,opto-other,opto,15.0,-12.0,-30.311,-18.311,15.287
+bx_opto,Brainworx,opto pedal,opto-other,opto,15.0,-15.0,-31.145,-16.145,13.121
+bx_opto,Brainworx,opto pedal,opto-other,opto,15.0,-18.0,-31.966,-13.966,10.942
+bx_opto,Brainworx,opto pedal,opto-other,opto,15.0,-21.0,-32.781,-11.781,8.757
+bx_opto,Brainworx,opto pedal,opto-other,opto,15.0,-24.0,-33.622,-9.622,6.598
+bx_opto,Brainworx,opto pedal,opto-other,opto,15.0,-27.0,-34.539,-7.539,4.515
+bx_opto,Brainworx,opto pedal,opto-other,opto,15.0,-3.0,-27.536,-24.536,21.512
+bx_opto,Brainworx,opto pedal,opto-other,opto,15.0,-30.0,-35.605,-5.605,2.581
+bx_opto,Brainworx,opto pedal,opto-other,opto,15.0,-36.0,-39.056,-3.056,0.032
+bx_opto,Brainworx,opto pedal,opto-other,opto,15.0,-42.0,-45.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,15.0,-48.0,-51.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,15.0,-54.0,-57.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,15.0,-6.0,-28.517,-22.517,19.493
+bx_opto,Brainworx,opto pedal,opto-other,opto,15.0,-9.0,-29.434,-20.434,17.41
+bx_opto,Brainworx,opto pedal,opto-other,opto,15.0,0.0,-26.48,-26.48,23.456
+bx_opto,Brainworx,opto pedal,opto-other,opto,3.0,-12.0,-17.877,-5.877,2.853
+bx_opto,Brainworx,opto pedal,opto-other,opto,3.0,-15.0,-19.222,-4.222,1.198
+bx_opto,Brainworx,opto pedal,opto-other,opto,3.0,-18.0,-21.097,-3.097,0.073
+bx_opto,Brainworx,opto pedal,opto-other,opto,3.0,-21.0,-24.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,3.0,-24.0,-27.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,3.0,-27.0,-30.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,3.0,-3.0,-15.108,-12.108,9.084
+bx_opto,Brainworx,opto pedal,opto-other,opto,3.0,-30.0,-33.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,3.0,-36.0,-39.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,3.0,-42.0,-45.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,3.0,-48.0,-51.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,3.0,-54.0,-57.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,3.0,-6.0,-15.943,-9.943,6.919
+bx_opto,Brainworx,opto pedal,opto-other,opto,3.0,-9.0,-16.845,-7.845,4.821
+bx_opto,Brainworx,opto pedal,opto-other,opto,3.0,0.0,-14.293,-14.293,11.269
+bx_opto,Brainworx,opto pedal,opto-other,opto,6.0,-12.0,-20.922,-8.922,5.898
+bx_opto,Brainworx,opto pedal,opto-other,opto,6.0,-15.0,-21.871,-6.871,3.847
+bx_opto,Brainworx,opto pedal,opto-other,opto,6.0,-18.0,-23.029,-5.029,2.005
+bx_opto,Brainworx,opto pedal,opto-other,opto,6.0,-21.0,-24.552,-3.552,0.528
+bx_opto,Brainworx,opto pedal,opto-other,opto,6.0,-24.0,-27.028,-3.028,0.004
+bx_opto,Brainworx,opto pedal,opto-other,opto,6.0,-27.0,-30.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,6.0,-3.0,-18.42,-15.42,12.396
+bx_opto,Brainworx,opto pedal,opto-other,opto,6.0,-30.0,-33.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,6.0,-36.0,-39.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,6.0,-42.0,-45.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,6.0,-48.0,-51.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,6.0,-54.0,-57.024,-3.024,0.0
+bx_opto,Brainworx,opto pedal,opto-other,opto,6.0,-6.0,-19.24,-13.24,10.216
+bx_opto,Brainworx,opto pedal,opto-other,opto,6.0,-9.0,-20.058,-11.058,8.034
+bx_opto,Brainworx,opto pedal,opto-other,opto,6.0,0.0,-17.591,-17.591,14.567
+c1_comp,Waves,clean digital,digital,digital,10.0,-12.0,-2.363,9.637,9.975
+c1_comp,Waves,clean digital,digital,digital,10.0,-15.0,-3.023,11.977,7.635
+c1_comp,Waves,clean digital,digital,digital,10.0,-18.0,-3.932,14.068,5.544
+c1_comp,Waves,clean digital,digital,digital,10.0,-21.0,-5.168,15.832,3.78
+c1_comp,Waves,clean digital,digital,digital,10.0,-24.0,-6.773,17.227,2.385
+c1_comp,Waves,clean digital,digital,digital,10.0,-27.0,-8.751,18.249,1.363
+c1_comp,Waves,clean digital,digital,digital,10.0,-3.0,-0.937,2.063,17.549
+c1_comp,Waves,clean digital,digital,digital,10.0,-30.0,-11.061,18.939,0.673
+c1_comp,Waves,clean digital,digital,digital,10.0,-36.0,-16.413,19.587,0.025
+c1_comp,Waves,clean digital,digital,digital,10.0,-42.0,-22.291,19.709,-0.097
+c1_comp,Waves,clean digital,digital,digital,10.0,-48.0,-28.333,19.667,-0.055
+c1_comp,Waves,clean digital,digital,digital,10.0,-54.0,-34.388,19.612,0.0
+c1_comp,Waves,clean digital,digital,digital,10.0,-6.0,-1.412,4.588,15.024
+c1_comp,Waves,clean digital,digital,digital,10.0,-9.0,-1.858,7.142,12.47
+c1_comp,Waves,clean digital,digital,digital,10.0,0.0,-0.359,-0.359,19.971
+c1_comp,Waves,clean digital,digital,digital,15.0,-12.0,-3.623,8.377,14.993
+c1_comp,Waves,clean digital,digital,digital,15.0,-15.0,-4.069,10.931,12.439
+c1_comp,Waves,clean digital,digital,digital,15.0,-18.0,-4.578,13.422,9.948
+c1_comp,Waves,clean digital,digital,digital,15.0,-21.0,-5.244,15.756,7.614
+c1_comp,Waves,clean digital,digital,digital,15.0,-24.0,-6.164,17.836,5.534
+c1_comp,Waves,clean digital,digital,digital,15.0,-27.0,-7.411,19.589,3.781
+c1_comp,Waves,clean digital,digital,digital,15.0,-3.0,-1.84,1.16,22.21
+c1_comp,Waves,clean digital,digital,digital,15.0,-30.0,-9.029,20.971,2.399
+c1_comp,Waves,clean digital,digital,digital,15.0,-36.0,-13.339,22.661,0.709
+c1_comp,Waves,clean digital,digital,digital,15.0,-42.0,-18.704,23.296,0.074
+c1_comp,Waves,clean digital,digital,digital,15.0,-48.0,-24.587,23.413,-0.043
+c1_comp,Waves,clean digital,digital,digital,15.0,-54.0,-30.63,23.37,0.0
+c1_comp,Waves,clean digital,digital,digital,15.0,-6.0,-2.576,3.424,19.946
+c1_comp,Waves,clean digital,digital,digital,15.0,-9.0,-3.15,5.85,17.52
+c1_comp,Waves,clean digital,digital,digital,15.0,0.0,-0.894,-0.894,24.264
+c1_comp,Waves,clean digital,digital,digital,3.0,-12.0,-3.829,8.171,2.979
+c1_comp,Waves,clean digital,digital,digital,3.0,-15.0,-5.623,9.377,1.773
+c1_comp,Waves,clean digital,digital,digital,3.0,-18.0,-7.774,10.226,0.924
+c1_comp,Waves,clean digital,digital,digital,3.0,-21.0,-10.227,10.773,0.377
+c1_comp,Waves,clean digital,digital,digital,3.0,-24.0,-12.912,11.088,0.062
+c1_comp,Waves,clean digital,digital,digital,3.0,-27.0,-15.757,11.243,-0.093
+c1_comp,Waves,clean digital,digital,digital,3.0,-3.0,-0.573,2.427,8.723
+c1_comp,Waves,clean digital,digital,digital,3.0,-30.0,-18.699,11.301,-0.151
+c1_comp,Waves,clean digital,digital,digital,3.0,-36.0,-24.725,11.275,-0.125
+c1_comp,Waves,clean digital,digital,digital,3.0,-42.0,-30.782,11.218,-0.068
+c1_comp,Waves,clean digital,digital,digital,3.0,-48.0,-36.824,11.176,-0.026
+c1_comp,Waves,clean digital,digital,digital,3.0,-54.0,-42.85,11.15,0.0
+c1_comp,Waves,clean digital,digital,digital,3.0,-6.0,-1.347,4.653,6.497
+c1_comp,Waves,clean digital,digital,digital,3.0,-9.0,-2.411,6.589,4.561
+c1_comp,Waves,clean digital,digital,digital,3.0,0.0,-0.003,-0.003,11.153
+c1_comp,Waves,clean digital,digital,digital,6.0,-12.0,-2.439,9.561,5.971
+c1_comp,Waves,clean digital,digital,digital,6.0,-15.0,-3.593,11.407,4.125
+c1_comp,Waves,clean digital,digital,digital,6.0,-18.0,-5.111,12.889,2.643
+c1_comp,Waves,clean digital,digital,digital,6.0,-21.0,-7.004,13.996,1.536
+c1_comp,Waves,clean digital,digital,digital,6.0,-24.0,-9.241,14.759,0.773
+c1_comp,Waves,clean digital,digital,digital,6.0,-27.0,-11.764,15.236,0.296
+c1_comp,Waves,clean digital,digital,digital,6.0,-3.0,-0.498,2.502,13.03
+c1_comp,Waves,clean digital,digital,digital,6.0,-30.0,-14.498,15.502,0.03
+c1_comp,Waves,clean digital,digital,digital,6.0,-36.0,-20.337,15.663,-0.131
+c1_comp,Waves,clean digital,digital,digital,6.0,-42.0,-26.372,15.628,-0.096
+c1_comp,Waves,clean digital,digital,digital,6.0,-48.0,-32.428,15.572,-0.04
+c1_comp,Waves,clean digital,digital,digital,6.0,-54.0,-38.468,15.532,0.0
+c1_comp,Waves,clean digital,digital,digital,6.0,-6.0,-0.981,5.019,10.513
+c1_comp,Waves,clean digital,digital,digital,6.0,-9.0,-1.596,7.404,8.128
+c1_comp,Waves,clean digital,digital,digital,6.0,0.0,-0.053,-0.053,15.585
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,10.0,-12.0,-45.463,-33.463,10.077
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,10.0,-15.0,-46.207,-31.207,7.821
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,10.0,-18.0,-46.882,-28.882,5.496
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,10.0,-21.0,-47.602,-26.602,3.216
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,10.0,-24.0,-48.714,-24.714,1.328
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,10.0,-27.0,-50.664,-23.664,0.278
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,10.0,-3.0,-43.071,-40.071,16.685
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,10.0,-30.0,-53.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,10.0,-36.0,-59.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,10.0,-42.0,-65.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,10.0,-48.0,-71.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,10.0,-54.0,-77.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,10.0,-6.0,-43.85,-37.85,14.464
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,10.0,-9.0,-44.627,-35.627,12.241
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,10.0,0.0,-42.28,-42.28,18.894
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,15.0,-12.0,-50.399,-38.399,15.013
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,15.0,-15.0,-51.159,-36.159,12.773
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,15.0,-18.0,-51.998,-33.998,10.612
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,15.0,-21.0,-52.76,-31.76,8.374
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,15.0,-24.0,-53.45,-29.45,6.064
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,15.0,-27.0,-54.143,-27.143,3.757
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,15.0,-3.0,-48.109,-45.109,21.723
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,15.0,-30.0,-55.115,-25.115,1.729
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,15.0,-36.0,-59.391,-23.391,0.005
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,15.0,-42.0,-65.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,15.0,-48.0,-71.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,15.0,-54.0,-77.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,15.0,-6.0,-48.832,-42.832,19.446
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,15.0,-9.0,-49.607,-40.607,17.221
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,15.0,0.0,-47.376,-47.376,23.99
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,3.0,-12.0,-38.542,-26.542,3.156
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,3.0,-15.0,-39.676,-24.676,1.29
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,3.0,-18.0,-41.642,-23.642,0.256
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,3.0,-21.0,-44.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,3.0,-24.0,-47.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,3.0,-27.0,-50.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,3.0,-3.0,-36.4,-33.4,10.014
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,3.0,-30.0,-53.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,3.0,-36.0,-59.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,3.0,-42.0,-65.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,3.0,-48.0,-71.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,3.0,-54.0,-77.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,3.0,-6.0,-37.142,-31.142,7.756
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,3.0,-9.0,-37.816,-28.816,5.43
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,3.0,0.0,-35.567,-35.567,12.181
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,6.0,-12.0,-41.353,-29.353,5.967
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,6.0,-15.0,-42.048,-27.048,3.662
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,6.0,-18.0,-43.038,-25.038,1.652
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,6.0,-21.0,-44.83,-23.83,0.444
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,6.0,-24.0,-47.387,-23.387,0.001
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,6.0,-27.0,-50.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,6.0,-3.0,-39.065,-36.065,12.679
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,6.0,-30.0,-53.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,6.0,-36.0,-59.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,6.0,-42.0,-65.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,6.0,-48.0,-71.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,6.0,-54.0,-77.386,-23.386,0.0
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,6.0,-6.0,-39.906,-33.906,10.52
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,6.0,-9.0,-40.666,-31.666,8.28
+cla3a,Waves,UREI LA-3A,opto-la2a,opto,6.0,0.0,-38.303,-38.303,14.917
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,10.0,-12.0,-24.701,-12.701,9.742
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,10.0,-15.0,-25.449,-10.449,7.49
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,10.0,-18.0,-26.172,-8.172,5.213
@@ -194,36 +914,36 @@ dbx160,UAD,dbx 160 VU,vca-dbx160,vca,10.0,-54.0,-56.959,-2.959,0.0
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,10.0,-6.0,-23.162,-17.162,14.203
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,10.0,-9.0,-23.935,-14.935,11.976
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,10.0,0.0,-21.641,-21.641,18.682
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-12.0,-28.419,-16.419,13.46
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-15.0,-29.18,-14.18,11.221
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-18.0,-29.914,-11.914,8.955
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-21.0,-30.618,-9.618,6.659
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-24.0,-31.292,-7.292,4.333
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-27.0,-31.941,-4.941,1.982
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-3.0,-26.043,-23.043,20.084
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-30.0,-32.959,-2.959,0.0
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-12.0,-29.963,-17.963,15.004
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-15.0,-30.731,-15.731,12.772
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-18.0,-31.471,-13.471,10.512
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-21.0,-32.18,-11.18,8.221
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-24.0,-32.858,-8.858,5.899
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-27.0,-33.509,-6.509,3.55
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-3.0,-27.549,-24.549,21.59
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-30.0,-34.139,-4.139,1.18
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-36.0,-38.959,-2.959,0.0
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-42.0,-44.959,-2.959,0.0
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-48.0,-50.959,-2.959,0.0
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-54.0,-56.959,-2.959,0.0
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-6.0,-26.841,-20.841,17.882
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-9.0,-27.636,-18.636,15.677
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,0.0,-25.256,-25.256,22.297
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-12.0,-17.211,-5.211,2.252
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-15.0,-17.959,-2.959,0.0
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-6.0,-28.363,-22.363,19.404
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,-9.0,-29.17,-20.17,17.211
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,15.0,0.0,-26.742,-26.742,23.783
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-12.0,-17.954,-5.954,2.995
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-15.0,-18.689,-3.689,0.73
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-18.0,-20.959,-2.959,0.0
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-21.0,-23.959,-2.959,0.0
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-24.0,-26.959,-2.959,0.0
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-27.0,-29.959,-2.959,0.0
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-3.0,-14.975,-11.975,9.016
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-3.0,-15.713,-12.713,9.754
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-30.0,-32.959,-2.959,0.0
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-36.0,-38.959,-2.959,0.0
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-42.0,-44.959,-2.959,0.0
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-48.0,-50.959,-2.959,0.0
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-54.0,-56.959,-2.959,0.0
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-6.0,-15.714,-9.714,6.755
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-9.0,-16.464,-7.464,4.505
-dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,0.0,-14.265,-14.265,11.306
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-6.0,-16.454,-10.454,7.495
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,-9.0,-17.206,-8.206,5.247
+dbx160,UAD,dbx 160 VU,vca-dbx160,vca,3.0,0.0,-15.0,-15.0,12.041
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,6.0,-12.0,-20.963,-8.963,6.004
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,6.0,-15.0,-21.702,-6.702,3.743
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,6.0,-18.0,-22.419,-4.419,1.46
@@ -239,6 +959,1026 @@ dbx160,UAD,dbx 160 VU,vca-dbx160,vca,6.0,-54.0,-56.959,-2.959,0.0
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,6.0,-6.0,-19.449,-13.449,10.49
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,6.0,-9.0,-20.208,-11.208,8.249
 dbx160,UAD,dbx 160 VU,vca-dbx160,vca,6.0,0.0,-17.971,-17.971,15.012
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,10.0,-12.0,-23.072,-11.072,10.156
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,10.0,-15.0,-23.615,-8.615,7.699
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,10.0,-18.0,-24.256,-6.256,5.34
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,10.0,-21.0,-25.032,-4.032,3.116
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,10.0,-24.0,-26.101,-2.101,1.185
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,10.0,-27.0,-28.061,-1.061,0.145
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,10.0,-3.0,-21.644,-18.644,17.728
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,10.0,-30.0,-30.922,-0.922,0.006
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,10.0,-36.0,-36.916,-0.916,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,10.0,-42.0,-42.916,-0.916,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,10.0,-48.0,-48.916,-0.916,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,10.0,-54.0,-54.916,-0.916,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,10.0,-6.0,-22.091,-16.091,15.175
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,10.0,-9.0,-22.562,-13.562,12.646
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,10.0,0.0,-21.158,-21.158,20.242
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,15.0,-12.0,-22.21,-10.21,14.983
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,15.0,-15.0,-22.666,-7.666,12.439
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,15.0,-18.0,-23.164,-5.164,9.937
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,15.0,-21.0,-23.704,-2.704,7.477
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,15.0,-24.0,-24.35,-0.35,5.123
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,15.0,-27.0,-25.134,1.866,2.907
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,15.0,-3.0,-20.701,-17.701,22.474
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,15.0,-30.0,-26.26,3.74,1.033
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,15.0,-36.0,-31.232,4.768,0.005
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,15.0,-42.0,-37.227,4.773,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,15.0,-48.0,-43.227,4.773,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,15.0,-54.0,-49.227,4.773,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,15.0,-6.0,-21.344,-15.344,20.117
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,15.0,-9.0,-21.788,-12.788,17.561
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,15.0,0.0,-19.945,-19.945,24.718
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,3.0,-12.0,-24.966,-12.966,3.079
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,3.0,-15.0,-26.054,-11.054,1.167
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,3.0,-18.0,-28.029,-10.029,0.142
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,3.0,-21.0,-30.894,-9.894,0.007
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,3.0,-24.0,-33.888,-9.888,0.001
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,3.0,-27.0,-36.887,-9.887,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,3.0,-3.0,-22.916,-19.916,10.029
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,3.0,-30.0,-39.887,-9.887,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,3.0,-36.0,-45.887,-9.887,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,3.0,-42.0,-51.887,-9.887,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,3.0,-48.0,-57.887,-9.887,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,3.0,-54.0,-63.887,-9.887,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,3.0,-6.0,-23.499,-17.499,7.612
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,3.0,-9.0,-24.169,-15.169,5.282
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,3.0,0.0,-22.353,-22.353,12.466
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,6.0,-12.0,-23.888,-11.888,6.464
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,6.0,-15.0,-24.603,-9.603,4.179
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,6.0,-18.0,-25.474,-7.474,2.05
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,6.0,-21.0,-26.928,-5.928,0.504
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,6.0,-24.0,-29.453,-5.453,0.029
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,6.0,-27.0,-32.426,-5.426,0.002
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,6.0,-3.0,-22.234,-19.234,13.81
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,6.0,-30.0,-35.424,-5.424,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,6.0,-36.0,-41.424,-5.424,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,6.0,-42.0,-47.424,-5.424,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,6.0,-48.0,-53.424,-5.424,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,6.0,-54.0,-59.424,-5.424,0.0
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,6.0,-6.0,-22.754,-16.754,11.33
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,6.0,-9.0,-23.291,-14.291,8.867
+distressor,UAD,Empirical Labs Distressor,fet-other,fet,6.0,0.0,-21.748,-21.748,16.324
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,10.0,-12.0,-11.038,0.962,10.108
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,10.0,-15.0,-11.474,3.526,7.544
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,10.0,-18.0,-12.011,5.989,5.081
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,10.0,-21.0,-12.719,8.281,2.789
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,10.0,-24.0,-13.786,10.214,0.856
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,10.0,-27.0,-15.926,11.074,-0.004
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,10.0,-3.0,-10.15,-7.15,18.22
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,10.0,-30.0,-18.928,11.072,-0.002
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,10.0,-36.0,-24.929,11.071,-0.001
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,10.0,-42.0,-30.93,11.07,0.0
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,10.0,-48.0,-36.93,11.07,0.0
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,10.0,-54.0,-42.93,11.07,0.0
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,10.0,-6.0,-10.383,-4.383,15.453
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,10.0,-9.0,-10.678,-1.678,12.748
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,10.0,0.0,-10.0,-10.0,21.07
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,15.0,-12.0,-15.735,-3.735,14.805
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,15.0,-15.0,-16.065,-1.065,12.135
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,15.0,-18.0,-16.451,1.549,9.521
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,15.0,-21.0,-16.911,4.089,6.981
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,15.0,-24.0,-17.48,6.52,4.55
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,15.0,-27.0,-18.244,8.756,2.314
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,15.0,-3.0,-15.02,-12.02,23.09
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,15.0,-30.0,-19.449,10.551,0.519
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,15.0,-36.0,-24.929,11.071,-0.001
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,15.0,-42.0,-30.93,11.07,0.0
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,15.0,-48.0,-36.93,11.07,0.0
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,15.0,-54.0,-42.93,11.07,0.0
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,15.0,-6.0,-15.204,-9.204,20.274
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,15.0,-9.0,-15.447,-6.447,17.517
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,15.0,0.0,-14.989,-14.989,26.059
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,3.0,-12.0,-4.037,7.963,3.107
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,3.0,-15.0,-5.021,9.979,1.091
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,3.0,-18.0,-6.901,11.099,-0.029
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,3.0,-21.0,-9.914,11.086,-0.016
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,3.0,-24.0,-12.922,11.078,-0.008
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,3.0,-27.0,-15.926,11.074,-0.004
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,3.0,-3.0,-2.497,0.503,10.567
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,3.0,-30.0,-18.928,11.072,-0.002
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,3.0,-36.0,-24.929,11.071,-0.001
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,3.0,-42.0,-30.93,11.07,0.0
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,3.0,-48.0,-36.93,11.07,0.0
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,3.0,-54.0,-42.93,11.07,0.0
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,3.0,-6.0,-2.874,3.126,7.944
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,3.0,-9.0,-3.371,5.629,5.441
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,3.0,0.0,-2.234,-2.234,13.304
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,6.0,-12.0,-7.324,4.676,6.394
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,6.0,-15.0,-7.923,7.077,3.993
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,6.0,-18.0,-8.757,9.243,1.827
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,6.0,-21.0,-10.149,10.851,0.219
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,6.0,-24.0,-12.922,11.078,-0.008
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,6.0,-27.0,-15.926,11.074,-0.004
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,6.0,-3.0,-6.193,-3.193,14.263
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,6.0,-30.0,-18.928,11.072,-0.002
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,6.0,-36.0,-24.929,11.071,-0.001
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,6.0,-42.0,-30.93,11.07,0.0
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,6.0,-48.0,-36.93,11.07,0.0
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,6.0,-54.0,-42.93,11.07,0.0
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,6.0,-6.0,-6.482,-0.482,11.552
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,6.0,-9.0,-6.855,2.145,8.925
+fairchild660,UAD,Fairchild 660 mono,varimu-fairchild,vari-mu,6.0,0.0,-5.991,-5.991,17.061
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,10.0,-12.0,-20.919,-8.919,10.439
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,10.0,-15.0,-21.556,-6.556,8.076
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,10.0,-18.0,-22.318,-4.318,5.838
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,10.0,-21.0,-23.264,-2.264,3.784
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,10.0,-24.0,-24.483,-0.483,2.003
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,10.0,-27.0,-26.138,0.862,0.658
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,10.0,-3.0,-19.392,-16.392,17.912
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,10.0,-30.0,-28.501,1.499,0.021
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,10.0,-36.0,-34.479,1.521,-0.001
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,10.0,-42.0,-40.479,1.521,-0.001
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,10.0,-48.0,-46.479,1.521,-0.001
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,10.0,-54.0,-52.48,1.52,0.0
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,10.0,-6.0,-19.847,-13.847,15.367
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,10.0,-9.0,-20.357,-11.357,12.877
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,10.0,0.0,-19.018,-19.018,20.538
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,15.0,-12.0,-22.493,-10.493,12.013
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,15.0,-15.0,-23.078,-8.078,9.598
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,15.0,-18.0,-23.753,-5.753,7.273
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,15.0,-21.0,-24.573,-3.573,5.093
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,15.0,-24.0,-25.602,-1.602,3.122
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,15.0,-27.0,-26.949,0.051,1.469
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,15.0,-3.0,-21.063,-18.063,19.583
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,15.0,-30.0,-28.818,1.182,0.338
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,15.0,-36.0,-34.479,1.521,-0.001
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,15.0,-42.0,-40.479,1.521,-0.001
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,15.0,-48.0,-46.479,1.521,-0.001
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,15.0,-54.0,-52.48,1.52,0.0
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,15.0,-6.0,-21.483,-15.483,17.003
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,15.0,-9.0,-21.963,-12.963,14.483
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,15.0,0.0,-20.737,-20.737,22.257
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,3.0,-12.0,-13.376,-1.376,2.896
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,3.0,-15.0,-14.773,0.227,1.293
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,3.0,-18.0,-16.725,1.275,0.245
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,3.0,-21.0,-19.475,1.525,-0.005
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,3.0,-24.0,-22.477,1.523,-0.003
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,3.0,-27.0,-25.478,1.522,-0.002
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,3.0,-3.0,-10.795,-7.795,9.315
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,3.0,-30.0,-28.479,1.521,-0.001
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,3.0,-36.0,-34.479,1.521,-0.001
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,3.0,-42.0,-40.479,1.521,-0.001
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,3.0,-48.0,-46.479,1.521,-0.001
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,3.0,-54.0,-52.48,1.52,0.0
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,3.0,-6.0,-11.477,-5.477,6.997
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,3.0,-9.0,-12.316,-3.316,4.836
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,3.0,0.0,-10.216,-10.216,11.736
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,6.0,-12.0,-16.27,-4.27,5.79
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,6.0,-15.0,-17.221,-2.221,3.741
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,6.0,-18.0,-18.447,-0.447,1.967
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,6.0,-21.0,-20.114,0.886,0.634
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,6.0,-24.0,-22.495,1.505,0.015
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,6.0,-27.0,-25.478,1.522,-0.002
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,6.0,-3.0,-14.315,-11.315,12.835
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,6.0,-30.0,-28.479,1.521,-0.001
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,6.0,-36.0,-34.479,1.521,-0.001
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,6.0,-42.0,-40.479,1.521,-0.001
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,6.0,-48.0,-46.479,1.521,-0.001
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,6.0,-54.0,-52.48,1.52,0.0
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,6.0,-6.0,-14.871,-8.871,10.391
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,6.0,-9.0,-15.506,-6.506,8.026
+fairchild670,UAD,Fairchild 670 stereo,varimu-fairchild,vari-mu,6.0,0.0,-13.821,-13.821,15.341
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,10.0,-12.0,-18.871,-6.871,10.032
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,10.0,-15.0,-19.638,-4.638,7.799
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,10.0,-18.0,-20.418,-2.418,5.579
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,10.0,-21.0,-21.215,-0.215,3.376
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,10.0,-24.0,-22.073,1.927,1.234
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,10.0,-27.0,-23.839,3.161,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,10.0,-3.0,-16.594,-13.594,16.755
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,10.0,-30.0,-26.839,3.161,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,10.0,-36.0,-32.839,3.161,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,10.0,-42.0,-38.839,3.161,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,10.0,-48.0,-44.839,3.161,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,10.0,-54.0,-50.839,3.161,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,10.0,-6.0,-17.35,-11.35,14.511
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,10.0,-9.0,-18.107,-9.107,12.268
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,10.0,0.0,-15.841,-15.841,19.002
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,15.0,-12.0,-21.546,-9.546,15.198
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,15.0,-15.0,-22.309,-7.309,12.961
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,15.0,-18.0,-23.079,-5.079,10.731
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,15.0,-21.0,-23.857,-2.857,8.509
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,15.0,-24.0,-24.648,-0.648,6.3
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,15.0,-27.0,-25.459,1.541,4.111
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,15.0,-3.0,-19.279,-16.279,21.931
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,15.0,-30.0,-26.317,3.683,1.969
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,15.0,-36.0,-30.348,5.652,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,15.0,-42.0,-36.348,5.652,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,15.0,-48.0,-42.348,5.652,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,15.0,-54.0,-48.348,5.652,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,15.0,-6.0,-20.028,-14.028,19.68
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,15.0,-9.0,-20.788,-11.788,17.44
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,15.0,0.0,-18.518,-18.518,24.17
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,3.0,-12.0,-15.231,-3.231,2.964
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,3.0,-15.0,-16.099,-1.099,0.832
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,3.0,-18.0,-18.267,-0.267,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,3.0,-21.0,-21.267,-0.267,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,3.0,-24.0,-24.267,-0.267,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,3.0,-27.0,-27.267,-0.267,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,3.0,-3.0,-12.909,-9.909,9.642
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,3.0,-30.0,-30.267,-0.267,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,3.0,-36.0,-36.267,-0.267,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,3.0,-42.0,-42.267,-0.267,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,3.0,-48.0,-48.267,-0.267,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,3.0,-54.0,-54.267,-0.267,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,3.0,-6.0,-13.671,-7.671,7.404
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,3.0,-9.0,-14.441,-5.441,5.174
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,3.0,0.0,-12.151,-12.151,11.884
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,6.0,-12.0,-16.903,-4.903,6.223
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,6.0,-15.0,-17.685,-2.685,4.005
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,6.0,-18.0,-18.504,-0.504,1.824
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,6.0,-21.0,-19.688,1.312,0.008
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,6.0,-24.0,-22.68,1.32,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,6.0,-27.0,-25.68,1.32,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,6.0,-3.0,-14.615,-11.615,12.935
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,6.0,-30.0,-28.68,1.32,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,6.0,-36.0,-34.68,1.32,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,6.0,-42.0,-40.68,1.32,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,6.0,-48.0,-46.68,1.32,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,6.0,-54.0,-52.68,1.32,0.0
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,6.0,-6.0,-15.372,-9.372,10.692
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,6.0,-9.0,-16.133,-7.133,8.453
+h_comp,Waves,"hybrid, analogue-modelled",digital,hybrid,6.0,0.0,-13.857,-13.857,15.177
+kh_comp,Kilohearts,clean digital,digital,digital,10.0,-12.0,-24.088,-12.088,9.078
+kh_comp,Kilohearts,clean digital,digital,digital,10.0,-15.0,-25.589,-10.589,7.579
+kh_comp,Kilohearts,clean digital,digital,digital,10.0,-18.0,-27.09,-9.09,6.08
+kh_comp,Kilohearts,clean digital,digital,digital,10.0,-21.0,-28.592,-7.592,4.582
+kh_comp,Kilohearts,clean digital,digital,digital,10.0,-24.0,-30.095,-6.095,3.085
+kh_comp,Kilohearts,clean digital,digital,digital,10.0,-27.0,-31.598,-4.598,1.588
+kh_comp,Kilohearts,clean digital,digital,digital,10.0,-3.0,-19.587,-16.587,13.577
+kh_comp,Kilohearts,clean digital,digital,digital,10.0,-30.0,-33.11,-3.11,0.1
+kh_comp,Kilohearts,clean digital,digital,digital,10.0,-36.0,-39.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,10.0,-42.0,-45.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,10.0,-48.0,-51.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,10.0,-54.0,-57.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,10.0,-6.0,-21.087,-15.087,12.077
+kh_comp,Kilohearts,clean digital,digital,digital,10.0,-9.0,-22.588,-13.588,10.578
+kh_comp,Kilohearts,clean digital,digital,digital,10.0,0.0,-18.087,-18.087,15.077
+kh_comp,Kilohearts,clean digital,digital,digital,15.0,-12.0,-24.088,-12.088,9.078
+kh_comp,Kilohearts,clean digital,digital,digital,15.0,-15.0,-25.589,-10.589,7.579
+kh_comp,Kilohearts,clean digital,digital,digital,15.0,-18.0,-27.09,-9.09,6.08
+kh_comp,Kilohearts,clean digital,digital,digital,15.0,-21.0,-28.592,-7.592,4.582
+kh_comp,Kilohearts,clean digital,digital,digital,15.0,-24.0,-30.095,-6.095,3.085
+kh_comp,Kilohearts,clean digital,digital,digital,15.0,-27.0,-31.598,-4.598,1.588
+kh_comp,Kilohearts,clean digital,digital,digital,15.0,-3.0,-19.587,-16.587,13.577
+kh_comp,Kilohearts,clean digital,digital,digital,15.0,-30.0,-33.11,-3.11,0.1
+kh_comp,Kilohearts,clean digital,digital,digital,15.0,-36.0,-39.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,15.0,-42.0,-45.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,15.0,-48.0,-51.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,15.0,-54.0,-57.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,15.0,-6.0,-21.087,-15.087,12.077
+kh_comp,Kilohearts,clean digital,digital,digital,15.0,-9.0,-22.588,-13.588,10.578
+kh_comp,Kilohearts,clean digital,digital,digital,15.0,0.0,-18.087,-18.087,15.077
+kh_comp,Kilohearts,clean digital,digital,digital,3.0,-12.0,-17.188,-5.188,2.178
+kh_comp,Kilohearts,clean digital,digital,digital,3.0,-15.0,-18.689,-3.689,0.679
+kh_comp,Kilohearts,clean digital,digital,digital,3.0,-18.0,-21.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,3.0,-21.0,-24.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,3.0,-24.0,-27.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,3.0,-27.0,-30.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,3.0,-3.0,-12.687,-9.687,6.677
+kh_comp,Kilohearts,clean digital,digital,digital,3.0,-30.0,-33.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,3.0,-36.0,-39.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,3.0,-42.0,-45.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,3.0,-48.0,-51.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,3.0,-54.0,-57.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,3.0,-6.0,-14.187,-8.187,5.177
+kh_comp,Kilohearts,clean digital,digital,digital,3.0,-9.0,-15.688,-6.688,3.678
+kh_comp,Kilohearts,clean digital,digital,digital,3.0,0.0,-11.187,-11.187,8.177
+kh_comp,Kilohearts,clean digital,digital,digital,6.0,-12.0,-21.788,-9.788,6.778
+kh_comp,Kilohearts,clean digital,digital,digital,6.0,-15.0,-23.289,-8.289,5.279
+kh_comp,Kilohearts,clean digital,digital,digital,6.0,-18.0,-24.79,-6.79,3.78
+kh_comp,Kilohearts,clean digital,digital,digital,6.0,-21.0,-26.292,-5.292,2.282
+kh_comp,Kilohearts,clean digital,digital,digital,6.0,-24.0,-27.795,-3.795,0.785
+kh_comp,Kilohearts,clean digital,digital,digital,6.0,-27.0,-30.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,6.0,-3.0,-17.287,-14.287,11.277
+kh_comp,Kilohearts,clean digital,digital,digital,6.0,-30.0,-33.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,6.0,-36.0,-39.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,6.0,-42.0,-45.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,6.0,-48.0,-51.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,6.0,-54.0,-57.01,-3.01,0.0
+kh_comp,Kilohearts,clean digital,digital,digital,6.0,-6.0,-18.787,-12.787,9.777
+kh_comp,Kilohearts,clean digital,digital,digital,6.0,-9.0,-20.287,-11.287,8.277
+kh_comp,Kilohearts,clean digital,digital,digital,6.0,0.0,-15.786,-15.786,12.776
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,10.0,-12.0,-25.116,-13.116,10.106
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,10.0,-15.0,-25.642,-10.642,7.632
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,10.0,-18.0,-26.205,-8.205,5.195
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,10.0,-21.0,-26.832,-5.832,2.822
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,10.0,-24.0,-27.609,-3.609,0.599
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,10.0,-27.0,-30.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,10.0,-3.0,-23.654,-20.654,17.644
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,10.0,-30.0,-33.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,10.0,-36.0,-39.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,10.0,-42.0,-45.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,10.0,-48.0,-51.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,10.0,-54.0,-57.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,10.0,-6.0,-24.129,-18.129,15.119
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,10.0,-9.0,-24.615,-15.615,12.605
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,10.0,0.0,-23.187,-23.187,20.177
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,15.0,-12.0,-30.045,-18.045,15.035
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,15.0,-15.0,-30.531,-15.531,12.521
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,15.0,-18.0,-31.033,-13.033,10.023
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,15.0,-21.0,-31.56,-10.56,7.55
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,15.0,-24.0,-32.124,-8.124,5.114
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,15.0,-27.0,-32.754,-5.754,2.744
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,15.0,-3.0,-28.639,-25.639,22.629
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,15.0,-30.0,-33.541,-3.541,0.531
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,15.0,-36.0,-39.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,15.0,-42.0,-45.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,15.0,-48.0,-51.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,15.0,-54.0,-57.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,15.0,-6.0,-29.102,-23.102,20.092
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,15.0,-9.0,-29.57,-20.57,17.56
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,15.0,0.0,-28.18,-28.18,25.17
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,3.0,-12.0,-18.026,-6.026,3.016
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,3.0,-15.0,-18.782,-3.782,0.772
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,3.0,-18.0,-21.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,3.0,-21.0,-24.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,3.0,-24.0,-27.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,3.0,-27.0,-30.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,3.0,-3.0,-16.324,-13.324,10.314
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,3.0,-30.0,-33.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,3.0,-36.0,-39.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,3.0,-42.0,-45.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,3.0,-48.0,-51.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,3.0,-54.0,-57.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,3.0,-6.0,-16.847,-10.847,7.837
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,3.0,-9.0,-17.406,-8.406,5.396
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,3.0,0.0,-15.824,-15.824,12.814
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,6.0,-12.0,-21.012,-9.012,6.002
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,6.0,-15.0,-21.613,-6.613,3.603
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,6.0,-18.0,-22.32,-4.32,1.31
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,6.0,-21.0,-24.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,6.0,-24.0,-27.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,6.0,-27.0,-30.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,6.0,-3.0,-19.452,-16.452,13.442
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,6.0,-30.0,-33.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,6.0,-36.0,-39.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,6.0,-42.0,-45.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,6.0,-48.0,-51.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,6.0,-54.0,-57.01,-3.01,0.0
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,6.0,-6.0,-19.947,-13.947,10.937
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,6.0,-9.0,-20.463,-11.463,8.453
+kotelnikov,Tokyo Dawn,"clean digital, states its times",digital,digital,6.0,0.0,-18.97,-18.97,15.96
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,10.0,-12.0,-14.873,-2.873,10.973
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,10.0,-15.0,-15.43,-0.43,8.53
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,10.0,-18.0,-16.047,1.953,6.147
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,10.0,-21.0,-16.772,4.228,3.872
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,10.0,-24.0,-17.727,6.273,1.827
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,10.0,-27.0,-19.277,7.723,0.377
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,10.0,-3.0,-13.324,-10.324,18.424
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,10.0,-30.0,-21.903,8.097,0.003
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,10.0,-36.0,-27.899,8.101,-0.001
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,10.0,-42.0,-33.9,8.1,0.0
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,10.0,-48.0,-39.9,8.1,0.0
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,10.0,-54.0,-45.9,8.1,0.0
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,10.0,-6.0,-13.843,-7.843,15.943
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,10.0,-9.0,-14.351,-5.351,13.451
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,10.0,0.0,-12.762,-12.762,20.862
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,15.0,-12.0,-20.095,-8.095,16.198
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,15.0,-15.0,-20.601,-5.601,13.704
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,15.0,-18.0,-21.12,-3.12,11.223
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,15.0,-21.0,-21.668,-0.668,8.771
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,15.0,-24.0,-22.275,1.725,6.378
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,15.0,-27.0,-22.988,4.012,4.091
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,15.0,-3.0,-18.384,-15.384,23.487
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,15.0,-30.0,-23.911,6.089,2.014
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,15.0,-36.0,-27.906,8.094,0.009
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,15.0,-42.0,-33.897,8.103,0.0
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,15.0,-48.0,-39.897,8.103,0.0
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,15.0,-54.0,-45.897,8.103,0.0
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,15.0,-6.0,-19.005,-13.005,21.108
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,15.0,-9.0,-19.572,-10.572,18.675
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,15.0,0.0,-17.702,-17.702,25.805
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,3.0,-12.0,-8.518,3.482,4.615
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,3.0,-15.0,-9.379,5.621,2.476
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,3.0,-18.0,-10.672,7.328,0.769
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,3.0,-21.0,-12.951,8.049,0.048
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,3.0,-24.0,-15.904,8.096,0.001
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,3.0,-27.0,-18.899,8.101,-0.004
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,3.0,-3.0,-6.697,-3.697,11.794
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,3.0,-30.0,-21.901,8.099,-0.002
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,3.0,-36.0,-27.902,8.098,-0.001
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,3.0,-42.0,-33.903,8.097,0.0
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,3.0,-48.0,-39.903,8.097,0.0
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,3.0,-54.0,-45.903,8.097,0.0
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,3.0,-6.0,-7.24,-1.24,9.337
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,3.0,-9.0,-7.832,1.168,6.929
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,3.0,0.0,-6.183,-6.183,14.28
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,6.0,-12.0,-8.518,3.482,4.615
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,6.0,-15.0,-9.379,5.621,2.476
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,6.0,-18.0,-10.672,7.328,0.769
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,6.0,-21.0,-12.951,8.049,0.048
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,6.0,-24.0,-15.904,8.096,0.001
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,6.0,-27.0,-18.899,8.101,-0.004
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,6.0,-3.0,-6.697,-3.697,11.794
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,6.0,-30.0,-21.901,8.099,-0.002
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,6.0,-36.0,-27.902,8.098,-0.001
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,6.0,-42.0,-33.903,8.097,0.0
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,6.0,-48.0,-39.903,8.097,0.0
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,6.0,-54.0,-45.903,8.097,0.0
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,6.0,-6.0,-7.24,-1.24,9.337
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,6.0,-9.0,-7.832,1.168,6.929
+la2a,UAD,Teletronix LA-2A,opto-la2a,opto,6.0,0.0,-6.183,-6.183,14.28
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,10.0,-12.0,-24.918,-12.918,9.908
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,10.0,-15.0,-25.895,-10.895,7.885
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,10.0,-18.0,-26.794,-8.794,5.784
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,10.0,-21.0,-27.575,-6.575,3.565
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,10.0,-24.0,-28.76,-4.76,1.75
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,10.0,-27.0,-30.819,-3.819,0.809
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,10.0,-3.0,-22.335,-19.335,16.325
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,10.0,-30.0,-33.361,-3.361,0.351
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,10.0,-36.0,-39.08,-3.08,0.07
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,10.0,-42.0,-45.027,-3.027,0.017
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,10.0,-48.0,-51.014,-3.014,0.004
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,10.0,-54.0,-57.01,-3.01,0.0
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,10.0,-6.0,-23.089,-17.089,14.079
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,10.0,-9.0,-23.957,-14.957,11.947
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,10.0,0.0,-21.606,-21.606,18.596
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,15.0,-12.0,-29.999,-17.999,14.985
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,15.0,-15.0,-31.005,-16.005,12.991
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,15.0,-18.0,-31.938,-13.938,10.924
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,15.0,-21.0,-32.723,-11.723,8.709
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,15.0,-24.0,-33.293,-9.293,6.279
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,15.0,-27.0,-33.659,-6.659,3.645
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,15.0,-3.0,-27.318,-24.318,21.304
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,15.0,-30.0,-34.631,-4.631,1.617
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,15.0,-36.0,-39.313,-3.313,0.299
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,15.0,-42.0,-45.082,-3.082,0.068
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,15.0,-48.0,-51.028,-3.028,0.014
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,15.0,-54.0,-57.014,-3.014,0.0
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,15.0,-6.0,-28.105,-22.105,19.091
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,15.0,-9.0,-29.008,-20.008,16.994
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,15.0,0.0,-26.582,-26.582,23.568
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,3.0,-12.0,-17.577,-5.577,2.568
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,3.0,-15.0,-19.168,-4.168,1.159
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,3.0,-18.0,-21.53,-3.53,0.521
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,3.0,-21.0,-24.24,-3.24,0.231
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,3.0,-24.0,-27.116,-3.116,0.107
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,3.0,-27.0,-30.059,-3.059,0.05
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,3.0,-3.0,-15.11,-12.11,9.101
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,3.0,-30.0,-33.032,-3.032,0.023
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,3.0,-36.0,-39.014,-3.014,0.005
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,3.0,-42.0,-45.01,-3.01,0.001
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,3.0,-48.0,-51.009,-3.009,0.0
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,3.0,-54.0,-57.009,-3.009,0.0
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,3.0,-6.0,-15.801,-9.801,6.792
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,3.0,-9.0,-16.616,-7.616,4.607
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,3.0,0.0,-14.443,-14.443,11.434
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,6.0,-12.0,-21.245,-9.245,6.236
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,6.0,-15.0,-22.2,-7.2,4.191
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,6.0,-18.0,-23.226,-5.226,2.217
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,6.0,-21.0,-25.06,-4.06,1.051
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,6.0,-24.0,-27.488,-3.488,0.479
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,6.0,-27.0,-30.22,-3.22,0.211
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,6.0,-3.0,-18.741,-15.741,12.732
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,6.0,-30.0,-33.105,-3.105,0.096
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,6.0,-36.0,-39.029,-3.029,0.02
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,6.0,-42.0,-45.014,-3.014,0.005
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,6.0,-48.0,-51.01,-3.01,0.001
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,6.0,-54.0,-57.009,-3.009,0.0
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,6.0,-6.0,-19.465,-13.465,10.456
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,6.0,-9.0,-20.307,-11.307,8.298
+molotok,Tokyo Dawn,digital with a modelled character,digital,digital,6.0,0.0,-18.04,-18.04,15.031
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,10.0,-12.0,-25.043,-13.043,10.033
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,10.0,-15.0,-25.73,-10.73,7.72
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,10.0,-18.0,-26.64,-8.64,5.63
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,10.0,-21.0,-27.858,-6.858,3.848
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,10.0,-24.0,-29.435,-5.435,2.425
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,10.0,-27.0,-31.38,-4.38,1.37
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,10.0,-3.0,-23.335,-20.335,17.325
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,10.0,-30.0,-33.661,-3.661,0.651
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,10.0,-36.0,-39.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,10.0,-42.0,-45.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,10.0,-48.0,-51.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,10.0,-54.0,-57.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,10.0,-6.0,-23.942,-17.942,14.932
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,10.0,-9.0,-24.481,-15.481,12.471
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,10.0,0.0,-22.588,-22.588,19.578
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,15.0,-12.0,-30.023,-18.023,15.013
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,15.0,-15.0,-30.563,-15.563,12.553
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,15.0,-18.0,-31.123,-13.123,10.113
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,15.0,-21.0,-31.804,-10.804,7.794
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,15.0,-24.0,-32.705,-8.705,5.695
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,15.0,-27.0,-33.912,-6.912,3.902
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,15.0,-3.0,-27.705,-24.705,21.695
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,15.0,-30.0,-35.476,-5.476,2.466
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,15.0,-36.0,-39.68,-3.68,0.67
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,15.0,-42.0,-45.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,15.0,-48.0,-51.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,15.0,-54.0,-57.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,15.0,-6.0,-28.66,-22.66,19.65
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,15.0,-9.0,-29.414,-20.414,17.404
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,15.0,0.0,-26.51,-26.51,23.5
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,3.0,-12.0,-18.147,-6.147,3.137
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,3.0,-15.0,-19.898,-4.898,1.888
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,3.0,-18.0,-22.006,-4.006,0.996
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,3.0,-21.0,-24.423,-3.423,0.413
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,3.0,-24.0,-27.081,-3.081,0.071
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,3.0,-27.0,-30.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,3.0,-3.0,-14.942,-11.942,8.932
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,3.0,-30.0,-33.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,3.0,-36.0,-39.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,3.0,-42.0,-45.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,3.0,-48.0,-51.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,3.0,-54.0,-57.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,3.0,-6.0,-15.721,-9.721,6.711
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,3.0,-9.0,-16.766,-7.766,4.756
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,3.0,0.0,-14.335,-14.335,11.325
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,6.0,-12.0,-21.036,-9.036,6.026
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,6.0,-15.0,-22.187,-7.187,4.177
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,6.0,-18.0,-23.69,-5.69,2.68
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,6.0,-21.0,-25.563,-4.563,1.553
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,6.0,-24.0,-27.78,-3.78,0.77
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,6.0,-27.0,-30.286,-3.286,0.276
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,6.0,-3.0,-18.974,-15.974,12.964
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,6.0,-30.0,-33.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,6.0,-36.0,-39.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,6.0,-42.0,-45.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,6.0,-48.0,-51.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,6.0,-54.0,-57.01,-3.01,0.0
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,6.0,-6.0,-19.524,-13.524,10.514
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,6.0,-9.0,-20.178,-11.178,8.168
+rcomp,Waves,"Renaissance, opto and electro modes",digital,digital,6.0,0.0,-18.429,-18.429,15.419
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,10.0,-12.0,-23.974,-11.974,11.309
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,10.0,-15.0,-24.77,-9.77,9.105
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,10.0,-18.0,-25.57,-7.57,6.905
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,10.0,-21.0,-26.386,-5.386,4.721
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,10.0,-24.0,-27.203,-3.203,2.538
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,10.0,-27.0,-28.136,-1.136,0.471
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,10.0,-3.0,-21.606,-18.606,17.941
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,10.0,-30.0,-30.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,10.0,-36.0,-36.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,10.0,-42.0,-42.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,10.0,-48.0,-48.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,10.0,-54.0,-54.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,10.0,-6.0,-22.383,-16.383,15.718
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,10.0,-9.0,-23.179,-14.179,13.514
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,10.0,0.0,-20.829,-20.829,20.164
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,15.0,-12.0,-26.708,-14.708,14.043
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,15.0,-15.0,-27.503,-12.503,11.838
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,15.0,-18.0,-28.299,-10.299,9.634
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,15.0,-21.0,-29.095,-8.095,7.43
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,15.0,-24.0,-29.91,-5.91,5.245
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,15.0,-27.0,-30.726,-3.726,3.061
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,15.0,-3.0,-24.363,-21.363,20.698
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,15.0,-30.0,-31.62,-1.62,0.955
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,15.0,-36.0,-36.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,15.0,-42.0,-42.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,15.0,-48.0,-48.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,15.0,-54.0,-54.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,15.0,-6.0,-25.139,-19.139,18.474
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,15.0,-9.0,-25.916,-16.916,16.251
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,15.0,0.0,-23.586,-23.586,22.921
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,3.0,-12.0,-15.813,-3.813,3.148
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,3.0,-15.0,-16.701,-1.701,1.036
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,3.0,-18.0,-18.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,3.0,-21.0,-21.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,3.0,-24.0,-24.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,3.0,-27.0,-27.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,3.0,-3.0,-13.387,-10.387,9.722
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,3.0,-30.0,-30.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,3.0,-36.0,-36.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,3.0,-42.0,-42.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,3.0,-48.0,-48.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,3.0,-54.0,-54.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,3.0,-6.0,-14.183,-8.183,7.518
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,3.0,-9.0,-14.998,-5.998,5.333
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,3.0,0.0,-12.592,-12.592,11.927
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,6.0,-12.0,-18.522,-6.522,5.857
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,6.0,-15.0,-19.337,-4.337,3.672
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,6.0,-18.0,-20.189,-2.189,1.524
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,6.0,-21.0,-21.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,6.0,-24.0,-24.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,6.0,-27.0,-27.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,6.0,-3.0,-16.121,-13.121,12.456
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,6.0,-30.0,-30.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,6.0,-36.0,-36.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,6.0,-42.0,-42.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,6.0,-48.0,-48.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,6.0,-54.0,-54.665,-0.665,0.0
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,6.0,-6.0,-16.916,-10.916,10.251
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,6.0,-9.0,-17.712,-8.712,8.047
+solid_bus_comp,Softube,SSL G series bus compressor,vca-sslbus,vca,6.0,0.0,-15.325,-15.325,14.66
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,10.0,-12.0,-18.89,-6.89,9.257
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,10.0,-15.0,-20.097,-5.097,7.464
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,10.0,-18.0,-21.501,-3.501,5.868
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,10.0,-21.0,-23.103,-2.103,4.47
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,10.0,-24.0,-24.903,-0.903,3.27
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,10.0,-27.0,-26.901,0.099,2.268
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,10.0,-3.0,-16.071,-13.071,15.438
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,10.0,-30.0,-29.097,0.903,1.464
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,10.0,-36.0,-34.069,1.931,0.436
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,10.0,-42.0,-39.667,2.333,0.034
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,10.0,-48.0,-45.633,2.367,0.0
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,10.0,-54.0,-51.633,2.367,0.0
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,10.0,-6.0,-16.927,-10.927,13.294
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,10.0,-9.0,-17.853,-8.853,11.22
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,10.0,0.0,-15.265,-15.265,17.632
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,15.0,-12.0,-18.89,-6.89,9.257
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,15.0,-15.0,-20.097,-5.097,7.464
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,15.0,-18.0,-21.501,-3.501,5.868
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,15.0,-21.0,-23.103,-2.103,4.47
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,15.0,-24.0,-24.903,-0.903,3.27
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,15.0,-27.0,-26.901,0.099,2.268
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,15.0,-3.0,-16.071,-13.071,15.438
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,15.0,-30.0,-29.097,0.903,1.464
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,15.0,-36.0,-34.069,1.931,0.436
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,15.0,-42.0,-39.667,2.333,0.034
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,15.0,-48.0,-45.633,2.367,0.0
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,15.0,-54.0,-51.633,2.367,0.0
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,15.0,-6.0,-16.927,-10.927,13.294
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,15.0,-9.0,-17.853,-8.853,11.22
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,15.0,0.0,-15.265,-15.265,17.632
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,3.0,-12.0,-15.415,-3.415,3.271
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,3.0,-15.0,-17.413,-2.413,2.269
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,3.0,-18.0,-19.609,-1.609,1.465
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,3.0,-21.0,-22.002,-1.002,0.858
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,3.0,-24.0,-24.58,-0.58,0.436
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,3.0,-27.0,-27.311,-0.311,0.167
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,3.0,-3.0,-10.608,-7.608,7.464
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,3.0,-30.0,-30.179,-0.179,0.035
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,3.0,-36.0,-36.144,-0.144,0.0
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,3.0,-42.0,-42.144,-0.144,0.0
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,3.0,-48.0,-48.144,-0.144,0.0
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,3.0,-54.0,-54.144,-0.144,0.0
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,3.0,-6.0,-12.013,-6.013,5.869
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,3.0,-9.0,-13.615,-4.615,4.471
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,3.0,0.0,-9.401,-9.401,9.257
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,6.0,-12.0,-16.959,-4.959,5.868
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,6.0,-15.0,-18.562,-3.562,4.471
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,6.0,-18.0,-20.362,-2.362,3.271
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,6.0,-21.0,-22.36,-1.36,2.269
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,6.0,-24.0,-24.555,-0.555,1.464
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,6.0,-27.0,-26.949,0.051,0.858
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,6.0,-3.0,-13.312,-10.312,11.221
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,6.0,-30.0,-29.527,0.473,0.436
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,6.0,-36.0,-35.125,0.875,0.034
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,6.0,-42.0,-41.091,0.909,0.0
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,6.0,-48.0,-47.091,0.909,0.0
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,6.0,-54.0,-53.091,0.909,0.0
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,6.0,-6.0,-14.348,-8.348,9.257
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,6.0,-9.0,-15.555,-6.555,7.464
+solid_dynamics,Softube,SSL 4000 channel dynamics,vca-sslchannel,vca,6.0,0.0,-12.385,-12.385,13.294
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,10.0,-12.0,-24.992,-12.992,10.022
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,10.0,-15.0,-25.86,-10.86,7.89
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,10.0,-18.0,-26.783,-8.783,5.813
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,10.0,-21.0,-27.778,-6.778,3.808
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,10.0,-24.0,-28.875,-4.875,1.905
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,10.0,-27.0,-30.232,-3.232,0.262
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,10.0,-3.0,-22.608,-19.608,16.638
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,10.0,-30.0,-32.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,10.0,-36.0,-38.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,10.0,-42.0,-44.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,10.0,-48.0,-50.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,10.0,-54.0,-56.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,10.0,-6.0,-23.377,-17.377,14.407
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,10.0,-9.0,-24.169,-15.169,12.199
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,10.0,0.0,-21.856,-21.856,18.886
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,15.0,-12.0,-29.935,-17.935,14.965
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,15.0,-15.0,-30.72,-15.72,12.75
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,15.0,-18.0,-31.535,-13.535,10.565
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,15.0,-21.0,-32.391,-11.391,8.421
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,15.0,-24.0,-33.298,-9.298,6.328
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,15.0,-27.0,-34.274,-7.274,4.304
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,15.0,-3.0,-27.673,-24.673,21.703
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,15.0,-30.0,-35.338,-5.338,2.368
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,15.0,-36.0,-38.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,15.0,-42.0,-44.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,15.0,-48.0,-50.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,15.0,-54.0,-56.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,15.0,-6.0,-28.421,-22.421,19.451
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,15.0,-9.0,-29.171,-20.171,17.201
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,15.0,0.0,-26.915,-26.915,23.945
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,3.0,-12.0,-17.817,-5.817,2.847
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,3.0,-15.0,-19.004,-4.004,1.034
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,3.0,-18.0,-20.973,-2.973,0.003
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,3.0,-21.0,-23.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,3.0,-24.0,-26.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,3.0,-27.0,-29.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,3.0,-3.0,-14.93,-11.93,8.96
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,3.0,-30.0,-32.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,3.0,-36.0,-38.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,3.0,-42.0,-44.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,3.0,-48.0,-50.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,3.0,-54.0,-56.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,3.0,-6.0,-15.823,-9.823,6.853
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,3.0,-9.0,-16.78,-7.78,4.81
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,3.0,0.0,-14.085,-14.085,11.115
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,6.0,-12.0,-20.974,-8.974,6.004
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,6.0,-15.0,-21.962,-6.962,3.992
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,6.0,-18.0,-23.046,-5.046,2.076
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,6.0,-21.0,-24.356,-3.356,0.386
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,6.0,-24.0,-26.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,6.0,-27.0,-29.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,6.0,-3.0,-18.374,-15.374,12.404
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,6.0,-30.0,-32.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,6.0,-36.0,-38.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,6.0,-42.0,-44.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,6.0,-48.0,-50.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,6.0,-54.0,-56.97,-2.97,0.0
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,6.0,-6.0,-19.194,-13.194,10.224
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,6.0,-9.0,-20.057,-11.057,8.087
+ssl_gbus,UAD,SSL G series bus compressor,vca-sslbus,vca,6.0,0.0,-17.585,-17.585,14.615
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,10.0,-12.0,-24.54,-12.54,9.53
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,10.0,-15.0,-25.097,-10.097,7.087
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,10.0,-18.0,-25.685,-7.685,4.675
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,10.0,-21.0,-26.314,-5.314,2.304
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,10.0,-24.0,-27.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,10.0,-27.0,-30.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,10.0,-3.0,-23.038,-20.038,17.028
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,10.0,-30.0,-33.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,10.0,-36.0,-39.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,10.0,-42.0,-45.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,10.0,-48.0,-51.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,10.0,-54.0,-57.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,10.0,-6.0,-23.513,-17.513,14.503
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,10.0,-9.0,-24.012,-15.012,12.002
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,10.0,0.0,-22.584,-22.584,19.574
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,15.0,-12.0,-30.003,-18.003,14.993
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,15.0,-15.0,-30.496,-15.496,12.486
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,15.0,-18.0,-31.019,-13.019,10.009
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,15.0,-21.0,-31.57,-10.57,7.56
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,15.0,-24.0,-32.151,-8.151,5.141
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,15.0,-27.0,-32.772,-5.772,2.762
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,15.0,-3.0,-28.651,-25.651,22.641
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,15.0,-30.0,-33.434,-3.434,0.424
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,15.0,-36.0,-39.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,15.0,-42.0,-45.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,15.0,-48.0,-51.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,15.0,-54.0,-57.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,15.0,-6.0,-29.082,-23.082,20.072
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,15.0,-9.0,-29.532,-20.532,17.522
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,15.0,0.0,-28.238,-28.238,25.228
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,3.0,-12.0,-18.037,-6.037,3.027
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,3.0,-15.0,-18.694,-3.694,0.684
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,3.0,-18.0,-21.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,3.0,-21.0,-24.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,3.0,-24.0,-27.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,3.0,-27.0,-30.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,3.0,-3.0,-16.296,-13.296,10.286
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,3.0,-30.0,-33.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,3.0,-36.0,-39.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,3.0,-42.0,-45.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,3.0,-48.0,-51.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,3.0,-54.0,-57.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,3.0,-6.0,-16.844,-10.844,7.834
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,3.0,-9.0,-17.421,-8.421,5.411
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,3.0,0.0,-15.776,-15.776,12.766
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,6.0,-12.0,-20.976,-8.976,5.966
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,6.0,-15.0,-21.582,-6.582,3.572
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,6.0,-18.0,-22.229,-4.229,1.219
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,6.0,-21.0,-24.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,6.0,-24.0,-27.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,6.0,-27.0,-30.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,6.0,-3.0,-19.352,-16.352,13.342
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,6.0,-30.0,-33.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,6.0,-36.0,-39.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,6.0,-42.0,-45.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,6.0,-48.0,-51.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,6.0,-54.0,-57.01,-3.01,0.0
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,6.0,-6.0,-19.864,-13.864,10.854
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,6.0,-9.0,-20.406,-11.406,8.396
+ssl_native_bus,SSL,SSL G series bus compressor,vca-sslbus,vca,6.0,0.0,-18.866,-18.866,15.856
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,10.0,-12.0,-19.004,-7.004,10.069
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,10.0,-15.0,-19.834,-4.834,7.899
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,10.0,-18.0,-20.914,-2.914,5.979
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,10.0,-21.0,-22.264,-1.264,4.329
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,10.0,-24.0,-23.911,0.089,2.976
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,10.0,-27.0,-25.88,1.12,1.945
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,10.0,-3.0,-17.379,-14.379,17.444
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,10.0,-30.0,-28.138,1.862,1.203
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,10.0,-36.0,-33.326,2.674,0.391
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,10.0,-42.0,-39.146,2.854,0.211
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,10.0,-48.0,-45.089,2.911,0.154
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,10.0,-54.0,-50.935,3.065,0.0
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,10.0,-6.0,-17.83,-11.83,14.895
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,10.0,-9.0,-18.356,-9.356,12.421
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,10.0,0.0,-16.971,-16.971,20.036
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,15.0,-12.0,-19.571,-7.571,14.971
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,15.0,-15.0,-20.089,-5.089,12.489
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,15.0,-18.0,-20.723,-2.723,10.123
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,15.0,-21.0,-21.533,-0.533,7.933
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,15.0,-24.0,-22.588,1.412,5.988
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,15.0,-27.0,-23.912,3.088,4.312
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,15.0,-3.0,-18.328,-15.328,22.728
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,15.0,-30.0,-25.53,4.47,2.93
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,15.0,-36.0,-29.703,6.297,1.103
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,15.0,-42.0,-34.853,7.147,0.253
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,15.0,-48.0,-40.654,7.346,0.054
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,15.0,-54.0,-46.6,7.4,0.0
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,15.0,-6.0,-18.721,-12.721,20.121
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,15.0,-9.0,-19.126,-10.126,17.526
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,15.0,0.0,-17.922,-17.922,25.322
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,3.0,-12.0,-17.212,-5.212,2.516
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,3.0,-15.0,-19.356,-4.356,1.66
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,3.0,-18.0,-21.757,-3.757,1.061
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,3.0,-21.0,-24.372,-3.372,0.676
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,3.0,-24.0,-27.162,-3.162,0.466
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,3.0,-27.0,-30.093,-3.093,0.397
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,3.0,-3.0,-12.627,-9.627,6.931
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,3.0,-30.0,-33.073,-3.073,0.377
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,3.0,-36.0,-38.999,-2.999,0.303
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,3.0,-42.0,-44.799,-2.799,0.103
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,3.0,-48.0,-50.696,-2.696,0.0
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,3.0,-54.0,-56.696,-2.696,0.0
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,3.0,-6.0,-13.862,-7.862,5.166
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,3.0,-9.0,-15.379,-6.379,3.683
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,3.0,0.0,-11.657,-11.657,8.961
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,6.0,-12.0,-17.837,-5.837,6.045
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,6.0,-15.0,-19.205,-4.205,4.413
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,6.0,-18.0,-20.872,-2.872,3.08
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,6.0,-21.0,-22.86,-1.86,2.068
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,6.0,-24.0,-25.134,-1.134,1.342
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,6.0,-27.0,-27.644,-0.644,0.852
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,6.0,-3.0,-15.24,-12.24,12.448
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,6.0,-30.0,-30.346,-0.346,0.554
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,6.0,-36.0,-36.179,-0.179,0.387
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,6.0,-42.0,-42.12,-0.12,0.328
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,6.0,-48.0,-47.961,0.039,0.169
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,6.0,-54.0,-53.792,0.208,0.0
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,6.0,-6.0,-15.897,-9.897,10.105
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,6.0,-9.0,-16.741,-7.741,7.949
+supercharger_gt,Native Instruments,tube compressor,opto-other,tube,6.0,0.0,-14.708,-14.708,14.916
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,10.0,-12.0,-16.25,-4.25,1.524
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,10.0,-15.0,-18.8,-3.8,1.074
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,10.0,-18.0,-21.461,-3.461,0.735
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,10.0,-21.0,-24.209,-3.209,0.483
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,10.0,-24.0,-27.065,-3.065,0.339
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,10.0,-27.0,-29.874,-2.874,0.148
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,10.0,-3.0,-9.665,-6.665,3.939
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,10.0,-30.0,-32.778,-2.778,0.052
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,10.0,-36.0,-38.732,-2.732,0.006
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,10.0,-42.0,-44.727,-2.727,0.001
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,10.0,-48.0,-50.73,-2.73,0.004
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,10.0,-54.0,-56.726,-2.726,0.0
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,10.0,-6.0,-11.656,-5.656,2.93
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,10.0,-9.0,-13.864,-4.864,2.138
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,10.0,0.0,-7.93,-7.93,5.204
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,15.0,-12.0,-16.25,-4.25,1.524
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,15.0,-15.0,-18.8,-3.8,1.074
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,15.0,-18.0,-21.461,-3.461,0.735
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,15.0,-21.0,-24.209,-3.209,0.483
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,15.0,-24.0,-27.065,-3.065,0.339
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,15.0,-27.0,-29.874,-2.874,0.148
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,15.0,-3.0,-9.665,-6.665,3.939
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,15.0,-30.0,-32.778,-2.778,0.052
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,15.0,-36.0,-38.732,-2.732,0.006
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,15.0,-42.0,-44.727,-2.727,0.001
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,15.0,-48.0,-50.73,-2.73,0.004
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,15.0,-54.0,-56.726,-2.726,0.0
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,15.0,-6.0,-11.656,-5.656,2.93
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,15.0,-9.0,-13.864,-4.864,2.138
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,15.0,0.0,-7.93,-7.93,5.204
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,3.0,-12.0,-16.25,-4.25,1.524
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,3.0,-15.0,-18.8,-3.8,1.074
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,3.0,-18.0,-21.461,-3.461,0.735
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,3.0,-21.0,-24.209,-3.209,0.483
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,3.0,-24.0,-27.065,-3.065,0.339
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,3.0,-27.0,-29.874,-2.874,0.148
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,3.0,-3.0,-9.665,-6.665,3.939
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,3.0,-30.0,-32.778,-2.778,0.052
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,3.0,-36.0,-38.732,-2.732,0.006
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,3.0,-42.0,-44.727,-2.727,0.001
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,3.0,-48.0,-50.73,-2.73,0.004
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,3.0,-54.0,-56.726,-2.726,0.0
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,3.0,-6.0,-11.656,-5.656,2.93
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,3.0,-9.0,-13.864,-4.864,2.138
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,3.0,0.0,-7.93,-7.93,5.204
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,6.0,-12.0,-16.25,-4.25,1.524
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,6.0,-15.0,-18.8,-3.8,1.074
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,6.0,-18.0,-21.461,-3.461,0.735
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,6.0,-21.0,-24.209,-3.209,0.483
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,6.0,-24.0,-27.065,-3.065,0.339
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,6.0,-27.0,-29.874,-2.874,0.148
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,6.0,-3.0,-9.665,-6.665,3.939
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,6.0,-30.0,-32.778,-2.778,0.052
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,6.0,-36.0,-38.732,-2.732,0.006
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,6.0,-42.0,-44.727,-2.727,0.001
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,6.0,-48.0,-50.73,-2.73,0.004
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,6.0,-54.0,-56.726,-2.726,0.0
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,6.0,-6.0,-11.656,-5.656,2.93
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,6.0,-9.0,-13.864,-4.864,2.138
+vari_comp,Softube,Manley Variable Mu,varimu-other,vari-mu,6.0,0.0,-7.93,-7.93,5.204
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,10.0,-12.0,-22.506,-10.506,7.651
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,10.0,-15.0,-23.228,-8.228,5.373
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,10.0,-18.0,-23.916,-5.916,3.061
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,10.0,-21.0,-24.598,-3.598,0.743
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,10.0,-24.0,-26.932,-2.932,0.077
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,10.0,-27.0,-29.931,-2.931,0.076
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,10.0,-3.0,-20.397,-17.397,14.542
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,10.0,-30.0,-32.928,-2.928,0.073
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,10.0,-36.0,-38.919,-2.919,0.064
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,10.0,-42.0,-44.907,-2.907,0.052
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,10.0,-48.0,-50.883,-2.883,0.028
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,10.0,-54.0,-56.855,-2.855,0.0
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,10.0,-6.0,-21.11,-15.11,12.255
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,10.0,-9.0,-21.802,-12.802,9.947
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,10.0,0.0,-19.642,-19.642,16.787
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,15.0,-12.0,-32.135,-20.135,17.28
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,15.0,-15.0,-32.856,-17.856,15.001
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,15.0,-18.0,-33.544,-15.544,12.689
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,15.0,-21.0,-34.226,-13.226,10.371
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,15.0,-24.0,-34.918,-10.918,8.063
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,15.0,-27.0,-35.592,-8.592,5.737
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,15.0,-3.0,-30.028,-27.028,24.173
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,15.0,-30.0,-36.318,-6.318,3.463
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,15.0,-36.0,-38.919,-2.919,0.064
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,15.0,-42.0,-44.907,-2.907,0.052
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,15.0,-48.0,-50.883,-2.883,0.028
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,15.0,-54.0,-56.855,-2.855,0.0
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,15.0,-6.0,-30.738,-24.738,21.883
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,15.0,-9.0,-31.431,-22.431,19.576
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,15.0,0.0,-29.271,-29.271,26.416
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,3.0,-12.0,-17.689,-5.689,2.834
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,3.0,-15.0,-18.411,-3.411,0.556
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,3.0,-18.0,-20.933,-2.933,0.078
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,3.0,-21.0,-23.933,-2.933,0.078
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,3.0,-24.0,-26.932,-2.932,0.077
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,3.0,-27.0,-29.931,-2.931,0.076
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,3.0,-3.0,-15.581,-12.581,9.726
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,3.0,-30.0,-32.928,-2.928,0.073
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,3.0,-36.0,-38.919,-2.919,0.064
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,3.0,-42.0,-44.907,-2.907,0.052
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,3.0,-48.0,-50.883,-2.883,0.028
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,3.0,-54.0,-56.855,-2.855,0.0
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,3.0,-6.0,-16.293,-10.293,7.438
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,3.0,-9.0,-16.985,-7.985,5.13
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,3.0,0.0,-14.826,-14.826,11.971
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,6.0,-12.0,-22.506,-10.506,7.651
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,6.0,-15.0,-23.228,-8.228,5.373
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,6.0,-18.0,-23.916,-5.916,3.061
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,6.0,-21.0,-24.598,-3.598,0.743
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,6.0,-24.0,-26.932,-2.932,0.077
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,6.0,-27.0,-29.931,-2.931,0.076
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,6.0,-3.0,-20.397,-17.397,14.542
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,6.0,-30.0,-32.928,-2.928,0.073
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,6.0,-36.0,-38.919,-2.919,0.064
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,6.0,-42.0,-44.907,-2.907,0.052
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,6.0,-48.0,-50.883,-2.883,0.028
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,6.0,-54.0,-56.855,-2.855,0.0
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,6.0,-6.0,-21.11,-15.11,12.255
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,6.0,-9.0,-21.802,-12.802,9.947
+vc160,Softube,dbx 160 VU,vca-dbx160,vca,6.0,0.0,-19.642,-19.642,16.787
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,10.0,-12.0,-65.087,-53.087,10.021
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,10.0,-15.0,-65.444,-50.444,7.378
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,10.0,-18.0,-66.351,-48.351,5.285
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,10.0,-21.0,-67.059,-46.059,2.993
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,10.0,-24.0,-68.033,-44.033,0.967
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,10.0,-27.0,-70.104,-43.104,0.038
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,10.0,-3.0,-64.06,-61.06,17.994
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,10.0,-30.0,-73.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,10.0,-36.0,-79.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,10.0,-42.0,-85.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,10.0,-48.0,-91.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,10.0,-54.0,-97.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,10.0,-6.0,-64.394,-58.394,15.328
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,10.0,-9.0,-64.671,-55.671,12.605
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,10.0,0.0,-63.659,-63.659,20.593
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,15.0,-12.0,-70.062,-58.062,14.996
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,15.0,-15.0,-70.359,-55.359,12.293
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,15.0,-18.0,-70.742,-52.742,9.676
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,15.0,-21.0,-71.124,-50.124,7.058
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,15.0,-24.0,-72.056,-48.056,4.99
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,15.0,-27.0,-72.798,-45.798,2.732
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,15.0,-3.0,-68.878,-65.878,22.812
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,15.0,-30.0,-73.809,-43.809,0.743
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,15.0,-36.0,-79.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,15.0,-42.0,-85.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,15.0,-48.0,-91.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,15.0,-54.0,-97.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,15.0,-6.0,-69.343,-63.343,20.277
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,15.0,-9.0,-69.737,-60.737,17.671
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,15.0,0.0,-68.323,-68.323,25.257
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,3.0,-12.0,-58.058,-46.058,2.992
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,3.0,-15.0,-59.031,-44.031,0.965
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,3.0,-18.0,-61.103,-43.103,0.037
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,3.0,-21.0,-64.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,3.0,-24.0,-67.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,3.0,-27.0,-70.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,3.0,-3.0,-56.085,-53.085,10.019
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,3.0,-30.0,-73.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,3.0,-36.0,-79.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,3.0,-42.0,-85.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,3.0,-48.0,-91.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,3.0,-54.0,-97.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,3.0,-6.0,-56.442,-50.442,7.376
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,3.0,-9.0,-57.349,-48.349,5.283
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,3.0,0.0,-55.669,-55.669,12.603
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,6.0,-12.0,-61.104,-49.104,6.038
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,6.0,-15.0,-62.147,-47.147,4.081
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,6.0,-18.0,-62.999,-44.999,1.933
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,6.0,-21.0,-64.229,-43.229,0.163
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,6.0,-24.0,-67.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,6.0,-27.0,-70.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,6.0,-3.0,-60.02,-57.02,13.954
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,6.0,-30.0,-73.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,6.0,-36.0,-79.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,6.0,-42.0,-85.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,6.0,-48.0,-91.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,6.0,-54.0,-97.066,-43.066,0.0
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,6.0,-6.0,-60.405,-54.405,11.339
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,6.0,-9.0,-60.718,-51.718,8.652
+vc2a,Softube,Teletronix LA-2A,opto-la2a,opto,6.0,0.0,-59.72,-59.72,16.654
 vc76,Softube,UREI 1176,fet-1176,fet,10.0,-12.0,-29.155,-17.155,9.201
 vc76,Softube,UREI 1176,fet-1176,fet,10.0,-15.0,-29.706,-14.706,6.752
 vc76,Softube,UREI 1176,fet-1176,fet,10.0,-18.0,-30.299,-12.299,4.345
@@ -299,3 +2039,63 @@ vc76,Softube,UREI 1176,fet-1176,fet,6.0,-54.0,-66.741,-12.741,0.0
 vc76,Softube,UREI 1176,fet-1176,fet,6.0,-6.0,-28.936,-22.936,10.195
 vc76,Softube,UREI 1176,fet-1176,fet,6.0,-9.0,-29.484,-20.484,7.743
 vc76,Softube,UREI 1176,fet-1176,fet,6.0,0.0,-27.889,-27.889,15.148
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,10.0,-12.0,-17.418,-5.418,9.971
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,10.0,-15.0,-18.23,-3.23,7.783
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,10.0,-18.0,-19.181,-1.181,5.734
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,10.0,-21.0,-20.343,0.657,3.896
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,10.0,-24.0,-21.614,2.386,2.167
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,10.0,-27.0,-22.798,4.202,0.351
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,10.0,-3.0,-15.33,-12.33,16.883
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,10.0,-30.0,-25.448,4.552,0.001
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,10.0,-36.0,-31.447,4.553,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,10.0,-42.0,-37.447,4.553,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,10.0,-48.0,-43.447,4.553,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,10.0,-54.0,-49.447,4.553,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,10.0,-6.0,-15.977,-9.977,14.53
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,10.0,-9.0,-16.668,-7.668,12.221
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,10.0,0.0,-14.711,-14.711,19.264
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,15.0,-12.0,-15.977,-3.977,14.53
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,15.0,-15.0,-16.668,-1.668,12.221
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,15.0,-18.0,-17.418,0.582,9.971
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,15.0,-21.0,-18.23,2.77,7.783
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,15.0,-24.0,-19.181,4.819,5.734
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,15.0,-27.0,-20.343,6.657,3.896
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,15.0,-3.0,-14.101,-11.101,21.654
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,15.0,-30.0,-21.614,8.386,2.167
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,15.0,-36.0,-25.448,10.552,0.001
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,15.0,-42.0,-31.447,10.553,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,15.0,-48.0,-37.447,10.553,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,15.0,-54.0,-43.447,10.553,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,15.0,-6.0,-14.711,-8.711,19.264
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,15.0,-9.0,-15.33,-6.33,16.883
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,15.0,0.0,-13.335,-13.335,23.888
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,3.0,-12.0,-21.019,-9.019,2.972
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,3.0,-15.0,-22.273,-7.273,1.226
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,3.0,-18.0,-24.048,-6.048,0.001
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,3.0,-21.0,-27.047,-6.047,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,3.0,-24.0,-30.047,-6.047,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,3.0,-27.0,-33.047,-6.047,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,3.0,-3.0,-17.842,-14.842,8.795
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,3.0,-30.0,-36.047,-6.047,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,3.0,-36.0,-42.047,-6.047,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,3.0,-42.0,-48.047,-6.047,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,3.0,-48.0,-54.047,-6.047,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,3.0,-54.0,-60.047,-6.047,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,3.0,-6.0,-18.708,-12.708,6.661
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,3.0,-9.0,-19.775,-10.775,4.728
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,3.0,0.0,-17.059,-17.059,11.012
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,6.0,-12.0,-19.181,-7.181,5.734
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,6.0,-15.0,-20.343,-5.343,3.896
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,6.0,-18.0,-21.614,-3.614,2.167
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,6.0,-21.0,-22.798,-1.798,0.351
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,6.0,-24.0,-25.448,-1.448,0.001
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,6.0,-27.0,-28.447,-1.447,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,6.0,-3.0,-16.668,-13.668,12.221
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,6.0,-30.0,-31.447,-1.447,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,6.0,-36.0,-37.447,-1.447,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,6.0,-42.0,-43.447,-1.447,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,6.0,-48.0,-49.447,-1.447,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,6.0,-54.0,-55.447,-1.447,0.0
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,6.0,-6.0,-17.418,-11.418,9.971
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,6.0,-9.0,-18.23,-9.23,7.783
+vcomp,Waves,Neve 2254 diode bridge,diode-neve,diode-bridge,6.0,0.0,-15.977,-15.977,14.53

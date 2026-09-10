@@ -1,58 +1,833 @@
 slug,maker,models,group,band,target_hz,actual_hz,marking,gain_label,peak_db,peak_hz,q,bandwidth_oct
-api550a,Waves,API 550A,eq-api,high_bell,10000.0,10000.0,dB,+12,11.521,9283.2,,
-api550a,Waves,API 550A,eq-api,high_bell,10000.0,10000.0,dB,+4,4.157,8433.9,,
+api550a,Waves,API 550A,eq-api,high_bell,10000.0,10000.0,dB,+12,11.517,9283.2,,
+api550a,Waves,API 550A,eq-api,high_bell,10000.0,10000.0,dB,+4,4.159,8433.9,,
 api550a,Waves,API 550A,eq-api,high_bell,10000.0,10000.0,dB,+6,6.096,8433.9,,
-api550a,Waves,API 550A,eq-api,high_bell,10000.0,10000.0,dB,+9,8.833,9283.2,,
-api550a,Waves,API 550A,eq-api,high_bell,10000.0,10000.0,dB,-12,-12.315,10217.9,,
-api550a,Waves,API 550A,eq-api,high_bell,10000.0,10000.0,dB,-4,-4.328,10217.9,,
-api550a,Waves,API 550A,eq-api,high_bell,10000.0,10000.0,dB,-6,-6.406,10217.9,,
-api550a,Waves,API 550A,eq-api,high_bell,10000.0,10000.0,dB,-9,-9.317,10217.9,,
-api550a,Waves,API 550A,eq-api,high_shelf,10000.0,10000.0,dB,+12,12.098,18170.4,,
-api550a,Waves,API 550A,eq-api,high_shelf,10000.0,10000.0,dB,+4,3.676,14997.9,,
-api550a,Waves,API 550A,eq-api,high_shelf,10000.0,10000.0,dB,+6,5.915,16508.1,,
+api550a,Waves,API 550A,eq-api,high_bell,10000.0,10000.0,dB,+9,8.832,9283.2,,
+api550a,Waves,API 550A,eq-api,high_bell,10000.0,10000.0,dB,-12,-12.314,10217.9,,
+api550a,Waves,API 550A,eq-api,high_bell,10000.0,10000.0,dB,-4,-4.326,10217.9,,
+api550a,Waves,API 550A,eq-api,high_bell,10000.0,10000.0,dB,-6,-6.407,10217.9,,
+api550a,Waves,API 550A,eq-api,high_bell,10000.0,10000.0,dB,-9,-9.314,9283.2,,
+api550a,Waves,API 550A,eq-api,high_shelf,10000.0,10000.0,dB,+12,12.095,18170.4,,
+api550a,Waves,API 550A,eq-api,high_shelf,10000.0,10000.0,dB,+4,3.673,14997.9,,
+api550a,Waves,API 550A,eq-api,high_shelf,10000.0,10000.0,dB,+6,5.914,16508.1,,
 api550a,Waves,API 550A,eq-api,high_shelf,10000.0,10000.0,dB,+9,8.91,16508.1,,
-api550a,Waves,API 550A,eq-api,high_shelf,10000.0,10000.0,dB,-12,-12.689,20000.0,,
-api550a,Waves,API 550A,eq-api,high_shelf,10000.0,10000.0,dB,-4,-4.066,20000.0,,
-api550a,Waves,API 550A,eq-api,high_shelf,10000.0,10000.0,dB,-6,-6.288,20000.0,,
-api550a,Waves,API 550A,eq-api,high_shelf,10000.0,10000.0,dB,-9,-9.344,20000.0,,
+api550a,Waves,API 550A,eq-api,high_shelf,10000.0,10000.0,dB,-12,-12.688,20000.0,,
+api550a,Waves,API 550A,eq-api,high_shelf,10000.0,10000.0,dB,-4,-4.067,20000.0,,
+api550a,Waves,API 550A,eq-api,high_shelf,10000.0,10000.0,dB,-6,-6.287,20000.0,,
+api550a,Waves,API 550A,eq-api,high_shelf,10000.0,10000.0,dB,-9,-9.346,20000.0,,
 api550a,Waves,API 550A,eq-api,himid_bell,3300.0,3000.0,dB,+12,11.701,3231.2,0.606,2.239
-api550a,Waves,API 550A,eq-api,himid_bell,3300.0,3000.0,dB,+4,4.057,2935.6,0.403,2.921
-api550a,Waves,API 550A,eq-api,himid_bell,3300.0,3000.0,dB,+6,6.055,2935.6,0.471,2.599
-api550a,Waves,API 550A,eq-api,himid_bell,3300.0,3000.0,dB,+9,8.832,2935.6,0.526,2.357
-api550a,Waves,API 550A,eq-api,himid_bell,3300.0,3000.0,dB,-12,-11.828,3231.2,0.599,2.228
-api550a,Waves,API 550A,eq-api,himid_bell,3300.0,3000.0,dB,-4,-3.985,3231.2,0.387,3.102
-api550a,Waves,API 550A,eq-api,himid_bell,3300.0,3000.0,dB,-6,-6.019,2935.6,0.451,2.614
+api550a,Waves,API 550A,eq-api,himid_bell,3300.0,3000.0,dB,+4,4.058,3231.2,0.443,2.919
+api550a,Waves,API 550A,eq-api,himid_bell,3300.0,3000.0,dB,+6,6.057,2935.6,0.471,2.598
+api550a,Waves,API 550A,eq-api,himid_bell,3300.0,3000.0,dB,+9,8.833,2935.6,0.526,2.357
+api550a,Waves,API 550A,eq-api,himid_bell,3300.0,3000.0,dB,-12,-11.826,3231.2,0.599,2.228
+api550a,Waves,API 550A,eq-api,himid_bell,3300.0,3000.0,dB,-4,-3.985,3231.2,0.387,3.103
+api550a,Waves,API 550A,eq-api,himid_bell,3300.0,3000.0,dB,-6,-6.019,2935.6,0.451,2.613
 api550a,Waves,API 550A,eq-api,himid_bell,3300.0,3000.0,dB,-9,-8.882,3231.2,0.562,2.367
-api550a,Waves,API 550A,eq-api,lomid_bell,500.0,400.0,dB,+12,11.866,391.5,0.589,2.193
-api550a,Waves,API 550A,eq-api,lomid_bell,500.0,400.0,dB,+4,4.056,391.5,0.408,2.936
-api550a,Waves,API 550A,eq-api,lomid_bell,500.0,400.0,dB,+6,6.074,391.5,0.486,2.581
-api550a,Waves,API 550A,eq-api,lomid_bell,500.0,400.0,dB,+9,8.924,391.5,0.553,2.33
-api550a,Waves,API 550A,eq-api,lomid_bell,500.0,400.0,dB,-12,-12.052,391.5,0.61,2.157
-api550a,Waves,API 550A,eq-api,lomid_bell,500.0,400.0,dB,-4,-4.038,391.5,0.449,2.76
-api550a,Waves,API 550A,eq-api,lomid_bell,500.0,400.0,dB,-6,-6.086,391.5,0.513,2.5
-api550a,Waves,API 550A,eq-api,lomid_bell,500.0,400.0,dB,-9,-8.998,391.5,0.586,2.248
-api550a,Waves,API 550A,eq-api,low_bell,100.0,100.0,dB,+12,11.935,102.2,0.613,2.126
-api550a,Waves,API 550A,eq-api,low_bell,100.0,100.0,dB,+4,3.961,102.2,0.442,2.843
-api550a,Waves,API 550A,eq-api,low_bell,100.0,100.0,dB,+6,6.005,102.2,0.514,2.523
-api550a,Waves,API 550A,eq-api,low_bell,100.0,100.0,dB,+9,8.895,102.2,0.573,2.276
-api550a,Waves,API 550A,eq-api,low_bell,100.0,100.0,dB,-12,-12.137,102.2,0.647,2.007
-api550a,Waves,API 550A,eq-api,low_bell,100.0,100.0,dB,-4,-4.148,102.2,0.461,2.805
-api550a,Waves,API 550A,eq-api,low_bell,100.0,100.0,dB,-6,-6.127,102.2,0.525,2.457
-api550a,Waves,API 550A,eq-api,low_bell,100.0,100.0,dB,-9,-8.91,102.2,0.609,2.12
+api550a,Waves,API 550A,eq-api,lomid_bell,500.0,400.0,dB,+12,11.868,391.5,0.589,2.193
+api550a,Waves,API 550A,eq-api,lomid_bell,500.0,400.0,dB,+4,4.056,391.5,0.408,2.935
+api550a,Waves,API 550A,eq-api,lomid_bell,500.0,400.0,dB,+6,6.076,391.5,0.486,2.581
+api550a,Waves,API 550A,eq-api,lomid_bell,500.0,400.0,dB,+9,8.925,391.5,0.553,2.33
+api550a,Waves,API 550A,eq-api,lomid_bell,500.0,400.0,dB,-12,-12.051,391.5,0.609,2.157
+api550a,Waves,API 550A,eq-api,lomid_bell,500.0,400.0,dB,-4,-4.037,391.5,0.449,2.76
+api550a,Waves,API 550A,eq-api,lomid_bell,500.0,400.0,dB,-6,-6.084,391.5,0.513,2.499
+api550a,Waves,API 550A,eq-api,lomid_bell,500.0,400.0,dB,-9,-8.997,391.5,0.586,2.249
+api550a,Waves,API 550A,eq-api,low_bell,100.0,100.0,dB,+12,11.937,102.2,0.613,2.126
+api550a,Waves,API 550A,eq-api,low_bell,100.0,100.0,dB,+4,3.962,102.2,0.442,2.843
+api550a,Waves,API 550A,eq-api,low_bell,100.0,100.0,dB,+6,6.006,102.2,0.514,2.523
+api550a,Waves,API 550A,eq-api,low_bell,100.0,100.0,dB,+9,8.896,102.2,0.573,2.276
+api550a,Waves,API 550A,eq-api,low_bell,100.0,100.0,dB,-12,-12.136,102.2,0.647,2.007
+api550a,Waves,API 550A,eq-api,low_bell,100.0,100.0,dB,-4,-4.146,102.2,0.461,2.806
+api550a,Waves,API 550A,eq-api,low_bell,100.0,100.0,dB,-6,-6.126,102.2,0.525,2.457
+api550a,Waves,API 550A,eq-api,low_bell,100.0,100.0,dB,-9,-8.909,102.2,0.609,2.12
 api550a,Waves,API 550A,eq-api,low_shelf,100.0,100.0,dB,+12,13.291,22.0,,
-api550a,Waves,API 550A,eq-api,low_shelf,100.0,100.0,dB,+4,4.183,22.0,,
-api550a,Waves,API 550A,eq-api,low_shelf,100.0,100.0,dB,+6,6.464,22.0,,
+api550a,Waves,API 550A,eq-api,low_shelf,100.0,100.0,dB,+4,4.183,20.0,,
+api550a,Waves,API 550A,eq-api,low_shelf,100.0,100.0,dB,+6,6.463,22.0,,
 api550a,Waves,API 550A,eq-api,low_shelf,100.0,100.0,dB,+9,9.712,22.0,,
-api550a,Waves,API 550A,eq-api,low_shelf,100.0,100.0,dB,-12,-13.286,26.7,,
-api550a,Waves,API 550A,eq-api,low_shelf,100.0,100.0,dB,-4,-4.203,32.3,,
-api550a,Waves,API 550A,eq-api,low_shelf,100.0,100.0,dB,-6,-6.399,32.3,,
-api550a,Waves,API 550A,eq-api,low_shelf,100.0,100.0,dB,-9,-9.721,26.7,,
-api550a,Waves,API 550A,eq-api,mid_bell,1000.0,800.0,dB,+12,11.747,766.2,0.555,2.231
+api550a,Waves,API 550A,eq-api,low_shelf,100.0,100.0,dB,-12,-13.285,26.7,,
+api550a,Waves,API 550A,eq-api,low_shelf,100.0,100.0,dB,-4,-4.202,32.3,,
+api550a,Waves,API 550A,eq-api,low_shelf,100.0,100.0,dB,-6,-6.398,29.4,,
+api550a,Waves,API 550A,eq-api,low_shelf,100.0,100.0,dB,-9,-9.72,26.7,,
+api550a,Waves,API 550A,eq-api,mid_bell,1000.0,800.0,dB,+12,11.748,766.2,0.555,2.231
 api550a,Waves,API 550A,eq-api,mid_bell,1000.0,800.0,dB,+4,4.038,766.2,0.391,2.977
-api550a,Waves,API 550A,eq-api,mid_bell,1000.0,800.0,dB,+6,6.06,766.2,0.466,2.608
-api550a,Waves,API 550A,eq-api,mid_bell,1000.0,800.0,dB,+9,8.871,766.2,0.525,2.353
-api550a,Waves,API 550A,eq-api,mid_bell,1000.0,800.0,dB,-12,-11.915,766.2,0.574,2.18
-api550a,Waves,API 550A,eq-api,mid_bell,1000.0,800.0,dB,-4,-4.027,766.2,0.42,2.844
-api550a,Waves,API 550A,eq-api,mid_bell,1000.0,800.0,dB,-6,-6.06,766.2,0.483,2.541
-api550a,Waves,API 550A,eq-api,mid_bell,1000.0,800.0,dB,-9,-8.943,766.2,0.553,2.269
-api550a,Waves,API 550A,eq-api,extra,,,,analog_off,11.746,766.2,0.555,2.232
+api550a,Waves,API 550A,eq-api,mid_bell,1000.0,800.0,dB,+6,6.062,766.2,0.466,2.607
+api550a,Waves,API 550A,eq-api,mid_bell,1000.0,800.0,dB,+9,8.872,766.2,0.525,2.352
+api550a,Waves,API 550A,eq-api,mid_bell,1000.0,800.0,dB,-12,-11.914,766.2,0.574,2.18
+api550a,Waves,API 550A,eq-api,mid_bell,1000.0,800.0,dB,-4,-4.026,766.2,0.42,2.845
+api550a,Waves,API 550A,eq-api,mid_bell,1000.0,800.0,dB,-6,-6.059,766.2,0.483,2.542
+api550a,Waves,API 550A,eq-api,mid_bell,1000.0,800.0,dB,-9,-8.942,766.2,0.553,2.269
+api550a,Waves,API 550A,eq-api,extra,,,,analog_off,11.747,766.2,0.555,2.232
+api550b,Waves,API 550B,eq-api,high_bell,10000.0,10000.0,dB,+12,11.058,11246.8,,
+api550b,Waves,API 550B,eq-api,high_bell,10000.0,10000.0,dB,+4,3.921,9283.2,,
+api550b,Waves,API 550B,eq-api,high_bell,10000.0,10000.0,dB,+6,5.847,10217.9,,
+api550b,Waves,API 550B,eq-api,high_bell,10000.0,10000.0,dB,+9,8.498,10217.9,,
+api550b,Waves,API 550B,eq-api,high_bell,10000.0,10000.0,dB,-12,-12.736,11246.8,,
+api550b,Waves,API 550B,eq-api,high_bell,10000.0,10000.0,dB,-4,-4.35,11246.8,,
+api550b,Waves,API 550B,eq-api,high_bell,10000.0,10000.0,dB,-6,-6.513,11246.8,,
+api550b,Waves,API 550B,eq-api,high_bell,10000.0,10000.0,dB,-9,-9.579,11246.8,,
+api550b,Waves,API 550B,eq-api,high_shelf,10000.0,10000.0,dB,+12,12.299,20000.0,,
+api550b,Waves,API 550B,eq-api,high_shelf,10000.0,10000.0,dB,+4,3.789,20000.0,,
+api550b,Waves,API 550B,eq-api,high_shelf,10000.0,10000.0,dB,+6,5.962,20000.0,,
+api550b,Waves,API 550B,eq-api,high_shelf,10000.0,10000.0,dB,+9,9.0,20000.0,,
+api550b,Waves,API 550B,eq-api,high_shelf,10000.0,10000.0,dB,-12,-12.225,18170.4,,
+api550b,Waves,API 550B,eq-api,high_shelf,10000.0,10000.0,dB,-4,-3.898,16508.1,,
+api550b,Waves,API 550B,eq-api,high_shelf,10000.0,10000.0,dB,-6,-6.098,16508.1,,
+api550b,Waves,API 550B,eq-api,high_shelf,10000.0,10000.0,dB,-9,-9.066,16508.1,,
+api550b,Waves,API 550B,eq-api,himid_bell,3300.0,3000.0,dB,+12,11.679,3231.2,0.63,2.165
+api550b,Waves,API 550B,eq-api,himid_bell,3300.0,3000.0,dB,+4,4.079,3231.2,0.444,2.877
+api550b,Waves,API 550B,eq-api,himid_bell,3300.0,3000.0,dB,+6,6.071,2935.6,0.482,2.546
+api550b,Waves,API 550B,eq-api,himid_bell,3300.0,3000.0,dB,+9,8.853,2935.6,0.549,2.289
+api550b,Waves,API 550B,eq-api,himid_bell,3300.0,3000.0,dB,-12,-11.612,3231.2,0.576,2.237
+api550b,Waves,API 550B,eq-api,himid_bell,3300.0,3000.0,dB,-4,-3.94,3231.2,0.412,2.911
+api550b,Waves,API 550B,eq-api,himid_bell,3300.0,3000.0,dB,-6,-5.943,3231.2,0.485,2.581
+api550b,Waves,API 550B,eq-api,himid_bell,3300.0,3000.0,dB,-9,-8.737,3231.2,0.552,2.336
+api550b,Waves,API 550B,eq-api,lomid_bell,500.0,500.0,dB,+12,11.413,522.0,0.624,2.187
+api550b,Waves,API 550B,eq-api,lomid_bell,500.0,500.0,dB,+4,3.876,474.3,0.412,2.886
+api550b,Waves,API 550B,eq-api,lomid_bell,500.0,500.0,dB,+6,5.845,474.3,0.479,2.583
+api550b,Waves,API 550B,eq-api,lomid_bell,500.0,500.0,dB,+9,8.613,474.3,0.539,2.318
+api550b,Waves,API 550B,eq-api,lomid_bell,500.0,500.0,dB,-12,-11.806,474.3,0.595,2.136
+api550b,Waves,API 550B,eq-api,lomid_bell,500.0,500.0,dB,-4,-3.962,474.3,0.419,2.851
+api550b,Waves,API 550B,eq-api,lomid_bell,500.0,500.0,dB,-6,-5.981,474.3,0.488,2.55
+api550b,Waves,API 550B,eq-api,lomid_bell,500.0,500.0,dB,-9,-8.84,474.3,0.553,2.303
+api550b,Waves,API 550B,eq-api,low_bell,100.0,100.0,dB,+12,12.073,102.2,0.62,2.096
+api550b,Waves,API 550B,eq-api,low_bell,100.0,100.0,dB,+4,4.062,112.5,0.504,2.792
+api550b,Waves,API 550B,eq-api,low_bell,100.0,100.0,dB,+6,6.123,102.2,0.527,2.459
+api550b,Waves,API 550B,eq-api,low_bell,100.0,100.0,dB,+9,9.035,102.2,0.586,2.22
+api550b,Waves,API 550B,eq-api,low_bell,100.0,100.0,dB,-12,-12.122,102.2,0.654,1.974
+api550b,Waves,API 550B,eq-api,low_bell,100.0,100.0,dB,-4,-4.127,102.2,0.454,2.866
+api550b,Waves,API 550B,eq-api,low_bell,100.0,100.0,dB,-6,-6.082,112.5,0.566,2.474
+api550b,Waves,API 550B,eq-api,low_bell,100.0,100.0,dB,-9,-9.08,102.2,0.578,2.201
+api550b,Waves,API 550B,eq-api,low_shelf,100.0,100.0,dB,+12,13.41,20.0,,
+api550b,Waves,API 550B,eq-api,low_shelf,100.0,100.0,dB,+4,4.16,20.0,,
+api550b,Waves,API 550B,eq-api,low_shelf,100.0,100.0,dB,+6,6.358,20.0,,
+api550b,Waves,API 550B,eq-api,low_shelf,100.0,100.0,dB,+9,9.688,20.0,,
+api550b,Waves,API 550B,eq-api,low_shelf,100.0,100.0,dB,-12,-13.183,32.3,,
+api550b,Waves,API 550B,eq-api,low_shelf,100.0,100.0,dB,-4,-4.1,26.7,,
+api550b,Waves,API 550B,eq-api,low_shelf,100.0,100.0,dB,-6,-6.273,29.4,,
+api550b,Waves,API 550B,eq-api,low_shelf,100.0,100.0,dB,-9,-9.564,32.3,,
+api550b,Waves,API 550B,eq-api,mid_bell,1000.0,1000.0,dB,+12,11.519,1124.7,0.627,2.166
+api550b,Waves,API 550B,eq-api,mid_bell,1000.0,1000.0,dB,+4,3.91,928.3,0.407,2.891
+api550b,Waves,API 550B,eq-api,mid_bell,1000.0,1000.0,dB,+6,5.89,1021.8,0.485,2.559
+api550b,Waves,API 550B,eq-api,mid_bell,1000.0,1000.0,dB,+9,8.644,1021.8,0.54,2.323
+api550b,Waves,API 550B,eq-api,mid_bell,1000.0,1000.0,dB,-12,-11.747,1021.8,0.585,2.189
+api550b,Waves,API 550B,eq-api,mid_bell,1000.0,1000.0,dB,-4,-3.974,1021.8,0.433,2.902
+api550b,Waves,API 550B,eq-api,mid_bell,1000.0,1000.0,dB,-6,-5.989,1021.8,0.499,2.581
+api550b,Waves,API 550B,eq-api,mid_bell,1000.0,1000.0,dB,-9,-8.818,1021.8,0.548,2.327
+api550b,Waves,API 550B,eq-api,extra,,,,analog_off,11.519,1124.7,0.627,2.166
+api_vision_eq,UAD,API 550L EQ section,eq-api,high_bell,10000.0,10000.0,dB,+12,11.579,11246.8,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,high_bell,10000.0,10000.0,dB,+4,4.187,10217.9,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,high_bell,10000.0,10000.0,dB,+6,6.165,10217.9,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,high_bell,10000.0,10000.0,dB,+9,8.876,11246.8,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,high_bell,10000.0,10000.0,dB,-12,-12.119,12379.3,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,high_bell,10000.0,10000.0,dB,-4,-4.037,11246.8,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,high_bell,10000.0,10000.0,dB,-6,-6.134,11246.8,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,high_bell,10000.0,10000.0,dB,-9,-9.075,11246.8,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,high_shelf,10000.0,10000.0,dB,+12,12.578,20000.0,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,high_shelf,10000.0,10000.0,dB,+4,4.047,13625.8,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,high_shelf,10000.0,10000.0,dB,+6,6.305,18170.4,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,high_shelf,10000.0,10000.0,dB,+9,9.359,20000.0,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,high_shelf,10000.0,10000.0,dB,-12,-11.608,20000.0,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,high_shelf,10000.0,10000.0,dB,-4,-3.389,16508.1,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,high_shelf,10000.0,10000.0,dB,-6,-5.606,18170.4,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,high_shelf,10000.0,10000.0,dB,-9,-8.522,20000.0,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,himid_bell,3300.0,3000.0,dB,+12,11.327,3231.2,0.587,2.186
+api_vision_eq,UAD,API 550L EQ section,eq-api,himid_bell,3300.0,3000.0,dB,+4,4.035,3231.2,0.431,2.882
+api_vision_eq,UAD,API 550L EQ section,eq-api,himid_bell,3300.0,3000.0,dB,+6,5.952,3231.2,0.495,2.572
+api_vision_eq,UAD,API 550L EQ section,eq-api,himid_bell,3300.0,3000.0,dB,+9,8.557,3231.2,0.562,2.295
+api_vision_eq,UAD,API 550L EQ section,eq-api,himid_bell,3300.0,3000.0,dB,-12,-11.351,3556.6,0.641,2.143
+api_vision_eq,UAD,API 550L EQ section,eq-api,himid_bell,3300.0,3000.0,dB,-4,-3.743,3231.2,0.423,2.824
+api_vision_eq,UAD,API 550L EQ section,eq-api,himid_bell,3300.0,3000.0,dB,-6,-5.721,3231.2,0.491,2.516
+api_vision_eq,UAD,API 550L EQ section,eq-api,himid_bell,3300.0,3000.0,dB,-9,-8.515,3231.2,0.549,2.28
+api_vision_eq,UAD,API 550L EQ section,eq-api,lomid_bell,500.0,500.0,dB,+12,11.947,522.0,0.627,2.167
+api_vision_eq,UAD,API 550L EQ section,eq-api,lomid_bell,500.0,500.0,dB,+4,4.061,474.3,0.402,2.913
+api_vision_eq,UAD,API 550L EQ section,eq-api,lomid_bell,500.0,500.0,dB,+6,6.084,474.3,0.473,2.574
+api_vision_eq,UAD,API 550L EQ section,eq-api,lomid_bell,500.0,500.0,dB,+9,8.947,522.0,0.588,2.317
+api_vision_eq,UAD,API 550L EQ section,eq-api,lomid_bell,500.0,500.0,dB,-12,-11.737,522.0,0.64,2.128
+api_vision_eq,UAD,API 550L EQ section,eq-api,lomid_bell,500.0,500.0,dB,-4,-3.859,474.3,0.423,2.803
+api_vision_eq,UAD,API 550L EQ section,eq-api,lomid_bell,500.0,500.0,dB,-6,-5.885,474.3,0.491,2.502
+api_vision_eq,UAD,API 550L EQ section,eq-api,lomid_bell,500.0,500.0,dB,-9,-8.748,474.3,0.548,2.267
+api_vision_eq,UAD,API 550L EQ section,eq-api,low_bell,100.0,100.0,dB,+12,11.843,102.2,0.6,2.174
+api_vision_eq,UAD,API 550L EQ section,eq-api,low_bell,100.0,100.0,dB,+4,3.911,102.2,0.403,2.988
+api_vision_eq,UAD,API 550L EQ section,eq-api,low_bell,100.0,100.0,dB,+6,5.939,102.2,0.487,2.613
+api_vision_eq,UAD,API 550L EQ section,eq-api,low_bell,100.0,100.0,dB,+9,8.83,102.2,0.557,2.333
+api_vision_eq,UAD,API 550L EQ section,eq-api,low_bell,100.0,100.0,dB,-12,-11.826,102.2,0.611,2.13
+api_vision_eq,UAD,API 550L EQ section,eq-api,low_bell,100.0,100.0,dB,-4,-3.83,102.2,0.414,2.923
+api_vision_eq,UAD,API 550L EQ section,eq-api,low_bell,100.0,100.0,dB,-6,-5.866,102.2,0.496,2.564
+api_vision_eq,UAD,API 550L EQ section,eq-api,low_bell,100.0,100.0,dB,-9,-8.778,102.2,0.566,2.288
+api_vision_eq,UAD,API 550L EQ section,eq-api,low_shelf,100.0,100.0,dB,+12,13.1,20.0,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,low_shelf,100.0,100.0,dB,+4,3.985,20.0,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,low_shelf,100.0,100.0,dB,+6,6.173,20.0,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,low_shelf,100.0,100.0,dB,+9,9.499,20.0,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,low_shelf,100.0,100.0,dB,-12,-13.11,20.0,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,low_shelf,100.0,100.0,dB,-4,-3.997,20.0,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,low_shelf,100.0,100.0,dB,-6,-6.184,20.0,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,low_shelf,100.0,100.0,dB,-9,-9.51,20.0,,
+api_vision_eq,UAD,API 550L EQ section,eq-api,mid_bell,1000.0,1000.0,dB,+12,11.971,1124.7,0.616,2.161
+api_vision_eq,UAD,API 550L EQ section,eq-api,mid_bell,1000.0,1000.0,dB,+4,4.063,1124.7,0.435,2.91
+api_vision_eq,UAD,API 550L EQ section,eq-api,mid_bell,1000.0,1000.0,dB,+6,6.088,1124.7,0.512,2.568
+api_vision_eq,UAD,API 550L EQ section,eq-api,mid_bell,1000.0,1000.0,dB,+9,8.968,1124.7,0.578,2.31
+api_vision_eq,UAD,API 550L EQ section,eq-api,mid_bell,1000.0,1000.0,dB,-12,-11.768,1124.7,0.628,2.126
+api_vision_eq,UAD,API 550L EQ section,eq-api,mid_bell,1000.0,1000.0,dB,-4,-3.861,1124.7,0.457,2.798
+api_vision_eq,UAD,API 550L EQ section,eq-api,mid_bell,1000.0,1000.0,dB,-6,-5.885,1124.7,0.529,2.499
+api_vision_eq,UAD,API 550L EQ section,eq-api,mid_bell,1000.0,1000.0,dB,-9,-8.766,1124.7,0.592,2.264
+api_vision_eq,UAD,API 550L EQ section,eq-api,extra,,,,560_1k_+12,12.524,1021.8,0.632,2.148
+api_vision_eq,UAD,API 550L EQ section,eq-api,extra,,,,560_1k_-12,-12.346,1021.8,0.655,2.082
+aw_air3,Airwindows,top-end lift,eq-tilt,high_shelf,10000.0,,raw 0..1,raw_0,-28.25,12379.3,4.129,0.361
+aw_air3,Airwindows,top-end lift,eq-tilt,high_shelf,10000.0,,raw 0..1,raw_0.25,-5.738,12379.3,1.301,1.355
+aw_air3,Airwindows,top-end lift,eq-tilt,high_shelf,10000.0,,raw 0..1,raw_0.5,0.0,20.0,,
+aw_air3,Airwindows,top-end lift,eq-tilt,high_shelf,10000.0,,raw 0..1,raw_0.75,14.008,12379.3,0.787,2.943
+aw_air3,Airwindows,top-end lift,eq-tilt,high_shelf,10000.0,,raw 0..1,raw_1,24.072,12379.3,,
+aw_baxandall2,Airwindows,Baxandall tone control,eq-tilt,high_shelf,10000.0,,raw 0..1,raw_0,-25.965,10217.9,,
+aw_baxandall2,Airwindows,Baxandall tone control,eq-tilt,high_shelf,10000.0,,raw 0..1,raw_0.25,-12.728,8433.9,,
+aw_baxandall2,Airwindows,Baxandall tone control,eq-tilt,high_shelf,10000.0,,raw 0..1,raw_0.5,0.0,20.0,,
+aw_baxandall2,Airwindows,Baxandall tone control,eq-tilt,high_shelf,10000.0,,raw 0..1,raw_0.75,12.893,10217.9,0.67,2.175
+aw_baxandall2,Airwindows,Baxandall tone control,eq-tilt,high_shelf,10000.0,,raw 0..1,raw_1,24.901,11246.8,0.805,1.928
+aw_baxandall2,Airwindows,Baxandall tone control,eq-tilt,low_shelf,100.0,,raw 0..1,raw_0,-23.136,20.0,,
+aw_baxandall2,Airwindows,Baxandall tone control,eq-tilt,low_shelf,100.0,,raw 0..1,raw_0.25,-11.934,29.4,,
+aw_baxandall2,Airwindows,Baxandall tone control,eq-tilt,low_shelf,100.0,,raw 0..1,raw_0.5,0.0,20.0,,
+aw_baxandall2,Airwindows,Baxandall tone control,eq-tilt,low_shelf,100.0,,raw 0..1,raw_0.75,11.977,32.3,,
+aw_baxandall2,Airwindows,Baxandall tone control,eq-tilt,low_shelf,100.0,,raw 0..1,raw_1,23.372,22.0,,
+aw_capacitor2,Airwindows,capacitor-modelled filter,eq-tilt,highpass,,,raw 0..1,hp_0,0.0,20.0,,
+aw_capacitor2,Airwindows,capacitor-modelled filter,eq-tilt,highpass,,,raw 0..1,hp_0.25,-67.144,20.0,,
+aw_capacitor2,Airwindows,capacitor-modelled filter,eq-tilt,highpass,,,raw 0..1,hp_0.5,-107.834,20.0,,
+aw_capacitor2,Airwindows,capacitor-modelled filter,eq-tilt,highpass,,,raw 0..1,hp_0.75,-158.008,20.0,,
+aw_capacitor2,Airwindows,capacitor-modelled filter,eq-tilt,lowpass,,,raw 0..1,lp_0.25,-74.093,12379.3,,
+aw_capacitor2,Airwindows,capacitor-modelled filter,eq-tilt,lowpass,,,raw 0..1,lp_0.5,-46.161,10217.9,,
+aw_capacitor2,Airwindows,capacitor-modelled filter,eq-tilt,lowpass,,,raw 0..1,lp_0.75,-20.361,10217.9,,
+aw_capacitor2,Airwindows,capacitor-modelled filter,eq-tilt,lowpass,,,raw 0..1,lp_1,0.0,20.0,,
+aw_capacitor2,Airwindows,capacitor-modelled filter,eq-tilt,extra,,,,nonlin_0,-47.781,10217.9,,
+aw_capacitor2,Airwindows,capacitor-modelled filter,eq-tilt,extra,,,,nonlin_1,-42.149,10217.9,,
+elysia_niveau,elysia,passive tilt filter,eq-tilt,tilt_1k,,1000.0,raw 0..1,raw_0,-16.593,20000.0,,
+elysia_niveau,elysia,passive tilt filter,eq-tilt,tilt_1k,,1000.0,raw 0..1,raw_0.25,-5.487,20000.0,,
+elysia_niveau,elysia,passive tilt filter,eq-tilt,tilt_1k,,1000.0,raw 0..1,raw_0.5,0.0,20.0,,
+elysia_niveau,elysia,passive tilt filter,eq-tilt,tilt_1k,,1000.0,raw 0..1,raw_0.75,-5.678,39.1,,
+elysia_niveau,elysia,passive tilt filter,eq-tilt,tilt_1k,,1000.0,raw 0..1,raw_1,-30.274,20.0,,
+elysia_niveau,elysia,passive tilt filter,eq-tilt,tilt_230,,230.0,raw 0..1,raw_0,-29.415,20000.0,,
+elysia_niveau,elysia,passive tilt filter,eq-tilt,tilt_230,,230.0,raw 0..1,raw_0.25,-5.655,16508.1,,
+elysia_niveau,elysia,passive tilt filter,eq-tilt,tilt_230,,230.0,raw 0..1,raw_0.5,0.0,20.0,,
+elysia_niveau,elysia,passive tilt filter,eq-tilt,tilt_230,,230.0,raw 0..1,raw_0.75,-5.508,22.0,,
+elysia_niveau,elysia,passive tilt filter,eq-tilt,tilt_230,,230.0,raw 0..1,raw_1,-17.504,20.0,,
+kh_3band,Kilohearts,clean three-band,eq-digital,high_shelf,10000.0,10000.0,raw 0..1,raw_0,-15.677,20000.0,,
+kh_3band,Kilohearts,clean three-band,eq-digital,high_shelf,10000.0,10000.0,raw 0..1,raw_0.15,-10.983,20000.0,,
+kh_3band,Kilohearts,clean three-band,eq-digital,high_shelf,10000.0,10000.0,raw 0..1,raw_0.3,-6.283,20000.0,,
+kh_3band,Kilohearts,clean three-band,eq-digital,high_shelf,10000.0,10000.0,raw 0..1,raw_0.7,6.284,20000.0,,
+kh_3band,Kilohearts,clean three-band,eq-digital,high_shelf,10000.0,10000.0,raw 0..1,raw_0.85,10.985,20000.0,,
+kh_3band,Kilohearts,clean three-band,eq-digital,high_shelf,10000.0,10000.0,raw 0..1,raw_1,15.667,20000.0,,
+kh_3band,Kilohearts,clean three-band,eq-digital,low_shelf,100.0,100.0,raw 0..1,raw_0,-15.419,22.0,,
+kh_3band,Kilohearts,clean three-band,eq-digital,low_shelf,100.0,100.0,raw 0..1,raw_0.15,-10.836,22.0,,
+kh_3band,Kilohearts,clean three-band,eq-digital,low_shelf,100.0,100.0,raw 0..1,raw_0.3,-6.211,22.0,,
+kh_3band,Kilohearts,clean three-band,eq-digital,low_shelf,100.0,100.0,raw 0..1,raw_0.7,6.238,22.0,,
+kh_3band,Kilohearts,clean three-band,eq-digital,low_shelf,100.0,100.0,raw 0..1,raw_0.85,10.921,22.0,,
+kh_3band,Kilohearts,clean three-band,eq-digital,low_shelf,100.0,100.0,raw 0..1,raw_1,15.596,22.0,,
+kh_3band,Kilohearts,clean three-band,eq-digital,mid_bell,1000.0,1000.0,raw 0..1,raw_0,-16.003,766.2,0.077,6.715
+kh_3band,Kilohearts,clean three-band,eq-digital,mid_bell,1000.0,1000.0,raw 0..1,raw_0.15,-11.178,766.2,0.077,6.706
+kh_3band,Kilohearts,clean three-band,eq-digital,mid_bell,1000.0,1000.0,raw 0..1,raw_0.3,-6.377,766.2,0.077,6.697
+kh_3band,Kilohearts,clean three-band,eq-digital,mid_bell,1000.0,1000.0,raw 0..1,raw_0.7,6.364,1237.9,0.125,6.68
+kh_3band,Kilohearts,clean three-band,eq-digital,mid_bell,1000.0,1000.0,raw 0..1,raw_0.85,11.131,1237.9,0.125,6.676
+kh_3band,Kilohearts,clean three-band,eq-digital,mid_bell,1000.0,1000.0,raw 0..1,raw_1,15.888,1237.9,0.124,6.674
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,boost_12,6.625,11246.8,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,boost_20,11.384,11246.8,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,boost_20_bw1,4.605,11246.8,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,boost_20_bw3,19.315,11246.8,1.082,1.3
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,boost_4,0.531,10217.9,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,boost_8,2.514,10217.9,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,cut_12,-5.337,8433.9,0.619,2.463
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,cut_20,-9.398,10217.9,0.862,1.901
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,cut_4,-0.412,6324.6,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,cut_8,-2.001,6324.6,0.439,3.016
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,boost_12,6.126,20000.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,boost_20,12.155,20000.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,boost_20_bw1,14.128,20000.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,boost_20_bw3,11.983,20000.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,boost_4,0.491,20000.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,boost_8,2.113,20000.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,cut_12,-0.965,4742.7,0.71,2.102
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,cut_20,-2.54,20000.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,cut_4,0.252,20000.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,cut_8,1.08,20000.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,boost_12,6.747,3914.7,0.337,3.499
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,boost_20,11.745,3914.7,0.501,2.558
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,boost_20_bw1,4.597,3914.7,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,boost_20_bw3,20.913,3914.7,1.018,1.363
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,boost_4,0.537,3556.6,0.239,4.201
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,boost_8,2.541,3914.7,0.237,4.515
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,cut_12,-5.905,3556.6,0.462,3.037
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,cut_20,-10.572,3556.6,0.602,2.272
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,cut_4,-0.448,2935.6,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,cut_8,-2.163,2935.6,0.315,3.83
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,boost_12,6.793,696.1,0.257,4.137
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,boost_20,11.86,696.1,0.398,3.069
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,boost_20_bw1,4.68,766.2,0.158,5.701
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,boost_20_bw3,21.222,696.1,0.838,1.661
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,boost_4,0.54,696.1,0.19,4.985
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,boost_8,2.554,696.1,0.166,5.375
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,cut_12,-6.07,696.1,0.265,4.151
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,cut_20,-10.92,696.1,0.396,3.093
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,cut_4,-0.46,574.6,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,cut_8,-2.213,574.6,0.153,5.334
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,boost_12,6.632,112.5,0.277,3.774
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,boost_20,11.283,123.8,0.461,2.736
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,boost_20_bw1,2.718,112.5,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,boost_20_bw3,20.435,123.8,0.975,1.445
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,boost_4,0.536,112.5,0.206,4.632
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,boost_8,2.536,112.5,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,cut_12,-5.987,112.5,0.269,3.797
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,cut_20,-10.57,112.5,0.418,2.673
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,cut_4,-0.458,112.5,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,cut_8,-2.205,112.5,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,boost_12,7.115,20.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,boost_20,19.535,22.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,boost_20_bw1,19.338,22.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,boost_20_bw3,20.124,22.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,boost_4,0.432,20.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,boost_8,1.79,20.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,cut_12,-5.967,20.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,cut_20,-17.543,20.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,cut_4,-0.318,20.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,cut_8,-1.289,20.0,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,boost_12,6.78,1237.9,0.347,3.495
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,boost_20,11.812,1124.7,0.487,2.521
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,boost_20_bw1,4.614,1237.9,0.199,4.956
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,boost_20_bw3,20.936,1124.7,1.003,1.336
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,boost_4,0.539,1124.7,0.233,4.267
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,boost_8,2.553,1237.9,0.224,4.62
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,cut_12,-6.036,1124.7,0.378,3.262
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,cut_20,-10.834,1124.7,0.56,2.346
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,cut_4,-0.458,1021.8,,
+massive_passive,UAD,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,cut_8,-2.202,1124.7,0.267,4.286
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_bell,10000.0,10000.0,0-11 knob,boost_11,7.473,11246.8,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_bell,10000.0,10000.0,0-11 knob,boost_11_bw1,5.024,11246.8,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_bell,10000.0,10000.0,0-11 knob,boost_11_bw3,10.893,11246.8,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_bell,10000.0,10000.0,0-11 knob,boost_2,0.143,10217.9,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_bell,10000.0,10000.0,0-11 knob,boost_4,0.907,10217.9,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_bell,10000.0,10000.0,0-11 knob,boost_7,5.473,11246.8,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_bell,10000.0,10000.0,0-11 knob,cut_11,-6.015,8433.9,0.647,2.472
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_bell,10000.0,10000.0,0-11 knob,cut_2,-0.104,6324.6,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_bell,10000.0,10000.0,0-11 knob,cut_4,-0.713,5746.0,0.46,3.083
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_bell,10000.0,10000.0,0-11 knob,cut_7,-4.38,6961.4,0.524,2.727
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_shelf,10000.0,12000.0,0-11 knob,boost_11,8.61,20000.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_shelf,10000.0,12000.0,0-11 knob,boost_11_bw1,9.484,20000.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_shelf,10000.0,12000.0,0-11 knob,boost_11_bw3,7.93,20000.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_shelf,10000.0,12000.0,0-11 knob,boost_2,0.175,20000.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_shelf,10000.0,12000.0,0-11 knob,boost_4,0.91,20000.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_shelf,10000.0,12000.0,0-11 knob,boost_7,5.9,20000.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_shelf,10000.0,12000.0,0-11 knob,cut_11,-1.472,5220.3,0.628,2.215
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_shelf,10000.0,12000.0,0-11 knob,cut_2,0.05,20000.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_shelf,10000.0,12000.0,0-11 knob,cut_4,0.526,20000.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,high_shelf,10000.0,12000.0,0-11 knob,cut_7,1.346,20000.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,himid_bell,3300.0,3300.0,0-11 knob,boost_11,7.552,3914.7,0.391,3.161
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,himid_bell,3300.0,3300.0,0-11 knob,boost_11_bw1,4.866,3914.7,0.239,4.364
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,himid_bell,3300.0,3300.0,0-11 knob,boost_11_bw3,11.333,3914.7,0.622,2.181
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,himid_bell,3300.0,3300.0,0-11 knob,boost_2,0.145,3556.6,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,himid_bell,3300.0,3300.0,0-11 knob,boost_4,0.909,3556.6,0.216,4.493
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,himid_bell,3300.0,3300.0,0-11 knob,boost_7,5.515,3914.7,0.323,3.639
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,himid_bell,3300.0,3300.0,0-11 knob,cut_11,-6.925,3231.2,0.513,2.648
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,himid_bell,3300.0,3300.0,0-11 knob,cut_2,-0.123,2935.6,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,himid_bell,3300.0,3300.0,0-11 knob,cut_4,-0.788,2667.0,0.344,3.595
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,himid_bell,3300.0,3300.0,0-11 knob,cut_7,-4.982,3231.2,0.463,3.002
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,lomid_bell,500.0,560.0,0-11 knob,boost_11,8.267,696.1,0.307,3.649
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,lomid_bell,500.0,560.0,0-11 knob,boost_11_bw1,4.717,766.2,0.185,5.225
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,lomid_bell,500.0,560.0,0-11 knob,boost_11_bw3,11.492,696.1,0.445,2.778
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,lomid_bell,500.0,560.0,0-11 knob,boost_2,0.295,696.1,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,lomid_bell,500.0,560.0,0-11 knob,boost_4,1.22,766.2,0.181,5.329
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,lomid_bell,500.0,560.0,0-11 knob,boost_7,6.322,696.1,0.255,4.094
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,lomid_bell,500.0,560.0,0-11 knob,cut_11,-7.873,696.1,0.363,3.402
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,lomid_bell,500.0,560.0,0-11 knob,cut_2,-0.261,696.1,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,lomid_bell,500.0,560.0,0-11 knob,cut_4,-1.092,574.6,0.179,4.973
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,lomid_bell,500.0,560.0,0-11 knob,cut_7,-5.926,696.1,0.309,3.819
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_bell,100.0,100.0,0-11 knob,boost_11,7.903,112.5,0.377,3.1
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_bell,100.0,100.0,0-11 knob,boost_11_bw1,2.322,112.5,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_bell,100.0,100.0,0-11 knob,boost_11_bw3,11.395,112.5,0.571,2.214
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_bell,100.0,100.0,0-11 knob,boost_2,0.354,112.5,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_bell,100.0,100.0,0-11 knob,boost_4,1.483,112.5,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_bell,100.0,100.0,0-11 knob,boost_7,6.229,112.5,0.319,3.516
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_bell,100.0,100.0,0-11 knob,cut_11,-7.649,112.5,0.416,2.917
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_bell,100.0,100.0,0-11 knob,cut_2,-0.316,112.5,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_bell,100.0,100.0,0-11 knob,cut_4,-1.338,112.5,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_bell,100.0,100.0,0-11 knob,cut_7,-5.918,112.5,0.351,3.361
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_shelf,100.0,100.0,0-11 knob,boost_11,9.649,22.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_shelf,100.0,100.0,0-11 knob,boost_11_bw1,9.709,22.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_shelf,100.0,100.0,0-11 knob,boost_11_bw3,10.032,22.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_shelf,100.0,100.0,0-11 knob,boost_2,0.335,20.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_shelf,100.0,100.0,0-11 knob,boost_4,1.019,20.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_shelf,100.0,100.0,0-11 knob,boost_7,6.541,20.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_shelf,100.0,100.0,0-11 knob,cut_11,-9.163,20.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_shelf,100.0,100.0,0-11 knob,cut_2,-0.283,20.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_shelf,100.0,100.0,0-11 knob,cut_4,-0.817,20.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,low_shelf,100.0,100.0,0-11 knob,cut_7,-6.23,20.0,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,mid_bell,1000.0,1000.0,0-11 knob,boost_11,7.572,1124.7,0.377,3.116
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,mid_bell,1000.0,1000.0,0-11 knob,boost_11_bw1,4.784,1237.9,0.255,4.295
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,mid_bell,1000.0,1000.0,0-11 knob,boost_11_bw3,11.469,1124.7,0.598,2.154
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,mid_bell,1000.0,1000.0,0-11 knob,boost_2,0.146,1237.9,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,mid_bell,1000.0,1000.0,0-11 knob,boost_4,0.912,1237.9,0.241,4.459
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,mid_bell,1000.0,1000.0,0-11 knob,boost_7,5.529,1124.7,0.308,3.589
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,mid_bell,1000.0,1000.0,0-11 knob,cut_11,-7.149,1124.7,0.46,2.848
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,mid_bell,1000.0,1000.0,0-11 knob,cut_2,-0.128,1124.7,,
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,mid_bell,1000.0,1000.0,0-11 knob,cut_4,-0.81,1021.8,0.275,4.06
+massive_passive_m,UAD,Manley Massive Passive MST,eq-massive-passive,mid_bell,1000.0,1000.0,0-11 knob,cut_7,-5.131,1124.7,0.389,3.277
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,boost_12,7.169,11246.8,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,boost_20,10.88,11246.8,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,boost_20_bw2,6.345,11246.8,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,boost_20_bw8,17.047,11246.8,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,boost_4,0.282,11246.8,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,boost_8,2.506,11246.8,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,cut_12,-5.991,9283.2,0.598,2.591
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,cut_20,-9.194,10217.9,0.732,2.148
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,cut_4,-0.229,6961.4,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_bell,10000.0,10000.0,0-20 knob,cut_8,-2.095,6961.4,0.423,3.201
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,boost_12,7.938,20000.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,boost_20,15.931,20000.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,boost_20_bw2,16.173,20000.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,boost_20_bw8,17.102,20000.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,boost_4,0.315,20000.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,boost_8,2.187,20000.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,cut_12,-1.116,3556.6,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,cut_20,-7.145,20000.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,cut_4,0.064,20000.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,high_shelf,10000.0,12000.0,0-20 knob,cut_8,0.732,20000.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,boost_12,7.429,2667.0,0.361,3.377
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,boost_20,11.448,2667.0,0.511,2.592
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,boost_20_bw2,6.522,2667.0,0.279,4.002
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,boost_20_bw8,18.759,2667.0,0.94,1.534
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,boost_4,0.292,2667.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,boost_8,2.56,2667.0,0.219,4.647
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,cut_12,-6.793,2423.1,0.425,3.06
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,cut_20,-10.553,2667.0,0.604,2.404
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,cut_4,-0.261,2201.4,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,himid_bell,3300.0,3300.0,0-20 knob,cut_8,-2.307,2201.4,0.285,4.051
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,boost_12,7.455,574.6,0.276,3.7
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,boost_20,11.507,632.5,0.433,2.877
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,boost_20_bw2,6.533,574.6,0.213,4.36
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,boost_20_bw8,19.285,632.5,0.824,1.677
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,boost_4,0.293,574.6,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,boost_8,2.569,574.6,0.166,5.071
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,cut_12,-6.891,574.6,0.303,3.569
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,cut_20,-10.692,574.6,0.419,2.771
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,cut_4,-0.264,574.6,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,lomid_bell,500.0,560.0,0-20 knob,cut_8,-2.337,574.6,0.194,4.851
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,boost_12,6.989,112.5,0.34,3.498
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,boost_20,10.406,112.5,0.463,2.742
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,boost_20_bw2,3.247,112.5,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,boost_20_bw8,18.648,112.5,0.952,1.474
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,boost_4,0.278,112.5,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,boost_8,2.487,112.5,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,cut_12,-6.526,112.5,0.357,3.334
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,cut_20,-9.876,112.5,0.5,2.533
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,cut_4,-0.252,112.5,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_bell,100.0,100.0,0-20 knob,cut_8,-2.269,112.5,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,boost_12,8.229,20.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,boost_20,18.136,20.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,boost_20_bw2,17.746,20.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,boost_20_bw8,18.627,20.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,boost_4,0.287,20.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,boost_8,1.822,20.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,cut_12,-7.156,20.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,cut_20,-16.019,20.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,cut_4,-0.241,20.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,low_shelf,100.0,100.0,0-20 knob,cut_8,-1.421,20.0,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,boost_12,7.433,1237.9,0.382,3.225
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,boost_20,11.452,1237.9,0.542,2.457
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,boost_20_bw2,6.527,1237.9,0.295,3.846
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,boost_20_bw8,18.771,1237.9,0.996,1.447
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,boost_4,0.292,1237.9,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,boost_8,2.563,1237.9,0.231,4.471
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,cut_12,-6.84,1237.9,0.434,3.059
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,cut_20,-10.617,1237.9,0.591,2.349
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,cut_4,-0.263,1124.7,,
+passive_eq,Softube,Manley Massive Passive,eq-massive-passive,mid_bell,1000.0,1000.0,0-20 knob,cut_8,-2.321,1237.9,0.291,4.159
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,high_shelf,10000.0,10000.0,0-11 boost,atten_11,-19.467,20000.0,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,high_shelf,10000.0,10000.0,0-11 boost,atten_2,-0.864,20000.0,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,high_shelf,10000.0,10000.0,0-11 boost,atten_4,-2.285,20000.0,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,high_shelf,10000.0,10000.0,0-11 boost,atten_6,-4.79,20000.0,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,high_shelf,10000.0,10000.0,0-11 boost,atten_8,-8.672,20000.0,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,high_shelf,10000.0,10000.0,0-11 boost,boost_11,19.402,10217.9,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,high_shelf,10000.0,10000.0,0-11 boost,boost_11_narrow,10.852,10217.9,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,high_shelf,10000.0,10000.0,0-11 boost,boost_2,0.96,10217.9,1.688,0.84
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,high_shelf,10000.0,10000.0,0-11 boost,boost_2_narrow,0.303,10217.9,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,high_shelf,10000.0,10000.0,0-11 boost,boost_4,3.019,10217.9,0.7,1.909
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,high_shelf,10000.0,10000.0,0-11 boost,boost_4_narrow,1.59,10217.9,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,high_shelf,10000.0,10000.0,0-11 boost,boost_6,5.284,10217.9,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,high_shelf,10000.0,10000.0,0-11 boost,boost_6_narrow,3.171,10217.9,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,high_shelf,10000.0,10000.0,0-11 boost,boost_8,8.752,10217.9,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,high_shelf,10000.0,10000.0,0-11 boost,boost_8_narrow,5.502,10217.9,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,low_shelf,100.0,100.0,0-11 boost,atten_11,-20.443,20.0,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,low_shelf,100.0,100.0,0-11 boost,atten_2,-0.125,20.0,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,low_shelf,100.0,100.0,0-11 boost,atten_4,-1.376,20.0,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,low_shelf,100.0,100.0,0-11 boost,atten_6,-6.326,20.0,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,low_shelf,100.0,100.0,0-11 boost,atten_8,-13.394,20.0,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,low_shelf,100.0,100.0,0-11 boost,boost_11,16.601,29.4,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,low_shelf,100.0,100.0,0-11 boost,boost_2,0.698,63.2,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,low_shelf,100.0,100.0,0-11 boost,boost_4,2.915,47.4,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,low_shelf,100.0,100.0,0-11 boost,boost_6,8.37,43.1,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,low_shelf,100.0,100.0,0-11 boost,boost_8,13.956,35.6,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,extra,,,,high_3k_boost_11,11.326,3231.2,0.368,3.137
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,extra,,,,low_20hz_boost_11,12.48,20.0,,
+puigtec_eqp1a,Waves,Pultec EQP-1A,eq-pultec,extra,,,,low_boost_and_cut,15.728,39.1,,
+puigtec_meq5,Waves,Pultec MEQ-5 midrange,eq-pultec,himid_bell,3300.0,3000.0,0-11 peak,peak_11,8.71,2935.6,1.26,1.081
+puigtec_meq5,Waves,Pultec MEQ-5 midrange,eq-pultec,himid_bell,3300.0,3000.0,0-11 peak,peak_2,0.586,2935.6,3.984,0.348
+puigtec_meq5,Waves,Pultec MEQ-5 midrange,eq-pultec,himid_bell,3300.0,3000.0,0-11 peak,peak_4,1.996,2935.6,2.216,0.624
+puigtec_meq5,Waves,Pultec MEQ-5 midrange,eq-pultec,himid_bell,3300.0,3000.0,0-11 peak,peak_6,3.364,2935.6,1.682,0.818
+puigtec_meq5,Waves,Pultec MEQ-5 midrange,eq-pultec,himid_bell,3300.0,3000.0,0-11 peak,peak_8,5.047,2935.6,1.42,0.964
+puigtec_meq5,Waves,Pultec MEQ-5 midrange,eq-pultec,lomid_bell,500.0,500.0,0-11 peak,peak_11,10.773,522.0,0.643,2.1
+puigtec_meq5,Waves,Pultec MEQ-5 midrange,eq-pultec,lomid_bell,500.0,500.0,0-11 peak,peak_2,0.993,522.0,2.201,0.666
+puigtec_meq5,Waves,Pultec MEQ-5 midrange,eq-pultec,lomid_bell,500.0,500.0,0-11 peak,peak_4,2.317,522.0,1.17,1.224
+puigtec_meq5,Waves,Pultec MEQ-5 midrange,eq-pultec,lomid_bell,500.0,500.0,0-11 peak,peak_6,3.905,522.0,0.84,1.669
+puigtec_meq5,Waves,Pultec MEQ-5 midrange,eq-pultec,lomid_bell,500.0,500.0,0-11 peak,peak_8,5.847,522.0,0.701,1.952
+puigtec_meq5,Waves,Pultec MEQ-5 midrange,eq-pultec,mid_bell,1000.0,1000.0,0-11 dip,dip_11,-10.787,1021.8,1.056,1.299
+puigtec_meq5,Waves,Pultec MEQ-5 midrange,eq-pultec,mid_bell,1000.0,1000.0,0-11 dip,dip_2,-0.439,1021.8,,
+puigtec_meq5,Waves,Pultec MEQ-5 midrange,eq-pultec,mid_bell,1000.0,1000.0,0-11 dip,dip_4,-3.212,1021.8,0.613,2.12
+puigtec_meq5,Waves,Pultec MEQ-5 midrange,eq-pultec,mid_bell,1000.0,1000.0,0-11 dip,dip_6,-7.123,1021.8,0.803,1.674
+puigtec_meq5,Waves,Pultec MEQ-5 midrange,eq-pultec,mid_bell,1000.0,1000.0,0-11 dip,dip_8,-9.939,1021.8,0.994,1.375
+q10,Waves,clean parametric,eq-digital,high_bell,10000.0,10000.0,dB,+12,12.0,10217.9,,
+q10,Waves,clean parametric,eq-digital,high_bell,10000.0,10000.0,dB,+3,3.0,10217.9,,
+q10,Waves,clean parametric,eq-digital,high_bell,10000.0,10000.0,dB,+6,6.001,10217.9,,
+q10,Waves,clean parametric,eq-digital,high_bell,10000.0,10000.0,dB,+9,9.0,10217.9,,
+q10,Waves,clean parametric,eq-digital,high_bell,10000.0,10000.0,dB,-12,-12.003,10217.9,,
+q10,Waves,clean parametric,eq-digital,high_bell,10000.0,10000.0,dB,-3,-3.0,9283.2,,
+q10,Waves,clean parametric,eq-digital,high_bell,10000.0,10000.0,dB,-6,-6.001,10217.9,,
+q10,Waves,clean parametric,eq-digital,high_bell,10000.0,10000.0,dB,-9,-9.003,10217.9,,
+q10,Waves,clean parametric,eq-digital,high_shelf,10000.0,10000.0,dB,+12,11.369,20000.0,,
+q10,Waves,clean parametric,eq-digital,high_shelf,10000.0,10000.0,dB,+3,2.876,20000.0,,
+q10,Waves,clean parametric,eq-digital,high_shelf,10000.0,10000.0,dB,+6,5.739,20000.0,,
+q10,Waves,clean parametric,eq-digital,high_shelf,10000.0,10000.0,dB,+9,8.575,20000.0,,
+q10,Waves,clean parametric,eq-digital,high_shelf,10000.0,10000.0,dB,-12,-11.367,20000.0,,
+q10,Waves,clean parametric,eq-digital,high_shelf,10000.0,10000.0,dB,-3,-2.876,20000.0,,
+q10,Waves,clean parametric,eq-digital,high_shelf,10000.0,10000.0,dB,-6,-5.738,20000.0,,
+q10,Waves,clean parametric,eq-digital,high_shelf,10000.0,10000.0,dB,-9,-8.573,20000.0,,
+q10,Waves,clean parametric,eq-digital,himid_bell,3300.0,3300.0,dB,+12,11.998,3231.2,0.275,4.163
+q10,Waves,clean parametric,eq-digital,himid_bell,3300.0,3300.0,dB,+3,3.0,3231.2,0.243,4.607
+q10,Waves,clean parametric,eq-digital,himid_bell,3300.0,3300.0,dB,+6,5.999,3231.2,0.249,4.512
+q10,Waves,clean parametric,eq-digital,himid_bell,3300.0,3300.0,dB,+9,8.999,3231.2,0.26,4.354
+q10,Waves,clean parametric,eq-digital,himid_bell,3300.0,3300.0,dB,-12,-11.999,3231.2,0.275,4.155
+q10,Waves,clean parametric,eq-digital,himid_bell,3300.0,3300.0,dB,-3,-3.0,3231.2,0.243,4.607
+q10,Waves,clean parametric,eq-digital,himid_bell,3300.0,3300.0,dB,-6,-6.0,3231.2,0.249,4.513
+q10,Waves,clean parametric,eq-digital,himid_bell,3300.0,3300.0,dB,-9,-8.999,3231.2,0.26,4.354
+q10,Waves,clean parametric,eq-digital,lomid_bell,500.0,500.0,dB,+12,12.006,474.3,0.217,4.445
+q10,Waves,clean parametric,eq-digital,lomid_bell,500.0,500.0,dB,+3,3.005,474.3,0.177,4.97
+q10,Waves,clean parametric,eq-digital,lomid_bell,500.0,500.0,dB,+6,6.008,474.3,0.184,4.859
+q10,Waves,clean parametric,eq-digital,lomid_bell,500.0,500.0,dB,+9,9.009,474.3,0.198,4.68
+q10,Waves,clean parametric,eq-digital,lomid_bell,500.0,500.0,dB,-12,-12.056,474.3,0.217,4.475
+q10,Waves,clean parametric,eq-digital,lomid_bell,500.0,500.0,dB,-3,-3.008,474.3,0.177,4.979
+q10,Waves,clean parametric,eq-digital,lomid_bell,500.0,500.0,dB,-6,-6.019,474.3,0.185,4.878
+q10,Waves,clean parametric,eq-digital,lomid_bell,500.0,500.0,dB,-9,-9.034,474.3,0.198,4.707
+q10,Waves,clean parametric,eq-digital,low_bell,100.0,100.0,dB,+12,12.108,112.5,,
+q10,Waves,clean parametric,eq-digital,low_bell,100.0,100.0,dB,+3,3.049,112.5,,
+q10,Waves,clean parametric,eq-digital,low_bell,100.0,100.0,dB,+6,6.083,112.5,,
+q10,Waves,clean parametric,eq-digital,low_bell,100.0,100.0,dB,+9,9.104,112.5,,
+q10,Waves,clean parametric,eq-digital,low_bell,100.0,100.0,dB,-12,-12.387,112.5,,
+q10,Waves,clean parametric,eq-digital,low_bell,100.0,100.0,dB,-3,-3.063,112.5,,
+q10,Waves,clean parametric,eq-digital,low_bell,100.0,100.0,dB,-6,-6.145,112.5,,
+q10,Waves,clean parametric,eq-digital,low_bell,100.0,100.0,dB,-9,-9.251,112.5,,
+q10,Waves,clean parametric,eq-digital,low_shelf,100.0,100.0,dB,+12,11.23,20.0,,
+q10,Waves,clean parametric,eq-digital,low_shelf,100.0,100.0,dB,+3,2.834,20.0,,
+q10,Waves,clean parametric,eq-digital,low_shelf,100.0,100.0,dB,+6,5.661,20.0,,
+q10,Waves,clean parametric,eq-digital,low_shelf,100.0,100.0,dB,+9,8.465,20.0,,
+q10,Waves,clean parametric,eq-digital,low_shelf,100.0,100.0,dB,-12,-11.121,20.0,,
+q10,Waves,clean parametric,eq-digital,low_shelf,100.0,100.0,dB,-3,-2.828,20.0,,
+q10,Waves,clean parametric,eq-digital,low_shelf,100.0,100.0,dB,-6,-5.635,20.0,,
+q10,Waves,clean parametric,eq-digital,low_shelf,100.0,100.0,dB,-9,-8.404,20.0,,
+q10,Waves,clean parametric,eq-digital,mid_bell,1000.0,1000.0,dB,+12,11.989,1021.8,0.238,4.402
+q10,Waves,clean parametric,eq-digital,mid_bell,1000.0,1000.0,dB,+3,2.996,1021.8,0.196,4.924
+q10,Waves,clean parametric,eq-digital,mid_bell,1000.0,1000.0,dB,+6,5.994,1021.8,0.204,4.817
+q10,Waves,clean parametric,eq-digital,mid_bell,1000.0,1000.0,dB,+9,8.991,1021.8,0.218,4.646
+q10,Waves,clean parametric,eq-digital,mid_bell,1000.0,1000.0,dB,-12,-11.956,1021.8,0.237,4.403
+q10,Waves,clean parametric,eq-digital,mid_bell,1000.0,1000.0,dB,-3,-2.994,1124.7,0.215,4.93
+q10,Waves,clean parametric,eq-digital,mid_bell,1000.0,1000.0,dB,-6,-5.986,1124.7,0.224,4.832
+q10,Waves,clean parametric,eq-digital,mid_bell,1000.0,1000.0,dB,-9,-8.973,1021.8,0.217,4.666
+sieq,Soundtoys,API 550-style,eq-api,high_shelf,10000.0,,dB,+12,-13.288,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,high_shelf,10000.0,,dB,+3,-13.288,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,high_shelf,10000.0,,dB,+6,-13.288,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,high_shelf,10000.0,,dB,+9,-13.288,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,high_shelf,10000.0,,dB,-12,-13.287,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,high_shelf,10000.0,,dB,-3,-13.288,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,high_shelf,10000.0,,dB,-6,-13.288,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,high_shelf,10000.0,,dB,-9,-13.288,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,himid_bell,3300.0,3500.0,dB,+3,-13.285,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,himid_bell,3300.0,3500.0,dB,+6,-13.285,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,himid_bell,3300.0,3500.0,dB,+8,-13.285,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,himid_bell,3300.0,3500.0,dB,-3,-13.285,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,himid_bell,3300.0,3500.0,dB,-6,-13.285,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,himid_bell,3300.0,3500.0,dB,-8,-13.285,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,low_shelf,100.0,,dB,+12,-13.158,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,low_shelf,100.0,,dB,+3,-13.158,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,low_shelf,100.0,,dB,+6,-13.158,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,low_shelf,100.0,,dB,+9,-13.158,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,low_shelf,100.0,,dB,-12,-12.824,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,low_shelf,100.0,,dB,-3,-13.158,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,low_shelf,100.0,,dB,-6,-13.158,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,low_shelf,100.0,,dB,-9,-13.158,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,mid_bell,1000.0,1000.0,dB,+3,-13.285,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,mid_bell,1000.0,1000.0,dB,+6,-13.285,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,mid_bell,1000.0,1000.0,dB,+8,-13.285,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,mid_bell,1000.0,1000.0,dB,-3,-13.285,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,mid_bell,1000.0,1000.0,dB,-6,-13.285,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,mid_bell,1000.0,1000.0,dB,-8,-13.283,20.0,,
+sieq,Soundtoys,API 550-style,eq-api,extra,,,,drive_+15,8.476,323.1,0.52,2.715
+sieq,Soundtoys,API 550-style,eq-api,extra,,,,drive_-15,8.476,323.1,0.52,2.715
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,high_bell,10000.0,10000.0,dB,+12,11.99,10217.9,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,high_bell,10000.0,10000.0,dB,+3,3.0,10217.9,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,high_bell,10000.0,10000.0,dB,+6,5.998,10217.9,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,high_bell,10000.0,10000.0,dB,+9,8.995,10217.9,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,high_bell,10000.0,10000.0,dB,-12,-11.993,10217.9,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,high_bell,10000.0,10000.0,dB,-3,-3.0,10217.9,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,high_bell,10000.0,10000.0,dB,-6,-5.999,10217.9,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,high_bell,10000.0,10000.0,dB,-9,-8.996,10217.9,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,high_shelf,10000.0,10000.0,dB,+12,9.572,20000.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,high_shelf,10000.0,10000.0,dB,+3,2.414,20000.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,high_shelf,10000.0,10000.0,dB,+6,4.82,20000.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,high_shelf,10000.0,10000.0,dB,+9,7.208,20000.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,high_shelf,10000.0,10000.0,dB,-12,-9.569,20000.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,high_shelf,10000.0,10000.0,dB,-3,-2.414,20000.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,high_shelf,10000.0,10000.0,dB,-6,-4.819,20000.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,high_shelf,10000.0,10000.0,dB,-9,-7.206,20000.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,himid_bell,3300.0,3300.0,dB,+12,11.989,3231.2,0.602,2.148
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,himid_bell,3300.0,3300.0,dB,+3,2.999,3231.2,0.35,3.289
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,himid_bell,3300.0,3300.0,dB,+6,5.997,3231.2,0.474,2.613
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,himid_bell,3300.0,3300.0,dB,+9,8.993,3231.2,0.557,2.29
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,himid_bell,3300.0,3300.0,dB,-12,-11.989,3231.2,0.601,2.148
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,himid_bell,3300.0,3300.0,dB,-3,-3.0,3231.2,0.35,3.29
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,himid_bell,3300.0,3300.0,dB,-6,-5.997,3231.2,0.474,2.611
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,himid_bell,3300.0,3300.0,dB,-9,-8.993,3231.2,0.557,2.291
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,lomid_bell,500.0,500.0,dB,+12,11.949,474.3,0.58,2.15
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,lomid_bell,500.0,500.0,dB,+3,3.002,474.3,0.338,3.276
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,lomid_bell,500.0,500.0,dB,+6,5.994,474.3,0.455,2.639
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,lomid_bell,500.0,500.0,dB,+9,8.976,474.3,0.538,2.296
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,lomid_bell,500.0,500.0,dB,-12,-12.011,474.3,0.588,2.118
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,lomid_bell,500.0,500.0,dB,-3,-3.006,474.3,0.338,3.271
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,lomid_bell,500.0,500.0,dB,-6,-6.007,474.3,0.456,2.641
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,lomid_bell,500.0,500.0,dB,-9,-9.008,474.3,0.542,2.275
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,low_bell,100.0,100.0,dB,+12,12.082,102.2,0.63,2.11
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,low_bell,100.0,100.0,dB,+3,3.037,112.5,0.4,3.32
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,low_bell,100.0,100.0,dB,+6,6.057,102.2,0.5,2.577
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,low_bell,100.0,100.0,dB,+9,9.073,102.2,0.583,2.25
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,low_bell,100.0,100.0,dB,-12,-12.279,102.2,0.657,2.001
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,low_bell,100.0,100.0,dB,-3,-3.057,112.5,0.404,3.271
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,low_bell,100.0,100.0,dB,-6,-6.105,102.2,0.505,2.512
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,low_bell,100.0,100.0,dB,-9,-9.182,102.2,0.594,2.172
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,low_shelf,100.0,100.0,dB,+12,11.224,20.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,low_shelf,100.0,100.0,dB,+3,2.804,20.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,low_shelf,100.0,100.0,dB,+6,5.611,20.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,low_shelf,100.0,100.0,dB,+9,8.419,20.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,low_shelf,100.0,100.0,dB,-12,-11.113,20.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,low_shelf,100.0,100.0,dB,-3,-2.798,20.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,low_shelf,100.0,100.0,dB,-6,-5.585,20.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,low_shelf,100.0,100.0,dB,-9,-8.358,20.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,mid_bell,1000.0,1000.0,dB,+12,11.979,1021.8,0.624,2.158
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,mid_bell,1000.0,1000.0,dB,+3,2.995,1021.8,0.362,3.299
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,mid_bell,1000.0,1000.0,dB,+6,5.99,1021.8,0.492,2.625
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,mid_bell,1000.0,1000.0,dB,+9,8.985,1021.8,0.58,2.294
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,mid_bell,1000.0,1000.0,dB,-12,-11.944,1021.8,0.62,2.172
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,mid_bell,1000.0,1000.0,dB,-3,-2.993,1021.8,0.362,3.298
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,mid_bell,1000.0,1000.0,dB,-6,-5.983,1021.8,0.491,2.628
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,mid_bell,1000.0,1000.0,dB,-9,-8.967,1021.8,0.578,2.3
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,extra,,,,flat_sat,0.0,20.0,,
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,extra,,,,low_+10_clean,10.077,102.2,0.603,2.185
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,extra,,,,low_+10_sat,10.333,102.2,0.594,2.193
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,extra,,,,model_british,10.337,102.2,0.417,2.96
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,extra,,,,model_german,10.337,102.2,0.405,3.026
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,extra,,,,model_soviet,10.336,102.2,0.48,2.644
+slickeq,Tokyo Dawn,switchable saturation at a fixed curve,eq-digital,extra,,,,out_drive_12,0.0,20.0,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,high_shelf,10000.0,10000.0,dB,+12,12.366,20000.0,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,high_shelf,10000.0,10000.0,dB,+3,2.099,20000.0,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,high_shelf,10000.0,10000.0,dB,+6,5.497,20000.0,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,high_shelf,10000.0,10000.0,dB,+9,8.943,20000.0,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,high_shelf,10000.0,10000.0,dB,-12,-11.777,20000.0,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,high_shelf,10000.0,10000.0,dB,-3,-3.597,20000.0,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,high_shelf,10000.0,10000.0,dB,-6,-6.295,20000.0,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,high_shelf,10000.0,10000.0,dB,-9,-8.883,20000.0,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,himid_bell,3300.0,3300.0,dB,+12,7.729,3556.6,0.377,3.244
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,himid_bell,3300.0,3300.0,dB,+3,0.997,3556.6,0.232,4.589
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,himid_bell,3300.0,3300.0,dB,+6,2.745,3556.6,0.266,4.198
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,himid_bell,3300.0,3300.0,dB,+9,5.052,3556.6,0.314,3.718
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,himid_bell,3300.0,3300.0,dB,-12,-7.808,3556.6,0.375,3.258
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,himid_bell,3300.0,3300.0,dB,-3,-1.11,3556.6,0.231,4.604
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,himid_bell,3300.0,3300.0,dB,-6,-2.92,3556.6,0.263,4.222
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,himid_bell,3300.0,3300.0,dB,-9,-5.221,3556.6,0.311,3.742
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,lomid_bell,500.0,500.0,dB,+12,7.298,574.6,0.351,3.295
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,lomid_bell,500.0,500.0,dB,+3,0.79,574.6,0.174,5.131
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,lomid_bell,500.0,500.0,dB,+6,2.498,574.6,0.218,4.498
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,lomid_bell,500.0,500.0,dB,+9,4.781,574.6,0.281,3.81
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,lomid_bell,500.0,500.0,dB,-12,-8.151,574.6,0.335,3.404
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,lomid_bell,500.0,500.0,dB,-3,-1.333,574.6,0.169,5.214
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,lomid_bell,500.0,500.0,dB,-6,-3.195,574.6,0.21,4.61
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,lomid_bell,500.0,500.0,dB,-9,-5.496,574.6,0.271,3.893
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,low_shelf,100.0,100.0,dB,+12,12.173,22.0,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,low_shelf,100.0,100.0,dB,+3,2.148,26.7,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,low_shelf,100.0,100.0,dB,+6,5.417,22.0,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,low_shelf,100.0,100.0,dB,+9,8.968,22.0,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,low_shelf,100.0,100.0,dB,-12,-12.152,20.0,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,low_shelf,100.0,100.0,dB,-3,-2.748,26.7,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,low_shelf,100.0,100.0,dB,-6,-6.134,22.0,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,low_shelf,100.0,100.0,dB,-9,-9.286,22.0,,
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,mid_bell,1000.0,1000.0,dB,+12,7.273,1021.8,0.358,3.289
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,mid_bell,1000.0,1000.0,dB,+3,0.787,1021.8,0.177,5.114
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,mid_bell,1000.0,1000.0,dB,+6,2.487,1021.8,0.223,4.507
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,mid_bell,1000.0,1000.0,dB,+9,4.762,1021.8,0.286,3.839
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,mid_bell,1000.0,1000.0,dB,-12,-8.078,1021.8,0.341,3.41
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,mid_bell,1000.0,1000.0,dB,-3,-1.326,1124.7,0.19,5.182
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,mid_bell,1000.0,1000.0,dB,-6,-3.174,1124.7,0.236,4.625
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,mid_bell,1000.0,1000.0,dB,-9,-5.454,1021.8,0.275,3.939
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,extra,,,,lmf_1k_+12_q0.7,7.273,1021.8,0.291,3.8
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,extra,,,,lmf_1k_+12_q2.5,7.272,1021.8,0.697,1.928
+ssl_native_eq,SSL,"SSL 9000 channel EQ, E and G curves",eq-ssl,extra,,,,lmf_1k_+3_q1,0.787,1021.8,0.177,5.114
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,high_bell,10000.0,10000.0,dB,+12,12.014,10217.9,1.028,1.378
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,high_bell,10000.0,10000.0,dB,+3,3.011,10217.9,1.03,1.375
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,high_bell,10000.0,10000.0,dB,+6,6.017,10217.9,1.029,1.376
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,high_bell,10000.0,10000.0,dB,+9,9.017,10217.9,1.028,1.378
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,high_bell,10000.0,10000.0,dB,-12,-12.138,10217.9,1.037,1.362
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,high_bell,10000.0,10000.0,dB,-3,-3.017,10217.9,1.031,1.372
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,high_bell,10000.0,10000.0,dB,-6,-6.043,10217.9,1.033,1.369
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,high_bell,10000.0,10000.0,dB,-9,-9.082,10217.9,1.034,1.366
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,high_shelf,10000.0,10000.0,dB,+12,11.258,20000.0,,
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,high_shelf,10000.0,10000.0,dB,+3,2.861,20000.0,,
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,high_shelf,10000.0,10000.0,dB,+6,5.703,20000.0,,
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,high_shelf,10000.0,10000.0,dB,+9,8.507,20000.0,,
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,high_shelf,10000.0,10000.0,dB,-12,-11.284,20000.0,,
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,high_shelf,10000.0,10000.0,dB,-3,-2.864,20000.0,,
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,high_shelf,10000.0,10000.0,dB,-6,-5.715,20000.0,,
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,high_shelf,10000.0,10000.0,dB,-9,-8.529,20000.0,,
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,himid_bell,3300.0,3300.0,dB,+12,11.984,3231.2,0.972,1.396
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,himid_bell,3300.0,3300.0,dB,+3,2.999,3231.2,0.973,1.394
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,himid_bell,3300.0,3300.0,dB,+6,5.996,3231.2,0.973,1.395
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,himid_bell,3300.0,3300.0,dB,+9,8.992,3231.2,0.973,1.395
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,himid_bell,3300.0,3300.0,dB,-12,-12.008,3231.2,0.971,1.393
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,himid_bell,3300.0,3300.0,dB,-3,-3.0,3231.2,0.973,1.393
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,himid_bell,3300.0,3300.0,dB,-6,-6.002,3231.2,0.972,1.393
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,himid_bell,3300.0,3300.0,dB,-9,-9.005,3231.2,0.972,1.393
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,lomid_bell,500.0,500.0,dB,+12,11.899,522.0,1.025,1.406
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,lomid_bell,500.0,500.0,dB,+3,2.981,522.0,1.029,1.398
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,lomid_bell,500.0,500.0,dB,+6,5.961,522.0,1.028,1.4
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,lomid_bell,500.0,500.0,dB,+9,8.934,522.0,1.027,1.403
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,lomid_bell,500.0,500.0,dB,-12,-11.935,522.0,1.031,1.386
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,lomid_bell,500.0,500.0,dB,-3,-2.984,522.0,1.03,1.394
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,lomid_bell,500.0,500.0,dB,-6,-5.968,522.0,1.031,1.392
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,lomid_bell,500.0,500.0,dB,-9,-8.952,522.0,1.031,1.389
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,low_bell,100.0,100.0,dB,+12,12.038,102.2,1.036,1.345
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,low_bell,100.0,100.0,dB,+3,3.021,102.2,1.041,1.328
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,low_bell,100.0,100.0,dB,+6,6.032,102.2,1.039,1.335
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,low_bell,100.0,100.0,dB,+9,9.038,102.2,1.037,1.34
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,low_bell,100.0,100.0,dB,-12,-12.211,102.2,1.06,1.269
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,low_bell,100.0,100.0,dB,-3,-3.03,102.2,1.046,1.31
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,low_bell,100.0,100.0,dB,-6,-6.073,102.2,1.05,1.299
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,low_bell,100.0,100.0,dB,-9,-9.133,102.2,1.054,1.286
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,low_shelf,100.0,100.0,dB,+12,12.17,26.7,,
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,low_shelf,100.0,100.0,dB,+3,3.095,26.7,,
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,low_shelf,100.0,100.0,dB,+6,6.149,26.7,,
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,low_shelf,100.0,100.0,dB,+9,9.172,26.7,,
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,low_shelf,100.0,100.0,dB,-12,-13.099,39.1,,
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,low_shelf,100.0,100.0,dB,-3,-3.144,32.3,,
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,low_shelf,100.0,100.0,dB,-6,-6.364,35.6,,
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,low_shelf,100.0,100.0,dB,-9,-9.672,35.6,,
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,mid_bell,1000.0,1000.0,dB,+12,11.973,1021.8,1.015,1.395
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,mid_bell,1000.0,1000.0,dB,+3,2.996,1021.8,1.016,1.392
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,mid_bell,1000.0,1000.0,dB,+6,5.991,1021.8,1.016,1.393
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,mid_bell,1000.0,1000.0,dB,+9,8.983,1021.8,1.016,1.393
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,mid_bell,1000.0,1000.0,dB,-12,-11.985,1021.8,1.015,1.388
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,mid_bell,1000.0,1000.0,dB,-3,-2.995,1021.8,1.016,1.39
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,mid_bell,1000.0,1000.0,dB,-6,-5.992,1021.8,1.016,1.39
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,mid_bell,1000.0,1000.0,dB,-9,-8.988,1021.8,1.016,1.389
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,extra,,,,bell_1k_+12_q0.3,12.0,1021.8,0.306,3.7
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,extra,,,,bell_1k_+12_q0.7,11.988,1021.8,0.712,1.919
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,extra,,,,bell_1k_+12_q2,11.886,1021.8,1.987,0.733
+tdr_nova,Tokyo Dawn,clean parallel dynamic EQ,eq-digital,extra,,,,bell_1k_+12_q6,11.058,1021.8,5.114,0.288
+veq3,Waves,Neve 1073 EQ,eq-neve,high_shelf,10000.0,10000.0,dB,+12,11.438,12379.3,,
+veq3,Waves,Neve 1073 EQ,eq-neve,high_shelf,10000.0,10000.0,dB,+3,2.824,5746.0,,
+veq3,Waves,Neve 1073 EQ,eq-neve,high_shelf,10000.0,10000.0,dB,+6,5.788,8433.9,,
+veq3,Waves,Neve 1073 EQ,eq-neve,high_shelf,10000.0,10000.0,dB,+9,8.719,10217.9,,
+veq3,Waves,Neve 1073 EQ,eq-neve,high_shelf,10000.0,10000.0,dB,-12,-13.954,20000.0,,
+veq3,Waves,Neve 1073 EQ,eq-neve,high_shelf,10000.0,10000.0,dB,-3,-3.496,13625.8,,
+veq3,Waves,Neve 1073 EQ,eq-neve,high_shelf,10000.0,10000.0,dB,-6,-7.461,20000.0,,
+veq3,Waves,Neve 1073 EQ,eq-neve,high_shelf,10000.0,10000.0,dB,-9,-10.279,20000.0,,
+veq3,Waves,Neve 1073 EQ,eq-neve,himid_bell,3300.0,3200.0,dB,+12,11.94,3556.6,0.343,3.552
+veq3,Waves,Neve 1073 EQ,eq-neve,himid_bell,3300.0,3200.0,dB,+3,3.05,6961.4,,
+veq3,Waves,Neve 1073 EQ,eq-neve,himid_bell,3300.0,3200.0,dB,+6,5.954,3914.7,0.243,4.371
+veq3,Waves,Neve 1073 EQ,eq-neve,himid_bell,3300.0,3200.0,dB,+9,8.922,3556.6,0.284,3.942
+veq3,Waves,Neve 1073 EQ,eq-neve,himid_bell,3300.0,3200.0,dB,-12,-12.115,3231.2,0.431,3.055
+veq3,Waves,Neve 1073 EQ,eq-neve,himid_bell,3300.0,3200.0,dB,-3,-3.12,2667.0,0.358,3.502
+veq3,Waves,Neve 1073 EQ,eq-neve,himid_bell,3300.0,3200.0,dB,-6,-6.158,2935.6,0.356,3.482
+veq3,Waves,Neve 1073 EQ,eq-neve,himid_bell,3300.0,3200.0,dB,-9,-9.094,2935.6,0.352,3.403
+veq3,Waves,Neve 1073 EQ,eq-neve,lomid_bell,500.0,360.0,dB,+12,11.976,323.1,0.326,3.327
+veq3,Waves,Neve 1073 EQ,eq-neve,lomid_bell,500.0,360.0,dB,+3,3.011,391.5,0.267,4.215
+veq3,Waves,Neve 1073 EQ,eq-neve,lomid_bell,500.0,360.0,dB,+6,5.983,391.5,0.307,3.901
+veq3,Waves,Neve 1073 EQ,eq-neve,lomid_bell,500.0,360.0,dB,+9,8.977,391.5,0.345,3.641
+veq3,Waves,Neve 1073 EQ,eq-neve,lomid_bell,500.0,360.0,dB,-12,-12.057,391.5,0.442,3.079
+veq3,Waves,Neve 1073 EQ,eq-neve,lomid_bell,500.0,360.0,dB,-3,-2.978,391.5,0.338,3.775
+veq3,Waves,Neve 1073 EQ,eq-neve,lomid_bell,500.0,360.0,dB,-6,-6.058,391.5,0.349,3.672
+veq3,Waves,Neve 1073 EQ,eq-neve,lomid_bell,500.0,360.0,dB,-9,-9.013,391.5,0.386,3.444
+veq3,Waves,Neve 1073 EQ,eq-neve,low_shelf,100.0,100.0,dB,+12,12.099,57.5,,
+veq3,Waves,Neve 1073 EQ,eq-neve,low_shelf,100.0,100.0,dB,+3,3.071,47.4,,
+veq3,Waves,Neve 1073 EQ,eq-neve,low_shelf,100.0,100.0,dB,+6,6.094,57.5,,
+veq3,Waves,Neve 1073 EQ,eq-neve,low_shelf,100.0,100.0,dB,+9,9.055,57.5,,
+veq3,Waves,Neve 1073 EQ,eq-neve,low_shelf,100.0,100.0,dB,-12,-12.171,76.6,,
+veq3,Waves,Neve 1073 EQ,eq-neve,low_shelf,100.0,100.0,dB,-3,-3.196,123.8,,
+veq3,Waves,Neve 1073 EQ,eq-neve,low_shelf,100.0,100.0,dB,-6,-6.198,112.5,,
+veq3,Waves,Neve 1073 EQ,eq-neve,low_shelf,100.0,100.0,dB,-9,-9.143,84.3,,
+veq3,Waves,Neve 1073 EQ,eq-neve,mid_bell,1000.0,1200.0,dB,+12,11.981,1124.7,0.327,3.5
+veq3,Waves,Neve 1073 EQ,eq-neve,mid_bell,1000.0,1200.0,dB,+3,3.086,1237.9,0.201,4.612
+veq3,Waves,Neve 1073 EQ,eq-neve,mid_bell,1000.0,1200.0,dB,+6,6.051,1237.9,0.268,4.149
+veq3,Waves,Neve 1073 EQ,eq-neve,mid_bell,1000.0,1200.0,dB,+9,9.035,1124.7,0.283,3.851
+veq3,Waves,Neve 1073 EQ,eq-neve,mid_bell,1000.0,1200.0,dB,-12,-11.941,1124.7,0.364,3.355
+veq3,Waves,Neve 1073 EQ,eq-neve,mid_bell,1000.0,1200.0,dB,-3,-3.009,1124.7,0.335,3.757
+veq3,Waves,Neve 1073 EQ,eq-neve,mid_bell,1000.0,1200.0,dB,-6,-5.98,1124.7,0.319,3.778
+veq3,Waves,Neve 1073 EQ,eq-neve,mid_bell,1000.0,1200.0,dB,-9,-8.989,1124.7,0.335,3.605
+veq3,Waves,Neve 1073 EQ,eq-neve,extra,,,,analog_off_flat,0.003,63.2,,
+veq3,Waves,Neve 1073 EQ,eq-neve,extra,,,,hpf_50,-18.115,20.0,,
+veq3,Waves,Neve 1073 EQ,eq-neve,extra,,,,low_35hz_+12,8.826,47.4,0.499,2.028
+veq4,Waves,Neve 1081 EQ,eq-neve,high_bell,10000.0,10000.0,dB,+12,12.18,10217.9,,
+veq4,Waves,Neve 1081 EQ,eq-neve,high_bell,10000.0,10000.0,dB,+3,3.158,7662.4,,
+veq4,Waves,Neve 1081 EQ,eq-neve,high_bell,10000.0,10000.0,dB,+6,6.187,8433.9,,
+veq4,Waves,Neve 1081 EQ,eq-neve,high_bell,10000.0,10000.0,dB,+9,9.231,10217.9,,
+veq4,Waves,Neve 1081 EQ,eq-neve,high_bell,10000.0,10000.0,dB,-12,-11.892,9283.2,,
+veq4,Waves,Neve 1081 EQ,eq-neve,high_bell,10000.0,10000.0,dB,-3,-2.877,9283.2,,
+veq4,Waves,Neve 1081 EQ,eq-neve,high_bell,10000.0,10000.0,dB,-6,-5.93,9283.2,,
+veq4,Waves,Neve 1081 EQ,eq-neve,high_bell,10000.0,10000.0,dB,-9,-8.855,9283.2,,
+veq4,Waves,Neve 1081 EQ,eq-neve,high_shelf,10000.0,10000.0,dB,+12,12.761,20000.0,,
+veq4,Waves,Neve 1081 EQ,eq-neve,high_shelf,10000.0,10000.0,dB,+3,3.727,20000.0,,
+veq4,Waves,Neve 1081 EQ,eq-neve,high_shelf,10000.0,10000.0,dB,+6,6.754,20000.0,,
+veq4,Waves,Neve 1081 EQ,eq-neve,high_shelf,10000.0,10000.0,dB,+9,9.769,20000.0,,
+veq4,Waves,Neve 1081 EQ,eq-neve,high_shelf,10000.0,10000.0,dB,-12,-11.18,20000.0,,
+veq4,Waves,Neve 1081 EQ,eq-neve,high_shelf,10000.0,10000.0,dB,-3,-2.254,16508.1,,
+veq4,Waves,Neve 1081 EQ,eq-neve,high_shelf,10000.0,10000.0,dB,-6,-5.218,20000.0,,
+veq4,Waves,Neve 1081 EQ,eq-neve,high_shelf,10000.0,10000.0,dB,-9,-8.235,20000.0,,
+veq4,Waves,Neve 1081 EQ,eq-neve,himid_bell,3300.0,3300.0,dB,+12,8.049,3231.2,0.498,2.704
+veq4,Waves,Neve 1081 EQ,eq-neve,himid_bell,3300.0,3300.0,dB,+3,2.059,3231.2,0.455,2.912
+veq4,Waves,Neve 1081 EQ,eq-neve,himid_bell,3300.0,3300.0,dB,+6,4.001,3231.2,0.458,2.904
+veq4,Waves,Neve 1081 EQ,eq-neve,himid_bell,3300.0,3300.0,dB,+9,6.001,3231.2,0.476,2.81
+veq4,Waves,Neve 1081 EQ,eq-neve,himid_bell,3300.0,3300.0,dB,-12,-7.981,3231.2,0.424,2.966
+veq4,Waves,Neve 1081 EQ,eq-neve,himid_bell,3300.0,3300.0,dB,-3,-1.937,3231.2,0.359,3.374
+veq4,Waves,Neve 1081 EQ,eq-neve,himid_bell,3300.0,3300.0,dB,-6,-3.968,3231.2,0.381,3.226
+veq4,Waves,Neve 1081 EQ,eq-neve,himid_bell,3300.0,3300.0,dB,-9,-5.956,3231.2,0.396,3.131
+veq4,Waves,Neve 1081 EQ,eq-neve,lomid_bell,500.0,470.0,dB,+12,8.054,474.3,0.446,2.719
+veq4,Waves,Neve 1081 EQ,eq-neve,lomid_bell,500.0,470.0,dB,+3,1.99,474.3,0.377,3.074
+veq4,Waves,Neve 1081 EQ,eq-neve,lomid_bell,500.0,470.0,dB,+6,4.0,474.3,0.398,2.955
+veq4,Waves,Neve 1081 EQ,eq-neve,lomid_bell,500.0,470.0,dB,+9,6.058,474.3,0.418,2.852
+veq4,Waves,Neve 1081 EQ,eq-neve,lomid_bell,500.0,470.0,dB,-12,-7.952,474.3,0.453,2.698
+veq4,Waves,Neve 1081 EQ,eq-neve,lomid_bell,500.0,470.0,dB,-3,-1.963,474.3,0.397,2.991
+veq4,Waves,Neve 1081 EQ,eq-neve,lomid_bell,500.0,470.0,dB,-6,-3.968,474.3,0.406,2.932
+veq4,Waves,Neve 1081 EQ,eq-neve,lomid_bell,500.0,470.0,dB,-9,-5.944,474.3,0.421,2.852
+veq4,Waves,Neve 1081 EQ,eq-neve,low_bell,100.0,100.0,dB,+12,12.595,92.8,,
+veq4,Waves,Neve 1081 EQ,eq-neve,low_bell,100.0,100.0,dB,+3,3.728,47.4,,
+veq4,Waves,Neve 1081 EQ,eq-neve,low_bell,100.0,100.0,dB,+6,6.759,57.5,,
+veq4,Waves,Neve 1081 EQ,eq-neve,low_bell,100.0,100.0,dB,+9,9.768,76.6,,
+veq4,Waves,Neve 1081 EQ,eq-neve,low_bell,100.0,100.0,dB,-12,-12.786,102.2,,
+veq4,Waves,Neve 1081 EQ,eq-neve,low_bell,100.0,100.0,dB,-3,-3.723,47.4,,
+veq4,Waves,Neve 1081 EQ,eq-neve,low_bell,100.0,100.0,dB,-6,-6.83,57.5,,
+veq4,Waves,Neve 1081 EQ,eq-neve,low_bell,100.0,100.0,dB,-9,-9.61,92.8,,
+veq4,Waves,Neve 1081 EQ,eq-neve,low_shelf,100.0,100.0,dB,+12,12.715,26.7,,
+veq4,Waves,Neve 1081 EQ,eq-neve,low_shelf,100.0,100.0,dB,+3,3.292,26.7,,
+veq4,Waves,Neve 1081 EQ,eq-neve,low_shelf,100.0,100.0,dB,+6,6.492,26.7,,
+veq4,Waves,Neve 1081 EQ,eq-neve,low_shelf,100.0,100.0,dB,+9,9.634,26.7,,
+veq4,Waves,Neve 1081 EQ,eq-neve,low_shelf,100.0,100.0,dB,-12,-12.553,26.7,,
+veq4,Waves,Neve 1081 EQ,eq-neve,low_shelf,100.0,100.0,dB,-3,-3.167,26.7,,
+veq4,Waves,Neve 1081 EQ,eq-neve,low_shelf,100.0,100.0,dB,-6,-6.337,26.7,,
+veq4,Waves,Neve 1081 EQ,eq-neve,low_shelf,100.0,100.0,dB,-9,-9.5,26.7,,
+veq4,Waves,Neve 1081 EQ,eq-neve,mid_bell,1000.0,1000.0,dB,+12,8.007,1021.8,0.423,2.988
+veq4,Waves,Neve 1081 EQ,eq-neve,mid_bell,1000.0,1000.0,dB,+3,2.067,1021.8,0.356,3.409
+veq4,Waves,Neve 1081 EQ,eq-neve,mid_bell,1000.0,1000.0,dB,+6,4.042,1021.8,0.378,3.268
+veq4,Waves,Neve 1081 EQ,eq-neve,mid_bell,1000.0,1000.0,dB,+9,6.068,1021.8,0.397,3.144
+veq4,Waves,Neve 1081 EQ,eq-neve,mid_bell,1000.0,1000.0,dB,-12,-7.92,1021.8,0.426,2.985
+veq4,Waves,Neve 1081 EQ,eq-neve,mid_bell,1000.0,1000.0,dB,-3,-2.011,928.3,0.343,3.328
+veq4,Waves,Neve 1081 EQ,eq-neve,mid_bell,1000.0,1000.0,dB,-6,-4.009,1021.8,0.388,3.236
+veq4,Waves,Neve 1081 EQ,eq-neve,mid_bell,1000.0,1000.0,dB,-9,-5.951,1021.8,0.41,3.081
+veq4,Waves,Neve 1081 EQ,eq-neve,extra,,,,analog_off_flat,0.009,13625.8,,
+veq4,Waves,Neve 1081 EQ,eq-neve,extra,,,,hmf_3k3_+12_hiq,12.052,3231.2,0.645,2.086
+veq4,Waves,Neve 1081 EQ,eq-neve,extra,,,,lmf_1k_+12_hiq,12.01,1021.8,0.597,2.241

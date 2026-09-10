@@ -125,6 +125,7 @@ def bell_shape(rel):
 def export_colour():
     units = load("colour")
     resp, thd, tilt, imd, noise, trans, summary = [], [], [], [], [], [], []
+    wow, tone_resp = [], []
 
     for slug, d in sorted(units.items()):
         meta = meta_of(d)
@@ -156,6 +157,21 @@ def export_colour():
                     rejected_runs=row.get("rejected_runs"),
                     **{"h%d" % m: row.get("h%d" % m) for m in range(2, 9)}))
 
+            # A tone-measured response beside the swept one. A swept sine
+            # deconvolves the *linear* part of what a unit does, which is the
+            # response only while the unit is linear -- and several here are
+            # not, at any level. `sweep_check_worst_db` says which; this is
+            # what to plot for those, since a tone's fundamental is the
+            # fundamental whatever else the stage is doing to it.
+            for level, row in (s.get("response_check") or {}).items():
+                ref = row.get("1000")
+                for hz, db in row.items():
+                    tone_resp.append(dict(
+                        base, source="check", level_dbfs=float(level),
+                        hz=float(hz), gain_db=db,
+                        magnitude_db=(round(db - ref, 3)
+                                      if ref is not None else None)))
+
             for key, row in (s.get("harmonics_vs_freq") or {}).items():
                 hz, level = key.split("/")
                 tilt.append(dict(
@@ -163,6 +179,20 @@ def export_colour():
                     thd_pct=row.get("thd_pct"),
                     valid_orders=row.get("valid_orders"),
                     **{"h%d" % m: row.get("h%d" % m) for m in range(2, 9)}))
+
+            grid = s.get("harmonics_vs_freq") or {}
+            for level in {k.split("/")[1] for k in grid}:
+                ref = (grid.get("1000/%s" % level) or {}).get("gain_db")
+                for key, row in grid.items():
+                    hz, lv = key.split("/")
+                    if lv != level:
+                        continue
+                    db = row.get("gain_db")
+                    tone_resp.append(dict(
+                        base, source="tilt_grid", level_dbfs=float(lv),
+                        hz=float(hz), gain_db=db,
+                        magnitude_db=(round(db - ref, 3)
+                                      if None not in (db, ref) else None)))
 
             for test, rows in (s.get("imd") or {}).items():
                 for row in rows or []:
@@ -185,12 +215,30 @@ def export_colour():
             for level, row in (s.get("transients") or {}).items():
                 trans.append(dict(base, level_dbfs=float(level), **row))
 
+            wf = s.get("wow_flutter")
+            if wf:
+                for hz, pct in (wf.get("modulation_spectrum_pct")
+                                or {}).items():
+                    wow.append(dict(base, rate_hz=float(hz),
+                                    deviation_pct=pct,
+                                    measured_hz=wf.get("measured_hz"),
+                                    speed_error_pct=wf.get("speed_error_pct"),
+                                    wow_pct=wf.get("wow_pct_0p1_4hz"),
+                                    flutter_pct=wf.get("flutter_pct_4_100hz"),
+                                    scrape_pct=wf.get("scrape_pct_100_1000hz"),
+                                    total_rms_pct=wf.get("total_rms_pct"),
+                                    peak_pct=wf.get("peak_pct")))
+
             summary.append(_colour_summary(base, s, d))
 
     _rows("colour_response.csv",
           ["slug", "maker", "models", "family", "group", "setting", "depth",
            "matched", "level_dbfs", "hz", "magnitude_db", "phase_deg",
            "group_delay_ms", "ref_1k_db", "sweep_check_worst_db"], resp)
+    _rows("colour_response_by_tone.csv",
+          ["slug", "maker", "models", "family", "group", "setting", "depth",
+           "matched", "source", "level_dbfs", "hz", "gain_db",
+           "magnitude_db"], tone_resp)
     _rows("colour_thd_vs_level.csv",
           ["slug", "maker", "models", "group", "setting", "depth", "matched",
            "hz", "level_dbfs", "thd_pct", "thd_db", "gain_db",
@@ -211,6 +259,10 @@ def export_colour():
            "crest_in_db", "crest_out_db", "crest_change_db", "slew_index",
            "click_peak_gain_db", "tone_gain_db", "square_slope_ratio",
            "sine_slope_ratio"], trans)
+    _rows("tape_wow_flutter.csv",
+          ["slug", "maker", "models", "group", "setting", "rate_hz",
+           "deviation_pct", "measured_hz", "speed_error_pct", "wow_pct",
+           "flutter_pct", "scrape_pct", "total_rms_pct", "peak_pct"], wow)
     _rows("colour_summary.csv",
           ["slug", "maker", "models", "family", "group", "setting", "depth",
            "matched", "gain_1k_db", "thd_1k_pct", "thd_100_pct",
@@ -527,7 +579,19 @@ def export_noise():
     bands, summary = [], []
     for slug, d in sorted(units.items()):
         meta = meta_of(d)
-        for state, e in sorted(d.get("states", {}).items()):
+        states = d.get("states", {})
+        # Paired per condition, not just on silence. Several of these models
+        # emit nothing at all until signal is passing -- Waves NLS Channel is
+        # silent on silence at every setting and puts a floor 17 dB higher
+        # under a tone once its Drive is up -- so a "noise added" figure
+        # taken only on silence reports zero for exactly the units that have
+        # a noise model worth knowing about.
+        def added(cond):
+            on = ((states.get("on") or {}).get(cond) or {}).get("rms_dbfs")
+            off = ((states.get("off") or {}).get(cond) or {}).get("rms_dbfs")
+            return round(on - off, 2) if None not in (on, off) else None
+
+        for state, e in sorted(states.items()):
             for cond, r in sorted(e.items()):
                 if cond == "applied" or not r:
                     continue
@@ -539,7 +603,7 @@ def export_noise():
                     rms_dbfs=r.get("rms_dbfs"),
                     peak_dbfs=r.get("peak_dbfs"),
                     a_weighted_dbfs=r.get("a_weighted_dbfs"),
-                    noise_added_db=d.get("noise_added_db"),
+                    noise_added_db=added(cond),
                     controls=" ".join("%s=%s" % kv for kv in
                                       sorted((d.get("controls_found")
                                               or {}).items())),
@@ -556,19 +620,44 @@ def export_noise():
 
 
 def export_units():
+    """The index: every unit, what it models, and which suites measured it.
+
+    `latency_samples` and the as-shipped readings come from the survey rather
+    than from a measurement run, so they are there even for a unit whose
+    sweep failed -- which is what makes this the table to join the others to.
+    """
     import roster
     rows = []
     for slug, u in sorted(roster.UNITS.items()):
         measured = [fam for fam in ("colour", "eq", "comp", "noise")
                     if os.path.exists("out/chart/%s/%s.json" % (fam, slug))]
-        rows.append(dict(slug=slug, maker=u["maker"], models=u["models"],
-                         family=u["family"], group=u["group"],
-                         plugin=u["spec"][1] or os.path.basename(u["spec"][0]),
-                         measured_in=" ".join(measured),
-                         note=u["note"]))
+        row = dict(slug=slug, maker=u["maker"], models=u["models"],
+                   family=u["family"], group=u["group"],
+                   plugin=u["spec"][1] or os.path.basename(u["spec"][0]),
+                   measured_in=" ".join(measured), note=u["note"])
+        path = "out/survey/%s.json" % slug
+        if os.path.exists(path):
+            d = json.load(open(path))
+            row["survey_ok"] = "error" not in d and not d.get("silent")
+            row["latency_samples"] = d.get("latency_samples")
+            at = d.get("at_-18_dbfs") or {}
+            row["default_gain_db"] = at.get("gain_db")
+            row["default_thd_pct"] = at.get("thd_pct")
+        # The survey loads a unit and measures it as it arrives, before any
+        # of `voicings.py` has been applied -- which for the Airwindows units
+        # means whatever state the previous processor left behind. Where a
+        # measurement run exists it saw the unit configured, so its latency
+        # is the one to quote.
+        for fam in measured:
+            d = json.load(open("out/chart/%s/%s.json" % (fam, slug)))
+            if d.get("latency_samples") is not None:
+                row["latency_samples"] = d["latency_samples"]
+                break
+        rows.append(row)
     _rows("units.csv",
           ["slug", "maker", "models", "family", "group", "plugin",
-           "measured_in", "note"], rows)
+           "measured_in", "survey_ok", "latency_samples", "default_gain_db",
+           "default_thd_pct", "note"], rows)
 
 
 if __name__ == "__main__":
