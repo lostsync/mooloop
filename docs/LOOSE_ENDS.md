@@ -229,6 +229,28 @@ limiter-lookahead sentence runs straight into "Each kind publishes a static
 `ParamDescriptor` table", which belongs to a separate bullet that lost its
 list marker in the 2026-09-05 edit.
 
+**Six dB readouts still round for themselves.** `GainMath.format-db` now
+covers every readout that is a *gain*, but six sites spell their own number
+because they are not gains and the shared formatter's signed, `-inf`-floored
+output would misreport them: a `+` on a knee width or a gate range is wrong,
+and `±0.0 dB` on a limiter ceiling parked at full scale reads oddly.
+`compressor-device.slint:70,142`, `gate-device.slint:68,140`,
+`limiter-device.slint:62`, `device-displays.slint:545`. Three of them use
+`round(x * 10) / 10`, which drops the tenth on a whole value — the same
+width-jitter this pass took out of `format-db` itself. What is missing is an
+unsigned one-decimal formatter to sit beside `format-db`; that is a decision
+about the dB vocabulary rather than a typo, which is why it was left.
+
+**A `"s"`-unit parameter reads at two decimals in an automation lane.**
+`format_param_value` (`mooloop-ui/src/lib.rs:1557`) prints the descriptor's
+natural units directly, so an envelope attack of 5 ms reads `0.01 s` and
+everything below 5 ms reads `0.00 s` — the lane cannot show the range it is
+editing. The DS-01 face already solves this: `display_unit`
+(`lib.rs:1650`) converts a sub-second `"s"` to `ms` and a `>= 1 kHz` `"Hz"`
+to `kHz`, and `format_param_value` is the one value path that does not call
+it. Found 2026-09-10 during a metering pass; not fixed then only because
+`lib.rs` was owned by another session at the time.
+
 **Two unmerged spikes and 39 unpushed commits on `main`.**
 `spike/egui-view-layer` and `spike/slint-split-build` are answers rather than
 candidates — neither is waiting to land. Adam's call whether either goes
