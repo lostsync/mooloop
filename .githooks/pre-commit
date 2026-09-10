@@ -2,11 +2,26 @@
 
 branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
 
+# A merge is the one write `main` accepts. AGENTS.md calls it "read/merge-only"
+# and asks every task to finish by merging into it, so refusing the commit that
+# concludes a merge refuses the workflow the rule exists to protect.
+#
+# It went unnoticed because the documented finish is a *fast-forward*, which
+# moves the ref without making a commit and so never reaches this hook. The day
+# a branch could not fast-forward -- `main` having moved on independently --
+# there was no way to land it at all: the merge stopped here, and `--no-verify`
+# is banned a few lines further down the same document.
+if [ -e "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+    exit 0
+fi
+
 if [ "$branch" = "main" ]; then
-    cat >&2 <<'EOF'
+    cat >&2 <<'MSG'
 Refusing to commit on main.
 Create a task worktree and branch before editing:
   git worktree add ../mooloop-worktrees/<branch-name> -b <type>/<slug> main
-EOF
+
+(A merge commit is allowed; this only blocks ordinary commits.)
+MSG
     exit 1
 fi
