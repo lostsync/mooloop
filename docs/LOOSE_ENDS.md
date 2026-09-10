@@ -241,6 +241,29 @@ width-jitter this pass took out of `format-db` itself. What is missing is an
 unsigned one-decimal formatter to sit beside `format-db`; that is a decision
 about the dB vocabulary rather than a typo, which is why it was left.
 
+**A rack unit is two different widths.** A device's total width -- face plus
+both rails -- is computed twice and not the same way. An effect slot uses
+`unit-width * units + half-gap * (units - 1) + rail-width * 2`
+(`main.slint:3806`); the source device uses `unit-width * units + half-gap +
+rail-width * 2` (`main.slint:3283`), with the gap term not multiplied. They
+agree only at two units. A three-unit source is 724px where a three-unit
+effect is 728px, and a four-unit source is 944px against 952px -- so
+"3U" on a sampler and "3U" on a delay are not the same measurement.
+
+Nothing is visibly misaligned: the two sit side by side rather than stacked,
+and the drag hit-tests each row from its own `absolute-position + width`
+(`main.slint:3838`), which is what `CURRENT.md` means by "measured from that
+row's own bounds". The cost is only that the unit is not a unit.
+
+Which one is wrong is a design call rather than a reading of the code, which
+is why this is a note. Two of the three sites that size a face use
+`* (units - 1)`, so it has the majority. But `JOURNAL.md` records the
+three-unit source face at its inner 664px -- exactly what the source formula
+gives -- as measured and deliberate, and ML-P8 moved to four units on the
+finding that three had "no slack anywhere". Correcting the source formula
+widens every three-unit source face by 4px and every four-unit one by 8px,
+against faces that were sized by eye and signed off. Found 2026-09-10.
+
 **Two unmerged spikes and 39 unpushed commits on `main`.**
 `spike/egui-view-layer` and `spike/slint-split-build` are answers rather than
 candidates — neither is waiting to land. Adam's call whether either goes
