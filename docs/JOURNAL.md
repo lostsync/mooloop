@@ -1182,6 +1182,67 @@ reading a single pixel.
 
 Three renames, three stores, and none of the three had a test. They do now.
 
+## Sep 10 (the measurements) — the warm one measures odd
+
+`06-preamp-modelling.md` ended on a promise to go and measure some plugins,
+and `REFERENCE_MEASUREMENTS.md` was the protocol for doing it without wasting
+the studio time. Ran it: 25 licensed plugins on Adam's Mac, hosted offline
+through `pedalboard` with no GUI and no audio device, driven from
+`spikes/preamp-measure/`.
+
+**The first hour went on things that were not measurements.** UAD's Audio
+Unit builds do not scan at all — every `uaudio_*.component` reports
+"unsupported plugin format or scan failure", which reads exactly like an
+expired licence — while the `.vst3` of the same plugin loads fine. Then three
+of the six preamp units turned out to have been sweeping a control that does
+not reach the nonlinearity: Scheps 73's gain selector only sets level, SSL
+EV2's line gain walks the plugin's own output into clipping, and bx_console
+N's THD knob does nothing whatever until its EQ section is switched in. Each
+of those produced a column of identical rows, which is the failure mode worth
+naming, because a column of identical rows looks like data.
+
+**And Waves plugins glitch.** About one render in eight comes back with a
+dropout that loses fundamental energy and lifts the broadband floor by tens
+of dB — deterministic, tied to the call index, and landing 40 dB above a
+quiet cell's real 2nd harmonic. A clean render is bit-repeatable, so the fix
+is selection rather than averaging: render four times, keep the one with the
+most fundamental in it, count the rest. It ran at 11.7% on every Waves unit
+and 0% on everything else. The same thing corrupts a compressor's gain trace
+as a hundred dB of gain reduction that never happened, which is how a CLA-3A
+release curve first came back.
+
+**Then the finding.** 06 reasons from topology to harmonic order —
+single-ended gives even, push-pull gives odd — and concludes that `Iron`,
+the Neve-flavoured voicing, is even-order dominant. The reasoning is right.
+The box it was attached to is not. A Neve *console channel* is a chain of
+push-pull line amps and measures odd, hard: NLS's 5116 model by 9.8 dB,
+bx_console N's VXS by 66.8. The even-order warmth people mean by "Neve" is
+the *mic preamp* being leant on, and Scheps 73, which models exactly that,
+is even by 10.6 dB. So `Iron` has a choice in front of it that the document
+had not noticed it was making.
+
+Two more of 06's claims moved. The frequency-dependent drive it calls "the
+one that turns a shaper into a preamp" is real and large — 23.8 dB on the
+Neve console, falling as a first-order shelf with its corner at 240 Hz,
+which is `IRON_PREAMP`'s 220 Hz guess almost exactly — and it is *absent*
+from all five of FrontDAW's styles and slightly backwards on the SSLs. And
+Grip's "nice fat round low end", which 06 predicted would be
+frequency-dependent drive, is on the real SSL a drive-dependent low *shelf*:
++9 dB at 40 Hz at full drive, measured where nothing is distorting. `Preamp`
+cannot produce that, on purpose — its tilt pair is exactly reciprocal so the
+stage colours without equalising, and a test says so.
+
+**The EQ question answered cleanly.** An inductor EQ's distortion is
+band-dependent, and by an amount that rules out the cheap implementation.
+The Massive Passive's 3rd-harmonic peak moves with the band — 40 Hz for the
+low shelf, 630 Hz for the 560 Hz bell — and 15.8 dB of boost raises it by
+67.5 dB where a shaper placed after the EQ predicts 31.6. The Pultec misses
+the same prediction by 5.6 dB the other way. SlickEQ isolates it: identical
+curve, and its saturation switch does nothing at all until a band is up.
+
+Nothing in `mooloop_dsp` has been re-authored from any of this yet, because
+the two largest findings are Adam's decisions rather than fits.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.

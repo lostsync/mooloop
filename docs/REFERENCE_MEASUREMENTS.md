@@ -7,9 +7,15 @@ each finding the last one missed something.
 Written 2026-09-09, when the first voicing numbers had to be picked rather
 than measured. Adam: *"we can do some sweep measurements on UAD and Waves
 plugs later to try and get some real numbers"*, and *"i have a few plugins
-that might be worth measuring for various mooloop stuff."* Nothing here is
-built yet; this is the protocol, so that the scripts are a short job and the
-studio time is not wasted.
+that might be worth measuring for various mooloop stuff."*
+
+> **Run on 2026-09-10.** This protocol has been executed — 25 plugins,
+> preamps, EQs and compressors. The scripts are
+> [`spikes/preamp-measure/`](../spikes/preamp-measure/README.md) and the
+> numbers are in its
+> [`RESULTS.md`](../spikes/preamp-measure/RESULTS.md). This document stays as
+> the protocol and the reasoning behind it; what the run learned that changes
+> the *method* is folded in below, marked as such.
 
 Revised the same day, when Adam pointed out that the plugins can simply be
 loaded and driven in Python. The first version routed everything through
@@ -109,7 +115,17 @@ one.
 
 No alignment chirp is needed — `pedalboard` reports and compensates plugin
 latency — but check it rather than assume it: process an impulse and confirm
-it comes back where it went in.
+it comes back where it went in. It does: every unit measured came back within
+one sample.
+
+**Measured 2026-09-10 — repeat each tone and reject, do not average.** Point 3
+above asks whether a plugin is deterministic. The answer for Waves plugins is
+"almost": a clean render is bit-repeatable, and roughly one render in eight
+carries a dropout that loses fundamental energy and lifts the broadband floor
+by tens of dB. Averaging that in moves a quiet cell's 2nd harmonic by 40 dB.
+Because the clean value is exact and the glitch only ever subtracts signal,
+the fix is selection rather than averaging: render four times, keep the one
+with the most fundamental in it, and record how many were discarded.
 
 ## Three things that silently produce wrong numbers
 
@@ -195,29 +211,44 @@ Not this. A reverb wants an impulse response, which is a different capture and
 a different use, and mooloop's is an FDN rather than a convolver
 (`REVERB.md`). Out of scope here.
 
-## What Adam has, from memory
+## What Adam has
 
-His list, 2026-09-09, *"working from memory here"* — so this wants checking
-against the actual plugin folder before anything is scripted, and he expects
-to: *"i think in reality we'll need to sit there and look at the plugin list."*
+Listed from memory 2026-09-09 and checked against the machine 2026-09-10.
+The memory was right about all of it. What the folder also turned out to hold
+is a full UADx set — 610-B, API Vision, Century, LA-2A, 1176 in three
+revisions, dbx 160, Fairchild 660 and 670, Distressor, SSL G bus, Studer
+A800, Manley Massive Passive — plus Waves PuigTec, VEQ3/4, CLA-3A, API-2500
+and API-550, and TDR's Kotelnikov and SlickEQ.
 
-| Voicing | What he has |
-| --- | --- |
-| **all the pres** | **FrontDAW**, which models the lot — the obvious first target, because one plugin covers the preamp axis for all three voicings under one set of conventions |
-| **Punch** (API) | API Vision channel strip; Waves API bundle — 550 EQ, 560 graphic, 2500 compressor |
-| **Grip** (SSL) | Waves SSL channel strip, SSL's own Native Channel Strip 2, possibly a UA one |
-| **Iron** (Neve) | Scheps 73 for most of it, plus V-Comp and V-EQ3/4 |
+`spikes/preamp-measure/candidates.py` is the working list, with a path and a
+role for each. All 25 units tried were licensed and passed real audio.
 
-**Start with FrontDAW.** If one plugin really does model all the preamps, then
-measuring it gives the three voicings' harmonic surfaces *relative to each
-other* under identical conditions, which is worth more than three separate
-plugins measured to three different reference levels. The per-manufacturer
-strips are then the EQ and compressor sources rather than the preamp ones.
+**Starting with FrontDAW was the right call and it did not settle the
+question.** Its five styles do differ from each other under identical
+conditions, exactly as hoped — but every one of them has a *flat* harmonic
+response across frequency, where Waves NLS's Neve model has 23.8 dB of
+frequency-dependent drive. One plugin per voicing is enough to rank the
+voicings and is not enough to decide whether the transformer mechanism is
+part of the sound. That took a second opinion.
 
 What still has to be decided at the machine is what each measurement is *for*.
 "Measure everything" produces a pile of numbers with no home; "this is the
 `Iron` preamp target, this comp is what the strip should feel like" decides
 which stimulus each needs.
+
+### Two traps that cost an hour each
+
+- **UAD's Audio Unit builds do not scan; the VST3 builds of the same plugins
+  load fine.** Every `uaudio_*.component` fails with "unsupported plugin
+  format or scan failure", which reads exactly like a licensing failure and
+  is not one.
+- **Find the drive control before sweeping it.** A channel strip has several
+  gains and usually only one of them reaches the nonlinearity; sweeping the
+  wrong one produces a column of identical rows, which looks like data. Three
+  of six preamp units needed this checked: Scheps 73's gain selector only
+  sets level, SSL EV2's line gain walks its own output into clipping, and
+  bx_console N's THD control does nothing whatever unless its EQ section is
+  switched in.
 
 ## What lands afterwards
 
@@ -226,3 +257,11 @@ picked and become measured — and the doc comments that currently say
 *provisional* get to say what they were fitted to instead. Nothing else in
 either module changes, which was the point of keeping them as plain tables of
 numbers with no behaviour attached.
+
+**Still true after the run, with one addition.** The measurements are taken
+and written down; nothing in `mooloop_dsp` has been re-authored from them
+yet, because two of the findings are choices for Adam rather than fits:
+whether `Iron` models a mic preamp or a console channel, which decides its
+harmonic order, and whether `Grip` gets a drive-dependent low shelf, which
+the SSL reference plainly has and the current exactly-reciprocal tilt pair
+cannot produce. `spikes/preamp-measure/RESULTS.md` states both.

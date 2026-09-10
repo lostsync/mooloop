@@ -1,5 +1,11 @@
 # 06 — Preamp modelling
 
+> **Measured 2026-09-10 — [`spikes/preamp-measure/RESULTS.md`](../../../spikes/preamp-measure/RESULTS.md).**
+> The sweeps this file asks for at the end have been run against 25 licensed
+> plugins. Most of what is reasoned below survived; three claims did not, and
+> each is marked **Measured** in place rather than deleted, because the
+> reasoning that produced them is still the reasoning worth having.
+>
 > **Partly settled by Adam's mockup, 2026-09-09 — [`THE-STRIP.md`](THE-STRIP.md).**
 > It is not a device at the head of a chain: it is the strip's own input stage,
 > `pre in / drive`, drawn at the top beside the **Moo / Grip / Punch / Iron**
@@ -31,6 +37,23 @@ The gain stage's transfer curve. The single most useful fact about it is
 That one distinction carries most of the difference between "I want to drive
 this" and "I want to back off". `mooloop_dsp::harmonics` already makes this
 number authorable and testable — a profile is written down and hit to 0.00 dB.
+
+> **Measured, and the rule holds — but it was pointed at the wrong box.**
+> The topology rule is right and the measurements separate on it cleanly.
+> What they also show is that *"a Neve"* is two different stages, and only
+> one of them is single-ended:
+>
+> | Neve-derived unit | models | h2 - h3 |
+> | --- | --- | --- |
+> | Scheps 73, drive in | 1073 **mic preamp** | **+10.6 dB**, even |
+> | NLS Nevo | 5116 **console channel** | **-9.8 dB**, odd |
+> | bx_console N | VXS **console channel** | **-66.8 dB**, odd |
+>
+> A console channel is a chain of push-pull line amps and measures odd, hard.
+> The even-order warmth people mean by "Neve" is the mic preamp being leant
+> on. So **`Iron` has a choice to make that this document has not noticed:
+> preamp or channel.** `IRON` is currently authored even-dominant, which is
+> the preamp reading, and its named inspiration is the console one.
 
 Asymmetry is also how you *get* even orders from a symmetric curve: a DC bias
 into the shaper pushes the signal onto an uneven part of it.
@@ -70,6 +93,20 @@ This is a **Wiener–Hammerstein** model — linear filter, static nonlinearity,
 linear filter — which is the standard block-oriented structure for exactly
 this class of device, and a great deal of analog gear is well approximated by
 it.
+
+> **Measured: the mechanism is real, large, and not universal.** NLS's Neve
+> console model has **23.8 dB** more 2nd harmonic at 80 Hz than at 5 kHz,
+> falling as a first-order shelf with a half-way corner at **240-250 Hz** —
+> which is `IRON_PREAMP`'s 220 Hz guess almost exactly, with a tilt about
+> 10 dB deeper than the 14 dB it is set to.
+>
+> But FrontDAW's five styles have a tilt of **zero**, every one of them, and
+> the SSL units tilt slightly the *wrong way* (-14 dB on SSL EV2: more
+> distortion at 5 kHz than at 80 Hz). Two respected emulations of the same
+> class of hardware disagree about whether this effect is part of the sound
+> at all. That is not a reason to drop it; it is a reason to keep treating
+> `tilt_db` as a voicing decision rather than as physics that must be
+> present.
 
 #### Cut the top, do not boost the bottom
 
@@ -177,6 +214,18 @@ The most specific of the three, and it maps onto mechanism almost directly:
 - **But keep the frequency-dependent drive**, so the low end still rounds when
   pushed. Same structure as Iron with much less of it and the opposite
   harmonic balance — which is why one structure serves all four.
+
+  > **Measured: the real SSL does this, and not this way.** NLS Mike has
+  > 2.3 dB of tilt, essentially none. What it has instead is a low-frequency
+  > *gain* that grows with the drive control — **+4.2 dB at 40 Hz** at Drive
+  > 6 and **+9.0 dB** at Drive 12, measured at -40 dBFS where nothing is
+  > distorting at all. The fat round low end is an equalisation, not a
+  > distortion.
+  >
+  > `Preamp` cannot currently produce that: its tilt pair is exactly
+  > reciprocal by construction, so the stage colours without equalising, and
+  > there is a test that says so. Giving `Grip` a drive-dependent low shelf
+  > is a decision for Adam, not a bug to fix quietly.
 - Flattest voicing curve of the coloured three.
 
 ### Punch — *"needs to sound like rock and roll"*
@@ -201,6 +250,16 @@ applies:
   is a transformer-shaped nonlinearity sitting *inside* the frequency-shaping
   network, so the distortion is band-dependent rather than broadband. The same
   filter-sandwich structure covers it.
+
+  > **Measured, in four units, and the magnitude settles the structure.**
+  > The Massive Passive's 3rd harmonic peak *moves with the band*: at the low
+  > shelf it lives at 40-110 Hz, at the 560 Hz bell it lives at 630 Hz. And
+  > 15.8 dB of boost raises it by **67.5 dB**, where a static shaper placed
+  > after the EQ predicts 31.6 dB. The Pultec misses the same prediction in
+  > the other direction, 10.8 dB against 16.4. Neither is reachable by moving
+  > a coefficient — the nonlinearity has to be *inside* the network, which is
+  > what this structure does. SlickEQ isolates it perfectly: same curve, and
+  > its saturation switch does nothing at all until a band is boosted.
 - **A compressor's gain element has its own character** — FET, opto, VCA and
   vari-mu each distort differently — but **the timing is most of the sound**.
   Detector shape, attack and release curves and programme dependence do more
@@ -231,3 +290,23 @@ a step while leaving a 100 Hz tone of the same peak untouched, which is what
 says it acts on `dV/dt` rather than on level.
 
 **What is still unbuilt from the list above:** supply sag, and hysteresis.
+
+## The measured targets
+
+`spikes/preamp-measure/RESULTS.md` has the surfaces; the four numbers that
+bear on the table above, all at mooloop's -12 dBFS operating level:
+
+| | h2 | h3 | tilt | corner |
+| --- | --- | --- | --- | --- |
+| NLS Nevo (Neve console), Drive 6 | -69.8 | -59.9 | +23.8 | ~245 Hz |
+| NLS Mike (SSL console), Drive 6 | -52.3 | -36.6 | +2.3 | — |
+| NLS Spike (EMI console), Drive 6 | -47.0 | -58.1 | +2.3 | — |
+| Scheps 73 (1073 preamp), drive in | -19.4 | -30.0 | +0.5 | — |
+
+And the calibration point, which is about `pre in / drive` rather than about
+the profiles: the reference units span roughly **-70 dB to -20 dB of 2nd
+harmonic** between a console channel at rest and a 1073 leant on, so that is
+the range the drive control has to reach. `IRON` as authored (-28 dB, with
+its 2nd 18 dB above its 3rd) sits inside that span for amount, but no unit
+measured has an even-over-odd margin anywhere near 18 dB — the widest, among
+units making more than -50 dB of 2nd, is +11.1 dB.

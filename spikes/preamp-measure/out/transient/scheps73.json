@@ -1,0 +1,170 @@
+{
+ "amps_dbfs": [
+  -24.0,
+  -18.0,
+  -12.0,
+  -6.0,
+  -3.0,
+  0.0
+ ],
+ "base": {
+  "eq": "Out ",
+  "input_l_m": 0.0,
+  "link_i_o": "Unlinked ",
+  "output_l_m": 0.0,
+  "preamp_l_m": "0L ",
+  "preamp_on_off": "On ",
+  "preamp_r_s": "0L "
+ },
+ "note": "Waves Scheps 73, Neve 1073 preamp, EQ out",
+ "seconds": 9.7,
+ "settings": {
+  "drive_off": {
+   "applied": {
+    "preamp_drive": "Off "
+   },
+   "rows": {
+    "-12": {
+     "click_peak_gain_db": -0.04022242738949444,
+     "crest_change_db": -0.03956891731861134,
+     "crest_in_db": 36.224494971372536,
+     "crest_out_db": 36.184926054053925,
+     "sine_slope_in": 1.5737614617441509,
+     "sine_slope_out": 1.5783802717924118,
+     "slew_index": 0.9794966326768055,
+     "square_slope_in": 24.11410974249197,
+     "square_slope_out": 23.68901038169861
+    },
+    "-18": {
+     "click_peak_gain_db": -0.04028927136366889,
+     "crest_change_db": -0.03955981731949265,
+     "crest_in_db": 36.224494971372536,
+     "crest_out_db": 36.18493515405304,
+     "sine_slope_in": 0.7887491534007635,
+     "sine_slope_out": 0.7910487055778503,
+     "slew_index": 0.9795107692799724,
+     "square_slope_in": 12.085683953224006,
+     "square_slope_out": 11.872570753097534
+    },
+    "-24": {
+     "click_peak_gain_db": -0.0403973270690301,
+     "crest_change_db": -0.03954981052689277,
+     "crest_in_db": 36.224494971372536,
+     "crest_out_db": 36.18494516084564,
+     "sine_slope_in": 0.3953110062187816,
+     "sine_slope_out": 0.39645687863230705,
+     "slew_index": 0.9795193635381245,
+     "square_slope_in": 6.057190507009856,
+     "square_slope_out": 5.950333535671234
+    },
+    "-3": {
+     "click_peak_gain_db": -0.04017399577869085,
+     "crest_change_db": -0.03957791816227285,
+     "crest_in_db": 36.224494971372536,
+     "crest_out_db": 36.18491705321026,
+     "sine_slope_in": 4.435462441661511,
+     "sine_slope_out": 4.4485849142074585,
+     "slew_index": 0.9794770660498643,
+     "square_slope_in": 67.96279530087725,
+     "square_slope_out": 66.76494312286377
+    },
+    "-6": {
+     "click_peak_gain_db": -0.04018555775604504,
+     "crest_change_db": -0.03957584128714586,
+     "crest_in_db": 36.22449497137254,
+     "crest_out_db": 36.1849191300854,
+     "sine_slope_in": 3.140066937368442,
+     "sine_slope_out": 3.149336278438568,
+     "slew_index": 0.9794826054931787,
+     "square_slope_in": 48.113974428218135,
+     "square_slope_out": 47.26591730117798
+    },
+    "0": {
+     "click_peak_gain_db": -0.040165237344317935,
+     "crest_change_db": -0.0395793886219451,
+     "crest_in_db": 36.224494971372536,
+     "crest_out_db": 36.18491558275059,
+     "sine_slope_in": 6.265257226610999,
+     "sine_slope_out": 6.283826172351837,
+     "slew_index": 0.9794725158353733,
+     "square_slope_in": 96.0,
+     "square_slope_out": 94.30804538726807
+    }
+   }
+  },
+  "drive_on": {
+   "applied": {
+    "preamp_drive": "On "
+   },
+   "rows": {
+    "-12": {
+     "click_peak_gain_db": 2.9438790946617566,
+     "crest_change_db": -0.8946016374274635,
+     "crest_in_db": 36.224494971372536,
+     "crest_out_db": 35.32989333394507,
+     "sine_slope_in": 1.5737614617441509,
+     "sine_slope_out": 2.8611876368522644,
+     "slew_index": 0.7321130109334366,
+     "square_slope_in": 24.11410974249197,
+     "square_slope_out": 32.096434593200684
+    },
+    "-18": {
+     "click_peak_gain_db": 4.828849905209438,
+     "crest_change_db": 0.1396287656238684,
+     "crest_in_db": 36.224494971372536,
+     "crest_out_db": 36.364123736996405,
+     "sine_slope_in": 0.7887491534007635,
+     "sine_slope_out": 1.325848639011383,
+     "slew_index": 0.8264584239264473,
+     "square_slope_in": 12.085683953224006,
+     "square_slope_out": 16.789868116378784
+    },
+    "-24": {
+     "click_peak_gain_db": 4.005525672818745,
+     "crest_change_db": 0.20214887744691623,
+     "crest_in_db": 36.224494971372536,
+     "crest_out_db": 36.42664384881945,
+     "sine_slope_in": 0.3953110062187816,
+     "sine_slope_out": 0.5922915637493134,
+     "slew_index": 0.8730119329862407,
+     "square_slope_in": 6.057190507009856,
+     "square_slope_out": 7.922970771789551
+    },
+    "-3": {
+     "click_peak_gain_db": -6.000001270704788,
+     "crest_change_db": -3.0831837570992775,
+     "crest_in_db": 36.224494971372536,
+     "crest_out_db": 33.14131121427326,
+     "sine_slope_in": 4.435462441661511,
+     "sine_slope_out": 8.555418580770493,
+     "slew_index": 0.25983448855598373,
+     "square_slope_in": 67.96279530087725,
+     "square_slope_out": 34.06201887130737
+    },
+    "-6": {
+     "click_peak_gain_db": -3.0000413969175446,
+     "crest_change_db": -2.368854823346787,
+     "crest_in_db": 36.22449497137254,
+     "crest_out_db": 33.855640148025756,
+     "sine_slope_in": 3.140066937368442,
+     "sine_slope_out": 5.974152982234955,
+     "slew_index": 0.37207808004263465,
+     "square_slope_in": 48.113974428218135,
+     "square_slope_out": 34.05985164642334
+    },
+    "0": {
+     "click_peak_gain_db": -9.000000541138998,
+     "crest_change_db": -3.827629825685996,
+     "crest_in_db": 36.224494971372536,
+     "crest_out_db": 32.39686514568654,
+     "sine_slope_in": 6.265257226610999,
+     "sine_slope_out": 12.182944357395172,
+     "slew_index": 0.18246796072329047,
+     "square_slope_in": 96.0,
+     "square_slope_out": 34.06208324432373
+    }
+   }
+  }
+ },
+ "slug": "scheps73"
+}
