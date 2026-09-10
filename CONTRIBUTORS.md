@@ -207,7 +207,8 @@ Alphabetical by model name, then by harness.
   said `150 ms` to the tooltip and `150ms` to the eye, and then the piano
   roll's two test suites, which each held their own copy of `TICKS_PER_STEP`
   and so would have gone on passing while the roll drew every note in the
-  wrong place.
+  wrong place, and the roll's keyboard, the one place in the program naming a
+  note without asking the shared namer.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

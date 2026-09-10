@@ -241,6 +241,18 @@ width-jitter this pass took out of `format-db` itself. What is missing is an
 unsigned one-decimal formatter to sit beside `format-db`; that is a decision
 about the dB vocabulary rather than a typo, which is why it was left.
 
+**Ticks-per-step is twenty-five bare `24`s in the markup.** `mooloop_core`
+owns `TICKS_PER_STEP`; the roll spells it as a literal `24` fifteen times in
+`piano-grid.slint` and ten in `main.slint`, because Slint has no shared
+constant for it the way `GainMath` and `DeviceRackMetrics` are shared for
+gain and rack geometry. Drift is now *detected* -- `piano_tools.rs` and
+`piano_drag.rs` compute from the engine's value since 2026-09-10, so a table
+edit that the markup does not follow fails them -- but acting on that
+failure means finding twenty-five literals by hand. A `RollMetrics`
+global beside the other two, with a test asserting it against
+`mooloop_core::TICKS_PER_STEP`, would make it one edit. Mechanical, and
+larger than a detail fix, which is why it is here.
+
 **A rack unit is two different widths.** A device's total width -- face plus
 both rails -- is computed twice and not the same way. An effect slot uses
 `unit-width * units + half-gap * (units - 1) + rail-width * 2`

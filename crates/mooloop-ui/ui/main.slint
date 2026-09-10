@@ -3,7 +3,8 @@ import { Theme, Motion, StatusHint } from "theme.slint";
 import { GainMath } from "gain.slint";
 export { DisplayPrefs, Motion } from "theme.slint";
 import {
-    AudioOrientation, IconButton, InstrumentModule, MiniKnob, ParameterFader, ParameterKnob, PeakMeter,
+    AudioOrientation, IconButton, InstrumentModule, MiniKnob, NoteFormat, ParameterFader,
+    ParameterKnob, PeakMeter,
     PickerChip, SegmentedControl, SelectorBank, StereoPeakMeter, ZoomScrollBar,
     ToggleButton, ToolButton, TransportButton, ValueScale, MuteButton as DesignMuteButton, TrimKnob
 } from "controls.slint";
@@ -4672,7 +4673,13 @@ export component MainWindow inherits Window {
                                                         || mod(note-number, 12) == 10)
                                                         ? Theme.panel : Theme.surface;
                                                     if mod(note-number, 12) == 0 : Text {
-                                                        text: "C" + (floor(note-number / 12) - 1);
+                                                        // Through the shared namer, which already
+                                                        // knows that middle C is C4 -- the same
+                                                        // convention `note_to_freq` puts A4 at MIDI
+                                                        // 69. Spelled out here, the octave was that
+                                                        // convention written a second time, and the
+                                                        // copy that would not move if it ever did.
+                                                        text: NoteFormat.midi-name(note-number);
                                                         color: Theme.text-muted;
                                                         font-size: min(9px, root.piano-row-height - 1px);
                                                         vertical-alignment: center;
