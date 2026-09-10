@@ -212,7 +212,10 @@ Alphabetical by model name, then by harness.
   roll's two test suites, which each held their own copy of `TICKS_PER_STEP`
   and so would have gone on passing while the roll drew every note in the
   wrong place, and the roll's keyboard, the one place in the program naming a
-  note without asking the shared namer.
+  note without asking the shared namer, and then `scripts/dupe-audit`, which
+  is that whole pass turned into four searches so the next one does not have
+  to re-derive them -- and which, run against the tree as it stood before the
+  pass, finds all four of the things the pass found by hand.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""Find values and policies that have been written down more than once.
+
+    scripts/dupe-audit                  # every check, ranked
+    scripts/dupe-audit shared-constant  # one check
+    scripts/dupe-audit --list           # what the checks are
+
+This is the search that a 2026-09-10 detail pass kept re-deriving by hand.
+Ten of the defects it found were one fault wearing different clothes: a
+number or a rule written in two places, the copies drifting, and nothing
+able to notice. Five of them had reached the screen -- a meter scale reading
+`+2` where it meant `-12`, a formatter that had never produced its own
+documented format, a lane that could not show the range it was editing.
+
+**What it is not.** It does not find duplicated *formulas*. Four synths
+computing `sin(2*pi*phi)` will agree forever, because a sine has no
+parameters to drift. Copied arithmetic is mostly waste; copied numbers and
+copied policies are what diverge silently. Every check here is aimed at the
+second kind, which is why the list is short.
+
+Expect false positives and read the output as leads rather than as findings.
+Two of the checks are deliberately noisy at the edges, because the failure
+that matters -- a guard that has quietly stopped guarding -- looks like
+nothing at all until somebody goes and looks.
+"""
+
+from __future__ import annotations
+
+import collections
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+CRATES = ROOT / "crates"
+
+# Lines that repeat for reasons nobody should be asked to look at.
+BORING = re.compile(
+    r"^\s*(\}|\{|\)|\);|\},|use |mod |pub mod |//|/\*|\*|#\[|let mut |return;|$)"
+)
+
+
+def rust_sources():
+    for path in sorted(CRATES.glob("*/src/**/*.rs")):
+        yield path
+
+
+def rust_tests():
+    for path in sorted(CRATES.glob("*/tests/**/*.rs")):
+        yield path
+
+
+def slint_sources():
+    for path in sorted(CRATES.glob("*/ui/*.slint")):
+        yield path
+
+
+def rel(path: pathlib.Path) -> str:
+    return str(path.relative_to(ROOT))
+
+
+# --- 1 -----------------------------------------------------------------
+def shared_constant():
+    """A local `const NAME` shadowing a `pub const NAME` from a crate.
+
+    The sharpest of these checks, and the one with a scalp. `piano_tools.rs`
+    and `piano_drag.rs` each declared `const TICKS_PER_STEP: i32 = 24`
+    beside a `mooloop_core` that already exported it. Those suites work by
+    computing where a tick belongs on screen and clicking there, so a local
+    copy made them agree with the markup *by construction*: had the engine's
+    value moved, the roll would have drawn every note in the wrong place and
+    both suites would have gone on passing. A test that shares the drift it
+    exists to catch cannot report it.
+    """
+    published = {}
+    for path in rust_sources():
+        for match in re.finditer(
+            r"^\s*pub const ([A-Z][A-Z0-9_]*)\s*:\s*[^=]+=\s*([^;]+);",
+            path.read_text(),
+            re.M,
+        ):
+            published.setdefault(match.group(1), (rel(path), match.group(2).strip()))
+
+    hits = []
+    for path in list(rust_sources()) + list(rust_tests()):
+        text = path.read_text()
+        for match in re.finditer(
+            r"^\s*(?:pub\s+)?const ([A-Z][A-Z0-9_]*)\s*:\s*[^=]+=\s*([^;]+);", text, re.M
+        ):
+            name, value = match.group(1), match.group(2).strip()
+            if name not in published:
+                continue
+            owner, owner_value = published[name]
+            if owner == rel(path):
+                continue
+            # A copy that derives from the original is the fix, not the fault.
+            if "::" in value or any(c.isalpha() for c in value.replace("_", "")):
+                continue
+            # Same name, different value, is two facts that happen to share a
+            # word -- `PARAM_LEVEL` means one thing to DS-01 and another to
+            # Aux In. Only an equal value is a copy.
+            if value.rstrip("0").rstrip(".") != owner_value.rstrip("0").rstrip("."):
+                continue
+            # Same crate, same name, same value is usually deliberate
+            # namespacing: `OSC_OFFSET_WAVE` is 0 in two device tables
+            # because both count from zero. The copies that rot are the ones
+            # that cross a crate, where the owner is somewhere you would have
+            # to go looking.
+            if rel(path).split("/")[1] == owner.split("/")[1]:
+                continue
+            line = text[: match.start()].count("\n") + 1
+            hits.append(
+                (
+                    f"{rel(path)}:{line}",
+                    f"{name} = {value} re-declared; {owner} publishes it as {owner_value}",
+                )
+            )
+    return hits
+
+
+# --- 2 -----------------------------------------------------------------
+def repeated_line():
+    """One non-trivial line, byte-identical, in three or more files.
+
+    Found four synths computing glide with the same twelve tokens --
+    `(-1.0 / (params.glide.max(MIN_GLIDE_S) * sr as f32)).exp()` -- while
+    all four already imported `MIN_GLIDE_S` from the module the helper
+    belongs in. The constant had been shared and the formula had not, which
+    is the shape to look for: the fix is usually one function in a file
+    every offender already depends on.
+    """
+    seen = collections.defaultdict(set)
+    where = {}
+    for path in rust_sources():
+        for number, line in enumerate(path.read_text().split("\n"), 1):
+            stripped = line.strip()
+            if len(stripped) < 40 or BORING.match(line):
+                continue
+            # A signature repeats because several types implement one trait,
+            # which is the opposite of the problem. Only statements and
+            # expressions carry a value somebody had to type twice.
+            if stripped.endswith("{") or stripped.startswith(("fn ", "pub fn ", "impl ")):
+                continue
+            # A duplicated *computation* is the target: it carries a literal
+            # and does arithmetic on it. A duplicated *call* -- `self
+            # .apply_param(id, value)` in sixteen devices -- is a shared
+            # idiom, which is the thing working correctly.
+            body = re.sub(r'"[^"]*"', "", stripped)
+            if not (re.search(r"\d", body) and re.search(r"[*/+]|\s-\s", body)):
+                continue
+            seen[stripped].add(rel(path))
+            where.setdefault(stripped, f"{rel(path)}:{number}")
+
+    hits = []
+    for line, files in seen.items():
+        if len(files) >= 3:
+            hits.append((len(files), where[line], f"in {len(files)} files: {line[:88]}"))
+    return [hit[1:] for hit in sorted(hits, reverse=True)]
+
+
+# --- 3 -----------------------------------------------------------------
+def unit_spelling():
+    """The same unit appended two ways in the markup.
+
+    A readout's unit is a house convention, not a per-file choice: the Rust
+    side attaches every unit with a space and `%` without one. Two faces
+    spelled percent `50 %` against ninety-four writing `50%`, and one shelf
+    caption said `150ms` where its own knob said `150 ms`. Minority
+    spellings are reported; a minority of one, six lines from its majority,
+    is how the last two were found.
+    """
+    counts = collections.defaultdict(collections.Counter)
+    where = collections.defaultdict(dict)
+    for path in slint_sources():
+        for number, line in enumerate(path.read_text().split("\n"), 1):
+            for match in re.finditer(r'\+\s*"(\s?)([%a-zA-Z]{1,4})"', line):
+                space, unit = match.group(1), match.group(2)
+                counts[unit][space] += 1
+                where[unit].setdefault(space, f"{rel(path)}:{number}")
+
+    hits = []
+    for unit, spellings in counts.items():
+        if len(spellings) < 2:
+            continue
+        ranked = spellings.most_common()
+        majority, majority_n = ranked[0]
+        for space, n in ranked[1:]:
+            hits.append(
+                (
+                    n,
+                    where[unit][space],
+                    f'"{space}{unit}" used {n}x against "{majority}{unit}" {majority_n}x',
+                )
+            )
+    return [hit[1:] for hit in sorted(hits)]
+
+
+# --- 4 -----------------------------------------------------------------
+def twin_names():
+    """Two functions whose names say the same thing.
+
+    `mooloop_core::gain::linear_to_db` floors at -60 dB and its inverse
+    returns silence below that; `mooloop_dsp::dynamics::lin_to_db` floors at
+    1e-9, about -180 dB, and its inverse has no floor at all. A hundred and
+    twenty decibels apart at silence, in crates where one depends on the
+    other. The difference is deliberate -- a compressor's detector needs
+    range a fader does not -- and nothing anywhere says so, which is what
+    makes it a trap for whoever decides to tidy the duplicate away.
+    """
+    words = {"lin": "linear", "db": "decibels", "ms": "milliseconds", "freq": "frequency",
+             "amp": "amplitude", "pos": "position", "norm": "normalized", "val": "value"}
+
+    def key(name: str) -> tuple:
+        parts = [words.get(part, part) for part in name.split("_") if part]
+        return tuple(sorted(parts))
+
+    families = collections.defaultdict(list)
+    for path in rust_sources():
+        text = path.read_text()
+        for match in re.finditer(r"^\s*(?:pub(?:\([^)]*\))?\s+)?fn ([a-z][a-z0-9_]*)\s*\(", text, re.M):
+            name = match.group(1)
+            if len(name) < 5:
+                continue
+            line = text[: match.start()].count("\n") + 1
+            families[key(name)].append((name, f"{rel(path)}:{line}"))
+
+    hits = []
+    for members in families.values():
+        distinct = {name for name, _ in members}
+        if len(distinct) < 2:
+            continue
+        listed = ", ".join(f"{name} ({place})" for name, place in sorted(members))
+        # Two spellings inside one file are usually a deliberate inverse
+        # pair. Two that live in different crates are the ones nobody can
+        # see at once, which is where a quiet disagreement survives.
+        crates = {place.split("/")[1] for _, place in members}
+        hits.append(
+            (len(crates), len(members), sorted(members)[0][1],
+             f"names agree, bodies may not: {listed}")
+        )
+    return [hit[2:] for hit in sorted(hits, reverse=True)]
+
+
+# A sixth check was written and thrown away: Rust constants whose *value*
+# appears as a bare number in the markup. `TICKS_PER_STEP` really is spelled
+# `24` twenty-five times in the roll, and finding that automatically would be
+# worth having. But a bare number in markup carries no identity -- every
+# parameter id that happens to equal 24, 60 or 100 collides with every
+# unrelated 24, 60 or 100 -- and the check produced a hundred and two leads
+# for the one real answer. A tool that is wrong ninety-nine times in a
+# hundred does not get read the hundredth. That gap is recorded in
+# `LOOSE_ENDS.md` instead, where a human sentence can say which number
+# matters and why.
+
+
+CHECKS = {
+    "shared-constant": shared_constant,
+    "repeated-line": repeated_line,
+    "unit-spelling": unit_spelling,
+    "twin-names": twin_names,
+}
+
+
+def main(argv):
+    if "--list" in argv:
+        for name, check in CHECKS.items():
+            summary = (check.__doc__ or "").strip().split("\n")[0]
+            print(f"{name:<18}{summary}")
+        return 0
+
+    wanted = [a for a in argv if not a.startswith("-")] or list(CHECKS)
+    unknown = [name for name in wanted if name not in CHECKS]
+    if unknown:
+        print(f"unknown check: {', '.join(unknown)}", file=sys.stderr)
+        print(f"try one of: {', '.join(CHECKS)}", file=sys.stderr)
+        return 2
+
+    total = 0
+    for name in wanted:
+        hits = CHECKS[name]()
+        total += len(hits)
+        print(f"\n=== {name} ({len(hits)}) ===")
+        if not hits:
+            print("  nothing")
+        for place, detail in hits:
+            print(f"  {place}\n      {detail}")
+
+    print(f"\n{total} leads. None of them is a finding until you have read the code.")
+    # Leads are not failures: this reports, it does not gate. CI stays green.
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

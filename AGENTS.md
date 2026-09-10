@@ -80,6 +80,40 @@ lands. Completed plan directories move to `docs/plans/archive/`.
 `docs/README.md` indexes every document and states its one job, for anything
 this table does not cover.
 
+## Duplication
+
+A value written down twice is this codebase's characteristic fault. A pass on
+2026-09-10 found ten defects and five of them were one shape: a number or a
+rule spelled in both a Rust table and the Slint markup, the copies drifting,
+nothing able to notice. Three of the *tests* guarding that boundary had
+themselves stopped guarding it -- one parsed its own source two different
+ways, one covered the generator faces while claiming to cover any range
+written twice, and two held their own copy of `TICKS_PER_STEP`, so they would
+have passed while the roll drew every note in the wrong place. All three were
+green throughout.
+
+`scripts/dupe-audit` runs the searches that found them. It takes about a
+second, needs no build, and reports leads rather than failures -- it is not a
+gate and CI does not run it. Run it when you have half an hour and no
+particular task, or when you are about to touch a shared constant:
+
+```sh
+scripts/dupe-audit              # every check
+scripts/dupe-audit twin-names   # one of them
+scripts/dupe-audit --list       # what they are
+```
+
+Two things it deliberately does not do. It does not look for duplicated
+*formulas*: four synths computing `sin(2*pi*phi)` will agree forever, because
+a sine has no parameters to drift. And it does not chase Rust constants
+spelled as bare numbers in `.slint`, which is a real gap -- `TICKS_PER_STEP`
+is a literal `24` twenty-five times -- but a bare number carries no identity
+and the check produced a hundred leads for one answer. That one is written
+down in `LOOSE_ENDS.md`, where a sentence can say which number matters.
+
+Copied arithmetic is mostly waste. Copied numbers and copied policies are
+what diverge silently, and they are what the checks are aimed at.
+
 ## Documentation is part of the change
 
 `docs/CURRENT.md` describes the application as it exists. A change that adds,
