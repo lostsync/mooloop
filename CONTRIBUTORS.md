@@ -191,7 +191,9 @@ Alphabetical by model name, then by harness.
   meter whose vertical bar grew from the middle of its track, and a meter
   scale drawing its tick marks through its own labels so `-12` read as `+2`,
   all three because a sized child of a plain `Rectangle` is centred in it
-  rather than placed at its origin.
+  rather than placed at its origin, and then the agreement test that guards
+  that vocabulary, which parsed its own source two different ways and could
+  have read a comment recording a value in place of the value.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
