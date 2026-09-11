@@ -210,17 +210,34 @@ fn bent_ratio(ratio: f32, over_db: f32, bend: f32) -> f32 {
 /// formulas under one name, and the copy that drifts is the one a user is
 /// reading. So the curve is sampled here, by the same two functions the
 /// audio path calls.
+///
+/// **Every control on the page is in it, including the two that move the
+/// line rather than shape it.** `in trim` drives the detector *and* the wet
+/// path, so it is a compressor working that many decibels earlier than the
+/// threshold alone would say; `mix` blends the result back toward unity, so
+/// at 0 this draws the straight line the section is actually passing. The
+/// first version sampled neither, and drew a section clamping while it was
+/// passing the signal through exactly -- with both knobs sitting under the
+/// plot. The arithmetic below is `process_comp`'s own, per sample of level
+/// instead of per sample of audio.
 pub fn static_curve_db(params: &StripParams, floor_db: f32, samples: usize) -> Vec<f32> {
     let voicing = strip_voicing(params.voicing);
     let samples = samples.max(2);
+    let trim = db_to_lin(params.in_trim_db);
+    let makeup = db_to_lin(params.makeup_db);
+    let mix = params.mix.clamp(0.0, 1.0);
     (0..samples)
         .map(|index| {
             let input_db = floor_db + (-floor_db) * index as f32 / (samples - 1) as f32;
-            let over = input_db - params.threshold_db;
+            // The detector is behind the trim, which is why the knee sits
+            // where it does rather than at the threshold's own reading.
+            let detector_db = input_db + params.in_trim_db;
+            let over = detector_db - params.threshold_db;
             let ratio = bent_ratio(params.ratio, over, voicing.ratio_bend);
             let reduction =
-                compressor_gain_db(input_db, params.threshold_db, ratio, params.knee_db);
-            input_db + reduction + params.makeup_db
+                compressor_gain_db(detector_db, params.threshold_db, ratio, params.knee_db);
+            let wet = trim * db_to_lin(reduction) * makeup;
+            input_db + lin_to_db((1.0 - mix) + mix * wet)
         })
         .collect()
 }
@@ -1005,6 +1022,67 @@ mod tests {
         assert!(bent_ratio(ratio, 24.0, 0.6) > ratio);
         assert!(bent_ratio(ratio, 24.0, -0.5) < ratio);
         assert!(bent_ratio(ratio, 24.0, -0.5) > 1.0, "never below unity");
+    }
+
+    /// The curve the COMP page draws is the transfer the section is
+    /// running, which means the two knobs that move the line are in it:
+    /// `mix` at 0 draws the straight line, and `in trim` moves the knee.
+    ///
+    /// Written because the first version drew neither, so a section set to
+    /// pass the signal through exactly was drawn clamping it, with the knob
+    /// that said so directly underneath.
+    #[test]
+    fn the_drawn_curve_is_the_transfer_the_section_is_running() {
+        let base = tweak(|params| {
+            params.comp_in = true;
+            params.threshold_db = -24.0;
+            params.ratio = 8.0;
+            params.knee_db = 0.0;
+        });
+        let floor = -60.0;
+        let samples = 121;
+        let at = |curve: &[f32], input_db: f32| -> f32 {
+            let travel = (input_db - floor) / -floor;
+            curve[(travel * (samples - 1) as f32).round() as usize]
+        };
+
+        // Compressing: 12 dB over a -24 dB threshold at 8:1 leaves 1.5 over.
+        let curve = static_curve_db(&base, floor, samples);
+        assert!(
+            (at(&curve, -12.0) - -22.5).abs() < 0.2,
+            "8:1 should put -12 dB out at -22.5: {}",
+            at(&curve, -12.0)
+        );
+
+        // `mix` at 0 is the straight line, to the sample.
+        let dry = static_curve_db(&StripParams { mix: 0.0, ..base }, floor, samples);
+        for (index, output_db) in dry.iter().enumerate() {
+            let input_db = floor + -floor * index as f32 / (samples - 1) as f32;
+            assert!(
+                (output_db - input_db).abs() < 1e-4,
+                "mix 0 should draw unity at {input_db}: {output_db}"
+            );
+        }
+
+        // `in trim` moves the knee down the input axis by its own amount:
+        // 12 dB of trim is a compressor working from -36 dB in.
+        let trimmed = static_curve_db(
+            &StripParams {
+                in_trim_db: 12.0,
+                ..base
+            },
+            floor,
+            samples,
+        );
+        assert!(
+            (at(&curve, -36.0) - -36.0).abs() < 0.1,
+            "untrimmed, -36 dB is below the threshold and untouched"
+        );
+        assert!(
+            at(&trimmed, -36.0) > -36.0 + 11.0,
+            "trimmed, -36 dB is at the knee and 12 dB louder for it: {}",
+            at(&trimmed, -36.0)
+        );
     }
 
     /// A gain computer whose output falls as its input rises inverts

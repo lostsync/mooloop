@@ -659,12 +659,21 @@ merely wrong at an edge. Both are asserted in `tests/strip_face.rs` now, and
 the claim is narrowed to what is true: no *control* on the faces declares a
 bound.
 
-One thing was left rather than fixed, and is in `LOOSE_ENDS.md`: the
-compressor curve is drawn at `w/d mix` 1 and `in trim` 0, both of which move
-the line and both of which are knobs on the same page as the plot. The
-arithmetic is not the obstacle -- the audio path computes exactly this per
-sample -- it is that changing what the drawing means is Adam's call and not a
-reviewer's.
+The review left one thing for a ruling and it turned out not to need one:
+the curve was drawn at `w/d mix` 1 and `in trim` 0, both of which move the
+line rather than shape it, and both of which are knobs on the same page as
+the plot. Held up as a question about what the drawing should *mean*, the
+answer is the one the rest of this step already gives -- it means what the
+section is running -- and at `mix` 0 the old drawing was a section clamping
+while it passed the signal through exactly. `static_curve_db` samples
+`process_comp`'s own arithmetic now, per sample of level instead of per
+sample of audio, so `mix` at 0 draws the straight line and the trim moves
+the knee down the input axis by its own amount.
+
+The threshold handle still sits at the threshold's own reading rather than at
+the knee when the trim is up, which is correct for a handle that sets the
+threshold and is the one thing about the plot that trim changes and the
+drawing does not follow.
 
 ## Step 06 — preamp modelling
 
