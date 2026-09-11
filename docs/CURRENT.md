@@ -639,8 +639,9 @@ land on its own when it starts to matter:
   Every section is **out by default**, and out is not "flat": a section that
   is out does not touch the samples, so a project that has never opened a
   strip renders bit-identically to one built before the strip existed. That is
-  what entitles it to exist on all 256 tracks; the price of having one
-  everywhere is three booleans a block.
+  what entitles it to exist on every track rather than being a device
+  somebody places; the price of having one everywhere is three booleans a
+  block, against a track bank that is capped at seventeen today.
 
   The EQ's four bands read **left to right, top to bottom**: high shelf, high
   mid, low mid, low shelf. Each is frequency / gain / Q, and each switches

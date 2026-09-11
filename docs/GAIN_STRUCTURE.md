@@ -92,11 +92,15 @@ switched on, or a strip's drive is.** The engine's only writes into a bus
 buffer are the effect container's input trim, its wet/dry blend and output
 trim, the dry-path delay ring, the channel strip's four sections, and
 `StereoBus`'s add and multiply. Every one of them is linear in the signal
-except the strip's **drive**, whose shaper is monotone-clamped to `[-1, 1]`
-and whose `Iron` voicing carries a slew limit — both bounds, both inside a
-section that is out until somebody switches it in, and both the point of the
-control rather than a side effect of it. The strip's EQ and compressor are
-level-dependent but bound nothing: a biquad and a gain are multiplies. The single place a sample is clipped anywhere else in the codebase is
+except the strip's **drive**, which bounds a sample twice over: its harmonic
+shaper clamps its *input* to `[-1, 1]` before evaluating a polynomial, so a
+driven sample stops growing at full scale, and the `Iron` voicing adds a slew
+limit on top. Both are inside a section that is out until somebody switches
+it in, and both are the point of the control rather than a side effect of it.
+The strip's EQ and compressor are level-dependent but bound nothing: a biquad
+and a gain are multiplies.
+
+The single place a sample is clipped anywhere else in the codebase is
 `pcm24`, in `mooloop-engine/src/offline.rs`: that is the 24-bit WAV encoder,
 so exports hard-clip at full scale and live playback does not. Sums above
 0 dBFS reach the output device intact, and pulling them down is the user's

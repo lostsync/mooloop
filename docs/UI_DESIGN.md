@@ -559,12 +559,21 @@ decide its shape. Settled 2026-09-10.
 - **A strip control declares no range of its own.** Every knob on the channel
   strip takes its minimum, maximum, default, curve, name and unit from the
   descriptor table the engine reads, handed to the markup once at startup as
-  the `StripSpec` global -- so the face has nothing to drift from. This is
-  the stronger version of what `slint_face_agreement.rs` does for the device
-  faces, which mirror a range and are checked for divergence afterwards; here
-  there is no second copy to check. `tests/strip_face.rs` holds the table it
-  installs to `StripParams::descriptors()` and fails if a bound is ever
-  spelled in `strip.slint` "to make it clearer".
+  the `StripSpec` global -- so no control on the face has a range to drift
+  from. This is the stronger version of what `slint_face_agreement.rs` does
+  for the device faces, which mirror a range and are checked for divergence
+  afterwards; here there is no second copy to check. `tests/strip_face.rs`
+  holds the table it installs to `StripParams::descriptors()` and fails if a
+  bound is ever spelled on a control in `strip.slint` "to make it clearer".
+
+  What a face may still hold is a *display's* convention, and the distinction
+  is worth keeping: `EqResponseDisplay` reports a dragged point normalized
+  over its own axes, so the markup inverts those axes to turn one back into
+  hertz and decibels. That is not a parameter range and should not be handed
+  over as one -- the frequency axis is deliberately wider than any single
+  band. But such a number can *coincide* with a range or a floor, and then
+  moving one silently stretches a drawing rather than breaking it, so the
+  coincidence is asserted rather than commented on.
 - **Where the strip's processing sits in a track's chain is one statement.**
   `mooloop_core::mixer::STRIP_PIN` decides both when the engine runs it and
   where the rack draws its pinned row, so the drawing cannot say one thing

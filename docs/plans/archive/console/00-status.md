@@ -478,7 +478,7 @@ It costs the latency compiler nothing, as the plan predicted: biquads, a
 detector and a memoryless shaper declare no latency and there is no
 oversampler, so `chain_latency` is unchanged.
 
-### The faces have no numbers to drift from
+### No control on the faces has a number to drift from
 
 Every other device face mirrors its descriptor's range in the markup, and
 `slint_face_agreement.rs` exists because that second copy drifts. The strip's
@@ -491,8 +491,18 @@ That makes this feature's agreement test a different shape and a stronger
 one. `tests/strip_face.rs` reads the table back out of the window and holds
 it to `StripParams::descriptors()`, checks the band arithmetic the markup
 does lands on the ids `strip_band_param` mints, and **fails if a bound is
-ever spelled in `strip.slint`** -- which is how the second copy of a range
-gets written in the first place, one knob at a time, to make it clearer.
+ever spelled on a control in `strip.slint`** -- which is how the second copy
+of a range gets written in the first place, one knob at a time, to make it
+clearer.
+
+The two numbers the markup does hold are `EqResponseDisplay`'s axes, which
+`StripEqPage` inverts to turn a dragged point back into hertz and decibels
+(`gain * 36 - 18`, as `eq-device.slint` writes it). Those are the display's
+convention rather than a parameter's, and the frequency one is deliberately
+wider than any single band -- but the gain one *coincides* with the bands'
+gain range, and widening that range in the descriptor alone would leave a
+dragged point unable to reach the top of the knob. Found reviewing the step;
+`the_response_plots_gain_axis_is_the_bands_gain_range` is the assertion.
 
 The same principle settled the compressor's curve. `DynamicsCurveDisplay`
 holds a gain computer of its own and could draw a threshold, a ratio and a
@@ -585,6 +595,76 @@ Named here rather than left to be discovered.
 - **Solo**, which is a monitor tap rather than a control and is the largest
   unbuilt thing on the mockup. `LOOSE_ENDS.md` carries it and `MIXER_PLAN.md`
   specifies it. A dead solo button is not drawn.
+
+### The review pass, 2026-09-11
+
+The step landed and was then gone over against its own claims, `AGENTS.md`'s
+duplication standard, and every document it touched. The audio was sound; six
+things were open, and **four of them were tests that were green while
+guarding nothing**, which is the failure mode `AGENTS.md` opens on and is
+worth reading as a pattern rather than as four items.
+
+**The Q law was written twice, in two crates, with nothing comparing them.**
+`StripVoicing::proportional_q` is what the bank is designed against.
+`StripParams::proportional_q` is the same rule spelled again in
+`mooloop-core`, because `strip_row` plots the running Q and `mooloop-core`
+cannot see the DSP table. `only_two_voicings_narrow_a_boosted_band` checks
+the second against a hard-coded list of four booleans and therefore does not
+check it against the first. Flip one and the response display draws a curve
+the audio is not running -- which is *the* failure "a voicing selects laws,
+never values" was adopted to prevent, since for the Q law the plot is the
+only place the law is visible at all. `a_voicings_q_law_is_the_one_the_
+display_plots` holds the two together now.
+
+**`the_id_space_starts_after_the_faders_and_has_no_holes` sorted the ids
+before checking them**, and a sorted copy cannot see the property the markup
+depends on. `StripSpec.spec(id)` reads `params[id - first]`: the descriptor
+behind a knob is found by arithmetic on its *position* in `DESCRIPTORS`, so
+swapping two rows to read better gives every knob below the swap its
+neighbour's range, name and unit, with no Rust change to blame. It walks the
+table's own order now.
+
+**`a_flat_band_is_bit_identical_to_not_having_it` would have passed with the
+skip removed.** A cookbook peak or shelf at 0 dB has `b == a` term for term,
+so its normalized coefficients come out exactly `Biquad::identity`'s --
+running the stage produces the same samples, and bit-identity cannot tell the
+two apart. The claim the code makes is that the stage is *not run*, and
+`active_len` is the only place that is visible.
+
+**`a_track_reused_by_a_shorter_project_loses_its_strip` did not cover the fix
+it sits beside.** It reloads a project, so it goes through the arm that
+installs parameters and would pass whether or not `ed83c58`'s reset were
+there. `a_document_arriving_clears_the_strip_it_lands_in` asks the strip
+directly instead, with both sections in on both sides, because the whole of
+what the reset adds is state and the only block it shows up in is the first.
+
+Two things in the code itself:
+
+**A section switched in glided up from whichever values it last ran.** A
+smoother only advances while its own section runs, so every knob turned while
+a section was out is a value that smoother has never seen. Switching in then
+spent five milliseconds at the old setting -- the same artefact "a section
+switched *in* clears its own state first" exists to prevent, one field over.
+The switch-in path snaps the section's smoothed values to its knobs now.
+
+**The faces spell two numbers after all**, which three documents and the
+markup's own header said they did not. They are `EqResponseDisplay`'s axes,
+which `StripEqPage` inverts to turn a dragged point back into hertz and
+decibels -- the display's convention rather than a parameter's, and
+`eq-device.slint` writes them the same way, so they are not the fault the
+claim was about. But the gain one *coincides* with the bands' gain range, and
+the compressor curve is sampled in Rust over a floor the display holds a
+private second copy of; move either and the drawing is stretched rather than
+merely wrong at an edge. Both are asserted in `tests/strip_face.rs` now, and
+the claim is narrowed to what is true: no *control* on the faces declares a
+bound.
+
+One thing was left rather than fixed, and is in `LOOSE_ENDS.md`: the
+compressor curve is drawn at `w/d mix` 1 and `in trim` 0, both of which move
+the line and both of which are knobs on the same page as the plot. The
+arithmetic is not the obstacle -- the audio path computes exactly this per
+sample -- it is that changing what the drawing means is Adam's call and not a
+reviewer's.
 
 ## Step 06 — preamp modelling
 

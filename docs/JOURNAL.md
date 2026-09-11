@@ -1264,7 +1264,7 @@ condition that makes a law honest where a moved value is not. The Q law is
 the single case that touches a knob's reading, and it is precedent rather
 than an exception: the seven-band EQ has done exactly that since it shipped.
 
-**The faces have no numbers to drift from.** Every other device face mirrors
+**No control on the faces has a number to drift from.** Every other device face mirrors
 its descriptor's range in the markup, and `slint_face_agreement.rs` exists
 because that second copy drifts — it was written after a pass found five
 faces declaring a range their table disagreed with. The strip's faces mirror
@@ -1272,10 +1272,15 @@ nothing: the whole descriptor table crosses into the markup once at startup
 as a global, so a knob's minimum *is* its descriptor's and
 `StripSpec.drive-db` *is* `STRIP_DRIVE_DB`. The test that guards it is
 therefore a different shape, and a better one: it reads the table back out of
-the running window, and it fails if a bound is ever spelled in the markup at
-all. The same reasoning settled the compressor's display — rather than teach
-the markup the voicing's ratio bend, Rust samples the real curve and the
-display plots what it is given.
+the running window, and it fails if a bound is ever spelled on a control. The
+same reasoning settled the compressor's display — rather than teach the markup
+the voicing's ratio bend, Rust samples the real curve and the display plots
+what it is given. The review pass the next day found the two numbers this does
+*not* cover, and they are the interesting kind: the response plot's own axes,
+which are the display's convention rather than a parameter's, and which
+therefore coincide with a range and a floor instead of being one. Two
+assertions, not two copies removed — the coupling is real and the honest thing
+to do with a real coupling is make it fail.
 
 **A second detector that fills instantly is a slower release with extra
 arithmetic.** Programme dependence — the desk trait where a long loud passage
@@ -1352,9 +1357,7 @@ Refreshed 2026-09-02, with the September documentation audit's threads merged in
 - Buffer Stage 1's acceptance test 8 — no allocations or locks in the callback — is still unverified. It needs an allocation-tracking harness, not a reading of the code.
 - The sampler's four-voice stretching polyphony cap is not enforced anywhere: `StretchPool::new` builds a reader for all sixteen voices, at 100 KB each — 1.6 MB a stretching channel against 401 KB for four. Sixteen Music-mode voices is 12.7 us a frame, sixty-one per cent of a core for one channel (`stretch_cost`). Sizing the pool to `polyphony` is not free: it arrives as a parameter on the audio thread, so voices above the old size would silently stop stretching when it was raised.
 - Acid's Cutoff knob means a different frequency from the other two ML-M1 models — 0.41x nominal against 0.65–0.68x. The compensation constant is load-bearing, not a typo; correcting it lines the corners up and breaks the filter. Lining them up means re-deriving it, and whether it *should* track the others is a taste question Adam has not been asked.
-- ~~Mixer: inserts only, no sends, sidechain, solo, stem export, or bus renaming.~~ Sends landed 2026-09-09 and tracks can be renamed and removed as of the same day. The channel strip landed 2026-09-11, so EQ and compression are on every track
-rather than on inserts only. What is left of this thread is **no sidechain, no
-solo, and no per-track stem export**, plus two pieces of the send work that are stage 2: a tap point below pre-fader (after a named device, or at one of its declared outlets), and a send authored from a *channel* — the engine compiles one, but the mixer draws no channel strips for the control to live on. An `Aux In` channel reads another channel's published outlet as of 2026-09-05, which is an input to a device rather than a send: the producing channel does not know it is being read and its own routing does not move.
+- ~~Mixer: inserts only, no sends, sidechain, solo, stem export, or bus renaming.~~ Sends landed 2026-09-09 and tracks can be renamed and removed as of the same day. The channel strip landed 2026-09-11, so EQ and compression are on every track rather than on inserts only. What is left of this thread is **no sidechain, no solo, and no per-track stem export**, plus two pieces of the send work that are stage 2: a tap point below pre-fader (after a named device, or at one of its declared outlets), and a send authored from a *channel* — the engine compiles one, but the mixer draws no channel strips for the control to live on. An `Aux In` channel reads another channel's published outlet as of 2026-09-05, which is an input to a device rather than a send: the producing channel does not know it is being read and its own routing does not move.
 - No plugin-delay compensation, so no lookahead anywhere.
 - The effect-level preset exists as of 2026-09-04, with a factory bank per kind and save/load on the rack row; what is still missing is the browser, the taxonomy surface, and a factory-content mechanism that can update what it shipped. DS-01's bank is the second instrument those were waiting for, and it landed the same day — as *generator* presets, since a DS-01 patch has no channel rack, which is the contrast with the ML-M1 bank that had to ship as channel presets. The browser now has a destination: Adam wants presets browsable in the sample browser panel (`FOCUS.md` step 3).
 - `PolylinePlot` does not exist, and the workaround for it is hand-rolled 17 times across 8 files.

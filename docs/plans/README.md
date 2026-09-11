@@ -26,8 +26,8 @@ outlive the feature. **A voicing selects laws, never values**: the plan had
 one choosing band frequencies and Q, which would have made four voicings four
 sets of lying knobs, so what a voicing owns is the harmonic profile, the
 tilt, the slew, the Q law, the curve above the knee and the programme
-dependence -- each either invisible or *drawn*. And **the strip's faces
-declare no range at all**: `install_strip_spec` hands the markup the whole
+dependence -- each either invisible or *drawn*. And **no control on the strip's faces
+declares a range**: `install_strip_spec` hands the markup the whole
 descriptor table once at startup, so there is no second copy to drift and
 `tests/strip_face.rs` fails if a bound is ever spelled in the markup. That is
 the stronger form of what `slint_face_agreement.rs` does for every other

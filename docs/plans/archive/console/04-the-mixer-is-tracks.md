@@ -116,7 +116,7 @@ own decision rather than a rider here.
 Not crammed into the strip. Adam wants a **left sidebar carrying options and
 settings for the currently selected item**, and routing setup is what it is
 for. That sidebar is already recorded — `ENHANCEMENTS.md`, and
-`interface-iteration/03-channel-identity.md` builds its first contents (a
+`docs/plans/interface-iteration/03-channel-identity.md` builds its first contents (a
 channel's name and colour) — so this step should put the minimum routing
 control it needs on the strip and let the sidebar take the rest when it
 arrives. Do not build the sidebar here.

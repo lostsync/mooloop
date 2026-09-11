@@ -99,6 +99,19 @@ slot. The ids start at 16 for this: `modulation::STRIP_PARAM_VOLUME` and
 become one without renumbering anything automation has persisted. Recorded
 2026-09-11 with step 03.
 
+**The strip's compressor curve is drawn at `w/d mix` 1 and `in trim` 0.**
+`mooloop_dsp::strip::static_curve_db` samples the threshold, the ratio, the
+knee, the voicing's bend and the makeup, which is everything that shapes the
+line -- and not the two controls that *move* it. `in trim` drives the
+detector and the wet path together, so 12 dB of it is a compressor working
+12 dB earlier than the drawing says; `mix` blends the curve back toward the
+straight line, so at 0 the section is drawn clamping while it is passing the
+signal through exactly. Both are on the same COMP page as the curve. The
+arithmetic is not the obstacle -- the audio path computes exactly this per
+sample, and the trim half is one addition -- it is that changing what the
+plot means wants Adam's eye on it rather than a reviewer's. Found reviewing
+step 03, 2026-09-11.
+
 **The strip's compressor has no live gain-reduction meter.**
 `mooloop_dsp::strip::Strip::dynamics_frame` reports the block's extremes and
 nothing carries them to the face: `DeviceMeters` is addressed by device and

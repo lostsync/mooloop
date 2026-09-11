@@ -153,7 +153,7 @@ depends on, and rediscovering them is the expensive part.
 - **`Session::reset_channel_source` rewrites the name from the index**, so
   changing a channel's device destroys any name it had. Found on the way past;
   it belongs to channel identity, and is recorded in
-  `interface-iteration/03-channel-identity.md` rather than here.
+  `docs/plans/interface-iteration/03-channel-identity.md` rather than here.
 - **Patterns can already be renamed** (`main.slint`, `pattern-renamed`). What
   is missing is pattern *colour*.
 
@@ -163,9 +163,9 @@ Where one of these already has a home, that home is named rather than
 duplicated.
 
 - **Channel names and colours** -- already fully planned in
-  `interface-iteration/03-channel-identity.md`.
+  `docs/plans/interface-iteration/03-channel-identity.md`.
 - **Pattern rename** -- already works. No action.
-- **Pattern colour** -- folded into `interface-iteration/03-channel-identity.md`,
+- **Pattern colour** -- folded into `docs/plans/interface-iteration/03-channel-identity.md`,
   since it is the same defaulted-field shape.
 - **Playlist as DAW lanes, zoom-to-patterns, song-level automation** -- the
   largest unrecorded item on the list, and a design question rather than a

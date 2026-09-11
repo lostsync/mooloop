@@ -118,9 +118,13 @@ pub struct StripBand {
 ///
 /// Every switch is off and every value is the neutral one, so a strip that
 /// nobody has touched is bit-identical to no strip at all -- which is what
-/// entitles it to exist on all 256 tracks. `#[serde(default)]` on
-/// `MixerBus::strip` is the migration: a song saved before this existed
-/// opens with exactly this.
+/// entitles it to exist on every track a song has, and on however many
+/// [`crate::MAX_BUSES`] later becomes. It is seventeen today;
+/// `docs/CAPACITY_POLICY.md` prices the `u8` address space at 11.25 MB and
+/// says what to fix first, and the strip's own share of that is the few
+/// hundred bytes `a_strip_is_a_few_hundred_bytes` measures.
+/// `#[serde(default)]` on `MixerBus::strip` is the migration: a song saved
+/// before this existed opens with exactly this.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct StripParams {
     /// Strip-wide, and the only control that governs all three sections.
