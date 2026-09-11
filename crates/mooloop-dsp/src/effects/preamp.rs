@@ -1,8 +1,9 @@
 //! The channel strip's input stage, insertable on its own.
 //!
 //! [`crate::preamp`] is the stage; this is the device around it. The strip
-//! will carry the same voicings when it exists (`docs/plans/console/03`), and
-//! this is deliberately not waiting for it: a rack had nowhere to automate
+//! will carry the same voicings when it exists
+//! (`docs/plans/archive/console/03`), and this is deliberately not waiting
+//! for it: a rack had nowhere to automate
 //! gain in the middle of a chain, and a preamp is a gain stage that happens
 //! to have a character.
 //!

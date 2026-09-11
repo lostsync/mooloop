@@ -1,0 +1,543 @@
+// The channel strip every track has, drawn.
+//
+// One set of components, used by all three places the strip appears: the
+// mixer strip's back face (92px, `mixer.slint`), the track's pinned row in
+// the device rack (`bus-device.slint`), and -- when it is built -- the zoomed
+// console. `docs/plans/archive/console/THE-STRIP.md` is the mockup and
+// `docs/UI_DESIGN.md` carries the two rules that pull against each other: a
+// page that is not on screen is not built, and no parameter is reachable
+// from only one of them.
+//
+// **No range, id or default is spelled here.** `StripSpec` is a global whose
+// table Rust fills once at startup from `mooloop_core::strip`, so a knob's
+// minimum, maximum, default, name and unit all come from the descriptor the
+// engine reads -- which is the duplication `AGENTS.md` opens on, closed by
+// construction rather than by a test. The one thing the markup decides is
+// which parameter goes where.
+
+import { Theme } from "theme.slint";
+import { GainMath } from "gain.slint";
+import { MiniKnob, NoteFormat, PickerChip, SectionLabel, SelectorBank, ToolButton, ValueScale } from "controls.slint";
+import { DynamicsCurveDisplay, EqResponseDisplay } from "device-displays.slint";
+
+// One parameter's identity and range, as `mooloop_core::ParamDescriptor`
+// states it. Handed over once at startup, never per frame.
+export struct StripParamSpec {
+    id: int,
+    name: string,
+    unit: string,
+    minimum: float,
+    maximum: float,
+    default-value: float,
+    // 0 for a continuous parameter, 2 for a switch, 4 for the voicing.
+    steps: int,
+    logarithmic: bool,
+}
+
+// One track's strip, as the pane and Rust exchange it. Values are in natural
+// units -- dB, hertz, milliseconds -- because that is what the engine holds
+// and what the readouts say; the knobs normalize against the spec.
+export struct StripRow {
+    voicing: int,
+    pre-in: bool,
+    drive-db: float,
+    eq-in: bool,
+    // Four bands, one entry each. Parallel arrays rather than a struct per
+    // band so one repeater can draw a row from an index.
+    band-frequency-hz: [float],
+    band-gain-db: [float],
+    band-q: [float],
+    band-shelf: [bool],
+    // The response plot's own convention: five floats a band. See
+    // `EqResponseDisplay`.
+    band-data: [float],
+    comp-in: bool,
+    threshold-db: float,
+    ratio: float,
+    in-trim-db: float,
+    attack-ms: float,
+    release-ms: float,
+    knee-db: float,
+    mix: float,
+    makeup-db: float,
+    // The compressor's static curve as it is *running*, sampled by Rust:
+    // the voicing bends the line above the knee and this is how the display
+    // shows the bend without holding a second gain computer. See
+    // `DynamicsCurveDisplay::curve-db`.
+    curve-db: [float],
+}
+
+// The parameter table, and every id the markup addresses.
+//
+// Rust sets all of this once, from `mooloop_core::strip`. It is the reason
+// no number below is a literal: `StripSpec.drive-db` *is*
+// `mooloop_core::strip::STRIP_DRIVE_DB`, and a knob's range *is* its
+// descriptor's.
+export global StripSpec {
+    in-out property <[StripParamSpec]> params;
+    in-out property <int> first;
+    in-out property <int> voicing;
+    in-out property <int> pre-in;
+    in-out property <int> drive-db;
+    in-out property <int> eq-in;
+    in-out property <int> band-base;
+    in-out property <int> band-stride;
+    in-out property <int> band-frequency;
+    in-out property <int> band-gain;
+    in-out property <int> band-q;
+    in-out property <int> band-kind;
+    in-out property <int> comp-in;
+    in-out property <int> threshold-db;
+    in-out property <int> ratio;
+    in-out property <int> in-trim-db;
+    in-out property <int> attack-ms;
+    in-out property <int> release-ms;
+    in-out property <int> knee-db;
+    in-out property <int> mix;
+    in-out property <int> makeup-db;
+    /// The four voicing names, in index order, so the selector does not
+    /// spell what `PreampVoicing::label` already says.
+    in property <[string]> voicings;
+    /// The four bands' names, in the reading order the layout draws them in:
+    /// high shelf, high mid, low mid, low shelf. From Rust, so the markup
+    /// does not hold a second answer to which row is which.
+    in property <[string]> band-names;
+
+    /// One field of one band, the way `strip_band_param` computes it.
+    public pure function band(band: int, field: int) -> int {
+        return root.band-base + band * root.band-stride + field;
+    }
+
+    public pure function spec(id: int) -> StripParamSpec {
+        return root.params[clamp(id - root.first, 0, max(0, root.params.length - 1))];
+    }
+
+    /// A value in the units its own descriptor names.
+    ///
+    /// One formatter for the whole strip rather than a readout expression
+    /// per knob: the unit string comes from the descriptor, so the knob that
+    /// reads "dB" is the knob whose descriptor says dB.
+    public pure function format(id: int, value: float) -> string {
+        let unit = root.spec(id).unit;
+        if (unit == "dB") { return GainMath.format-db(value); }
+        if (unit == "Hz") { return NoteFormat.frequency-value(value); }
+        if (unit == "ms") { return value < 10 ? round(value * 100) / 100 + " ms" : round(value) + " ms"; }
+        if (unit == ":1") { return round(value * 10) / 10 + ":1"; }
+        return round(value * 100) / 100;
+    }
+}
+
+// A knob for one strip parameter, which is the only shape a strip control
+// takes. Everything about it but its position comes from the descriptor.
+component StripKnob inherits MiniKnob {
+    in property <int> param;
+    in property <float> natural;
+    in property <bool> bipolar-value;
+    in property <length> size: 20px;
+
+    private property <StripParamSpec> spec: StripSpec.spec(root.param);
+
+    diameter: root.size;
+    label: root.spec.name;
+    minimum: root.spec.minimum;
+    maximum: root.spec.maximum;
+    default-value: root.spec.default-value;
+    scale: root.spec.logarithmic ? ValueScale.logarithmic : ValueScale.linear;
+    bipolar: root.bipolar-value;
+    value: root.natural;
+    // The caller owns the value: it comes from a model row, so the knob must
+    // not keep its own copy or the first drag drops the binding.
+    controlled: true;
+    value-text: StripSpec.format(root.param, root.natural);
+}
+
+// A section's `in` switch, which is the whole of "free while it is out".
+component StripInSwitch inherits ToolButton {
+    in property <bool> on;
+
+    text: "IN";
+    active: root.on;
+    tooltip: root.on ? "In" : "Out";
+    min-width: 24px;
+    max-width: 24px;
+    min-height: 16px;
+    max-height: 16px;
+}
+
+// The voicing, which governs all three sections and so belongs beside the
+// input stage rather than inside one of them.
+export component StripVoicingPicker inherits Rectangle {
+    in-out property <int> voicing;
+    in property <bool> wide;
+    callback picked(int);
+
+    private property <string> hint-text: "The strip's voicing: what its input stage "
+        + "distorts, how its EQ tracks gain, and how its compressor bends above the knee.";
+
+    if !root.wide : PickerChip {
+        width: 100%;
+        options: StripSpec.voicings;
+        selected-index: root.voicing;
+        tooltip: root.hint-text;
+        text-color: Theme.accent;
+        picked(index) => { root.picked(index); }
+    }
+    // Four segments across whatever room there is, rather than a fixed
+    // segment width: the bank sizes itself to its own labels by default,
+    // which at 150px overflowed the panel it was in and drew `IRON` on top
+    // of the EQ beside it.
+    if root.wide : SelectorBank {
+        width: 100%;
+        options: StripSpec.voicings;
+        selected-index: root.voicing;
+        segment-width: (root.width - 4px) / 4;
+        tooltip: root.hint-text;
+        selected(index) => { root.picked(index); }
+    }
+}
+
+// DRIVE: the input stage, and the voicing selector that sits with it.
+export component StripDrivePage inherits Rectangle {
+    in property <StripRow> strip;
+    in property <bool> wide;
+    callback moved(int, float);
+    callback switched(int, bool);
+    callback voicing-picked(int);
+
+    VerticalLayout {
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 4px;
+            height: 16px;
+            SectionLabel {
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                text: "DRIVE";
+                color: root.strip.pre-in ? Theme.accent : Theme.text-faint;
+            }
+            StripInSwitch {
+                on: root.strip.pre-in;
+                hint: "Run this track's input stage. Out is out: the samples are not touched.";
+                clicked => { root.switched(StripSpec.pre-in, !root.strip.pre-in); }
+            }
+        }
+        StripVoicingPicker {
+            height: root.wide ? 26px : 18px;
+            voicing: root.strip.voicing;
+            wide: root.wide;
+            picked(index) => { root.voicing-picked(index); }
+        }
+        HorizontalLayout {
+            alignment: center;
+            spacing: 6px;
+            StripKnob {
+                param: StripSpec.drive-db;
+                natural: root.strip.drive-db;
+                bipolar-value: true;
+                size: root.wide ? 34px : 22px;
+                enabled: root.strip.pre-in;
+                hint: "Gain into the voicing's curve. The profiles are stated at the "
+                    + "-12 dBFS operating level, so 0 dB is where a voicing measures true.";
+                changed(v) => { root.moved(StripSpec.drive-db, v); }
+            }
+            // A visible readout where there is room for one. The same
+            // formatter the knob's own hover text uses, so the two cannot
+            // disagree about what the value is.
+            if root.wide : Text {
+                text: StripSpec.spec(StripSpec.drive-db).name + " "
+                    + StripSpec.format(StripSpec.drive-db, root.strip.drive-db);
+                color: root.strip.pre-in ? Theme.text : Theme.text-faint;
+                font-size: 9px;
+                vertical-alignment: center;
+            }
+        }
+        if root.wide : Rectangle { vertical-stretch: 1; }
+    }
+}
+
+// EQ: four bands, read left to right and top to bottom -- high shelf, high
+// mid, low mid, low shelf.
+//
+// That reading order is this layout's whole rule, and it is stated here
+// because the next person to look at four stacked rows will assume the
+// order means something else. Adam, 2026-09-09: *"this has been annoying ppl
+// since EQs were invented. there's no good way to lay it out. i chose ltr
+// ttb."*
+export component StripEqPage inherits Rectangle {
+    in property <StripRow> strip;
+    in property <bool> wide;
+    callback moved(int, float);
+    callback switched(int, bool);
+
+    VerticalLayout {
+        spacing: 3px;
+        HorizontalLayout {
+            spacing: 4px;
+            height: 16px;
+            SectionLabel {
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                text: "EQ";
+                color: root.strip.eq-in ? Theme.accent : Theme.text-faint;
+            }
+            StripInSwitch {
+                on: root.strip.eq-in;
+                hint: "Run this track's EQ. A band at 0 dB is not run at all, and a "
+                    + "section that is out does not touch the samples.";
+                clicked => { root.switched(StripSpec.eq-in, !root.strip.eq-in); }
+            }
+        }
+        // The curve that is *running*, not the one the knobs imply: the
+        // voicing's Q law is in it, which is what makes a law-selecting
+        // voicing honest.
+        EqResponseDisplay {
+            height: root.wide ? 80px : 64px;
+            band-data: root.strip.band-data;
+            selected-target: -1;
+            spectrum-visible: false;
+            opacity: root.strip.eq-in ? 1.0 : 0.45;
+            point-dragged(band, frequency, gain) => {
+                root.moved(StripSpec.band(band, StripSpec.band-frequency),
+                    20 * pow(1000, clamp(frequency, 0, 1)));
+                root.moved(StripSpec.band(band, StripSpec.band-gain), gain * 36 - 18);
+            }
+        }
+        for band[index] in root.strip.band-gain-db : HorizontalLayout {
+            spacing: 2px;
+            alignment: center;
+            height: root.wide ? 24px : 22px;
+            if root.wide : SectionLabel {
+                width: 58px;
+                vertical-alignment: center;
+                overflow: elide;
+                text: StripSpec.band-names[index];
+            }
+            ToolButton {
+                text: root.strip.band-shelf[index] ? "\u{25e2}" : "\u{2229}";
+                tooltip: root.strip.band-shelf[index] ? "Shelf" : "Bell";
+                hint: "Switch this band between a bell and the shelf it is nearest: "
+                    + "the top two become high shelves, the bottom two low shelves.";
+                min-width: 16px;
+                max-width: 16px;
+                min-height: 16px;
+                max-height: 16px;
+                text-color: Theme.text-muted;
+                clicked => {
+                    root.switched(StripSpec.band(index, StripSpec.band-kind),
+                        !root.strip.band-shelf[index]);
+                }
+            }
+            StripKnob {
+                param: StripSpec.band(index, StripSpec.band-frequency);
+                natural: root.strip.band-frequency-hz[index];
+                size: root.wide ? 22px : 20px;
+                enabled: root.strip.eq-in;
+                hint: "This band's frequency.";
+                changed(v) => { root.moved(self.param, v); }
+            }
+            StripKnob {
+                param: StripSpec.band(index, StripSpec.band-gain);
+                natural: band;
+                bipolar-value: true;
+                size: root.wide ? 22px : 20px;
+                enabled: root.strip.eq-in;
+                hint: "Boost or cut. At exactly zero the band is not run.";
+                changed(v) => { root.moved(self.param, v); }
+            }
+            StripKnob {
+                param: StripSpec.band(index, StripSpec.band-q);
+                natural: root.strip.band-q[index];
+                size: root.wide ? 22px : 20px;
+                enabled: root.strip.eq-in;
+                hint: "Q as a bell, slope as a shelf: how abruptly the band gives way.";
+                changed(v) => { root.moved(self.param, v); }
+            }
+        }
+    }
+}
+
+// COMP: the strip's own compressor. Adam: *"this is a totally different comp
+// than the one built in as a device. w/d is just a wet/dry balance control
+// for parallel per strip."*
+export component StripCompPage inherits Rectangle {
+    in property <StripRow> strip;
+    in property <bool> wide;
+    callback moved(int, float);
+    callback switched(int, bool);
+
+    VerticalLayout {
+        spacing: 3px;
+        HorizontalLayout {
+            spacing: 4px;
+            height: 16px;
+            SectionLabel {
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                text: "COMP";
+                color: root.strip.comp-in ? Theme.accent : Theme.text-faint;
+            }
+            StripInSwitch {
+                on: root.strip.comp-in;
+                hint: "Run this track's compressor. Out is out: the samples are not touched.";
+                clicked => { root.switched(StripSpec.comp-in, !root.strip.comp-in); }
+            }
+        }
+        // The curve Rust sampled, so the voicing's bend above the knee is
+        // drawn rather than described.
+        DynamicsCurveDisplay {
+            height: root.wide ? 80px : 64px;
+            mode: 1;
+            threshold-db: root.strip.threshold-db;
+            ratio: root.strip.ratio;
+            knee-db: root.strip.knee-db;
+            extra-db: root.strip.makeup-db;
+            curve-db: root.strip.curve-db;
+            opacity: root.strip.comp-in ? 1.0 : 0.45;
+            threshold-dragged(db) => { root.moved(StripSpec.threshold-db, db); }
+        }
+        // Three rows of three, the order the mockup draws them in.
+        HorizontalLayout {
+            spacing: 2px;
+            alignment: center;
+            StripKnob {
+                param: StripSpec.threshold-db;
+                natural: root.strip.threshold-db;
+                size: root.wide ? 24px : 20px;
+                enabled: root.strip.comp-in;
+                hint: "Level above which the compressor starts working.";
+                changed(v) => { root.moved(self.param, v); }
+            }
+            StripKnob {
+                param: StripSpec.ratio;
+                natural: root.strip.ratio;
+                size: root.wide ? 24px : 20px;
+                enabled: root.strip.comp-in;
+                hint: "Ratio at the knee. Above it the voicing decides how the line bends.";
+                changed(v) => { root.moved(self.param, v); }
+            }
+            StripKnob {
+                param: StripSpec.in-trim-db;
+                natural: root.strip.in-trim-db;
+                bipolar-value: true;
+                size: root.wide ? 24px : 20px;
+                enabled: root.strip.comp-in;
+                hint: "Drive into the compressor: it moves the detector and the level "
+                    + "together. The dry side of the mix does not see it.";
+                changed(v) => { root.moved(self.param, v); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 2px;
+            alignment: center;
+            StripKnob {
+                param: StripSpec.attack-ms;
+                natural: root.strip.attack-ms;
+                size: root.wide ? 24px : 20px;
+                enabled: root.strip.comp-in;
+                hint: "How fast the detector rises.";
+                changed(v) => { root.moved(self.param, v); }
+            }
+            StripKnob {
+                param: StripSpec.release-ms;
+                natural: root.strip.release-ms;
+                size: root.wide ? 24px : 20px;
+                enabled: root.strip.comp-in;
+                hint: "How fast it lets go. The voicing's programme dependence is measured "
+                    + "against this, so a long passage releases slower than a short one.";
+                changed(v) => { root.moved(self.param, v); }
+            }
+            StripKnob {
+                param: StripSpec.knee-db;
+                natural: root.strip.knee-db;
+                size: root.wide ? 24px : 20px;
+                enabled: root.strip.comp-in;
+                hint: "Width of the soft knee around the threshold. Zero is a hard corner.";
+                changed(v) => { root.moved(self.param, v); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 2px;
+            alignment: center;
+            StripKnob {
+                param: StripSpec.mix;
+                natural: root.strip.mix;
+                size: root.wide ? 24px : 20px;
+                enabled: root.strip.comp-in;
+                hint: "Parallel balance. At zero this is the signal as it arrived, exactly.";
+                changed(v) => { root.moved(self.param, v); }
+            }
+            StripKnob {
+                param: StripSpec.makeup-db;
+                natural: root.strip.makeup-db;
+                size: root.wide ? 24px : 20px;
+                enabled: root.strip.comp-in;
+                hint: "Level put back after the compressor, which does not move the detector.";
+                changed(v) => { root.moved(self.param, v); }
+            }
+            // The third seat in the row, kept empty rather than filled: the
+            // two knobs above are the pair a user reaches for together, and
+            // a third control here would only be one that had nowhere else
+            // to go.
+            Rectangle { width: root.wide ? 24px : 20px; }
+        }
+    }
+}
+
+// All three sections at once, for a face with the room: the track's pinned
+// rack row, and the zoomed console when it is built.
+export component StripSections inherits Rectangle {
+    in property <StripRow> strip;
+    callback moved(int, float);
+    callback switched(int, bool);
+    callback voicing-picked(int);
+
+    HorizontalLayout {
+        spacing: 6px;
+        Rectangle {
+            width: 170px;
+            background: Theme.panel;
+            border-radius: Theme.radius-sm;
+            StripDrivePage {
+                x: 6px;
+                y: 6px;
+                width: parent.width - 12px;
+                height: parent.height - 12px;
+                strip: root.strip;
+                wide: true;
+                moved(id, value) => { root.moved(id, value); }
+                switched(id, on) => { root.switched(id, on); }
+                voicing-picked(index) => { root.voicing-picked(index); }
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            background: Theme.panel;
+            border-radius: Theme.radius-sm;
+            StripEqPage {
+                x: 6px;
+                y: 6px;
+                width: parent.width - 12px;
+                height: parent.height - 12px;
+                strip: root.strip;
+                wide: true;
+                moved(id, value) => { root.moved(id, value); }
+                switched(id, on) => { root.switched(id, on); }
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            background: Theme.panel;
+            border-radius: Theme.radius-sm;
+            StripCompPage {
+                x: 6px;
+                y: 6px;
+                width: parent.width - 12px;
+                height: parent.height - 12px;
+                strip: root.strip;
+                wide: true;
+                moved(id, value) => { root.moved(id, value); }
+                switched(id, on) => { root.switched(id, on); }
+            }
+        }
+    }
+}

@@ -183,7 +183,8 @@ impl SendScratch {
 /// delays against another's routing.
 ///
 /// **A project with no sends allocates nothing**, which is the "free while it
-/// is out" rule `docs/plans/console/` is held to, and is exactly the derived
+/// is out" rule `docs/plans/archive/console/` is held to, and is exactly
+/// the derived
 /// `Default`: two empty `Vec`s and no scratch. `a_project_with_no_sends_
 /// allocates_nothing` is the test that says so.
 #[derive(Default)]
@@ -1776,7 +1777,8 @@ struct BusStrip {
     /// compressor, all out until something switches them in.
     ///
     /// Not boxed and not optional. A few hundred bytes against the 128 KB a
-    /// track already costs (`docs/plans/console/00-status.md`, step 04's
+    /// track already costs (`docs/plans/archive/console/00-status.md`,
+    /// step 04's
     /// measurement), and what it must not spend is *time*, which is what the
     /// three `in` switches see to. Where it runs in the block is
     /// `mooloop_core::mixer::STRIP_PIN`.

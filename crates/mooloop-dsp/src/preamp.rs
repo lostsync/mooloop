@@ -63,7 +63,7 @@
 //!
 //! # What is not here
 //!
-//! Supply sag, and hysteresis. `docs/plans/console/06-preamp-modelling.md`
+//! Supply sag, and hysteresis. The console plan's `06-preamp-modelling.md`
 //! prices both; the second is Jiles–Atherton and is a per-sample ODE solve,
 //! which is not worth reaching for before this has been heard.
 //!

@@ -27,6 +27,13 @@ mod mockup_ui {
 use meter::MeterBallistics;
 use mooloop_core::gain::{linear_to_db, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::log::Level;
+use mooloop_core::strip::{
+    strip_band_param, StripParams, STRIP_BAND_FREQ, STRIP_BAND_GAIN, STRIP_BAND_KIND, STRIP_BAND_Q,
+    STRIP_BAND_STRIDE, STRIP_COMP_ATTACK_MS, STRIP_COMP_IN, STRIP_COMP_IN_TRIM_DB,
+    STRIP_COMP_KNEE_DB, STRIP_COMP_MAKEUP_DB, STRIP_COMP_MIX, STRIP_COMP_RATIO,
+    STRIP_COMP_RELEASE_MS, STRIP_COMP_THRESHOLD_DB, STRIP_DRIVE_DB, STRIP_EQ_BANDS, STRIP_EQ_IN,
+    STRIP_FIRST, STRIP_PRE_IN, STRIP_VOICING,
+};
 use mooloop_core::{log_debug, log_error, log_info, log_warn};
 use mooloop_core::{
     snap_bars_to_power_of_two,
@@ -146,6 +153,150 @@ fn sync_drum_preview(window: &MainWindow, params: DrumSynthParams) {
     let (minimums, maximums) = DrumSynth::preview_waveform(params, DRUM_PREVIEW_BINS);
     window.set_drum_preview_minimums(ModelRc::from(Rc::new(VecModel::from(minimums))));
     window.set_drum_preview_maximums(ModelRc::from(Rc::new(VecModel::from(maximums))));
+}
+
+/// How many points of the compressor's curve the face is handed. The
+/// display draws 140 samples of its own, so anything past a hundred-odd is
+/// resampling noise; 64 is the last power of two that reads smooth at the
+/// 80px the paned face gives it.
+const STRIP_CURVE_SAMPLES: usize = 64;
+
+/// One track's strip, as the faces take it.
+///
+/// Public for the reason `install_strip_spec` is: `tests/mixer_snapshot.rs`
+/// renders a real strip on a real face, and building the row by hand there
+/// would be a second answer to what the response plot's band array means.
+///
+/// Natural units, because that is what the engine holds and what the
+/// readouts say; the knobs normalize against the descriptor table the
+/// `StripSpec` global carries. The two derived fields are the ones a face
+/// cannot compute: the response plot's flat band array, and the compressor's
+/// curve as the voicing is actually bending it.
+pub fn strip_row(params: &StripParams) -> StripRow {
+    let mut band_data = Vec::with_capacity(STRIP_EQ_BANDS * 5);
+    let mut frequencies = Vec::with_capacity(STRIP_EQ_BANDS);
+    let mut gains = Vec::with_capacity(STRIP_EQ_BANDS);
+    let mut qs = Vec::with_capacity(STRIP_EQ_BANDS);
+    let mut shelves = Vec::with_capacity(STRIP_EQ_BANDS);
+    for (index, band) in params.bands.iter().enumerate() {
+        frequencies.push(band.frequency_hz);
+        gains.push(band.gain_db);
+        qs.push(band.q);
+        shelves.push(band.kind != mooloop_core::EqBandKind::Bell);
+        band_data.extend_from_slice(&[
+            // `EqResponseDisplay`'s own convention, the same one the EQ
+            // device's rows use: frequency and gain normalized over the
+            // display's axes, then Q, then whether to draw the band at all,
+            // then the `EqBandKind` index.
+            (band.frequency_hz / 20.0).ln() / 1000.0_f32.ln(),
+            (band.gain_db + 18.0) / 36.0,
+            // The Q that is *running*, after the voicing's law -- which is
+            // the condition that makes a law-selecting voicing honest, since
+            // the plot is the only place the law is visible.
+            params.effective_q(index),
+            1.0,
+            band.kind.to_index() as f32,
+        ]);
+    }
+    StripRow {
+        voicing: params.voicing.to_index(),
+        pre_in: params.pre_in,
+        drive_db: params.drive_db,
+        eq_in: params.eq_in,
+        band_frequency_hz: frequencies.as_slice().into(),
+        band_gain_db: gains.as_slice().into(),
+        band_q: qs.as_slice().into(),
+        band_shelf: shelves.as_slice().into(),
+        band_data: band_data.as_slice().into(),
+        comp_in: params.comp_in,
+        threshold_db: params.threshold_db,
+        ratio: params.ratio,
+        in_trim_db: params.in_trim_db,
+        attack_ms: params.attack_ms,
+        release_ms: params.release_ms,
+        knee_db: params.knee_db,
+        mix: params.mix,
+        makeup_db: params.makeup_db,
+        curve_db: mooloop_dsp::strip::static_curve_db(
+            params,
+            METER_FLOOR_DB,
+            STRIP_CURVE_SAMPLES,
+        )
+        .as_slice()
+        .into(),
+    }
+}
+
+/// Hand the markup the strip's parameter table and every id it addresses.
+///
+/// Public for the reason `effect_kind_index` is: a UI test should reach the
+/// strip the way the application does, and `tests/strip_face.rs` holds the
+/// table it installs to `StripParams::descriptors()`.
+///
+/// Called once, before the window is shown. It is why no range, default or
+/// id is spelled in `strip.slint`: `StripSpec.drive-db` *is*
+/// `STRIP_DRIVE_DB`, and a knob's minimum *is* its descriptor's -- the
+/// duplication `AGENTS.md` opens on, closed by construction rather than by a
+/// test that notices afterwards.
+pub fn install_strip_spec(window: &MainWindow) {
+    let spec = window.global::<StripSpec>();
+    let params: Vec<StripParamSpec> = StripParams::descriptors()
+        .iter()
+        .map(|descriptor| StripParamSpec {
+            id: descriptor.id as i32,
+            name: descriptor.name.into(),
+            unit: descriptor.unit.into(),
+            minimum: descriptor.min,
+            maximum: descriptor.max,
+            default_value: descriptor.default,
+            steps: match descriptor.curve {
+                ParamCurve::Stepped(steps) => steps as i32,
+                _ => 0,
+            },
+            logarithmic: matches!(descriptor.curve, ParamCurve::Exponential),
+        })
+        .collect();
+    spec.set_params(params.as_slice().into());
+    spec.set_first(STRIP_FIRST as i32);
+    spec.set_voicing(STRIP_VOICING as i32);
+    spec.set_pre_in(STRIP_PRE_IN as i32);
+    spec.set_drive_db(STRIP_DRIVE_DB as i32);
+    spec.set_eq_in(STRIP_EQ_IN as i32);
+    spec.set_band_base(strip_band_param(0, STRIP_BAND_FREQ) as i32);
+    spec.set_band_stride(STRIP_BAND_STRIDE as i32);
+    spec.set_band_frequency(STRIP_BAND_FREQ as i32);
+    spec.set_band_gain(STRIP_BAND_GAIN as i32);
+    spec.set_band_q(STRIP_BAND_Q as i32);
+    spec.set_band_kind(STRIP_BAND_KIND as i32);
+    spec.set_comp_in(STRIP_COMP_IN as i32);
+    spec.set_threshold_db(STRIP_COMP_THRESHOLD_DB as i32);
+    spec.set_ratio(STRIP_COMP_RATIO as i32);
+    spec.set_in_trim_db(STRIP_COMP_IN_TRIM_DB as i32);
+    spec.set_attack_ms(STRIP_COMP_ATTACK_MS as i32);
+    spec.set_release_ms(STRIP_COMP_RELEASE_MS as i32);
+    spec.set_knee_db(STRIP_COMP_KNEE_DB as i32);
+    spec.set_mix(STRIP_COMP_MIX as i32);
+    spec.set_makeup_db(STRIP_COMP_MAKEUP_DB as i32);
+    let voicings: Vec<slint::SharedString> = [
+        mooloop_core::PreampVoicing::Moo,
+        mooloop_core::PreampVoicing::Grip,
+        mooloop_core::PreampVoicing::Punch,
+        mooloop_core::PreampVoicing::Iron,
+    ]
+    .iter()
+    .map(|voicing| voicing.label().into())
+    .collect();
+    spec.set_voicings(voicings.as_slice().into());
+    // The bands' own names, in the reading order the faces draw them in.
+    // Spelled once, here, rather than in three faces.
+    let band_names: Vec<slint::SharedString> = ["HIGH SHELF", "HIGH MID", "LOW MID", "LOW SHELF"]
+        .iter()
+        .map(|name| (*name).into())
+        .collect();
+    spec.set_band_names(band_names.as_slice().into());
+    // The pin, which both the rack's drawing and the engine's block loop
+    // read from `mooloop_core::mixer::STRIP_PIN`.
+    window.set_strip_pin_head(mooloop_core::mixer::STRIP_PIN == mooloop_core::mixer::StripPin::Head);
 }
 
 fn apply_theme(window: &MainWindow, palette: ThemePalette) {
@@ -738,7 +889,7 @@ fn queue_channel_delete(
 /// rather than being a special case, and an incremental rotate would have to
 /// rotate `EngineHandle`'s sample and slice slots with the strips or hand the
 /// moved channel its neighbour's audio. See
-/// `docs/plans/console/01-a-channel-can-be-moved.md`.
+/// `docs/plans/archive/console/01-a-channel-can-be-moved.md`.
 fn queue_channel_move(
     tx: &ProjectEditSender,
     state: &Rc<RefCell<UiState>>,
@@ -3366,6 +3517,10 @@ impl UiState {
             selected: self.session.effect_target == EffectTarget::Bus(index as u8),
             is_master: index == MASTER_BUS as usize,
             console: setup.bus.console,
+            polarity: setup.bus.polarity,
+            strip: strip_row(&setup.bus.strip),
+            sends: self.send_rows(index),
+            send_allowed: self.allowed_destinations(index),
             feed_count: self.session.bus_feed_count(index) as i32,
             allowed: self.allowed_destinations(index),
             // Levels are owned by the metering timer, which writes them in
@@ -3437,6 +3592,8 @@ impl UiState {
         window.set_editing_bus_output(setup.bus.output as i32);
         window.set_editing_bus_feed_count(self.session.bus_feed_count(index) as i32);
         window.set_editing_bus_console(setup.bus.console);
+        window.set_editing_bus_polarity(setup.bus.polarity);
+        window.set_editing_bus_strip(strip_row(&setup.bus.strip));
         window.set_editing_bus_can_remove(self.session.can_remove_track(index));
         window.set_editing_bus_allowed(self.allowed_destinations(index));
         window.set_editing_bus_send_feed_count(self.session.track_send_count(index) as i32);
@@ -4642,6 +4799,9 @@ impl AppUi {
         // The Developer page hides its tools row entirely rather than offering
         // a button that would open nothing.
         window.set_preferences_mockup_tool_available(cfg!(feature = "mockup"));
+        // Once, before anything is drawn: the strip's faces read every range
+        // and every parameter id out of this rather than spelling them.
+        install_strip_spec(&window);
         {
             let settings = ui_settings.borrow();
             apply_appearance(&window, &settings.appearance);
@@ -6928,6 +7088,77 @@ impl AppUi {
                     guard.sync_mixer(&w);
                     // The bus device face carries the same switch, so it has
                     // to restate it -- the toggle can be thrown from either.
+                    guard.sync_bus_editor(&w);
+                    guard.update_document_title(&w);
+                }
+                let _ = tx.send(command);
+            });
+        }
+
+        // Polarity. One switch, drawn twice -- the mixer strip and the
+        // track's rack face both carry it -- so both are restated.
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_bus_polarity_toggled(move |bus| {
+                let mut guard = st.borrow_mut();
+                let Some(command) = guard.session.toggle_track_polarity(bus) else {
+                    return;
+                };
+                guard.session.dirty = true;
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_mixer(&w);
+                    guard.sync_bus_editor(&w);
+                    guard.update_document_title(&w);
+                }
+                let _ = tx.send(command);
+            });
+        }
+
+        // The channel strip. One callback for every parameter of every
+        // section, because `StripParams::set` is the only thing that knows
+        // what an id means -- and the id the face sends is the one
+        // `mooloop_core::strip` minted, handed to the markup by
+        // `install_strip_spec` rather than spelled there.
+        //
+        // The strip is drawn in two places at once, so both are restated: a
+        // knob turned on the mixer's back face has to move the same knob on
+        // the rack's pinned row.
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_bus_strip_param(move |bus, param, value| {
+                let mut guard = st.borrow_mut();
+                let Some(command) = guard.session.set_strip_param(bus, param, value) else {
+                    return;
+                };
+                guard.session.dirty = true;
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_mixer_strip(bus.max(0) as usize);
+                    guard.sync_bus_editor(&w);
+                    guard.update_document_title(&w);
+                }
+                let _ = tx.send(command);
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_bus_voicing_picked(move |bus, voicing| {
+                let mut guard = st.borrow_mut();
+                let Some(command) =
+                    guard
+                        .session
+                        .set_strip_param(bus, STRIP_VOICING as i32, voicing as f32)
+                else {
+                    return;
+                };
+                guard.session.dirty = true;
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_mixer_strip(bus.max(0) as usize);
                     guard.sync_bus_editor(&w);
                     guard.update_document_title(&w);
                 }

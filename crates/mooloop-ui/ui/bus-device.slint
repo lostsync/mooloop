@@ -5,103 +5,60 @@ import { NameField } from "toolbar.slint";
 import { GainMath } from "gain.slint";
 import { ChannelMeter } from "meters.slint";
 import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
-import { BusPicker, MixerSendRow } from "mixer.slint";
+import { BusPicker, MixerSendRow, SendRow } from "mixer.slint";
+import { StripRow, StripSections } from "strip.slint";
 
-// One send, drawn as Adam's bar: the target, where it taps, whether it is
-// passing, and a fader.
+// The track's channel strip as a row in its own device rack.
 //
-// Two lines rather than one because the strip is narrow and a send has four
-// things to say. The bar is a `ParameterFader` -- the same horizontal fader
-// the rest of the interface uses -- rather than a bespoke one, so a send
-// level drags, fine-drags and resets to default like every other value.
-component SendRow inherits Rectangle {
-    in property <MixerSendRow> send;
-    callback level-changed(float);
-    callback tap-picked(int);
-    callback enable-toggled();
-    callback removed();
+// Adam, 2026-09-10, asking for the strip's processing to be reachable from
+// the rack: *"own row, pinned, but we should be able to just move the pin or
+// morph what is drawn."* Where the row sits is
+// `mooloop_core::mixer::STRIP_PIN` -- the same statement the engine's block
+// loop reads, so the drawing and the audio agree by construction rather than
+// by anyone remembering.
+//
+// **It has no rails.** Every other row draws an insert menu on one side and
+// a remove on the other; this one can be neither inserted nor removed, so
+// offering the affordances would be offering gestures that do nothing. That
+// absence is what says "pinned" without a word for it.
+export component StripRackRow inherits Rectangle {
+    in property <StripRow> strip;
+    in property <string> name;
+    in property <bool> muted;
+    callback moved(int, float);
+    callback switched(int, bool);
+    callback voicing-picked(int);
 
-    height: 42px;
-    background: hover.has-hover ? Theme.surface-raised : transparent;
-    border-radius: Theme.radius-sm;
+    // Three units. Two is what the bus's own face needs for an output stage
+    // and its routing; the strip is four sections and three is the width at
+    // which an EQ band is still one row with its name beside it.
+    width: DeviceRackMetrics.unit-width * 3 + DeviceRackMetrics.half-gap;
+    height: DeviceRackMetrics.face-height;
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.border;
+    border-radius: Theme.radius-md;
 
-    hover := TouchArea { }
+    StripSections {
+        x: 8px;
+        y: DeviceRackMetrics.header-height + 8px;
+        width: parent.width - 16px;
+        height: parent.height - DeviceRackMetrics.header-height - 16px;
+        strip: root.strip;
+        moved(id, value) => { root.moved(id, value); }
+        switched(id, on) => { root.switched(id, on); }
+        voicing-picked(index) => { root.voicing-picked(index); }
+    }
 
-    VerticalLayout {
-        padding-left: 4px;
-        // Room for the scroll bar, which is drawn over the right edge of the
-        // viewport: at 2px the remove button sat under it and could not be
-        // clicked at all, while the switch beside it worked. Found by the
-        // test below, which is why it clicks rather than invoking.
-        padding-right: 12px;
-        padding-top: 2px;
-        spacing: 1px;
-
-        HorizontalLayout {
-            spacing: 3px;
-            height: 18px;
-            Text {
-                horizontal-stretch: 1;
-                text: root.send.target-name;
-                color: root.send.enabled ? Theme.text : Theme.text-faint;
-                font-size: 9px;
-                vertical-alignment: center;
-                overflow: elide;
-            }
-            // Post-fader first and pre-fader second, which is the order they
-            // are reached for. The deeper tap points -- after a named device,
-            // or at one of its declared outlets -- are the second half of
-            // this step and become further rows in this same list.
-            PickerChip {
-                width: 46px;
-                options: ["Post", "Pre"];
-                selected-index: root.send.pre-fader ? 1 : 0;
-                tooltip: root.send.pre-fader
-                    ? "Pre-fader: after this track's devices, before its fader"
-                    : "Post-fader: follows this track's fader";
-                picked(i) => { root.tap-picked(i); }
-            }
-            // The bypass dot, in the shape the device frame already uses for
-            // it. Switched off is not the same as turned down: this keeps the
-            // level, and keeps the send in the graph, so nothing re-times.
-            ToolButton {
-                text: root.send.enabled ? "\u{25cf}" : "\u{25cb}";
-                tooltip: root.send.enabled ? "Switch this send off" : "Switch this send on";
-                hint: "A send switched off keeps its level and stays in the routing, so nothing else moves in time.";
-                min-width: 20px;
-                max-width: 20px;
-                min-height: 18px;
-                max-height: 18px;
-                text-color: root.send.enabled ? Theme.accent : Theme.text-faint;
-                clicked => { root.enable-toggled(); }
-            }
-            ToolButton {
-                text: "\u{00d7}";
-                tooltip: "Remove this send";
-                hint: "Remove this send. The track it fed keeps everything else routed to it.";
-                min-width: 18px;
-                max-width: 18px;
-                min-height: 18px;
-                max-height: 18px;
-                text-color: Theme.text-muted;
-                clicked => { root.removed(); }
-            }
-        }
-        ParameterFader {
-            min-width: 60px;
-            min-height: 20px;
-            label-width: 0px;
-            track-min-width: 40px;
-            layout-spacing: 4px;
-            value: root.send.level;
-            maximum: GainMath.db-to-linear(6.0);
-            default-value: 1.0;
-            enabled: root.send.enabled;
-            fill: root.send.enabled ? Theme.accent : Theme.text-faint;
-            tooltip: "Level sent to " + root.send.target-name;
-            value-text: GainMath.format-db(GainMath.linear-to-db(root.send.level));
-            changed(v) => { root.level-changed(v); }
-        }
+    DeviceHeader {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        name: root.name + " strip";
+        kind: "STRIP / 3U";
+        role: "STRIP";
+        device-color: Theme.accent;
+        enabled: !root.muted;
     }
 }
 
@@ -126,6 +83,7 @@ export component BusDeviceFace inherits Rectangle {
     in property <float> left-db: -60;
     in property <float> right-db: -60;
     in property <bool> console;
+    in property <bool> polarity;
     in property <bool> can-remove: true;
     in property <[MixerSendRow]> sends;
     // Which tracks this one may send to. The same mask the output picker
@@ -143,6 +101,7 @@ export component BusDeviceFace inherits Rectangle {
     callback mute-toggled();
     callback output-picked(int);
     callback console-toggled();
+    callback polarity-toggled();
 
     VerticalLayout {
         padding: 8px;
@@ -211,9 +170,25 @@ export component BusDeviceFace inherits Rectangle {
                     }
                     HorizontalLayout {
                         alignment: center;
+                        spacing: 4px;
                         MuteButton {
                             muted: root.muted;
                             clicked => { root.mute-toggled(); }
+                        }
+                        // The mixer strip carries this too, in the same
+                        // column beside mute: no control belongs to only one
+                        // of the two faces.
+                        ToolButton {
+                            text: "\u{00f8}";
+                            tooltip: root.polarity ? "Inverted" : "Normal";
+                            hint: "Invert this track's polarity. It acts on the way in, so "
+                                + "everything after it -- including a pre-fader send -- is flipped.";
+                            active: root.polarity;
+                            min-width: 22px;
+                            max-width: 22px;
+                            min-height: 18px;
+                            max-height: 18px;
+                            clicked => { root.polarity-toggled(); }
                         }
                     }
                     Rectangle { vertical-stretch: 1; }

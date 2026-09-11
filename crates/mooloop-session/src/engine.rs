@@ -362,7 +362,8 @@ impl Session {
     /// The buffers are allocated here, on the pump thread, and only for the
     /// buses the plan names: a project that has never switched console on
     /// allocates nothing and this sends nothing, which is the "free while it
-    /// is out" rule `docs/plans/console/` is held to. Deliberately does not
+    /// is out" rule `docs/plans/archive/console/` is held to. Deliberately
+    /// does not
     /// mark the document dirty -- this is derived state, not something the
     /// user did.
     pub fn sync_console_sums(&mut self, handle: &mut EngineHandle) {

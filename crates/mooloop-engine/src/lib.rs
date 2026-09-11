@@ -192,7 +192,8 @@ pub enum StructuralCommand {
     /// reclaimed there, because the audio thread may do neither. `None` means
     /// nothing encoded reaches this bus, which is every bus in a project that
     /// has not switched console on -- so the feature costs nothing while it
-    /// is out, which is the rule everything in `docs/plans/console/` is held
+    /// is out, which is the rule everything in `docs/plans/archive/console/`
+    /// is held
     /// to.
     ///
     /// The switch itself is a POD `EngineCommand::SetStripConsole`, and the

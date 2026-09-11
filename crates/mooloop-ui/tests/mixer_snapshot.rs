@@ -1,7 +1,8 @@
-use mooloop_core::{EffectKind, MAX_BUSES};
+use mooloop_core::strip::{StripBand, StripParams};
+use mooloop_core::{EffectKind, EqBandKind, PreampVoicing, MAX_BUSES};
 use mooloop_ui::{
-    effect_kind_index, effect_kind_units, view, ChannelRow, EffectSlotRow, MainWindow,
-    MixerSendRow, MixerStripRow, StepCell,
+    effect_kind_index, effect_kind_units, strip_row, view, ChannelRow, EffectSlotRow, MainWindow,
+    MixerMetrics, MixerSendRow, MixerStripRow, StepCell, StripRow,
 };
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
@@ -72,6 +73,19 @@ fn strips(selected: usize) -> Rc<VecModel<MixerStripRow>> {
                 selected: index == selected,
                 is_master: index == 0,
                 console: false,
+                polarity: index == 2,
+                // Every section out on most tracks, which is what a track
+                // arrives with; one loaded strip so the turned-over face and
+                // the rack's pinned row have something to draw.
+                strip: if index == 1 {
+                    demo_strip()
+                } else {
+                    StripRow::default()
+                },
+                sends: ModelRc::from(Rc::new(VecModel::from(Vec::new()))),
+                send_allowed: ModelRc::from(Rc::new(VecModel::from(
+                    (0..MAX_BUSES).map(|other| other != index).collect::<Vec<_>>(),
+                ))),
                 feed_count: match index {
                     0 => 1,
                     3 => 2,
@@ -95,6 +109,43 @@ fn strips(selected: usize) -> Rc<VecModel<MixerStripRow>> {
     ))
 }
 
+/// A strip with something to draw: two sections in, a voicing that colours,
+/// and an EQ curve with a bell and a shelf in it. Built through the same
+/// `strip_row` the application publishes, so the response plot's band array
+/// and the compressor's sampled curve are the real ones.
+fn demo_strip() -> StripRow {
+    let mut params = StripParams {
+        voicing: PreampVoicing::Iron,
+        pre_in: true,
+        drive_db: 4.0,
+        eq_in: true,
+        comp_in: true,
+        threshold_db: -22.0,
+        ratio: 4.0,
+        makeup_db: 3.0,
+        ..StripParams::default()
+    };
+    params.bands[0] = StripBand {
+        kind: EqBandKind::HighShelf,
+        frequency_hz: 6_000.0,
+        gain_db: 3.5,
+        q: 0.7,
+    };
+    params.bands[1] = StripBand {
+        kind: EqBandKind::Bell,
+        frequency_hz: 2_400.0,
+        gain_db: -4.0,
+        q: 1.8,
+    };
+    params.bands[3] = StripBand {
+        kind: EqBandKind::LowShelf,
+        frequency_hz: 90.0,
+        gain_db: 5.0,
+        q: 0.8,
+    };
+    strip_row(&params)
+}
+
 fn headless() -> MainWindow {
     slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
         i_slint_backend_testing::TestingBackendOptions {
@@ -106,6 +157,11 @@ fn headless() -> MainWindow {
     .expect("initialize headless renderer");
 
     let ui = MainWindow::new().unwrap();
+    // The strip's faces read every range and every parameter id out of this,
+    // so a window that has not been given it draws a strip with no labels
+    // and no ranges. A test should reach the strip the way the application
+    // does.
+    mooloop_ui::install_strip_spec(&ui);
     ui.window().set_size(LogicalSize::new(1100.0, 760.0));
     ui.set_channels(rack_rows());
     ui.set_pattern_length(16);
@@ -140,6 +196,7 @@ fn render_mixer_pane_with_a_bus_chain() {
     ui.set_editing_bus_name(SharedString::from("Bus 3"));
     ui.set_editing_bus_feed_count(2);
     ui.set_editing_bus_volume(1.0);
+    ui.set_editing_bus_strip(demo_strip());
     ui.set_editing_bus_left_db(-9.0);
     ui.set_editing_bus_right_db(-11.0);
     ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
@@ -227,6 +284,95 @@ fn render_mixer_pane_with_a_bus_chain() {
     write_snapshot(&snapshot, "MOOLOOP_MIXER_SNAPSHOT");
 }
 
+/// **The turn-over**, which is the one gesture in the strip that nothing else
+/// tests: a click in a strip's lower-right corner replaces its lower half
+/// with the EQ / COMP / DRIVE / SENDS pages, and a control on the face that
+/// arrives has to report the parameter id the *engine* reads.
+///
+/// The corner is probed off `MOOLOOP_MIXER_SNAPSHOT` -- the small chevron at
+/// the bottom right of strip 1. The control is then found by **sweeping the
+/// strip** rather than by a second probe, so moving something inside the back
+/// face cannot leave this test passing while testing nothing.
+///
+/// Swept upward on purpose. The tab row sits above the page, so a downward
+/// sweep would click all four tabs before reaching the page area and would
+/// then be looking at SENDS, which has no `in` switch to find.
+#[test]
+fn turning_a_strip_over_reaches_its_own_parameters() {
+    let ui = headless();
+    ui.invoke_show_view(view::MIXER);
+
+    let moved = Rc::new(Cell::new((-1, -1)));
+    let sink = moved.clone();
+    ui.on_bus_strip_param(move |bus, param, _| sink.set((bus, param)));
+
+    // Nothing on the front face reports a strip parameter.
+    let mut ids = sweep_strip(&ui, &moved);
+    assert!(
+        ids.is_empty(),
+        "the front face reported a strip parameter: {ids:?}"
+    );
+
+    click(&ui, TURN_OVER_X, TURN_OVER_Y);
+    write_snapshot(
+        &ui.window().take_snapshot().unwrap(),
+        "MOOLOOP_TURNED_SNAPSHOT",
+    );
+    ids = sweep_strip(&ui, &moved);
+    assert!(
+        !ids.is_empty(),
+        "nothing on the turned-over strip reported a parameter"
+    );
+    let known: Vec<i32> = StripParams::descriptors()
+        .iter()
+        .map(|descriptor| descriptor.id as i32)
+        .collect();
+    for id in &ids {
+        assert!(
+            known.contains(id),
+            "the face reported {id}, which is not a parameter this strip has"
+        );
+    }
+    assert!(
+        ids.contains(&(mooloop_core::strip::STRIP_EQ_IN as i32)),
+        "the EQ's own `in` switch was not reachable on the back face: {ids:?}"
+    );
+
+    // And it turns back.
+    click(&ui, TURN_OVER_X, TURN_OVER_Y);
+    assert!(
+        sweep_strip(&ui, &moved).is_empty(),
+        "the strip did not turn back to its fader"
+    );
+}
+
+/// Every parameter id reported by clicking over strip 1's own column, from
+/// just above its turn-over button up to just below its fader. Deliberately
+/// clear of the corner, so the sweep cannot turn the strip over half way
+/// through and start testing the other face.
+fn sweep_strip(ui: &MainWindow, moved: &Rc<Cell<(i32, i32)>>) -> Vec<i32> {
+    let mut ids: Vec<i32> = Vec::new();
+    let mut y = 290.0;
+    while y > 190.0 {
+        let mut x = 118.0;
+        while x < 199.0 {
+            moved.set((-1, -1));
+            click(ui, x, y);
+            let (bus, param) = moved.get();
+            if bus == 1 && !ids.contains(&param) {
+                ids.push(param);
+            }
+            x += 3.0;
+        }
+        y -= 3.0;
+    }
+    ids
+}
+
+/// Strip 1's turn-over button, probed off `MOOLOOP_MIXER_SNAPSHOT`.
+const TURN_OVER_X: f32 = 192.0;
+const TURN_OVER_Y: f32 = 300.0;
+
 /// Clicking a strip's name plate is the gesture that points the device rack at
 /// that bus. If it stops reporting, the mixer becomes a display.
 ///
@@ -243,17 +389,37 @@ fn clicking_a_strip_name_selects_that_bus() {
 
     // Name-plate row of the first three strips: master, then two inserts one
     // strip pitch apart.
-    click(&ui, 44.0, NAME_PLATE_Y);
+    let pitch = strip_pitch(&ui);
+    // Inside the first strip's name plate. Any point in it will do: what the
+    // clicks below are about is the pitch between strips, not the plate's
+    // own extent.
+    let first = 54.0;
+    click(&ui, first, NAME_PLATE_Y);
     assert_eq!(picked.get(), 0, "the leftmost strip is the master");
-    click(&ui, 44.0 + STRIP_PITCH, NAME_PLATE_Y);
+    click(&ui, first + pitch, NAME_PLATE_Y);
     assert_eq!(picked.get(), 1);
-    click(&ui, 44.0 + STRIP_PITCH * 2.0, NAME_PLATE_Y);
+    click(&ui, first + pitch * 2.0, NAME_PLATE_Y);
     assert_eq!(picked.get(), 2);
 
-    // The gap between two strips belongs to neither.
-    picked.set(-1);
-    click(&ui, 80.0, NAME_PLATE_Y);
-    assert_eq!(picked.get(), -1, "the gutter must not select a bus");
+    // The gap between two strips belongs to neither. Found by walking
+    // rather than computed: the pane sits at an offset inside the work area,
+    // so the only honest way to name an absolute gutter coordinate is to
+    // sweep for it -- and the property worth asserting is that two strips
+    // are not adjacent, whatever the offset is.
+    let mut runs: Vec<i32> = Vec::new();
+    for step in 0..(pitch as i32 * 2) {
+        picked.set(-2);
+        click(&ui, first + step as f32, NAME_PLATE_Y);
+        let hit = picked.get();
+        if runs.last() != Some(&hit) {
+            runs.push(hit);
+        }
+    }
+    assert_eq!(
+        runs,
+        vec![0, -2, 1, -2, 2],
+        "a sweep across two strip pitches should read strip, gap, strip, gap, strip"
+    );
 }
 
 /// A channel owns its mixer destination even while the mixer pane is hidden.
@@ -295,8 +461,18 @@ fn channel_bus_picker_reports_the_selected_destination() {
 /// used to carry a 26px strip and its 1px rule above the pane, holding only
 /// the Steps/Mixer switcher, which now leads the toolbar row above.
 const NAME_PLATE_Y: f32 = 109.0;
-/// Strip width plus the layout gap between two strips.
-const STRIP_PITCH: f32 = 66.0;
+/// The gap `MixerPane`'s strip row puts between two strips.
+const STRIP_GAP: f32 = 4.0;
+
+/// Strip width plus the layout gap between two strips, read from
+/// `MixerMetrics` rather than kept here.
+///
+/// It was 66 until 2026-09-11, when the strip went to 92px so that three
+/// knobs fit a row and an EQ band could be one -- and a test holding its own
+/// copy of a width is how a passing suite comes to be clicking the gutter.
+fn strip_pitch(ui: &MainWindow) -> f32 {
+    ui.global::<MixerMetrics>().get_strip_width() + STRIP_GAP
+}
 
 /// Centre of the first channel row's bus picker in the normal work surface.
 const CHANNEL_BUS_PICKER_X: f32 = 202.0;

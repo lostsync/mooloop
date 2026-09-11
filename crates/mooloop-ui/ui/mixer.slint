@@ -1,8 +1,67 @@
-import { Theme } from "theme.slint";
+import { Theme, Motion } from "theme.slint";
 import { ScrollView } from "std-widgets.slint";
-import { ConsoleButton, MixerFader, MiniKnob, MuteButton, ToolButton } from "controls.slint";
+import { ConsoleButton, MixerFader, MiniKnob, MuteButton, ParameterFader, PickerChip, SectionLabel, ToolButton } from "controls.slint";
 import { GainMath } from "gain.slint";
 import { ChannelMeter } from "meters.slint";
+import { StripCompPage, StripDrivePage, StripEqPage, StripRow } from "strip.slint";
+
+// The mixer's own numbers, under a name, the way `DeviceRackMetrics` holds
+// the rack's.
+//
+// Adam, 2026-09-10: *"white tie imperial makes it work at 92px. why dont we
+// just adopt that size fully?"* The arithmetic is the argument: a strip was
+// 62px with 4px padding, so 54px of content, and `MiniKnob` is 22px -- two
+// knobs to a row, never three. At 92px there are 84px of content, three
+// knobs and their gutters are 74px, and **an EQ band is one row**. It pays
+// on the front as well: meter (22px) plus fader (30px) leaves room for the
+// column the mockup stacks mute and polarity in, which is what does not fit
+// at 62px and why today's strip put pan below the fader instead.
+//
+// The front face, the back face and `tests/mixer_snapshot.rs` all want this
+// number, and a number spelled in four places that drift apart is the fault
+// `AGENTS.md` opens on.
+export global MixerMetrics {
+    out property <length> strip-width: 92px;
+    out property <length> strip-padding: 4px;
+    out property <length> meter-width: 22px;
+    out property <length> fader-width: 30px;
+    /// The fader may be squeezed from the top -- Adam: *"there's room to
+    /// squish the fader's top downward but it should have some kind of
+    /// reasonable min height"* -- and this is the floor it stops at, which is
+    /// what lets the turned-over face take the rest of the strip.
+    out property <length> fader-floor: 96px;
+    /// And the floor it stops at once the strip is turned over, where the
+    /// fader is there to be *watched* rather than dragged: an EQ is set by
+    /// ear against what it does to the level, which a short fader still
+    /// shows. Without this the back face gets what is left of a 200px pane
+    /// after a full-height fader, which is a page seen through a slot.
+    out property <length> fader-turned-floor: 48px;
+    /// The tallest back page -- the EQ's four band rows under its response
+    /// plot. The page area scrolls to it rather than clipping, the way the
+    /// sends area scrolls to its rows.
+    out property <length> back-page-height: 190px;
+    /// The front face's lower half: the destination picker, the feed count
+    /// and the analog-sum switch, with the two gaps between them. Stated
+    /// rather than left to `preferred-height`, because the faces are inside
+    /// the clipping card that makes the turn work and a clipped child
+    /// reports nothing useful.
+    out property <length> front-height: 22px + 10px + 20px + 8px;
+}
+
+// One send on a track's strip: where it goes, how loud, where it taps, and
+// whether it is passing audio.
+//
+// `target` is a track index and `target-name` its name, carried together so
+// the row can draw the name without indexing `bus-names` -- a send survives
+// track edits by being renumbered in the model, and a row that looked its own
+// name up would be the one place that renumbering could be seen to lag.
+export struct MixerSendRow {
+    target: int,
+    target-name: string,
+    level: float,
+    pre-fader: bool,
+    enabled: bool,
+}
 
 // One mixer bus as the pane and the Rust side exchange it. Levels arrive
 // already in dB so the strip never has to know the meter's floor.
@@ -19,6 +78,18 @@ export struct MixerStripRow {
     // Whether this bus's own output is console-encoded. Never set on the
     // master, which feeds nothing.
     console: bool,
+    // Whether this track's signal is inverted.
+    polarity: bool,
+    // This track's channel strip: four sections, all out until something
+    // switches them in. Drawn on the back face; the same struct the rack
+    // face draws, so no parameter is reachable from only one of them.
+    strip: StripRow,
+    // The sends this track has, for the back face's SENDS page. The rack
+    // face draws the same rows.
+    sends: [MixerSendRow],
+    // Which tracks this one may send to: the same mask the output picker
+    // uses, because a send and an output are legal under the same rule.
+    send-allowed: [bool],
     // Sequencer channels feeding this bus directly. Drawn so an empty bus is
     // distinguishable from a loaded one at a glance.
     feed-count: int,
@@ -36,19 +107,105 @@ export struct MixerStripRow {
     clipping: bool,
 }
 
-// One send on a track's strip: where it goes, how loud, where it taps, and
-// whether it is passing audio.
+// One send, drawn as Adam's bar: the target, where it taps, whether it is
+// passing, and a fader.
 //
-// `target` is a track index and `target-name` its name, carried together so
-// the row can draw the name without indexing `bus-names` -- a send survives
-// track edits by being renumbered in the model, and a row that looked its own
-// name up would be the one place that renumbering could be seen to lag.
-export struct MixerSendRow {
-    target: int,
-    target-name: string,
-    level: float,
-    pre-fader: bool,
-    enabled: bool,
+// Two lines rather than one because the strip is narrow and a send has four
+// things to say. The bar is a `ParameterFader` -- the same horizontal fader
+// the rest of the interface uses -- rather than a bespoke one, so a send
+// level drags, fine-drags and resets to default like every other value.
+// Shared since 2026-09-11: the track's rack face drew it first and the mixer
+// strip's back face draws the same rows, so it lives here with `BusPicker`
+// rather than in one of the two faces that uses it.
+export component SendRow inherits Rectangle {
+    in property <MixerSendRow> send;
+    callback level-changed(float);
+    callback tap-picked(int);
+    callback enable-toggled();
+    callback removed();
+
+    height: 42px;
+    background: hover.has-hover ? Theme.surface-raised : transparent;
+    border-radius: Theme.radius-sm;
+
+    hover := TouchArea { }
+
+    VerticalLayout {
+        padding-left: 4px;
+        // Room for the scroll bar, which is drawn over the right edge of the
+        // viewport: at 2px the remove button sat under it and could not be
+        // clicked at all, while the switch beside it worked. Found by the
+        // test below, which is why it clicks rather than invoking.
+        padding-right: 12px;
+        padding-top: 2px;
+        spacing: 1px;
+
+        HorizontalLayout {
+            spacing: 3px;
+            height: 18px;
+            Text {
+                horizontal-stretch: 1;
+                text: root.send.target-name;
+                color: root.send.enabled ? Theme.text : Theme.text-faint;
+                font-size: 9px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            // Post-fader first and pre-fader second, which is the order they
+            // are reached for. The deeper tap points -- after a named device,
+            // or at one of its declared outlets -- are the second half of
+            // this step and become further rows in this same list.
+            PickerChip {
+                width: 46px;
+                options: ["Post", "Pre"];
+                selected-index: root.send.pre-fader ? 1 : 0;
+                tooltip: root.send.pre-fader
+                    ? "Pre-fader: after this track's devices, before its fader"
+                    : "Post-fader: follows this track's fader";
+                picked(i) => { root.tap-picked(i); }
+            }
+            // The bypass dot, in the shape the device frame already uses for
+            // it. Switched off is not the same as turned down: this keeps the
+            // level, and keeps the send in the graph, so nothing re-times.
+            ToolButton {
+                text: root.send.enabled ? "\u{25cf}" : "\u{25cb}";
+                tooltip: root.send.enabled ? "Switch this send off" : "Switch this send on";
+                hint: "A send switched off keeps its level and stays in the routing, so nothing else moves in time.";
+                min-width: 20px;
+                max-width: 20px;
+                min-height: 18px;
+                max-height: 18px;
+                text-color: root.send.enabled ? Theme.accent : Theme.text-faint;
+                clicked => { root.enable-toggled(); }
+            }
+            ToolButton {
+                text: "\u{00d7}";
+                tooltip: "Remove this send";
+                hint: "Remove this send. The track it fed keeps everything else routed to it.";
+                min-width: 18px;
+                max-width: 18px;
+                min-height: 18px;
+                max-height: 18px;
+                text-color: Theme.text-muted;
+                clicked => { root.removed(); }
+            }
+        }
+        ParameterFader {
+            min-width: 60px;
+            min-height: 20px;
+            label-width: 0px;
+            track-min-width: 40px;
+            layout-spacing: 4px;
+            value: root.send.level;
+            maximum: GainMath.db-to-linear(6.0);
+            default-value: 1.0;
+            enabled: root.send.enabled;
+            fill: root.send.enabled ? Theme.accent : Theme.text-faint;
+            tooltip: "Level sent to " + root.send.target-name;
+            value-text: GainMath.format-db(GainMath.linear-to-db(root.send.level));
+            changed(v) => { root.level-changed(v); }
+        }
+    }
 }
 
 // Shared bus chooser. Used both to assign a channel to a bus and to route one
@@ -159,30 +316,195 @@ export component BusPicker inherits Rectangle {
     }
 }
 
+// One page of the strip's back face. Four of them, in the order
+// `THE-STRIP.md` settles: EQ, COMP, DRIVE (carrying the voicing), SENDS.
+//
+// Sends last because they are the one section that also lives on the track's
+// rack face, so they are the one a user has somewhere else to reach.
+component StripBackPages inherits Rectangle {
+    in property <MixerStripRow> strip;
+    in property <[string]> bus-names;
+    callback strip-moved(int, float);
+    callback strip-switched(int, bool);
+    callback voicing-picked(int);
+    callback send-added(int);
+    callback send-removed(int);
+    callback send-level-changed(int, float);
+    callback send-tap-picked(int, int);
+    callback send-enable-toggled(int);
+
+    private property <int> page: 0;
+
+    VerticalLayout {
+        spacing: 3px;
+        // The tabs, two by two rather than four across. Four in a row is
+        // what `THE-STRIP.md` sketched and 84px of content does not hold it:
+        // a quarter of the width is 21px, which fits neither `COMP` nor
+        // `SENDS` and would have to abbreviate both. Two rows of two carry
+        // the words, and a word is worth 16px of the strip's height.
+        for row[pair] in [["EQ", "COMP"], ["DRIVE", "SENDS"]] : HorizontalLayout {
+            spacing: 1px;
+            height: 16px;
+            for label[column] in row : ToolButton {
+                text: label;
+                tooltip: label;
+                hint: "Turn this strip's back face to its " + label + " page.";
+                active: root.page == pair * 2 + column;
+                // Half the row each, rather than whatever the label's own
+                // preferred width is: a `ToolButton` sized to its text
+                // overflows the strip and draws `COMP` and `SENDS` through
+                // its right edge.
+                min-width: (parent.width - 1px) / 2;
+                max-width: (parent.width - 1px) / 2;
+                min-height: 16px;
+                max-height: 16px;
+                clicked => { root.page = pair * 2 + column; }
+            }
+        }
+        // One page at a time, and the three that are not on screen are not
+        // built -- an `if` rather than an opacity, which is what keeps a
+        // strip's back face free on every track that is not turned over.
+        //
+        // Scrolled rather than squeezed: the mixer pane is whatever height
+        // the views around it leave, and a page that shrank to fit would be
+        // a row of 8px knobs. The same answer the sends area already gives.
+        ScrollView {
+            vertical-stretch: 1;
+            viewport-width: self.visible-width;
+            viewport-height: max(self.visible-height, MixerMetrics.back-page-height);
+            if root.page == 0 : StripEqPage {
+                width: 100%;
+                strip: root.strip.strip;
+                moved(id, value) => { root.strip-moved(id, value); }
+                switched(id, on) => { root.strip-switched(id, on); }
+            }
+            if root.page == 1 : StripCompPage {
+                width: 100%;
+                strip: root.strip.strip;
+                moved(id, value) => { root.strip-moved(id, value); }
+                switched(id, on) => { root.strip-switched(id, on); }
+            }
+            if root.page == 2 : StripDrivePage {
+                width: 100%;
+                strip: root.strip.strip;
+                moved(id, value) => { root.strip-moved(id, value); }
+                switched(id, on) => { root.strip-switched(id, on); }
+                voicing-picked(index) => { root.voicing-picked(index); }
+            }
+            if root.page == 3 : VerticalLayout {
+                width: 100%;
+                spacing: 3px;
+                HorizontalLayout {
+                    spacing: 2px;
+                    height: 16px;
+                    SectionLabel {
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                        text: root.strip.sends.length == 0 ? "SENDS"
+                            : root.strip.sends.length + (root.strip.sends.length == 1 ? " SEND" : " SENDS");
+                    }
+                    // Not a `+ Send` button: this creates a **route**, and
+                    // the track at the far end becomes a return by being
+                    // sent to (`docs/TERMINOLOGY.md`).
+                    if !root.strip.is-master : BusPicker {
+                        bus-names: root.bus-names;
+                        value: root.strip.output;
+                        allowed: root.strip.send-allowed;
+                        label: "+";
+                        chip-width: 20px;
+                        height: 16px;
+                        tooltip: "Route a copy of this track to another one";
+                        picked(target) => { root.send-added(target); }
+                    }
+                }
+                if root.strip.sends.length == 0 : Text {
+                    text: "Route this track to another and it gains a fader here.";
+                    color: Theme.text-faint;
+                    font-size: 8px;
+                    wrap: word-wrap;
+                    vertical-stretch: 1;
+                }
+                // The area draws the sends that exist and scrolls past the
+                // room it has, rather than reserving bays for a number
+                // somebody drew once. Adam, 2026-09-09: *"i drew 4 sends bc
+                // that is how many fit in my drawing... we are not limiting
+                // to 4."*
+                if root.strip.sends.length > 0 : ScrollView {
+                    vertical-stretch: 1;
+                    viewport-width: self.visible-width;
+                    viewport-height: max(self.visible-height, root.strip.sends.length * 41px);
+                    VerticalLayout {
+                        spacing: 1px;
+                        for send[index] in root.strip.sends : SendRow {
+                            send: send;
+                            level-changed(v) => { root.send-level-changed(index, v); }
+                            tap-picked(tap) => { root.send-tap-picked(index, tap); }
+                            enable-toggled => { root.send-enable-toggled(index); }
+                            removed => { root.send-removed(index); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One track, at `MixerMetrics.strip-width`, with two faces.
+//
+// The front is what you look at while **mixing**; the back is what you look
+// at while **setting one track up**. The turn-over is per strip, so one
+// track can show its EQ while everything around it still shows faders --
+// which is the comparison a global flip would take away.
+//
+// **The name, the meter and the fader do not turn.** Two reasons, and the
+// second is the load-bearing one: an EQ is set by ear while watching what it
+// does to the level, and a face that shares nothing with the one it replaced
+// reads as a different panel arriving rather than as this strip, turned
+// round.
 component MixerStrip inherits Rectangle {
     in property <MixerStripRow> strip;
     in property <int> index;
     in property <[string]> bus-names;
     callback selected();
     callback mute-toggled();
+    callback polarity-toggled();
     callback volume-changed(float);
     callback pan-changed(float);
     callback output-picked(int);
     callback console-toggled();
     callback clip-reset();
+    callback strip-moved(int, float);
+    callback strip-switched(int, bool);
+    callback voicing-picked(int);
+    callback send-added(int);
+    callback send-removed(int);
+    callback send-level-changed(int, float);
+    callback send-tap-picked(int, int);
+    callback send-enable-toggled(int);
 
-    width: 62px;
+    // 0 is the front, 1 is the back, and the way between them is a real
+    // turn: Slint 1.17 has no 3D transform, so the card closes to nothing
+    // and opens again with the other face on it -- `abs(turn - 0.5) * 2` is
+    // 1 at both ends and 0 in the middle, where the faces swap. It spends
+    // `Motion.duration` and `Motion.curve`, the tokens the device rack's
+    // slide-aside and the dock's extent already animate on, rather than
+    // introducing a second timing.
+    private property <float> turn: 0;
+    private property <bool> showing-back: root.turn >= 0.5;
+    animate turn { duration: Motion.duration; easing: Motion.curve; }
+
+    width: MixerMetrics.strip-width;
     background: root.strip.selected ? Theme.surface-active : Theme.surface;
     border-width: 1px;
     border-color: root.strip.selected ? Theme.accent : Theme.border;
     border-radius: Theme.radius-md;
 
     VerticalLayout {
-        padding: 4px;
+        padding: MixerMetrics.strip-padding;
         spacing: 4px;
 
         // Name plate. Clicking it is the gesture that points the device rack
-        // below at this bus, so it covers the full width of the strip.
+        // below at this track, so it covers the full width of the strip.
         Rectangle {
             height: 20px;
             border-radius: Theme.radius-sm;
@@ -204,12 +526,18 @@ component MixerStrip inherits Rectangle {
             Tooltip { text: @markdown("\{root.strip.name}"); }
         }
 
+        // The output section: meter, fader, and the column beside it. It is
+        // the elastic one -- the fader is squeezed from the top down to
+        // `MixerMetrics.fader-floor` and the back face takes the rest.
         HorizontalLayout {
-            vertical-stretch: 1;
+            vertical-stretch: root.showing-back ? 0 : 1;
+            min-height: root.showing-back
+                ? MixerMetrics.fader-turned-floor
+                : MixerMetrics.fader-floor;
             spacing: 2px;
             alignment: center;
             ChannelMeter {
-                width: 22px;
+                width: MixerMetrics.meter-width;
                 segments: 14;
                 left-db: root.strip.left-db;
                 right-db: root.strip.right-db;
@@ -219,7 +547,7 @@ component MixerStrip inherits Rectangle {
                 clip-reset => { root.clip-reset(); }
             }
             MixerFader {
-                width: 30px;
+                width: MixerMetrics.fader-width;
                 value: root.strip.volume;
                 maximum: GainMath.db-to-linear(6.0);
                 default-value: 1.0;
@@ -227,88 +555,195 @@ component MixerStrip inherits Rectangle {
                 value-text: GainMath.format-db(GainMath.linear-to-db(root.strip.volume));
                 changed(v) => { root.volume-changed(v); }
             }
+            // Mute and polarity stacked, which is where the mockup puts them
+            // and what 92px is what makes possible: at 62px this column is
+            // what did not fit.
+            VerticalLayout {
+                width: 24px;
+                spacing: 2px;
+                alignment: start;
+                MuteButton {
+                    muted: root.strip.muted;
+                    clicked => { root.mute-toggled(); }
+                }
+                // The cheapest control on the mockup, and drawn where it is
+                // drawn rather than where it acts: polarity is applied at
+                // the top of the track's block, so the strip, the chain,
+                // both send taps and the fader all see the flipped signal.
+                ToolButton {
+                    text: "\u{00f8}";
+                    tooltip: root.strip.polarity ? "Inverted" : "Normal";
+                    hint: "Invert this track's polarity. It acts on the way in, so "
+                        + "everything after it -- including a pre-fader send -- is flipped.";
+                    active: root.strip.polarity;
+                    min-width: 22px;
+                    max-width: 22px;
+                    min-height: 18px;
+                    max-height: 18px;
+                    clicked => { root.polarity-toggled(); }
+                }
+                Rectangle { vertical-stretch: 1; }
+            }
         }
 
-        HorizontalLayout {
-            spacing: 2px;
-            alignment: center;
-            MiniKnob {
-                label: "Pan";
-                value: root.strip.pan;
-                minimum: -1;
-                maximum: 1;
-                default-value: 0;
-                bipolar: true;
-                value-text: abs(root.strip.pan) < 0.01 ? "Center"
-                    : root.strip.pan < 0 ? "L " + round(abs(root.strip.pan) * 100)
-                    : "R " + round(root.strip.pan * 100);
-                changed(v) => { root.pan-changed(v); }
-            }
-            MuteButton {
-                muted: root.strip.muted;
-                clicked => { root.mute-toggled(); }
-            }
-        }
-
-        // The master has nowhere to send, so the row below it carries a feed
-        // count instead of an empty control.
+        // The card. Only the lower half turns, so what is above stays put
+        // and the strip reads as one object throughout.
         Rectangle {
-            height: 22px;
-            if !root.strip.is-master : BusPicker {
-                x: (parent.width - 30px) / 2;
-                bus-names: root.bus-names;
-                value: root.strip.output;
-                allowed: root.strip.allowed;
-                tooltip: "Bus this one feeds";
-                picked(i) => { root.output-picked(i); }
-            }
-            if root.strip.is-master : Text {
-                text: "OUT";
-                color: Theme.text-faint;
-                font-size: 8px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                width: 100%;
+            vertical-stretch: root.showing-back ? 1 : 0;
+            // Bounds rather than a height, because an explicit `height`
+            // overrides a layout's stretch: bound to `preferred-height` the
+            // turned face measured zero -- a `ScrollView` has no intrinsic
+            // height -- and the fader grew into the whole strip while the
+            // back face drew nothing at all.
+            min-height: root.showing-back ? 90px : MixerMetrics.front-height;
+            max-height: root.showing-back ? 100000px : MixerMetrics.front-height;
+            clip: true;
+            Rectangle {
+                width: parent.width * abs(root.turn - 0.5) * 2;
+                x: (parent.width - self.width) / 2;
+                height: 100%;
+                clip: true;
+                // Fixed at the strip's own content width inside a container
+                // that narrows, so the face is *clipped* as the card closes
+                // rather than reflowed into a column one pixel wide.
+                Rectangle {
+                    width: MixerMetrics.strip-width - 2 * MixerMetrics.strip-padding;
+                    x: (parent.width - self.width) / 2;
+                    height: 100%;
+                    if !root.showing-back : VerticalLayout {
+                        spacing: 4px;
+                        // The master has nowhere to send, so the row below
+                        // it carries a feed count instead of an empty
+                        // control.
+                        Rectangle {
+                            height: 22px;
+                            if !root.strip.is-master : BusPicker {
+                                x: (parent.width - 30px) / 2;
+                                bus-names: root.bus-names;
+                                value: root.strip.output;
+                                allowed: root.strip.allowed;
+                                tooltip: "Bus this one feeds";
+                                picked(i) => { root.output-picked(i); }
+                            }
+                            if root.strip.is-master : Text {
+                                text: "OUT";
+                                color: Theme.text-faint;
+                                font-size: 8px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                            }
+                        }
+                        Rectangle {
+                            height: 10px;
+                            Text {
+                                text: root.strip.feed-count == 0 ? "\u{2014}"
+                                    : root.strip.feed-count + (root.strip.feed-count == 1 ? " ch" : " chs");
+                                color: root.strip.feed-count == 0 ? Theme.text-faint : Theme.text-muted;
+                                font-size: 8px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                            }
+                        }
+                        // Analog sum, at the foot of the strip and set apart
+                        // from mute -- which is where Adam's mockup puts it,
+                        // and it is the honest place: this is the last thing
+                        // that happens on the way out, after the fader, and
+                        // it is not an output control in the way mute and
+                        // pan are. The master has none, because it feeds
+                        // nothing.
+                        Rectangle {
+                            height: 20px;
+                            if !root.strip.is-master : ConsoleButton {
+                                // Sized and placed by coordinate rather than
+                                // by a layout, so it needs an explicit size:
+                                // outside a layout an element fills its
+                                // parent and `min-width`/`max-width`
+                                // constrain nothing, which drew the switch as
+                                // a slab across the whole strip the first
+                                // time.
+                                x: (parent.width - 22px) / 2;
+                                y: 1px;
+                                width: 22px;
+                                height: 18px;
+                                on: root.strip.console;
+                                tooltip: "Analog sum";
+                                hint: "Sum this bus into its destination through the analog summing "
+                                    + "curve, together with everything else feeding it that has this on.";
+                                toggled(v) => { root.console-toggled(); }
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                    if root.showing-back : VerticalLayout {
+                        spacing: 3px;
+                        // Clear of the turn-over in the corner, which is
+                        // drawn over this face rather than in a row of its
+                        // own: without it the EQ's response plot runs under
+                        // the button.
+                        padding-bottom: 16px;
+                        // The pan survives the turn along with the name, the
+                        // meter and the level: it is on the back rather than
+                        // the front because that is where the mockup draws
+                        // it, and it is also on the track's rack face, so no
+                        // parameter is reachable from only one drawing.
+                        HorizontalLayout {
+                            height: 24px;
+                            alignment: center;
+                            MiniKnob {
+                                label: "Pan";
+                                hint: "Where this track sits between the speakers.";
+                                value: root.strip.pan;
+                                minimum: -1;
+                                maximum: 1;
+                                default-value: 0;
+                                bipolar: true;
+                                controlled: true;
+                                value-text: abs(root.strip.pan) < 0.01 ? "Center"
+                                    : root.strip.pan < 0 ? "L " + round(abs(root.strip.pan) * 100)
+                                    : "R " + round(root.strip.pan * 100);
+                                changed(v) => { root.pan-changed(v); }
+                            }
+                        }
+                        StripBackPages {
+                            vertical-stretch: 1;
+                            strip: root.strip;
+                            bus-names: root.bus-names;
+                            strip-moved(id, value) => { root.strip-moved(id, value); }
+                            strip-switched(id, on) => { root.strip-switched(id, on); }
+                            voicing-picked(voicing) => { root.voicing-picked(voicing); }
+                            send-added(target) => { root.send-added(target); }
+                            send-removed(send) => { root.send-removed(send); }
+                            send-level-changed(send, level) => { root.send-level-changed(send, level); }
+                            send-tap-picked(send, tap) => { root.send-tap-picked(send, tap); }
+                            send-enable-toggled(send) => { root.send-enable-toggled(send); }
+                        }
+                    }
+                }
             }
         }
 
-        Rectangle {
-            height: 10px;
-            Text {
-                text: root.strip.feed-count == 0 ? "\u{2014}"
-                    : root.strip.feed-count + (root.strip.feed-count == 1 ? " ch" : " chs");
-                color: root.strip.feed-count == 0 ? Theme.text-faint : Theme.text-muted;
-                font-size: 8px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                width: 100%;
-            }
-        }
+    }
 
-        // Analog sum, at the foot of the strip and set apart from mute --
-        // which is where Adam's mockup puts it, and it is the honest place:
-        // this is the last thing that happens on the way out, after the
-        // fader, and it is not an output control in the way mute and pan are.
-        // The master has none, because it feeds nothing.
-        Rectangle {
-            height: 20px;
-            if !root.strip.is-master : ConsoleButton {
-                // Sized and placed by coordinate rather than by a layout, so
-                // it needs an explicit size: outside a layout an element
-                // fills its parent and `min-width`/`max-width` constrain
-                // nothing, which drew the switch as a 62px slab across the
-                // whole strip the first time.
-                x: (parent.width - 22px) / 2;
-                y: 1px;
-                width: 22px;
-                height: 18px;
-                on: root.strip.console;
-                tooltip: "Analog sum";
-                hint: "Sum this bus into its destination through the analog summing "
-                    + "curve, together with everything else feeding it that has this on.";
-                toggled(v) => { root.console-toggled(); }
-            }
-        }
+    // The turn-over, in the strip's lower-right **corner** rather than in a
+    // row of its own: a row costs 20px of the one dimension the strip cannot
+    // spare, since the strip's height is the fader's. One button per strip; a
+    // global one -- the way a desk's FLIP works -- was floated 2026-09-10 and
+    // is not ruled on, and this does not depend on it.
+    ToolButton {
+        x: root.width - 20px;
+        y: root.height - 18px;
+        text: root.showing-back ? "\u{2039}" : "\u{203a}";
+        tooltip: root.showing-back ? "Back to the fader" : "Turn this strip over";
+        hint: root.showing-back
+            ? "Turn this strip back to its fader, meter and destination."
+            : "Turn this strip over: its EQ, compressor, drive and sends, at the "
+                + "same width. The name, the meter and the fader stay where they are.";
+        width: 16px;
+        height: 14px;
+        text-color: Theme.text-muted;
+        clicked => { root.turn = root.showing-back ? 0 : 1; }
     }
 }
 
@@ -323,7 +758,18 @@ export component MixerPane inherits Rectangle {
     callback bus-pan-changed(int, float);
     callback bus-output-changed(int, int);
     callback bus-console-toggled(int);
+    callback bus-polarity-toggled(int);
     callback bus-clip-reset(int);
+    // One callback for every strip parameter, carrying the id
+    // `mooloop_core::strip` gave it: `StripSpec` is where the markup gets
+    // that id from, so neither side spells a number.
+    callback bus-strip-param(int, int, float);
+    callback bus-voicing-picked(int, int);
+    callback bus-send-added(int, int);
+    callback bus-send-removed(int, int);
+    callback bus-send-level-changed(int, int, float);
+    callback bus-send-tap-picked(int, int, int);
+    callback bus-send-enable-toggled(int, int);
     callback track-added();
     in property <bool> can-add-track: true;
 
@@ -352,11 +798,20 @@ export component MixerPane inherits Rectangle {
                     bus-names: root.bus-names;
                     selected => { root.bus-selected(i); }
                     mute-toggled => { root.bus-muted(i); }
+                    polarity-toggled => { root.bus-polarity-toggled(i); }
                     volume-changed(v) => { root.bus-volume-changed(i, v); }
                     pan-changed(v) => { root.bus-pan-changed(i, v); }
                     output-picked(o) => { root.bus-output-changed(i, o); }
                     console-toggled => { root.bus-console-toggled(i); }
                     clip-reset => { root.bus-clip-reset(i); }
+                    strip-moved(id, value) => { root.bus-strip-param(i, id, value); }
+                    strip-switched(id, on) => { root.bus-strip-param(i, id, on ? 1 : 0); }
+                    voicing-picked(voicing) => { root.bus-voicing-picked(i, voicing); }
+                    send-added(target) => { root.bus-send-added(i, target); }
+                    send-removed(send) => { root.bus-send-removed(i, send); }
+                    send-level-changed(send, level) => { root.bus-send-level-changed(i, send, level); }
+                    send-tap-picked(send, tap) => { root.bus-send-tap-picked(i, send, tap); }
+                    send-enable-toggled(send) => { root.bus-send-enable-toggled(i, send); }
                 }
 
                 // One `+`, one kind of thing. What a track *is* -- an

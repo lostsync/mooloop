@@ -63,9 +63,9 @@ pub enum StripPin {
 
 /// The pinned position, and the reasons for it, in the order they carry
 /// weight: the drive stage is an *input* stage and a preamp after an insert
-/// is not one; a track's rack is glue and post (`docs/plans/console/README.md`,
-/// decision 2) and post means after; and the device people put last on a
-/// track is a limiter, which a strip compressor behind it would be working
+/// is not one; a track's rack is glue and post (decision 2 of the console
+/// plan's `README.md`) and post means after; and the device people put last
+/// on a track is a limiter, which a strip compressor behind it would be working
 /// on the far side of.
 pub const STRIP_PIN: StripPin = StripPin::Head;
 
@@ -147,7 +147,7 @@ impl MixerBus {
 /// **they arrive at the same time**, since a fader declares no latency.
 ///
 /// Taps further up the chain (after a named device, or at one of a device's
-/// declared audio outlets) are the second half of `docs/plans/console/`'s
+/// declared audio outlets) are the second half of the console plan's
 /// step 05 and are not here yet: they need a per-tap chain prefix latency,
 /// where these two need none.
 #[derive(

@@ -1,8 +1,8 @@
 //! The channel strip every track has: an input stage, four EQ bands and a
 //! compressor, under one strip-wide voicing.
 //!
-//! `docs/plans/console/03-the-channel-strip-device.md` is the work order and
-//! `THE-STRIP.md` beside it is Adam's mockup. Two things about this file are
+//! `docs/plans/archive/console/03-the-channel-strip-device.md` is the work
+//! order and `THE-STRIP.md` beside it is Adam's mockup. Two things about this file are
 //! decisions rather than plumbing.
 //!
 //! **It is not a device.** There is no `EffectKind`, nothing to insert and

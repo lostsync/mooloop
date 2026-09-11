@@ -42,8 +42,15 @@ import { ReverbDeviceFace } from "reverb-device.slint";
 import { PlateDeviceFace } from "plate-device.slint";
 import { ModulationDeviceFace } from "modulation-device.slint";
 import { ModulationShelf, ModulationShelfMetrics, ModulationSourceRow, ModulationOutletRow, ModulationRouteRow } from "modulation-shelf.slint";
-import { MixerPane, MixerSendRow, MixerStripRow, BusPicker } from "mixer.slint";
-import { BusDeviceFace } from "bus-device.slint";
+import { MixerMetrics, MixerPane, MixerSendRow, MixerStripRow, BusPicker } from "mixer.slint";
+export { MixerMetrics }
+import { BusDeviceFace, StripRackRow } from "bus-device.slint";
+import { StripRow, StripSpec } from "strip.slint";
+// Re-exported so Rust can reach them: a global is visible to the generated
+// code only from the entry file, and `install_strip_spec` fills the first
+// while `tests/mixer_snapshot.rs` reads the strip's width out of the second
+// rather than keeping its own copy of 92.
+export { StripSpec }
 import { MonoDeviceFace } from "mono-device.slint";
 import { MlM1DeviceFace } from "mlm1-device.slint";
 import { MlP8DeviceFace, MlP8RouteRow } from "mlp8-device.slint";
@@ -879,7 +886,16 @@ export component MainWindow inherits Window {
     callback bus-pan-changed(int, float);
     callback bus-output-changed(int, int);
     callback bus-console-toggled(int);
+    callback bus-polarity-toggled(int);
     callback bus-clip-reset(int);
+    // One callback for the whole channel strip, carrying the parameter id
+    // `mooloop_core::strip` gave it. The markup reads that id from the
+    // `StripSpec` global, which Rust fills from the same constants, so
+    // neither side spells a number and there is no per-section verb to keep
+    // in step. The voicing is separate only because it is an index into a
+    // named set rather than a value.
+    callback bus-strip-param(int, int, float);
+    callback bus-voicing-picked(int, int);
     // Track structure. One `+`; routing decides what a track is.
     callback track-added();
     callback track-renamed(int, string);
@@ -897,6 +913,14 @@ export component MainWindow inherits Window {
     in property <int> editing-bus-output;
     in property <int> editing-bus-feed-count;
     in property <bool> editing-bus-console;
+    in property <bool> editing-bus-polarity;
+    // The strip of the track the rack is following, for the pinned row.
+    in property <StripRow> editing-bus-strip;
+    // Whether that row draws before the track's own devices or after them.
+    // `mooloop_core::mixer::STRIP_PIN` decides, and the engine's block loop
+    // reads the same constant -- so the rack cannot draw the strip in a
+    // place the audio does not run it.
+    in property <bool> strip-pin-head: true;
     in property <bool> editing-bus-can-remove;
     in property <[bool]> editing-bus-allowed;
     in property <float> editing-bus-left-db: -60;
@@ -3107,7 +3131,15 @@ export component MainWindow inherits Window {
                                 bus-pan-changed(i, v) => { root.bus-pan-changed(i, v); }
                                 bus-output-changed(i, o) => { root.bus-output-changed(i, o); }
                                 bus-console-toggled(i) => { root.bus-console-toggled(i); }
+                                bus-polarity-toggled(i) => { root.bus-polarity-toggled(i); }
                                 bus-clip-reset(i) => { root.bus-clip-reset(i); }
+                                bus-strip-param(i, id, v) => { root.bus-strip-param(i, id, v); }
+                                bus-voicing-picked(i, voicing) => { root.bus-voicing-picked(i, voicing); }
+                                bus-send-added(i, t) => { root.send-added(i, t); }
+                                bus-send-removed(i, send) => { root.send-removed(i, send); }
+                                bus-send-level-changed(i, send, v) => { root.send-level-changed(i, send, v); }
+                                bus-send-tap-picked(i, send, tap) => { root.send-tap-picked(i, send, tap); }
+                                bus-send-enable-toggled(i, send) => { root.send-enable-toggled(i, send); }
                                 can-add-track: root.can-add-track;
                                 track-added => { root.track-added(); }
                             }
@@ -3339,6 +3371,8 @@ export component MainWindow inherits Window {
                                                 pan-changed(v) => { root.bus-pan-changed(root.editing-bus-index, v); }
                                                 mute-toggled => { root.bus-muted(root.editing-bus-index); }
                                                 console: root.editing-bus-console;
+                                                polarity: root.editing-bus-polarity;
+                                                polarity-toggled => { root.bus-polarity-toggled(root.editing-bus-index); }
                                                 can-remove: root.editing-bus-can-remove;
                                                 output-picked(o) => { root.bus-output-changed(root.editing-bus-index, o); }
                                                 console-toggled => { root.bus-console-toggled(root.editing-bus-index); }
@@ -3811,6 +3845,25 @@ export component MainWindow inherits Window {
 
                                         DeviceJoin { }
 
+
+                                        // The strip's own row, pinned. Two
+                                        // instances and one guard rather
+                                        // than one instance that moves: a
+                                        // `HorizontalLayout` places its
+                                        // children in declaration order, so
+                                        // "before the chain" and "after the
+                                        // chain" are two positions in this
+                                        // file. `STRIP_PIN` picks between
+                                        // them, and the engine reads the
+                                        // same constant.
+                                        if root.editing-bus && root.strip-pin-head : StripRackRow {
+                                            strip: root.editing-bus-strip;
+                                            name: root.editing-bus-name;
+                                            muted: root.editing-bus-muted;
+                                            moved(id, v) => { root.bus-strip-param(root.editing-bus-index, id, v); }
+                                            switched(id, on) => { root.bus-strip-param(root.editing-bus-index, id, on ? 1 : 0); }
+                                            voicing-picked(voicing) => { root.bus-voicing-picked(root.editing-bus-index, voicing); }
+                                        }
                                         for slot[index] in root.effect-slots : cell := Rectangle {
                                             property <length> face-width:
                                                 DeviceRackMetrics.unit-width * slot.units
@@ -4470,6 +4523,17 @@ export component MainWindow inherits Window {
                                             }
                                         }
 
+                                        // The other position the pin can take:
+                                        // after the track's own devices. See the
+                                        // instance before the chain.
+                                        if root.editing-bus && !root.strip-pin-head : StripRackRow {
+                                            strip: root.editing-bus-strip;
+                                            name: root.editing-bus-name;
+                                            muted: root.editing-bus-muted;
+                                            moved(id, v) => { root.bus-strip-param(root.editing-bus-index, id, v); }
+                                            switched(id, on) => { root.bus-strip-param(root.editing-bus-index, id, on ? 1 : 0); }
+                                            voicing-picked(voicing) => { root.bus-voicing-picked(root.editing-bus-index, voicing); }
+                                        }
                                         Rectangle {
                                             width: 50px;
                                             height: DeviceRackMetrics.face-height;

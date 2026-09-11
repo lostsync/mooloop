@@ -387,6 +387,119 @@ export component DelayEchoDisplay inherits Rectangle {
 // x, output level on y, both -60..0 dB, with the unity diagonal for reference.
 // The gain computers are the same ones in mooloop_dsp::dynamics, so the
 // plotted corner and both parameter-derived points stay on the audible curve.
+// A deliberately bounded frequency plot. The spectrum layer receives compact
+// display telemetry only when enabled, so it cannot create background DSP work.
+// Shared rather than private to the EQ device since 2026-09-11: the channel
+// strip's own four bands are drawn by it too, and a second copy would be a
+// second answer to what a bell of a given Q looks like.
+//
+// It reads a flat `band-data` of five floats a band -- normalized frequency,
+// normalized gain, Q, enabled, `EqBandKind` index -- and draws up to seven of
+// them. A caller with four bands sends four; `band-value` answers 0 past the
+// end of the model, and a band whose `enabled` field is 0 is neither plotted
+// nor draggable.
+export component EqResponseDisplay inherits Rectangle {
+    in property <[float]> band-data;
+    in property <[float]> spectrum-data;
+    in property <int> selected-target;
+    in property <bool> spectrum-visible;
+    callback point-grabbed(int);
+    callback point-dragged(int, float, float);
+    private property <int> sample-count: 140;
+
+    pure function band-value(index: int, field: int) -> float {
+        return index * 5 + field < root.band-data.length ? root.band-data[index * 5 + field] : 0;
+    }
+    pure function band-shape(index: int, x: float) -> float {
+        let frequency = 20 * pow(1000, clamp(x, 0, 1));
+        let center = 20 * pow(1000, clamp(root.band-value(index, 0), 0, 1));
+        // Q is the inverse of bandwidth: a larger Q must visibly narrow the
+        // bell. The old exponent approximation changed the curve's skirt but
+        // not its half-width, which made the display read backwards.
+        let bell = 1 / (1 + pow(abs(ln(frequency / center)) * max(0.15, root.band-value(index, 2)), 2));
+        return root.band-value(index, 4) == 1 ? 1 / (1 + pow(frequency / center, 1.6))
+            : root.band-value(index, 4) == 2 ? 1 / (1 + pow(center / frequency, 1.6)) : bell;
+    }
+    // Coincident points cannot be independently clicked when they occupy the
+    // same TouchArea. Spread only matching, enabled points horizontally; the
+    // callback still addresses the band at the curve position.
+    pure function overlaps(index: int, other: int) -> bool {
+        return index != other
+            && root.band-value(index, 3) > 0.5
+            && root.band-value(other, 3) > 0.5
+            && abs(root.band-value(index, 0) - root.band-value(other, 0)) < 0.002
+            && abs(root.band-value(index, 1) - root.band-value(other, 1)) < 0.002;
+    }
+    pure function overlap-count(index: int) -> int {
+        return 1
+            + (root.overlaps(index, 0) ? 1 : 0) + (root.overlaps(index, 1) ? 1 : 0)
+            + (root.overlaps(index, 2) ? 1 : 0) + (root.overlaps(index, 3) ? 1 : 0)
+            + (root.overlaps(index, 4) ? 1 : 0) + (root.overlaps(index, 5) ? 1 : 0)
+            + (root.overlaps(index, 6) ? 1 : 0);
+    }
+    pure function overlap-rank(index: int) -> int {
+        return (index > 0 && root.overlaps(index, 0) ? 1 : 0)
+            + (index > 1 && root.overlaps(index, 1) ? 1 : 0)
+            + (index > 2 && root.overlaps(index, 2) ? 1 : 0)
+            + (index > 3 && root.overlaps(index, 3) ? 1 : 0)
+            + (index > 4 && root.overlaps(index, 4) ? 1 : 0)
+            + (index > 5 && root.overlaps(index, 5) ? 1 : 0);
+    }
+    pure function response-db(x: float) -> float {
+        let b0 = root.band-value(0, 3) > 0.5 ? (root.band-value(0, 1) * 36 - 18) * root.band-shape(0, x) : 0;
+        let b1 = root.band-value(1, 3) > 0.5 ? (root.band-value(1, 1) * 36 - 18) * root.band-shape(1, x) : 0;
+        let b2 = root.band-value(2, 3) > 0.5 ? (root.band-value(2, 1) * 36 - 18) * root.band-shape(2, x) : 0;
+        let b3 = root.band-value(3, 3) > 0.5 ? (root.band-value(3, 1) * 36 - 18) * root.band-shape(3, x) : 0;
+        let b4 = root.band-value(4, 3) > 0.5 ? (root.band-value(4, 1) * 36 - 18) * root.band-shape(4, x) : 0;
+        let b5 = root.band-value(5, 3) > 0.5 ? (root.band-value(5, 1) * 36 - 18) * root.band-shape(5, x) : 0;
+        let b6 = root.band-value(6, 3) > 0.5 ? (root.band-value(6, 1) * 36 - 18) * root.band-shape(6, x) : 0;
+        return clamp(b0 + b1 + b2 + b3 + b4 + b5 + b6, -24, 24);
+    }
+    pure function point-color(index: int) -> color {
+        return index == 0 ? #eab308 : index == 1 ? #84cc16 : index == 2 ? #22c55e
+            : index == 3 ? #06b6d4 : index == 4 ? #3b82f6 : index == 5 ? #a855f7 : #ec4899;
+    }
+
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.border;
+    clip: true;
+    for grid in 7 : Rectangle { x: grid * parent.width / 6; width: 1px; height: 100%; background: Theme.border.with-alpha(0.32); }
+    for grid in 5 : Rectangle { y: grid * parent.height / 4; width: 100%; height: 1px; background: Theme.border.with-alpha(grid == 2 ? 0.72 : 0.32); }
+    for bar in 48 : Rectangle {
+        private property <float> level: bar < root.spectrum-data.length ? root.spectrum-data[bar] : 0;
+        x: bar * parent.width / 48; width: max(1px, parent.width / 48 - 1px);
+        y: parent.height * (1 - clamp(level, 0, 1)); height: parent.height * clamp(level, 0, 1);
+        background: Theme.text-faint.with-alpha(root.spectrum-visible ? 0.16 : 0);
+    }
+    for sample in root.sample-count : Rectangle {
+        private property <float> x0: sample / (root.sample-count - 1);
+        private property <float> x1: min(1, (sample + 1) / (root.sample-count - 1));
+        private property <float> y0: 0.5 - root.response-db(x0) / 48;
+        private property <float> y1: 0.5 - root.response-db(x1) / 48;
+        x: x0 * parent.width; y: min(y0, y1) * parent.height;
+        width: max(1px, parent.width / root.sample-count + 0.5px); height: max(1px, abs(y1 - y0) * parent.height);
+        background: Theme.accent;
+    }
+    for index in 7 : DraggablePoint {
+        private property <float> frequency: root.band-value(index, 0);
+        private property <float> gain: root.band-value(index, 1);
+        private property <int> coincident-count: root.overlap-count(index);
+        private property <int> coincident-rank: root.overlap-rank(index);
+        x: frequency * parent.width - 7px + (coincident-rank - (coincident-count - 1) / 2) * 18px;
+        y: (1 - gain) * parent.height - 7px;
+        width: 14px; height: 14px;
+        enabled: root.band-value(index, 3) > 0.5;
+        grabbed => { root.point-grabbed(index); }
+        dragged(dx, dy) => {
+            root.point-dragged(index,
+                clamp(self.frequency + dx * 1px / parent.width, 0, 1),
+                clamp(self.gain - dy * 1px / parent.height, 0, 1));
+        }
+        Rectangle { width: 14px; height: 14px; border-radius: 7px; background: root.point-color(index); border-width: root.selected-target == index ? 2px : 1px; border-color: root.selected-target == index ? Theme.text : Theme.panel; }
+    }
+}
+
 export component DynamicsCurveDisplay inherits Rectangle {
     in property <int> mode;            // 0 = gate, 1 = compressor, 2 = limiter
     // Gate and compressor: the threshold. Limiter: the ceiling.
@@ -406,6 +519,16 @@ export component DynamicsCurveDisplay inherits Rectangle {
     // lags the static curve during release, which is exactly the part of a
     // compressor's behaviour a transfer plot alone cannot show.
     in property <float> gain-reduction-db: 0;
+    /// Output level in dB for `floor-db..0` of input, sampled evenly, or
+    /// empty to use this component's own gain computer.
+    ///
+    /// For a device whose curve is **not** the shared one: the channel
+    /// strip's compressor bends its ratio above the knee by an amount its
+    /// voicing chooses, and the alternative to plotting what it hands over
+    /// is teaching this file a second gain computer -- two formulas, one
+    /// name, and the copy that drifts is the one a user is reading. Rust
+    /// samples the real curve, and the display draws what is running.
+    in property <[float]> curve-db;
     callback threshold-dragged(float);
     private property <int> sample-count: 140;
     private property <float> floor-db: -60;
@@ -448,9 +571,19 @@ export component DynamicsCurveDisplay inherits Rectangle {
                 : input-db + root.comp-gain(input-db) + root.extra-db);
     }
 
+    /// This device's output for an input level: the supplied curve if there
+    /// is one, and otherwise its own gain computer.
+    pure function curve-out(input-db: float) -> float {
+        if (root.curve-db.length > 1) {
+            let travel = clamp((input-db - root.floor-db) / -root.floor-db, 0, 1);
+            return root.curve-db[clamp(round(travel * (root.curve-db.length - 1)), 0, root.curve-db.length - 1)];
+        }
+        return root.output-db(input-db);
+    }
+
     pure function plot-y(index: int) -> float {
         let input-db = root.floor-db + (0 - root.floor-db) * index / (root.sample-count - 1);
-        let out = clamp(root.output-db(input-db), root.floor-db, 0);
+        let out = clamp(root.curve-out(input-db), root.floor-db, 0);
         return -out / -root.floor-db;
     }
 
@@ -465,7 +598,7 @@ export component DynamicsCurveDisplay inherits Rectangle {
     }
 
     pure function db-y(db: float) -> float {
-        return root.level-y(root.output-db(clamp(db, root.floor-db, 0)));
+        return root.level-y(root.curve-out(clamp(db, root.floor-db, 0)));
     }
 
     // The scope warms as the device leans on the signal. This is the same

@@ -2,8 +2,8 @@
 //! compressor, under one strip-wide voicing.
 //!
 //! `mooloop_core::strip` is the parameter set a project persists; this is
-//! what runs. `docs/plans/console/03-the-channel-strip-device.md` is the
-//! work order, and three things in here are its decisions rather than
+//! what runs. `docs/plans/archive/console/03-the-channel-strip-device.md`
+//! is the work order, and three things in here are its decisions rather than
 //! arithmetic.
 //!
 //! # A voicing selects laws, never values
@@ -196,6 +196,31 @@ fn bent_ratio(ratio: f32, over_db: f32, bend: f32) -> f32 {
     } else {
         1.0 + (ratio - 1.0) / (1.0 - t)
     }
+}
+
+/// The compressor's static curve, as this strip is running it: output level
+/// in dB for `floor_db..0` of input, evenly sampled.
+///
+/// For the face. `DynamicsCurveDisplay` holds a gain computer of its own and
+/// could draw a threshold, a ratio and a knee unaided -- but not the
+/// voicing's bend above the knee, and the alternative to handing the display
+/// the real curve is teaching the markup a second gain computer. Two
+/// formulas under one name, and the copy that drifts is the one a user is
+/// reading. So the curve is sampled here, by the same two functions the
+/// audio path calls.
+pub fn static_curve_db(params: &StripParams, floor_db: f32, samples: usize) -> Vec<f32> {
+    let voicing = strip_voicing(params.voicing);
+    let samples = samples.max(2);
+    (0..samples)
+        .map(|index| {
+            let input_db = floor_db + (-floor_db) * index as f32 / (samples - 1) as f32;
+            let over = input_db - params.threshold_db;
+            let ratio = bent_ratio(params.ratio, over, voicing.ratio_bend);
+            let reduction =
+                compressor_gain_db(input_db, params.threshold_db, ratio, params.knee_db);
+            input_db + reduction + params.makeup_db
+        })
+        .collect()
 }
 
 /// The strip's four-band EQ.
