@@ -118,30 +118,37 @@ it *testable*: render a sine at `gain::REFERENCE_PEAK_DBFS` through each
 voicing and assert the harmonic amplitudes against the table. `SpectrumAnalyzer`
 already exists, so the measurement costs nothing to build.
 
-**Built and proven, 2026-09-09**, in `mooloop_dsp::harmonics`: every voicing's
-stated profile is what a full-scale sine measures coming out of it, to 0.00 dB.
-`harmonics_hit_their_stated_target` is that claim as a test.
+**Built and proven, 2026-09-09**, in `mooloop_dsp::harmonics`, and **re-based
+on measurement 2026-09-10**: every voicing's stated profile is what a sine
+*at `gain::REFERENCE_PEAK_DBFS`* measures coming out of it, to 0.00 dB, and
+every profile is now read off a named unit in the 106-unit survey rather than
+picked. `harmonics_hit_their_stated_target_at_the_operating_level` is that
+claim as a test.
 
 The two limits, stated up front so the target is not quietly missed:
 
-1. **The exact correspondence holds at one amplitude, and below it the
-   character both thins *and changes shape*.** Building it turned up something
-   the first draft of this file got wrong: there is no simple `a^(n-1)` law
-   once a profile has more than one term. Off full scale every `Tₙ` spills
-   into harmonics `n-2`, `n-4`…, so `T₄` feeds the 2nd against `T₂` and the
-   two partially cancel — `Iron`'s 2nd falls 9 dB per halving, not 6. The
-   module header carries the worked algebra and a test pins the number.
+1. **The correspondence holds at one amplitude, and that amplitude is the
+   operating level.** The first version authored at full scale, which is
+   exact where the Chebyshev identity is exact and wrong everywhere music is:
+   `Iron` claimed a 2nd harmonic "near −40 dB at the operating level" and
+   delivered −44, with its 4th and 5th at −84 and −108 dB. The shaper now
+   *solves* for the coefficients that hit the profile at −12 dBFS.
 
-   That is wanted, not a flaw: `reference/ADAM.md` asks for colour that
-   *"reacts to level"*, and a distortion whose spectrum is the same at −30 and
-   −6 dBFS is the one that sounds like a plugin.
+   That is why the profile carries **two** harmonics and not four. `Tₙ`'s own
+   output scales as `aⁿ` while its spill into the fundamental scales as `a`,
+   so at `a = 0.251` a `T₅` big enough to make an audible 5th costs 15 dB of
+   fundamental. Nothing is lost: the four-harmonic form delivered its 4th and
+   5th 80 dB down at the operating level anyway.
 
-   **But it means the profile numbers cannot be authored on their own.** At
-   −18 dBFS the first-pass `Grip` profile has receded past −110 dB, which is
-   nothing; "−28 dB of 2nd harmonic" says nothing without saying what level
-   arrives at the curve. The stage that decides that is `pre in / drive`,
-   normalizing into the shaper the way `shaper::drive_compensation` already
-   does for the Drive device. **Author the two together, with ears.**
+   The character still reacts to level, which is what
+   `reference/ADAM.md` asks for — a distortion whose spectrum is the same at
+   −30 and −6 dBFS is the one that sounds like a plugin. What a fixed
+   polynomial cannot do is react at the *rate* real units do: it forces a
+   harmonic up `n-1` dB per dB, where the survey's 186 unit-settings median
+   +0.79 dB/dB for the 2nd and +1.28 for the 3rd. So the voicings hold their
+   balance at and below the operating level and flatten above it, where the
+   references hold theirs about ten times further.
+
 2. **Real transformer distortion is frequency-dependent and hysteretic, and a
    memoryless shaper is neither.** Core saturation rises steeply toward low
    frequencies, which is most of why `Iron` sounds like `Iron` on a kick and
@@ -150,8 +157,11 @@ The two limits, stated up front so the target is not quietly missed:
    inverse after — and that is worth building for `Iron` specifically rather
    than for all four.
 
-What is *not* being claimed is a match to a measured unit. The claim is a
-stated harmonic target, hit at a stated level, and tested.
+Since 2026-09-10 a match to a measured unit *is* claimed for the harmonic
+half: `Grip` is Waves NLS "Mike" (SSL 4000 G+), `Punch` is the UA 610-A, and
+`Iron` is NLS "Spike" (EMI TG12345), each at the drive setting where it makes
+1% THD at the operating level. `tilt_db`, `tilt_hz` and `slew` are still
+picked rather than fitted.
 
 ## Two things the plan did not have at all
 

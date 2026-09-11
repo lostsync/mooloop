@@ -2,8 +2,8 @@
 //!
 //! Adam, naming the channel strip's four voicings: *"note its not just curves
 //! im hoping to capture...idk if we can do it but some THD that's on-target
-//! would be really cool."* This is the answer, and it is yes, with two limits
-//! stated below.
+//! would be really cool."* This is the answer, and it is yes, at the level
+//! the music is actually at.
 //!
 //! # The trick
 //!
@@ -15,44 +15,73 @@
 //!   T₁(sin θ) =  sin θ        the fundamental
 //!   T₂(sin θ) = -cos 2θ       pure 2nd,  and no DC
 //!   T₃(sin θ) = -sin 3θ       pure 3rd
-//!   T₄(sin θ) =  cos 4θ       pure 4th
 //! ```
 //!
-//! So a shaper written as `x + Σ aₙ Tₙ(x)` produces, for a full-scale sine,
-//! harmonic `n` at exactly `aₙ`. The harmonic profile is therefore something
-//! you **write down** and solve for, rather than something you arrive at by
-//! turning a knob until it sounds right — and, being a number, it can be
-//! asserted in a test. That is what `harmonics_hit_their_stated_target` does.
+//! So a shaper written as `x + Σ aₙ Tₙ(x)` produces, for a **full-scale**
+//! sine, harmonic `n` at exactly `aₙ`. The harmonic profile is therefore
+//! something you **write down** and solve for, rather than something you
+//! arrive at by turning a knob until it sounds right — and, being a number,
+//! it can be asserted in a test.
+//!
+//! # The profile is stated at the operating level, not at full scale
+//!
+//! That identity is exact at full scale and nowhere else, and full scale is
+//! not where music sits. mooloop's unity operating level is
+//! [`PROFILE_REFERENCE_DBFS`] — `-12` dBFS, from
+//! `mooloop_core::gain::REFERENCE_PEAK_DBFS` — and a profile stated 12 dB
+//! above the signal describes a stage nobody hears. The version of this file
+//! that authored at full scale delivered `Iron`'s 2nd harmonic at **-44 dB**
+//! where its own doc comment claimed "near -40 dB at the operating level",
+//! and its 4th and 5th at -84 and -108 dB, which is nothing at all.
+//!
+//! So [`HarmonicShaper::new`] **solves** for the coefficients that hit the
+//! profile at [`PROFILE_REFERENCE_DBFS`], instead of using the targets as
+//! coefficients directly. Feed `a·sin θ` to `Tₙ` and it spills into harmonics
+//! `n`, `n-2`, `n-4`…, so the map from coefficients to harmonics is a small
+//! linear system rather than the identity:
+//!
+//! ```text
+//!   F  = a + a₃(3a³ - 3a)      the fundamental, which T₃ moves
+//!   H₂ = -a₂a²
+//!   H₃ = -a₃a³
+//! ```
+//!
+//! `solve_at` inverts that in closed form. At `a = 1` the spill terms vanish
+//! and it reduces to the old direct mapping exactly, which
+//! `full_scale_solves_to_the_coefficients_themselves` pins.
+//!
+//! # Why only the 2nd and the 3rd
+//!
+//! Because the 4th and the 5th **cannot be authored down here**, and that is
+//! arithmetic rather than taste. `Tₙ`'s own harmonic output scales as `aⁿ`
+//! while its spill into the fundamental scales as `a`. At `a = 0.251` that
+//! is `a⁵ = 0.001`: `T₅` is a thousand times better at disturbing the
+//! fundamental than at making a 5th harmonic. Solving all four of a measured
+//! unit's harmonics at -12 dBFS needs coefficients that drop the stage's own
+//! fundamental by **15 dB** for `Grip` and 7 dB for `Iron`. The four-target
+//! form is only sane above about -4 dBFS.
+//!
+//! Nothing audible is lost. A profile that carried the 4th and 5th delivered
+//! them at -84 and -108 dB at the operating level, which is under the floor
+//! of the file an export is written to. Two harmonics stated where the music
+//! is beats four stated where it is not.
 //!
 //! # The two limits, stated so the target is not quietly missed
 //!
-//! **1. The profile is exact at full scale, and below it the character both
-//! thins *and changes shape*.** The orthogonality above is a property of the
-//! full-scale sine, not of the polynomial. Feed it `a·sin θ` and every `Tₙ`
-//! spills into harmonics `n`, `n-2`, `n-4`… — so `T₄` contributes to the 2nd
-//! as well as the 4th, with the *opposite* sign to `T₂`, and the two
-//! partially cancel:
+//! **1. The profile is exact at the operating level, and the character both
+//! grows above it and thins below it.** `the_profile_thins_as_the_signal_
+//! quietens` asserts the direction, which is the property that is actually
+//! wanted and the one a well-meaning normalization upstream would destroy.
 //!
-//! ```text
-//!   2nd harmonic coefficient  =  -a₂·a²  +  a₄·(4a² - 4a⁴)
-//!                a = 1        =  -a₂                      the stated target
-//!                a = 0.5      =  -0.25·a₂ + 0.75·a₄
-//! ```
+//! Above the reference the curve breaks up fast: these voicings reach 5-11%
+//! THD at 0 dBFS. That is not a defect — it is what the references do. The
+//! units these profiles are fitted to go from 1% THD at -12 dBFS to **20-35%
+//! at 0 dBFS**, a knee they cross between -12 and -9. See
+//! `spikes/preamp-measure/DATA.md`.
 //!
-//! For `IRON` that is -28 dB at full scale and -37 dB at half — a 9 dB fall
-//! where a single-term profile would have given 6. **There is no simple
-//! `a^(n-1)` law once a profile has more than one term**, and a version of
-//! this file that claimed one was wrong; `the_profile_thins_as_the_signal_
-//! quietens` now asserts the property that is actually true and actually
-//! wanted, which is that every harmonic recedes monotonically as the signal
-//! quietens.
-//!
-//! None of that is a defect to be corrected. `reference/ADAM.md` asks for
-//! colour that *"reacts to level"*, and a distortion whose spectrum is
-//! identical at -30 and -6 dBFS is the one that sounds like a plugin. The
-//! strip's `pre in / drive` control is what buys the character back: it is a
-//! gain into this curve, so driving it harder walks the profile back up
-//! toward its stated shape rather than fading in a wet/dry mix.
+//! `reference/ADAM.md` asks for colour that *"reacts to level"*, and a
+//! distortion whose spectrum is identical at -30 and -6 dBFS is the one that
+//! sounds like a plugin.
 //!
 //! **2. It is memoryless, so it cannot be frequency-dependent.** A
 //! transformer's core flux goes as `V/f`, so for a constant voltage it
@@ -60,25 +89,36 @@
 //! stage is obvious on a kick and nearly clean on a hat. A polynomial has no
 //! opinion about frequency at all, and real cores are hysteretic besides.
 //!
-//! The cheap and standard fix is a **filter sandwich**: tilt the lows up into
-//! the shaper and back down after, so what survives is frequency-dependent
-//! *distortion* rather than frequency-dependent *level*. That is a
-//! Wiener-Hammerstein model -- linear, static nonlinear, linear -- and it is
-//! two biquads around this module. It is not built here;
-//! `docs/plans/console/06-preamp-modelling.md` is where it belongs, along
-//! with the frequency-dependent THD test that is what makes "warm on a kick,
-//! clean on a hat" a number.
+//! The cheap and standard fix is a **filter sandwich**: hold the highs back
+//! from the shaper and restore them after, so what survives is
+//! frequency-dependent *distortion* rather than frequency-dependent *level*.
+//! That is a Wiener-Hammerstein model -- linear, static nonlinear, linear --
+//! and it is [`crate::preamp`], which is where `tilt_db` lives.
 //!
-//! What is *not* claimed anywhere is a match to a measured unit. The claim is
-//! a stated harmonic target, hit at a stated level, and tested.
+//! What *is* claimed here is a stated harmonic target, hit at a stated level,
+//! tested — and, since 2026-09-10, cited to a measured unit.
+/// Harmonics a profile describes: the 2nd and the 3rd.
+///
+/// Two, not four, and this module's header says why: at the operating level
+/// the 4th and 5th cannot be authored without wrecking the fundamental, and
+/// a profile that carried them delivered them 80 dB down regardless.
+pub const PROFILE_HARMONICS: usize = 2;
 
-/// Harmonics a profile describes: the 2nd through the 5th. Beyond the 5th
-/// there is little a listener can attribute to a stage rather than to the
-/// source, and every extra term is another polynomial degree to alias.
-pub const PROFILE_HARMONICS: usize = 4;
+/// The level a profile's harmonics are stated at.
+///
+/// mooloop's unity operating level, so a voicing is authored where the
+/// material is. Taken from `mooloop_core::gain::REFERENCE_PEAK_DBFS` rather
+/// than spelt again here: a number written down twice is this codebase's
+/// characteristic fault, and this one is load-bearing in both places.
+pub const PROFILE_REFERENCE_DBFS: f32 = mooloop_core::gain::REFERENCE_PEAK_DBFS;
 
-/// A voicing's harmonic signature, in **dB below the fundamental, at full
-/// scale**, for harmonics 2, 3, 4 and 5.
+/// [`PROFILE_REFERENCE_DBFS`] as an amplitude. About `0.2512`.
+pub(crate) fn reference_amplitude() -> f32 {
+    10.0f32.powf(PROFILE_REFERENCE_DBFS / 20.0)
+}
+
+/// A voicing's harmonic signature, in **dB below the fundamental, at
+/// [`PROFILE_REFERENCE_DBFS`]**, for harmonics 2 and 3.
 ///
 /// `f32::NEG_INFINITY` — or anything below [`SILENT_HARMONIC_DB`] — means the
 /// harmonic is absent, which is how [`HarmonicProfile::TRANSPARENT`] is
@@ -99,9 +139,9 @@ impl HarmonicProfile {
         harmonics_db: [SILENT_HARMONIC_DB; PROFILE_HARMONICS],
     };
 
-    pub const fn new(second: f32, third: f32, fourth: f32, fifth: f32) -> Self {
+    pub const fn new(second: f32, third: f32) -> Self {
         Self {
-            harmonics_db: [second, third, fourth, fifth],
+            harmonics_db: [second, third],
         }
     }
 
@@ -119,72 +159,138 @@ impl HarmonicProfile {
 //
 // Named for the sound rather than for any hardware, per `UI_DESIGN.md`.
 //
-// **These numbers are provisional, and there is a reason beyond taste.** A
-// profile is stated at full scale, and the level law above means the same
-// curve is far quieter on material at mooloop's -12 dBFS operating level --
-// `the_profile_thins_as_the_signal_quietens` prints the figures, and at
-// -18 dBFS `GRIP`'s harmonics have receded past -110 dB, which is nothing at
-// all. So **what these numbers should be cannot be settled until the strip's
-// input stage is**: "-28 dB of 2nd harmonic" says nothing without saying what
-// level arrives at the curve.
+// **Each is now a measured unit rather than a guess**, read at 1 kHz and
+// -12 dBFS from the 106-unit survey in `spikes/preamp-measure/` — see
+// `DATA.md` there for the method and `out/tidy/colour_thd_vs_level.csv` for
+// the rows. Each is quoted at the drive setting where its reference makes
+// **1% THD at the operating level**, which is the one comparison that means
+// the same thing across makers: "Drive 6" does not, and 1% does.
 //
-// The stage that decides it is `pre in / drive`, which normalizes into the
-// shaper the way `shaper::drive_compensation` already does for the Drive
-// device -- +12 dB brings operating-level material to where these profiles
-// are stated. Authoring the two together, with ears, is step 03's job; this
-// module exists to prove that the target *can* be stated and hit.
-//
-// When the numbers stop being picked they will come from a rendered
-// measurement rather than from taste: `docs/REFERENCE_MEASUREMENTS.md` is the
-// protocol, and because a profile is authored through its Chebyshev
-// decomposition, measured harmonic amplitudes *are* the coefficients. Fit at
-// one level and check the others rather than least-squares over the whole
-// surface -- for the interaction reason above, a fit that averages across
-// levels lands somewhere that matches nothing.
+// The previous numbers were picked by ear against a guess about level, and
+// the guess was the part that was wrong — see the header on what `Iron`
+// actually delivered at -12 dBFS versus what its doc comment claimed.
 
 /// `Moo` — the house voicing. Calibrated and uncoloured.
 pub const MOO: HarmonicProfile = HarmonicProfile::TRANSPARENT;
 
 /// `Grip` — fast, tight, controlled. Low distortion and mostly odd-order,
 /// which is what a well-behaved VCA-ish stage measures like.
-pub const GRIP: HarmonicProfile = HarmonicProfile::new(-58.0, -44.0, -70.0, -60.0);
+///
+/// Waves NLS Channel "Mike" (SSL 4000 G+) at 1% THD: the 3rd sits 16 dB
+/// **above** the 2nd, which is the push-pull signature and the reason this
+/// voicing reads as control rather than as warmth.
+pub const GRIP: HarmonicProfile = HarmonicProfile::new(-56.4, -40.3);
 
 /// `Punch` — forward and thick. Both orders present and enough of them to
 /// hear on a snare.
-pub const PUNCH: HarmonicProfile = HarmonicProfile::new(-36.0, -40.0, -54.0, -56.0);
+///
+/// UA 610-A at 1% THD, with UAD's Century Tube Channel agreeing within
+/// 1.5 dB on both harmonics — two units of the same kind reading the same
+/// way, which is worth more than either alone. The two orders sit within
+/// 5 dB of each other, which is what "both present" means as a number.
+pub const PUNCH: HarmonicProfile = HarmonicProfile::new(-41.5, -46.9);
 
 /// `Iron` — transformer warmth: even-order dominant, the one whose
-/// distortion is the point. At the operating level its 2nd harmonic lands
-/// near -40 dB, which is about a percent and is audible as warmth rather than
-/// as an effect.
-pub const IRON: HarmonicProfile = HarmonicProfile::new(-28.0, -46.0, -48.0, -60.0);
+/// distortion is the point.
+///
+/// Waves NLS Channel "Spike" (EMI TG12345) at 1% THD, the 2nd 11 dB above
+/// the 3rd. **Not a Neve**, and that is a finding rather than a
+/// substitution: every Neve channel in the survey measures *odd*-dominant —
+/// NLS "Nevo" by 10.5 dB, Brainworx bx_console N by 49 dB — so the
+/// even-order transformer character this voicing is named for belongs to the
+/// EMI desk. `spikes/preamp-measure/RESULTS.md` §5 item 4 asked which one
+/// `Iron` was; this is the answer the wider pass gives.
+pub const IRON: HarmonicProfile = HarmonicProfile::new(-40.4, -51.7);
 
 // --- The shaper -------------------------------------------------------------
 
 /// A memoryless curve that realises a [`HarmonicProfile`].
 ///
-/// Cheap enough to sit on every strip: five multiply-accumulates on the
+/// Cheap enough to sit on every strip: three multiply-accumulates on the
 /// polynomial, evaluated by the Chebyshev recurrence so no `powi` is needed,
-/// and skipped entirely when the profile is transparent.
+/// and skipped entirely when the profile is transparent. The solve happens
+/// once, in [`Self::new`].
 #[derive(Debug, Clone, Copy)]
 pub struct HarmonicShaper {
-    /// `a₂..a₅` in linear amplitude. `a₁` is 1 and is not stored.
+    /// `a₂..a₃` in linear amplitude. `a₁` is 1 and is not stored.
     coefficients: [f32; PROFILE_HARMONICS],
+    /// Restores the fundamental the `T₃` term takes away.
+    ///
+    /// `T₃`'s linear part is `-3x`, so a curve that makes a 3rd harmonic also
+    /// attenuates: `Grip` loses 3.1 dB without this, which is a *level*
+    /// change, and `GAIN_STRUCTURE.md` is explicit that raising drive changes
+    /// character and not level. Set so the fundamental is exactly unity at
+    /// [`PROFILE_REFERENCE_DBFS`]; below that it drifts by under 0.3 dB,
+    /// because the small-signal gain `1 - 3a₃` and the reference-level gain
+    /// are nearly the same number.
+    makeup: f32,
     transparent: bool,
 }
 
-impl HarmonicShaper {
-    pub fn new(profile: HarmonicProfile) -> Self {
-        let mut coefficients = [0.0; PROFILE_HARMONICS];
-        for (coefficient, db) in coefficients.iter_mut().zip(profile.harmonics_db) {
-            *coefficient = if db <= SILENT_HARMONIC_DB {
-                0.0
-            } else {
-                10.0f32.powf(db / 20.0)
-            };
+/// The coefficients that make `profile` measure true at amplitude `a`, and
+/// the fundamental they leave behind.
+///
+/// Closed form, from the spill relations in this module's header:
+///
+/// ```text
+///   H₃ = -a₃a³        = -t₃·F     with  F = a + a₃(3a³ - 3a)
+///   H₂ = -a₂a²        = -t₂·F
+/// ```
+///
+/// The first is one linear equation in `a₃` once `F` is substituted; the
+/// second then falls out. Done in `f64` because `a³` is `1.6e-2` at the
+/// reference and the subtraction below it is where the precision goes.
+fn solve_at(profile: HarmonicProfile, a: f32) -> ([f32; PROFILE_HARMONICS], f32) {
+    let linear = |db: f32| -> f64 {
+        if db <= SILENT_HARMONIC_DB {
+            0.0
+        } else {
+            10.0f64.powf(db as f64 / 20.0)
         }
+    };
+    let (t2, t3) = (
+        linear(profile.harmonics_db[0]),
+        linear(profile.harmonics_db[1]),
+    );
+    let a = a as f64;
+    let (a2p, a3p) = (a * a, a * a * a);
+
+    // How much of the fundamental `T₃` carries at this amplitude. Zero at
+    // full scale, which is what makes this reduce to the identity there.
+    let spill = 3.0 * a3p - 3.0 * a;
+
+    // -a₃a³ = -t₃(a + a₃·spill)  =>  a₃(-a³ + t₃·spill) = -t₃·a
+    let denominator = -a3p + t3 * spill;
+    let a3 = if denominator.abs() < f64::EPSILON {
+        0.0
+    } else {
+        -t3 * a / denominator
+    };
+    let fundamental = a + a3 * spill;
+    let a2 = if a2p > 0.0 { t2 * fundamental / a2p } else { 0.0 };
+
+    ([a2 as f32, a3 as f32], (fundamental / a) as f32)
+}
+
+impl HarmonicShaper {
+    /// The shaper that hits `profile` at [`PROFILE_REFERENCE_DBFS`].
+    pub fn new(profile: HarmonicProfile) -> Self {
+        Self::at_amplitude(profile, reference_amplitude())
+    }
+
+    /// As [`Self::new`], for an arbitrary reference amplitude.
+    ///
+    /// Exists for the tests, which need to ask what the curve does at a level
+    /// it was not authored at, and to pin the `a = 1` reduction.
+    fn at_amplitude(profile: HarmonicProfile, a: f32) -> Self {
+        let (coefficients, fundamental) = solve_at(profile, a);
         Self {
             coefficients,
+            makeup: if fundamental.abs() > 1e-6 {
+                1.0 / fundamental
+            } else {
+                1.0
+            },
             transparent: profile.is_transparent(),
         }
     }
@@ -217,7 +323,7 @@ impl HarmonicShaper {
             current = next;
             out += coefficient * current;
         }
-        out
+        out * self.makeup
     }
 }
 
@@ -303,22 +409,20 @@ mod tests {
     }
 
     /// **The claim, as a test.** Every voicing's stated harmonic profile is
-    /// what a full-scale sine actually measures coming out of it.
+    /// what a sine *at the operating level* actually measures coming out of
+    /// it — which is the whole of the 2026-09-10 change, since the previous
+    /// version of this test asserted it at full scale and was true there and
+    /// wrong everywhere music is.
     ///
     /// The tolerance is 0.5 dB, which is far tighter than any of these
-    /// numbers will ever be authored to; it is that tight because the
-    /// Chebyshev construction is exact and anything looser would stop
-    /// noticing if it broke.
+    /// numbers will ever be authored to; it is that tight because the solve
+    /// is closed-form and anything looser would stop noticing if it broke.
     #[test]
-    fn harmonics_hit_their_stated_target() {
+    fn harmonics_hit_their_stated_target_at_the_operating_level() {
+        let amplitude = reference_amplitude();
         for (name, profile) in [("Grip", GRIP), ("Punch", PUNCH), ("Iron", IRON)] {
-            let samples = shaped_sine(profile, 1.0);
+            let samples = shaped_sine(profile, amplitude);
             let fundamental = harmonic_amplitude(&samples, 1);
-            assert!(
-                (db(fundamental)).abs() < 0.1,
-                "{name} moved the fundamental to {:.2} dB",
-                db(fundamental)
-            );
             for (index, target_db) in profile.harmonics_db.iter().enumerate() {
                 let n = index + 2;
                 let measured = db(harmonic_amplitude(&samples, n) / fundamental);
@@ -332,53 +436,122 @@ mod tests {
         }
     }
 
+    /// The stage does not change the level at the level it is authored at.
+    ///
+    /// `T₃`'s linear part is `-3x`, so a curve that makes a 3rd harmonic
+    /// attenuates unless something puts the fundamental back;
+    /// `HarmonicShaper::makeup` is that. Without it `Grip` runs 3.1 dB quiet,
+    /// and `GAIN_STRUCTURE.md` says raising drive changes character and not
+    /// level. This is that sentence as a number.
+    #[test]
+    fn the_stage_is_unity_at_the_operating_level() {
+        let amplitude = reference_amplitude();
+        for (name, profile) in [("Grip", GRIP), ("Punch", PUNCH), ("Iron", IRON)] {
+            let samples = shaped_sine(profile, amplitude);
+            let gain = db(harmonic_amplitude(&samples, 1) / amplitude);
+            println!("{name} fundamental at the operating level: {gain:+.3} dB");
+            assert!(gain.abs() < 0.1, "{name} moved the fundamental by {gain:+.2} dB");
+        }
+
+        // And stays near unity below it, where the makeup is no longer exact.
+        for (name, profile) in [("Grip", GRIP), ("Punch", PUNCH), ("Iron", IRON)] {
+            for quieter in [amplitude * 0.5, amplitude * 0.1, amplitude * 0.01] {
+                let samples = shaped_sine(profile, quieter);
+                let gain = db(harmonic_amplitude(&samples, 1) / quieter);
+                assert!(
+                    gain.abs() < 0.3,
+                    "{name} at amplitude {quieter:.4} has gain {gain:+.2} dB"
+                );
+            }
+        }
+    }
+
     /// The colour recedes as the signal quietens, which is limit 1 in this
     /// module's own header and the property that makes it playable.
     ///
-    /// **Monotonic, not a fixed dB law.** The first version of this test
-    /// asserted `a^(n-1)` -- 6 dB off the 2nd per halving -- and it failed,
-    /// which is how the interaction in the header was found: below full scale
-    /// `T₄` feeds the 2nd harmonic against `T₂`, so `Iron`'s 2nd falls 9 dB
-    /// per halving rather than 6. What is worth holding is that every
-    /// harmonic goes *down* and keeps going down, because that is what a
-    /// well-meaning normalization somewhere upstream would destroy.
+    /// **Monotonic, not a fixed dB law.** Measured downward from the
+    /// operating level, where the profile is stated, rather than from full
+    /// scale. What is worth holding is that every harmonic goes *down* and
+    /// keeps going down, because that is what a well-meaning normalization
+    /// somewhere upstream would destroy.
     #[test]
     fn the_profile_thins_as_the_signal_quietens() {
+        let reference = reference_amplitude();
         for (name, profile) in [("Grip", GRIP), ("Punch", PUNCH), ("Iron", IRON)] {
-            for n in 2..=5 {
+            for n in 2..=3 {
                 let mut previous = f32::INFINITY;
-                for amplitude in [1.0, 0.5, 0.25, 0.125] {
+                for step in [1.0, 0.5, 0.25, 0.125] {
+                    let amplitude = reference * step;
                     let samples = shaped_sine(profile, amplitude);
                     let ratio =
                         db(harmonic_amplitude(&samples, n) / harmonic_amplitude(&samples, 1));
                     assert!(
                         ratio < previous - 1.0,
-                        "{name} harmonic {n} did not recede at amplitude {amplitude}:                          {ratio:.2} dB against {previous:.2} dB"
+                        "{name} harmonic {n} did not recede at amplitude {amplitude}: \
+                         {ratio:.2} dB against {previous:.2} dB"
                     );
                     previous = ratio;
                 }
-                println!("{name} harmonic {n}: recedes to {previous:.1} dB by -18 dBFS");
+                println!("{name} harmonic {n}: recedes to {previous:.1} dB by -36 dBFS");
             }
         }
     }
 
-    /// The interaction the test above found, pinned as a number so the
-    /// header's worked example cannot drift away from the code.
+    /// The colour also *grows* above the operating level, and how fast is the
+    /// thing the survey says a polynomial gets wrong.
+    ///
+    /// A Chebyshev term forces its harmonic to rise `n-1` dB per dB of level:
+    /// 1 for the 2nd, 2 for the 3rd. Measured units are flatter than that —
+    /// a median of +0.79 and +1.28 dB/dB over 186 unit-settings in
+    /// `spikes/preamp-measure/out/tidy/colour_thd_vs_level.csv`. This test
+    /// does not assert the references' law, because the shaper cannot hold
+    /// it; it pins the shaper's own so the discrepancy stays visible and a
+    /// future level-dependent scheme has something to beat.
     #[test]
-    fn a_profiles_terms_interact_below_full_scale() {
-        let ratio_at = |amplitude: f32| {
-            let samples = shaped_sine(IRON, amplitude);
-            db(harmonic_amplitude(&samples, 2) / harmonic_amplitude(&samples, 1))
+    fn the_level_law_is_the_polynomials_and_not_the_references() {
+        let reference = reference_amplitude();
+        let slope = |profile: HarmonicProfile, n: usize| {
+            let at = |amplitude: f32| {
+                let samples = shaped_sine(profile, amplitude);
+                db(harmonic_amplitude(&samples, n) / harmonic_amplitude(&samples, 1))
+            };
+            // Six dB of level, taken below the reference so the clamp is
+            // nowhere near it.
+            (at(reference) - at(reference * 0.5)) / 6.0
         };
-        let full = ratio_at(1.0);
-        let half = ratio_at(0.5);
-        assert!((full - -28.0).abs() < 0.1, "full scale {full:.2}");
-        // -37.1 by hand from `-a2*a^2 + a4*(4a^2 - 4a^4)`, not -34 as a
-        // single-term `a^(n-1)` law would predict.
-        assert!(
-            (half - -37.1).abs() < 0.3,
-            "half scale measured {half:.2} dB, expected -37.1"
-        );
+        for (name, profile) in [("Grip", GRIP), ("Punch", PUNCH), ("Iron", IRON)] {
+            for (n, expected) in [(2usize, 1.0f32), (3, 2.0)] {
+                let measured = slope(profile, n);
+                println!("{name} harmonic {n}: {measured:.3} dB per dB (polynomial says {expected})");
+                assert!(
+                    (measured - expected).abs() < 0.1,
+                    "{name} harmonic {n} rises {measured:.3} dB/dB, not {expected}"
+                );
+            }
+        }
+    }
+
+    /// At full scale the solve has nothing to do, and must reduce to the
+    /// direct mapping the Chebyshev identity gives.
+    ///
+    /// This is what makes the change safe to reason about: the new scheme is
+    /// a strict generalization of the old one, and `a = 1` is the old one.
+    #[test]
+    fn full_scale_solves_to_the_coefficients_themselves() {
+        for (name, profile) in [("Grip", GRIP), ("Punch", PUNCH), ("Iron", IRON)] {
+            let (coefficients, fundamental) = solve_at(profile, 1.0);
+            assert!(
+                (fundamental - 1.0).abs() < 1e-6,
+                "{name} needs makeup at full scale: {fundamental}"
+            );
+            for (coefficient, db_target) in coefficients.iter().zip(profile.harmonics_db) {
+                let expected = 10.0f32.powf(db_target / 20.0);
+                assert!(
+                    (coefficient - expected).abs() < 1e-6,
+                    "{name}: solved {coefficient} against the identity's {expected}"
+                );
+            }
+        }
     }
 
     /// `Moo` adds nothing, and says so cheaply enough that the strip can skip
@@ -397,12 +570,22 @@ mod tests {
     /// A polynomial grows without limit outside its domain, so the clamp is
     /// load-bearing: without it a sample at 2.0 would come back at 30-odd and
     /// the strip would be a fuzz box above full scale.
+    ///
+    /// The bound is 1.7 rather than the old 1.5 because the coefficients are
+    /// larger now — a profile stated at -12 dBFS needs more curve than one
+    /// stated at full scale, and `Tₙ(1) = 1` for every `n`, so the peak is
+    /// `makeup·(1 + Σaₙ)`. What matters is that it is finite and that a
+    /// hotter sample cannot make it worse.
     #[test]
     fn a_hot_sample_saturates_instead_of_exploding() {
-        let shaper = HarmonicShaper::new(IRON);
-        assert_eq!(shaper.shape(4.0), shaper.shape(1.0));
-        assert_eq!(shaper.shape(-4.0), shaper.shape(-1.0));
-        assert!(shaper.shape(1.0).abs() < 1.5, "{}", shaper.shape(1.0));
+        for (name, profile) in [("Grip", GRIP), ("Punch", PUNCH), ("Iron", IRON)] {
+            let shaper = HarmonicShaper::new(profile);
+            assert_eq!(shaper.shape(4.0), shaper.shape(1.0), "{name}");
+            assert_eq!(shaper.shape(-4.0), shaper.shape(-1.0), "{name}");
+            let peak = shaper.shape(1.0).abs();
+            println!("{name} peaks at {peak:.3} for a full-scale sample");
+            assert!(peak < 1.7, "{name} peaks at {peak}");
+        }
     }
 
     /// The DC an even-order term carries at anything but full scale is real,

@@ -52,8 +52,14 @@ number authorable and testable — a profile is written down and hit to 0.00 dB.
 > A console channel is a chain of push-pull line amps and measures odd, hard.
 > The even-order warmth people mean by "Neve" is the mic preamp being leant
 > on. So **`Iron` has a choice to make that this document has not noticed:
-> preamp or channel.** `IRON` is currently authored even-dominant, which is
-> the preamp reading, and its named inspiration is the console one.
+> preamp or channel.**
+>
+> **Answered 2026-09-10 by the wider pass, and it is a third option.** Every
+> Neve-derived channel in the 106-unit survey measures odd-dominant, so the
+> even-order character `Iron` is named for is not a Neve channel at any
+> drive. It is the **EMI TG12345** — NLS "Spike", 2nd 11 dB over its 3rd and
+> holding that from −24 dBFS to −6. `IRON` is now authored from it, and stays
+> even-dominant without pretending a push-pull channel is.
 
 Asymmetry is also how you *get* even orders from a symmetric curve: a DC bias
 into the shaper pushes the signal onto an uneven part of it.
@@ -67,6 +73,8 @@ DC back out.
 > later to try and get some real numbers. if we need them before then lets
 > just pick some."* `PreampVoicing` is deliberately a table of numbers with no
 > behaviour attached, so a measured fit replaces four rows and nothing else.
+> **The harmonic half of that fit landed 2026-09-10**; `tilt_db`, `tilt_hz`
+> and `slew` are still picked.
 > Two things the building found are recorded at the end of this section.
 
 **This is the one that turns "a shaper" into "a preamp".** A transformer's
@@ -129,10 +137,16 @@ restores fundamental and harmonics by the same factor, `tilt_db` ought to *be*
 the dB difference in distortion across the corner. It was claimed, tested, and
 false — `Grip` states 10 dB and delivers 31.
 
-The reason is the one `harmonics.rs` already records about its level law:
-**a multi-term profile's terms interact.** `Grip`'s 2nd-harmonic coefficient
-is `-a₂a² + a₄(4a² - 4a⁴)`, and at the amplitude the tilt leaves at 8 kHz
-those two terms agree to within a few percent and annihilate each other.
+The reason is the level law `harmonics.rs` records: a harmonic moves faster
+than the signal that makes it — `n-1` dB per dB for the `n`th — so holding the
+top of the band back by `tilt_db` drops its harmonics by rather more, and how
+much more depends on which harmonic and where the profile sits.
+
+*(The original reading of this was an interaction between `T₂` and `T₄` that
+nearly cancelled. The 2026-09-10 rebase dropped the 4th and 5th from the
+profile entirely — see `harmonics.rs` on why they cannot be authored at the
+operating level — so the cancellation is gone and the level law is the whole
+of it. The conclusion below is unchanged, and was reached twice.)*
 
 That is twice that a clean closed-form claim about this scheme has been wrong
 in the same way, which makes it a rule rather than a coincidence: **derive

@@ -587,6 +587,15 @@ picking a sound.
    preamp reading and named for the console one. The tilt — the "warm on a
    kick, clean on a hat" mechanism, and the most distinctive thing in these
    measurements — belongs to the console channel, not the preamp.
+
+   **Settled 2026-09-10, and the answer is neither.** The wider pass has
+   every Neve-derived channel in it and they are all odd-dominant, so there
+   is no drive setting at which "Neve console channel" is the even-order
+   sound `Iron` is named for. The unit that *is* even-dominant and holds it
+   across the working range — 2nd 11 dB over its 3rd from -24 dBFS to -6 —
+   is the **EMI TG12345**, as Waves NLS "Spike". `IRON` is authored from it
+   as of the same day. The tilt question is untouched by this and is still
+   open.
 5. **Should `Grip` equalise?** The SSL reference's fat low end is a
    drive-dependent low shelf reaching +9 dB at 40 Hz, not frequency-dependent
    distortion. `Preamp`'s tilt pair is exactly reciprocal on purpose, so the
@@ -600,6 +609,15 @@ picking a sound.
 than its own static curve predicts. `Punch`'s `slew: None` matches the
 references; `Iron`'s `slew: Some(0.08)` is an invention that may sound right
 and cannot cite this document.
+
+**The wider pass looked again, on 42 units rather than 9, and agrees.** The
+signature that would prove a slew limit is crest loss that grows with level
+while THD stays low, and nothing has it. Nineteen rows do lose crest in the
+linear region — `aw_ironoxide5`, `aw_ironoxideclassic2` — but they lose
+*exactly* -1.71 dB at every level from -24 to -3 dBFS, which is a linear HF
+rolloff and not a slew limit. The 74 unit-settings that lose more than 1 dB
+more crest at -3 than at -24 are all sitting at 2-140% THD, which a static
+curve produces on its own.
 
 ### If someone re-runs this
 

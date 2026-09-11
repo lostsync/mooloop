@@ -159,15 +159,20 @@ table of — and the drive axis is what tells us where on its own range a plugin
 was designed to be run, which is a judgement we would otherwise have to make
 by ear.
 The fit is then mechanical: `mooloop_dsp::harmonics` authors a profile through
-its Chebyshev decomposition, so measured harmonic amplitudes *are* the
-coefficients, and `preamp.rs`'s `tilt_db` falls out of how the surface leans
-across frequency.
+its Chebyshev decomposition, and `preamp.rs`'s `tilt_db` falls out of how the
+surface leans across frequency.
 
 **Fit at one level and check the others**, rather than least-squares over the
-whole surface. `harmonics.rs` records why: a multi-term profile's terms
-interact, so a fit that averages over levels will land somewhere that matches
-nothing. Two closed-form predictions about that scheme have already turned out
-wrong in the same way.
+whole surface. `harmonics.rs` records why: the shaper's own level law is
+`n-1` dB per dB and real units are flatter than that, so a fit that averages
+over levels will land somewhere that matches nothing.
+
+**That level is the operating level, and measured amplitudes are not the
+coefficients.** Both halves of that sentence corrected an earlier draft of
+this one on 2026-09-10. A measured amplitude *is* the coefficient only at
+full scale, where the Chebyshev identity is exact and where no music sits;
+`HarmonicShaper` now solves for the coefficients that hit the profile at
+-12 dBFS instead. Read the harmonics to fit from the -12 dBFS row.
 
 ### EQs — response per band, and where they distort
 
@@ -254,9 +259,12 @@ which stimulus each needs.
 
 `PreampVoicing`'s four rows and `harmonics.rs`'s four profiles stop being
 picked and become measured — and the doc comments that currently say
-*provisional* get to say what they were fitted to instead. Nothing else in
-either module changes, which was the point of keeping them as plain tables of
-numbers with no behaviour attached.
+*provisional* get to say what they were fitted to instead.
+
+**Landed 2026-09-10 for the harmonic half**, and one thing in the module did
+have to change: a profile stated at full scale could not carry a measurement
+taken at the operating level, so the reference moved and the 4th and 5th
+harmonics left the profile. `tilt_db`, `tilt_hz` and `slew` are still picked.
 
 **Still true after the run, with one addition.** The measurements are taken
 and written down; nothing in `mooloop_dsp` has been re-authored from them

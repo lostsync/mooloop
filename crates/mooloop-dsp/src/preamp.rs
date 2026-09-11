@@ -43,20 +43,14 @@
 //!
 //! It is tempting to say the tilt in dB *is* the difference in distortion in
 //! dB, because the post-filter restores fundamental and harmonics by the same
-//! factor. That was claimed here, tested, and false: `Grip` states 10 dB and
-//! delivers 31.
+//! factor. That was claimed here, tested, and false.
 //!
-//! The reason is the one [`crate::harmonics`] already records about its level
-//! law — **a multi-term profile's terms interact**, and here they nearly
-//! cancel. `Grip`'s 2nd-harmonic coefficient is `-a₂a² + a₄(4a² - 4a⁴)`, and
-//! at the amplitude the tilt leaves at 8 kHz those two terms agree to within
-//! a few percent and annihilate each other, dropping the 2nd by 30 dB rather
-//! than 10.
-//!
-//! That is twice now that a clean closed-form claim about this scheme has
-//! turned out to be wrong in the same way, which is itself the finding:
-//! **derive nothing about a profile, measure it.** More tilt does reliably
-//! mean more difference — `more_tilt_means_more_difference` holds that, and
+//! The reason is the level law [`crate::harmonics`] records: a harmonic's
+//! level moves faster than the signal that makes it — `n-1` dB per dB for the
+//! `n`th — so holding the top of the band back by `tilt_db` drops its
+//! harmonics by rather more than `tilt_db`, and how much more depends on
+//! which harmonic and on where the profile sits. **More tilt does reliably
+//! mean more difference** — `more_tilt_means_more_difference` holds that, and
 //! it is monotone rather than linear — but the number is a control to be
 //! turned, not a specification to be read off.
 //!
@@ -73,13 +67,22 @@
 //! prices both; the second is Jiles–Atherton and is a per-sample ODE solve,
 //! which is not worth reaching for before this has been heard.
 //!
-//! # The numbers are provisional, and deliberately separable
+//! # The numbers are measured, and still deliberately separable
 //!
 //! Adam, 2026-09-09: *"we can do some sweep measurements on UAD and Waves
 //! plugs later to try and get some real numbers. if we need them before then
-//! lets just pick some."* So [`PreampVoicing`] is a plain table of numbers
-//! with no behaviour attached, and a measured fit replaces its rows without
-//! touching anything else in this file.
+//! lets just pick some."* The measurements happened on 2026-09-10 — 106 units
+//! in `spikes/preamp-measure/`, documented in `DATA.md` there — and the
+//! harmonic half of every voicing now comes from a named unit at a named
+//! setting. [`PreampVoicing`] stays a plain table of numbers with no
+//! behaviour attached, so the next pass replaces its rows the same way.
+//!
+//! `tilt_db`, `tilt_hz` and `slew` are **not** yet measured fits. The survey
+//! bears on all three and says so in `RESULTS.md` §5; `slew` in particular is
+//! contradicted by it — no unit in either pass rounds a fast edge more than
+//! its own static curve predicts, and the units that lose crest in the linear
+//! region lose exactly as much at every level, which is a filter and not a
+//! slew limit.
 //!
 //! `docs/REFERENCE_MEASUREMENTS.md` is the protocol for taking those
 //! measurements, including the four ways a session can produce plausible
@@ -95,7 +98,8 @@ use crate::harmonics::{DcBlocker, HarmonicProfile, HarmonicShaper, GRIP, IRON, M
 /// later measurement pass a matter of editing four rows.
 #[derive(Debug, Clone, Copy)]
 pub struct PreampVoicing {
-    /// What the curve does, at full scale. See [`crate::harmonics`].
+    /// What the curve does, at the -12 dBFS operating level. See
+    /// [`crate::harmonics`].
     pub harmonics: HarmonicProfile,
     /// How much *less* the top of the band distorts than the bottom, in dB.
     /// This is the transformer, and it is the difference between a voicing
@@ -254,10 +258,11 @@ impl Preamp {
     /// Run one sample through the stage.
     ///
     /// `drive` is a linear gain into the curve, and it is the control that
-    /// makes the character playable: the harmonic profile is stated at full
-    /// scale, so material at the -12 dBFS operating level needs pushing
-    /// toward it before the curve does much. See `harmonics.rs` on the level
-    /// law, which is not the simple one it looks like.
+    /// makes the character playable. The harmonic profile is stated *at* the
+    /// -12 dBFS operating level, so at unity drive the stage already measures
+    /// what its voicing says; drive walks it up from there, and the level law
+    /// in `harmonics.rs` is what makes that a change of character rather than
+    /// a change of amount.
     #[inline]
     pub fn process(&mut self, sample: f32, drive: f32) -> f32 {
         if self.transparent {
@@ -352,11 +357,11 @@ mod tests {
     ///
     /// **Monotone, not linear, and deliberately not a prediction.** The first
     /// version of this test asserted that the difference *equals* `tilt_db`,
-    /// which reads beautifully and is false — `Grip` states 10 dB and
-    /// delivers 31, because at the amplitude the tilt leaves at 8 kHz its
-    /// `a₂` and `a₄` terms very nearly cancel. That is the second time a
-    /// closed-form claim about a multi-term profile has been wrong in the
-    /// same way; the module header records it as a rule.
+    /// which reads beautifully and is false: a harmonic moves faster than the
+    /// signal that makes it — `n-1` dB per dB for the `n`th — so holding the
+    /// top of the band back by `tilt_db` drops its harmonics by rather more
+    /// than `tilt_db`. The module header records it as a rule: derive nothing
+    /// about a profile, measure it.
     #[test]
     fn more_tilt_means_more_difference() {
         let mut previous = f32::NEG_INFINITY;
@@ -453,10 +458,20 @@ mod tests {
     /// The harmonic balance is what separates the voicings, and it is the one
     /// thing the table must not lose: `Iron` is even-dominant and `Grip` is
     /// odd-dominant, which is the whole warm-versus-hard axis.
+    ///
+    /// **Asserted at the operating level**, which is where the profiles are
+    /// stated and where the references hold their own balance: Waves NLS
+    /// "Spike" keeps its 2nd 11 dB over its 3rd from -24 dBFS all the way to
+    /// -6. Driven past that the model's balance flattens and eventually
+    /// inverts, because a Chebyshev term forces its harmonic up `n-1` dB per
+    /// dB and the 3rd therefore catches the 2nd. The references drift about
+    /// a tenth of that over their working range. It is the known cost of a
+    /// fixed polynomial, priced in `harmonics.rs`, and
+    /// `the_level_law_is_the_polynomials_and_not_the_references` pins it.
     #[test]
     fn iron_is_even_dominant_and_grip_is_odd_dominant() {
         let balance = |voicing: PreampVoicing| {
-            let samples = run(voicing, 80.0, 0.5, 1.9);
+            let samples = run(voicing, 80.0, crate::harmonics::reference_amplitude(), 1.0);
             let second = harmonic_amplitude(&samples, 80.0, 2);
             let third = harmonic_amplitude(&samples, 80.0, 3);
             db(second / third)
