@@ -1152,6 +1152,11 @@ fn effect_slot_row(
         eq_band_data: eq_band_data.as_slice().into(),
         eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
         eq_analyzer_enabled: slot.params.eq().is_some_and(|eq| eq.analyzer_enabled),
+        preamp_deviation: Vec::<f32>::new().as_slice().into(),
+        preamp_display_enabled: slot
+            .params
+            .preamp()
+            .is_some_and(|preamp| preamp.display_enabled),
         wet_dry: slot.wet_dry,
         input_trim_db: linear_to_db(slot.input_trim),
         output_trim_db: linear_to_db(slot.output_trim),
@@ -6678,8 +6683,22 @@ impl AppUi {
         }
 
         {
+            let telemetry2 = telemetry_tx.clone();
+            let st2 = state.clone();
             let telemetry = telemetry_tx.clone();
             let st = state.clone();
+            window.on_preamp_display_changed(move |slot, enabled| {
+                let mut st = st2.borrow_mut();
+                let Some((target, slot)) = st.session.set_preamp_display(slot, enabled) else {
+                    return;
+                };
+                st.refresh_effect_row(slot as usize);
+                let _ = telemetry2.send(TelemetryAction::SetEffectSpectrumEnabled {
+                    target,
+                    slot,
+                    enabled,
+                });
+            });
             window.on_eq_analyzer_changed(move |slot, enabled| {
                 let mut st = st.borrow_mut();
                 let Some((target, slot)) = st.session.set_eq_analyzer(slot, enabled) else {
@@ -11187,6 +11206,13 @@ impl AppUi {
                                     let spectrum = handle.effect_spectrum(state.session.effect_target, slot as u8);
                                     row.eq_spectrum_data = spectrum.as_slice().into();
                                 }
+                                // The same stage, carrying a different
+                                // meaning: the preamp publishes what it did
+                                // to the signal rather than what arrived.
+                                if row.preamp_display_enabled {
+                                    let deviation = handle.effect_spectrum(state.session.effect_target, slot as u8);
+                                    row.preamp_deviation = deviation.as_slice().into();
+                                }
                                 // A forced return to live leaves no other
                                 // trace, so the buffer face reads the count
                                 // rather than waiting for an audible cue.
@@ -11201,6 +11227,7 @@ impl AppUi {
                                     || dynamics_changed
                                     || collisions_changed
                                     || row.eq_analyzer_enabled
+                                    || row.preamp_display_enabled
                                 {
                                     row.input_left_db = input_left_db;
                                     row.input_right_db = input_right_db;
@@ -11494,6 +11521,13 @@ fn sync_effect_spectrum_subscriptions(state: &UiState, handle: &EngineHandle) {
                     eq.analyzer_enabled,
                 );
             }
+            if let Some(preamp) = effect.params.preamp() {
+                handle.set_effect_spectrum_enabled(
+                    EffectTarget::Channel(channel as u8),
+                    slot as u8,
+                    preamp.display_enabled,
+                );
+            }
         }
     }
     for (bus, setup) in state.session.buses.iter().enumerate() {
@@ -11503,6 +11537,13 @@ fn sync_effect_spectrum_subscriptions(state: &UiState, handle: &EngineHandle) {
                     EffectTarget::Bus(bus as u8),
                     slot as u8,
                     eq.analyzer_enabled,
+                );
+            }
+            if let Some(preamp) = effect.params.preamp() {
+                handle.set_effect_spectrum_enabled(
+                    EffectTarget::Bus(bus as u8),
+                    slot as u8,
+                    preamp.display_enabled,
                 );
             }
         }
