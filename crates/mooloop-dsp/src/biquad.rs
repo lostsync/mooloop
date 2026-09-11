@@ -11,6 +11,8 @@
 //! frequency they were designed at, while `Svf` stays stable through a
 //! sweep.
 
+use crate::node::REST_EPSILON;
+
 /// One RBJ-cookbook biquad section in Direct Form I, normalized so `a0` is
 /// always 1.
 #[derive(Clone, Copy)]
@@ -45,6 +47,17 @@ impl Biquad {
     pub fn reset(&mut self) {
         self.z1 = 0.0;
         self.z2 = 0.0;
+    }
+
+    /// Whether this stage's stored samples are too small for anything audible
+    /// to come out of it.
+    ///
+    /// With no input, [`Self::process`] returns `z1`, so a stage whose two
+    /// stored samples are both under [`REST_EPSILON`] can only emit values
+    /// under it. That is what lets a host stop calling a filter bank without
+    /// changing where it comes back — see [`crate::node::AudioNode::is_at_rest`].
+    pub fn is_at_rest(&self) -> bool {
+        self.z1.abs() <= REST_EPSILON && self.z2.abs() <= REST_EPSILON
     }
 
     pub fn process(&mut self, input: f32) -> f32 {
@@ -87,6 +100,62 @@ impl Biquad {
             / sample_rate as f32;
         let a = 10.0_f32.powf(gain_db.clamp(-24.0, 24.0) / 40.0);
         let alpha = w.sin() * 0.5 * (a + a.recip()).sqrt();
+        let beta = 2.0 * a.sqrt() * alpha;
+        let c = w.cos();
+        if low {
+            self.set_normalized(
+                a * ((a + 1.0) - (a - 1.0) * c + beta),
+                2.0 * a * ((a - 1.0) - (a + 1.0) * c),
+                a * ((a + 1.0) - (a - 1.0) * c - beta),
+                (a + 1.0) + (a - 1.0) * c + beta,
+                -2.0 * ((a - 1.0) + (a + 1.0) * c),
+                (a + 1.0) + (a - 1.0) * c - beta,
+            );
+        } else {
+            self.set_normalized(
+                a * ((a + 1.0) + (a - 1.0) * c + beta),
+                -2.0 * a * ((a - 1.0) + (a + 1.0) * c),
+                a * ((a + 1.0) + (a - 1.0) * c - beta),
+                (a + 1.0) - (a - 1.0) * c + beta,
+                2.0 * ((a - 1.0) - (a + 1.0) * c),
+                (a + 1.0) - (a - 1.0) * c - beta,
+            );
+        }
+    }
+
+    /// RBJ low- or high-shelf with an explicit slope `s`, where 1 is the
+    /// cookbook's own maximally-flat shelf, below 1 is gentler and wider, and
+    /// above 1 steepens toward a resonant corner.
+    ///
+    /// **Why this is a second function rather than a parameter on
+    /// [`Self::shelf`].** That one's `alpha` is `sin(w)/2 * sqrt(A + 1/A)`,
+    /// which is the cookbook form at a slope that *varies with gain* — S = 1
+    /// at 0 dB and about 0.83 at 12 dB, so its shelves widen as they are
+    /// pushed. The seven-band EQ and `crate::preamp`'s tilt pair were both
+    /// designed against that curve and both have tests on its numbers, so it
+    /// is left exactly as it was; this is the form a face can put a slope
+    /// knob in front of.
+    ///
+    /// It keeps the property `crate::preamp` depends on: `alpha` sees `A`
+    /// only through `A + 1/A`, which is invariant under `A -> 1/A`, so a
+    /// cut and a matching boost at the same slope are **exact** inverses.
+    pub fn shelf_slope(
+        &mut self,
+        frequency: f32,
+        gain_db: f32,
+        s: f32,
+        low: bool,
+        sample_rate: u32,
+    ) {
+        let w = core::f32::consts::TAU * frequency.clamp(20.0, sample_rate as f32 * 0.45)
+            / sample_rate as f32;
+        let a = 10.0_f32.powf(gain_db.clamp(-24.0, 24.0) / 40.0);
+        // Clamped low as well as high: the cookbook's radicand goes negative
+        // for large S at high gain, which would produce NaN coefficients and
+        // silence the stage rather than steepen it.
+        let s = s.clamp(0.1, 2.0);
+        let radicand = (a + a.recip()) * (s.recip() - 1.0) + 2.0;
+        let alpha = w.sin() * 0.5 * radicand.max(0.0).sqrt();
         let beta = 2.0 * a.sqrt() * alpha;
         let c = w.cos();
         if low {
@@ -197,6 +266,46 @@ mod tests {
             low > high * 4.0,
             "low {low} should pass far more than high {high}"
         );
+    }
+
+    /// The slope knob has to do something, and in the direction it says: a
+    /// gentler shelf has already given away less of its boost an octave
+    /// below the corner than a steep one has.
+    #[test]
+    fn a_gentler_shelf_slope_reaches_further_past_its_corner() {
+        let sr = 48_000;
+        let mut steep = Biquad::identity();
+        steep.shelf_slope(1_000.0, 12.0, 2.0, false, sr);
+        let mut gentle = Biquad::identity();
+        gentle.shelf_slope(1_000.0, 12.0, 0.15, false, sr);
+        let steep_below = respond(steep, 250.0, sr);
+        let gentle_below = respond(gentle, 250.0, sr);
+        assert!(
+            gentle_below > steep_below * 1.3,
+            "gentle {gentle_below} should still be lifting 250 Hz where steep {steep_below} has let go"
+        );
+    }
+
+    /// The property `crate::preamp`'s filter sandwich rests on, stated for
+    /// the sloped form as well: a cut and a matching boost at the same slope
+    /// cancel, because `alpha` sees the gain only through `A + 1/A`.
+    #[test]
+    fn a_sloped_shelf_and_its_inverse_cancel() {
+        let sr = 48_000;
+        for slope in [0.3f32, 1.0, 1.7] {
+            let mut down = Biquad::identity();
+            let mut up = Biquad::identity();
+            down.shelf_slope(300.0, -9.0, slope, false, sr);
+            up.shelf_slope(300.0, 9.0, slope, false, sr);
+            for i in 0..2_000 {
+                let input = (i as f32 * 0.11).sin() * 0.7;
+                let out = up.process(down.process(input));
+                assert!(
+                    (out - input).abs() < 1e-4,
+                    "slope {slope} frame {i}: {out} should be {input}"
+                );
+            }
+        }
     }
 
     #[test]

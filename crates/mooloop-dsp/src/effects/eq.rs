@@ -22,68 +22,20 @@
 //! biquads a channel and a working band count of three or four is normal, so
 //! running the lot was mostly arithmetic on identity coefficients. Skipping
 //! them is exact rather than an approximation — see [`EqEffect::active`].
+//!
+//! The bank is built from [`crate::biquad::Biquad`], which was promoted out
+//! of this file by the `share-dsp-primitives` plan and then had no caller
+//! here for a fortnight, so a fix to the shared RBJ primitive could silently
+//! miss the only EQ that needed it.
 
 use mooloop_core::{EqBand, EqBandKind, EqParams, EQ_MAX_BANDS};
 
+use crate::biquad::Biquad;
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
-use crate::node::{AudioNode, ProcessContext, REST_EPSILON};
+use crate::node::{AudioNode, ProcessContext};
 
 const PASS_STAGES: usize = 6;
-
-#[derive(Clone, Copy)]
-struct Biquad {
-    b0: f32, b1: f32, b2: f32, a1: f32, a2: f32,
-    z1: f32, z2: f32,
-}
-
-impl Biquad {
-    const fn identity() -> Self { Self { b0: 1.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 0.0, z1: 0.0, z2: 0.0 } }
-    fn process(&mut self, input: f32) -> f32 {
-        let out = self.b0 * input + self.z1;
-        self.z1 = self.b1 * input - self.a1 * out + self.z2;
-        self.z2 = self.b2 * input - self.a2 * out;
-        out
-    }
-    /// With no input, `process` returns `z1`, so a stage whose two stored
-    /// samples are both below [`REST_EPSILON`] can only emit values below it.
-    fn is_at_rest(&self) -> bool {
-        self.z1.abs() <= REST_EPSILON && self.z2.abs() <= REST_EPSILON
-    }
-    fn set_normalized(&mut self, b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) {
-        let inv = a0.max(1e-12).recip();
-        self.b0 = b0 * inv; self.b1 = b1 * inv; self.b2 = b2 * inv;
-        self.a1 = a1 * inv; self.a2 = a2 * inv;
-    }
-    fn peak(&mut self, frequency: f32, q: f32, gain_db: f32, sr: u32) {
-        let w = core::f32::consts::TAU * frequency.clamp(20.0, sr as f32 * 0.45) / sr as f32;
-        let alpha = w.sin() / (2.0 * q.clamp(0.15, 30.0));
-        let a = 10.0_f32.powf(gain_db.clamp(-24.0, 24.0) / 40.0);
-        self.set_normalized(1.0 + alpha * a, -2.0 * w.cos(), 1.0 - alpha * a, 1.0 + alpha / a, -2.0 * w.cos(), 1.0 - alpha / a);
-    }
-    fn shelf(&mut self, frequency: f32, gain_db: f32, low: bool, sr: u32) {
-        let w = core::f32::consts::TAU * frequency.clamp(20.0, sr as f32 * 0.45) / sr as f32;
-        let a = 10.0_f32.powf(gain_db.clamp(-24.0, 24.0) / 40.0);
-        let alpha = w.sin() * 0.5 * (a + a.recip()).sqrt();
-        let beta = 2.0 * a.sqrt() * alpha;
-        let c = w.cos();
-        if low {
-            self.set_normalized(a * ((a + 1.0) - (a - 1.0) * c + beta), 2.0 * a * ((a - 1.0) - (a + 1.0) * c), a * ((a + 1.0) - (a - 1.0) * c - beta), (a + 1.0) + (a - 1.0) * c + beta, -2.0 * ((a - 1.0) + (a + 1.0) * c), (a + 1.0) + (a - 1.0) * c - beta);
-        } else {
-            self.set_normalized(a * ((a + 1.0) + (a - 1.0) * c + beta), -2.0 * a * ((a - 1.0) + (a + 1.0) * c), a * ((a + 1.0) + (a - 1.0) * c - beta), (a + 1.0) - (a - 1.0) * c + beta, 2.0 * ((a - 1.0) - (a + 1.0) * c), (a + 1.0) - (a - 1.0) * c - beta);
-        }
-    }
-    fn pass(&mut self, frequency: f32, q: f32, high: bool, sr: u32) {
-        let w = core::f32::consts::TAU * frequency.clamp(20.0, sr as f32 * 0.45) / sr as f32;
-        let alpha = w.sin() / (2.0 * q.clamp(0.15, 30.0));
-        let c = w.cos();
-        if high {
-            self.set_normalized((1.0 + c) * 0.5, -(1.0 + c), (1.0 + c) * 0.5, 1.0 + alpha, -2.0 * c, 1.0 - alpha);
-        } else {
-            self.set_normalized((1.0 - c) * 0.5, 1.0 - c, (1.0 - c) * 0.5, 1.0 + alpha, -2.0 * c, 1.0 - alpha);
-        }
-    }
-}
 
 /// Every stage the bank can hold: seven bands, then a high-pass and a
 /// low-pass of up to six stages each.
