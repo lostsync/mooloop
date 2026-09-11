@@ -412,9 +412,68 @@ fn the_master_has_a_strip_of_its_own() {
     );
 }
 
-/// A strip's state does not survive a project that does not ask for it:
-/// `BusStrip::reset` puts the sections back out, so a track removed and
-/// another loaded into its seat does not inherit a compressor.
+/// **A document arriving clears the strip it lands in.**
+///
+/// `load_project` installs a track's parameters onto whatever the strip in
+/// that seat was already holding. On the path the application takes that is
+/// harmless, because `install_project` builds a fresh `RenderState`; on a
+/// state being *reused* -- an undo, or a project with fewer tracks than the
+/// last one -- the new song would be handed a filter bank and a detector
+/// full of the old one's audio, and would hear it in its first block.
+///
+/// Asked of the strip rather than measured off the master, and that is the
+/// point: `set_params` leaves the same *parameters* either way, so the only
+/// difference the reset makes is state, and the only block it is visible in
+/// is the first one. Both sections are in on both sides so that neither the
+/// bank nor the detector can answer for the other, and the tests either side
+/// of this one are what say the reset does not cost the parameters.
+#[test]
+fn a_document_arriving_clears_the_strip_it_lands_in() {
+    let mut loud = one_track_project();
+    loud.buses[1].bus.strip = StripParams {
+        eq_in: true,
+        comp_in: true,
+        threshold_db: -50.0,
+        ratio: 20.0,
+        release_ms: 2_000.0,
+        ..StripParams::default()
+    };
+    loud.buses[1].bus.strip.bands[0].gain_db = 18.0;
+
+    let mut render = RenderState::from_project(SAMPLE_RATE, &loud, &[]);
+    render.play();
+    for _ in 0..8 {
+        render.process_once_block(1_024);
+    }
+    assert_eq!(
+        render.strip_is_at_rest(1),
+        Some(false),
+        "the strip was not holding anything, so this proves nothing"
+    );
+
+    // The same document again: every parameter it installs is the one
+    // already there, so nothing but the reset can settle the strip.
+    render.load_project(&loud);
+    assert_eq!(
+        render.strip_is_at_rest(1),
+        Some(true),
+        "a document arrived onto a charged detector and a loaded filter bank"
+    );
+}
+
+/// A strip's state does not survive a project that does not ask for it: a
+/// track removed and another loaded into its seat does not inherit a
+/// compressor.
+///
+/// What this holds is the *outcome* over both branches -- the seat is
+/// abandoned by one project and re-taken by the next -- rather than
+/// `BusStrip::reset` in particular. It cannot single that one out, and the
+/// reason is worth knowing before somebody tries: `reset` puts the sections
+/// back **out**, and a strip whose sections are out answers `is_at_rest`
+/// without reading any state and renders without touching a sample, so
+/// there is nothing it could do differently for a test to see. Its own
+/// `strip.reset()` is there by construction, so the seat is clean whichever
+/// branch clears it.
 #[test]
 fn a_track_reused_by_a_shorter_project_loses_its_strip() {
     let mut loud = one_track_project();

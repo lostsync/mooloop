@@ -1873,6 +1873,21 @@ impl BusStrip {
     fn reset(&mut self, reclaim: &mut Reclaim) {
         self.effects.clear(reclaim);
         self.output = OutputStage::new(1.0);
+        // Cleared as well as defaulted, and in that order, for the reason
+        // `load_project`'s `Some` arm gives: `set_params` moves the values
+        // and deliberately leaves the filter state alone, so a strip put
+        // back to factory would still be holding the audio of the song that
+        // just went away. This is the arm a project with *fewer* tracks than
+        // the last one takes, which is the case that keeps a spare strip
+        // rather than freeing it.
+        //
+        // By construction rather than under a test, and unusually for this
+        // file that is the honest arrangement: the default it installs is
+        // every section **out**, and an out strip neither reads its state nor
+        // writes a sample, so no render can tell the two apart. What would
+        // make the difference visible is a later document switching a section
+        // back in -- and that arrives through the `Some` arm, which resets.
+        self.strip.reset();
         self.strip.set_params(StripParams::default());
         self.polarity = false;
         // The displaced ring leaves on the same carrier a displaced dry-path
@@ -4731,6 +4746,20 @@ impl RenderState {
     #[cfg(test)]
     pub fn set_strip_pin(&mut self, pin: StripPin) {
         self.strip_pin = pin;
+    }
+
+    /// Whether one track's strip is holding anything that could still come
+    /// out of it.
+    ///
+    /// The only way to see the difference between `set_params` and
+    /// `reset()` + `set_params` from outside: both leave the same
+    /// *parameters*, and the whole of what the second one adds is state a
+    /// rendered comparison can only reach through the one block it would
+    /// corrupt. `a_document_arriving_clears_the_strip_it_lands_in` asks it
+    /// directly instead.
+    #[cfg(test)]
+    pub fn strip_is_at_rest(&self, bus: usize) -> Option<bool> {
+        Some(self.buses.get(bus)?.strip.is_at_rest())
     }
 
     /// Turn skipping idle devices and idle channels off, or back on.

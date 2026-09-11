@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-11
-- Sessions: 95
+- Sessions: 96
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -232,7 +232,9 @@ Alphabetical by model name, then by harness.
   four sections on every track under one voicing, where the plan's own
   specification would have had a voicing moving the numbers its own knobs
   show, and where the faces ended up with no range in them at all because the
-  descriptor table crosses into the markup once at startup.
+  descriptor table crosses into the markup once at startup; then the review
+  pass over that strip, which found the Q law stated in two crates with
+  nothing holding them together.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

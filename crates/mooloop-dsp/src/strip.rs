@@ -20,10 +20,12 @@
 //!
 //! Each section runs only while its own switch is in, so the strip's cost on
 //! an untouched project is reading three booleans. A section switched *in*
-//! has its state cleared first ([`Strip::apply_param`]): a filter bank and a
-//! detector that were last fed audio ten minutes ago would otherwise put
-//! that audio into the first block, which is the one artefact "free while it
-//! is out" could plausibly produce.
+//! has its state cleared and its smoothed values put at its knobs first
+//! ([`Strip::apply_param`]): a filter bank and a detector that were last fed
+//! audio ten minutes ago would otherwise put that audio into the first block
+//! back, and a smoother that has not advanced since then would spend that
+//! block gliding up from a setting the user has already changed. Those are
+//! the two artefacts "free while it is out" could plausibly produce.
 //!
 //! # It is not a device, so it is not an `AudioNode`
 //!
@@ -390,21 +392,43 @@ impl Strip {
         self.rebuild_drive();
         self.eq.update(&params, &self.voicing, self.sample_rate);
         self.set_detector_times();
-        self.drive.reset_to(db_to_linear(params.drive_db));
-        self.threshold.reset_to(params.threshold_db);
-        self.ratio.reset_to(params.ratio);
-        self.trim.reset_to(db_to_linear(params.in_trim_db));
-        self.mix.reset_to(params.mix);
-        self.makeup.reset_to(db_to_linear(params.makeup_db));
+        self.snap_drive();
+        self.snap_comp();
+    }
+
+    /// Put a section's smoothed values *at* its knobs rather than gliding to
+    /// them, for the two moments there is nothing to be continuous with: a
+    /// document arriving, and a section being switched in.
+    ///
+    /// A smoother only advances while its own section runs, so a knob turned
+    /// while the section was out leaves the smoother holding a value from
+    /// whenever it last ran. Gliding from that is not click-free -- the
+    /// discontinuity is the section starting, not the gain moving -- it is
+    /// five milliseconds of the *old* setting at the front of the first
+    /// block back, which is the same artefact `apply_param` clears the
+    /// filter bank and the detector to avoid.
+    fn snap_drive(&mut self) {
+        self.drive.reset_to(db_to_linear(self.params.drive_db));
+    }
+
+    fn snap_comp(&mut self) {
+        self.threshold.reset_to(self.params.threshold_db);
+        self.ratio.reset_to(self.params.ratio);
+        self.trim.reset_to(db_to_linear(self.params.in_trim_db));
+        self.mix.reset_to(self.params.mix);
+        self.makeup.reset_to(db_to_linear(self.params.makeup_db));
     }
 
     /// Move one parameter, and report whether it was one this strip has.
     ///
-    /// The `in` switches clear their own section's state on the way in. That
-    /// is deliberate rather than tidy: a filter bank and a detector last fed
-    /// audio before the section was switched out would otherwise put that
-    /// audio into the first block after it comes back, and "out means out"
-    /// would have a pop attached to it.
+    /// The `in` switches clear their own section's state on the way in, and
+    /// put its smoothed values at its knobs. That is deliberate rather than
+    /// tidy: a filter bank and a detector last fed audio before the section
+    /// was switched out would otherwise put that audio into the first block
+    /// after it comes back, and a smoother that has not advanced since then
+    /// would spend that block gliding up from a setting the user has already
+    /// changed. Either way "out means out" would have an artefact attached
+    /// to it.
     pub fn apply_param(&mut self, id: u32, value: f32) -> bool {
         if !self.params.set(id, value) {
             return false;
@@ -433,6 +457,7 @@ impl Strip {
             STRIP_PRE_IN => {
                 if self.params.pre_in {
                     self.rebuild_drive();
+                    self.snap_drive();
                 }
             }
             STRIP_EQ_IN => {
@@ -444,6 +469,7 @@ impl Strip {
                 if self.params.comp_in {
                     self.detector.reset();
                     self.programme.reset();
+                    self.snap_comp();
                     self.reduction_db = 0.0;
                     self.detector_peak = 0.0;
                 }
@@ -635,7 +661,7 @@ mod tests {
     use super::*;
     use mooloop_core::strip::{
         strip_band_param, STRIP_BAND_FREQ, STRIP_BAND_GAIN, STRIP_BAND_KIND, STRIP_BAND_Q,
-        STRIP_EQ_BANDS,
+        STRIP_COMP_KNEE_DB, STRIP_EQ_BANDS,
     };
     use mooloop_core::PreampVoicing;
 
@@ -777,6 +803,13 @@ mod tests {
     /// A band at 0 dB is not run at all, so switching a neighbouring band on
     /// beside it cannot change what it does. The exactness the stage skip
     /// rests on, stated the way `EqEffect`'s own test states it.
+    ///
+    /// The bit-identity is asserted *and* the skip is, because on its own
+    /// the identity does not distinguish them: a cookbook peak or shelf at
+    /// 0 dB has `b == a` term for term, so its normalized coefficients come
+    /// out exactly `identity`'s and running the stage would have produced
+    /// the same samples. The claim the code makes is that it is not run, and
+    /// `active_len` is the only place that is visible.
     #[test]
     fn a_flat_band_is_bit_identical_to_not_having_it() {
         let frames = 2_048;
@@ -784,15 +817,31 @@ mod tests {
             params.eq_in = true;
             params.bands[2].gain_db = 9.0;
         });
+        // The descriptor's own ceiling rather than a number written here: a
+        // fourth copy of the shelf bands' Q maximum is the duplication
+        // `AGENTS.md` opens on, and holding a test to a range means reading
+        // the range.
+        let q_ceiling = StripParams::descriptor(strip_band_param(0, STRIP_BAND_Q))
+            .expect("band 0 has a Q descriptor")
+            .max;
         let mut padded = one;
         for index in [0, 1, 3] {
             padded.bands[index].gain_db = 0.0;
-            padded.bands[index].q = BAND_Q_CEILING;
+            assert!(
+                padded.set(strip_band_param(index, STRIP_BAND_Q), q_ceiling),
+                "band {index} refused its own ceiling"
+            );
         }
         let plain = run(one, noise(frames));
         let with_flat = run(padded, noise(frames));
         assert_eq!(plain.l[..frames], with_flat.l[..frames]);
         assert!(plain.l[..frames].iter().any(|s| s.abs() > 0.01));
+
+        let strip = Strip::new(padded, SAMPLE_RATE);
+        assert_eq!(
+            strip.eq.active_len, 1,
+            "three bands at 0 dB were still in the bank's run"
+        );
     }
 
     /// A shelf switched to a bell keeps its frequency and changes its shape,
@@ -1046,6 +1095,58 @@ mod tests {
         assert!(leaked < 1e-9, "the bank came back holding audio: {leaked}");
     }
 
+    /// And it starts it at the knobs it is *currently* set to, not at the
+    /// ones it had when it was switched out.
+    ///
+    /// A section's smoothers only advance while that section runs, so every
+    /// knob turned while it was out is a value the smoother has never seen.
+    /// Switching in and gliding up from the stale one would put five
+    /// milliseconds of the old setting at the front of the first block back.
+    /// Measured against a strip that was *born* with these values, which is
+    /// the same audio by definition.
+    #[test]
+    fn a_section_switched_in_starts_at_the_knobs_it_is_set_to() {
+        let frames = 256;
+        let settings = tweak(|params| {
+            params.comp_in = true;
+            // Under the threshold with no knee, so the gain computer does
+            // nothing and what is left is the trim and the makeup -- the two
+            // smoothed values a stale smoother would get wrong.
+            params.threshold_db = 0.0;
+            params.knee_db = 0.0;
+            params.in_trim_db = -6.0;
+            params.makeup_db = 18.0;
+        });
+
+        let mut switched = Strip::new(StripParams::default(), SAMPLE_RATE);
+        for id in [
+            STRIP_COMP_THRESHOLD_DB,
+            STRIP_COMP_KNEE_DB,
+            STRIP_COMP_IN_TRIM_DB,
+            STRIP_COMP_MAKEUP_DB,
+        ] {
+            assert!(switched.apply_param(id, settings.get(id).unwrap()));
+        }
+        // A block while the section is still out, so the smoothers cannot
+        // have crept toward the new values on their own.
+        let mut ignored = sine(frames, 200.0, 0.2);
+        switched.process_block(&mut ignored, frames);
+        assert!(switched.apply_param(STRIP_COMP_IN, 1.0));
+
+        let mut turned = sine(frames, 200.0, 0.2);
+        switched.process_block(&mut turned, frames);
+        let born = run(settings, sine(frames, 200.0, 0.2));
+        for index in 0..frames {
+            assert!(
+                (turned.l[index] - born.l[index]).abs() < 1e-6,
+                "frame {index}: switched in gives {}, where a strip born with \
+                 the same settings gives {}",
+                turned.l[index],
+                born.l[index]
+            );
+        }
+    }
+
     /// A strip that is out is at rest whatever it has been fed, and a strip
     /// with a section in reports at rest only once that section has
     /// settled -- which is what `BusStrip::is_resting` asks it.
@@ -1170,8 +1271,54 @@ mod tests {
         }
     }
 
-    /// Q ceiling of the shelf-capable bands, so the padding in
-    /// `a_flat_band_is_bit_identical_to_not_having_it` stays inside the
-    /// descriptor's range rather than relying on the clamp.
-    const BAND_Q_CEILING: f32 = 2.0;
+    /// **The Q law is stated twice and only one of them is heard.**
+    ///
+    /// [`StripVoicing::proportional_q`] is what the bank is designed
+    /// against; `StripParams::proportional_q` is the same rule spelled again
+    /// in `mooloop-core`, because `strip_row` plots the running Q and
+    /// `mooloop-core` cannot see this table. Two answers to "does `Grip`
+    /// narrow a boosted band", in two crates, and the one that drifts is
+    /// whichever is edited second -- at which point the response display
+    /// draws a curve the audio is not running, which is the exact failure
+    /// "a voicing selects laws, never values" was adopted to avoid.
+    ///
+    /// So they are held to each other here, the way
+    /// `a_voicings_input_stage_is_the_same_one_the_device_gets` holds the
+    /// preamp table to `preamp_voicing`. `mooloop-dsp` depends on
+    /// `mooloop-core`, so this is the only side that can ask.
+    #[test]
+    fn a_voicings_q_law_is_the_one_the_display_plots() {
+        for choice in [
+            PreampVoicing::Moo,
+            PreampVoicing::Grip,
+            PreampVoicing::Punch,
+            PreampVoicing::Iron,
+        ] {
+            let params = tweak(|params| {
+                params.voicing = choice;
+                params.bands[1] = mooloop_core::StripBand {
+                    gain_db: 12.0,
+                    ..params.bands[1]
+                };
+            });
+            let voicing = strip_voicing(choice);
+            assert_eq!(
+                voicing.proportional_q,
+                params.proportional_q(),
+                "{choice:?} narrows a boosted band in one crate and not the other"
+            );
+            // And the number, not just the flag: the display plots
+            // `effective_q` and the bank is designed at `eq_effective_q`
+            // under this voicing's profile, so those have to be one value.
+            assert_eq!(
+                params.effective_q(1),
+                eq_effective_q(
+                    params.bands[1].q,
+                    params.bands[1].gain_db,
+                    voicing.q_profile()
+                ),
+                "{choice:?} plots a Q it is not running"
+            );
+        }
+    }
 }

@@ -687,22 +687,32 @@ mod tests {
         assert_eq!(params.drive_db, 0.0);
     }
 
-    /// The id space is contiguous from `STRIP_FIRST` and the gap below it is
-    /// the one the module header describes. Both halves matter: a hole in
-    /// the middle would be a parameter nothing can reach, and a table that
-    /// started at 0 would collide with the fader and the pan.
+    /// The id space is contiguous from `STRIP_FIRST`, **in table order**,
+    /// and the gap below it is the one the module header describes.
+    ///
+    /// Three halves matter. A hole in the middle would be a parameter
+    /// nothing can reach. A table that started at 0 would collide with the
+    /// fader and the pan. And the *order of the rows* is load-bearing in a
+    /// way nothing else in this file makes visible: `strip.slint`'s
+    /// `StripSpec.spec(id)` reads `params[id - first]`, so the descriptor
+    /// behind a knob is found by arithmetic on its position, not by search.
+    /// Swap two rows to read better and every knob from there down gets its
+    /// neighbour's range, name and unit, with no Rust change to blame.
+    ///
+    /// This deliberately does not sort: an earlier version did, and a sorted
+    /// copy of the ids cannot see the one property the markup depends on.
     #[test]
     fn the_id_space_starts_after_the_faders_and_has_no_holes() {
         assert_eq!(STRIP_FIRST, 16);
         assert!(StripParams::descriptor(crate::modulation::STRIP_PARAM_VOLUME).is_none());
         assert!(StripParams::descriptor(crate::modulation::STRIP_PARAM_PAN).is_none());
-        let mut ids: Vec<u32> = StripParams::descriptors().iter().map(|d| d.id).collect();
-        ids.sort_unstable();
-        for (offset, id) in ids.iter().enumerate() {
+        for (offset, descriptor) in StripParams::descriptors().iter().enumerate() {
             assert_eq!(
-                *id,
+                descriptor.id,
                 STRIP_FIRST + offset as u32,
-                "a hole at offset {offset}"
+                "{} sits at offset {offset}, where the face will look for id {}",
+                descriptor.name,
+                STRIP_FIRST + offset as u32
             );
         }
     }
