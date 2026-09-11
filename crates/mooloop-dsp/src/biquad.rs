@@ -100,8 +100,17 @@ impl Biquad {
             / sample_rate as f32;
         let a = 10.0_f32.powf(gain_db.clamp(-24.0, 24.0) / 40.0);
         let alpha = w.sin() * 0.5 * (a + a.recip()).sqrt();
-        let beta = 2.0 * a.sqrt() * alpha;
-        let c = w.cos();
+        self.set_shelf(a, 2.0 * a.sqrt() * alpha, w.cos(), low);
+    }
+
+    /// The cookbook's shelf coefficients, given the gain, the `beta` the
+    /// caller's slope law produced, and `cos(w)`.
+    ///
+    /// Shared by [`Self::shelf`] and [`Self::shelf_slope`] because the two
+    /// differ **only** in how they reach `alpha` — the twelve coefficient
+    /// expressions below were byte-identical in both, which is copied
+    /// arithmetic doing nothing but waiting to be edited once.
+    fn set_shelf(&mut self, a: f32, beta: f32, c: f32, low: bool) {
         if low {
             self.set_normalized(
                 a * ((a + 1.0) - (a - 1.0) * c + beta),
@@ -156,27 +165,7 @@ impl Biquad {
         let s = s.clamp(0.1, 2.0);
         let radicand = (a + a.recip()) * (s.recip() - 1.0) + 2.0;
         let alpha = w.sin() * 0.5 * radicand.max(0.0).sqrt();
-        let beta = 2.0 * a.sqrt() * alpha;
-        let c = w.cos();
-        if low {
-            self.set_normalized(
-                a * ((a + 1.0) - (a - 1.0) * c + beta),
-                2.0 * a * ((a - 1.0) - (a + 1.0) * c),
-                a * ((a + 1.0) - (a - 1.0) * c - beta),
-                (a + 1.0) + (a - 1.0) * c + beta,
-                -2.0 * ((a - 1.0) + (a + 1.0) * c),
-                (a + 1.0) + (a - 1.0) * c - beta,
-            );
-        } else {
-            self.set_normalized(
-                a * ((a + 1.0) + (a - 1.0) * c + beta),
-                -2.0 * a * ((a - 1.0) + (a + 1.0) * c),
-                a * ((a + 1.0) + (a - 1.0) * c - beta),
-                (a + 1.0) - (a - 1.0) * c + beta,
-                2.0 * ((a - 1.0) - (a + 1.0) * c),
-                (a + 1.0) - (a - 1.0) * c - beta,
-            );
-        }
+        self.set_shelf(a, 2.0 * a.sqrt() * alpha, w.cos(), low);
     }
 
     /// RBJ high- or low-pass, one Butterworth-Q stage.
