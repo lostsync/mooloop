@@ -3,7 +3,7 @@
 use crate::session::Session;
 use mooloop_core::{
     compile_bus_graph, is_legal_send, sanitize_route, would_create_cycle, AuxSend, BusSetup,
-    EffectParams, EffectTarget, EngineCommand, SendTap, MAX_BUSES, MAX_LINEAR_GAIN,
+    EffectParams, EffectTarget, EngineCommand, SendTap, StripParams, MAX_BUSES, MAX_LINEAR_GAIN,
 };
 
 /// A send is addressed by its track and its position in that track's own run,
@@ -231,7 +231,12 @@ impl Session {
     }
 
     /// Switches a send on or off, which is not the same as turning it down.
-    pub fn set_send_enabled(&mut self, bus: i32, send: i32, enabled: bool) -> Option<EngineCommand> {
+    pub fn set_send_enabled(
+        &mut self,
+        bus: i32,
+        send: i32,
+        enabled: bool,
+    ) -> Option<EngineCommand> {
         let (index, send) = send_address(bus, send)?;
         let entry = self.buses.get_mut(index)?.sends.get_mut(send)?;
         entry.enabled = enabled;
@@ -252,6 +257,54 @@ impl Session {
             index: send as u8,
             tap,
         })
+    }
+
+    /// Flips whether a track's signal is inverted.
+    ///
+    /// Offered on every track including the master, unlike analog sum: a
+    /// polarity switch is about how this track's own signal arrives, and the
+    /// master has a signal.
+    pub fn toggle_track_polarity(&mut self, bus: i32) -> Option<EngineCommand> {
+        let index = usize::try_from(bus).ok()?;
+        let setup = self.buses.get_mut(index)?;
+        setup.bus.polarity = !setup.bus.polarity;
+        Some(EngineCommand::SetTrackPolarity {
+            bus: index as u8,
+            on: setup.bus.polarity,
+        })
+    }
+
+    /// Moves one parameter of a track's channel strip.
+    ///
+    /// One entry point for every section, because `StripParams::set` is the
+    /// only thing that knows what an id means and it is also where the range
+    /// is enforced -- so this hands the engine the value that was *stored*
+    /// rather than the one it was asked for, and the model and the audio
+    /// cannot end up holding different numbers.
+    ///
+    /// Refuses an id the strip does not have, which is what makes a stale
+    /// face harmless rather than a value landing on a neighbouring
+    /// parameter.
+    pub fn set_strip_param(&mut self, bus: i32, param: i32, value: f32) -> Option<EngineCommand> {
+        let index = usize::try_from(bus).ok()?;
+        let param = u32::try_from(param).ok()?;
+        let setup = self.buses.get_mut(index)?;
+        if !setup.bus.strip.set(param, value) {
+            return None;
+        }
+        Some(EngineCommand::SetStripParam {
+            bus: index as u8,
+            param,
+            value: setup.bus.strip.get(param)?,
+        })
+    }
+
+    /// A track's strip, for the faces to draw. Three of them draw it and
+    /// none of them may be the only way to reach a parameter, so they all
+    /// read the same struct.
+    pub fn strip_params(&self, bus: i32) -> Option<StripParams> {
+        let index = usize::try_from(bus).ok()?;
+        Some(self.buses.get(index)?.bus.strip)
     }
 
     /// Turns an EQ slot's spectrum analyzer on or off.
@@ -295,12 +348,24 @@ mod tests {
         let mut session = Session::default();
         session.ensure_tracks(2);
 
-        assert!(session.rename_track(1, "  Drum Bus  "), "a real name was refused");
-        assert_eq!(session.buses[1].bus.name, "Drum Bus", "the name was not trimmed");
+        assert!(
+            session.rename_track(1, "  Drum Bus  "),
+            "a real name was refused"
+        );
+        assert_eq!(
+            session.buses[1].bus.name, "Drum Bus",
+            "the name was not trimmed"
+        );
 
-        assert!(!session.rename_track(1, "Drum Bus"), "an unchanged name reported a change");
+        assert!(
+            !session.rename_track(1, "Drum Bus"),
+            "an unchanged name reported a change"
+        );
         assert!(!session.rename_track(1, "  "), "a blank name was stored");
-        assert_eq!(session.buses[1].bus.name, "Drum Bus", "a refused name was still applied");
+        assert_eq!(
+            session.buses[1].bus.name, "Drum Bus",
+            "a refused name was still applied"
+        );
 
         assert!(!session.rename_track(-1, "Nope"));
         assert!(!session.rename_track(session.buses.len() as i32, "Nope"));
@@ -321,6 +386,53 @@ mod tests {
             Some(EngineCommand::SetBusPan { pan, .. }) if pan == -1.0
         ));
         assert!(session.set_bus_volume(9_999, 0.5).is_none());
+    }
+
+    /// A strip parameter is clamped by the model and the *stored* value is
+    /// what the engine is told, so the face, the document and the audio
+    /// cannot hold three different numbers.
+    #[test]
+    fn a_strip_parameter_is_clamped_once_and_sent_as_stored() {
+        let mut session = Session::default();
+        session.ensure_tracks(2);
+        let ratio = mooloop_core::STRIP_COMP_RATIO;
+        assert!(matches!(
+            session.set_strip_param(1, ratio as i32, 1_000.0),
+            Some(EngineCommand::SetStripParam { value, .. }) if value == 20.0
+        ));
+        assert_eq!(session.buses[1].bus.strip.ratio, 20.0);
+        assert_eq!(session.strip_params(1).unwrap().ratio, 20.0);
+
+        // An id the strip does not have is refused rather than landing on a
+        // neighbour, and so is a track that is not there.
+        assert!(session.set_strip_param(1, 0, 1.0).is_none());
+        assert!(session.set_strip_param(9_999, ratio as i32, 4.0).is_none());
+        assert!(session.set_strip_param(1, -1, 4.0).is_none());
+        assert!(session.strip_params(9_999).is_none());
+    }
+
+    /// Polarity is a track's own switch, the master included -- which is
+    /// where it differs from analog sum, and the difference is not a
+    /// stylistic one: an encode on the master would go into a sum nothing
+    /// decodes, where an inverted master is just an inverted master.
+    #[test]
+    fn polarity_is_offered_on_every_track_where_analog_sum_is_not() {
+        let mut session = Session::default();
+        session.ensure_tracks(2);
+        assert!(matches!(
+            session.toggle_track_polarity(MASTER_BUS as i32),
+            Some(EngineCommand::SetTrackPolarity { on: true, .. })
+        ));
+        assert!(session.toggle_bus_console(MASTER_BUS as i32).is_none());
+        assert!(matches!(
+            session.toggle_track_polarity(1),
+            Some(EngineCommand::SetTrackPolarity { bus: 1, on: true })
+        ));
+        assert!(matches!(
+            session.toggle_track_polarity(1),
+            Some(EngineCommand::SetTrackPolarity { bus: 1, on: false })
+        ));
+        assert!(session.toggle_track_polarity(9_999).is_none());
     }
 
     /// The engine's schedule is a topological sort; a graph with a loop in it
@@ -365,7 +477,10 @@ mod tests {
         let Err(RoutingLoop { feeder }) = refusal else {
             panic!("a send closed a loop and was accepted");
         };
-        assert_eq!(feeder, session.buses[2].bus.name, "the refusal named the wrong track");
+        assert_eq!(
+            feeder, session.buses[2].bus.name,
+            "the refusal named the wrong track"
+        );
         assert!(
             session.buses[1].sends.is_empty(),
             "the refused send was pushed anyway"

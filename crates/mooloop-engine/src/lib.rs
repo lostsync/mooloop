@@ -86,6 +86,8 @@ mod ds01_tests;
 mod gain_structure_tests;
 #[cfg(test)]
 mod idle_skip_tests;
+#[cfg(test)]
+mod strip_tests;
 
 use graph::{AsyncClient, Graph};
 use render::{ReclaimedEffect, RenderState};

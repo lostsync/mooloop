@@ -259,6 +259,27 @@ before any of them existed still loads:
   and a `console_mode` added later with `#[serde(default)]` is the same no-op
   migration whenever it lands, so a saved field with one legal value would buy
   nothing now. See `docs/plans/console/02-console-summing.md`.
+- **A track's channel strip is one defaulted struct per track.**
+  `buses[].bus.strip` carries the voicing, the three `in` switches, the drive,
+  the four EQ bands and the compressor's eight values; `buses[].bus.polarity`
+  is the invert beside it. Both default, and the default is every switch off
+  and every value neutral -- so a manifest written before the strip existed
+  loads **bit-identical** to the file it was saved from, which is the same
+  claim analog sum makes one entry up and is a test rather than an intention
+  (`a_default_strip_changes_nothing_about_the_mix`).
+
+  A band stores its `kind` as the full `EqBandKind` (`bell`, `low_shelf`,
+  `high_shelf`) although the face offers each band only two of the three: the
+  type switch chooses between a bell and that band's *own* shelf. Storing the
+  kind rather than the switch position is what lets the two outer bands and
+  the two mid bands share one struct, and what would let a later face offer
+  the third value without a format change.
+
+  There is deliberately **no field for where the strip sits in the chain.**
+  `mooloop_core::mixer::STRIP_PIN` is a constant, not a project value: the
+  pinned position is a policy the application states once, and a per-track
+  copy of it would be a thing to keep in step for a feature nobody has asked
+  for. See `docs/plans/console/03-the-channel-strip-device.md`.
 - **A track's sends are a defaulted list.** `buses[].sends` is `{ target,
   level, tap, enabled }` per send, where `target` is a track index, `tap` is
   `post_fader` (the default) or `pre_fader`, and `enabled` defaults to `true`

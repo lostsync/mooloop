@@ -15,6 +15,8 @@ use mooloop_core::{
     chain_latency, clamp_bus, compile_latency, send_edges, DEFAULT_STEPS, MAX_CONTAINER_DEPTH, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
     MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS, STRIP_PARAM_VOLUME,
 };
+use mooloop_core::mixer::{StripPin, STRIP_PIN};
+use mooloop_core::strip::StripParams;
 use mooloop_core::modulation::{CONTROL_SOURCE_SLOTS, MAX_GENERATOR_OUTLETS};
 use mooloop_dsp::console;
 #[cfg(test)]
@@ -28,6 +30,7 @@ use mooloop_dsp::{
     CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE, SILENCE_PEAK,
 };
 use mooloop_dsp::smooth::Smoothed;
+use mooloop_dsp::strip::Strip;
 
 use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
 use crate::sequencer::Sequencer;
@@ -1769,6 +1772,18 @@ struct BusStrip {
     effects: EffectChain,
     bus: StereoBus,
     output: OutputStage,
+    /// This track's channel strip: the input stage, the EQ and the
+    /// compressor, all out until something switches them in.
+    ///
+    /// Not boxed and not optional. A few hundred bytes against the 128 KB a
+    /// track already costs (`docs/plans/console/00-status.md`, step 04's
+    /// measurement), and what it must not spend is *time*, which is what the
+    /// three `in` switches see to. Where it runs in the block is
+    /// `mooloop_core::mixer::STRIP_PIN`.
+    strip: Strip,
+    /// Whether this track's signal is inverted, applied at the top of its
+    /// block so everything downstream sees the flip.
+    polarity: bool,
     /// How long this bus waits before summing into the bus it feeds. Same
     /// contract as a channel's, and always `None` on the master, which feeds
     /// nothing.
@@ -1813,12 +1828,14 @@ struct BusStrip {
 }
 
 impl BusStrip {
-    fn new() -> Self {
+    fn new(sample_rate: u32) -> Self {
         Self {
             effects: EffectChain::new(),
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             // Unity, not a channel's 0.8: see `mooloop_core::MixerBus::new`.
             output: OutputStage::new(1.0),
+            strip: Strip::new(StripParams::default(), sample_rate),
+            polarity: false,
             compensation: None,
             console: false,
             console_sum: None,
@@ -1842,6 +1859,11 @@ impl BusStrip {
     /// freezing it would strand that audio until the bus woke.
     fn is_resting(&self) -> bool {
         self.effects.is_at_rest()
+            // The strip is asked the same question the chain is, and for the
+            // same reason: a detector frozen mid-release wakes up holding
+            // reduction the music has stopped asking for. A strip whose
+            // sections are all out answers `true` without reading any state.
+            && self.strip.is_at_rest()
             && self.silent_frames
                 >= self.compensation.as_ref().map_or(0, |delay| delay.frames() as u32)
     }
@@ -1849,6 +1871,8 @@ impl BusStrip {
     fn reset(&mut self, reclaim: &mut Reclaim) {
         self.effects.clear(reclaim);
         self.output = OutputStage::new(1.0);
+        self.strip.set_params(StripParams::default());
+        self.polarity = false;
         // The displaced ring leaves on the same carrier a displaced dry-path
         // aligner does: it is the same type doing the same job one level out,
         // and inventing a second channel for it would only mean two things to
@@ -2498,6 +2522,14 @@ pub(crate) struct RenderState {
     /// compared were not simply the same render twice: a skip mechanism that
     /// never fires would pass every one of them.
     slept_strip_blocks: u64,
+    /// Where each track's channel strip runs in its block.
+    ///
+    /// Initialized from `mooloop_core::mixer::STRIP_PIN`, which is the one
+    /// statement of the policy; this field exists so a test can render the
+    /// same project both ways and say what the difference is, the way
+    /// `skip_idle` exists so one can render it with and without skipping. It
+    /// is not a user setting and no command moves it.
+    strip_pin: StripPin,
     /// Whether devices and strips with nothing to do may be left uncalled.
     ///
     /// On by default and not exposed as a user setting. It exists so the
@@ -2529,6 +2561,7 @@ impl RenderState {
         let slice_slots_for_growth = slice_slots.clone();
         let mut state = Self {
             transport: Transport::new(sample_rate),
+            strip_pin: STRIP_PIN,
             skip_idle: true,
             slept_strip_blocks: 0,
             sequencer: Sequencer::new(1, 1, DEFAULT_STEPS as usize, mooloop_core::Ppq::DEFAULT),
@@ -2543,7 +2576,7 @@ impl RenderState {
             // every route ends there.
             buses: {
                 let mut buses = Vec::with_capacity(MAX_BUSES);
-                buses.push(BusStrip::new());
+                buses.push(BusStrip::new(sample_rate));
                 buses
             },
             bus_graph: CompiledBusGraph::default(),
@@ -2784,7 +2817,7 @@ impl RenderState {
     /// displaced one is dropped on the control thread anyway.
     fn grow_buses(&mut self, count: usize) {
         while self.buses.len() < count.min(MAX_BUSES) {
-            self.buses.push(BusStrip::new());
+            self.buses.push(BusStrip::new(self.sample_rate));
         }
     }
 
@@ -2853,6 +2886,8 @@ impl RenderState {
                     strip.output.muted = setup.bus.muted;
                     strip.output.set_volume(setup.bus.volume);
                     strip.output.set_pan(setup.bus.pan);
+                    strip.polarity = setup.bus.polarity;
+                    strip.strip.set_params(setup.bus.strip);
                     strip.effects.load(
                         &setup.effects,
                         self.sample_rate,
@@ -3768,6 +3803,16 @@ impl RenderState {
                     }
                 }
             }
+            EngineCommand::SetTrackPolarity { bus, on } => {
+                if let Some(strip) = self.buses.get_mut(bus as usize) {
+                    strip.polarity = on;
+                }
+            }
+            EngineCommand::SetStripParam { bus, param, value } => {
+                if let Some(strip) = self.buses.get_mut(bus as usize) {
+                    strip.strip.apply_param(param, value);
+                }
+            }
             EngineCommand::SetEffectBypassed {
                 target,
                 slot,
@@ -4571,11 +4616,30 @@ impl RenderState {
                 }
                 strip.console_dirty = false;
             }
+            // Polarity, at the top of the track's block: everything below
+            // -- the strip, the chain, both send taps and the fader -- sees
+            // the flipped signal, which is what a desk's input invert does.
+            // It cannot move a meter, because it does not move a magnitude.
+            if strip.polarity {
+                // A multiply by -1 rather than a dedicated pass: it is
+                // exact, and the gain stage that already walks the buffer is
+                // the honest place for a sign.
+                strip.bus.apply_stereo_gain(-1.0, -1.0, frames);
+            }
             // The bus head's input meter reads what the bus received this
             // block, before its own chain touches it.
             let (input_l, input_r) = strip.bus.peak(frames);
             self.device_meters
                 .publish_input(MAX_CHANNELS + index, 0, input_l, input_r);
+            // **The channel strip, at the pin.** One statement decides
+            // whether a track's own devices run before or after its EQ and
+            // compressor, and it is `mooloop_core::mixer::STRIP_PIN` rather
+            // than the order of two lines here -- so moving the pin moves
+            // the audio and the rack's drawing together.
+            strip.strip.set_sample_rate(context.sample_rate);
+            if self.strip_pin == StripPin::Head {
+                strip.strip.process_block(&mut strip.bus, frames);
+            }
             strip.effects.process(
                 &context,
                 &mut strip.bus,
@@ -4589,6 +4653,9 @@ impl RenderState {
                 automation.as_ref(),
                 skip_idle,
             );
+            if self.strip_pin == StripPin::Tail {
+                strip.strip.process_block(&mut strip.bus, frames);
+            }
             let producer = EffectTarget::Bus(index as u8);
             let muted = strip.output.muted;
             // Mute silences a track's sends, pre-fader ones included. That is
@@ -4647,6 +4714,15 @@ impl RenderState {
 
     pub fn master(&self) -> &StereoBus {
         &self.buses[MASTER_BUS as usize].bus
+    }
+
+    /// Move the strip's pinned position, for a test that renders the same
+    /// project both ways. `mooloop_core::mixer::STRIP_PIN` is the policy;
+    /// this only exists so the difference the policy makes can be asserted
+    /// rather than argued.
+    #[cfg(test)]
+    pub fn set_strip_pin(&mut self, pin: StripPin) {
+        self.strip_pin = pin;
     }
 
     /// Turn skipping idle devices and idle channels off, or back on.

@@ -10,12 +10,9 @@
 //! engine pre-allocates pools at startup so these commands only mutate.
 
 use crate::{
-    AutomationPoint, BufferEvent, DeviceKind, DrumSynthParams, EffectTarget,
-    LoopRange, MlP8Route, ModRoute, ModSourceId, ModSourceRef, ModulatorParams, MonoSynthParams,
-    MlM1Params,
-    NoteEvent,
-    NoteId,
-    ParamAddr, PlaybackMode, PointId, PolySynthParams, SamplerParams, SendTap,
+    AutomationPoint, BufferEvent, DeviceKind, DrumSynthParams, EffectTarget, LoopRange, MlM1Params,
+    MlP8Route, ModRoute, ModSourceId, ModSourceRef, ModulatorParams, MonoSynthParams, NoteEvent,
+    NoteId, ParamAddr, PlaybackMode, PointId, PolySynthParams, SamplerParams, SendTap,
 };
 
 /// GUI -> audio. Drained at the top of each process callback.
@@ -212,10 +209,7 @@ pub enum EngineCommand {
         params: MonoSynthParams,
     },
     /// Replace a channel's ML-M1 parameter set.
-    SetChannelMlM1Params {
-        channel: u8,
-        params: MlM1Params,
-    },
+    SetChannelMlM1Params { channel: u8, params: MlM1Params },
     /// Set one descriptor-addressed generator parameter on a channel.
     ///
     /// The narrow form of the `SetChannel*Params` commands around it, and the
@@ -245,7 +239,11 @@ pub enum EngineCommand {
     /// Move one internal route's depth. The ordinary knob drag, and
     /// deliberately not structural: it retunes the compiled table in place
     /// rather than rebuilding it.
-    SetSourceRouteAmount { channel: u8, route: u16, amount: f32 },
+    SetSourceRouteAmount {
+        channel: u8,
+        route: u16,
+        amount: f32,
+    },
     /// Replace a channel's poly synth parameter set.
     SetChannelPolySynthParams {
         channel: u8,
@@ -276,6 +274,24 @@ pub enum EngineCommand {
     /// linearly for that tick, which is the same either-order tolerance
     /// `SetSamplerStretch` documents.
     SetTrackConsole { bus: u8, enabled: bool },
+    /// Invert one track's signal.
+    ///
+    /// Acts at the top of the track's block, before the strip, the chain,
+    /// the sends and the fader: a polarity switch on a desk is an input
+    /// control, and a pre-fader send of an inverted track is inverted.
+    SetTrackPolarity { bus: u8, on: bool },
+    /// Move one parameter of one track's channel strip.
+    ///
+    /// One variant for the whole strip, rather than a variant per section:
+    /// `mooloop_core::strip` gives every parameter a stable id and
+    /// `StripParams::set` is the only thing that knows what one means, so a
+    /// second name here would be a second place to keep in step.
+    ///
+    /// POD and high-rate, like a fader. Nothing the strip holds is
+    /// allocated, and nothing it does changes the graph's timing -- the
+    /// sections declare no latency, so a strip switched in mid-take
+    /// re-times nothing.
+    SetStripParam { bus: u8, param: u32, value: f32 },
     /// Bypass or re-enable one effect slot. While bypassed the slot's
     /// parameter events keep accumulating and flush on re-enable.
     SetEffectBypassed {
