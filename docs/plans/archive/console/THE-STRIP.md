@@ -149,6 +149,17 @@ The two limits, stated up front so the target is not quietly missed:
    balance at and below the operating level and flatten above it, where the
    references hold theirs about ten times further.
 
+   **Read downward it is a control rather than a limit, which is the half
+   that got heard first.** Adam, 2026-09-11, playing the finished strip:
+   *"the pres are cool in that they respond to gain being reduced as well as
+   being driven. i didnt expect that but its cool."* The same `n-1` dB per dB
+   means the higher harmonics fall fastest as the drive comes down, so a
+   stage backed off gets cleaner *and rounder* rather than merely smaller --
+   `Iron` six decibels down loses 6 dB of 2nd and gains 6 dB of margin over
+   its 3rd. Everything above this paragraph is about the half of the range
+   where a fixed polynomial is worse than the references; this is the half
+   where it is doing something they charge for.
+
 2. **Real transformer distortion is frequency-dependent and hysteretic, and a
    memoryless shaper is neither.** Core saturation rises steeply toward low
    frequencies, which is most of why `Iron` sounds like `Iron` on a kick and

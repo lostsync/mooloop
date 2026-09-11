@@ -492,6 +492,48 @@ mod tests {
         );
     }
 
+    /// **Backing the drive off does not merely make a voicing quieter: it
+    /// re-balances it.** Heard before it was asserted -- Adam, 2026-09-11,
+    /// on the finished strip: *"the pres are cool in that they respond to
+    /// gain being reduced as well as being driven. i didnt expect that but
+    /// its cool."*
+    ///
+    /// It is the level law in `harmonics.rs` read downward. Every harmonic
+    /// falls faster than the fundamental that makes it -- `n-1` dB per dB --
+    /// so the higher ones fall fastest, and a stage backed off gets cleaner
+    /// *and* rounder rather than simply smaller. The same arithmetic that is
+    /// a limitation above the operating level, where the balance flattens
+    /// and eventually inverts, is a musical control below it.
+    ///
+    /// So this asserts both halves of what he heard: the colour goes away,
+    /// and the 2nd's margin over the 3rd *widens* while it does.
+    #[test]
+    fn backing_the_drive_off_cleans_and_rounds() {
+        let margin = |drive: f32| {
+            let samples = run(IRON_PREAMP, 80.0, 0.25, drive);
+            let second = db(harmonic_amplitude(&samples, 80.0, 2) / harmonic_amplitude(&samples, 80.0, 1));
+            let third = db(harmonic_amplitude(&samples, 80.0, 3) / harmonic_amplitude(&samples, 80.0, 1));
+            (second, second - third)
+        };
+        let (unity_second, unity_margin) = margin(1.0);
+        // Six dB down, which is where the drive knob spends most of its
+        // lower half and well clear of the shaper's clamp.
+        let (backed_second, backed_margin) = margin(0.501);
+        println!(
+            "Iron at 80 Hz: 2nd {unity_second:.1} dB / margin {unity_margin:.1} dB at unity, \
+             2nd {backed_second:.1} dB / margin {backed_margin:.1} dB six down"
+        );
+        assert!(
+            backed_second < unity_second - 4.0,
+            "backing off should take the colour with it: {unity_second:.1} -> {backed_second:.1}"
+        );
+        assert!(
+            backed_margin > unity_margin + 3.0,
+            "and the 3rd should fall faster than the 2nd, widening the margin: \
+             {unity_margin:.1} -> {backed_margin:.1}"
+        );
+    }
+
     /// The harmonic balance is what separates the voicings, and it is the one
     /// thing the table must not lose: `Iron` is even-dominant and `Grip` is
     /// odd-dominant, which is the whole warm-versus-hard axis.

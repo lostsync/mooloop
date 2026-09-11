@@ -83,6 +83,19 @@
 //! distortion whose spectrum is identical at -30 and -6 dBFS is the one that
 //! sounds like a plugin.
 //!
+//! **Read downward, the same law is a control rather than a limit**, and
+//! that is the half that got heard first. Adam, 2026-09-11, on the finished
+//! channel strip: *"the pres are cool in that they respond to gain being
+//! reduced as well as being driven. i didnt expect that but its cool."* A
+//! harmonic falls `n-1` dB per dB with the signal that makes it, so the
+//! higher ones fall fastest and a stage backed off gets cleaner **and
+//! rounder**: six decibels down, `Iron`'s 2nd drops 6.0 dB and its margin
+//! over the 3rd *widens* by 6.0, because the 3rd drops 12.
+//! `backing_the_drive_off_cleans_and_rounds` in `preamp.rs` measures both
+//! halves. Above the reference this arithmetic is what flattens the balance
+//! and eventually inverts it, which is why it is written up as limit 1 --
+//! below it, it is why the drive knob is worth turning in both directions.
+//!
 //! **2. It is memoryless, so it cannot be frequency-dependent.** A
 //! transformer's core flux goes as `V/f`, so for a constant voltage it
 //! saturates *from the bottom up* -- which is most of why an iron-sounding

@@ -117,7 +117,7 @@ writing steps would presume the answer.
 reading before reopening the area it covers, because several record *why* a
 tempting change was rejected:
 
-`console/` (all six, closed 2026-09-11) is the newest and the widest: four
+`console/` (all six, closed 2026-09-11 and **played the same day** -- *"three distinct and musical characters"* on headphones, with the studio still to come) is the newest and the widest: four
 items from one morning's list -- reorder channels, group them, make the mixer
 work like a console, proper sends -- which turned out to be one design with a
 character layer on top. Read its `00-status.md` before touching the mixer,

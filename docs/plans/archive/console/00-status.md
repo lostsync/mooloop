@@ -675,6 +675,33 @@ the knee when the trim is up, which is correct for a handle that sets the
 threshold and is the one thing about the plot that trim changes and the
 drawing does not follow.
 
+### Heard, 2026-09-11
+
+On headphones, not yet in the studio. Adam: *"it sounds good as hell... on my
+cans it doesnt leave a lot to be desired. it is three distinct and musical
+characters."* That is the claim the voicings were built to make -- three
+coloured ones that differ from each other rather than three amounts of the
+same thing -- and it is the one no test can make.
+
+**One thing he found that this plan had written down only as a limitation.**
+*"the pres are cool in that they respond to gain being reduced as well as
+being driven. i didnt expect that but its cool."*
+
+That is `harmonics.rs`'s level law read downward. A harmonic falls `n-1` dB
+per dB with the signal that makes it, so backing the drive off does not
+simply make a voicing quieter: the higher harmonics fall fastest and the
+stage gets cleaner **and rounder**. Measured on `Iron` at 80 Hz, six
+decibels down: the 2nd drops 6.0 dB and its margin over the 3rd *widens* by
+6.0 dB, because the 3rd drops 12. Every document here discussed that
+arithmetic as the reason the model is worse than the references *above* the
+operating level -- `THE-STRIP.md`'s first limit -- and none of them noticed
+it is why the lower half of the knob is worth turning.
+
+`backing_the_drive_off_cleans_and_rounds` is the observation as an assertion,
+beside `drive_buys_character`, which had only ever gone up.
+
+UI feedback is outstanding and will land separately.
+
 ## Step 06 — preamp modelling
 
 Closed with step 03, having landed ahead of it: `mooloop_dsp::preamp` was
