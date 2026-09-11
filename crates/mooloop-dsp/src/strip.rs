@@ -1454,14 +1454,13 @@ mod tests {
             ("Punch", PUNCH_STRIP),
             ("Iron", IRON_STRIP),
         ] {
-            for band in 0..STRIP_EQ_BANDS {
-                let row = voicing.eq.bands[band];
+            let declared = voicing.eq.bands.iter().zip(STRIP_BAND_POSITIONS.iter());
+            for (band, (row, &steps)) in declared.enumerate() {
                 assert_eq!(
                     row.len(),
-                    STRIP_BAND_POSITIONS[band] as usize,
-                    "{name} band {band} has {} positions where the model declares {}",
+                    steps as usize,
+                    "{name} band {band} has {} positions where the model declares {steps}",
                     row.len(),
-                    STRIP_BAND_POSITIONS[band]
                 );
                 for pair in row.windows(2) {
                     assert!(
@@ -1486,8 +1485,7 @@ mod tests {
     /// swapping a channel module rather than turning a colour knob.
     #[test]
     fn a_position_is_a_different_frequency_under_a_different_voicing() {
-        for band in 0..STRIP_EQ_BANDS {
-            let position = DEFAULT_POSITIONS_FOR_TEST[band];
+        for (band, &position) in DEFAULT_POSITIONS_FOR_TEST.iter().enumerate() {
             let moo = MOO_STRIP.eq.frequency(band, position);
             let iron = IRON_STRIP.eq.frequency(band, position);
             assert!(
@@ -1526,8 +1524,8 @@ mod tests {
     #[test]
     fn the_nearest_position_to_a_positions_own_frequency_is_itself() {
         for voicing in [MOO_STRIP, GRIP_STRIP, PUNCH_STRIP, IRON_STRIP] {
-            for band in 0..STRIP_EQ_BANDS {
-                for position in 0..STRIP_BAND_POSITIONS[band] {
+            for (band, &steps) in STRIP_BAND_POSITIONS.iter().enumerate() {
+                for position in 0..steps {
                     let hz = voicing.eq.frequency(band, position);
                     assert_eq!(voicing.eq.nearest(band, hz), position, "band {band}");
                 }
