@@ -260,6 +260,65 @@ it is correct. `NameField` therefore drives its input from a `changed`
 handler and never writes back to `text`; `current-text` is what is actually
 in the box, and is what a test should read.
 
+### The back of a device
+
+**Every device has a second face, and it costs nothing.** A face is a fixed
+268 px by N units, and that rectangle is already allocated whether or not
+anything is drawn in it. Turning a device over reuses it. `Mixer Strips`
+below specifies the turn-over for the channel strip, where it was worked out
+first; this is the same mechanism generalised, and the mechanism is the cheap
+part.
+
+Adam, 2026-09-10: *"its a whole space we could have for every device pretty
+much at no cost... i dont know exactly what we'd spend it on yet but its
+something we have."* So this section records the space and the rules that
+keep it safe to use. **What goes on it is deliberately not decided here.**
+
+**It is a space, not a picture of one.** Reason's rack back is a direct
+emulation -- you turn the rack round and patch physical cables between real
+jacks, and the skeuomorphism is the feature. That is not what this is for.
+Nothing here needs to look like the back of anything; it is simply the other
+side of a rectangle we are already paying for.
+
+The rules that make it usable:
+
+- **The back is for what is *set*. The front is for what is *played*.**
+  Anything reached for while listening belongs on the front, and a device
+  that puts a performance control on its back has mis-sorted it. Candidates
+  for the back are per-device configuration that does not earn front-panel
+  space, macro controls, and options that change what the front face *means*
+  rather than what the signal does.
+- **A back-face control is not a hidden control, because a face is only a
+  drawing.** A parameter's identity is its `ParamDescriptor`, and automation,
+  modulation and presets address it by id through `EffectKind::descriptors`
+  -- none of which knows or cares which face draws the knob. So moving a
+  control to the back costs it nothing in addressability: it stays
+  automatable, modulatable, and saved. This is the property that makes the
+  back cheap to spend, and it is worth not breaking.
+- **A device with nothing on its back does not grow a turn-over button.** The
+  affordance is evidence that there is something behind it. A rack where
+  every device offers a turn and most of them turn to nothing teaches people
+  not to turn any of them.
+- **A face that is not showing is not built.** An `if`, not an `opacity: 0`,
+  exactly as the mixer's back face already requires -- a rack holds many
+  devices and an unbuilt face is what keeps the second one free.
+- **The turn is per device, not global.** Same reasoning the mixer strip
+  gives: you turn one device over to compare it against what its neighbours
+  are doing on the front.
+- **The identity header survives the turn.** A face sharing nothing with the
+  one it replaced reads as a different device arriving rather than as this
+  device, turned round.
+- **The transition spends `Motion.duration` and `Motion.curve`**, like every
+  other animation in the rack. Slint 1.17 has no 3D transform, so a literal
+  card flip is an x-scale through zero with the faces swapped at the
+  midpoint; a cross-dissolve with a small slide is equally available.
+
+**The first real candidate, when one is wanted:** the preamp's
+spectrum-deviation display, and anything else that answers "what is this
+device doing to my signal" rather than "what do I want it to do". A meter is
+not a control, it wants room, and it is exactly the kind of thing a front
+face cannot afford at 1U.
+
 ### Piano roll gestures
 
 The roll's header reads left to right as pane, mode, grid, then selection:
