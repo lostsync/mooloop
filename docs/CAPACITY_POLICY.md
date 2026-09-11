@@ -244,7 +244,7 @@ the decision has a before to point at.
   `render::tests::a_project_with_no_sends_allocates_nothing` guards the zero.
 
   The drawn side matters here too, and is the half this document does not
-  usually get to state. `docs/plans/console/THE-STRIP.md` first fixed the face
+  usually get to state. `docs/plans/archive/console/THE-STRIP.md` first fixed the face
   at four send bars — a *drawn* limit rather than an engine one, which this
   document's own distinction would have permitted. Adam retired it on
   2026-09-09: the area draws exactly the sends that exist and scrolls past the

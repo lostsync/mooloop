@@ -324,6 +324,26 @@ derived and diffed once a pump tick as `StructuralCommand::SetTrackGraph`,
 beside the three reconciles already there. Level, tap and enable stay POD, or
 a fader drag would rebuild every ring in the plan sixty times a second.
 
+### The back face is cramped at the pane's default height
+
+Found by rendering it. The mixer pane gets whatever height the views around
+it leave -- about 200px in the default arrangement -- and the turned-over
+strip spends that on the name, a shortened meter and fader, the pan, and two
+rows of page tabs, which leaves the page itself about 40px. It **scrolls**
+rather than clipping or shrinking its knobs, which is the same answer the
+sends area gives, and the dock divider is right there; but the back face is
+made for a taller pane than the one it opens in, and the zoomed console is
+the drawing that fixes it properly.
+
+Two smaller things the rendering settled. The fader has a *second* floor for
+when the strip is turned over -- 48px against 96 -- because on the back face
+it is there to be watched rather than dragged, and without that the page got
+what was left of 200px after a full-height fader. And the four page tabs do
+not fit across 84px of content: a quarter of it is 21px, which carries
+neither `COMP` nor `SENDS`, so they are two rows of two with the words
+intact. `THE-STRIP.md` sketched them as one row, which is the sketch being a
+sketch.
+
 ### What is not in it
 
 Named here rather than left to be discovered.
@@ -402,3 +422,178 @@ instance of: a list of things a user makes draws exactly the ones that exist
 and scrolls, rather than reserving bays for a number somebody drew once. The
 scroll-bar-over-the-viewport trap is recorded beside it, because that is what
 makes the rule cost a test rather than nothing.
+
+## Step 03 — the channel strip
+
+Landed on `feat/channel-strip` (2026-09-11). Four sections on every track --
+an input stage, a four-band EQ, a compressor and a polarity switch -- under
+one strip-wide voicing, all out by default, drawn on the mixer strip's new
+back face and on a pinned row in the track's device rack.
+
+### The step doc was a stack of corrections, and one of them was wrong
+
+`03-the-channel-strip-device.md` opened by proposing a composite
+`EffectKind` you insert, and then carried two rounds of amendment saying it
+is not one. It is rewritten as a work order; the retired premise is here
+rather than at the bottom of that file, because a plan you have to read
+backwards is one nobody reads.
+
+The claim that had to be replaced rather than amended: the old file had a
+voicing selecting *"knee, ratio law, attack and release curves, EQ band
+frequencies and Q"*. **A voicing that moves a band's frequency means the
+3 kHz on the face is not the frequency being boosted**, and four voicings are
+then four sets of lying knobs. So the rule this step is built on is that **a
+voicing selects laws, never values**: the harmonic profile, the tilt, the
+slew limit, the Q law, the curve above the knee and the programme dependence
+-- every one of which is either invisible or *drawn*, by `EqResponseDisplay`
+and `DynamicsCurveDisplay`. The Q law is the one case where it touches a
+knob's meaning, and it is precedent rather than an exception: `EqQProfile`
+already does exactly that to the seven-band EQ.
+
+Two of the voicing's three thirds are new. `Punch` *eases* its ratio above
+the knee, which is the mechanism behind "louder at the same level" -- a
+transient over the knee is compressed less than the passage under it -- and
+`Iron` steepens toward a vari-mu. One signed number does both, equal to the
+knob's ratio at the threshold whatever the bend, and `a_bent_ratio_stays_
+monotone` walks 90 dB in tenths because a gain computer whose output falls as
+its input rises inverts transients.
+
+### The pin is one statement, and now a testable one
+
+`THE-STRIP.md` left open where the strip sits in a track's chain.
+**Decided: at the head** -- the drive stage is an input stage, a track's rack
+is glue and post, and the device people put last on a track is a limiter.
+`mooloop_core::mixer::STRIP_PIN` is that decision, read by the bus block loop
+*and* by the rack to place the pinned row, so the drawing cannot say one
+thing while the audio does another.
+
+`RenderState` holds it as a field initialized from the constant, for the
+reason `skip_idle` is a field: a test renders the same project both ways and
+says what the difference is. The proof needs a device that does not commute
+with the strip, which is a 36 dB/oct low-pass where the compressor is
+looking -- at the head it detects the whole signal and clamps hard, at the
+tail it detects what the filter left.
+
+It costs the latency compiler nothing, as the plan predicted: biquads, a
+detector and a memoryless shaper declare no latency and there is no
+oversampler, so `chain_latency` is unchanged.
+
+### The faces have no numbers to drift from
+
+Every other device face mirrors its descriptor's range in the markup, and
+`slint_face_agreement.rs` exists because that second copy drifts. The strip's
+faces mirror nothing: `install_strip_spec` hands the markup the whole
+descriptor table and every parameter id once at startup, as the `StripSpec`
+global, so `StripSpec.drive-db` *is* `STRIP_DRIVE_DB` and a knob's minimum
+*is* its descriptor's.
+
+That makes this feature's agreement test a different shape and a stronger
+one. `tests/strip_face.rs` reads the table back out of the window and holds
+it to `StripParams::descriptors()`, checks the band arithmetic the markup
+does lands on the ids `strip_band_param` mints, and **fails if a bound is
+ever spelled in `strip.slint`** -- which is how the second copy of a range
+gets written in the first place, one knob at a time, to make it clearer.
+
+The same principle settled the compressor's curve. `DynamicsCurveDisplay`
+holds a gain computer of its own and could draw a threshold, a ratio and a
+knee unaided -- but not the voicing's bend, and teaching the markup the bend
+would be two formulas under one name. It now takes an optional `curve-db`
+and plots what Rust sampled with the same two functions the audio path calls.
+
+### Three duplications closed on the way past
+
+**The shared biquad**, which is `docs/plans/archive/adopt-shared-biquad-in-eq/`
+absorbed: `effects/eq.rs` had kept its private copy of the RBJ cookbook for a
+fortnight after the shared one was promoted out of it, so the strip would
+have been the third. The shared one gained `is_at_rest` (which the private
+copy had) and `shelf_slope`, which is new -- a band's `q` is its Q as a bell
+and its **slope** as a shelf, so a shelf with no slope parameter would be a
+dead knob.
+
+**`eq_effective_q`** is in `mooloop-core` now. The proportional-Q law had one
+caller; it now has three in two crates -- the seven-band EQ, the strip's bank,
+and every display that has to plot the curve that is *running* rather than
+the one the knobs imply -- and the copy that drifts is the one deciding what
+is heard.
+
+**`preamp_voicing`** moved from `effects/preamp.rs` into `preamp.rs`. The
+device and every track's strip now read one mapping from the persisted choice
+to the measured table, with a test that the two agree: a strip on `Iron` and
+a `Preamp` on `Iron` have to be the same stage, or the voicing means two
+things.
+
+### What the doing found
+
+**The programme-dependent release had to be timed off the release, not the
+attack.** The first version charged its second detector at twelve times the
+*attack* -- 12 ms at a 1 ms attack -- which fills on a single transient, and a
+stage that fills instantly is a slower release with extra arithmetic: a short
+burst and a long passage released within 3% of each other. Both constants are
+multiples of the knob's release now, so "a long passage" means long by the
+standard the user set.
+
+**And the test that found it was measuring the wrong quantity.** It compared
+the RMS of a quiet tail, which separated the two cases by three percent even
+after the mechanism was right. What programme dependence changes is a
+*time*, so it counts blocks to recovery instead: a factor of two, with `Moo`
+as the control at 1%.
+
+**Pan is on the back face.** Adam's mockup draws mute / solo / polarity in
+the column beside the fader and `meter vol pan` on the back, so the front
+face has no pan for the first time. It is on the back and on the track's rack
+face, which satisfies the reachability rule; recorded here because it is the
+one place the built strip will surprise someone who knows the old 62px one.
+
+**A section switched *in* clears its own state first.** Not tidiness: a
+filter bank and a detector last fed audio before the section was switched out
+would otherwise put that audio into the first block back, which is the one
+artefact "free while it is out" could plausibly produce.
+
+### What is not in it
+
+Named here rather than left to be discovered.
+
+- **The zoomed console**, which `THE-STRIP.md` settles as the third drawing.
+  The paned back face and the pinned rack row already satisfy the
+  reachability rule, so it is comfort rather than capability, and it needs
+  nothing this step did not build: `StripSections` is the full-format
+  arrangement and takes the room it is given.
+- **Automation and modulation of strip parameters.** A lane's target is an
+  `EffectTarget` plus a slot plus a param id, and a strip is not a slot. The
+  ids are ready for it: they start at 16 because
+  `modulation::STRIP_PARAM_VOLUME` and `STRIP_PARAM_PAN` are 0 and 1 of what
+  is conceptually the same strip -- `ParamOwner::Strip`, already addressable
+  by a route -- so the two tables can later become one table without
+  renumbering an id automation has persisted.
+- **A live gain-reduction meter on the COMP page.** `Strip::dynamics_frame`
+  exists and reports the block's extremes; what is missing is a carrier for
+  it, since the strip is not a device and `DeviceMeters` is addressed by
+  device. The page draws the static curve, which is what says what the
+  voicing is doing.
+- **A strip preset.** The preset system's unit is a device and a strip is not
+  one. The voicing is the thing worth recalling and it is one value.
+- **The voicing's own EQ curve.** `06-preamp-modelling.md` asks for a broad
+  presence lift on `Iron` and a top-end bump and rolloff. Not built, for one
+  reason: it would make the strip's drive and `EffectKind::Preamp` two
+  different stages under one voicing name. When somebody measures a curve it
+  belongs in `PreampVoicing`, where both get it.
+- **Solo**, which is a monitor tap rather than a control and is the largest
+  unbuilt thing on the mockup. `LOOSE_ENDS.md` carries it and `MIXER_PLAN.md`
+  specifies it. A dead solo button is not drawn.
+
+## Step 06 — preamp modelling
+
+Closed with step 03, having landed ahead of it: `mooloop_dsp::preamp` was
+built 2026-09-09, re-based on 106 measured units 2026-09-10
+(`spikes/preamp-measure/`), and given `EffectKind::Preamp` the same day so
+that a rack had somewhere to automate gain in the middle of a chain. Step 03
+is what finally put it where the plan always said it went -- the strip's own
+input stage, under the voicing selector that governs all three sections.
+
+What remains in `06-preamp-modelling.md` is **authoring and measurement
+rather than building**: supply sag and hysteresis (priced, and the second is
+a per-sample ODE solve), a measured fit for `tilt_db`, `tilt_hz` and `slew`
+where only the harmonic half is fitted, and Adam's decision about whether
+`Grip` gets the drive-dependent low shelf the real SSL turns out to have
+instead of a tilt. None of those is a step; each is a row of a table and a
+pair of ears.

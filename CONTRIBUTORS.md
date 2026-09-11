@@ -228,7 +228,11 @@ Alphabetical by model name, then by harness.
   hand in the test fixtures until renumbering one kind turned every container
   fixture in a snapshot suite into a preamp, and where the test that checked
   the menu for completeness had been quietly requiring it to list kinds in
-  numbering order.
+  numbering order, and then the channel strip that closed the console plan --
+  four sections on every track under one voicing, where the plan's own
+  specification would have had a voicing moving the numbers its own knobs
+  show, and where the faces ended up with no range in them at all because the
+  descriptor table crosses into the markup once at startup.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

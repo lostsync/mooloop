@@ -1,6 +1,6 @@
 # preamp-measure — reference measurements from real plugins
 
-`docs/plans/console/06-preamp-modelling.md` ends on a promise:
+`docs/plans/archive/console/06-preamp-modelling.md` ends on a promise:
 
 > we can do some sweep measurements on UAD and Waves plugs later to try and
 > get some real numbers. if we need them before then lets just pick some.

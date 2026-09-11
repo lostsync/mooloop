@@ -343,6 +343,29 @@ Two rules, and they pull in opposite directions on purpose:
    in the paned mixer -- makes the mixer's state the thing a user has to
    manage before they can do the work.
 
+## Built, 2026-09-11
+
+Step 03 landed the strip: the two paned faces at 92px with the turn-over
+between them, the pinned rack row, all four sections, and the voicing.
+`00-status.md` records what the doing changed about this file. The two things
+worth carrying up here:
+
+**The pin is settled -- at the head**, which is the last entry that used to
+be in the list below. `mooloop_core::mixer::STRIP_PIN` is the statement, and
+both the block loop and the rack read it, so Adam's *"we should be able to
+just move the pin"* is an edit to one constant.
+
+**Pan is on the back face, as drawn.** This file's front sketch has mute /
+solo / polarity in the column beside the fader and `meter vol pan` on the
+back, so the built front face has no pan for the first time. It is on the
+back and on the track's rack face, which is what the reachability rule asks
+for.
+
+The zoomed console is the one drawing of the three that is not built. It
+needs nothing new -- `StripSections` is the full-format arrangement and takes
+the room it is given -- and the two faces that are built already satisfy the
+rule that no parameter is reachable from only one of them.
+
 ## Still open
 
 - **Whether the sequencer rack draws a group.** Routing several channels to
@@ -355,9 +378,6 @@ Two rules, and they pull in opposite directions on purpose:
 - **A global turn-over** -- one control in the mixer's toolbar row that turns
   every strip at once, the way a desk's FLIP does. Floated 2026-09-10 and not
   ruled on; the per-strip button is settled and does not depend on it.
-- **Where the pinned strip row sits** in a track's chain by default, and
-  therefore whether a track's own devices run before or after its EQ and
-  compressor.
 
 ## Order this implies
 

@@ -113,5 +113,5 @@ space. It is recorded here rather than in a plan because it is *the same
 question*, and answering it separately is how a project ends up with two
 editors that nearly agree.
 
-Recorded while writing `docs/plans/console/`, which is the mixer half of the
+Recorded while writing `docs/plans/archive/console/`, which is the mixer half of the
 same morning list and which deliberately does not touch the playlist.

@@ -326,7 +326,7 @@ sidechains and step 7 are next.
    live take sample for sample.
 
    Two things it deliberately did not do, and **the first of them landed
-   2026-09-09**, in `docs/plans/console/` step 05. **Parallel sends** are a
+   2026-09-09**, in `docs/plans/archive/console/` step 05. **Parallel sends** are a
    second outgoing edge from a strip, and they turned out not to extend this
    mechanism at all: a send is a producer-side edge that carries its own
    compensation, so it is aligned by construction and never goes through

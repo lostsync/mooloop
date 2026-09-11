@@ -17,7 +17,24 @@ anything, and that an ordinary edit rebuilds it at 20 ms a time. Whether that
 is worth a step is a `FOCUS.md` question; the measurements to judge it by are
 committed either way.
 
-Last swept 2026-09-09, when `console/` steps 01, 02, 04 and 05 landed and step
+Last swept 2026-09-11, when `console/` finished and moved to `archive/`: step
+03 put a channel strip on every track -- an input stage, four EQ bands, a
+compressor and a polarity switch, all out by default, under one strip-wide
+voicing -- and closed step 06 with it, since the preamp it models had landed
+two days earlier and was waiting for somewhere to live. Two things in it
+outlive the feature. **A voicing selects laws, never values**: the plan had
+one choosing band frequencies and Q, which would have made four voicings four
+sets of lying knobs, so what a voicing owns is the harmonic profile, the
+tilt, the slew, the Q law, the curve above the knee and the programme
+dependence -- each either invisible or *drawn*. And **the strip's faces
+declare no range at all**: `install_strip_spec` hands the markup the whole
+descriptor table once at startup, so there is no second copy to drift and
+`tests/strip_face.rs` fails if a bound is ever spelled in the markup. That is
+the stronger form of what `slint_face_agreement.rs` does for every other
+face. `adopt-shared-biquad-in-eq/` went to `archive/` with it, absorbed as
+the step said it would be.
+
+Before that, 2026-09-09, when `console/` steps 01, 02, 04 and 05 landed and step
 05 was verified: the mixer became a list of tracks somebody made rather than a
 fixed seventeen, a track routes a copy of itself to another track, and any
 summing point can glue what feeds it. The plan's own `README.md` was rewritten
@@ -91,8 +108,6 @@ writing steps would presume the answer.
 | `device-registry/` | **A survey, written 2026-09-11, not a work order.** Adam's "we should basically be loading these like plugins we get to have native conversations with", priced. Adding a device kind touches fourteen files, nine of which hold a one-line arm stating one fact; those nine are the registry, spread out. Three findings worth having before anyone tries: the typed `EffectParams` enum is the reason the DSP reads well and should not be flattened into function pointers; a table spanning crates cannot exist, because `mooloop-dsp` depends on `mooloop-core` and so a node constructor is not nameable beside the params it builds from; and Slint has no dynamic component instantiation, so `main.slint` holds one arm per kind under every design short of generating the markup. What *is* reachable is that those arms are 444 lines of which 245 are the same eleven bindings fourteen times -- a face host component would take an arm from twenty-seven lines to eight without a Rust change. |
 | `poly-v1-mono-mode/` | One step. The only thing blocking deletion of `DeviceKind::MonoSynth`, which is what lets `MlM1` take the plain name. The held-note stack it needs already exists. |
 | `preset-system/` | **Done: steps 01-04 ran 2026-09-04 and landed on `main` after Adam confirmed the interface.** A preset's unit is a device, with relative addressing. The effect-level preset exists end to end: one rack row, no routes, no absolute addressing, `contains = ["effect_params"]` in the manifest so a later fragment format can supersede it cleanly, `presets/effects/<kind>/` on disk, an undoable load through the session, and the rack row's rail buttons wired. `PresetSummary` names three preset classes. Every effect kind ships a factory bank, seeded like the ML-M1 one. A second pass fixed the load path — an effect preset is a rack edit, not a document load — and put the preset's name in the device header. `00-status.md` records what the run found. A second entry, 2026-09-05, moves the *generator* half onto the device rail beside the effect half and gives the source device a preset label in its header. The browser, the taxonomy surface, and an updatable factory mechanism are unblocked now that DS-01's bank ships. As of 2026-09-05 the browser has a home: Adam wants preset browsing in the sample browser panel, and `FOCUS.md` step 3 carries it. |
-| `adopt-shared-biquad-in-eq/` | `effects/eq.rs:30` still declares its own `Biquad` after the shared one was promoted out of it. |
-| `console/` | **Written 2026-09-09, from Adam's morning list; steps 01, 02, 04 and 05 all landed the same day, leaving 03 (EQ + comp) and 06 (preamp) open.** Reorder, group, console mixer and sends turn out to be one design with a character layer on top. Its `README.md` carries the decisions that make it incremental, and **it was rewritten mid-plan because the first pair of them were a spreadsheet's idea of a console**: the mixer is *tracks*, all of them, always -- every channel has one permanently and keeps it when grouped -- with bus and send as roles a track is put in by what routes into it, rather than a derived view of strips in which grouping takes a channel's strip away. `EffectTarget` stays while the track list becomes dynamic, rather than doing `MIXER_PLAN.md`'s full `SignalSlotId` rewrite in the first move. `docs/TERMINOLOGY.md` is the vocabulary and is worth reading before the plan. The retired first draft -- including the policy *a mixer strip is created by a musical act, not an administrative one*, which answered a problem that does not arise once every channel simply has a track -- is kept at the bottom of that `README.md`. Steps 01-03 (channel reorder, Airwindows-style console summing, a channel-strip device) each end in something audible and need none of the routing work; 04-05 are the structural block. Note `adopt-shared-biquad-in-eq/` above is absorbed by step 03, and step 04 closes the bus-rename entry in `LOOSE_ENDS.md`. Step 01 (a channel can be dragged to another row) found that the *session's* six channel-keyed things -- the selected device, the open lane, the preset labels -- were never rescoped by any channel edit, so an insert or a delete has been mis-keying them all along; `00-status.md` records that and the one place the plan's premise was wrong about the engine. Step 02 (console summing) is in and off by default: every summing point decodes, so two channels glue with no bus created and nothing placed in a chain, and nesting needed no special case. Two of the plan's numbers were wrong and are corrected there -- the ceiling is +3.92 dBFS rather than 0, and normalizing the curve to move it was built and rejected because its round trip is worst exactly where music is loudest. Step 05 (sends) is in, and its own step doc was the thing that turned out to be wrong: it named `CompiledBusGraph::destinations` as the assumption a send breaks, when a track really does have one output and what breaks is one *edge* per node -- so the step scheduled last for forcing a rewrite of the realtime schedule did not touch it. `05-sends.md` is the rewrite and keeps the original at the bottom. Adam retired returns as a concept and the four-bar ceiling `THE-STRIP.md` had drawn; the drill-down tap points and channel-authored sends are stage 2, listed in `00-status.md`. A verification pass over step 05 the same day found the engine half complete against its own acceptance list and three gaps outside it: one component behind four controls still tooltipped every destination row `"Send to"`, two acceptance cases were true but untested, and four documents still said sends were absent -- `AUDIO_ARCHITECTURE.md`'s migration step 6 among them, which had parallel sends written as the thing its typed-edge model would grow into when they turn out not to extend it at all. |
 | `extract-mid-level-dsp-blocks/` | The primitives-to-devices ladder has no middle rung on the DSP side, and `device-displays.slint` holds eight visualizers with no shared canvas. |
 | `theming/` | Written 2026-09-09 from Adam's question about skins rather than color schemes. `Theme` in `ui/theme.slint` already is the stylesheet -- Slint has no cascade and does not need one -- and the survey in its `README.md` says which axes it is missing: color and radius and motion are tokenized, type and stroke are not at all (313 literal `font-size`, 81 literal `border-width`), and metrics are half-started in `toolbar.slint`'s `ToolbarMetrics`. Queued because it costs more with every device face added, not because it is urgent. **The reason to build it is accessibility rather than the homage**: the working type size is 7-11px and is not adjustable, and nothing checks that a chosen palette is readable. Step 02 (a relief primitive, because a Slint `Rectangle` has one border colour and a bevel needs four) is the only design problem in it; 01 and 03 are a token sweep and a file format, and are worth having on their own. |
 
@@ -102,6 +117,21 @@ writing steps would presume the answer.
 reading before reopening the area it covers, because several record *why* a
 tempting change was rejected:
 
+`console/` (all six, closed 2026-09-11) is the newest and the widest: four
+items from one morning's list -- reorder channels, group them, make the mixer
+work like a console, proper sends -- which turned out to be one design with a
+character layer on top. Read its `00-status.md` before touching the mixer,
+the strip or the summing: it records the two premises the plan got wrong and
+had to retire (a derived *view of strips* where grouping takes a channel's
+strip away, and a voicing that moves the numbers its own knobs show), the
+step whose whole justification -- that sends force a rewrite of the realtime
+schedule -- was false, and the two measurements that changed the design of
+console summing. `THE-STRIP.md` beside it is Adam's mockup and the rulings on
+it, and is still the reference for the strip's shape.
+
+`adopt-shared-biquad-in-eq/` (absorbed by `console/` step 03 and closed with
+it; the EQ's private copy of the RBJ cookbook is gone and the shared one
+gained the `is_at_rest` it lacked) ·
 `auto-offline-idle-devices/` (all three, closed 2026-09-05; read its status
 before touching anything a device runs on the clock rather than on its input,
 and before assuming a frozen delay line reads the same as a running one) ·

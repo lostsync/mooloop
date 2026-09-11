@@ -550,10 +550,27 @@ decide its shape. Settled 2026-09-10.
 - **A face that is not showing is not built.** An `if`, not an `opacity: 0`:
   that is what keeps a back face free on every track in a large project.
 - **No parameter is reachable from only one presentation.** The paned strip's
-  back face, the track's face in the device rack, and the zoomed console strip
-  are one parameter set drawn three ways. A control that exists in only one of
-  them makes the mixer's own state something a user has to manage before they
-  can do the work.
+  back face, the track's pinned row in the device rack, and the zoomed console
+  strip are one parameter set drawn three ways. A control that exists in only
+  one of them makes the mixer's own state something a user has to manage
+  before they can do the work. Built 2026-09-11 for the first two; the zoomed
+  console is recorded in `docs/plans/archive/console/00-status.md` and needs nothing
+  new.
+- **A strip control declares no range of its own.** Every knob on the channel
+  strip takes its minimum, maximum, default, curve, name and unit from the
+  descriptor table the engine reads, handed to the markup once at startup as
+  the `StripSpec` global -- so the face has nothing to drift from. This is
+  the stronger version of what `slint_face_agreement.rs` does for the device
+  faces, which mirror a range and are checked for divergence afterwards; here
+  there is no second copy to check. `tests/strip_face.rs` holds the table it
+  installs to `StripParams::descriptors()` and fails if a bound is ever
+  spelled in `strip.slint` "to make it clearer".
+- **Where the strip's processing sits in a track's chain is one statement.**
+  `mooloop_core::mixer::STRIP_PIN` decides both when the engine runs it and
+  where the rack draws its pinned row, so the drawing cannot say one thing
+  while the audio does another. The pinned row has no rails, because it can
+  be neither inserted nor removed and offering those affordances would be
+  offering gestures that do nothing.
 - **The transition spends `Motion.duration` and `Motion.curve`.** They are
   what the device rack's slide-aside and the dock's extent already animate on.
   Slint 1.17 has no 3D transform, so a literal card flip is an x-scale through

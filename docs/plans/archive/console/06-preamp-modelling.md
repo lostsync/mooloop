@@ -1,6 +1,6 @@
 # 06 — Preamp modelling
 
-> **Measured 2026-09-10 — [`spikes/preamp-measure/RESULTS.md`](../../../spikes/preamp-measure/RESULTS.md).**
+> **Measured 2026-09-10 — [`spikes/preamp-measure/RESULTS.md`](../../../../spikes/preamp-measure/RESULTS.md).**
 > The sweeps this file asks for at the end have been run against 25 licensed
 > plugins. Most of what is reasoned below survived; three claims did not, and
 > each is marked **Measured** in place rather than deleted, because the

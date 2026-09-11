@@ -215,7 +215,7 @@ the callback—but its `[u8; MAX_BUSES]` destination permutation models one
 output per bus. ~~It must be replaced, not stretched, before sends land.~~
 
 **That was wrong, and sends landed without it** (2026-09-09,
-`docs/plans/console/05-sends.md`). A track has exactly one *output*; a send is
+`docs/plans/archive/console/05-sends.md`). A track has exactly one *output*; a send is
 an additional edge, not a second output, so the permutation stays true and is
 still what the callback walks. What the permutation could not express was the
 *order*, and that was answered by counting sends in the same Kahn pass rather
@@ -259,9 +259,9 @@ not overload `AuxSend` or borrow another slot's audio buffer.
 **Rewritten 2026-09-10.** The August version of this section had every strip
 carrying `Send A` and `Send B` as fixed controls, and a `+ Track` / `+ Bus` /
 `+ Send` row to make them; all three are retired
-(`docs/TERMINOLOGY.md`, `docs/plans/console/README.md`). What replaces them is
+(`docs/TERMINOLOGY.md`, `docs/plans/archive/console/README.md`). What replaces them is
 a strip with **two faces** and a mixer with **three states**, settled the same
-day. [`docs/plans/console/THE-STRIP.md`](plans/console/THE-STRIP.md) carries
+day. [`docs/plans/archive/console/THE-STRIP.md`](plans/archive/console/THE-STRIP.md) carries
 the strip's own detail; what follows is the part that belongs to the mixer.
 
 The mixer is a horizontal strip work surface, not a routing spreadsheet. A
@@ -379,7 +379,7 @@ it as vertical slices:
    This stage is useful by itself: it replaces the 16-bus bank with a coherent
    console.
 4. **Aux sends and returns.** *(Landed 2026-09-09 as
-   `docs/plans/console/05-sends.md`, and not in this shape: there are no
+   `docs/plans/archive/console/05-sends.md`, and not in this shape: there are no
    `Send A/B` defaults and no return object, because bus and send are roles a
    track is put in by routing rather than species -- `docs/TERMINOLOGY.md`.
    The pre/post taps, the per-send level and the general DAG latency rule are

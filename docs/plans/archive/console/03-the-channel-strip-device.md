@@ -214,7 +214,7 @@ does not build.
 
 Mostly assembly, and every part exists or is queued to be extracted.
 
-- **The shared `Biquad`.** `docs/plans/adopt-shared-biquad-in-eq/` is that
+- **The shared `Biquad`.** `docs/plans/archive/adopt-shared-biquad-in-eq/` is that
   plan and this step absorbs it: `effects/eq.rs` still declares a private
   copy of the RBJ cookbook, and the strip must not add a third. Doing the
   adoption first means the strip's EQ is built on the one the preamp already

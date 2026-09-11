@@ -258,7 +258,7 @@ before any of them existed still loads:
   There is deliberately **no field naming the algorithm**. One curve exists,
   and a `console_mode` added later with `#[serde(default)]` is the same no-op
   migration whenever it lands, so a saved field with one legal value would buy
-  nothing now. See `docs/plans/console/02-console-summing.md`.
+  nothing now. See `docs/plans/archive/console/02-console-summing.md`.
 - **A track's channel strip is one defaulted struct per track.**
   `buses[].bus.strip` carries the voicing, the three `in` switches, the drive,
   the four EQ bands and the compressor's eight values; `buses[].bus.polarity`
@@ -279,7 +279,7 @@ before any of them existed still loads:
   `mooloop_core::mixer::STRIP_PIN` is a constant, not a project value: the
   pinned position is a policy the application states once, and a per-track
   copy of it would be a thing to keep in step for a feature nobody has asked
-  for. See `docs/plans/console/03-the-channel-strip-device.md`.
+  for. See `docs/plans/archive/console/03-the-channel-strip-device.md`.
 - **A track's sends are a defaulted list.** `buses[].sends` is `{ target,
   level, tap, enabled }` per send, where `target` is a track index, `tap` is
   `post_fader` (the default) or `pre_fader`, and `enabled` defaults to `true`
@@ -297,7 +297,7 @@ before any of them existed still loads:
   and a send with nowhere to go is simply not a send — re-pointing it at the
   master would put a wet path into the mix at full level. A bank whose sends
   close a loop has its sends cleared along with its outputs, so the file still
-  opens. See `docs/plans/console/05-sends.md`.
+  opens. See `docs/plans/archive/console/05-sends.md`.
 - **Two effects follow the transport, and both persist a division rather
   than its result.** A delay carries `tempo_sync` and `time_division`, and a
   modulation effect carries `tempo_sync` and `rate_division`; all four

@@ -184,12 +184,18 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   existed load at unity. Voice controls cover one-shot/gated playback, 1-16
   voices, restart/layer retriggering, and 16 cross-channel choke groups.
 - A mixer sharing the work surface with the step grid, behind the toolbar's
-  STEPS/MIXER tab strip. It is a strip per bus - master first, then sixteen inserts - with a
-  name plate, live stereo meter, fader, pan, mute, destination, and a count of
-  the channels feeding it. Clicking a strip's name plate points the device rack
-  below at that bus, so a chain on a group of channels is built with the same
-  gesture as a chain on one channel. Channels name their bus from a picker in
-  their rack row, beside their other output controls.
+  STEPS/MIXER tab strip. It is a strip per track, master first, and a strip is
+  **92 px wide with two faces**. The front is what you look at while mixing:
+  name plate, live stereo meter, fader, mute, polarity, destination, a count
+  of the channels feeding it, and the analog-sum switch at its foot. A small
+  button in the lower-right corner **turns the strip over** -- one strip at a
+  time, so one track can show its EQ while the rest still show faders -- onto
+  a back face carrying the pan and one page of EQ / COMP / DRIVE / SENDS. The
+  name, the meter and the fader do not turn: an EQ is set by ear while
+  watching what it does to the level. Clicking a strip's name plate points the
+  device rack below at that track, so a chain on a group of channels is built
+  with the same gesture as a chain on one channel. Channels name their track
+  from a picker in their rack row, beside their other output controls.
 - A horizontal lower device rack with one fixed-height 3U source face followed
   by a chainable effect chain (slots are added by kind from the rack's add
   slot, bypassed or removed from their shared host header, and reordered by
@@ -627,6 +633,49 @@ land on its own when it starts to matter:
 - A send orders its target after its source, the same way an output does, and
   a cycle closed through a send is refused the same way one closed through an
   output is.
+- **A channel strip on every track.** Four sections -- an input stage
+  (`pre in` and a drive), a four-band EQ, a compressor, and a polarity
+  switch -- under one strip-wide **voicing**: `Moo`, `Grip`, `Punch`, `Iron`.
+  Every section is **out by default**, and out is not "flat": a section that
+  is out does not touch the samples, so a project that has never opened a
+  strip renders bit-identically to one built before the strip existed. That is
+  what entitles it to exist on all 256 tracks; the price of having one
+  everywhere is three booleans a block.
+
+  The EQ's four bands read **left to right, top to bottom**: high shelf, high
+  mid, low mid, low shelf. Each is frequency / gain / Q, and each switches
+  between a bell and the shelf it is nearest -- the top two to a high shelf,
+  the bottom two to a low shelf. A band's Q knob is its Q as a bell and its
+  **slope** as a shelf, and a band at exactly 0 dB is not run at all. The
+  compressor is its own design rather than the compressor device behind a
+  different face: threshold, ratio, input trim, attack, release, knee, a
+  parallel `w/d mix` (at 0 it is the dry signal exactly) and makeup.
+
+  **A voicing selects laws, never values.** It owns the input stage's
+  harmonic profile, its tilt and its slew limit (all measured -- see
+  `docs/plans/archive/console/06-preamp-modelling.md`), the EQ's Q law, the
+  compressor's curve above the knee, and its programme dependence. Nothing a
+  voicing does moves a number a knob shows, so the 3 kHz on the face is the
+  frequency being boosted whichever voicing is selected; what a voicing
+  changes that a knob cannot show is *drawn*, by the response plot and the
+  gain-computer curve. `Moo` is the null case exactly: every section in, `Moo`
+  selected and nothing set is the same audio as no strip.
+
+  The strip is drawn in two places, and no parameter is reachable from only
+  one of them: the mixer strip's back face, and a **pinned row in the track's
+  device rack**. Where that row sits in the chain -- before the track's own
+  devices -- is one statement, `mooloop_core::mixer::STRIP_PIN`, which the
+  engine's block loop reads as well, so the drawing and the audio cannot
+  disagree. The row has no insert or remove rails, because it can be neither.
+
+  Polarity is drawn beside mute on both faces and acts at the **top** of the
+  track's block, so everything after it -- the strip, the chain, both send
+  taps and the fader -- sees the flipped signal.
+
+  Not yet: the strip's parameters are not automation or modulation
+  destinations, there is no live gain-reduction meter on the compressor page,
+  and there is no strip preset. `docs/plans/archive/console/00-status.md` says why
+  each is separable.
 - **Analog sum.** Any mixer track can be switched to sum into its destination
   through a non-linear encode, decoded at that destination together with
   everything else feeding it that has the switch on. The control is a small

@@ -54,7 +54,7 @@ channel that has never been named, so the distinguishing question is whether
 the current name is still the default one for the *outgoing* device -- if it
 is, re-derive it; if it is not, the user named it and it stays.
 
-Found while writing `docs/plans/console/`, which is why it is dated later than
+Found while writing `docs/plans/archive/console/`, which is why it is dated later than
 the rest of this file.
 
 ## Pattern colour comes with channel colour

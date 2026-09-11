@@ -80,7 +80,7 @@ sense, and every desk calls it that.
 them to the same track. That track is then being used as a bus, and it is
 worth naming "Drums"; nothing else about it differs, and **a grouped
 channel keeps its own track**, its fader and its sends. An earlier draft of
-`docs/plans/console/` had grouping *create* a track and its members *leave*
+`docs/plans/archive/console/` had grouping *create* a track and its members *leave*
 the mixer — that is a spreadsheet's idea of a console and it is wrong.
 
 **Analog sum** is a track's switch, not a channel's, for the same reason the
@@ -91,4 +91,4 @@ summing thing for now is tracks-only."*
 
 **Strip** means the vertical run of controls a track draws — preamp, EQ,
 compressor, sends, fader. It is a face, not an object. See
-`docs/plans/console/THE-STRIP.md`.
+`docs/plans/archive/console/THE-STRIP.md`.

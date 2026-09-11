@@ -72,7 +72,9 @@ gives, at every fader position. `summing_stays_linear_however_the_faders_sit`
 holds that sample by sample up to the +12 dB ceiling. If one track ever
 appears to duck another, nothing in the summing path can be responsible;
 look for a shared *nonlinear* stage instead — a driven filter, the drive
-effect, a compressor or limiter on a bus every source drains through. Those
+effect, a compressor or limiter on a bus every source drains through, or
+**the channel strip's own compressor or drive on such a track**, which since
+2026-09-11 is one switch rather than a device somebody placed. Those
 are level-dependent by design, they have no time constant when the shaper is
 static, and no bus assignment escapes one sitting on the master.
 What matters is placement, not the effect: a channel's chain runs on that
@@ -86,10 +88,15 @@ same superposition holds with the pad routed down a two-hop insert chain,
 which is what puts audio through `mix_into`.
 
 **Nothing bounds a sample in the live path — unless console summing is
-switched on.** The engine's only writes into a bus buffer are the effect
-container's input trim, its wet/dry blend and output trim, the dry-path delay
-ring, and `StereoBus`'s add and multiply — every one of them linear in the
-signal. The single place a sample is clipped anywhere else in the codebase is
+switched on, or a strip's drive is.** The engine's only writes into a bus
+buffer are the effect container's input trim, its wet/dry blend and output
+trim, the dry-path delay ring, the channel strip's four sections, and
+`StereoBus`'s add and multiply. Every one of them is linear in the signal
+except the strip's **drive**, whose shaper is monotone-clamped to `[-1, 1]`
+and whose `Iron` voicing carries a slew limit — both bounds, both inside a
+section that is out until somebody switches it in, and both the point of the
+control rather than a side effect of it. The strip's EQ and compressor are
+level-dependent but bound nothing: a biquad and a gain are multiplies. The single place a sample is clipped anywhere else in the codebase is
 `pcm24`, in `mooloop-engine/src/offline.rs`: that is the 24-bit WAV encoder,
 so exports hard-clip at full scale and live playback does not. Sums above
 0 dBFS reach the output device intact, and pulling them down is the user's
