@@ -3517,6 +3517,7 @@ impl UiState {
     }
 
     fn mixer_strip_row(&self, index: usize, setup: &BusSetup) -> MixerStripRow {
+        let solo_silenced = mooloop_core::mixer::solo_silenced(&self.session.buses);
         MixerStripRow {
             name: setup.bus.name.as_str().into(),
             muted: setup.bus.muted,
@@ -3527,6 +3528,11 @@ impl UiState {
             is_master: index == MASTER_BUS as usize,
             console: setup.bus.console,
             polarity: setup.bus.polarity,
+            solo: setup.bus.solo,
+            // Derived rather than stored, by the same function the engine is
+            // told through: what a solo silences is a property of the whole
+            // graph, and the strip dims its name rather than looking muted.
+            solo_silenced: solo_silenced.get(index).copied().unwrap_or(false),
             strip: strip_row(&setup.bus.strip),
             sends: self.send_rows(index),
             send_allowed: self.allowed_destinations(index),
@@ -3602,6 +3608,7 @@ impl UiState {
         window.set_editing_bus_feed_count(self.session.bus_feed_count(index) as i32);
         window.set_editing_bus_console(setup.bus.console);
         window.set_editing_bus_polarity(setup.bus.polarity);
+        window.set_editing_bus_solo(setup.bus.solo);
         window.set_editing_bus_strip(strip_row(&setup.bus.strip));
         window.set_editing_bus_can_remove(self.session.can_remove_track(index));
         window.set_editing_bus_allowed(self.allowed_destinations(index));
@@ -7136,6 +7143,67 @@ impl AppUi {
                     guard.update_document_title(&w);
                 }
                 let _ = tx.send(command);
+            });
+        }
+
+        // Solo, in place. The button says which track is soloed; what that
+        // silences is derived by the pump's `sync_solo`, because it is a
+        // property of the whole graph. Both faces carry the button, and
+        // every *other* strip's name dims or undims, so the whole model is
+        // republished rather than one row.
+        {
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_bus_solo_toggled(move |bus| {
+                let mut guard = st.borrow_mut();
+                if !guard.session.toggle_track_solo(bus) {
+                    return;
+                }
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_mixer(&w);
+                    guard.sync_bus_editor(&w);
+                    guard.update_document_title(&w);
+                }
+            });
+        }
+
+        // A point dragged on the EQ's response plot. The face hands over
+        // hertz and `StripEqTable::nearest` snaps it to one of the band's
+        // positions -- here rather than in the markup, because that search
+        // is in log distance and a second copy of it is what would drift.
+        {
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_bus_strip_point_dragged(move |bus, band, hz, gain_db| {
+                let mut guard = st.borrow_mut();
+                let Some(params) = guard.session.strip_params(bus) else {
+                    return;
+                };
+                let band = band.max(0) as usize;
+                let table = mooloop_dsp::strip::strip_voicing(params.voicing).eq;
+                let position = table.nearest(band, hz);
+                let moves = [
+                    (strip_band_param(band, STRIP_BAND_FREQ), position as f32),
+                    (strip_band_param(band, STRIP_BAND_GAIN), gain_db),
+                ];
+                let mut moved = false;
+                for (param, value) in moves {
+                    if let Some(command) = guard.session.set_strip_param(bus, param as i32, value)
+                    {
+                        let _ = tx.send(command);
+                        moved = true;
+                    }
+                }
+                if !moved {
+                    return;
+                }
+                guard.session.dirty = true;
+                if let Some(w) = weak.upgrade() {
+                    guard.sync_mixer_strip(bus.max(0) as usize);
+                    guard.sync_bus_editor(&w);
+                    guard.update_document_title(&w);
+                }
             });
         }
 
@@ -11355,6 +11423,22 @@ impl AppUi {
                 let editing_bus = w.get_editing_bus();
                 let edited_bus = w.get_editing_bus_index().max(0) as usize;
                 let selected_channel = st.borrow().session.selected;
+                // The strips' gain-reduction lamps, as one model rather than
+                // a field on every row: this is the only thing about a strip
+                // that moves at frame rate, and both faces index the same
+                // array so the mixer's lamp and the rack row's curve cannot
+                // disagree. Drained every tick whether or not anything is
+                // drawing it, for the reason the peaks are -- a held cell
+                // nobody read would light the lamp with a minute-old
+                // transient the moment a strip was turned to.
+                let mut reduction = Vec::with_capacity(MAX_BUSES);
+                for bus in 0..MAX_BUSES {
+                    reduction.push(handle.take_strip_reduction(bus));
+                }
+                if showing_mixer || showing_device_rack {
+                    w.global::<StripMeters>()
+                        .set_reduction_db(reduction.as_slice().into());
+                }
                 for (bus, meters) in bus_meters.iter_mut().enumerate() {
                     if bus_clip_clear_in
                         .borrow_mut()

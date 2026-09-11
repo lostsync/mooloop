@@ -74,6 +74,11 @@ fn strips(selected: usize) -> Rc<VecModel<MixerStripRow>> {
                 is_master: index == 0,
                 console: false,
                 polarity: index == 2,
+                // One track soloed, which is what dims the names of the
+                // tracks a solo silences -- so the snapshot carries both
+                // states rather than only the quiet one.
+                solo: index == 1,
+                solo_silenced: index > 1,
                 // Every section out on most tracks, which is what a track
                 // arrives with; one loaded strip so the turned-over face and
                 // the rack's pinned row have something to draw.
@@ -162,6 +167,11 @@ fn headless() -> MainWindow {
     // and no ranges. A test should reach the strip the way the application
     // does.
     mooloop_ui::install_strip_spec(&ui);
+    // 760 deliberately, which is *shorter* than the mixer's own default
+    // dock height: the work area gives the pane about 200px here, where the
+    // strip's fader face wants about 180 plus the pane's own chrome, so
+    // this window renders the squeezed case. Every coordinate below is
+    // probed against it, and a taller window would move all of them.
     ui.window().set_size(LogicalSize::new(1100.0, 760.0));
     ui.set_channels(rack_rows());
     ui.set_pattern_length(16);
@@ -288,10 +298,10 @@ fn render_mixer_pane_with_a_bus_chain() {
     write_snapshot(&snapshot, "MOOLOOP_MIXER_SNAPSHOT");
 }
 
-/// **The turn-over**, which is the one gesture in the strip that nothing else
-/// tests: a click in a strip's lower-right corner replaces its lower half
-/// with the EQ / COMP / DRIVE / SENDS pages, and a control on the face that
-/// arrives has to report the parameter id the *engine* reads.
+/// **The turn**, which is the one gesture in the strip that nothing else
+/// tests: a click on the arrow in a strip's bottom-right corner replaces its
+/// lower half with the strip's own three sections, and a control on the face
+/// that arrives has to report the parameter id the *engine* reads.
 ///
 /// The corner is probed off `MOOLOOP_MIXER_SNAPSHOT` -- the small chevron at
 /// the bottom right of strip 1. The control is then found by **sweeping the
@@ -356,10 +366,13 @@ fn turning_a_strip_over_reaches_its_own_parameters() {
 /// through and start testing the other face.
 fn sweep_strip(ui: &MainWindow, moved: &Rc<Cell<(i32, i32)>>) -> Vec<i32> {
     let mut ids: Vec<i32> = Vec::new();
-    let mut y = 290.0;
+    let mut y = 285.0;
     while y > 190.0 {
+        // Clear of the page's own scroll bar at the strip's right edge,
+        // which is a control and would otherwise be most of what this
+        // sweep clicks.
         let mut x = 118.0;
-        while x < 199.0 {
+        while x < 186.0 {
             moved.set((-1, -1));
             click(ui, x, y);
             let (bus, param) = moved.get();
@@ -373,9 +386,11 @@ fn sweep_strip(ui: &MainWindow, moved: &Rc<Cell<(i32, i32)>>) -> Vec<i32> {
     ids
 }
 
-/// Strip 1's turn-over button, probed off `MOOLOOP_MIXER_SNAPSHOT`.
-const TURN_OVER_X: f32 = 192.0;
-const TURN_OVER_Y: f32 = 300.0;
+/// The arrow in strip 1's bottom-right corner, probed off
+/// `MOOLOOP_MIXER_SNAPSHOT`. It is the face's last row rather than an
+/// overlay, so it sits just inside the strip's own bottom padding.
+const TURN_OVER_X: f32 = 194.0;
+const TURN_OVER_Y: f32 = 291.0;
 
 /// Clicking a strip's name plate is the gesture that points the device rack at
 /// that bus. If it stops reporting, the mixer becomes a display.

@@ -77,8 +77,22 @@ export component ToolButton inherits Rectangle {
     in property <color> active-color: Theme.accent-active;
     callback clicked;
 
-    min-width: 44px;
-    min-height: 24px;
+    // A toolbar button's *comfortable* size, not a floor every use has to
+    // live with. Slint takes the stricter of a component's constraint and
+    // its instance's, so a `min-height: 24px` here could not be relaxed:
+    // thirty-one sites in this interface ask a `ToolButton` for something
+    // smaller -- a rack row's bypass dot, a send's remove, the strip's
+    // in-and-out switches -- and every one of them was silently getting 24.
+    // Found 2026-09-11, when the redrawn mixer strip's column of four
+    // controls came out 24px taller than it asked for and pushed the
+    // analog-sum switch off the bottom of the face.
+    //
+    // The *preferred* size is unchanged, which is what a toolbar gets: a
+    // button that states no size of its own still comes out 44 by 24.
+    min-width: 16px;
+    min-height: 16px;
+    preferred-width: 44px;
+    preferred-height: 24px;
     border-radius: Theme.radius-md;
     border-width: (tap.has-hover || button-keyboard.has-focus) && root.enabled ? 1px : 0px;
     border-color: button-keyboard.has-focus ? Theme.focus : Theme.border;
@@ -2109,7 +2123,14 @@ export component MixerFader inherits Rectangle {
     private property <length> cap-height: 16px;
 
     width: 30px;
-    min-height: 100px;
+    // 80 rather than 100, lowered 2026-09-11 when the redrawn mixer strip
+    // could not fit its own face into the room a 200px dock leaves. The
+    // floor exists so a fader is never a stub; eighty pixels is still a
+    // fader, and a constraint declared here **cannot be relaxed by an
+    // instance** -- Slint takes the stricter of the two -- so this is the
+    // only place it could come down. `MixerMetrics.fader-floor` is the
+    // strip's own reading of the same number.
+    min-height: 80px;
     accessible-role: slider;
     accessible-label: root.tooltip;
     accessible-value: root.value-text;

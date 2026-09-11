@@ -1,6 +1,6 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { ConsoleButton, MixerFader, MiniKnob, MuteButton, ParameterFader, PickerChip, SectionLabel, ToolButton } from "controls.slint";
+import { ConsoleButton, MixerFader, MiniKnob, MuteButton, ParameterFader, PickerChip, SectionLabel, SoloButton, ToolButton } from "controls.slint";
 import { NameField } from "toolbar.slint";
 import { GainMath } from "gain.slint";
 import { ChannelMeter } from "meters.slint";
@@ -23,11 +23,15 @@ import { StripRow, StripSections } from "strip.slint";
 // absence is what says "pinned" without a word for it.
 export component StripRackRow inherits Rectangle {
     in property <StripRow> strip;
+    /// Which track this row belongs to, for the lamps `StripMeters`
+    /// publishes.
+    in property <int> track: -1;
     in property <string> name;
     in property <bool> muted;
     callback moved(int, float);
     callback switched(int, bool);
     callback voicing-picked(int);
+    callback point-dragged(int, float, float);
 
     // Three units. Two is what the bus's own face needs for an output stage
     // and its routing; the strip is four sections and three is the width at
@@ -45,9 +49,12 @@ export component StripRackRow inherits Rectangle {
         width: parent.width - 16px;
         height: parent.height - DeviceRackMetrics.header-height - 16px;
         strip: root.strip;
+        track: root.track;
+        wide: true;
         moved(id, value) => { root.moved(id, value); }
         switched(id, on) => { root.switched(id, on); }
         voicing-picked(index) => { root.voicing-picked(index); }
+        point-dragged(band, hz, gain) => { root.point-dragged(band, hz, gain); }
     }
 
     DeviceHeader {
@@ -84,6 +91,7 @@ export component BusDeviceFace inherits Rectangle {
     in property <float> right-db: -60;
     in property <bool> console;
     in property <bool> polarity;
+    in property <bool> solo;
     in property <bool> can-remove: true;
     in property <[MixerSendRow]> sends;
     // Which tracks this one may send to. The same mask the output picker
@@ -102,6 +110,7 @@ export component BusDeviceFace inherits Rectangle {
     callback output-picked(int);
     callback console-toggled();
     callback polarity-toggled();
+    callback solo-toggled();
 
     VerticalLayout {
         padding: 8px;
@@ -174,6 +183,12 @@ export component BusDeviceFace inherits Rectangle {
                         MuteButton {
                             muted: root.muted;
                             clicked => { root.mute-toggled(); }
+                        }
+                        // The mixer strip carries this too: no control
+                        // belongs to only one of the two faces.
+                        if !root.is-master : SoloButton {
+                            soloed: root.solo;
+                            clicked => { root.solo-toggled(); }
                         }
                         // The mixer strip carries this too, in the same
                         // column beside mute: no control belongs to only one

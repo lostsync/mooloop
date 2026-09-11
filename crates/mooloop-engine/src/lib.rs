@@ -845,6 +845,12 @@ impl EngineHandle {
         self.bus_meters.take(bus)
     }
 
+    /// Read and clear how much gain reduction a track's channel strip took,
+    /// in dB as a positive amount. Zero while its compressor is out.
+    pub fn take_strip_reduction(&self, bus: usize) -> f32 {
+        self.bus_meters.take_reduction(bus)
+    }
+
     /// Read and clear a device's held input/output peaks. `target` addresses
     /// channels and buses in one space: a channel is its own index, a bus is
     /// `MAX_CHANNELS + bus index`. Stage 0 is the source; effect slots follow.
