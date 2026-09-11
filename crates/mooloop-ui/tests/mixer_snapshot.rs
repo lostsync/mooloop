@@ -127,19 +127,19 @@ fn demo_strip() -> StripRow {
     };
     params.bands[0] = StripBand {
         kind: EqBandKind::HighShelf,
-        frequency_hz: 6_000.0,
+        position: 1,
         gain_db: 3.5,
         q: 0.7,
     };
     params.bands[1] = StripBand {
         kind: EqBandKind::Bell,
-        frequency_hz: 2_400.0,
+        position: 3,
         gain_db: -4.0,
         q: 1.8,
     };
     params.bands[3] = StripBand {
         kind: EqBandKind::LowShelf,
-        frequency_hz: 90.0,
+        position: 1,
         gain_db: 5.0,
         q: 0.8,
     };

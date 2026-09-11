@@ -20,8 +20,7 @@
 use mooloop_core::gain::MIN_DB as METER_FLOOR_DB;
 use mooloop_core::strip::{
     strip_band_param, StripParams, STRIP_BAND_FREQ, STRIP_BAND_GAIN, STRIP_BAND_KIND, STRIP_BAND_Q,
-    STRIP_BAND_STRIDE, STRIP_COMP_ATTACK_MS, STRIP_COMP_IN, STRIP_COMP_IN_TRIM_DB,
-    STRIP_COMP_KNEE_DB, STRIP_COMP_MAKEUP_DB, STRIP_COMP_MIX, STRIP_COMP_RATIO,
+    STRIP_BAND_STRIDE, STRIP_COMP_ATTACK_MS, STRIP_COMP_IN, STRIP_COMP_KNEE_DB, STRIP_COMP_MAKEUP_DB, STRIP_COMP_MIX, STRIP_COMP_RATIO,
     STRIP_COMP_RELEASE_MS, STRIP_COMP_THRESHOLD_DB, STRIP_DRIVE_DB, STRIP_EQ_BANDS, STRIP_EQ_IN,
     STRIP_FIRST, STRIP_PRE_IN, STRIP_VOICING,
 };
@@ -66,7 +65,6 @@ fn the_faces_table_is_the_engines_table() {
         (spec.get_comp_in(), STRIP_COMP_IN),
         (spec.get_threshold_db(), STRIP_COMP_THRESHOLD_DB),
         (spec.get_ratio(), STRIP_COMP_RATIO),
-        (spec.get_in_trim_db(), STRIP_COMP_IN_TRIM_DB),
         (spec.get_attack_ms(), STRIP_COMP_ATTACK_MS),
         (spec.get_release_ms(), STRIP_COMP_RELEASE_MS),
         (spec.get_knee_db(), STRIP_COMP_KNEE_DB),
@@ -279,7 +277,6 @@ fn every_strip_parameter_is_addressed_by_a_face() {
         "StripSpec.comp-in",
         "StripSpec.threshold-db",
         "StripSpec.ratio",
-        "StripSpec.in-trim-db",
         "StripSpec.attack-ms",
         "StripSpec.release-ms",
         "StripSpec.knee-db",

@@ -28,6 +28,16 @@
 //! (see the step doc), and when they become ones the two tables should be one
 //! table. Leaving the gap is what makes that a merge rather than a renumber
 //! of ids automation has already persisted.
+//!
+//! The compressor's ids **were** renumbered once, on 2026-09-11, when Adam
+//! took the input trim off the face -- *"no input gain"* -- and the five
+//! below it moved down to close the hole. That was safe precisely because
+//! nothing persists one of these: a project stores named fields, and a strip
+//! parameter is not an automation destination yet. It stops being safe the
+//! day it becomes one, and from then on the rule
+//! [`crate::ParamDescriptor`] states applies -- append, never renumber. The
+//! hole matters because `strip.slint` finds a descriptor by arithmetic on
+//! its position, not by search.
 
 use crate::effect::{EqBandKind, EqQProfile, ParamCurve, ParamDescriptor, PreampVoicing};
 
@@ -58,12 +68,11 @@ pub const STRIP_BAND_KIND: u32 = 3;
 pub const STRIP_COMP_IN: u32 = STRIP_BAND_BASE + STRIP_EQ_BANDS as u32 * STRIP_BAND_STRIDE;
 pub const STRIP_COMP_THRESHOLD_DB: u32 = STRIP_COMP_IN + 1;
 pub const STRIP_COMP_RATIO: u32 = STRIP_COMP_IN + 2;
-pub const STRIP_COMP_IN_TRIM_DB: u32 = STRIP_COMP_IN + 3;
-pub const STRIP_COMP_ATTACK_MS: u32 = STRIP_COMP_IN + 4;
-pub const STRIP_COMP_RELEASE_MS: u32 = STRIP_COMP_IN + 5;
-pub const STRIP_COMP_KNEE_DB: u32 = STRIP_COMP_IN + 6;
-pub const STRIP_COMP_MIX: u32 = STRIP_COMP_IN + 7;
-pub const STRIP_COMP_MAKEUP_DB: u32 = STRIP_COMP_IN + 8;
+pub const STRIP_COMP_ATTACK_MS: u32 = STRIP_COMP_IN + 3;
+pub const STRIP_COMP_RELEASE_MS: u32 = STRIP_COMP_IN + 4;
+pub const STRIP_COMP_KNEE_DB: u32 = STRIP_COMP_IN + 5;
+pub const STRIP_COMP_MIX: u32 = STRIP_COMP_IN + 6;
+pub const STRIP_COMP_MAKEUP_DB: u32 = STRIP_COMP_IN + 7;
 
 /// The id of one field of one band.
 pub const fn strip_band_param(band: usize, field: u32) -> u32 {
@@ -109,9 +118,35 @@ pub const fn strip_band_shelf(band: usize) -> EqBandKind {
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct StripBand {
     pub kind: EqBandKind,
-    pub frequency_hz: f32,
+    /// **Which of this band's positions is selected, not a frequency.**
+    ///
+    /// A band has [`STRIP_BAND_POSITIONS`] of them and the voicing decides
+    /// what each one is worth in hertz -- `mooloop_dsp::strip` holds the
+    /// tables. Adam, 2026-09-11, settling the thing this file had refused:
+    /// *"i want to have a selectable range of freqs in the eq bands, not
+    /// fully parametric. you didnt want to do that before bc it would make
+    /// the labels lie... i say we dont label. we just have N
+    /// positions/band and they're selectable."*
+    ///
+    /// Which is why it does not break "a voicing selects laws, never
+    /// values": the face shows a *position*, and 3 of 7 is true under every
+    /// voicing. The hertz arrives on hover, from the voicing that is
+    /// running.
+    ///
+    /// Defaulted, because it replaced a `frequency_hz` that songs saved on
+    /// 2026-09-11 may hold: serde ignores the old field and such a band
+    /// opens at the middle of its own range. See `docs/PROJECT_FORMAT.md`.
+    #[serde(default = "default_band_position")]
+    pub position: u8,
     pub gain_db: f32,
     pub q: f32,
+}
+
+/// The middle position, which is every band's default whatever the voicing
+/// -- so switching a voicing moves what a position is worth and never which
+/// position a band is on.
+fn default_band_position() -> u8 {
+    2
 }
 
 /// The four sections, as a track persists them.
@@ -138,10 +173,6 @@ pub struct StripParams {
     pub comp_in: bool,
     pub threshold_db: f32,
     pub ratio: f32,
-    /// Drive into the compressor: it moves the detector and the level
-    /// together, which is what an input trim on a desk does. The dry side of
-    /// `mix` does not see it, so `mix` at 0 is the signal as it arrived.
-    pub in_trim_db: f32,
     pub attack_ms: f32,
     pub release_ms: f32,
     pub knee_db: f32,
@@ -152,9 +183,19 @@ pub struct StripParams {
     pub makeup_db: f32,
 }
 
-/// Spelled once and read by both the defaults and the descriptor table,
-/// which would otherwise be the same four numbers written twice.
-const DEFAULT_FREQUENCIES: [f32; STRIP_EQ_BANDS] = [8_000.0, 3_000.0, 400.0, 100.0];
+/// How many frequency positions each band offers, outer bands first.
+///
+/// Five on the shelves and seven on the mids, Adam's 2026-09-11 ruling and
+/// the idiomatic shape: a low shelf does not need seven choices between
+/// 20 and 800 Hz, and a mid does. `mooloop_dsp::strip`'s tables are held to
+/// these lengths for every voicing, so a position means the same *slot* in
+/// all four and only its frequency changes.
+pub const STRIP_BAND_POSITIONS: [u8; STRIP_EQ_BANDS] = [5, 7, 7, 5];
+
+/// The position each band arrives on: the middle of its own set. Read by
+/// both the defaults and the descriptor table, which would otherwise be the
+/// same four numbers written twice.
+const DEFAULT_POSITIONS: [u8; STRIP_EQ_BANDS] = [2, 3, 3, 2];
 const DEFAULT_QS: [f32; STRIP_EQ_BANDS] = [0.707, 0.9, 0.9, 0.707];
 /// `Type` positions: the two outer bands arrive as their shelf, the two mid
 /// bands as bells.
@@ -168,7 +209,7 @@ impl Default for StripParams {
             } else {
                 EqBandKind::Bell
             },
-            frequency_hz: DEFAULT_FREQUENCIES[index],
+            position: DEFAULT_POSITIONS[index],
             gain_db: 0.0,
             q: DEFAULT_QS[index],
         };
@@ -181,7 +222,6 @@ impl Default for StripParams {
             comp_in: false,
             threshold_db: -18.0,
             ratio: 3.0,
-            in_trim_db: 0.0,
             attack_ms: 10.0,
             release_ms: 120.0,
             knee_db: 6.0,
@@ -242,7 +282,7 @@ impl StripParams {
         if let Some((index, field)) = strip_band_of(id) {
             let band = self.bands.get(index)?;
             return Some(match field {
-                STRIP_BAND_FREQ => band.frequency_hz,
+                STRIP_BAND_FREQ => band.position as f32,
                 STRIP_BAND_GAIN => band.gain_db,
                 STRIP_BAND_Q => band.q,
                 STRIP_BAND_KIND => switch_to_f32(band.kind != EqBandKind::Bell),
@@ -257,7 +297,6 @@ impl StripParams {
             STRIP_COMP_IN => switch_to_f32(self.comp_in),
             STRIP_COMP_THRESHOLD_DB => self.threshold_db,
             STRIP_COMP_RATIO => self.ratio,
-            STRIP_COMP_IN_TRIM_DB => self.in_trim_db,
             STRIP_COMP_ATTACK_MS => self.attack_ms,
             STRIP_COMP_RELEASE_MS => self.release_ms,
             STRIP_COMP_KNEE_DB => self.knee_db,
@@ -288,7 +327,7 @@ impl StripParams {
                 return false;
             };
             match field {
-                STRIP_BAND_FREQ => band.frequency_hz = value,
+                STRIP_BAND_FREQ => band.position = value.round().max(0.0) as u8,
                 STRIP_BAND_GAIN => band.gain_db = value,
                 STRIP_BAND_Q => band.q = value,
                 STRIP_BAND_KIND => {
@@ -310,7 +349,6 @@ impl StripParams {
             STRIP_COMP_IN => self.comp_in = switch_from_f32(value),
             STRIP_COMP_THRESHOLD_DB => self.threshold_db = value,
             STRIP_COMP_RATIO => self.ratio = value,
-            STRIP_COMP_IN_TRIM_DB => self.in_trim_db = value,
             STRIP_COMP_ATTACK_MS => self.attack_ms = value,
             STRIP_COMP_RELEASE_MS => self.release_ms = value,
             STRIP_COMP_KNEE_DB => self.knee_db = value,
@@ -336,17 +374,6 @@ fn switch_from_f32(value: f32) -> bool {
     value >= 0.5
 }
 
-/// Frequency reach per band. Wide and overlapping on purpose: a high shelf
-/// at 1 kHz and a low shelf at 500 Hz are both ordinary things to ask a desk
-/// for, and a band that cannot leave its own octave is a band you have to
-/// plan around.
-const BAND_RANGES: [(f32, f32); STRIP_EQ_BANDS] = [
-    (1_000.0, 20_000.0),
-    (400.0, 16_000.0),
-    (40.0, 2_000.0),
-    (20.0, 800.0),
-];
-
 /// Top of a band's Q knob. The outer two reach 2, which is where a cookbook
 /// shelf stops being a shelf; the mid two reach 8, which is a bell narrow
 /// enough to notch with. See [`StripBand`].
@@ -357,7 +384,7 @@ const BAND_Q_MAX: [f32; STRIP_EQ_BANDS] = [2.0, 8.0, 8.0, 2.0];
 /// rows a reader cannot see is not a table anybody will check a face
 /// against. Every *number* in them still comes from the four arrays above,
 /// so a default lives in one place.
-static DESCRIPTORS: [ParamDescriptor; 4 + STRIP_EQ_BANDS * 4 + 9] = [
+static DESCRIPTORS: [ParamDescriptor; 4 + STRIP_EQ_BANDS * 4 + 8] = [
     ParamDescriptor {
         id: STRIP_VOICING,
         name: "Voicing",
@@ -397,11 +424,14 @@ static DESCRIPTORS: [ParamDescriptor; 4 + STRIP_EQ_BANDS * 4 + 9] = [
     ParamDescriptor {
         id: strip_band_param(0, STRIP_BAND_FREQ),
         name: "HS Freq",
-        unit: "Hz",
-        min: BAND_RANGES[0].0,
-        max: BAND_RANGES[0].1,
-        curve: ParamCurve::Exponential,
-        default: DEFAULT_FREQUENCIES[0],
+        // A position, not a frequency: the unit is empty because there is
+        // no unit to state. What the position is worth in hertz is the
+        // voicing's, and `mooloop_dsp::strip::band_frequency` answers it.
+        unit: "",
+        min: 0.0,
+        max: (STRIP_BAND_POSITIONS[0] - 1) as f32,
+        curve: ParamCurve::Stepped(STRIP_BAND_POSITIONS[0] as u16),
+        default: DEFAULT_POSITIONS[0] as f32,
     },
     ParamDescriptor {
         id: strip_band_param(0, STRIP_BAND_GAIN),
@@ -433,11 +463,14 @@ static DESCRIPTORS: [ParamDescriptor; 4 + STRIP_EQ_BANDS * 4 + 9] = [
     ParamDescriptor {
         id: strip_band_param(1, STRIP_BAND_FREQ),
         name: "HM Freq",
-        unit: "Hz",
-        min: BAND_RANGES[1].0,
-        max: BAND_RANGES[1].1,
-        curve: ParamCurve::Exponential,
-        default: DEFAULT_FREQUENCIES[1],
+        // A position, not a frequency: the unit is empty because there is
+        // no unit to state. What the position is worth in hertz is the
+        // voicing's, and `mooloop_dsp::strip::band_frequency` answers it.
+        unit: "",
+        min: 0.0,
+        max: (STRIP_BAND_POSITIONS[1] - 1) as f32,
+        curve: ParamCurve::Stepped(STRIP_BAND_POSITIONS[1] as u16),
+        default: DEFAULT_POSITIONS[1] as f32,
     },
     ParamDescriptor {
         id: strip_band_param(1, STRIP_BAND_GAIN),
@@ -469,11 +502,14 @@ static DESCRIPTORS: [ParamDescriptor; 4 + STRIP_EQ_BANDS * 4 + 9] = [
     ParamDescriptor {
         id: strip_band_param(2, STRIP_BAND_FREQ),
         name: "LM Freq",
-        unit: "Hz",
-        min: BAND_RANGES[2].0,
-        max: BAND_RANGES[2].1,
-        curve: ParamCurve::Exponential,
-        default: DEFAULT_FREQUENCIES[2],
+        // A position, not a frequency: the unit is empty because there is
+        // no unit to state. What the position is worth in hertz is the
+        // voicing's, and `mooloop_dsp::strip::band_frequency` answers it.
+        unit: "",
+        min: 0.0,
+        max: (STRIP_BAND_POSITIONS[2] - 1) as f32,
+        curve: ParamCurve::Stepped(STRIP_BAND_POSITIONS[2] as u16),
+        default: DEFAULT_POSITIONS[2] as f32,
     },
     ParamDescriptor {
         id: strip_band_param(2, STRIP_BAND_GAIN),
@@ -505,11 +541,14 @@ static DESCRIPTORS: [ParamDescriptor; 4 + STRIP_EQ_BANDS * 4 + 9] = [
     ParamDescriptor {
         id: strip_band_param(3, STRIP_BAND_FREQ),
         name: "LS Freq",
-        unit: "Hz",
-        min: BAND_RANGES[3].0,
-        max: BAND_RANGES[3].1,
-        curve: ParamCurve::Exponential,
-        default: DEFAULT_FREQUENCIES[3],
+        // A position, not a frequency: the unit is empty because there is
+        // no unit to state. What the position is worth in hertz is the
+        // voicing's, and `mooloop_dsp::strip::band_frequency` answers it.
+        unit: "",
+        min: 0.0,
+        max: (STRIP_BAND_POSITIONS[3] - 1) as f32,
+        curve: ParamCurve::Stepped(STRIP_BAND_POSITIONS[3] as u16),
+        default: DEFAULT_POSITIONS[3] as f32,
     },
     ParamDescriptor {
         id: strip_band_param(3, STRIP_BAND_GAIN),
@@ -564,15 +603,6 @@ static DESCRIPTORS: [ParamDescriptor; 4 + STRIP_EQ_BANDS * 4 + 9] = [
         max: 20.0,
         curve: ParamCurve::Exponential,
         default: 3.0,
-    },
-    ParamDescriptor {
-        id: STRIP_COMP_IN_TRIM_DB,
-        name: "In Trim",
-        unit: "dB",
-        min: -24.0,
-        max: 24.0,
-        curve: ParamCurve::Linear,
-        default: 0.0,
     },
     ParamDescriptor {
         id: STRIP_COMP_ATTACK_MS,

@@ -52,6 +52,12 @@ export struct StripRow {
     eq-in: bool,
     // Four bands, one entry each. Parallel arrays rather than a struct per
     // band so one repeater can draw a row from an index.
+    //
+    // **The knob's value is the position; the hertz is the readout.** A band
+    // is stepped and the voicing decides what each position is worth, so
+    // these two are a control and a reading of it rather than one value
+    // twice -- see `mooloop_dsp::strip::StripEqTable`.
+    band-position: [float],
     band-frequency-hz: [float],
     band-gain-db: [float],
     band-q: [float],
@@ -62,7 +68,6 @@ export struct StripRow {
     comp-in: bool,
     threshold-db: float,
     ratio: float,
-    in-trim-db: float,
     attack-ms: float,
     release-ms: float,
     knee-db: float,
@@ -97,7 +102,6 @@ export global StripSpec {
     in-out property <int> comp-in;
     in-out property <int> threshold-db;
     in-out property <int> ratio;
-    in-out property <int> in-trim-db;
     in-out property <int> attack-ms;
     in-out property <int> release-ms;
     in-out property <int> knee-db;
@@ -156,7 +160,11 @@ component StripKnob inherits MiniKnob {
     // The caller owns the value: it comes from a model row, so the knob must
     // not keep its own copy or the first drag drops the binding.
     controlled: true;
-    value-text: StripSpec.format(root.param, root.natural);
+    // The descriptor's own units, unless the caller has something truer to
+    // say: a stepped band's knob holds a position and its reading is the
+    // frequency that position selects, which only the voicing knows.
+    in property <string> readout;
+    value-text: root.readout == "" ? StripSpec.format(root.param, root.natural) : root.readout;
 }
 
 // A section's `in` switch, which is the whole of "free while it is out".
@@ -276,6 +284,14 @@ export component StripEqPage inherits Rectangle {
     in property <bool> wide;
     callback moved(int, float);
     callback switched(int, bool);
+    /// A point dragged on the plot, as a band and the hertz and decibels it
+    /// was dragged to.
+    ///
+    /// Hertz rather than a position, because snapping to the nearest one is
+    /// `StripEqTable::nearest`'s job and teaching the markup to do it would
+    /// be that arithmetic written twice -- in log distance, which is the
+    /// part that would drift.
+    callback point-dragged(int, float, float);
 
     VerticalLayout {
         spacing: 3px;
@@ -305,9 +321,7 @@ export component StripEqPage inherits Rectangle {
             spectrum-visible: false;
             opacity: root.strip.eq-in ? 1.0 : 0.45;
             point-dragged(band, frequency, gain) => {
-                root.moved(StripSpec.band(band, StripSpec.band-frequency),
-                    20 * pow(1000, clamp(frequency, 0, 1)));
-                root.moved(StripSpec.band(band, StripSpec.band-gain), gain * 36 - 18);
+                root.point-dragged(band, 20 * pow(1000, clamp(frequency, 0, 1)), gain * 36 - 18);
             }
         }
         for band[index] in root.strip.band-gain-db : HorizontalLayout {
@@ -337,10 +351,15 @@ export component StripEqPage inherits Rectangle {
             }
             StripKnob {
                 param: StripSpec.band(index, StripSpec.band-frequency);
-                natural: root.strip.band-frequency-hz[index];
+                // The position, stepped: the knob has as many stops as the
+                // band has, and what each one is worth in hertz is the
+                // voicing's to decide.
+                natural: root.strip.band-position[index];
+                readout: NoteFormat.frequency-value(root.strip.band-frequency-hz[index]);
                 size: root.wide ? 22px : 20px;
                 enabled: root.strip.eq-in;
-                hint: "This band's frequency.";
+                hint: "Which of this band's frequencies is selected. The voicing decides "
+                    + "what each position is worth, so the same stop moves when it changes.";
                 changed(v) => { root.moved(self.param, v); }
             }
             StripKnob {
@@ -403,7 +422,7 @@ export component StripCompPage inherits Rectangle {
             opacity: root.strip.comp-in ? 1.0 : 0.45;
             threshold-dragged(db) => { root.moved(StripSpec.threshold-db, db); }
         }
-        // Three rows of three, the order the mockup draws them in.
+        // The order the mockup draws them in.
         HorizontalLayout {
             spacing: 2px;
             alignment: center;
@@ -421,16 +440,6 @@ export component StripCompPage inherits Rectangle {
                 size: root.wide ? 24px : 20px;
                 enabled: root.strip.comp-in;
                 hint: "Ratio at the knee. Above it the voicing decides how the line bends.";
-                changed(v) => { root.moved(self.param, v); }
-            }
-            StripKnob {
-                param: StripSpec.in-trim-db;
-                natural: root.strip.in-trim-db;
-                bipolar-value: true;
-                size: root.wide ? 24px : 20px;
-                enabled: root.strip.comp-in;
-                hint: "Drive into the compressor: it moves the detector and the level "
-                    + "together. The dry side of the mix does not see it.";
                 changed(v) => { root.moved(self.param, v); }
             }
         }

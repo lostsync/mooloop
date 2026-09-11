@@ -29,8 +29,7 @@ use mooloop_core::gain::{linear_to_db, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::log::Level;
 use mooloop_core::strip::{
     strip_band_param, StripParams, STRIP_BAND_FREQ, STRIP_BAND_GAIN, STRIP_BAND_KIND, STRIP_BAND_Q,
-    STRIP_BAND_STRIDE, STRIP_COMP_ATTACK_MS, STRIP_COMP_IN, STRIP_COMP_IN_TRIM_DB,
-    STRIP_COMP_KNEE_DB, STRIP_COMP_MAKEUP_DB, STRIP_COMP_MIX, STRIP_COMP_RATIO,
+    STRIP_BAND_STRIDE, STRIP_COMP_ATTACK_MS, STRIP_COMP_IN, STRIP_COMP_KNEE_DB, STRIP_COMP_MAKEUP_DB, STRIP_COMP_MIX, STRIP_COMP_RATIO,
     STRIP_COMP_RELEASE_MS, STRIP_COMP_THRESHOLD_DB, STRIP_DRIVE_DB, STRIP_EQ_BANDS, STRIP_EQ_IN,
     STRIP_FIRST, STRIP_PRE_IN, STRIP_VOICING,
 };
@@ -173,13 +172,19 @@ const STRIP_CURVE_SAMPLES: usize = 64;
 /// cannot compute: the response plot's flat band array, and the compressor's
 /// curve as the voicing is actually bending it.
 pub fn strip_row(params: &StripParams) -> StripRow {
+    let table = mooloop_dsp::strip::strip_voicing(params.voicing).eq;
     let mut band_data = Vec::with_capacity(STRIP_EQ_BANDS * 5);
+    let mut positions = Vec::with_capacity(STRIP_EQ_BANDS);
     let mut frequencies = Vec::with_capacity(STRIP_EQ_BANDS);
     let mut gains = Vec::with_capacity(STRIP_EQ_BANDS);
     let mut qs = Vec::with_capacity(STRIP_EQ_BANDS);
     let mut shelves = Vec::with_capacity(STRIP_EQ_BANDS);
     for (index, band) in params.bands.iter().enumerate() {
-        frequencies.push(band.frequency_hz);
+        // The knob holds the position and reads out the hertz, which only
+        // the voicing's table knows.
+        let frequency_hz = table.frequency(index, band.position);
+        positions.push(band.position as f32);
+        frequencies.push(frequency_hz);
         gains.push(band.gain_db);
         qs.push(band.q);
         shelves.push(band.kind != mooloop_core::EqBandKind::Bell);
@@ -188,7 +193,7 @@ pub fn strip_row(params: &StripParams) -> StripRow {
             // device's rows use: frequency and gain normalized over the
             // display's axes, then Q, then whether to draw the band at all,
             // then the `EqBandKind` index.
-            (band.frequency_hz / 20.0).ln() / 1000.0_f32.ln(),
+            (frequency_hz / 20.0).ln() / 1000.0_f32.ln(),
             (band.gain_db + 18.0) / 36.0,
             // The Q that is *running*, after the voicing's law -- which is
             // the condition that makes a law-selecting voicing honest, since
@@ -203,6 +208,7 @@ pub fn strip_row(params: &StripParams) -> StripRow {
         pre_in: params.pre_in,
         drive_db: params.drive_db,
         eq_in: params.eq_in,
+        band_position: positions.as_slice().into(),
         band_frequency_hz: frequencies.as_slice().into(),
         band_gain_db: gains.as_slice().into(),
         band_q: qs.as_slice().into(),
@@ -211,7 +217,6 @@ pub fn strip_row(params: &StripParams) -> StripRow {
         comp_in: params.comp_in,
         threshold_db: params.threshold_db,
         ratio: params.ratio,
-        in_trim_db: params.in_trim_db,
         attack_ms: params.attack_ms,
         release_ms: params.release_ms,
         knee_db: params.knee_db,
@@ -271,7 +276,6 @@ pub fn install_strip_spec(window: &MainWindow) {
     spec.set_comp_in(STRIP_COMP_IN as i32);
     spec.set_threshold_db(STRIP_COMP_THRESHOLD_DB as i32);
     spec.set_ratio(STRIP_COMP_RATIO as i32);
-    spec.set_in_trim_db(STRIP_COMP_IN_TRIM_DB as i32);
     spec.set_attack_ms(STRIP_COMP_ATTACK_MS as i32);
     spec.set_release_ms(STRIP_COMP_RELEASE_MS as i32);
     spec.set_knee_db(STRIP_COMP_KNEE_DB as i32);

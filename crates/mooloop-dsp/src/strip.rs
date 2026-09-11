@@ -37,7 +37,7 @@
 //! mockup ruled out.
 
 use mooloop_core::strip::{
-    strip_band_of, StripParams, STRIP_COMP_ATTACK_MS, STRIP_COMP_IN, STRIP_COMP_IN_TRIM_DB,
+    strip_band_of, StripParams, STRIP_COMP_ATTACK_MS, STRIP_COMP_IN,
     STRIP_COMP_MAKEUP_DB, STRIP_COMP_MIX, STRIP_COMP_RATIO, STRIP_COMP_RELEASE_MS,
     STRIP_COMP_THRESHOLD_DB, STRIP_DRIVE_DB, STRIP_EQ_BANDS, STRIP_EQ_IN, STRIP_PRE_IN,
     STRIP_VOICING,
@@ -51,7 +51,7 @@ use crate::node::DynamicsFrame;
 use crate::preamp::Preamp;
 use crate::smooth::Smoothed;
 
-/// Drive, trim, mix and makeup all scale amplitude directly, so a step in
+/// Drive, mix and makeup all scale amplitude directly, so a step in
 /// any of them is a click. The same constant the dynamics effects and the
 /// preamp device use, for the same reason.
 const PARAM_SMOOTH_S: f32 = 0.005;
@@ -81,6 +81,123 @@ const BEND_RANGE_DB: f32 = 24.0;
 const PROGRAMME_RELEASE_SCALE: f32 = 8.0;
 const PROGRAMME_CHARGE_SCALE: f32 = 2.0;
 
+/// One voicing's EQ frequencies: the hertz behind each band's positions,
+/// outer bands first and [`mooloop_core::strip::STRIP_BAND_POSITIONS`] long.
+///
+/// **A band is stepped, and this is what the steps are worth.** Adam,
+/// 2026-09-11: *"i want to have a selectable range of freqs in the eq bands,
+/// not fully parametric... i say we dont label. we just have N
+/// positions/band and they're selectable. tooltip/statusbar can carry the
+/// specific frequency information to the user on hover."*
+///
+/// That is what lets a voicing own the frequencies without breaking the rule
+/// this module opens on. A voicing may not move a number the face shows; the
+/// face shows a *position*, and 3 of 7 is true under all four. What the
+/// position is worth arrives on hover, from the voicing that is running --
+/// so `Iron` can sit a mid at 2.2 kHz where `Moo` puts it at 3 without
+/// anything on screen becoming false.
+///
+/// Switching voicing therefore keeps the position and changes the frequency,
+/// which is what swapping a channel module on a desk does.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StripEqTable {
+    pub bands: [&'static [f32]; STRIP_EQ_BANDS],
+}
+
+impl StripEqTable {
+    /// The frequency this band's `position` selects, clamped into the table
+    /// rather than wrapped: a stale position from a shorter table lands on
+    /// the nearest end, which is audible and sane, where a wrap would move a
+    /// high shelf to the bottom of the band.
+    pub fn frequency(&self, band: usize, position: u8) -> f32 {
+        let row = self.bands[band.min(STRIP_EQ_BANDS - 1)];
+        row[(position as usize).min(row.len() - 1)]
+    }
+
+    /// The position nearest `hz`, in log distance because that is how a
+    /// frequency is heard and how the response plot's axis is spaced.
+    ///
+    /// For the plot's drag: a dragged point snaps to a position rather than
+    /// moving between them, which is the feedback a stepped band should give.
+    pub fn nearest(&self, band: usize, hz: f32) -> u8 {
+        let row = self.bands[band.min(STRIP_EQ_BANDS - 1)];
+        let target = hz.max(1.0).ln();
+        let mut best = 0usize;
+        let mut best_distance = f32::INFINITY;
+        for (index, frequency) in row.iter().enumerate() {
+            let distance = (frequency.ln() - target).abs();
+            if distance < best_distance {
+                best_distance = distance;
+                best = index;
+            }
+        }
+        best as u8
+    }
+}
+
+/// `Moo`'s positions: an even, uncoloured spread, with the middle of each
+/// band landing where the strip's own default frequency used to be. The
+/// voicing that is not pretending to be furniture does not borrow anyone's
+/// switch positions.
+pub const MOO_EQ: StripEqTable = StripEqTable {
+    bands: [
+        &[4_000.0, 6_000.0, 8_000.0, 12_000.0, 16_000.0],
+        &[800.0, 1_200.0, 2_000.0, 3_000.0, 4_500.0, 6_000.0, 9_000.0],
+        &[100.0, 180.0, 280.0, 400.0, 600.0, 900.0, 1_400.0],
+        &[40.0, 65.0, 100.0, 150.0, 220.0],
+    ],
+};
+
+/// `Grip`'s positions, from the SSL 4000's own knob.
+///
+/// Its EQ is continuous, but the knobs are *labelled*, and the low shelf's
+/// five printed marks are exactly `20 / 50 / 100 / 200 / 450` -- so that band
+/// is the desk's rather than a choice. The other three are spreads over the
+/// spans the same panel prints: LMF 200 Hz-2.5 kHz, HMF 600 Hz-7 kHz, HF
+/// 1.5-16 kHz.
+///
+/// Front-panel values, not measurements. The harmonic profiles beside them
+/// came off a spectrum analyser (`spikes/preamp-measure/`); these came off a
+/// photograph of a panel, and the difference is worth knowing when somebody
+/// later wants to defend one of these numbers.
+pub const GRIP_EQ: StripEqTable = StripEqTable {
+    bands: [
+        &[3_000.0, 5_000.0, 8_000.0, 12_000.0, 16_000.0],
+        &[600.0, 1_000.0, 1_500.0, 2_500.0, 3_500.0, 5_000.0, 7_000.0],
+        &[200.0, 300.0, 450.0, 700.0, 1_000.0, 1_600.0, 2_500.0],
+        &[20.0, 50.0, 100.0, 200.0, 450.0],
+    ],
+};
+
+/// `Punch`'s positions, from the API 550A's high band and the UA 610's bass.
+///
+/// `5k / 7k / 10k / 12.5k / 15k` is the 550A's HF switch, five for five, and
+/// the low shelf is built around the 610's `70 / 100 / 200`. The two mids are
+/// spreads in the 550A's spirit -- it has five where this has seven.
+pub const PUNCH_EQ: StripEqTable = StripEqTable {
+    bands: [
+        &[5_000.0, 7_000.0, 10_000.0, 12_500.0, 15_000.0],
+        &[800.0, 1_200.0, 1_800.0, 2_500.0, 3_500.0, 5_000.0, 7_000.0],
+        &[100.0, 150.0, 220.0, 300.0, 450.0, 700.0, 1_000.0],
+        &[50.0, 70.0, 100.0, 150.0, 220.0],
+    ],
+};
+
+/// `Iron`'s positions: lower and rounder than the other three, everywhere.
+///
+/// The EMI-derived voicing sits its mids and its top below where the desks
+/// do -- a 2.2 kHz mid rather than 2.5 or 3, a 7 kHz shelf rather than 8 or
+/// 10 -- which is most of what makes the same position sound like a
+/// different module when the voicing changes under it.
+pub const IRON_EQ: StripEqTable = StripEqTable {
+    bands: [
+        &[3_500.0, 5_000.0, 7_000.0, 10_000.0, 14_000.0],
+        &[700.0, 1_000.0, 1_400.0, 2_200.0, 3_200.0, 4_500.0, 6_000.0],
+        &[60.0, 90.0, 140.0, 200.0, 300.0, 480.0, 750.0],
+        &[35.0, 60.0, 90.0, 130.0, 180.0],
+    ],
+};
+
 /// One voicing's laws, as data.
 ///
 /// Every field is a number somebody picked and can re-pick, and none of them
@@ -104,6 +221,8 @@ pub struct StripVoicing {
     /// Strength of the programme-dependent release stage, in `[0, 1]`. 0 is
     /// the knob's release and nothing else.
     pub programme: f32,
+    /// What each of this voicing's band positions is worth in hertz.
+    pub eq: StripEqTable,
 }
 
 impl StripVoicing {
@@ -125,6 +244,7 @@ impl StripVoicing {
 /// `Moo` — the house voicing, and the identity.
 pub const MOO_STRIP: StripVoicing = StripVoicing {
     preamp: crate::preamp::MOO_PREAMP,
+    eq: MOO_EQ,
     proportional_q: false,
     ratio_bend: 0.0,
     programme: 0.0,
@@ -138,6 +258,7 @@ pub const MOO_STRIP: StripVoicing = StripVoicing {
 /// is where its softness is chosen.
 pub const GRIP_STRIP: StripVoicing = StripVoicing {
     preamp: crate::preamp::GRIP_PREAMP,
+    eq: GRIP_EQ,
     proportional_q: true,
     ratio_bend: 0.0,
     programme: 0.15,
@@ -151,6 +272,7 @@ pub const GRIP_STRIP: StripVoicing = StripVoicing {
 /// survives.
 pub const PUNCH_STRIP: StripVoicing = StripVoicing {
     preamp: crate::preamp::PUNCH_PREAMP,
+    eq: PUNCH_EQ,
     proportional_q: true,
     ratio_bend: -0.5,
     programme: 0.35,
@@ -164,6 +286,7 @@ pub const PUNCH_STRIP: StripVoicing = StripVoicing {
 /// that is hard to hear working.
 pub const IRON_STRIP: StripVoicing = StripVoicing {
     preamp: crate::preamp::IRON_PREAMP,
+    eq: IRON_EQ,
     proportional_q: false,
     ratio_bend: 0.6,
     programme: 0.6,
@@ -211,32 +334,29 @@ fn bent_ratio(ratio: f32, over_db: f32, bend: f32) -> f32 {
 /// reading. So the curve is sampled here, by the same two functions the
 /// audio path calls.
 ///
-/// **Every control on the page is in it, including the two that move the
-/// line rather than shape it.** `in trim` drives the detector *and* the wet
-/// path, so it is a compressor working that many decibels earlier than the
-/// threshold alone would say; `mix` blends the result back toward unity, so
-/// at 0 this draws the straight line the section is actually passing. The
-/// first version sampled neither, and drew a section clamping while it was
-/// passing the signal through exactly -- with both knobs sitting under the
-/// plot. The arithmetic below is `process_comp`'s own, per sample of level
-/// instead of per sample of audio.
+/// **Every control on the page is in it, including the one that moves the
+/// line rather than shaping it.** `mix` blends the curve back toward unity,
+/// so at 0 this draws the straight line the section is actually passing --
+/// the first version left it out and drew a section clamping while it passed
+/// the signal through exactly, with the knob that said so under the plot.
+/// The arithmetic below is `process_comp`'s own, per sample of level instead
+/// of per sample of audio.
+///
+/// There were two such controls until 2026-09-11, when the input trim went
+/// with the face Adam redrew: *"no input gain."*
 pub fn static_curve_db(params: &StripParams, floor_db: f32, samples: usize) -> Vec<f32> {
     let voicing = strip_voicing(params.voicing);
     let samples = samples.max(2);
-    let trim = db_to_lin(params.in_trim_db);
     let makeup = db_to_lin(params.makeup_db);
     let mix = params.mix.clamp(0.0, 1.0);
     (0..samples)
         .map(|index| {
             let input_db = floor_db + (-floor_db) * index as f32 / (samples - 1) as f32;
-            // The detector is behind the trim, which is why the knee sits
-            // where it does rather than at the threshold's own reading.
-            let detector_db = input_db + params.in_trim_db;
-            let over = detector_db - params.threshold_db;
+            let over = input_db - params.threshold_db;
             let ratio = bent_ratio(params.ratio, over, voicing.ratio_bend);
             let reduction =
-                compressor_gain_db(detector_db, params.threshold_db, ratio, params.knee_db);
-            let wet = trim * db_to_lin(reduction) * makeup;
+                compressor_gain_db(input_db, params.threshold_db, ratio, params.knee_db);
+            let wet = db_to_lin(reduction) * makeup;
             input_db + lin_to_db((1.0 - mix) + mix * wet)
         })
         .collect()
@@ -293,8 +413,8 @@ impl StripEq {
         for (index, band) in params.bands.iter().enumerate() {
             let live = band.gain_db != 0.0;
             if live {
-                Self::design(&mut self.left[index], *band, voicing, sample_rate);
-                Self::design(&mut self.right[index], *band, voicing, sample_rate);
+                Self::design(&mut self.left[index], index, *band, voicing, sample_rate);
+                Self::design(&mut self.right[index], index, *band, voicing, sample_rate);
                 self.active[self.active_len] = index as u8;
                 self.active_len += 1;
             } else {
@@ -307,19 +427,26 @@ impl StripEq {
         }
     }
 
-    fn design(stage: &mut Biquad, band: StripBand, voicing: &StripVoicing, sample_rate: u32) {
+    fn design(
+        stage: &mut Biquad,
+        index: usize,
+        band: StripBand,
+        voicing: &StripVoicing,
+        sample_rate: u32,
+    ) {
+        let frequency_hz = voicing.eq.frequency(index, band.position);
         match band.kind {
             EqBandKind::Bell => stage.peak(
-                band.frequency_hz,
+                frequency_hz,
                 eq_effective_q(band.q, band.gain_db, voicing.q_profile()),
                 band.gain_db,
                 sample_rate,
             ),
             EqBandKind::LowShelf => {
-                stage.shelf_slope(band.frequency_hz, band.gain_db, band.q, true, sample_rate)
+                stage.shelf_slope(frequency_hz, band.gain_db, band.q, true, sample_rate)
             }
             EqBandKind::HighShelf => {
-                stage.shelf_slope(band.frequency_hz, band.gain_db, band.q, false, sample_rate)
+                stage.shelf_slope(frequency_hz, band.gain_db, band.q, false, sample_rate)
             }
         }
     }
@@ -359,7 +486,6 @@ pub struct Strip {
     programme: EnvelopeFollower,
     threshold: Smoothed,
     ratio: Smoothed,
-    trim: Smoothed,
     mix: Smoothed,
     makeup: Smoothed,
     /// Block extremes, for the face's gain-reduction meter and curve. Same
@@ -386,7 +512,6 @@ impl Strip {
             programme: EnvelopeFollower::new(),
             threshold: smoothed(params.threshold_db),
             ratio: smoothed(params.ratio),
-            trim: smoothed(db_to_linear(params.in_trim_db)),
             mix: smoothed(params.mix),
             makeup: smoothed(db_to_linear(params.makeup_db)),
             detector_peak: 0.0,
@@ -431,7 +556,6 @@ impl Strip {
     fn snap_comp(&mut self) {
         self.threshold.reset_to(self.params.threshold_db);
         self.ratio.reset_to(self.params.ratio);
-        self.trim.reset_to(db_to_linear(self.params.in_trim_db));
         self.mix.reset_to(self.params.mix);
         self.makeup.reset_to(db_to_linear(self.params.makeup_db));
     }
@@ -494,7 +618,6 @@ impl Strip {
             STRIP_DRIVE_DB => self.drive.set_target(db_to_linear(stored)),
             STRIP_COMP_THRESHOLD_DB => self.threshold.set_target(stored),
             STRIP_COMP_RATIO => self.ratio.set_target(stored),
-            STRIP_COMP_IN_TRIM_DB => self.trim.set_target(db_to_linear(stored)),
             STRIP_COMP_MIX => self.mix.set_target(stored),
             STRIP_COMP_MAKEUP_DB => self.makeup.set_target(db_to_linear(stored)),
             STRIP_COMP_ATTACK_MS | STRIP_COMP_RELEASE_MS => self.set_detector_times(),
@@ -537,7 +660,6 @@ impl Strip {
             &mut self.drive,
             &mut self.threshold,
             &mut self.ratio,
-            &mut self.trim,
             &mut self.mix,
             &mut self.makeup,
         ] {
@@ -588,7 +710,6 @@ impl Strip {
                 && self.programme.is_at_rest()
                 && self.threshold.is_settled()
                 && self.ratio.is_settled()
-                && self.trim.is_settled()
                 && self.mix.is_settled()
                 && self.makeup.is_settled())
         {
@@ -636,16 +757,14 @@ impl Strip {
         for frame in 0..frames {
             let threshold_db = self.threshold.advance();
             let ratio = self.ratio.advance();
-            let trim = self.trim.advance();
             let mix = self.mix.advance();
             let makeup = self.makeup.advance();
-            // The dry side is the signal as it *arrived*, which is why the
-            // trim is on the wet path alone: `mix` at 0 then gives back the
-            // input exactly, whatever the trim is set to.
+            // `mix` at 0 gives back the input exactly, which is what makes
+            // this a parallel balance rather than the device host's blend.
             let dry_l = bus.l[frame];
             let dry_r = bus.r[frame];
-            let wet_l = dry_l * trim;
-            let wet_r = dry_r * trim;
+            let wet_l = dry_l;
+            let wet_r = dry_r;
             // Linked detection on the louder channel, like every dynamics
             // effect in this crate: detecting per channel lets a loud left
             // duck only itself and walks the image around.
@@ -677,8 +796,8 @@ impl Strip {
 mod tests {
     use super::*;
     use mooloop_core::strip::{
-        strip_band_param, STRIP_BAND_FREQ, STRIP_BAND_GAIN, STRIP_BAND_KIND, STRIP_BAND_Q,
-        STRIP_COMP_KNEE_DB, STRIP_EQ_BANDS,
+        strip_band_param, STRIP_BAND_FREQ, STRIP_BAND_GAIN, STRIP_BAND_KIND,
+        STRIP_BAND_POSITIONS, STRIP_BAND_Q, STRIP_COMP_KNEE_DB, STRIP_EQ_BANDS,
     };
     use mooloop_core::PreampVoicing;
 
@@ -790,20 +909,25 @@ mod tests {
         }
     }
 
-    /// A band boosted at 1 kHz raises a 1 kHz tone and leaves 100 Hz where
-    /// it was. Acceptance case 2, and the shape of the whole EQ claim.
+    /// A boosted band raises the frequency its *position* selects and
+    /// leaves 100 Hz where it was. Acceptance case 2, and the shape of the
+    /// whole EQ claim -- asked of the position rather than of a frequency,
+    /// since 2026-09-11 there is no frequency to set.
     #[test]
     fn a_boosted_band_lifts_its_own_frequency_and_not_its_neighbour() {
         let frames = SAMPLE_RATE as usize / 4;
         let params = tweak(|params| {
             params.eq_in = true;
-            params.bands[1].frequency_hz = 1_000.0;
+            params.bands[1].position = 1;
             params.bands[1].gain_db = 12.0;
             params.bands[1].q = 2.0;
         });
+        // Whatever `Moo` puts there, rather than a number spelled here: the
+        // table is the DSP's and this test is about the bank.
+        let boosted_hz = MOO_STRIP.eq.frequency(1, 1);
 
-        let lifted = run(params, sine(frames, 1_000.0, 0.2));
-        let reference = sine(frames, 1_000.0, 0.2);
+        let lifted = run(params, sine(frames, boosted_hz, 0.2));
+        let reference = sine(frames, boosted_hz, 0.2);
         let settled = frames / 2..frames;
         let ratio = rms(&lifted.l[settled.clone()]) / rms(&reference.l[settled.clone()]);
         assert!(ratio > 2.5, "a 12 dB boost should be about 4x: {ratio}");
@@ -869,12 +993,12 @@ mod tests {
         let frames = SAMPLE_RATE as usize / 4;
         let shelf = tweak(|params| {
             params.eq_in = true;
-            params.bands[0].frequency_hz = 4_000.0;
+            params.bands[0].position = 0;
             params.bands[0].gain_db = 12.0;
         });
         let mut bell = shelf;
         bell.set(strip_band_param(0, STRIP_BAND_KIND), 0.0);
-        assert_eq!(bell.bands[0].frequency_hz, shelf.bands[0].frequency_hz);
+        assert_eq!(bell.bands[0].position, shelf.bands[0].position);
 
         let settled = frames / 2..frames;
         let reference = rms(&sine(frames, 12_000.0, 0.2).l[settled.clone()]);
@@ -927,7 +1051,6 @@ mod tests {
             params.mix = 0.0;
             params.threshold_db = -50.0;
             params.ratio = 20.0;
-            params.in_trim_db = 18.0;
             params.makeup_db = 18.0;
         });
         let source = noise(frames);
@@ -1025,12 +1148,14 @@ mod tests {
     }
 
     /// The curve the COMP page draws is the transfer the section is
-    /// running, which means the two knobs that move the line are in it:
-    /// `mix` at 0 draws the straight line, and `in trim` moves the knee.
+    /// running, which means the knob that moves the line is in it: `mix` at
+    /// 0 draws the straight line.
     ///
-    /// Written because the first version drew neither, so a section set to
-    /// pass the signal through exactly was drawn clamping it, with the knob
-    /// that said so directly underneath.
+    /// Written because the first version drew neither it nor the input trim,
+    /// so a section set to pass the signal through exactly was drawn
+    /// clamping it, with the knob that said so directly underneath. The trim
+    /// went with the redrawn face on 2026-09-11, which is why this now has
+    /// one half to assert instead of two.
     #[test]
     fn the_drawn_curve_is_the_transfer_the_section_is_running() {
         let base = tweak(|params| {
@@ -1064,24 +1189,12 @@ mod tests {
             );
         }
 
-        // `in trim` moves the knee down the input axis by its own amount:
-        // 12 dB of trim is a compressor working from -36 dB in.
-        let trimmed = static_curve_db(
-            &StripParams {
-                in_trim_db: 12.0,
-                ..base
-            },
-            floor,
-            samples,
-        );
+        // And the threshold still decides where the bend starts, which is
+        // what the trim used to move.
         assert!(
             (at(&curve, -36.0) - -36.0).abs() < 0.1,
-            "untrimmed, -36 dB is below the threshold and untouched"
-        );
-        assert!(
-            at(&trimmed, -36.0) > -36.0 + 11.0,
-            "trimmed, -36 dB is at the knee and 12 dB louder for it: {}",
-            at(&trimmed, -36.0)
+            "-36 dB is below the threshold and untouched: {}",
+            at(&curve, -36.0)
         );
     }
 
@@ -1188,11 +1301,10 @@ mod tests {
         let settings = tweak(|params| {
             params.comp_in = true;
             // Under the threshold with no knee, so the gain computer does
-            // nothing and what is left is the trim and the makeup -- the two
-            // smoothed values a stale smoother would get wrong.
+            // nothing and what is left is the makeup -- the smoothed value
+            // a stale smoother would get wrong.
             params.threshold_db = 0.0;
             params.knee_db = 0.0;
-            params.in_trim_db = -6.0;
             params.makeup_db = 18.0;
         });
 
@@ -1200,7 +1312,6 @@ mod tests {
         for id in [
             STRIP_COMP_THRESHOLD_DB,
             STRIP_COMP_KNEE_DB,
-            STRIP_COMP_IN_TRIM_DB,
             STRIP_COMP_MAKEUP_DB,
         ] {
             assert!(switched.apply_param(id, settings.get(id).unwrap()));
@@ -1327,6 +1438,117 @@ mod tests {
             "a strip is {size} bytes, against the 128 KB a track already costs"
         );
     }
+
+    /// Every voicing offers a position for every step the model declares,
+    /// the frequencies rise, and none of them is outside the audio band.
+    ///
+    /// The lengths are the load-bearing half: `mooloop_core::strip` says how
+    /// many positions a band has and the knob is built from that, so a table
+    /// one short would leave the top of a knob selecting a frequency that is
+    /// not there -- clamped, silently, to the one below it.
+    #[test]
+    fn every_voicings_table_has_a_position_for_every_step() {
+        for (name, voicing) in [
+            ("Moo", MOO_STRIP),
+            ("Grip", GRIP_STRIP),
+            ("Punch", PUNCH_STRIP),
+            ("Iron", IRON_STRIP),
+        ] {
+            for band in 0..STRIP_EQ_BANDS {
+                let row = voicing.eq.bands[band];
+                assert_eq!(
+                    row.len(),
+                    STRIP_BAND_POSITIONS[band] as usize,
+                    "{name} band {band} has {} positions where the model declares {}",
+                    row.len(),
+                    STRIP_BAND_POSITIONS[band]
+                );
+                for pair in row.windows(2) {
+                    assert!(
+                        pair[1] > pair[0],
+                        "{name} band {band} is not rising: {pair:?}"
+                    );
+                }
+                assert!(
+                    row[0] >= 20.0 && row[row.len() - 1] <= 20_000.0,
+                    "{name} band {band} leaves the audio band: {row:?}"
+                );
+            }
+        }
+    }
+
+    /// **The point of the whole change**: the same position is a different
+    /// frequency under a different voicing, and the difference reaches the
+    /// audio rather than only the readout.
+    ///
+    /// `Iron` sits lower than `Moo` on every band -- a 2.2 kHz mid where
+    /// `Moo` puts 3 -- which is what makes swapping the voicing feel like
+    /// swapping a channel module rather than turning a colour knob.
+    #[test]
+    fn a_position_is_a_different_frequency_under_a_different_voicing() {
+        for band in 0..STRIP_EQ_BANDS {
+            let position = DEFAULT_POSITIONS_FOR_TEST[band];
+            let moo = MOO_STRIP.eq.frequency(band, position);
+            let iron = IRON_STRIP.eq.frequency(band, position);
+            assert!(
+                iron < moo,
+                "band {band} at position {position}: Iron {iron} should sit under Moo {moo}"
+            );
+        }
+
+        // And it is audible: a tone at what `Moo`'s middle position selects
+        // is lifted by a band there, and lifted less once the voicing moves
+        // the band out from under it.
+        let frames = SAMPLE_RATE as usize / 4;
+        let settled = frames / 2..frames;
+        let tone_hz = MOO_STRIP.eq.frequency(1, 3);
+        let lift = |voicing: PreampVoicing| {
+            let params = tweak(|params| {
+                params.eq_in = true;
+                params.voicing = voicing;
+                params.bands[1].position = 3;
+                params.bands[1].gain_db = 15.0;
+                params.bands[1].q = 4.0;
+            });
+            rms(&run(params, sine(frames, tone_hz, 0.2)).l[settled.clone()])
+        };
+        let on_it = lift(PreampVoicing::Moo);
+        let moved = lift(PreampVoicing::Iron);
+        assert!(
+            on_it > moved * 1.2,
+            "the same position under Iron should not lift {tone_hz} Hz as much: \
+             {on_it} against {moved}"
+        );
+    }
+
+    /// `nearest` is `frequency`'s inverse on the positions themselves, which
+    /// is what lets the response plot's drag snap instead of sliding.
+    #[test]
+    fn the_nearest_position_to_a_positions_own_frequency_is_itself() {
+        for voicing in [MOO_STRIP, GRIP_STRIP, PUNCH_STRIP, IRON_STRIP] {
+            for band in 0..STRIP_EQ_BANDS {
+                for position in 0..STRIP_BAND_POSITIONS[band] {
+                    let hz = voicing.eq.frequency(band, position);
+                    assert_eq!(voicing.eq.nearest(band, hz), position, "band {band}");
+                }
+            }
+        }
+        // And a frequency between two positions goes to the nearer in *log*
+        // distance, which is how the plot's axis is spaced and how a
+        // frequency is heard. `Moo`'s top band steps 4 kHz to 6 kHz, whose
+        // geometric mean is 4899 and whose arithmetic mean is 5000 -- so
+        // 4950 is nearer 6 kHz by ratio and nearer 4 kHz by subtraction, and
+        // this is the one probe that tells the two apart.
+        assert_eq!(
+            MOO_STRIP.eq.nearest(0, 4_950.0),
+            1,
+            "4950 Hz should snap up to 6 kHz; a linear distance would send it down to 4"
+        );
+    }
+
+    /// The default position, spelled here because `mooloop-core` does not
+    /// export it and this file should not guess at it.
+    const DEFAULT_POSITIONS_FOR_TEST: [u8; STRIP_EQ_BANDS] = [2, 3, 3, 2];
 
     /// The four tables name their own input stage, and `preamp_voicing`
     /// names it again for the preamp *device*. Two statements of one
