@@ -58,7 +58,10 @@ const SPECTRUM_MIN_WINDOW: usize = 512;
 const SPECTRUM_PERIODS: f32 = 8.0;
 
 const SPECTRUM_HOP: usize = 2_048;
-const SPECTRUM_FLOOR_DB: f32 = -84.0;
+/// Level a band reads as zero. Public because a consumer that *compares* two
+/// spectra has to undo the normalization to get back to decibels, and
+/// spelling -84 a second time to do it is how the two would drift apart.
+pub const SPECTRUM_FLOOR_DB: f32 = -84.0;
 
 /// Rolling, low-rate spectrum analyzer. It is deliberately inexpensive:
 /// values are calculated once per hop, with a fixed Goertzel bank over a
@@ -130,14 +133,35 @@ impl SpectrumAnalyzer {
         bus: &StereoBus,
         frames: usize,
     ) -> Option<[f32; SPECTRUM_BINS]> {
-        self.configure(sample_rate);
+        self.prepare(sample_rate);
         let frames = frames.min(bus.capacity());
         for frame in 0..frames {
-            self.samples[self.write] = (bus.l[frame] + bus.r[frame]) * 0.5;
-            self.write = (self.write + 1) % SPECTRUM_WINDOW;
-            self.filled = (self.filled + 1).min(SPECTRUM_WINDOW);
+            self.write((bus.l[frame] + bus.r[frame]) * 0.5);
         }
-        self.since_publish = self.since_publish.saturating_add(frames);
+        self.take()
+    }
+
+    /// Ready the bank for a block at `sample_rate`. Call before [`Self::write`].
+    pub fn prepare(&mut self, sample_rate: u32) {
+        self.configure(sample_rate);
+    }
+
+    /// Ingest one mono sample.
+    ///
+    /// The sample-at-a-time half of [`Self::push`], for a device that cannot
+    /// hand over a bus because it has already overwritten it. The preamp is
+    /// the case: it reads dry and writes wet into the same buffer, so its dry
+    /// signal exists only inside the sample loop.
+    #[inline]
+    pub fn write(&mut self, sample: f32) {
+        self.samples[self.write] = sample;
+        self.write = (self.write + 1) % SPECTRUM_WINDOW;
+        self.filled = (self.filled + 1).min(SPECTRUM_WINDOW);
+        self.since_publish = self.since_publish.saturating_add(1);
+    }
+
+    /// A fresh display vector, if the window is full and a hop has passed.
+    pub fn take(&mut self) -> Option<[f32; SPECTRUM_BINS]> {
         if self.filled < SPECTRUM_WINDOW || self.since_publish < SPECTRUM_HOP {
             return None;
         }

@@ -322,6 +322,20 @@ impl Session {
         params.analyzer_enabled = enabled;
         Some((target, slot as u8))
     }
+
+    /// The preamp's band display, which subscribes the same engine stage the
+    /// EQ's analyzer does and is persisted for the same reason: it is a view
+    /// setting worth reopening a project with.
+    pub fn set_preamp_display(&mut self, slot: i32, enabled: bool) -> Option<(EffectTarget, u8)> {
+        let target = self.effect_target;
+        let slot = usize::try_from(slot).ok()?;
+        let effect = self.effect_chain_mut()?.get_mut(slot)?;
+        let EffectParams::Preamp(params) = &mut effect.params else {
+            return None;
+        };
+        params.display_enabled = enabled;
+        Some((target, slot as u8))
+    }
 }
 
 impl Session {

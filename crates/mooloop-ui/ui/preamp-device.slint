@@ -1,6 +1,8 @@
 import { Theme } from "theme.slint";
-import { ParameterKnob, SelectorBank } from "controls.slint";
+import { ParameterKnob, SelectorBank, ToolButton } from "controls.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
+import { PreampDeviationDisplay } from "device-displays.slint";
+
 
 // One preamp effect in a channel's device rack: only the working controls
 // live here; header, drag-to-reorder, and host actions come from the shared
@@ -17,6 +19,9 @@ export component PreampDeviceFace inherits EffectDeviceShell {
     in-out property <int> voicing;    // 0 = moo, 1 = grip, 2 = punch, 3 = iron
     in-out property <float> mix;      // normalized 0..1
     in-out property <float> output;   // normalized 0..1 (-24 .. +24 dB)
+    in property <[float]> deviation;
+    in-out property <bool> display-enabled;
+    callback display-toggled(bool);
     callback drive-changed(float);
     callback voicing-changed(int);
     callback mix-changed(float);
@@ -44,14 +49,33 @@ export component PreampDeviceFace inherits EffectDeviceShell {
                 selected(i) => { root.voicing-changed(i); }
             }
             Rectangle { horizontal-stretch: 1; }
+            ToolButton {
+                min-width: 30px; max-width: 30px; min-height: 26px; max-height: 26px;
+                text: "FFT"; tooltip: "Band display";
+                hint: "Show where this stage is distorting";
+                active: root.display-enabled;
+                clicked => { root.display-toggled(!root.display-enabled); }
+            }
         }
-        // No transfer-curve display, unlike Drive's. Drawing this stage's
-        // curve needs the coefficients `HarmonicShaper` solves for, and a
-        // face is bound from the shared slot struct in `main.slint` -- so
-        // reaching them means widening a struct every device uses, and the
-        // alternative is spelling the profile numbers a second time in
-        // markup. `LOOSE_ENDS.md` carries it.
-        Rectangle { vertical-stretch: 1; }
+        // Not a transfer curve, which is what a saturator's face usually
+        // carries. A curve shows what the shaper does to a sample, which is
+        // a fact about arithmetic; this shows where on the spectrum the
+        // stage is distorting *this* material, which is the mechanism the
+        // voicing exists for -- `Iron` is obvious on a kick and nearly clean
+        // on a hat, and only a per-band display can show that difference.
+        Rectangle {
+            vertical-stretch: 1;
+            background: Theme.panel;
+            border-radius: Theme.radius-sm;
+            PreampDeviationDisplay {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
+                deviation: root.deviation;
+                active: root.display-enabled;
+            }
+        }
         HorizontalLayout {
             alignment: center;
             spacing: 0px;

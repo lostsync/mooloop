@@ -222,6 +222,12 @@ struct EffectSlotRow {
     eq-band-data: [float],
     eq-spectrum-data: [float],
     eq-analyzer-enabled: bool,
+    // Per-band decibels the preamp *added*, already gated and normalized by
+    // `mooloop_dsp::effects::preamp`. Not a spectrum: a difference between
+    // two of them, which is why it is its own field rather than a second
+    // reader of `eq-spectrum-data`.
+    preamp-deviation: [float],
+    preamp-display-enabled: bool,
     wet-dry: float,
     // Trims are carried in dB from unity; the Rust side stores linear gain.
     input-trim-db: float,
@@ -1302,6 +1308,7 @@ export component MainWindow inherits Window {
     callback effect-buffer-reverse-pressed(int);
     callback effect-buffer-reverse-released(int);
     callback eq-analyzer-changed(int, bool);
+    callback preamp-display-changed(int, bool);
     callback reorder-effect(int, int);              // from slot, to slot
 
     // ---- channel modulation shelf ----
@@ -4129,6 +4136,9 @@ export component MainWindow inherits Window {
                                                     voicing: round(slot.p1 * 3);
                                                     mix: slot.p2;
                                                     output: slot.p3;
+                                                    deviation: slot.preamp-deviation;
+                                                    display-enabled: slot.preamp-display-enabled;
+                                                    display-toggled(v) => { root.preamp-display-changed(index, v); }
                                                     drive-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                     voicing-changed(i) => { root.effect-param-changed(index, 1, i * 1.0 / 3.0); }
                                                     mix-changed(v) => { root.effect-param-changed(index, 2, v); }

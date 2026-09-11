@@ -948,6 +948,7 @@ impl PreampVoicing {
 /// a chain had nowhere to automate gain -- and an automation lane drawn in
 /// dB is the one a person can read.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct PreampParams {
     /// Gain into the curve. The voicing's profile is authored at the -12 dBFS
     /// operating level, so 0 dB here is where it measures true.
@@ -957,6 +958,14 @@ pub struct PreampParams {
     pub mix: f32,
     /// Output trim, applied after the blend.
     pub output_db: f32,
+    /// Whether the band display is running.
+    ///
+    /// Not a [`ParamDescriptor`] parameter, for the same reason the EQ's
+    /// analyzer is not one: it is a view setting that happens to be worth
+    /// saving, and automating it would automate nothing audible. It gates
+    /// both halves at once -- the engine subscription the UI takes out, and
+    /// the two analyzers the node otherwise runs for nobody.
+    pub display_enabled: bool,
 }
 
 impl Default for PreampParams {
@@ -966,6 +975,7 @@ impl Default for PreampParams {
             voicing: PreampVoicing::default(),
             mix: 1.0,
             output_db: 0.0,
+            display_enabled: false,
         }
     }
 }

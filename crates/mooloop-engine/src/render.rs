@@ -1344,7 +1344,14 @@ impl EffectChain {
                 continue;
             }
             if let Some((_, telemetry, target)) = device_display {
-                if self.nodes[slot].is_some() && telemetry.spectrum_enabled(target, slot + 1) {
+                // A device that publishes its own display spectrum owns the
+                // stage; feeding the generic analyzer as well would burn a
+                // Goertzel bank writing cells the device is about to
+                // overwrite.
+                let host_analyzes = self.nodes[slot]
+                    .as_ref()
+                    .is_some_and(|node| !node.provides_display_spectrum());
+                if host_analyzes && telemetry.spectrum_enabled(target, slot + 1) {
                     if let Some(analyzer) = &mut self.analyzers[slot] {
                         if let Some(levels) =
                             analyzer.push(context.sample_rate, bus, context.frames)
@@ -1539,6 +1546,12 @@ impl EffectChain {
                     // else it is one `None` and the cells stay at rest.
                     if let Some(frame) = node.dynamics_frame() {
                         meters.publish_dynamics(target, slot + 1, frame);
+                    }
+                    // And the same shape again for a device that draws its
+                    // own spectrum rather than its input's. `None` on every
+                    // block but the one a hop comes due on.
+                    if let Some(levels) = node.take_display_spectrum() {
+                        telemetry.publish_spectrum(target, slot + 1, &levels);
                     }
                 }
             }

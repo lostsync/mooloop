@@ -740,3 +740,41 @@ export component DynamicsCurveDisplay inherits Rectangle {
         }
     }
 }
+
+// Where a preamp is distorting, band by band.
+//
+// **Not a spectrum.** Each value is how many decibels that band gained
+// between what arrived and what left, with any broadband level change already
+// taken out by `mooloop_dsp::effects::preamp` -- so a bar rises where the
+// stage *added* energy and stays down where it merely passed it through.
+// Turning Drive up does not light the display; turning it up far enough to
+// distort does.
+//
+// The band grid is the analyzer's, log-spaced 20 Hz to `0.45 * sample_rate`,
+// which is the same axis `spikes/preamp-measure` plots its harmonics against.
+export component PreampDeviationDisplay inherits Rectangle {
+    in property <[float]> deviation;
+    in property <bool> active;
+
+    // A band with nothing in it is not drawn as an empty slot: the rail
+    // underneath is what makes a lit band read as lit rather than as the
+    // only thing present.
+    Rectangle {
+        y: parent.height - 1px;
+        width: 100%;
+        height: 1px;
+        background: Theme.border.with-alpha(root.active ? 0.55 : 0.25);
+    }
+    for value[index] in root.deviation : Rectangle {
+        property <float> level: root.active ? clamp(value, 0, 1) : 0;
+        x: index * parent.width / max(1, root.deviation.length);
+        width: max(1px, parent.width / max(1, root.deviation.length) - 1px);
+        y: parent.height - self.height;
+        height: max(1px, self.level * parent.height);
+        // Warm where the stage is working hardest, which is the same ramp
+        // the drive transfer display uses for the same meaning.
+        background: self.level > 0.66 ? Theme.warning
+            : self.level > 0.33 ? Theme.warning.with-alpha(0.7)
+            : Theme.accent.with-alpha(0.55);
+    }
+}

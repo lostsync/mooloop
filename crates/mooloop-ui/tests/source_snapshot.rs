@@ -641,6 +641,8 @@ fn effect_slot(kind: EffectKind) -> EffectSlotRow {
         eq_band_data: Vec::<f32>::new().as_slice().into(),
         eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
         eq_analyzer_enabled: false,
+        preamp_deviation: Vec::<f32>::new().as_slice().into(),
+        preamp_display_enabled: false,
         buffer_collisions: 0,
         wet_dry: 1.0,
         input_trim_db: 0.0,

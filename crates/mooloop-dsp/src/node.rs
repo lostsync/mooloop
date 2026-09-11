@@ -223,6 +223,30 @@ pub trait AudioNode {
         None
     }
 
+    /// Whether this node publishes its own display spectrum, in place of the
+    /// generic analyzer the host otherwise runs on its input.
+    ///
+    /// Almost nothing should: an input spectrum is what a display usually
+    /// wants and the host already has the bus. The exception is a device
+    /// whose display is about *what it did* rather than what arrived --
+    /// the preamp shows where on the spectrum it is distorting, which needs
+    /// its dry and wet signals compared and only the device has both.
+    ///
+    /// A node that answers true owns the stage: the host stops feeding its
+    /// generic analyzer, so the two never write the same cells.
+    fn provides_display_spectrum(&self) -> bool {
+        false
+    }
+
+    /// This node's own display spectrum, if a fresh one is ready.
+    ///
+    /// Taken rather than read, so a frame is published once. Answered at most
+    /// once per analysis hop; `None` on every other block, which is most of
+    /// them.
+    fn take_display_spectrum(&mut self) -> Option<[f32; crate::analysis::SPECTRUM_BINS]> {
+        None
+    }
+
     /// Move whatever runs whether or not this node is called, over a block
     /// of `ctx.frames` the host decided not to hand over.
     ///
