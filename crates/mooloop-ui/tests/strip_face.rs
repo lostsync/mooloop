@@ -6,9 +6,18 @@
 //! the `StripSpec` global, which `install_strip_spec` fills from
 //! `mooloop_core::strip`. So the agreement test for this feature is a
 //! different shape, and a stronger one -- it reads the table back out of the
-//! window and holds it to the descriptors, and then checks that the markup
-//! really has no numbers of its own to drift.
+//! window and holds it to the descriptors, and then checks that no control in
+//! the markup declares a bound of its own.
+//!
+//! Two numbers in `strip.slint` are not covered by that and should not be:
+//! the response plot's axes, which `StripEqPage` inverts to turn a dragged
+//! point back into hertz and decibels. Those are `EqResponseDisplay`'s
+//! convention, spelled the same way in `eq-device.slint`. The last two tests
+//! here are for the couplings that leaves -- the gain axis against the range
+//! it coincides with, and the floor the compressor's curve is sampled over
+//! against the floor the plot indexes it by.
 
+use mooloop_core::gain::MIN_DB as METER_FLOOR_DB;
 use mooloop_core::strip::{
     strip_band_param, StripParams, STRIP_BAND_FREQ, STRIP_BAND_GAIN, STRIP_BAND_KIND, STRIP_BAND_Q,
     STRIP_BAND_STRIDE, STRIP_COMP_ATTACK_MS, STRIP_COMP_IN, STRIP_COMP_IN_TRIM_DB,
@@ -21,6 +30,7 @@ use mooloop_ui::{install_strip_spec, MainWindow, StripSpec};
 use slint::{ComponentHandle, Model, SharedString};
 
 const STRIP_SLINT: &str = include_str!("../ui/strip.slint");
+const DISPLAYS_SLINT: &str = include_str!("../ui/device-displays.slint");
 
 fn headless() -> MainWindow {
     slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
@@ -131,28 +141,47 @@ fn the_faces_table_is_the_engines_table() {
     assert_eq!(spec.get_band_names().row_count(), STRIP_EQ_BANDS);
 }
 
-/// And the markup really has nothing of its own to drift.
+/// And no control in the markup declares a bound of its own.
 ///
 /// A face that mirrors a range can be checked for drift; a face with no range
 /// cannot drift at all, and this is the test that keeps it that way. It fails
 /// the moment somebody adds `minimum: -24` to a strip knob "to make it
 /// clearer", which is exactly how the second copy of a range gets written.
+///
+/// Scanned by *statement* rather than by line. The first version matched a
+/// trimmed line beginning with `minimum:` and ending in a semicolon, which is
+/// one way of several to write the thing it is looking for: `StripKnob {
+/// minimum: -24; }` on one line trims to something starting with `StripKnob`
+/// and would have walked straight past. Splitting on the punctuation that
+/// ends a Slint statement sees it wherever it sits.
 #[test]
 fn the_strips_markup_declares_no_range_of_its_own() {
-    // `StripKnob` is the one place bounds are bound, and it binds them to
-    // the descriptor. Everything else must go through it.
-    let bindings: Vec<&str> = STRIP_SLINT
+    // Comments first, because the prose above `StripSpec` discusses minima
+    // and maxima at length and a scanner should not be reading the argument
+    // for the rule as a breach of it.
+    let mut code: String = STRIP_SLINT
         .lines()
+        .map(|line| line.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    // `StripParamSpec`'s own field list names these three; naming the fields
+    // is how the table is declared, not a second copy of a range.
+    let declaration = code
+        .find("struct StripParamSpec")
+        .and_then(|start| code[start..].find('}').map(|end| start..start + end + 1))
+        .expect("strip.slint still declares StripParamSpec");
+    code.replace_range(declaration, "");
+
+    let bindings: Vec<&str> = code
+        .split(['{', '}', ';'])
         .map(str::trim)
-        .filter(|line| {
-            // A binding ends in a semicolon; `StripParamSpec`'s own field
-            // list ends each line in a comma, and naming the fields is how
-            // the table is declared rather than a second copy of a range.
-            line.ends_with(';')
-                && (line.starts_with("minimum:")
-                    || line.starts_with("maximum:")
-                    || line.starts_with("default-value:"))
-                && !line.contains("root.spec.")
+        .filter(|statement| {
+            ["minimum:", "maximum:", "default-value:"]
+                .iter()
+                .any(|name| statement.starts_with(name))
+                // `StripKnob` is the one place bounds are bound, and it binds
+                // them to the descriptor. Everything else must go through it.
+                && !statement.contains("root.spec.")
         })
         .collect();
     // The pan knob on the paned back face is the mixer's own control rather
@@ -162,6 +191,74 @@ fn the_strips_markup_declares_no_range_of_its_own() {
         bindings.is_empty(),
         "strip.slint declares its own bounds, which the descriptor table already states: {bindings:?}"
     );
+}
+
+/// **The curve Rust sampled and the axis the plot indexes it against have to
+/// share a floor.**
+///
+/// `strip_row` samples the compressor's static curve over
+/// `METER_FLOOR_DB..0`; `DynamicsCurveDisplay::curve-out` turns an input
+/// level back into an index with `(input-db - floor-db) / -floor-db`, where
+/// `floor-db` is the display's own. The two are the same number written in
+/// two languages, and the markup's copy is `private`, so it cannot even be
+/// handed the Rust one. Move either and the curve is not wrong at the edges,
+/// it is stretched: every point of it lands at the wrong input level, with
+/// the threshold handle still drawn where the threshold really is.
+///
+/// The strip is the only caller that supplies `curve-db` at all -- every
+/// other dynamics face lets the display compute its own curve, where the
+/// floor is only an axis -- so this coupling exists for this feature and is
+/// asserted with it. Parsed rather than read off the window, the way
+/// `gain_slint_agreement.rs` parses the fader taper, and anchored on the
+/// declaration so that a comment or an expression mentioning the name cannot
+/// become what is being checked.
+#[test]
+fn the_sampled_curve_and_the_plot_share_a_floor() {
+    let declaration = DISPLAYS_SLINT
+        .lines()
+        .map(str::trim)
+        .find(|line| line.contains("property <float> floor-db:"))
+        .expect("DynamicsCurveDisplay still declares a floor-db");
+    let value: f32 = declaration
+        .rsplit_once(':')
+        .and_then(|(_, rest)| rest.trim().trim_end_matches(';').trim().parse().ok())
+        .unwrap_or_else(|| panic!("could not read a number out of `{declaration}`"));
+    assert_eq!(
+        value, METER_FLOOR_DB,
+        "`{declaration}` in device-displays.slint against METER_FLOOR_DB in          mooloop-core: `strip_row` samples the strip's compressor curve from          the second and the display indexes it with the first"
+    );
+}
+
+/// **The one pair of numbers `strip.slint` does spell, and what holds them
+/// to the table.**
+///
+/// `EqResponseDisplay` reports a dragged point normalized over *its own*
+/// axes, so `StripEqPage`'s `point-dragged` inverts them -- `gain * 36 - 18`,
+/// character for character what `eq-device.slint` writes for the seven-band
+/// EQ, and the inverse of what `strip_row` does on the way out. That is the
+/// display's convention rather than a parameter range, which is why the test
+/// above does not and should not flag it.
+///
+/// But it *coincides* with a parameter range, and the coincidence is
+/// load-bearing: widen a band's gain to +-24 in the descriptor and dragging a
+/// point to the top of the plot still writes +18, while typing 24 into the
+/// knob draws a curve off the top of it. Nothing about that is visible at
+/// either end, so it is asserted here -- where the number is already spelled
+/// twice, a third spelling that *fails* is the cheap one.
+#[test]
+fn the_response_plots_gain_axis_is_the_bands_gain_range() {
+    for band in 0..STRIP_EQ_BANDS {
+        let gain = StripParams::descriptor(strip_band_param(band, STRIP_BAND_GAIN))
+            .expect("every band has a gain descriptor");
+        assert_eq!(
+            (gain.min, gain.max),
+            (-18.0, 18.0),
+            "band {band}'s gain range left the response plot's axis behind: \
+             `strip.slint` and `eq-device.slint` both invert a dragged point \
+             as `gain * 36 - 18`, and `strip_row` normalizes as \
+             `(gain_db + 18) / 36`"
+        );
+    }
 }
 
 /// Every parameter the strip has is addressed by the markup, and the id space

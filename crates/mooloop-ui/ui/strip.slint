@@ -8,12 +8,20 @@
 // page that is not on screen is not built, and no parameter is reachable
 // from only one of them.
 //
-// **No range, id or default is spelled here.** `StripSpec` is a global whose
-// table Rust fills once at startup from `mooloop_core::strip`, so a knob's
-// minimum, maximum, default, name and unit all come from the descriptor the
-// engine reads -- which is the duplication `AGENTS.md` opens on, closed by
-// construction rather than by a test. The one thing the markup decides is
-// which parameter goes where.
+// **No parameter's range, id or default is spelled here.** `StripSpec` is a
+// global whose table Rust fills once at startup from `mooloop_core::strip`,
+// so a knob's minimum, maximum, default, name and unit all come from the
+// descriptor the engine reads -- which is the duplication `AGENTS.md` opens
+// on, closed by construction rather than by a test. The one thing the markup
+// decides is which parameter goes where.
+//
+// The two numbers that *are* written here are `EqResponseDisplay`'s axes,
+// which `StripEqPage` inverts to turn a dragged point back into hertz and
+// decibels. They are the display's convention rather than a parameter's, and
+// `eq-device.slint` spells them the same way for the seven-band EQ; the gain
+// one coincides with the bands' gain range, and
+// `the_response_plots_gain_axis_is_the_bands_gain_range` is what stops the
+// two coming apart.
 
 import { Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
