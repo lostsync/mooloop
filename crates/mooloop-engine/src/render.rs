@@ -2889,6 +2889,12 @@ impl RenderState {
                     strip.output.set_volume(setup.bus.volume);
                     strip.output.set_pan(setup.bus.pan);
                     strip.polarity = setup.bus.polarity;
+                    // Reset before installing: a document arriving is the
+                    // one moment there is nothing to be continuous with, and
+                    // a state being reused -- an undo, or a project with
+                    // fewer tracks than the last one -- would otherwise hand
+                    // the new song a filter bank holding the old one's audio.
+                    strip.strip.reset();
                     strip.strip.set_params(setup.bus.strip);
                     strip.effects.load(
                         &setup.effects,

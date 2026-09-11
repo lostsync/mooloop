@@ -577,6 +577,11 @@ Named here rather than left to be discovered.
   reason: it would make the strip's drive and `EffectKind::Preamp` two
   different stages under one voicing name. When somebody measures a curve it
   belongs in `PreampVoicing`, where both get it.
+- **Undo.** A strip edit marks the document dirty and reaches audio as a
+  command, exactly like `set_bus_output` and a send level; it does not go
+  through the project-edit path, so it is not undoable. The same gap step 05
+  recorded for sends, with the same fix -- unifying the two paths -- and the
+  same reason for not doing it here.
 - **Solo**, which is a monitor tap rather than a control and is the largest
   unbuilt thing on the mockup. `LOOSE_ENDS.md` carries it and `MIXER_PLAN.md`
   specifies it. A dead solo button is not drawn.
