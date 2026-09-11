@@ -96,7 +96,7 @@ use crate::harmonics::{DcBlocker, HarmonicProfile, HarmonicShaper, GRIP, IRON, M
 /// Every field is a number somebody picked and can re-pick. Nothing here
 /// decides *how* the stage works — that is [`Preamp`] — which is what keeps a
 /// later measurement pass a matter of editing four rows.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PreampVoicing {
     /// What the curve does, at the -12 dBFS operating level. See
     /// [`crate::harmonics`].
@@ -182,6 +182,24 @@ pub const IRON_PREAMP: PreampVoicing = PreampVoicing {
     slew: Some(0.08),
 };
 
+/// The voicing table for a persisted choice.
+///
+/// Here rather than in `mooloop-core` because the table is a DSP fact --
+/// what the curve is made of -- and the choice is a project fact.
+/// `mooloop-core` does not depend on `mooloop-dsp`, which is what keeps the
+/// two from being one type that has to be both. One mapping, read by the
+/// preamp *device* and by every track's strip: two copies of it would be two
+/// answers to "what is Iron", and the one that drifted would be whichever
+/// was edited second.
+pub fn preamp_voicing(voicing: mooloop_core::PreampVoicing) -> PreampVoicing {
+    match voicing {
+        mooloop_core::PreampVoicing::Moo => MOO_PREAMP,
+        mooloop_core::PreampVoicing::Grip => GRIP_PREAMP,
+        mooloop_core::PreampVoicing::Punch => PUNCH_PREAMP,
+        mooloop_core::PreampVoicing::Iron => IRON_PREAMP,
+    }
+}
+
 /// A slew limiter: the transient half of a preamp's character.
 #[derive(Debug, Clone, Copy)]
 struct SlewLimiter {
@@ -244,6 +262,25 @@ impl Preamp {
     /// Whether this stage may be skipped outright.
     pub fn is_transparent(&self) -> bool {
         self.transparent
+    }
+
+    /// Whether the stage holds nothing that could still come out of it.
+    ///
+    /// The shaper is memoryless, so this is the sandwich's two shelves, the
+    /// DC blocker and the slew limiter's held sample. A transparent voicing
+    /// has none of them and is always at rest, which is what lets a strip
+    /// running `Moo` answer the host without reading any state at all.
+    pub fn is_at_rest(&self) -> bool {
+        if self.transparent {
+            return true;
+        }
+        self.tilt.is_at_rest()
+            && self.untilt.is_at_rest()
+            && self.dc.is_at_rest()
+            && self
+                .slew
+                .as_ref()
+                .is_none_or(|slew| slew.last.abs() <= crate::node::REST_EPSILON)
     }
 
     pub fn reset(&mut self) {

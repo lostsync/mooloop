@@ -360,6 +360,15 @@ impl DcBlocker {
         self.last_output = 0.0;
     }
 
+    /// Whether the blocker's two stored samples are too small for anything
+    /// audible to come out of it. Same argument as
+    /// [`crate::biquad::Biquad::is_at_rest`], which is what a host asks
+    /// before it stops calling a stage.
+    pub fn is_at_rest(&self) -> bool {
+        self.last_input.abs() <= crate::node::REST_EPSILON
+            && self.last_output.abs() <= crate::node::REST_EPSILON
+    }
+
     #[inline]
     pub fn process(&mut self, sample: f32) -> f32 {
         let out = sample - self.last_input + self.coefficient * self.last_output;

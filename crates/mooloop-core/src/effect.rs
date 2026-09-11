@@ -401,6 +401,23 @@ impl EqQProfile {
     }
 }
 
+/// The Q a band is actually running, after its profile.
+///
+/// Proportional Q widens the assertion as well as the curve: a boost of
+/// 12 dB doubles the Q, so the band narrows as it is pushed. Here rather
+/// than in the DSP because three callers need the same answer and they are
+/// in different crates -- `EqEffect`, the channel strip's own bank, and
+/// every response display that has to plot the curve that is *running*
+/// rather than the one the knobs imply. The law written twice is the law
+/// that drifts, and the copy that drifts is the one deciding what is heard.
+pub fn eq_effective_q(q: f32, gain_db: f32, profile: EqQProfile) -> f32 {
+    let boost = match profile {
+        EqQProfile::Constant => 1.0,
+        EqQProfile::Proportional => 1.0 + gain_db.abs() / 12.0,
+    };
+    (q * boost).clamp(0.15, 30.0)
+}
+
 /// One band in the seven-band EQ bank.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EqBand {

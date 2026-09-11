@@ -45,6 +45,32 @@ pub enum EffectTarget {
     Bus(u8),
 }
 
+/// Where a track's channel strip sits in that track's chain.
+///
+/// Adam, 2026-09-10, asking for the strip's processing to be reachable from
+/// the device rack: *"own row, pinned, but we should be able to just move the
+/// pin or morph what is drawn."* This is that pin, and it is **one
+/// statement** rather than an assumption spread through the engine and the
+/// markup: [`STRIP_PIN`] is read by the bus block loop to decide when the
+/// strip runs and by the rack to decide where the pinned row draws, so
+/// moving it moves both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StripPin {
+    /// Before the track's own devices: `pre -> eq -> comp -> devices ->
+    /// fader`.
+    Head,
+    /// After the track's own devices, immediately before the fader.
+    Tail,
+}
+
+/// The pinned position, and the reasons for it, in the order they carry
+/// weight: the drive stage is an *input* stage and a preamp after an insert
+/// is not one; a track's rack is glue and post (`docs/plans/console/README.md`,
+/// decision 2) and post means after; and the device people put last on a
+/// track is a limiter, which a strip compressor behind it would be working
+/// on the far side of.
+pub const STRIP_PIN: StripPin = StripPin::Head;
+
 /// One mixer bus's non-effect state.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MixerBus {
@@ -72,6 +98,23 @@ pub struct MixerBus {
     /// reproduces a linear mixer exactly.
     #[serde(default)]
     pub console: bool,
+    /// Whether this track's signal is inverted.
+    ///
+    /// One multiply, and the cheapest thing on Adam's mockup. Applied at the
+    /// **top** of the track's block, before the strip, the chain, the sends
+    /// and the fader -- a polarity switch on a desk is an input control, and
+    /// everything downstream should see the flipped signal, including a
+    /// pre-fader send. It is drawn beside mute, where the mockup puts it,
+    /// which is a different question from where it acts.
+    #[serde(default)]
+    pub polarity: bool,
+    /// The four sections of this track's channel strip, all out by default.
+    ///
+    /// Defaulted on load, so a song saved before the strip existed opens
+    /// bit-identical to the file it was saved from. See
+    /// [`crate::strip::StripParams`].
+    #[serde(default)]
+    pub strip: crate::strip::StripParams,
 }
 
 impl MixerBus {
@@ -91,6 +134,8 @@ impl MixerBus {
             pan: 0.0,
             output: MASTER_BUS,
             console: false,
+            polarity: false,
+            strip: crate::strip::StripParams::default(),
         }
     }
 }

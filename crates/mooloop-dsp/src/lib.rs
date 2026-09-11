@@ -56,6 +56,7 @@ pub mod sampler;
 pub mod scale;
 pub mod shaper;
 pub mod smooth;
+pub mod strip;
 pub mod stretch;
 #[cfg(test)]
 mod stretch_cost;

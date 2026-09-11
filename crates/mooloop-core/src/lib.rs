@@ -28,6 +28,7 @@ pub mod pattern;
 pub mod playlist;
 pub mod project;
 pub mod sampler;
+pub mod strip;
 pub mod structure;
 pub mod synth;
 pub mod time;
@@ -75,6 +76,14 @@ pub use modulation::{
     STEP_PARAM_GLIDE, STEP_PARAM_LENGTH, STEP_PARAM_TRIGGER, STEP_PARAM_VALUE_BASE,
     STRIP_DESCRIPTORS, STRIP_PARAM_PAN, STRIP_PARAM_VOLUME,
 };
+pub use strip::{
+    strip_band_of, strip_band_param, strip_band_shelf, StripBand, StripParams, STRIP_BAND_BASE,
+    STRIP_BAND_FREQ, STRIP_BAND_GAIN, STRIP_BAND_KIND, STRIP_BAND_Q, STRIP_BAND_STRIDE,
+    STRIP_COMP_ATTACK_MS, STRIP_COMP_IN, STRIP_COMP_IN_TRIM_DB, STRIP_COMP_KNEE_DB,
+    STRIP_COMP_MAKEUP_DB, STRIP_COMP_MIX, STRIP_COMP_RATIO, STRIP_COMP_RELEASE_MS,
+    STRIP_COMP_THRESHOLD_DB, STRIP_DRIVE_DB, STRIP_EQ_BANDS, STRIP_EQ_IN, STRIP_FIRST,
+    STRIP_PRE_IN, STRIP_VOICING,
+};
 pub use mod_metadata::{
     local_slot_sources, ControlLatency, ControlRate, ModDestinationDescriptor, ModInterpretation,
     ModSourceDescriptor, ModSourceId, ModSourceKind, ModSourceRef, SignalShape, Smoothing,
@@ -117,7 +126,7 @@ pub use gain::{
 pub use effect::{
     BitcrushParams, BitcrushStyle, BufferParams, CompressorParams, DelayMode, DelayParams,
     ChainParams, DeviceId, DriveCurve, DriveParams, EffectKind, EffectParams,
-    EffectRun, EffectSlotState, EqBand,
+    EffectRun, EffectSlotState, eq_effective_q, EqBand,
     EqBandKind, EqParams, EqPassFilter, EqQProfile, EqSlope, FilterMode, FilterParams, FilterSlope,
     GateParams, LimiterParams, ModulationMode, ModulationParams, ParamCurve, ParamDescriptor,
     PlateParams, PreampParams, PreampVoicing, ReverbParams, BITCRUSH_PARAM_BITS, BITCRUSH_PARAM_DOWNSAMPLE, BITCRUSH_PARAM_MIX,

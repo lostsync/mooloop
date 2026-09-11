@@ -21,27 +21,12 @@ use mooloop_core::{
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
 use crate::node::{AudioNode, ProcessContext};
-use crate::preamp::{Preamp, GRIP_PREAMP, IRON_PREAMP, MOO_PREAMP, PUNCH_PREAMP};
+use crate::preamp::{preamp_voicing, Preamp};
 use crate::smooth::Smoothed;
 
 /// Drive, mix and output all scale amplitude directly, so a step in any of
 /// them is either a click or a zipper. Matches `drive.rs` for the same reason.
 const PARAM_SMOOTH_S: f32 = 0.005;
-
-/// The voicing table for a persisted choice.
-///
-/// The mapping lives here rather than in `mooloop-core` because the table is
-/// a DSP fact — what the curve is made of — and the choice is a project fact.
-/// `mooloop-core` does not depend on `mooloop-dsp`, which is what keeps the
-/// two from being one type that has to be both.
-fn voicing_table(voicing: PreampVoicing) -> crate::preamp::PreampVoicing {
-    match voicing {
-        PreampVoicing::Moo => MOO_PREAMP,
-        PreampVoicing::Grip => GRIP_PREAMP,
-        PreampVoicing::Punch => PUNCH_PREAMP,
-        PreampVoicing::Iron => IRON_PREAMP,
-    }
-}
 
 pub struct PreampEffect {
     params: PreampParams,
@@ -56,7 +41,7 @@ pub struct PreampEffect {
 impl PreampEffect {
     pub fn new(params: PreampParams, sample_rate: u32) -> Self {
         let smoothed = |initial| Smoothed::new(initial, PARAM_SMOOTH_S, sample_rate);
-        let table = voicing_table(params.voicing);
+        let table = preamp_voicing(params.voicing);
         Self {
             params,
             sample_rate,
@@ -94,7 +79,7 @@ impl PreampEffect {
     /// it is the right one: the alternative is running the old voicing's
     /// filter state through the new one's curve, which is neither voicing.
     fn rebuild_voicing(&mut self) {
-        let table = voicing_table(self.params.voicing);
+        let table = preamp_voicing(self.params.voicing);
         self.left = Preamp::new(table, self.sample_rate);
         self.right = Preamp::new(table, self.sample_rate);
     }
