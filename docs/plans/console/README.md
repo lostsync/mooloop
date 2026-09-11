@@ -205,6 +205,19 @@ The four questions this plan opened, and Adam's answers.
    does not appear there, and `docs/plans/README.md` is where its state is
    recorded.
 
+## Settled, 2026-09-10
+
+**Where the strip is drawn**, which this plan had left to `THE-STRIP.md` and
+`THE-STRIP.md` had left open. The strip has two faces and the mixer has three
+states: a 92px paned strip whose front is the mixing face and whose back
+carries one page of EQ / COMP / DRIVE / SENDS, reached by a turn-over button
+in its lower-right corner; the track's pinned row in the device rack; and the
+full-format console when the mixer pane is zoomed. The ruling, the arithmetic
+behind 92px, and the two ideas it retires are in
+[`THE-STRIP.md`](THE-STRIP.md); `docs/UI_DESIGN.md` carries the rules that
+fall out of it, and `docs/MIXER_PLAN.md`'s *Mixer interface* section was
+rewritten around them.
+
 ## What the first draft of this file said, and why it was wrong
 
 Kept rather than deleted, because the shape of the mistake is the useful part.

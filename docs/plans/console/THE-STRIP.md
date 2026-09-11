@@ -206,6 +206,133 @@ already draws are the whole mechanism, and they answer the 256-track cost
 question outright -- a section that is out does not run, so the price of the
 strip existing everywhere is two booleans per track.
 
+## Where the strip is drawn, settled 2026-09-10
+
+The mockup above is the strip at full size, and this file never said where a
+user *meets* it. In the ordinary paned layout the mixer holds one slot of a
+shared work area, at whatever height the other views leave it; the only answer
+the plan had was that the sections collapse, which makes the face shorter
+without making the pane usable. Adam's answer is that
+**the strip has two faces, and the mixer has three states**:
+
+```text
+  front (paned)        back (paned)          zoomed console
+  ─────────────        ────────────          ──────────────
+  name                 name                  the drawing at the top of
+  meter   fader        meter  vol  pan       this file: every section at
+  mute solo pol        ┌─────────────────┐   once, one strip per track,
+  -> dest              │ EQ COMP DRV SND │   scrolling horizontally
+  analog sum           │                 │
+                       │   one page      │   no turn-over here: the
+           [ over > ]  │        [ back ] │   room is the whole point
+                       └─────────────────┘
+```
+
+The front is what you look at while **mixing**. The back is what you look at
+while **setting one track up**. The zoomed console is the desk, and it needs
+no turn-over because it has the room for the whole strip at once.
+
+**The turn-over is a small button in the strip's lower-right corner.** One
+button per strip, so one track can show its EQ while everything around it
+still shows faders -- which is the comparison a global flip would take away.
+
+**It does not have to be a literal flip.** Adam, 2026-09-10: *"it doesnt have
+to literally flip. im open to what animation is used... we're already
+animating the panes so even tho slint clearly isnt quickshell, i feel like we
+should be able to do a decent transition."* Slint 1.17 has no 3D transform, so
+a card flip is an x-scale through zero with the faces swapped at the midpoint;
+a cross-dissolve with a small slide is equally available and may read better
+at 92px. Whichever it is, it spends `Motion.duration` and `Motion.curve` --
+the tokens the device rack's slide-aside and the dock's extent already animate
+on -- rather than introducing a second timing. It is worth real work rather
+than a state swap: *"this part of the app is probably one of the most likely
+to be the focus of any public attention so there's a reason to get it right
+and make it slick when we do."*
+
+**The meter, the level and the pan survive the turn**, along with the name.
+Two reasons, and the second is the load-bearing one: an EQ is set by ear while
+watching what it does to the level, and a face that shares nothing with the
+one it replaced reads as a different panel arriving rather than as this strip,
+turned round.
+
+**The pages, in order: EQ, COMP, DRIVE (carrying the voicing selector),
+SENDS.** Sends last because they are the one section that also lives on the
+track's rack face, so they are the one a user has somewhere else to reach.
+Each page carries its own `in` switch -- `eq in` / `comp in` are already the
+mechanism, and a page whose section is out should say so rather than drawing
+live-looking knobs that change nothing.
+
+## 92px, and why it is what removes the complication
+
+Adam, 2026-09-10: *"white tie imperial makes it work at 92px. why dont we just
+adopt that size fully?"* Adopted, for both faces and the zoomed console.
+
+The arithmetic is the argument. A strip is 62px today with 4px padding, so
+54px of content, and `MiniKnob` is 22px: **two knobs to a row, never three.**
+At 92px there are 84px of content, three knobs and their gutters are 74px, and
+so **an EQ band is one row** -- freq, gain, q -- with four bands in four rows.
+The whole reason the back face wanted to be wider than the front was that one
+number.
+
+It pays on the front as well. Meter (22px) plus fader (30px) leaves 24px for a
+column beside the fader, which is exactly where the mockup stacks mute, solo
+and polarity. At 62px that column is what does not fit, which is why today's
+strip puts pan and mute on a row *below* the fader instead. So 92px is not
+merely room for the back: it is what lets the paned strip be a small version
+of the drawn one rather than a different arrangement of the same controls.
+
+What it costs is strip count: a ~1200px mixer pane shows about thirteen strips
+where it showed about nineteen. `MixerPane` already scrolls horizontally and
+was built to, so this is comfort rather than capability.
+
+Two ideas it retires, both recorded because they were the obvious answers:
+
+- **Widening a strip when it turns over**, neighbours sliding aside. Slick,
+  and unnecessary once both faces are 92px -- and a strip that changes size
+  when you turn it is harder to read as the same object.
+- **A section that toggles open below the fader.** An area that opens makes
+  the strip *taller*, and the strip's height is the fader's; the fader is the
+  one thing on it that cannot shrink. A turn-over changes nothing's size.
+
+**92 gets a name, not a literal.** `MixerMetrics.strip-width`, the way
+`DeviceRackMetrics` already holds the rack's numbers. The front face, the back
+face, the zoomed console and `tests/mixer_snapshot.rs` all want it, and a
+number spelled in four places that drift apart is the fault `AGENTS.md` opens
+on.
+
+## The strip's processing is a pinned rack row
+
+The other half of where the strip is drawn. Adam, 2026-09-10, asked for the
+strip's processing to be reachable from the **device rack**, as a row in the
+track's chain: *"own row, pinned, but we should be able to just move the pin
+or morph what is drawn."*
+
+That is a narrower departure from this file's opening ruling than it looks.
+The strip is still not a device you *insert*: it cannot be added, deleted or
+duplicated, and every track has one whether or not anything is switched in.
+What it gains is a position in the chain, which is a fact the rack can draw --
+and the pinned position is then a **policy stated in one place**, not an
+assumption spread through the compiler. Moving the pin later, or morphing what
+that row draws, should be an edit to that one statement.
+
+The track's rack face already exists and already does half of this: `BusDeviceFace`
+(`ui/bus-device.slint`) stands in the rack's head slot when a track is
+selected and carries the name, fader, pan, mute, destination, console switch
+and the sends list. It is the face the strip's sections join.
+
+**The two presentations are functionally interchangeable, and neither draws
+what it is not showing.** Adam: *"in general we arent drawing things we arent
+seeing, hopefully. but the two views should be functionally interchangeable."*
+Two rules, and they pull in opposite directions on purpose:
+
+1. A page that is not on screen is not built. In Slint that is an `if` rather
+   than an `opacity: 0`, and it is what keeps a strip's back face free on all
+   256 tracks.
+2. No parameter is reachable from only one of them. A control that exists on
+   the rack face and not on the back face -- or on the zoomed console and not
+   in the paned mixer -- makes the mixer's state the thing a user has to
+   manage before they can do the work.
+
 ## Still open
 
 - **Whether the sequencer rack draws a group.** Routing several channels to
@@ -215,6 +342,12 @@ strip existing everywhere is two booleans per track.
   own decision.
 - **How each voicing's harmonic profile travels with level**, per the first
   limit above. That is authoring, and it wants ears.
+- **A global turn-over** -- one control in the mixer's toolbar row that turns
+  every strip at once, the way a desk's FLIP does. Floated 2026-09-10 and not
+  ruled on; the per-strip button is settled and does not depend on it.
+- **Where the pinned strip row sits** in a track's chain by default, and
+  therefore whether a track's own devices run before or after its EQ and
+  compressor.
 
 ## Order this implies
 

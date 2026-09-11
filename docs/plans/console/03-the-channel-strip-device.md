@@ -8,6 +8,12 @@
 > compressor together rather than the last two alone -- which pulls step 06
 > into this build instead of leaving it parked.
 >
+> **Amended again 2026-09-10**, in the same file: the strip is drawn in three
+> places -- a 92px paned strip that turns over to reach its sections, a
+> pinned row in the track's device rack, and a full-format console strip when
+> the mixer pane is zoomed. That is one parameter set drawn three ways, and no
+> parameter may be reachable from only one of them.
+>
 > What survives unchanged is everything below about *reuse* and about the
 > order of work. The shared units, the extraction of `EqResponseDisplay`, and
 > the rule that an idle strip costs nothing are the same either way.

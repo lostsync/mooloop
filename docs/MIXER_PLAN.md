@@ -256,33 +256,48 @@ not overload `AuxSend` or borrow another slot's audio buffer.
 
 ## Mixer interface
 
-The mixer is a horizontal strip work surface, not a routing spreadsheet. It
-uses the existing fixed-height modules and faders from `UI_DESIGN.md`; dynamic
-strip count scrolls horizontally rather than compressing the controls.
+**Rewritten 2026-09-10.** The August version of this section had every strip
+carrying `Send A` and `Send B` as fixed controls, and a `+ Track` / `+ Bus` /
+`+ Send` row to make them; all three are retired
+(`docs/TERMINOLOGY.md`, `docs/plans/console/README.md`). What replaces them is
+a strip with **two faces** and a mixer with **three states**, settled the same
+day. [`docs/plans/console/THE-STRIP.md`](plans/console/THE-STRIP.md) carries
+the strip's own detail; what follows is the part that belongs to the mixer.
+
+The mixer is a horizontal strip work surface, not a routing spreadsheet. A
+strip is **92px wide** and its controls do not compress; a dynamic strip count
+scrolls horizontally.
 
 ```text
- [MASTER] | [TRACK 1] [TRACK 2] ... [BUS DRUMS] | [SEND A] [SEND B] | + Track + Bus + Send
+ [MASTER] | [KICK] [SNARE] [HAT] [DRUMS] [BASS] [VERB] | +
 ```
 
 - Master is pinned at the left and visually distinct.
-- Tracks and buses share strip geometry. A small role label/icon identifies
-  `TRACK`, `BUS`, or `SEND`; names remain user-controlled.
-- Send returns appear after a divider because that is a useful console
-  convention, not because the signal engine treats them specially.
-- Each strip shows, in one stable vertical order: role/name, input/activity
-  indication, insert count/device shortcut, main destination, the two
-  preferred-send controls, mute/solo, meter, and fader/balance.
-- `Send A` and `Send B` are always visible as compact fader/knob pairs on a
-  strip. If either default return was removed, its control becomes an
-  `Assign send` affordance. A `Sends…` affordance opens the complete dynamic
-  list. Added sends do not make every strip wider or move its fader.
-- Clicking a strip selects that signal slot and points the existing lower
-  device rack at its inserts. A source slot additionally exposes its source
-  face and note editing; an empty/bus/send slot exposes only the device rack
-  and slot controls.
+- **Every track has a strip, and keeps it when it is grouped.** There is one
+  `+`, and what a track *is* -- an ordinary track, a bus, a send -- is decided
+  by what routes into it. Roles may be labelled; they are not species, and
+  there is no divider separating a set of returns from the rest.
+- **The front face is the mixing face**: name, meter, fader, pan, mute, solo,
+  polarity, destination and analog sum, in one stable vertical order. It is
+  what you look at while balancing a mix, and it fits a track's whole output
+  stage without a page.
+- **A turn-over button in the strip's lower-right corner shows the back
+  face**, which keeps the name, meter, level and pan and spends the rest of
+  its height on one page of EQ / COMP / DRIVE / SENDS. One strip turns at a
+  time, so a track's EQ can be set against its neighbours' faders.
+- **Double-clicking the mixer's tab zooms the pane** -- the existing gesture,
+  `UI_DESIGN.md` -- and the strips become full-format console strips with
+  every section drawn at once. There is no turn-over in this state, because
+  having the room is what the state is for.
+- Clicking a strip selects that track and points the lower device rack at it.
+  The track's face there carries the same controls as the back face and is
+  interchangeable with it; a parameter reachable from only one of them is a
+  defect rather than a shortcut.
 - Main destination is a long/dynamic target menu, not an enormous selector
   bank. Disabled destinations stay visible with their cycle reason.
-- Adding/removing/reassigning slots and routes are undoable project commands.
+- A track's sends are drawn as inline bars: exactly the sends that exist, and
+  the area scrolls rather than the strip growing or the faders shrinking.
+- Adding/removing/reassigning tracks and routes are undoable project commands.
   Parameter drags remain high-rate commands, as they do today.
 
 The rack retains its fast source-focused view. The mixer must not require a

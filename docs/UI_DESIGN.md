@@ -463,6 +463,45 @@ and stays where it is.
 - Lo-fi plots apply the same rounded bit-depth and sample-hold mappings as the
   sampler DSP.
 
+## Mixer Strips
+
+The mixer is a row of fixed-format strips that scroll rather than compress.
+`docs/MIXER_PLAN.md` owns what a strip contains; these are the rules that
+decide its shape. Settled 2026-09-10.
+
+- **A mixer strip is 92 px wide, from one named metric.** Not 62, and not a
+  literal in four files. The width is set by the widest row that must not
+  wrap, measured in real controls: an EQ band is freq / gain / q, a `MiniKnob`
+  is 22 px, and three of them with gutters need 74 px of content. 62 px leaves
+  54 px, which is two knobs, which is why the same section used to need a
+  wider face than the one it lived on. Pick a strip's width by doing that
+  arithmetic, not by choosing a number that looks narrow and paging around it.
+- **A strip that needs more controls gets a second face, not more height.** A
+  strip's height is its fader's, and the fader is the one element on it with a
+  floor -- so an area that toggles open below the fader spends the only
+  dimension that cannot give. Turning the strip over changes nothing's size.
+- **The turn-over control is a small button in the strip's lower-right
+  corner**, one per strip. Per-strip rather than global, because the reason to
+  look at one track's EQ is usually to compare it against what its neighbours
+  are doing, and a mixer that turns over all at once takes that away.
+- **The name, meter, level and pan survive the turn.** An EQ is set by ear
+  while watching what it does to the level, and a face sharing nothing with
+  the one it replaced reads as a different panel arriving rather than as this
+  strip, turned round.
+- **A face that is not showing is not built.** An `if`, not an `opacity: 0`:
+  that is what keeps a back face free on every track in a large project.
+- **No parameter is reachable from only one presentation.** The paned strip's
+  back face, the track's face in the device rack, and the zoomed console strip
+  are one parameter set drawn three ways. A control that exists in only one of
+  them makes the mixer's own state something a user has to manage before they
+  can do the work.
+- **The transition spends `Motion.duration` and `Motion.curve`.** They are
+  what the device rack's slide-aside and the dock's extent already animate on.
+  Slint 1.17 has no 3D transform, so a literal card flip is an x-scale through
+  zero with the faces swapped at the midpoint; a cross-dissolve with a small
+  slide is equally available. What is not available is a second set of timing
+  numbers.
+
 ## Rack Actions
 
 Add and remove are commands, not tall parameter modules. Present them as a

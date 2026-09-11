@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-10
-- Sessions: 88
+- Sessions: 89
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -220,7 +220,9 @@ Alphabetical by model name, then by harness.
   blocked by the pre-commit hook refusing the one write `main` accepts, and
   then the reference measurements themselves -- 25 licensed plugins driven
   offline on the studio Mac, which found that the console channels everyone
-  calls warm measure odd-order and the mic preamp is the even one.
+  calls warm measure odd-order and the mic preamp is the even one, and then
+  the mixer strip that turns over rather than growing, which is what a 92px
+  strip buys and what it retires.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
