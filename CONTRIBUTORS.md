@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-11
-- Sessions: 99
+- Sessions: 100
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -234,7 +234,13 @@ Alphabetical by model name, then by harness.
   show, and where the faces ended up with no range in them at all because the
   descriptor table crosses into the markup once at startup; then the review
   pass over that strip, which found the Q law stated in two crates with
-  nothing holding them together.
+  nothing holding them together; then the strip's face redesign off Adam's
+  annotated screenshot -- solo in place, a gain-reduction lamp, stepped EQ
+  frequencies whose hertz belong to the voicing rather than the label, and
+  three faces where there had been two -- which cost three layout
+  constraints that each type-checked and then rendered wrongly, the worst of
+  them an "overlay" that was quietly adding its own height to its parent's
+  minimum.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

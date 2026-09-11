@@ -99,27 +99,23 @@ slot. The ids start at 16 for this: `modulation::STRIP_PARAM_VOLUME` and
 become one without renumbering anything automation has persisted. Recorded
 2026-09-11 with step 03.
 
-**The strip's compressor has no live gain-reduction meter.**
-`mooloop_dsp::strip::Strip::dynamics_frame` reports the block's extremes and
-nothing carries them to the face: `DeviceMeters` is addressed by device and
-the strip is not one. The COMP page draws the static curve, which is what
-says what the voicing is doing but not what it is doing *now*.
-
 **Buffer MIDI mapping has no UI.** `EngineHandle::set_buffer_midi_map`
 (`mooloop-engine/src/lib.rs:622`) is the only way to install one, and neither
 `mooloop-ui` nor `mooloop-session` calls it. MIDI is decoded and routed; it is
 just not reachable from the app.
 
-**Solo is a button with nothing behind it.** `SoloButton` exists in
-`controls.slint:1856` with a `soloed` property; `mooloop-core` has no solo
-state at all. `MIXER_PLAN.md` specifies the intended behaviour (an AFL-style
-monitor tap, not a routing change). Also standing in `ENHANCEMENTS.md`, and
-now drawn on Adam's strip mockup — `docs/plans/archive/console/THE-STRIP.md` says why
-it is the largest unbuilt thing on it: a monitor tap is a second output path,
-not a control. The console plan closed on 2026-09-11 without it, and
-deliberately did not draw a dead button on the new 92px strip: the column
-beside the fader carries mute and polarity, and solo joins it when there is
-something behind it.
+**There is no way to hear a track before its own fader.** Solo is in place
+as of 2026-09-11, which silences the others rather than opening a monitor
+path, so a soloed track is still heard through its fader, its pan and its
+analog-sum switch. `MIXER_PLAN.md` records the AFL tap as later work and
+names what it needs: the tap points that pre-fader sends also want.
+
+**A channel cannot be soloed, only its track.** `MixerBus.solo` is per track,
+which is the same scope the analog-sum switch has and for the same reason
+(`docs/TERMINOLOGY.md`: a mixer strip is a track). Soloing one channel of
+several on a track has not been asked for, and would need the per-channel
+strip the sends work also wants — so it is one control on one face away, not
+a design question.
 
 ---
 

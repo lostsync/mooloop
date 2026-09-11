@@ -535,22 +535,37 @@ decide its shape. Settled 2026-09-10.
   54 px, which is two knobs, which is why the same section used to need a
   wider face than the one it lived on. Pick a strip's width by doing that
   arithmetic, not by choosing a number that looks narrow and paging around it.
-- **A strip that needs more controls gets a second face, not more height.** A
+- **A strip that needs more controls gets another face, not more height.** A
   strip's height is its fader's, and the fader is the one element on it with a
   floor -- so an area that toggles open below the fader spends the only
   dimension that cannot give. Turning the strip over changes nothing's size.
-- **The turn-over control is a small button in the strip's lower-right
-  corner**, one per strip. Per-strip rather than global, because the reason to
-  look at one track's EQ is usually to compare it against what its neighbours
-  are doing, and a mixer that turns over all at once takes that away.
-- **The name, meter, level and pan survive the turn.** An EQ is set by ear
-  while watching what it does to the level, and a face sharing nothing with
-  the one it replaced reads as a different panel arriving rather than as this
-  strip, turned round.
+- **There are three faces and the fader is the middle one.** Sends to the
+  left, the strip to the right, reached by a `‹` and a `›` in the strip's
+  bottom row. Two, not one: a single cycling button makes the user press it
+  and find out, where a pair says which way each goes before it is pressed.
+  The arrow of the face being shown **becomes a dot** -- the same idle-dot
+  idiom as an in-and-out switch -- so the row reads as a position indicator
+  rather than as two buttons that might both do something.
+- **The turn-over controls are per strip, not global.** The reason to look at
+  one track's EQ is usually to compare it against what its neighbours are
+  doing, and a mixer that turns over all at once takes that away.
+- **The name, meter, level, pan, solo, mute and polarity survive the turn.**
+  An EQ is set by ear while watching what it does to the level, and a face
+  sharing nothing with the one it replaced reads as a different panel arriving
+  rather than as this strip, turned round. The four small controls live in one
+  column beside the fader -- pan above solo, mute, polarity -- which is what
+  buys the room to keep them on every face rather than only on the front.
+- **The mixer's strip face carries no scopes.** The EQ curve and the
+  compressor's transfer are on the rack row's wide face, where there is width
+  to draw them at a size worth reading. A 84 px plot is a decoration that
+  costs the control under it; leaving it out is most of why the three
+  sections fit stacked with no tabs. Adam, on the mockup: *"no scopes on the
+  mixer -- that's partly the point."*
 - **A face that is not showing is not built.** An `if`, not an `opacity: 0`:
-  that is what keeps a back face free on every track in a large project.
+  exactly one of the three is constructed at a time, which is what keeps the
+  other two free on every track in a large project.
 - **No parameter is reachable from only one presentation.** The paned strip's
-  back face, the track's pinned row in the device rack, and the zoomed console
+  strip face, the track's pinned row in the device rack, and the zoomed console
   strip are one parameter set drawn three ways. A control that exists in only
   one of them makes the mixer's own state something a user has to manage
   before they can do the work. Built 2026-09-11 for the first two; the zoomed
@@ -574,6 +589,33 @@ decide its shape. Settled 2026-09-10.
   band. But such a number can *coincide* with a range or a floor, and then
   moving one silently stretches a drawing rather than breaking it, so the
   coincidence is asserted rather than commented on.
+- **Size says importance.** On a strip's sections the control a user reaches
+  for first is drawn larger than its neighbours: an EQ band's gain over its
+  frequency and Q, the compressor's threshold and ratio over its attack,
+  release, knee, mix and makeup. Two knob sizes, from two named metrics, and
+  the row order matches -- the big one first. This is the only ranking the
+  face gets, and it is why no section needs a heading per control.
+- **Draw the thing when the thing is a shape.** Each EQ row is identified by
+  a bell, a high shelf or a low shelf, not by the letters `HS`, `HM`, `LM`,
+  `LS` -- and the band's own type switch toggles between the two shapes it can
+  be, which is the same drawing pressed rather than a word. Where a control
+  is a quantity and has no shape (a threshold, an attack) a single-letter
+  caption stands in, and it is understood to be a mnemonic rather than a
+  label: Adam, on the earlier `G F Q` header, *"the letters -- they're hard to
+  read anyway, tooltip and statusbar are gonna be the user's friend
+  regardless."* So the caption is never the only place a control is named --
+  the tooltip carries the value and the status bar the explanation, per
+  **Interaction And Wording** below -- and a caption that has to be taught is a sign
+  the thing wanted an icon.
+- **A stepped control shows a position, and the voicing owns what the
+  position is worth.** The EQ's frequencies are 5, 7, 7 and 5 selectable
+  positions per band, unlabelled, because a printed hertz value would have to
+  be one voicing's -- and Iron wanting 2.2 kHz where Moo wants 2.5 kHz would
+  make the label lie on three faces out of four. The project stores the
+  position; `StripEqTable` turns it into hertz; the tooltip and the status bar
+  say which hertz it currently is. This is the same rule as *a voicing selects
+  laws, never values*, arrived at from the other end: the number the knob
+  shows must be one no voicing can move.
 - **Where the strip's processing sits in a track's chain is one statement.**
   `mooloop_core::mixer::STRIP_PIN` decides both when the engine runs it and
   where the rack draws its pinned row, so the drawing cannot say one thing

@@ -260,8 +260,8 @@ not overload `AuxSend` or borrow another slot's audio buffer.
 carrying `Send A` and `Send B` as fixed controls, and a `+ Track` / `+ Bus` /
 `+ Send` row to make them; all three are retired
 (`docs/TERMINOLOGY.md`, `docs/plans/archive/console/README.md`). What replaces them is
-a strip with **two faces** and a mixer with **three states**, settled the same
-day. [`docs/plans/archive/console/THE-STRIP.md`](plans/archive/console/THE-STRIP.md) carries
+a strip with faces and a mixer with **three states**, settled the same day --
+two faces as first drawn, three since 2026-09-11. [`docs/plans/archive/console/THE-STRIP.md`](plans/archive/console/THE-STRIP.md) carries
 the strip's own detail; what follows is the part that belongs to the mixer.
 
 The mixer is a horizontal strip work surface, not a routing spreadsheet. A
@@ -280,17 +280,22 @@ scrolls horizontally.
 - **The front face is the mixing face**: name, meter, fader, pan, mute, solo,
   polarity, destination and analog sum, in one stable vertical order. It is
   what you look at while balancing a mix, and it fits a track's whole output
-  stage without a page.
-- **A turn-over button in the strip's lower-right corner shows the back
-  face**, which keeps the name, meter, level and pan and spends the rest of
-  its height on one page of EQ / COMP / DRIVE / SENDS. One strip turns at a
-  time, so a track's EQ can be set against its neighbours' faders.
+  stage without a page. As built, pan / solo / mute / polarity are one column
+  beside the fader and they stay on every face -- see below.
+- **The strip has three faces and the mixing one is in the middle.** A `‹`
+  and a `›` in the strip's bottom row reach the sends and the strip's own
+  processing; the arrow of the face you are on becomes a dot. The name, the
+  meter, the fader and the column beside it do not turn, so a track's EQ can
+  be set against its neighbours' faders and a send against the fader feeding
+  it. One strip turns at a time. Built 2026-09-11: EQ, COMP and DRIVE are
+  stacked on the one page with no tabs, and the scopes are on the track's
+  rack row where there is width to read them.
 - **Double-clicking the mixer's tab zooms the pane** -- the existing gesture,
   `UI_DESIGN.md` -- and the strips become full-format console strips with
   every section drawn at once. There is no turn-over in this state, because
   having the room is what the state is for.
 - Clicking a strip selects that track and points the lower device rack at it.
-  The track's face there carries the same controls as the back face and is
+  The track's face there carries the same controls as the strip face and is
   interchangeable with it; a parameter reachable from only one of them is a
   defect rather than a shortcut.
 - Main destination is a long/dynamic target menu, not an enormous selector
@@ -318,15 +323,33 @@ The slot and its inserts continue processing so tails decay. Pre-fader sends
 continue, by definition. This behavior is shown in the tooltip and is why a
 send has its own enabled control.
 
-Solo is part of the v0.1 mixer pass, rather than a decorative button. It is
-an AFL-style monitor tap: when one or more slots are soloed, their own
-post-fader/post-balance signals are summed into the Master monitor feed in
-place of the ordinary Master input. The slots otherwise continue through the
-normal graph, so their tails and sends keep running. To listen to the result
-of a drum group or a reverb return, solo that group or return; v0.1 solo does
-not try to infer an arbitrary downstream listening path. Solo therefore does
-not change routing, allocation, or stored project state. Solo-safe and
-cue/control-room routing are later work.
+Solo is part of the v0.1 mixer pass, rather than a decorative button. Built
+2026-09-11 as **solo in place**, which is a narrowing of what this section
+used to specify -- an AFL-style monitor tap, summing the soloed slots into
+the Master monitor feed in place of its ordinary input. Adam chose in place,
+and the reason is that the silence can then happen exactly where mute already
+happens, at each track's own output, instead of needing a second output path
+with its own gain structure to keep in step with the first.
+
+So: while anything is soloed, every *other* track is silenced, with two
+exceptions that are what make the gesture useful. A track that feeds a soloed
+track stays audible, and so does a track a soloed track feeds -- followed
+through outputs **and** sends, in both directions. Soloing a group therefore
+hears the group, and soloing one track of several in a group hears it through
+that group rather than stripped of its own destination, which is what the
+earlier "does not try to infer a downstream listening path" was giving up on.
+Two solos are both heard. The master refuses the gesture: soloing the thing
+everything reaches would silence nothing.
+
+A track's `solo` bit is stored; what it silences is not. The silenced set is
+derived from the whole bank every pump tick and diffed, like latency
+compensation and the console sums, so adding a send changes what a standing
+solo lets through without anyone pressing anything. Solo does not touch the
+soloed track's own mute, and it changes no routing and no allocation.
+
+Solo-safe, cue/control-room routing, and an AFL tap for hearing a track
+*before* its own fader are later work, and the last of those wants the tap
+points that pre-fader sends want.
 
 Deleting a non-master slot is an explicit structural operation. If it has
 incoming main routes or sends, the confirmation names them and offers an
@@ -386,7 +409,7 @@ it as vertical slices:
    the parts that survived.)* Add Send A/B defaults, pre/post taps, send
    targets, level smoothing, routing diagnostics, persistence, and the mixer
    strip affordances. Demonstrate delay/reverb-style returns audibly.
-5. **Solo and refinements.** Audible monitor solo, meter details, slot/bus
+5. **Solo and refinements.** Solo in place landed 2026-09-11; meter details, slot/bus
    presets, and later stem export where it follows naturally.
 
 Each stage swaps whole prepared state for structural changes. Do not try to
@@ -420,7 +443,7 @@ The v0.1 mixer pass is complete when all of these are true:
 - true auxiliary sidechain inputs and ducking effects;
 - deliberate feedback edges and feedback safety controls;
 - external audio inputs, hardware inserts, and JACK port routing in the mixer;
-- cue/control-room buses, solo-safe, solo-in-place variants, and talkback;
+- cue/control-room buses, solo-safe, and talkback;
 - VCA/folder groups, surround/multichannel slots, and plugin pin routing;
 - patch-cord/canvas routing UI; and
 - a promise of REAPER-equivalent routing in v0.1.

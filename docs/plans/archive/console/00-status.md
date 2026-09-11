@@ -700,7 +700,7 @@ it is why the lower half of the knob is worth turning.
 `backing_the_drive_off_cleans_and_rounds` is the observation as an assertion,
 beside `drive_buys_character`, which had only ever gone up.
 
-UI feedback is outstanding and will land separately.
+UI feedback landed separately; the addendum at the bottom of this file is what it changed.
 
 ## Step 06 — preamp modelling
 
@@ -718,3 +718,71 @@ where only the harmonic half is fitted, and Adam's decision about whether
 `Grip` gets the drive-dependent low shelf the real SSL turns out to have
 instead of a tilt. None of those is a step; each is a row of a table and a
 pair of ears.
+
+---
+
+## Addendum — the UI feedback, 2026-09-11
+
+The strip's audio closed above. What Adam sent back was about its *face*, on
+an annotated screenshot (`~/Documents/mixer-strip-ui.png`), and it turned
+into six changes. They are recorded here rather than in a new plan step
+because not one of them needed a plan: the parameter set moved by two fields
+and everything else was drawing.
+
+**Solo, which this plan closed without.** Built as **solo in place**, which
+is a narrowing of what `MIXER_PLAN.md` specified. The status doc above listed
+solo as "the largest unbuilt thing on the mockup" precisely because an
+AFL-style monitor tap is a second output path rather than a control; in place
+needs no second path at all, because the silence happens where mute already
+happens. A soloed track's feeders and destinations stay audible, followed
+through outputs and sends in both directions, so soloing a group hears the
+group. `mixer::solo_silenced` reuses `reaches()` for that -- the same
+function the cycle check uses -- and the silenced set is derived and diffed
+each pump tick rather than stored.
+
+**The gain-reduction lamp, which this plan also closed without.** Adam:
+*"gr light, yeah let's do it tho. it's needed."* `BusMeters` gained a
+`reduction` array of held peaks, published by the render loop after the strip
+runs and drained by the pump into a `StripMeters` global. It is a lamp beside
+the COMP header rather than a meter: the strip page is 84px wide and a meter
+there would cost a control.
+
+**Stepped EQ frequencies.** This was the interesting one. Step 03 refused a
+selectable frequency set because a printed hertz value would have to be one
+voicing's, and Iron wanting 2.2 kHz where Moo wants 2.5 kHz would make the
+label lie on three faces out of four. Adam's answer removed the premise:
+*"i say we dont label. we just have N positions/band and they're selectable.
+tooltip/statusbar can carry the specific frequency information to the user on
+hover."* So a band stores a **position** -- 5, 7, 7, 5 across HS / HM / LM /
+LS -- and `StripEqTable` gives each voicing its own hertz for each position.
+Grip's are the SSL's own printed marks where it has them. This is the
+"laws, never values" rule arrived at from the other end: the number a knob
+shows must be one no voicing can move, and a position index is such a number.
+
+**The input trim came out.** Seven comp parameters where there were eight.
+It was a second gain in front of a threshold, which is a thing a user has to
+undo before the threshold means anything, and the drive knob one section up
+already does it with character. Safe to renumber because nothing persists a
+strip parameter id yet; `strip.rs`'s header says so, and the day anything
+does, that stops being true.
+
+**Three faces, not two.** The fader is the middle one, with sends to the left
+and the strip to the right, reached by a `‹` and a `›` whose active one
+becomes a dot. The pan knob moved off the back face into the column beside
+the fader, where it joins solo, mute and polarity -- four controls that now
+survive the turn, so panning no longer costs one.
+
+**No tabs, no scopes.** DRIVE, EQ and COMP are stacked on the one page, each
+with its own square-and-dot in-switch, and the EQ's rows are identified by a
+bell or a shelf drawn rather than by letters. The scopes stay on the rack
+row's wide face. Adam: *"no scopes on the mixer -- that's partly the point."*
+Leaving them out is most of why three sections fit in 84px with no tabs.
+
+What it cost, and the reason `reference-slint-layout-gotchas` is now a
+memory: the two page arrows were absolutely positioned at first, which reads
+like an overlay and is not -- **a non-layout child still contributes to its
+parent's layout constraints** -- so the pair added their own height to
+everything the strip already needed and pushed the analog-sum switch out of
+the bottom of the face. Four theories were wrong before that one (a meter's
+segment count, a fader's floor, the scroll bar, a column's alignment), and
+the proof was deleting the arrows and watching the switch appear.

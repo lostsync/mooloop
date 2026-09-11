@@ -185,14 +185,17 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   voices, restart/layer retriggering, and 16 cross-channel choke groups.
 - A mixer sharing the work surface with the step grid, behind the toolbar's
   STEPS/MIXER tab strip. It is a strip per track, master first, and a strip is
-  **92 px wide with two faces**. The front is what you look at while mixing:
-  name plate, live stereo meter, fader, mute, polarity, destination, a count
-  of the channels feeding it, and the analog-sum switch at its foot. A small
-  button in the lower-right corner **turns the strip over** -- one strip at a
-  time, so one track can show its EQ while the rest still show faders -- onto
-  a back face carrying the pan and one page of EQ / COMP / DRIVE / SENDS. The
-  name, the meter and the fader do not turn: an EQ is set by ear while
-  watching what it does to the level. Clicking a strip's name plate points the
+  **92 px wide with three faces**. The middle one is what you look at while
+  mixing: name plate, live stereo meter, fader, destination, a count of the
+  channels feeding it, and the analog-sum switch at its foot. A `‹` and a `›`
+  in the strip's bottom row reach the other two -- sends to the left, the
+  channel strip to the right -- and the arrow of the face you are on becomes a
+  dot, so the row says where you are as well as where you can go. It is one
+  strip at a time, so one track can show its EQ while the rest still show
+  faders. The name, the meter and the fader do not turn, and neither does the
+  column of four small controls beside the fader -- pan, solo, mute, polarity
+  -- because an EQ is set by ear while watching what it does to the level and
+  a send is set against the fader that feeds it. Clicking a strip's name plate points the
   device rack below at that track, so a chain on a group of channels is built
   with the same gesture as a chain on one channel. Channels name their track
   from a picker in their rack row, beside their other output controls.
@@ -362,8 +365,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   what the tool cannot yet compose with. That group is down to `PianoGrid` and
   `ModulationShelf`. The converse list -- UI patterns that recur but have no
   reusable component behind them at all -- is `docs/WIDGET_INVENTORY.md`.
-- Some widgets exist ahead of the features that will use them: gain reduction and
-  correlation have no audio behind them yet, and solo is a button style only.
+- Some widgets exist ahead of the features that will use them: correlation has
+  no audio behind it yet.
 - There is no metronome. The toolbar deliberately does not offer a click-track
   toggle, since nothing in the DSP graph produces one yet.
 - MIDI input is wired but reaches nothing. The engine registers a JACK
@@ -644,13 +647,23 @@ land on its own when it starts to matter:
   block, against a track bank that is capped at seventeen today.
 
   The EQ's four bands read **left to right, top to bottom**: high shelf, high
-  mid, low mid, low shelf. Each is frequency / gain / Q, and each switches
+  mid, low mid, low shelf. Each is gain / frequency / Q, and each switches
   between a bell and the shelf it is nearest -- the top two to a high shelf,
   the bottom two to a low shelf. A band's Q knob is its Q as a bell and its
   **slope** as a shelf, and a band at exactly 0 dB is not run at all. The
   compressor is its own design rather than the compressor device behind a
-  different face: threshold, ratio, input trim, attack, release, knee, a
-  parallel `w/d mix` (at 0 it is the dry signal exactly) and makeup.
+  different face: threshold, ratio, attack, release, knee, a parallel `w/d
+  mix` (at 0 it is the dry signal exactly) and makeup, with a lamp beside the
+  section's header that lights with the gain reduction the block actually
+  applied.
+
+  **Frequency is stepped, and the step is what is stored.** A band offers 5,
+  7, 7 or 5 positions rather than a sweep, and no position is printed with a
+  hertz value, because the hertz is the *voicing's*: `StripEqTable` gives each
+  voicing its own list, so Iron's low mid can sit lower than Moo's without a
+  label going wrong on three faces out of four. The tooltip and the status bar
+  say what the current position is worth. Dragging a point on the rack row's
+  response plot snaps to the nearest position by log distance.
 
   **A voicing selects laws, never values.** It owns the input stage's
   harmonic profile, its tilt and its slew limit (all measured -- see
@@ -663,7 +676,7 @@ land on its own when it starts to matter:
   selected and nothing set is the same audio as no strip.
 
   The strip is drawn in two places, and no parameter is reachable from only
-  one of them: the mixer strip's back face, and a **pinned row in the track's
+  one of them: the mixer strip's own face, and a **pinned row in the track's
   device rack**. Where that row sits in the chain -- before the track's own
   devices -- is one statement, `mooloop_core::mixer::STRIP_PIN`, which the
   engine's block loop reads as well, so the drawing and the audio cannot
@@ -674,9 +687,29 @@ land on its own when it starts to matter:
   taps and the fader -- sees the flipped signal.
 
   Not yet: the strip's parameters are not automation or modulation
-  destinations, there is no live gain-reduction meter on the compressor page,
-  and there is no strip preset. `docs/plans/archive/console/00-status.md` says why
+  destinations, and there is no strip preset. `docs/plans/archive/console/00-status.md` says why
   each is separable.
+- **Solo in place, per track.** A soloed track silences the *other* tracks,
+  and the exceptions are what make it useful: anything that feeds a soloed
+  track and anything a soloed track feeds stay audible, followed through
+  outputs **and** sends, in both directions -- so soloing a group hears the
+  group, and soloing a channel's track hears it through the group it lands in
+  rather than in isolation from its own destination. Two solos are both heard.
+  Nothing is silenced when nothing is soloed, and the master refuses the
+  gesture, because soloing the thing everything reaches means silencing
+  nothing.
+
+  It is **solo in place**, not a monitor tap: the silence happens where mute
+  happens, at the track's own output, so the mix a solo produces is the mix
+  minus everything else rather than a separate path with its own gain
+  structure. What is silenced is derived from the whole bank every pump tick
+  and diffed like compensation, the audio graph and the console sums -- a
+  track's `solo` is what is stored, never the silence -- so adding a send can
+  change what a standing solo lets through without anyone pressing anything.
+  A solo does not touch the soloed track's own mute: a muted track that is
+  soloed stays muted, which is the question "is this the one that is quiet?"
+  answered honestly. The button is drawn beside mute in the column that
+  survives the turn, and on the strip's rack row.
 - **Analog sum.** Any mixer track can be switched to sum into its destination
   through a non-linear encode, decoded at that destination together with
   everything else feeding it that has the switch on. The control is a small
@@ -1093,8 +1126,7 @@ land on its own when it starts to matter:
   nothing authors one, because the mixer draws no channel strips for the control
   to live on — that and the tap points below pre-fader are stage 2 of the send
   work. A send has a level and a tap, and no pan and no wet/dry split of its
-  own. There are no sidechains, external inputs, solo, or per-track stem
-  export.
+  own. There are no sidechains, external inputs, or per-track stem export.
 - Latency compensation is the mixer's own, not a hosted plugin's. `AudioNode`
   reports integer processing latency and `EffectKind` declares it without
   being built; the drive is the only kind that costs anything, at the measured

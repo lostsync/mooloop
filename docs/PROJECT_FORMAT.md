@@ -261,12 +261,22 @@ before any of them existed still loads:
   nothing now. See `docs/plans/archive/console/02-console-summing.md`.
 - **A track's channel strip is one defaulted struct per track.**
   `buses[].bus.strip` carries the voicing, the three `in` switches, the drive,
-  the four EQ bands and the compressor's eight values; `buses[].bus.polarity`
+  the four EQ bands and the compressor's seven values; `buses[].bus.polarity`
   is the invert beside it. Both default, and the default is every switch off
   and every value neutral -- so a manifest written before the strip existed
   loads **bit-identical** to the file it was saved from, which is the same
   claim analog sum makes one entry up and is a test rather than an intention
   (`a_default_strip_changes_nothing_about_the_mix`).
+
+  **A band stores a frequency `position`, not a frequency.** `position` is an
+  index into that band's stepped list -- 5 positions for the two outer bands
+  and 7 for the two mid ones -- and the hertz it is worth is the *voicing's*,
+  from `StripEqTable`. The format therefore survives a voicing being retuned,
+  and a band's hertz can differ between Moo and Iron without either manifest
+  or face lying. It carries `#[serde(default)]` returning the middle position,
+  so a manifest written against the earlier `frequency_hz` field loads with
+  the band centred rather than at zero; nothing shipped with the old field, so
+  no reader converts one.
 
   A band stores its `kind` as the full `EqBandKind` (`bell`, `low_shelf`,
   `high_shelf`) although the face offers each band only two of the three: the
@@ -280,6 +290,13 @@ before any of them existed still loads:
   pinned position is a policy the application states once, and a per-track
   copy of it would be a thing to keep in step for a feature nobody has asked
   for. See `docs/plans/archive/console/03-the-channel-strip-device.md`.
+- **A track's solo is stored, and what solo *does* is not.** `buses[].solo`
+  is a defaulted bool, so a project reopens with the same tracks soloed. What
+  it silences is derived every pump tick from the whole bank -- a soloed
+  track's feeders and destinations stay audible -- and never written, because
+  it is a function of the graph and storing it would let a hand-edited file
+  describe a silence the graph disagrees with. Muting is the switch; solo is
+  the question the switch asks.
 - **A track's sends are a defaulted list.** `buses[].sends` is `{ target,
   level, tap, enabled }` per send, where `target` is a track index, `tap` is
   `post_fader` (the default) or `pre_fader`, and `enabled` defaults to `true`

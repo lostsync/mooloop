@@ -10,9 +10,9 @@ block at the bottom.
 ---
 
 Anything that can be muted should also be able to be soloed.
-  STILL OPEN: solo is a button style with nothing behind it. `MIXER_PLAN.md`
-  specifies the behaviour (an AFL-style monitor tap, not a routing change) as
-  part of its v0.1 pass.
+  DONE 2026-09-11 for tracks, as solo in place: the others go quiet, and a
+  soloed track's feeders and destinations stay audible. A channel still has
+  no solo of its own, and neither does a device.
 
 
 Piano roll:
