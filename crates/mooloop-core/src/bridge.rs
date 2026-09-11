@@ -10,9 +10,12 @@
 //! engine pre-allocates pools at startup so these commands only mutate.
 
 use crate::{
-    AutomationPoint, BufferEvent, DeviceKind, DrumSynthParams, EffectTarget, LoopRange, MlM1Params,
-    MlP8Route, ModRoute, ModSourceId, ModSourceRef, ModulatorParams, MonoSynthParams, NoteEvent,
-    NoteId, ParamAddr, PlaybackMode, PointId, PolySynthParams, SamplerParams, SendTap,
+    AutomationPoint, BufferEvent, DeviceKind, DrumSynthParams, EffectTarget,
+    LoopRange, MlP8Route, ModRoute, ModSourceId, ModSourceRef, ModulatorParams, MonoSynthParams,
+    MlM1Params,
+    NoteEvent,
+    NoteId,
+    ParamAddr, PlaybackMode, PointId, PolySynthParams, SamplerParams, SendTap,
 };
 
 /// GUI -> audio. Drained at the top of each process callback.
@@ -209,7 +212,10 @@ pub enum EngineCommand {
         params: MonoSynthParams,
     },
     /// Replace a channel's ML-M1 parameter set.
-    SetChannelMlM1Params { channel: u8, params: MlM1Params },
+    SetChannelMlM1Params {
+        channel: u8,
+        params: MlM1Params,
+    },
     /// Set one descriptor-addressed generator parameter on a channel.
     ///
     /// The narrow form of the `SetChannel*Params` commands around it, and the
@@ -239,11 +245,7 @@ pub enum EngineCommand {
     /// Move one internal route's depth. The ordinary knob drag, and
     /// deliberately not structural: it retunes the compiled table in place
     /// rather than rebuilding it.
-    SetSourceRouteAmount {
-        channel: u8,
-        route: u16,
-        amount: f32,
-    },
+    SetSourceRouteAmount { channel: u8, route: u16, amount: f32 },
     /// Replace a channel's poly synth parameter set.
     SetChannelPolySynthParams {
         channel: u8,

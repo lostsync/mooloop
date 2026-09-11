@@ -231,12 +231,7 @@ impl Session {
     }
 
     /// Switches a send on or off, which is not the same as turning it down.
-    pub fn set_send_enabled(
-        &mut self,
-        bus: i32,
-        send: i32,
-        enabled: bool,
-    ) -> Option<EngineCommand> {
+    pub fn set_send_enabled(&mut self, bus: i32, send: i32, enabled: bool) -> Option<EngineCommand> {
         let (index, send) = send_address(bus, send)?;
         let entry = self.buses.get_mut(index)?.sends.get_mut(send)?;
         entry.enabled = enabled;
@@ -362,24 +357,12 @@ mod tests {
         let mut session = Session::default();
         session.ensure_tracks(2);
 
-        assert!(
-            session.rename_track(1, "  Drum Bus  "),
-            "a real name was refused"
-        );
-        assert_eq!(
-            session.buses[1].bus.name, "Drum Bus",
-            "the name was not trimmed"
-        );
+        assert!(session.rename_track(1, "  Drum Bus  "), "a real name was refused");
+        assert_eq!(session.buses[1].bus.name, "Drum Bus", "the name was not trimmed");
 
-        assert!(
-            !session.rename_track(1, "Drum Bus"),
-            "an unchanged name reported a change"
-        );
+        assert!(!session.rename_track(1, "Drum Bus"), "an unchanged name reported a change");
         assert!(!session.rename_track(1, "  "), "a blank name was stored");
-        assert_eq!(
-            session.buses[1].bus.name, "Drum Bus",
-            "a refused name was still applied"
-        );
+        assert_eq!(session.buses[1].bus.name, "Drum Bus", "a refused name was still applied");
 
         assert!(!session.rename_track(-1, "Nope"));
         assert!(!session.rename_track(session.buses.len() as i32, "Nope"));
@@ -491,10 +474,7 @@ mod tests {
         let Err(RoutingLoop { feeder }) = refusal else {
             panic!("a send closed a loop and was accepted");
         };
-        assert_eq!(
-            feeder, session.buses[2].bus.name,
-            "the refusal named the wrong track"
-        );
+        assert_eq!(feeder, session.buses[2].bus.name, "the refusal named the wrong track");
         assert!(
             session.buses[1].sends.is_empty(),
             "the refused send was pushed anyway"

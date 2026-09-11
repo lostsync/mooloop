@@ -36,7 +36,9 @@ pub const MASTER_BUS: u8 = 0;
 
 /// Where an effect chain lives. Effect commands address a target rather than a
 /// channel so one set of install/remove/param messages serves both.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum EffectTarget {
     Channel(u8),
@@ -310,9 +312,9 @@ pub fn sanitize_bank(buses: &[BusSetup]) -> Vec<BusSetup> {
         // or the channel is silently unheard, which is why that one falls
         // back; a send is an addition, and the honest repair for one whose
         // destination is gone is that it is gone too.
-        setup.sends.retain(|send| {
-            is_legal_send(index as u8, send.target) && (send.target as usize) < count
-        });
+        setup
+            .sends
+            .retain(|send| is_legal_send(index as u8, send.target) && (send.target as usize) < count);
     }
     if compile_bus_graph(&bank).is_none() {
         for setup in &mut bank {
@@ -504,10 +506,7 @@ pub fn compile_bus_graph(buses: &[BusSetup]) -> Option<CompiledBusGraph> {
         if node == MASTER_BUS {
             continue;
         }
-        let release = |destination: usize,
-                       feeding: &mut [u16; MAX_BUSES],
-                       queue: &mut [u8; MAX_BUSES],
-                       tail: &mut usize| {
+        let release = |destination: usize, feeding: &mut [u16; MAX_BUSES], queue: &mut [u8; MAX_BUSES], tail: &mut usize| {
             feeding[destination] -= 1;
             if feeding[destination] == 0 {
                 queue[*tail] = destination as u8;
@@ -723,10 +722,7 @@ pub fn compile_latency(
     // The latest anything feeding each bus arrives, before that bus's own
     // chain. Channels are known up front; buses fill in as they are visited.
     let mut input_arrival = [0u32; MAX_BUSES];
-    let channels = channel_latency
-        .len()
-        .min(channel_bus.len())
-        .min(MAX_CHANNELS);
+    let channels = channel_latency.len().min(channel_bus.len()).min(MAX_CHANNELS);
     for channel in 0..channels {
         let bus = clamp_bus(channel_bus[channel]) as usize;
         input_arrival[bus] = input_arrival[bus].max(channel_latency[channel]);
@@ -920,10 +916,7 @@ pub struct CompiledAudioGraph {
 
 impl CompiledAudioGraph {
     pub fn edge(&self, channel: usize) -> AudioEdge {
-        self.edges
-            .get(channel)
-            .copied()
-            .unwrap_or(AudioEdge::Unsubscribed)
+        self.edges.get(channel).copied().unwrap_or(AudioEdge::Unsubscribed)
     }
 
     pub fn order(&self) -> &AudioOrder {
@@ -1064,6 +1057,7 @@ pub fn compile_audio_graph(
         waiting[consumer] = edge.resolved().is_some();
     }
 
+
     let mut order = [0u8; MAX_CHANNELS];
     let mut emitted = 0usize;
     let mut queue = [0u8; MAX_CHANNELS];
@@ -1125,10 +1119,7 @@ pub fn compile_audio_graph(
     // one pass at the end rather than un-assigning as refusals happen keeps
     // the indices dense, which is what lets the engine treat the count as the
     // number of buffers it needs.
-    if edges
-        .iter()
-        .any(|edge| edge.refusal() == Some(EdgeRefusal::Cycle))
-    {
+    if edges.iter().any(|edge| edge.refusal() == Some(EdgeRefusal::Cycle)) {
         taps = [None; MAX_CHANNELS];
         tap_count = 0;
         for edge in edges.iter_mut().take(live) {
@@ -1166,9 +1157,9 @@ mod tests {
 
     // --- The audio graph ---------------------------------------------------
 
-    use crate::mod_metadata::SignalShape;
     use crate::outlet::{OutletDescriptor, OutletTap};
     use crate::AudioSubscription;
+    use crate::mod_metadata::SignalShape;
 
     /// A producer publishing one control outlet and two audio ones, which is
     /// the shape every refusal below is measured against.
@@ -1488,10 +1479,7 @@ mod tests {
         assert!(position(1) < position(2), "1 feeds 2 and must render first");
         assert!(position(2) < position(MASTER_BUS));
         for track in 0..bank.len() as u8 {
-            assert!(
-                order.contains(&track),
-                "track {track} was left out of the order"
-            );
+            assert!(order.contains(&track), "track {track} was left out of the order");
         }
     }
 
@@ -1568,10 +1556,7 @@ mod tests {
         // 4 -> 6 by send, so a send from 6 to 3 loops.
         let mut bank = routed(&[(3, 4)]);
         bank[4].sends.push(AuxSend::new(6));
-        assert!(
-            would_create_cycle(&bank, 6, 3),
-            "a loop closed through a send"
-        );
+        assert!(would_create_cycle(&bank, 6, 3), "a loop closed through a send");
     }
 
     /// A bank whose sends loop has no valid schedule, and the repair is the
@@ -1600,11 +1585,7 @@ mod tests {
         bank[1].sends.push(AuxSend::new(1));
         bank[1].sends.push(AuxSend::new(2));
         let repaired = sanitize_bank(&bank);
-        assert_eq!(
-            repaired[1].sends.len(),
-            1,
-            "only the reachable one survives"
-        );
+        assert_eq!(repaired[1].sends.len(), 1, "only the reachable one survives");
         assert_eq!(repaired[1].sends[0].target, 2);
     }
 
@@ -1673,12 +1654,7 @@ mod tests {
             .buses
             .iter()
             .enumerate()
-            .filter(|(_, track)| {
-                track
-                    .sends
-                    .iter()
-                    .any(|send| send.target as usize == reverb)
-            })
+            .filter(|(_, track)| track.sends.iter().any(|send| send.target as usize == reverb))
             .map(|(index, _)| index)
             .collect();
         assert_eq!(feeding.len(), 2, "two tracks send to it");
@@ -1703,18 +1679,9 @@ mod tests {
         assert_eq!(
             edges,
             vec![
-                SendEdge {
-                    producer: EffectTarget::Bus(1),
-                    target: 5
-                },
-                SendEdge {
-                    producer: EffectTarget::Bus(1),
-                    target: 2
-                },
-                SendEdge {
-                    producer: EffectTarget::Bus(3),
-                    target: 5
-                },
+                SendEdge { producer: EffectTarget::Bus(1), target: 5 },
+                SendEdge { producer: EffectTarget::Bus(1), target: 2 },
+                SendEdge { producer: EffectTarget::Bus(3), target: 5 },
             ]
         );
     }
@@ -1769,16 +1736,8 @@ mod tests {
         let sends = send_edges(&bank);
         let plan = compile_latency(&graph, &[0, 15], &[1, MASTER_BUS], &[0; MAX_BUSES], &sends);
 
-        assert_eq!(
-            plan.bus(1),
-            15,
-            "its output waits for the Drive at the master"
-        );
-        assert_eq!(
-            plan.send(0),
-            0,
-            "its send reaches a point nothing else does"
-        );
+        assert_eq!(plan.bus(1), 15, "its output waits for the Drive at the master");
+        assert_eq!(plan.send(0), 0, "its send reaches a point nothing else does");
     }
 
     /// A send from a channel is known before any track renders, the same way
@@ -1854,11 +1813,7 @@ mod tests {
         // But bus 1 arrives at the master fifteen frames late, so the direct
         // channel waits for it.
         assert_eq!(plan.channel(1), 15);
-        assert_eq!(
-            plan.bus(1),
-            0,
-            "the longest path into the master must not move"
-        );
+        assert_eq!(plan.bus(1), 0, "the longest path into the master must not move");
         assert_eq!(plan.total(), 15);
     }
 
@@ -1899,11 +1854,7 @@ mod tests {
 
         // Channel 0 travels 10 (bus 2) + 10 (bus 1) = 20 frames.
         assert_eq!(plan.total(), 20);
-        assert_eq!(
-            plan.channel(1),
-            20,
-            "the direct channel waits for the chain"
-        );
+        assert_eq!(plan.channel(1), 20, "the direct channel waits for the chain");
         assert_eq!(plan.channel(0), 0);
         assert_eq!(plan.bus(2), 0);
         assert_eq!(plan.bus(1), 0);
