@@ -1,0 +1,117 @@
+import { Theme } from "theme.slint";
+import { ParameterKnob, SelectorBank } from "controls.slint";
+import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
+
+// One preamp effect in a channel's device rack: only the working controls
+// live here; header, drag-to-reorder, and host actions come from the shared
+// shell and frame.
+//
+// The voicing selector is first and the knobs read left to right as the
+// signal runs: into the curve, blended against the dry, out. `Moo` is the
+// default and is the identity, so the device inserted and left alone is a
+// gain stage and nothing else.
+export component PreampDeviceFace inherits EffectDeviceShell {
+    name: "Preamp";
+    kind: "FX / 1U";
+    in-out property <float> drive;    // normalized 0..1 (-24 .. +24 dB)
+    in-out property <int> voicing;    // 0 = moo, 1 = grip, 2 = punch, 3 = iron
+    in-out property <float> mix;      // normalized 0..1
+    in-out property <float> output;   // normalized 0..1 (-24 .. +24 dB)
+    callback drive-changed(float);
+    callback voicing-changed(int);
+    callback mix-changed(float);
+    callback output-changed(float);
+
+    // Normalized -> natural, matching the descriptors in mooloop-core: both
+    // trims are linear over [-24, +24] dB.
+    private property <float> drive-db: -24 + root.drive * 48;
+    private property <float> output-db: -24 + root.output * 48;
+
+    VerticalLayout {
+        padding: 6px;
+        padding-top: DeviceRackMetrics.header-height + 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            alignment: start;
+            spacing: 4px;
+            SelectorBank {
+                options: ["MOO", "GRIP", "PUNCH", "IRON"];
+                selected-index <=> root.voicing;
+                // Wider than the bitcrusher's 34px: "PUNCH" is five
+                // characters and was touching its own segment edges.
+                segment-width: 44px;
+                tooltip: "Voicing";
+                selected(i) => { root.voicing-changed(i); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        // No transfer-curve display, unlike Drive's. Drawing this stage's
+        // curve needs the coefficients `HarmonicShaper` solves for, and a
+        // face is bound from the shared slot struct in `main.slint` -- so
+        // reaching them means widening a struct every device uses, and the
+        // alternative is spelling the profile numbers a second time in
+        // markup. `LOOSE_ENDS.md` carries it.
+        Rectangle { vertical-stretch: 1; }
+        HorizontalLayout {
+            alignment: center;
+            spacing: 0px;
+            ParameterKnob {
+                width: 69px;
+                diameter: 36px;
+                label: "Drive";
+                tooltip: "Gain into the curve";
+                value <=> root.drive;
+                default-value: 0.5;
+                value-text: round(root.drive-db * 10) / 10 + " dB";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[0];
+                modulation-depth: root.modulation-depths[0];
+                modulation-offset: root.modulation-offsets[0];
+                modulation-route-count: root.modulation-route-counts[0];
+                changed(v) => { root.drive-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
+                modulation-edit-started => { root.modulation-edit-started(0); }
+                modulation-edit-finished => { root.modulation-edit-finished(0); }
+            }
+            // The preamp's own blend, distinct from the surrounding host's
+            // generic Wet/dry control.
+            ParameterKnob {
+                width: 69px;
+                diameter: 36px;
+                label: "Mix";
+                tooltip: "Preamp's internal dry/wet blend";
+                value <=> root.mix;
+                default-value: 1.0;
+                value-text: round(root.mix * 100) + "%";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[2];
+                modulation-depth: root.modulation-depths[2];
+                modulation-offset: root.modulation-offsets[2];
+                modulation-route-count: root.modulation-route-counts[2];
+                changed(v) => { root.mix-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
+                modulation-edit-started => { root.modulation-edit-started(2); }
+                modulation-edit-finished => { root.modulation-edit-finished(2); }
+            }
+            ParameterKnob {
+                width: 69px;
+                diameter: 36px;
+                label: "Output";
+                tooltip: "Output trim";
+                value <=> root.output;
+                default-value: 0.5;
+                value-text: round(root.output-db * 10) / 10 + " dB";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[3];
+                modulation-depth: root.modulation-depths[3];
+                modulation-offset: root.modulation-offsets[3];
+                modulation-route-count: root.modulation-route-counts[3];
+                changed(v) => { root.output-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
+                modulation-edit-started => { root.modulation-edit-started(3); }
+                modulation-edit-finished => { root.modulation-edit-finished(3); }
+            }
+        }
+        Rectangle { vertical-stretch: 1; }
+    }
+}

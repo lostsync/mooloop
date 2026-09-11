@@ -605,6 +605,15 @@ fn slot_names(count: usize) -> ModelRc<SharedString> {
         .into()
 }
 
+/// The container's index in `effect_kind_index` (`mooloop-ui/src/lib.rs`),
+/// which `main.slint` matches on to draw a box rather than a face.
+///
+/// Named rather than spelt three times, because it moved once: the preamp
+/// took 12 and Chain went to 13 so that the insert menu could keep Chain
+/// last. The three literals this replaced all rendered a preamp instead, and
+/// the test failed on the box rather than in the diff.
+const CONTAINER_KIND: i32 = 13;
+
 fn effect_slot(kind: i32, units: i32) -> EffectSlotRow {
     EffectSlotRow {
         kind,
@@ -720,7 +729,7 @@ fn a_container_draws_its_run_and_its_nesting() {
     // A container holding two devices, one of which is another container
     // holding one: the shape the depth bars have to distinguish.
     let container = |children: i32, depth: i32| {
-        let mut row = effect_slot(12, 1);
+        let mut row = effect_slot(CONTAINER_KIND, 1);
         row.children = children;
         row.depth = depth;
         row.p0 = 0.6;
@@ -750,9 +759,9 @@ fn a_container_draws_its_run_and_its_nesting() {
         row
     };
     ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
-        flat(12),
+        flat(CONTAINER_KIND),
         flat(0),
-        flat(12),
+        flat(CONTAINER_KIND),
         flat(1),
         flat(3),
     ]))));

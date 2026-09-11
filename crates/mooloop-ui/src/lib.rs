@@ -972,7 +972,12 @@ fn effect_kind_index(kind: EffectKind) -> i32 {
         EffectKind::Modulation => 9,
         EffectKind::Plate => 10,
         EffectKind::Buffer => 11,
-        EffectKind::Chain => 12,
+        EffectKind::Preamp => 12,
+        // Highest, because the insert menu lists Chain last -- it is a
+        // container rather than an effect -- and
+        // `the_insert_menu_offers_every_kind` finds the menu's last row by
+        // `EffectKind::ALL.len() - 1`.
+        EffectKind::Chain => 13,
     }
 }
 
@@ -984,6 +989,7 @@ fn effect_kind_units(kind: EffectKind) -> i32 {
         EffectKind::Filter
         | EffectKind::Drive
         | EffectKind::Bitcrush
+        | EffectKind::Preamp
         | EffectKind::Limiter => 1,
         EffectKind::Buffer => 1,
         EffectKind::Gate | EffectKind::Compressor | EffectKind::Plate => 2,

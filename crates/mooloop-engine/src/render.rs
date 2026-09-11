@@ -7355,6 +7355,16 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 mooloop_core::EffectKind::Drive => {
                     params.set(mooloop_core::DRIVE_PARAM_DRIVE, 64.0);
                 }
+                mooloop_core::EffectKind::Preamp => {
+                    // `Moo` is the default and is the identity by design, so
+                    // a voicing has to be chosen or this kind would be the
+                    // one that proves nothing.
+                    params.set(
+                        mooloop_core::PREAMP_PARAM_VOICING,
+                        mooloop_core::PreampVoicing::Iron.to_index() as f32,
+                    );
+                    params.set(mooloop_core::PREAMP_PARAM_DRIVE_DB, 24.0);
+                }
                 mooloop_core::EffectKind::Bitcrush => {
                     params.set(mooloop_core::BITCRUSH_PARAM_BITS, 1.0);
                     params.set(mooloop_core::BITCRUSH_PARAM_DOWNSAMPLE, 32.0);

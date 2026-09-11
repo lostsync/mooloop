@@ -10,6 +10,7 @@
 //! `docs/MODULATION_PLAN.md` for why the split falls there.
 
 mod bitcrush;
+mod preamp;
 mod container;
 mod delay;
 mod drive;
@@ -21,6 +22,7 @@ mod plate;
 mod reverb;
 
 pub use bitcrush::BitcrushEffect;
+pub use preamp::PreampEffect;
 pub use delay::DelayEffect;
 pub use drive::DriveEffect;
 pub use dynamics::{CompressorEffect, GateEffect, LimiterEffect};
@@ -58,6 +60,7 @@ pub fn build_effect_at_tempo(
         EffectParams::Modulation(p) => Box::new(ModulationEffect::new(p, sample_rate)),
         EffectParams::Filter(p) => Box::new(FilterEffect::new(p, sample_rate)),
         EffectParams::Drive(p) => Box::new(DriveEffect::new(p, sample_rate)),
+        EffectParams::Preamp(p) => Box::new(PreampEffect::new(p, sample_rate)),
         EffectParams::Bitcrush(p) => Box::new(BitcrushEffect::new(p)),
         EffectParams::Delay(mut p) => {
             if p.tempo_sync {

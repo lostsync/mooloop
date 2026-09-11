@@ -213,6 +213,7 @@ fn resting_effect_cost() {
         EffectKind::Eq,
         EffectKind::Modulation,
         EffectKind::Filter,
+        EffectKind::Preamp,
         EffectKind::Drive,
         EffectKind::Bitcrush,
         EffectKind::Delay,

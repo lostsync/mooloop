@@ -742,6 +742,7 @@ fn effect_kind_slug(kind: EffectKind) -> &'static str {
         EffectKind::Eq => "eq",
         EffectKind::Modulation => "modulation",
         EffectKind::Filter => "filter",
+        EffectKind::Preamp => "preamp",
         EffectKind::Drive => "drive",
         EffectKind::Bitcrush => "bitcrush",
         EffectKind::Delay => "delay",

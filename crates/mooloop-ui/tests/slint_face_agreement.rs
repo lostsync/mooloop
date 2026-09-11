@@ -21,7 +21,8 @@ use mooloop_core::{DeviceKind, EffectKind, ParamCurve, ParamDescriptor};
 use mooloop_core::{
     BITCRUSH_PARAM_DOWNSAMPLE, COMP_PARAM_ATTACK_MS, COMP_PARAM_RATIO, COMP_PARAM_RELEASE_MS,
     DELAY_PARAM_TIME_MS, DRIVE_PARAM_DRIVE, GATE_PARAM_ATTACK_MS, GATE_PARAM_RELEASE_MS,
-    LIMITER_PARAM_RELEASE_MS, PLATE_PARAM_DECAY_S, REVERB_PARAM_PREDELAY_MS,
+    LIMITER_PARAM_RELEASE_MS, PLATE_PARAM_DECAY_S, PREAMP_PARAM_DRIVE_DB, PREAMP_PARAM_OUTPUT_DB,
+    REVERB_PARAM_PREDELAY_MS,
 };
 
 const DRUM_SLINT: &str = include_str!("../ui/drum-device.slint");
@@ -32,6 +33,7 @@ const MLM1_SLINT: &str = include_str!("../ui/mlm1-device.slint");
 const MLP8_SLINT: &str = include_str!("../ui/mlp8-device.slint");
 
 const BITCRUSH_SLINT: &str = include_str!("../ui/bitcrush-device.slint");
+const PREAMP_SLINT: &str = include_str!("../ui/preamp-device.slint");
 const DRIVE_SLINT: &str = include_str!("../ui/drive-device.slint");
 const COMPRESSOR_SLINT: &str = include_str!("../ui/compressor-device.slint");
 const DELAY_SLINT: &str = include_str!("../ui/delay-device.slint");
@@ -279,6 +281,7 @@ struct FaceRatio {
 fn effect_markup(file: &str) -> &'static str {
     match file {
         "bitcrush-device.slint" => BITCRUSH_SLINT,
+        "preamp-device.slint" => PREAMP_SLINT,
         "drive-device.slint" => DRIVE_SLINT,
         "compressor-device.slint" => COMPRESSOR_SLINT,
         "delay-device.slint" => DELAY_SLINT,
@@ -368,6 +371,89 @@ fn every_effect_ratio_readout_agrees_with_its_table() {
             descriptor.curve,
             ParamCurve::Exponential,
             "{file} {property}: the face maps it in ratio, so the table must too"
+        );
+    }
+}
+
+/// Read `<float> name: min + root.x * span;` back into a range.
+///
+/// The linear counterpart of [`face_ratio`], and it exists because the preamp
+/// was the first face to spell a linear range out in markup. A dB readout is
+/// the natural place for one: nobody writes `pow` for decibels.
+fn face_linear(markup: &str, file: &str, property: &str) -> FaceRatio {
+    let marker = format!("<float> {property}:");
+    let line = markup
+        .lines()
+        .find(|line| line.contains(&marker))
+        .unwrap_or_else(|| panic!("{file} no longer derives {property}"));
+    let body = line
+        .split_once(&marker)
+        .unwrap_or_else(|| panic!("{file} {property}: marker matched but would not split"))
+        .1
+        .trim()
+        .trim_end_matches(';');
+    let (min_text, rest) = body
+        .split_once('+')
+        .unwrap_or_else(|| panic!("{file} {property}: no `min + ...` to read"));
+    let span: f32 = rest
+        .rsplit_once('*')
+        .and_then(|(_, span)| span.trim().parse().ok())
+        .unwrap_or_else(|| panic!("{file} {property}: the span is not a literal"));
+    let min: f32 = min_text
+        .trim()
+        .parse()
+        .unwrap_or_else(|_| panic!("{file} {property}: the minimum is not a literal"));
+    FaceRatio {
+        min,
+        max: min + span,
+    }
+}
+
+/// The same check as `every_effect_ratio_readout_agrees_with_its_table`, for
+/// the faces that map linearly.
+///
+/// `AGENTS.md` names a range spelled in both a Rust table and the Slint
+/// markup as this codebase's characteristic fault. The ratio half has been
+/// guarded since the effects pass; this is the half that was not, and the
+/// preamp is the first face in it.
+#[test]
+fn every_effect_linear_readout_agrees_with_its_table() {
+    let cases: &[(&str, &str, EffectKind, u32)] = &[
+        (
+            "preamp-device.slint",
+            "drive-db",
+            EffectKind::Preamp,
+            PREAMP_PARAM_DRIVE_DB,
+        ),
+        (
+            "preamp-device.slint",
+            "output-db",
+            EffectKind::Preamp,
+            PREAMP_PARAM_OUTPUT_DB,
+        ),
+    ];
+
+    for (file, property, kind, id) in cases {
+        let descriptor = kind
+            .descriptor(*id)
+            .unwrap_or_else(|| panic!("{kind:?} has no descriptor for id {id}"));
+        let face = face_linear(effect_markup(file), file, property);
+        assert!(
+            (descriptor.min - face.min).abs() < 1e-6,
+            "{file} {property}: face min {}, table min {}",
+            face.min,
+            descriptor.min
+        );
+        assert!(
+            (descriptor.max - face.max).abs() < 1e-6,
+            "{file} {property}: face max {}, table max {}",
+            face.max,
+            descriptor.max
+        );
+        assert_eq!(
+            descriptor.curve,
+            ParamCurve::Linear,
+            "{file} {property}: the face maps it linearly, so the table must too"
         );
     }
 }

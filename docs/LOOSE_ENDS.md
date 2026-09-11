@@ -24,6 +24,27 @@ a wish belongs in `ENHANCEMENTS.md`; a described behaviour gap belongs in
 
 ## Wrong-looking UI over correct behaviour
 
+**The preamp face has no transfer-curve display, where Drive's has one.**
+`preamp-device.slint` leaves the panel Drive fills with
+`DriveTransferDisplay` empty. Drawing this stage's curve needs the
+coefficients `HarmonicShaper::new` solves for, and reaching them means
+widening `EffectSlotRow` in `main.slint` -- which is what the EQ, the
+dynamics trio and the Buffer already do for `eq-spectrum-data`,
+`gain-reduction-db` and `buffer-collisions`, so the path exists and is
+ordinary. The alternative, computing them in markup from the voicing index,
+would spell `harmonics.rs`'s profile numbers a second time, which is the
+duplication `AGENTS.md` names as this codebase's characteristic fault.
+
+**A transfer curve is probably the wrong display for it anyway.** Adam,
+2026-09-10: the interesting question is *where on the spectrum* the stage is
+distorting, which a curve cannot show and which is the whole point of the
+tilt -- obvious on a kick, nearly clean on a hat. `SpectrumAnalyzer` already
+produces exactly the right thing (48 log bands, a Goertzel bank rather than
+an FFT, published once a hop and only while a display subscribes), and this
+device is unusual in having both the dry and the wet signal in hand at the
+same sample. Two analyzers and a per-band difference would make the tilt
+visible on the same axis `colour_harmonics_vs_freq.csv` plots.
+
 **The oscillator Level knob works in dB; its descriptor is linear 0–1.**
 `device-oscillator.slint:95` drives the knob through `GainMath.linear-to-db`,
 while `generator.rs:75`'s `unit()` helper declares the parameter as a linear
@@ -190,6 +211,21 @@ thing it exists to replace.
 ---
 
 ## Consistency questions, not bugs
+
+**A device kind's UI index is a literal in several UI tests, and nothing
+notices when it moves.** `effect_kind_index` (`mooloop-ui/src/lib.rs`) is a
+runtime binding -- a project persists the `EffectKind` by name and the index
+is recomputed on every publish -- so it *can* be renumbered, and on
+2026-09-10 it was: the preamp took 12 and Chain went to 13, so that the
+insert menu could keep Chain last where its own comment says it belongs.
+Every arm in `main.slint` moved with it, but `source_snapshot.rs` was
+building its container fixtures from the literal `12` and silently started
+building preamps instead. The test caught it, and only because it asserts
+that a nested rack differs from a flat one; a fixture that had merely drawn
+the wrong face would have passed. That file now names `CONTAINER_KIND` once,
+and the other eight kind literals in it are still literals. Making the UI
+tests derive their indices needs `effect_kind_index` to be reachable from an
+integration test, which is a visibility change rather than a test change.
 
 **A departed producer and a departed device are handled oppositely.** Aux In
 sends a subscription whose source channel was deleted to `DEPARTED_SOURCE`

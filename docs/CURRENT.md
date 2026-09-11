@@ -697,9 +697,14 @@ land on its own when it starts to matter:
   index back at its own channel and drops one that names a device or control
   that is not there, leaving addresses on a generator that has no descriptor
   table yet untouched.
-- Twelve effect kinds ship: a low-pass/high-pass filter, a drive/saturation
-  with four curves at 2x oversampling, a bitcrush that is deliberately not
-  oversampled, a stereo delay with damped cross-feedable feedback and
+- Thirteen effect kinds ship: a low-pass/high-pass filter, a drive/saturation
+  with four curves at 2x oversampling, a preamp carrying the channel strip's
+  four voicings -- Moo, Grip, Punch and Iron, the last three measured from
+  real units rather than picked -- over a Drive, Mix and Output in dB. `Moo`
+  is the default and is bit-identical to no device at all, which makes the
+  preamp the way to put an automatable gain stage in the middle of a chain;
+  it is deliberately not oversampled, so it adds no latency and can sit
+  anywhere. A bitcrush that is deliberately not oversampled either, a stereo delay with damped cross-feedable feedback and
   digital/tape/reverse responses to a moving delay time. Its Time control is
   a knob with a sync lamp: dark, it sweeps free milliseconds; lit, it steps
   the same twenty-one-entry musical grid the modulators use, `4/1` down to
@@ -726,10 +731,10 @@ land on its own when it starts to matter:
   change at all without an off-thread IR rebuild. Beside it is a cheaper
   plate: eight parallel Freeverb-tuned combs into four series allpasses per
   channel, with Size, Decay, Damp, and Width, for material that does not need
-  the hall. The twelfth kind is the retained-audio Buffer described below,
+  the hall. The thirteenth kind is the retained-audio Buffer described below,
   which is an ordinary insert in the same picker. Device faces are
-  width-quantized in rack units: filter, drive, bitcrush, limiter, plate, and
-  Buffer take 1U; gate, compressor, EQ, and Mod take 2U; delay and reverb
+  width-quantized in rack units: filter, drive, preamp, bitcrush, limiter,
+  plate, and Buffer take 1U; gate, compressor, EQ, and Mod take 2U; delay and reverb
   take 3U.
 - Gate, compressor, and limiter share one transfer-curve display with a
   draggable threshold handle. Its live dot is fed by the device's own gain

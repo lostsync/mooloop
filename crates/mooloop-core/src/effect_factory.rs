@@ -19,6 +19,7 @@
 
 use crate::{
     BitcrushStyle, DelayMode, DriveCurve, EffectKind, EffectParams, ModTimeDivision,
+    PreampVoicing,
     EffectSlotState, EqBandKind, EqPassFilter, EqQProfile, EqSlope, FilterMode, FilterSlope,
     ModulationMode,
 };
@@ -44,6 +45,7 @@ pub fn patches(kind: EffectKind) -> Vec<EffectFactoryPatch> {
         EffectKind::Eq => eq(),
         EffectKind::Modulation => modulation(),
         EffectKind::Filter => filter(),
+        EffectKind::Preamp => preamp(),
         EffectKind::Drive => drive(),
         EffectKind::Bitcrush => bitcrush(),
         EffectKind::Delay => delay(),
@@ -307,6 +309,46 @@ fn drive() -> Vec<EffectFactoryPatch> {
             p.drive = 16.0;
             p.tone = -0.3;
             p.mix = 0.35;
+        }),
+    ]
+}
+
+// --- Preamp -----------------------------------------------------------------
+
+/// One patch per coloured voicing, because the voicing *is* the device and a
+/// bank that did not let you hear them would be hiding the point.
+///
+/// `Moo` appears once, as a clean boost rather than as itself: a patch of the
+/// bare default would be a row that changes nothing, and
+/// `every_patch_differs_from_the_defaults` says so.
+fn preamp() -> Vec<EffectFactoryPatch> {
+    let with = |name, tags, description, edit: fn(&mut crate::PreampParams)| {
+        patch(EffectKind::Preamp, name, tags, description, |effect| {
+            if let EffectParams::Preamp(params) = &mut effect.params {
+                edit(params);
+            }
+        })
+    };
+    vec![
+        with("Clean boost", &["clean", "gain"], "Uncoloured, six dB up. A gain stage with an automation lane.", |p| {
+            p.output_db = 6.0;
+        }),
+        with("Grip", &["tight", "controlled"], "Odd-order and low distortion, the way a well-behaved desk measures.", |p| {
+            p.voicing = PreampVoicing::Grip;
+        }),
+        with("Punch", &["forward", "thick"], "Both harmonic orders, enough to hear on a snare.", |p| {
+            p.voicing = PreampVoicing::Punch;
+            p.drive_db = 3.0;
+        }),
+        with("Iron", &["warm", "transformer"], "Even-order warmth, obvious on a kick and nearly clean on a hat.", |p| {
+            p.voicing = PreampVoicing::Iron;
+            p.drive_db = 3.0;
+        }),
+        with("Iron parallel", &["warm", "parallel"], "Iron driven hard underneath the dry signal.", |p| {
+            p.voicing = PreampVoicing::Iron;
+            p.drive_db = 12.0;
+            p.mix = 0.4;
+            p.output_db = -3.0;
         }),
     ]
 }

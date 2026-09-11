@@ -24,6 +24,13 @@ pub enum EffectKind {
     Compressor,
     Limiter,
     Buffer,
+    /// The channel strip's input stage, insertable on its own.
+    ///
+    /// Serialized as `preamp`, which is what `rename_all = "snake_case"`
+    /// would give it anyway — stated rather than inherited, because the
+    /// ML-M1 shipped under a name nobody chose and that is frozen forever.
+    #[serde(rename = "preamp")]
+    Preamp,
     /// A container: a device that holds an ordered run of the devices after
     /// it. See `docs/plans/containers/02-the-container-is-a-device.md`.
     Chain,
@@ -59,6 +66,9 @@ impl EffectKind {
             Self::Eq
             | Self::Modulation
             | Self::Filter
+            // Sample by sample, filters and all: the tilt pair is a biquad
+            // sandwich, not a lookahead.
+            | Self::Preamp
             | Self::Bitcrush
             | Self::Delay
             | Self::Reverb
@@ -76,10 +86,11 @@ impl EffectKind {
     }
 
     /// Every kind, in the order the UI offers them when adding an effect.
-    pub const ALL: [EffectKind; 13] = [
+    pub const ALL: [EffectKind; 14] = [
         EffectKind::Eq,
         EffectKind::Modulation,
         EffectKind::Filter,
+        EffectKind::Preamp,
         EffectKind::Drive,
         EffectKind::Bitcrush,
         EffectKind::Delay,
@@ -98,6 +109,7 @@ impl EffectKind {
             Self::Eq => "EQ",
             Self::Modulation => "Mod",
             Self::Filter => "Filter",
+            Self::Preamp => "Preamp",
             Self::Drive => "Drive",
             Self::Bitcrush => "Bitcrush",
             Self::Delay => "Delay",
@@ -118,6 +130,7 @@ impl EffectKind {
             Self::Eq => &EQ_DESCRIPTORS,
             Self::Modulation => &MODULATION_DESCRIPTORS,
             Self::Filter => &FILTER_DESCRIPTORS,
+            Self::Preamp => &PREAMP_DESCRIPTORS,
             Self::Drive => &DRIVE_DESCRIPTORS,
             Self::Bitcrush => &BITCRUSH_DESCRIPTORS,
             Self::Delay => &DELAY_DESCRIPTORS,
@@ -142,6 +155,7 @@ impl EffectKind {
             Self::Eq => EffectParams::Eq(EqParams::default()),
             Self::Modulation => EffectParams::Modulation(ModulationParams::default()),
             Self::Filter => EffectParams::Filter(FilterParams::default()),
+            Self::Preamp => EffectParams::Preamp(PreampParams::default()),
             Self::Drive => EffectParams::Drive(DriveParams::default()),
             Self::Bitcrush => EffectParams::Bitcrush(BitcrushParams::default()),
             Self::Delay => EffectParams::Delay(DelayParams::default()),
@@ -810,6 +824,131 @@ impl Default for DriveParams {
             tone: 0.0,
             mix: 1.0,
             output: 1.0,
+        }
+    }
+}
+
+// --- Preamp ----------------------------------------------------------------
+
+/// `Event::ParamValue` ids for [`PreampParams`].
+pub const PREAMP_PARAM_DRIVE_DB: u32 = 0;
+pub const PREAMP_PARAM_VOICING: u32 = 1;
+pub const PREAMP_PARAM_MIX: u32 = 2;
+pub const PREAMP_PARAM_OUTPUT_DB: u32 = 3;
+
+static PREAMP_DESCRIPTORS: [ParamDescriptor; 4] = [
+    ParamDescriptor {
+        id: PREAMP_PARAM_DRIVE_DB,
+        name: "Drive",
+        unit: "dB",
+        min: -24.0,
+        max: 24.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: PREAMP_PARAM_VOICING,
+        name: "Voicing",
+        unit: "",
+        min: 0.0,
+        max: 3.0,
+        curve: ParamCurve::Stepped(4),
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: PREAMP_PARAM_MIX,
+        name: "Mix",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 1.0,
+    },
+    ParamDescriptor {
+        id: PREAMP_PARAM_OUTPUT_DB,
+        name: "Output",
+        unit: "dB",
+        min: -24.0,
+        max: 24.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
+    },
+];
+
+/// Which voicing the stage runs, named for the sound rather than for any
+/// hardware. `mooloop_dsp::preamp` holds what each one is made of; this is
+/// only the choice, which is what a project has to persist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreampVoicing {
+    /// Uncoloured, and the identity: the stage is skipped outright, so a
+    /// `Preamp` in this voicing is bit-identical to no device at all except
+    /// for its own drive and output trims.
+    #[default]
+    Moo,
+    /// Fast, tight, controlled. Low distortion and mostly odd-order.
+    Grip,
+    /// Forward and thick, both harmonic orders present.
+    Punch,
+    /// Transformer warmth: even-order dominant, and the one whose distortion
+    /// is the point.
+    Iron,
+}
+
+impl PreampVoicing {
+    pub fn from_index(index: i32) -> Self {
+        match index {
+            1 => Self::Grip,
+            2 => Self::Punch,
+            3 => Self::Iron,
+            _ => Self::Moo,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            Self::Moo => 0,
+            Self::Grip => 1,
+            Self::Punch => 2,
+            Self::Iron => 3,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Moo => "MOO",
+            Self::Grip => "GRIP",
+            Self::Punch => "PUNCH",
+            Self::Iron => "IRON",
+        }
+    }
+}
+
+/// Parameters for the preamp effect (`PreampEffect` in `mooloop-dsp`).
+///
+/// Drive and output are in dB rather than as linear gains, unlike
+/// [`DriveParams`]. They are the reason this device is insertable at all --
+/// a chain had nowhere to automate gain -- and an automation lane drawn in
+/// dB is the one a person can read.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PreampParams {
+    /// Gain into the curve. The voicing's profile is authored at the -12 dBFS
+    /// operating level, so 0 dB here is where it measures true.
+    pub drive_db: f32,
+    pub voicing: PreampVoicing,
+    /// Dry/wet blend in `[0, 1]`, for parallel saturation.
+    pub mix: f32,
+    /// Output trim, applied after the blend.
+    pub output_db: f32,
+}
+
+impl Default for PreampParams {
+    fn default() -> Self {
+        Self {
+            drive_db: 0.0,
+            voicing: PreampVoicing::default(),
+            mix: 1.0,
+            output_db: 0.0,
         }
     }
 }
@@ -1926,6 +2065,7 @@ pub enum EffectParams {
     Modulation(ModulationParams),
     Filter(FilterParams),
     Drive(DriveParams),
+    Preamp(PreampParams),
     Bitcrush(BitcrushParams),
     Delay(DelayParams),
     Reverb(ReverbParams),
@@ -1944,6 +2084,7 @@ impl EffectParams {
             Self::Modulation(_) => EffectKind::Modulation,
             Self::Filter(_) => EffectKind::Filter,
             Self::Drive(_) => EffectKind::Drive,
+            Self::Preamp(_) => EffectKind::Preamp,
             Self::Bitcrush(_) => EffectKind::Bitcrush,
             Self::Delay(_) => EffectKind::Delay,
             Self::Reverb(_) => EffectKind::Reverb,
@@ -1973,6 +2114,13 @@ impl EffectParams {
     pub fn modulation(&self) -> Option<&ModulationParams> {
         match self {
             Self::Modulation(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn preamp(&self) -> Option<&PreampParams> {
+        match self {
+            Self::Preamp(p) => Some(p),
             _ => None,
         }
     }
@@ -2104,6 +2252,13 @@ impl EffectParams {
                 DRIVE_PARAM_TONE => Some(p.tone),
                 DRIVE_PARAM_MIX => Some(p.mix),
                 DRIVE_PARAM_OUTPUT => Some(p.output),
+                _ => None,
+            },
+            Self::Preamp(p) => match id {
+                PREAMP_PARAM_DRIVE_DB => Some(p.drive_db),
+                PREAMP_PARAM_VOICING => Some(p.voicing.to_index() as f32),
+                PREAMP_PARAM_MIX => Some(p.mix),
+                PREAMP_PARAM_OUTPUT_DB => Some(p.output_db),
                 _ => None,
             },
             Self::Bitcrush(p) => match id {
@@ -2241,6 +2396,15 @@ impl EffectParams {
                 DRIVE_PARAM_TONE => p.tone = value,
                 DRIVE_PARAM_MIX => p.mix = value,
                 DRIVE_PARAM_OUTPUT => p.output = value,
+                _ => return None,
+            },
+            Self::Preamp(p) => match id {
+                PREAMP_PARAM_DRIVE_DB => p.drive_db = value,
+                PREAMP_PARAM_VOICING => {
+                    p.voicing = PreampVoicing::from_index(value.round() as i32)
+                }
+                PREAMP_PARAM_MIX => p.mix = value,
+                PREAMP_PARAM_OUTPUT_DB => p.output_db = value,
                 _ => return None,
             },
             Self::Bitcrush(p) => match id {
@@ -2440,6 +2604,10 @@ impl EffectSlotState {
 
     pub fn drive(params: DriveParams) -> Self {
         Self::new(EffectParams::Drive(params))
+    }
+
+    pub fn preamp(params: PreampParams) -> Self {
+        Self::new(EffectParams::Preamp(params))
     }
 
     pub fn modulation(params: ModulationParams) -> Self {
