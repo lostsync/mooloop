@@ -36,7 +36,11 @@
 //! application through `scripts/mooloop-mcp`: at 1280x760 the rack row sits
 //! at (8, 364) and the first device frame at (16, 384).
 
-use mooloop_ui::{view, ChannelRow, EffectSlotRow, MainWindow, StepCell};
+use mooloop_core::{DeviceKind, EffectKind};
+use mooloop_ui::{
+    device_kind_to_int, effect_kind_index, effect_kind_units, view, ChannelRow, EffectSlotRow,
+    MainWindow, StepCell,
+};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -76,10 +80,21 @@ fn channels() -> ModelRc<ChannelRow> {
     }])))
 }
 
-fn effect_slot(kind: i32) -> EffectSlotRow {
+/// A one-unit device. `effect_x` walks the rack in fixed `CELL` steps, so
+/// every row in this fixture has to be one unit wide for the coordinates to
+/// mean anything -- which is a fact about the kinds chosen, and is asserted
+/// rather than assumed.
+fn effect_slot(kind: EffectKind) -> EffectSlotRow {
+    assert_eq!(
+        effect_kind_units(kind),
+        1,
+        "{} is wider than one rack unit, so effect_x would point at the \
+         wrong device",
+        kind.label()
+    );
     EffectSlotRow {
-        kind,
-        units: 1,
+        kind: effect_kind_index(kind),
+        units: effect_kind_units(kind),
         preset_options: Vec::<SharedString>::new().as_slice().into(),
         preset_name: Default::default(),
         bypassed: false,
@@ -129,11 +144,11 @@ fn harness() -> Harness {
     ui.set_channels(channels());
     ui.set_selected_channel_name(SharedString::from("Kick"));
     ui.invoke_show_view(view::DEVICES);
-    ui.set_source_kind(1);
+    ui.set_source_kind(device_kind_to_int(DeviceKind::DrumSynth));
     ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
-        effect_slot(0),
-        effect_slot(1),
-        effect_slot(3),
+        effect_slot(EffectKind::Filter),
+        effect_slot(EffectKind::Drive),
+        effect_slot(EffectKind::Bitcrush),
     ]))));
 
     let keys: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));

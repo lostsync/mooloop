@@ -1,8 +1,9 @@
-use mooloop_core::{Ds01EnvParams, Ds01Params, DrumMode, DrumSynthParams};
+use mooloop_core::{DeviceKind, Ds01EnvParams, Ds01Params, DrumMode, DrumSynthParams, EffectKind};
 use mooloop_dsp::DrumSynth;
-use mooloop_ui::{view, 
-    ChannelRow, EffectSlotRow, MainWindow, MlP8RouteRow, ModulationOutletRow, ModulationRouteRow,
-    ModulationSourceRow, StepCell,
+use mooloop_ui::{
+    device_kind_to_int, effect_kind_index, effect_kind_units, view, ChannelRow, EffectSlotRow,
+    MainWindow, MlP8RouteRow, ModulationOutletRow, ModulationRouteRow, ModulationSourceRow,
+    StepCell,
 };
 use slint::platform::WindowEvent;
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
@@ -66,7 +67,7 @@ fn render_drum_and_mono_source_editors() {
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("Kick"));
     ui.invoke_show_view(view::DEVICES);
-    ui.set_source_kind(1);
+    ui.set_source_kind(device_kind_to_int(DeviceKind::DrumSynth));
     ui.set_drum_mode(0);
     set_drum_preview(&ui, DrumSynthParams::default());
     let drum = ui.window().take_snapshot().unwrap();
@@ -98,7 +99,7 @@ fn render_drum_and_mono_source_editors() {
     assert_ne!(snare.as_bytes(), hat.as_bytes());
     write_snapshot(&hat, "MOOLOOP_HAT_SOURCE_SNAPSHOT");
 
-    ui.set_source_kind(2);
+    ui.set_source_kind(device_kind_to_int(DeviceKind::MonoSynth));
     ui.set_selected_channel_name(SharedString::from("Mono"));
     let mono = ui.window().take_snapshot().unwrap();
     assert_eq!((mono.width(), mono.height()), (960, 760));
@@ -150,7 +151,7 @@ fn render_mlm1_source_editor() {
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("ML-M1"));
     ui.invoke_show_view(view::DEVICES);
-    ui.set_source_kind(4);
+    ui.set_source_kind(device_kind_to_int(DeviceKind::MlM1));
 
     let osc = ui.window().take_snapshot().unwrap();
     assert_eq!((osc.width(), osc.height()), (960, 760));
@@ -232,7 +233,7 @@ fn render_sampler_source_editor() {
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("Kick"));
     ui.invoke_show_view(view::DEVICES);
-    ui.set_source_kind(0);
+    ui.set_source_kind(device_kind_to_int(DeviceKind::Sampler));
     ui.set_sample_name(SharedString::from("kick_808.wav"));
     ui.set_sample_description(SharedString::from("48kHz / 16-bit / mono"));
     ui.set_sample_duration(1.2);
@@ -605,19 +606,21 @@ fn slot_names(count: usize) -> ModelRc<SharedString> {
         .into()
 }
 
-/// The container's index in `effect_kind_index` (`mooloop-ui/src/lib.rs`),
-/// which `main.slint` matches on to draw a box rather than a face.
+/// A rack row for `kind`, addressed the way the application addresses it.
 ///
-/// Named rather than spelt three times, because it moved once: the preamp
-/// took 12 and Chain went to 13 so that the insert menu could keep Chain
-/// last. The three literals this replaced all rendered a preamp instead, and
-/// the test failed on the box rather than in the diff.
-const CONTAINER_KIND: i32 = 13;
-
-fn effect_slot(kind: i32, units: i32) -> EffectSlotRow {
+/// Both numbers come from `mooloop-ui` rather than from the fixture: the
+/// index `main.slint` dispatches on, and the width the rack would give the
+/// face. They used to be literals, and on 2026-09-10 the preamp took 12 and
+/// Chain moved to 13 -- every container fixture in this file silently became
+/// a preamp, and the only thing that noticed was the one assertion that
+/// compares a nested rack against a flat one. A fixture that had merely drawn
+/// the wrong face would have passed. Spelling the width out was wrong in a
+/// quieter way: `effect_slot(3, 2)` drew a delay two units wide where the
+/// rack gives it three.
+fn effect_slot(kind: EffectKind) -> EffectSlotRow {
     EffectSlotRow {
-        kind,
-        units,
+        kind: effect_kind_index(kind),
+        units: effect_kind_units(kind),
         preset_options: Vec::<slint::SharedString>::new().as_slice().into(),
         preset_name: Default::default(),
         bypassed: false,
@@ -672,23 +675,23 @@ fn render_effect_header_comparison() {
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("Kick"));
     ui.invoke_show_view(view::DEVICES);
-    ui.set_source_kind(1);
+    ui.set_source_kind(device_kind_to_int(DeviceKind::DrumSynth));
     set_drum_preview(&ui, DrumSynthParams::default());
 
-    let mut reverb = effect_slot(8, 3);
+    let mut reverb = effect_slot(EffectKind::Reverb);
     reverb.p1 = 1.0;
-    let mut plate = effect_slot(10, 2);
+    let mut plate = effect_slot(EffectKind::Plate);
     plate.p4 = 0.25;
     ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
-        effect_slot(0, 1),
-        effect_slot(1, 1),
-        effect_slot(2, 1),
-        effect_slot(5, 2),
+        effect_slot(EffectKind::Filter),
+        effect_slot(EffectKind::Drive),
+        effect_slot(EffectKind::Bitcrush),
+        effect_slot(EffectKind::Compressor),
         reverb,
         plate,
         // The buffer's own knobs, so its face is covered now that it has a
         // parameter surface and is not only a debug trigger panel.
-        effect_slot(11, 1),
+        effect_slot(EffectKind::Buffer),
     ]))));
 
     let snapshot = ui.window().take_snapshot().unwrap();
@@ -704,8 +707,8 @@ fn render_effect_header_comparison() {
 /// devices are rendered twice, once with the nesting the model describes and
 /// once flat, and the two have to differ. That is what fails if `main.slint`
 /// stops passing `children` and `depth`, if the container branch stops
-/// matching kind 12, or if `ContainerEnclosure` stops being instantiated --
-/// a rack that drew a container as an ordinary row would otherwise pass
+/// matching the container's kind, or if `ContainerEnclosure` stops being
+/// instantiated -- a rack that drew a container as an ordinary row would pass
 /// every other test in this file, which is how the previous version of this
 /// test (`shot.width() > 0`) let a container render as an empty frame.
 #[test]
@@ -724,27 +727,27 @@ fn a_container_draws_its_run_and_its_nesting() {
     ui.set_channels(rack_rows());
     ui.set_selected_channel_name(SharedString::from("Kick"));
     ui.invoke_show_view(view::DEVICES);
-    ui.set_source_kind(0);
+    ui.set_source_kind(device_kind_to_int(DeviceKind::Sampler));
 
     // A container holding two devices, one of which is another container
     // holding one: the shape the depth bars have to distinguish.
     let container = |children: i32, depth: i32| {
-        let mut row = effect_slot(CONTAINER_KIND, 1);
+        let mut row = effect_slot(EffectKind::Chain);
         row.children = children;
         row.depth = depth;
         row.p0 = 0.6;
         row
     };
-    let mut inner_child = effect_slot(1, 1);
+    let mut inner_child = effect_slot(EffectKind::Drive);
     inner_child.depth = 2;
-    let mut outer_child = effect_slot(0, 1);
+    let mut outer_child = effect_slot(EffectKind::Filter);
     outer_child.depth = 1;
     ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
         container(3, 0),
         outer_child,
         container(1, 1),
         inner_child,
-        effect_slot(3, 2),
+        effect_slot(EffectKind::Delay),
     ]))));
 
     let nested = ui.window().take_snapshot().unwrap();
@@ -753,17 +756,17 @@ fn a_container_draws_its_run_and_its_nesting() {
     // The same rack with every row at depth 0 and no container holding
     // anything. Same devices, same widths, same order: the only thing that
     // can differ in the pixels is the box.
-    let flat = |kind: i32| {
-        let mut row = effect_slot(kind, 1);
+    let flat = |kind: EffectKind| {
+        let mut row = effect_slot(kind);
         row.p0 = 0.6;
         row
     };
     ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
-        flat(CONTAINER_KIND),
-        flat(0),
-        flat(CONTAINER_KIND),
-        flat(1),
-        flat(3),
+        flat(EffectKind::Chain),
+        flat(EffectKind::Filter),
+        flat(EffectKind::Chain),
+        flat(EffectKind::Drive),
+        flat(EffectKind::Delay),
     ]))));
     let unnested = ui.window().take_snapshot().unwrap();
 
@@ -803,15 +806,15 @@ fn effect_rack_scrolls_horizontally_to_reach_a_long_chain() {
     ui.set_channels(rack_rows());
     ui.set_selected_channel_name(SharedString::from("Kick"));
     ui.invoke_show_view(view::DEVICES);
-    ui.set_source_kind(0);
-    // Filter, drive, bitcrush, delay (two units wide), filter: comfortably
+    ui.set_source_kind(device_kind_to_int(DeviceKind::Sampler));
+    // Filter, drive, bitcrush, delay (three units wide), filter: comfortably
     // past the 960 px window even before the source device's own three units.
     ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
-        effect_slot(0, 1),
-        effect_slot(1, 1),
-        effect_slot(2, 1),
-        effect_slot(3, 2),
-        effect_slot(0, 1),
+        effect_slot(EffectKind::Filter),
+        effect_slot(EffectKind::Drive),
+        effect_slot(EffectKind::Bitcrush),
+        effect_slot(EffectKind::Delay),
+        effect_slot(EffectKind::Filter),
     ]))));
 
     let unscrolled = ui.window().take_snapshot().unwrap();
@@ -853,7 +856,7 @@ fn render_poly_source_editor() {
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("Poly"));
     ui.invoke_show_view(view::DEVICES);
-    ui.set_source_kind(3);
+    ui.set_source_kind(device_kind_to_int(DeviceKind::PolySynth));
 
     let poly = ui.window().take_snapshot().unwrap();
     assert_eq!((poly.width(), poly.height()), (960, 760));
@@ -905,7 +908,7 @@ fn render_sampler_zoomed_markers() {
     ui.set_channels(rack_rows());
     ui.set_selected_channel_name(SharedString::from("Kick"));
     ui.invoke_show_view(view::DEVICES);
-    ui.set_source_kind(0);
+    ui.set_source_kind(device_kind_to_int(DeviceKind::Sampler));
     ui.set_sampler_device_page(0);
     ui.set_sample_name(SharedString::from("amen_break.wav"));
     ui.set_sample_description(SharedString::from("48kHz / 16-bit / stereo"));
@@ -956,7 +959,7 @@ fn render_sampler_slice_markers() {
     ui.set_channels(rack_rows());
     ui.set_selected_channel_name(SharedString::from("Break"));
     ui.invoke_show_view(view::DEVICES);
-    ui.set_source_kind(0);
+    ui.set_source_kind(device_kind_to_int(DeviceKind::Sampler));
     ui.set_sampler_device_page(0);
     ui.set_sample_name(SharedString::from("amen_break.wav"));
     ui.set_sample_description(SharedString::from("48kHz / 16-bit / stereo"));
@@ -1011,7 +1014,7 @@ fn render_sampler_committed_stretch() {
     ui.set_channels(rack_rows());
     ui.set_selected_channel_name(SharedString::from("Break"));
     ui.invoke_show_view(view::DEVICES);
-    ui.set_source_kind(0);
+    ui.set_source_kind(device_kind_to_int(DeviceKind::Sampler));
     // The stretch group lives on the sampler's second page.
     ui.set_sampler_device_page(1);
     ui.set_sample_name(SharedString::from("amen_break.wav"));
@@ -1108,7 +1111,7 @@ fn render_mlp8_modulation_page() {
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("ML-P8"));
     ui.invoke_show_view(view::DEVICES);
-    ui.set_source_kind(5);
+    ui.set_source_kind(device_kind_to_int(DeviceKind::MlP8));
 
     let names = |labels: &[&str]| {
         ModelRc::from(Rc::new(VecModel::from(
@@ -1234,7 +1237,7 @@ fn render_mlp8_source_editor() {
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("ML-P8"));
     ui.invoke_show_view(view::DEVICES);
-    ui.set_source_kind(5);
+    ui.set_source_kind(device_kind_to_int(DeviceKind::MlP8));
     // The pool's own arithmetic, which the face is given rather than deriving.
     ui.set_mlp8_unison_note_counts(ModelRc::from(Rc::new(VecModel::from(vec![
         8_i32, 4, 2, 1,
@@ -1392,7 +1395,7 @@ fn render_the_ds01_face() {
     ui.set_pattern_length(16);
     ui.set_selected_channel_name(SharedString::from("Kick"));
     ui.invoke_show_view(view::DEVICES);
-    ui.set_source_kind(6);
+    ui.set_source_kind(device_kind_to_int(DeviceKind::Ds01));
 
     mooloop_ui::refresh_ds01(&ui, &Ds01Params::default());
     let default_patch = ui.window().take_snapshot().unwrap();
@@ -1472,7 +1475,7 @@ fn render_aux_in_source_editor() {
     ui.set_pattern_length(16);
     ui.invoke_show_view(view::DEVICES);
     ui.set_selected_channel_name(SharedString::from("Aux 2"));
-    ui.set_source_kind(7);
+    ui.set_source_kind(device_kind_to_int(DeviceKind::AuxIn));
     ui.set_aux_in_source_names(
         ["None", "ML-P8 1"]
             .map(SharedString::from)

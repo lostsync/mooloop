@@ -1,5 +1,8 @@
-use mooloop_core::MAX_BUSES;
-use mooloop_ui::{view, ChannelRow, EffectSlotRow, MainWindow, MixerSendRow, MixerStripRow, StepCell};
+use mooloop_core::{EffectKind, MAX_BUSES};
+use mooloop_ui::{
+    effect_kind_index, effect_kind_units, view, ChannelRow, EffectSlotRow, MainWindow,
+    MixerSendRow, MixerStripRow, StepCell,
+};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
 use std::cell::Cell;
@@ -141,8 +144,8 @@ fn render_mixer_pane_with_a_bus_chain() {
     ui.set_editing_bus_right_db(-11.0);
     ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![
         EffectSlotRow {
-            kind: 5,
-            units: 2,
+            kind: effect_kind_index(EffectKind::Compressor),
+            units: effect_kind_units(EffectKind::Compressor),
             preset_options: Vec::<SharedString>::new().as_slice().into(),
             preset_name: Default::default(),
             bypassed: false,
@@ -179,8 +182,8 @@ fn render_mixer_pane_with_a_bus_chain() {
             selected: false,
         },
         EffectSlotRow {
-            kind: 6,
-            units: 1,
+            kind: effect_kind_index(EffectKind::Limiter),
+            units: effect_kind_units(EffectKind::Limiter),
             preset_options: Vec::<SharedString>::new().as_slice().into(),
             preset_name: Default::default(),
             bypassed: false,

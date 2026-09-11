@@ -212,21 +212,6 @@ thing it exists to replace.
 
 ## Consistency questions, not bugs
 
-**A device kind's UI index is a literal in several UI tests, and nothing
-notices when it moves.** `effect_kind_index` (`mooloop-ui/src/lib.rs`) is a
-runtime binding -- a project persists the `EffectKind` by name and the index
-is recomputed on every publish -- so it *can* be renumbered, and on
-2026-09-10 it was: the preamp took 12 and Chain went to 13, so that the
-insert menu could keep Chain last where its own comment says it belongs.
-Every arm in `main.slint` moved with it, but `source_snapshot.rs` was
-building its container fixtures from the literal `12` and silently started
-building preamps instead. The test caught it, and only because it asserts
-that a nested rack differs from a flat one; a fixture that had merely drawn
-the wrong face would have passed. That file now names `CONTAINER_KIND` once,
-and the other eight kind literals in it are still literals. Making the UI
-tests derive their indices needs `effect_kind_index` to be reachable from an
-integration test, which is a visibility change rather than a test change.
-
 **A departed producer and a departed device are handled oppositely.** Aux In
 sends a subscription whose source channel was deleted to `DEPARTED_SOURCE`
 (`aux_in.rs:147`), keeping it inert and inspectable. The modulation rack drops

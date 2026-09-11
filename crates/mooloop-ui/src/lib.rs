@@ -958,7 +958,24 @@ const EFFECT_ROW_PARAMS: usize = 10;
 /// constant rather than "whatever is left".
 const EFFECT_ROW_DESCRIPTOR_PARAMS: usize = EFFECT_ROW_PARAMS - 2;
 
-fn effect_kind_index(kind: EffectKind) -> i32 {
+/// The number that binds a kind to its face, and the only thing that does.
+///
+/// `main.slint` dispatches on it (`if slot.kind == 12 : PreampDeviceFace`)
+/// and the insert menu in `device-rack.slint` calls `kind-selected` with it,
+/// so a kind's number is a contract with two pieces of markup and nothing
+/// else. It is a *runtime* binding -- a project persists the `EffectKind` by
+/// its serde name and this is recomputed on every publish -- so renumbering
+/// breaks no saved file. It still breaks both markup lists at once, so the
+/// rule for a new kind is: **append the next free number, and leave the
+/// existing ones alone.** Nothing here constrains the order of `ALL`, of the
+/// insert menu, or of the arms in `main.slint`; the numbers are the only
+/// agreement.
+///
+/// Public for the same reason [`view`] is: the UI tests address a device the
+/// way the application does, rather than spelling the integer a second time
+/// and drifting when it moves. `the_menu_and_the_faces_cover_every_kind`
+/// (`tests/effect_preset_menu.rs`) checks this map against both markup lists.
+pub fn effect_kind_index(kind: EffectKind) -> i32 {
     match kind {
         EffectKind::Filter => 0,
         EffectKind::Drive => 1,
@@ -973,10 +990,6 @@ fn effect_kind_index(kind: EffectKind) -> i32 {
         EffectKind::Plate => 10,
         EffectKind::Buffer => 11,
         EffectKind::Preamp => 12,
-        // Highest, because the insert menu lists Chain last -- it is a
-        // container rather than an effect -- and
-        // `the_insert_menu_offers_every_kind` finds the menu's last row by
-        // `EffectKind::ALL.len() - 1`.
         EffectKind::Chain => 13,
     }
 }
@@ -984,7 +997,10 @@ fn effect_kind_index(kind: EffectKind) -> i32 {
 /// Rack units a kind's device face occupies. Devices with more working
 /// controls take more width rather than compressing them (docs/UI_DESIGN.md,
 /// "Device Rack Layout").
-fn effect_kind_units(kind: EffectKind) -> i32 {
+///
+/// Public alongside [`effect_kind_index`], so a test fixture builds a row at
+/// the width the application would give it rather than at a width of its own.
+pub fn effect_kind_units(kind: EffectKind) -> i32 {
     match kind {
         EffectKind::Filter
         | EffectKind::Drive
@@ -1232,7 +1248,14 @@ fn device_kind_from_int(value: i32) -> DeviceKind {
     }
 }
 
-fn device_kind_to_int(kind: DeviceKind) -> i32 {
+/// The generator's counterpart to [`effect_kind_index`]: the number
+/// `main.slint` dispatches the source face on (`root.source-kind == 4`).
+///
+/// Public for the same reason, and it was worth the same pass: the UI tests
+/// reached a device by writing `set_source_kind(5)`, which says nothing about
+/// which synth that is and stops being true the day a kind is inserted rather
+/// than appended.
+pub fn device_kind_to_int(kind: DeviceKind) -> i32 {
     match kind {
         DeviceKind::Sampler => 0,
         DeviceKind::DrumSynth => 1,

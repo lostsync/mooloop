@@ -67,8 +67,8 @@ Alphabetical by model name, then by harness.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-09-10
-- Sessions: 93
+- Last seen: 2026-09-11
+- Sessions: 94
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -222,7 +222,13 @@ Alphabetical by model name, then by harness.
   offline on the studio Mac, which found that the console channels everyone
   calls warm measure odd-order and the mic preamp is the even one, and then
   the mixer strip that turns over rather than growing, which is what a 92px
-  strip buys and what it retires.
+  strip buys and what it retires, and then the three lists that have to agree
+  about what a device is -- the enum, the insert menu, and the face dispatch
+  in `main.slint` -- which nothing but a small integer joins, spelled out by
+  hand in the test fixtures until renumbering one kind turned every container
+  fixture in a snapshot suite into a preamp, and where the test that checked
+  the menu for completeness had been quietly requiring it to list kinds in
+  numbering order.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
