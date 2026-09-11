@@ -385,6 +385,33 @@ impl Session {
         self.console_sums_sent = plan;
     }
 
+    /// Reconcile which tracks the engine is silencing for a solo.
+    ///
+    /// Derived and diffed once a tick, beside [`Self::sync_console_sums`]
+    /// and for the same reasons. A bank with nothing soloed derives all
+    /// false, matches what was sent, and returns without a command -- so
+    /// solo costs one array comparison a tick until somebody presses a
+    /// button. Deliberately does not mark the document dirty: what a solo
+    /// silences is derived state, and `MixerBus::solo` is the thing the user
+    /// did.
+    pub fn sync_solo(&mut self, handle: &mut EngineHandle) {
+        let plan = mooloop_core::mixer::solo_silenced(&self.buses);
+        if plan == self.solo_silenced_sent {
+            return;
+        }
+        for (bus, (&silenced, &sent)) in
+            plan.iter().zip(self.solo_silenced_sent.iter()).enumerate()
+        {
+            if silenced != sent {
+                handle.send(EngineCommand::SetTrackSoloSilenced {
+                    bus: bus as u8,
+                    silenced,
+                });
+            }
+        }
+        self.solo_silenced_sent = plan;
+    }
+
     /// The audio edges this project's channels compile to, from the model as
     /// it stands.
     ///

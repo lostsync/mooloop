@@ -11225,6 +11225,13 @@ impl AppUi {
                 // buffer only for the buses something encoded actually
                 // reaches, so a project with console off costs nothing.
                 st.borrow_mut().session.sync_console_sums(&mut handle);
+                // And the solo, which is the fifth and the cheapest: a bank
+                // with nothing soloed derives all false, matches what was
+                // sent, and returns without a command. What a solo silences
+                // is a property of the whole graph -- a soloed track's
+                // feeders and its destination stay up -- so it is derived
+                // here rather than worked out at the button.
+                st.borrow_mut().session.sync_solo(&mut handle);
                 // And the track graph, which is the fourth of these and the
                 // one that used to be sent from the edit that caused it.
                 // Routing stopped being one `u8` per track when a send became

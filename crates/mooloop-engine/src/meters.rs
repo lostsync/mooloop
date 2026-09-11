@@ -22,9 +22,23 @@ use mooloop_core::{
 use mooloop_dsp::dynamics::db_to_lin;
 use mooloop_dsp::{DynamicsFrame, SPECTRUM_BINS};
 
-/// Peak-hold cells for every bus, left and right interleaved.
+/// Peak-hold cells for every bus, left and right interleaved, and beside
+/// them the deepest gain reduction each track's channel strip applied.
 pub struct BusMeters {
     cells: Vec<AtomicU32>,
+    /// How much reduction the strip's compressor took, in dB **as a
+    /// positive amount**, held until read.
+    ///
+    /// Positive so that `fetch_max` finds the deepest one for the same
+    /// reason it finds the loudest peak: a transient landing between two UI
+    /// frames should still light the lamp rather than being overwritten by
+    /// the block after it. Reduction is negative everywhere else in this
+    /// codebase, so the sign is flipped here and nowhere else -- at the
+    /// publish, which is the one line that knows why.
+    ///
+    /// A strip whose compressor is out publishes nothing, so the cell falls
+    /// to zero on the next read and the lamp goes dark.
+    reduction: Vec<AtomicU32>,
 }
 
 /// Held input/output peaks for every visible device, plus the held detector
@@ -321,6 +335,7 @@ impl BusMeters {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             cells: (0..MAX_BUSES * 2).map(|_| AtomicU32::new(0)).collect(),
+            reduction: (0..MAX_BUSES).map(|_| AtomicU32::new(0)).collect(),
         })
     }
 
@@ -337,6 +352,23 @@ impl BusMeters {
         if let Some(cell) = self.cells.get(base + 1) {
             cell.fetch_max(peak_r.max(0.0).to_bits(), Ordering::Relaxed);
         }
+    }
+
+    /// Raise `bus`'s held gain reduction, given the reduction in dB the way
+    /// the rest of the codebase states it: negative, or zero for none.
+    pub fn publish_reduction(&self, bus: usize, reduction_db: f32) {
+        if let Some(cell) = self.reduction.get(bus) {
+            cell.fetch_max((-reduction_db).max(0.0).to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    /// Read and clear `bus`'s held gain reduction, as a positive number of
+    /// decibels. Called on the GUI thread.
+    pub fn take_reduction(&self, bus: usize) -> f32 {
+        self.reduction
+            .get(bus)
+            .map(|cell| f32::from_bits(cell.swap(0, Ordering::Relaxed)))
+            .unwrap_or(0.0)
     }
 
     /// Read and clear `bus`'s held peak. Called on the GUI thread.

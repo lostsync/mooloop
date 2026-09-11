@@ -120,6 +120,11 @@ pub struct Session {
     /// [`Self::compensation_sent`]: a record of what has been said to the
     /// audio thread, not document state.
     pub console_sums_sent: [bool; MAX_BUSES],
+    /// Which tracks the engine has been told a solo silences. Same status,
+    /// and derived the same way: whether a track is heard under a solo is a
+    /// property of the whole graph, so the pump re-derives and diffs rather
+    /// than the session tracking it per edit.
+    pub solo_silenced_sent: [bool; MAX_BUSES],
     /// The track graph and the send routing the engine has been told about.
     ///
     /// The key deliberately holds only what is *structural* about a send --
@@ -225,6 +230,7 @@ impl Default for Session {
             modulation_ui_channel: Cell::new(None),
             compensation_sent: mooloop_core::CompiledLatency::default(),
             console_sums_sent: [false; MAX_BUSES],
+            solo_silenced_sent: [false; MAX_BUSES],
             track_graph_sent: (mooloop_core::CompiledBusGraph::default(), Vec::new()),
             audio_graph_sent: mooloop_core::CompiledAudioGraph::default(),
             modulation_edit_before: None,
@@ -1255,6 +1261,10 @@ impl Session {
         // installs its own through `install_console`, so this side must
         // re-derive rather than trust a plan for the document that just left.
         self.console_sums_sent = [false; MAX_BUSES];
+        // And the solo, for the same reason: `install_solo` runs on the new
+        // document, so a plan derived against the old one must not be
+        // trusted to say what the engine already knows.
+        self.solo_silenced_sent = [false; MAX_BUSES];
         // Same for the audio edges: `RenderState::load_project` compiles and
         // allocates its own, so this side must re-derive rather than trust a
         // plan for the document that just left.

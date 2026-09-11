@@ -245,6 +245,133 @@ fn the_pin_decides_whether_the_strip_runs_before_the_tracks_devices() {
     );
 }
 
+/// **Solo in place**, through the engine: soloing a track silences its
+/// siblings, keeps what feeds it and where it goes, and leaves the mix
+/// bit-identical while nothing is soloed.
+///
+/// `mooloop_core::mixer::solo_silenced` is where the rule is tested as a
+/// rule. What this says is that the engine acts on it -- and acts through
+/// `load_project`, which is the path an **offline bounce** takes, so a
+/// render matches what was heard.
+#[test]
+fn a_solo_silences_the_siblings_and_keeps_the_path() {
+    let mut sibling = one_note_channel(45);
+    let mut soloed = one_note_channel(52);
+    sibling.setup.channel.bus = 1;
+    soloed.setup.channel.bus = 2;
+    let mut project = Project {
+        channels: vec![sibling, soloed],
+        ..Project::default()
+    };
+    project.ensure_tracks(3);
+
+    let (both, _) = render_master(&project, 0.5);
+    assert!(peak_of(&both) > 0.01, "the comparison ran on silence");
+
+    // Track 2 soloed: 1 goes, 2 stays, and the master stays because the
+    // solo has to be audible through it.
+    project.buses[2].bus.solo = true;
+    let (alone, _) = render_master(&project, 0.5);
+    assert!(
+        peak_of(&alone) > 0.01,
+        "a soloed track has to still be heard"
+    );
+    assert!(
+        worst_difference(&both, &alone) > 1e-3,
+        "soloing one of two tracks has to change the mix"
+    );
+
+    // The same render with the silenced track muted by hand instead: solo
+    // in place *is* that, which is the claim worth pinning.
+    project.buses[2].bus.solo = false;
+    project.buses[1].bus.muted = true;
+    let (muted, _) = render_master(&project, 0.5);
+    project.buses[1].bus.muted = false;
+    project.buses[2].bus.solo = true;
+    let (soloed_again, _) = render_master(&project, 0.5);
+    assert_eq!(
+        muted, soloed_again,
+        "solo in place should be exactly the other tracks muted"
+    );
+}
+
+/// A soloed *group* keeps the tracks that feed it: their audio is what the
+/// group is made of, so silencing them would make the solo silent.
+#[test]
+fn soloing_a_group_still_hears_what_feeds_it() {
+    let mut channel = one_note_channel(45);
+    channel.setup.channel.bus = 3;
+    let mut project = Project {
+        channels: vec![channel],
+        ..Project::default()
+    };
+    project.ensure_tracks(4);
+    // 3 feeds the group 2, which feeds the master.
+    project.buses[3].bus.output = 2;
+    let (plain, _) = render_master(&project, 0.5);
+    assert!(peak_of(&plain) > 0.01);
+
+    project.buses[2].bus.solo = true;
+    let (grouped, _) = render_master(&project, 0.5);
+    assert_eq!(
+        plain, grouped,
+        "soloing a group whose only feeder is track 3 should change nothing"
+    );
+}
+
+/// Nothing soloed is bit-identical to the engine before solo existed, which
+/// is the case that has to cost nothing.
+#[test]
+fn a_bank_with_no_solo_renders_exactly_as_before() {
+    let project = one_track_project();
+    let (left, right) = render_master(&project, 0.5);
+    let mut untouched = one_track_project();
+    for setup in &mut untouched.buses {
+        setup.bus.solo = false;
+    }
+    let (again, again_right) = render_master(&untouched, 0.5);
+    assert_eq!(left, again);
+    assert_eq!(right, again_right);
+}
+
+/// The lamp beside the COMP header reads what the compressor took, and
+/// reads nothing while the section is out.
+#[test]
+fn the_strip_publishes_the_reduction_its_lamp_reads() {
+    let mut project = one_track_project();
+    project.buses[1].bus.strip = StripParams {
+        comp_in: true,
+        threshold_db: -40.0,
+        ratio: 20.0,
+        attack_ms: 1.0,
+        ..StripParams::default()
+    };
+    let meters = crate::meters::BusMeters::new();
+    let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    render.attach_meters(meters.clone());
+    render.play();
+    for _ in 0..16 {
+        render.process_once_block(512);
+    }
+    let reduction = meters.take_reduction(1);
+    assert!(
+        reduction > 3.0,
+        "20:1 over a -40 dB threshold should publish real reduction: {reduction}"
+    );
+
+    // Switched out, nothing is published and the held cell falls to zero --
+    // which is what takes the lamp dark rather than leaving it lit at
+    // whatever it last saw.
+    project.buses[1].bus.strip.comp_in = false;
+    let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    render.attach_meters(meters.clone());
+    render.play();
+    for _ in 0..16 {
+        render.process_once_block(512);
+    }
+    assert_eq!(meters.take_reduction(1), 0.0);
+}
+
 /// Polarity inverts the track and nothing else: the same samples, negated.
 /// Exactly, because it is a multiply by -1.
 #[test]

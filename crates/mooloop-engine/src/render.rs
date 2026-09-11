@@ -1799,6 +1799,13 @@ struct BusStrip {
     /// Whether this track's signal is inverted, applied at the top of its
     /// block so everything downstream sees the flip.
     polarity: bool,
+    /// Whether something *else* is soloed and this track is not part of it.
+    ///
+    /// Derived on the control thread by `mooloop_core::mixer::solo_silenced`
+    /// -- whether a track is heard under a solo is a property of the whole
+    /// graph -- and held apart from `output.muted` so that dropping the solo
+    /// gives a track back whatever its own mute said.
+    solo_silenced: bool,
     /// How long this bus waits before summing into the bus it feeds. Same
     /// contract as a channel's, and always `None` on the master, which feeds
     /// nothing.
@@ -1851,6 +1858,7 @@ impl BusStrip {
             output: OutputStage::new(1.0),
             strip: Strip::new(StripParams::default(), sample_rate),
             polarity: false,
+            solo_silenced: false,
             compensation: None,
             console: false,
             console_sum: None,
@@ -1903,6 +1911,7 @@ impl BusStrip {
         self.strip.reset();
         self.strip.set_params(StripParams::default());
         self.polarity = false;
+        self.solo_silenced = false;
         // The displaced ring leaves on the same carrier a displaced dry-path
         // aligner does: it is the same type doing the same job one level out,
         // and inventing a second channel for it would only mean two things to
@@ -2940,6 +2949,7 @@ impl RenderState {
         self.bus_graph = compile_bus_graph(&project.buses).unwrap_or_default();
         self.install_compensation(project);
         self.install_console(project);
+        self.install_solo(project);
         // Here as well as through the session's incremental sync, and for the
         // same reason `install_compensation` is: an offline render builds its
         // own `RenderState` and never runs a pump, so without this an export
@@ -2959,6 +2969,21 @@ impl RenderState {
     ///
     /// Allocates, and is allowed to: `load_project` runs on the control
     /// thread while a state is prepared, never from the callback.
+    /// Install the solo state from `project`.
+    ///
+    /// Here as well as through the session's incremental sync, for the
+    /// reason [`Self::install_console`] gives: an **offline render** builds
+    /// its own `RenderState` and never runs a pump, so without this a bounce
+    /// would be the one place a solo was ignored -- and a bounce that does
+    /// not match what was heard is the disagreement this engine is arranged
+    /// to prevent.
+    fn install_solo(&mut self, project: &Project) {
+        let silenced = mooloop_core::mixer::solo_silenced(&project.buses);
+        for (index, strip) in self.buses.iter_mut().enumerate() {
+            strip.solo_silenced = silenced.get(index).copied().unwrap_or(false);
+        }
+    }
+
     fn install_console(&mut self, project: &Project) {
         for (index, strip) in self.buses.iter_mut().enumerate() {
             // The master feeds nothing, so a switch on it would encode into a
@@ -3839,6 +3864,11 @@ impl RenderState {
                     }
                 }
             }
+            EngineCommand::SetTrackSoloSilenced { bus, silenced } => {
+                if let Some(strip) = self.buses.get_mut(bus as usize) {
+                    strip.solo_silenced = silenced;
+                }
+            }
             EngineCommand::SetTrackPolarity { bus, on } => {
                 if let Some(strip) = self.buses.get_mut(bus as usize) {
                     strip.polarity = on;
@@ -4676,6 +4706,14 @@ impl RenderState {
             if self.strip_pin == StripPin::Head {
                 strip.strip.process_block(&mut strip.bus, frames);
             }
+            // The lamp beside the strip's COMP header. Published wherever
+            // the strip ran, and not at all while its compressor is out --
+            // `dynamics_frame` answers `None` there, the cell falls to zero
+            // on the next read, and the lamp goes dark rather than holding
+            // the last thing it saw.
+            if let Some(frame) = strip.strip.dynamics_frame() {
+                self.meters.publish_reduction(index, frame.reduction_db);
+            }
             strip.effects.process(
                 &context,
                 &mut strip.bus,
@@ -4693,7 +4731,11 @@ impl RenderState {
                 strip.strip.process_block(&mut strip.bus, frames);
             }
             let producer = EffectTarget::Bus(index as u8);
-            let muted = strip.output.muted;
+            // Mute and solo are one question here and two fields
+            // everywhere else: a track silenced by someone else's solo
+            // behaves exactly as a muted one -- it processes, so tails
+            // decay, and contributes nothing anywhere, sends included.
+            let muted = strip.output.muted || strip.solo_silenced;
             // Mute silences a track's sends, pre-fader ones included. That is
             // the reading a desk gives -- a muted strip contributes nothing
             // anywhere -- and it is what the channel loop already does by

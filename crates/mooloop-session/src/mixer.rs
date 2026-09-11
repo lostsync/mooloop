@@ -254,6 +254,45 @@ impl Session {
         })
     }
 
+    /// Flips a track's solo.
+    ///
+    /// **Solo in place**: what it silences is derived by the pump's
+    /// `sync_solo`, not here, because whether a track is heard under a solo
+    /// is a property of the whole graph. This only says which button is
+    /// lit, which is why it hands back no command.
+    ///
+    /// Refused on the master, which every track reaches: soloing it would
+    /// silence nothing at all, and a button that does nothing is worse than
+    /// one that is not offered.
+    pub fn toggle_track_solo(&mut self, bus: i32) -> bool {
+        let Ok(index) = usize::try_from(bus) else {
+            return false;
+        };
+        if index == mooloop_core::MASTER_BUS as usize {
+            return false;
+        }
+        let Some(setup) = self.buses.get_mut(index) else {
+            return false;
+        };
+        setup.bus.solo = !setup.bus.solo;
+        // Routing-shaped state does not travel as a command, so the edit is
+        // marked here rather than falling out of one. See `set_bus_output`.
+        self.mark_dirty();
+        true
+    }
+
+    /// Whether a solo somewhere is silencing `bus`, for the face to dim it.
+    pub fn solo_silenced(&self, bus: i32) -> bool {
+        usize::try_from(bus)
+            .ok()
+            .and_then(|index| {
+                mooloop_core::mixer::solo_silenced(&self.buses)
+                    .get(index)
+                    .copied()
+            })
+            .unwrap_or(false)
+    }
+
     /// Flips whether a track's signal is inverted.
     ///
     /// Offered on every track including the master, unlike analog sum: a

@@ -108,6 +108,21 @@ pub struct MixerBus {
     /// which is a different question from where it acts.
     #[serde(default)]
     pub polarity: bool,
+    /// Whether this track is soloed.
+    ///
+    /// **Solo in place**, Adam's 2026-09-11 ruling: soloing silences the
+    /// other tracks rather than tapping this one to a separate monitor
+    /// output. `docs/MIXER_PLAN.md` specifies the AFL tap and it is still
+    /// the better end state; this is the one the button on the strip means
+    /// to anyone who clicks it, and it needs no second output path.
+    ///
+    /// What it silences is [`solo_silenced`], not "everything else": a
+    /// soloed track's own feeders and its own destination have to stay up or
+    /// soloing a group would mute the tracks that make its sound.
+    /// Meaningless on the master, which every track reaches, and refused
+    /// there.
+    #[serde(default)]
+    pub solo: bool,
     /// The four sections of this track's channel strip, all out by default.
     ///
     /// Defaulted on load, so a song saved before the strip existed opens
@@ -135,6 +150,7 @@ impl MixerBus {
             output: MASTER_BUS,
             console: false,
             polarity: false,
+            solo: false,
             strip: crate::strip::StripParams::default(),
         }
     }
@@ -397,6 +413,50 @@ fn reaches(buses: &[BusSetup], from: u8, target: u8) -> bool {
         }
     }
     false
+}
+
+/// Which tracks a solo silences, indexed by track.
+///
+/// All false while nothing is soloed, which is the case that has to cost
+/// nothing and change nothing.
+///
+/// A track stays audible when it is **connected to a soloed track in either
+/// direction**: its ancestors, because their audio *is* what the soloed
+/// track is made of -- silence the kick's track and soloing the drum bus
+/// gives you nothing -- and its descendants, because that is where the sound
+/// goes on its way to the master. Siblings are silenced, which is the whole
+/// gesture.
+///
+/// Both directions follow sends as well as outputs, because [`reaches`] does
+/// and because a soloed track's reverb is part of what it sounds like. The
+/// consequence worth knowing: soloing a *return* keeps the tracks that feed
+/// it audible, so you hear them dry underneath. That is solo-in-place being
+/// honest rather than a defect -- the alternative is soloing a reverb and
+/// hearing silence -- and it is the case to revisit first if this ever feels
+/// wrong.
+pub fn solo_silenced(buses: &[BusSetup]) -> [bool; MAX_BUSES] {
+    let mut silenced = [false; MAX_BUSES];
+    let soloed = |setup: &BusSetup| setup.bus.solo;
+    if !buses.iter().take(MAX_BUSES).any(soloed) {
+        return silenced;
+    }
+    for index in 0..buses.len().min(MAX_BUSES) {
+        if buses[index].bus.solo {
+            continue;
+        }
+        let track = index as u8;
+        let connected = buses
+            .iter()
+            .enumerate()
+            .take(MAX_BUSES)
+            .filter(|(_, setup)| soloed(setup))
+            .any(|(other, _)| {
+                let other = other as u8;
+                reaches(buses, other, track) || reaches(buses, track, other)
+            });
+        silenced[index] = !connected;
+    }
+    silenced
 }
 
 /// Whether routing `bus` into `output` would close a loop. The interface uses
@@ -1977,6 +2037,87 @@ mod tests {
         assert!(!would_create_cycle(&buses, 2, MASTER_BUS));
         // Reaching a bus that merely shares a destination is not a cycle.
         assert!(!would_create_cycle(&routed(&[(4, 6), (5, 6)]), 4, 5));
+    }
+
+    // --- Solo -------------------------------------------------------------
+
+    /// Nothing soloed silences nothing, which is the case that has to cost
+    /// nothing: the whole mechanism is off until a button is pressed.
+    #[test]
+    fn a_bank_with_no_solo_silences_nothing() {
+        assert_eq!(solo_silenced(&full_bank()), [false; MAX_BUSES]);
+    }
+
+    /// Soloing a track silences its siblings and keeps what it is made of
+    /// and where it goes.
+    ///
+    /// The bank: 3 and 4 feed the group 2, which feeds the master; 5 is off
+    /// on its own. Solo the group and you must still hear 3 and 4 -- their
+    /// audio *is* the group's -- and the master, or the solo would be
+    /// inaudible. 5 is the sibling, and silencing it is the gesture.
+    #[test]
+    fn soloing_a_group_keeps_its_feeders_and_its_destination() {
+        let mut buses = routed(&[(3, 2), (4, 2), (2, MASTER_BUS), (5, MASTER_BUS)]);
+        buses[2].bus.solo = true;
+        let silenced = solo_silenced(&buses);
+
+        assert!(!silenced[2], "the soloed track");
+        assert!(!silenced[3], "a feeder, whose audio is the soloed track's");
+        assert!(!silenced[4], "the other feeder");
+        assert!(
+            !silenced[MASTER_BUS as usize],
+            "the master, or the solo is inaudible"
+        );
+        assert!(silenced[5], "a sibling, which is what a solo silences");
+    }
+
+    /// A soloed track's own mute still wins: solo decides what *else* is
+    /// heard, not whether this one is.
+    #[test]
+    fn a_solo_says_nothing_about_the_soloed_tracks_own_mute() {
+        let mut buses = full_bank();
+        buses[3].bus.solo = true;
+        buses[3].bus.muted = true;
+        // The derivation does not silence it -- the mute does, one layer on,
+        // which is why these are two fields and not one.
+        assert!(!solo_silenced(&buses)[3]);
+    }
+
+    /// Two solos add rather than fight: both stay up, and so does what
+    /// either is made of.
+    #[test]
+    fn two_solos_are_both_audible() {
+        let mut buses = routed(&[(3, 2), (2, MASTER_BUS), (5, MASTER_BUS)]);
+        buses[2].bus.solo = true;
+        buses[5].bus.solo = true;
+        let silenced = solo_silenced(&buses);
+        assert!(!silenced[2] && !silenced[5] && !silenced[3]);
+        assert!(silenced[6], "a track connected to neither is still silenced");
+    }
+
+    /// Solo follows a **send** in both directions, because `reaches` does
+    /// and because a soloed track's reverb is part of what it sounds like.
+    ///
+    /// The consequence in the other direction is the one to know about:
+    /// soloing the return keeps its senders audible, so their dry signal is
+    /// heard underneath. That is recorded in `solo_silenced`'s own comment
+    /// as the case to revisit, and asserting it here is what makes it a
+    /// decision rather than an accident.
+    #[test]
+    fn solo_follows_a_send_both_ways() {
+        let mut buses = sending(&[(3, 6)]);
+        buses[3].bus.solo = true;
+        assert!(
+            !solo_silenced(&buses)[6],
+            "a soloed track's reverb has to stay up"
+        );
+
+        let mut buses = sending(&[(3, 6)]);
+        buses[6].bus.solo = true;
+        assert!(
+            !solo_silenced(&buses)[3],
+            "and soloing the return keeps its sender, dry signal and all"
+        );
     }
 
     #[test]

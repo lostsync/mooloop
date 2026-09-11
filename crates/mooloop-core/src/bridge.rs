@@ -276,6 +276,19 @@ pub enum EngineCommand {
     /// linearly for that tick, which is the same either-order tolerance
     /// `SetSamplerStretch` documents.
     SetTrackConsole { bus: u8, enabled: bool },
+    /// Silence one track because something else is soloed, or stop.
+    ///
+    /// **Derived, not a switch.** The control is `MixerBus::solo`; what
+    /// reaches the engine is `mixer::solo_silenced`'s answer for this track,
+    /// because whether a track is heard under a solo is a property of the
+    /// whole graph -- its ancestors and descendants stay up -- and the
+    /// realtime side should receive a finished answer rather than reason
+    /// about routing. The same shape `SetConsoleSum` has, one layer down.
+    ///
+    /// Held apart from `SetBusMuted` so that a solo cannot eat a mute: a
+    /// track silenced by someone else's solo goes back to whatever its own
+    /// mute said when the solo is dropped.
+    SetTrackSoloSilenced { bus: u8, silenced: bool },
     /// Invert one track's signal.
     ///
     /// Acts at the top of the track's block, before the strip, the chain,
