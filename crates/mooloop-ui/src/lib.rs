@@ -12683,15 +12683,143 @@ mod tests {
         assert_eq!(super::format_param_value(&hertz, 0.022), "440 Hz");
     }
 
+    /// The markup, as text. These tests read the two division tables out of it
+    /// rather than out of a copy, which is the whole point of them.
+    const MAIN_SLINT: &str = include_str!("../ui/main.slint");
+    const CONTROLS_SLINT: &str = include_str!("../ui/controls.slint");
+
+    /// Pull an `index == 0 ? a : index == 1 ? b : ... : z` chain out of one
+    /// Slint function body, as the values in index order.
+    ///
+    /// Slint has no loop, so every table in the markup is a chain like this.
+    /// The trailing branch is the last index rather than a fallback -- that is
+    /// what makes the length one more than the highest `index ==` it names.
+    fn ternary_chain(markup: &str, signature: &str) -> Vec<String> {
+        let at = markup
+            .find(signature)
+            .unwrap_or_else(|| panic!("the markup no longer declares `{signature}`"));
+        let open = markup[at..].find('{').expect("a function body") + at;
+        let close = markup[open..].find("\n    }").expect("a function end") + open;
+        let body = &markup[open..close];
+
+        let mut values: Vec<String> = Vec::new();
+        let mut rest = body;
+        while let Some(hit) = rest.find("index == ") {
+            let after = &rest[hit + "index == ".len()..];
+            let (index, after) = after
+                .split_once('?')
+                .unwrap_or_else(|| panic!("`{signature}`: an `index ==` with no `?`"));
+            assert_eq!(
+                index.trim().parse::<usize>().ok(),
+                Some(values.len()),
+                "`{signature}` names its branches out of order at position {}",
+                values.len()
+            );
+            let end = after.find(':').unwrap_or(after.len());
+            values.push(after[..end].trim().to_string());
+            rest = &after[end..];
+        }
+        // Whatever follows the last `:` is the final entry.
+        let tail = rest
+            .trim_end()
+            .trim_end_matches(';')
+            .rsplit(':')
+            .next()
+            .expect("a trailing branch");
+        values.push(tail.trim().to_string());
+        values
+    }
+
+    /// **This test used to assert against a copy of its own subject.** It was
+    /// named for `snap-ticks()` in `main.slint` and compared
+    /// `MUSICAL_DIVISIONS` to a literal `[384, 192, ...]` written inside the
+    /// test -- a third spelling of the same eleven numbers. Changing the markup
+    /// would not have failed it, which is the one thing it existed to do.
+    ///
+    /// Both halves of the table are mirrored, so both are read here: the ticks
+    /// from `snap-ticks()` and the names from `musical-snap-options`. The
+    /// length picker indexes them by the same position, so a drift in either
+    /// sets the wrong length silently.
     #[test]
     fn musical_divisions_match_the_snap_table_in_main_slint() {
-        // `snap-ticks()` in main.slint is the other half of this table, and
-        // the length picker indexes into `musical-snap-options` by the same
-        // position. A drift between them would set the wrong length silently.
+        let ticks = ternary_chain(MAIN_SLINT, "pure function snap-ticks(index: int) -> int");
+        let parsed: Vec<u32> = ticks
+            .iter()
+            .map(|value| {
+                value
+                    .parse()
+                    .unwrap_or_else(|_| panic!("snap-ticks branch {value:?} is not a tick count"))
+            })
+            .collect();
         assert_eq!(
-            super::MUSICAL_DIVISIONS.map(|(ticks, _)| ticks),
-            [384, 192, 96, 64, 48, 32, 24, 16, 12, 8, 6]
+            super::MUSICAL_DIVISIONS.map(|(ticks, _)| ticks).to_vec(),
+            parsed,
+            "MUSICAL_DIVISIONS and main.slint's snap-ticks() disagree"
         );
+
+        let options = MAIN_SLINT
+            .split_once("property <[string]> musical-snap-options: [")
+            .expect("main.slint declares musical-snap-options")
+            .1;
+        let options = &options[..options.find(']').expect("an unterminated list")];
+        let names: Vec<&str> = options
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .collect();
+        assert_eq!(
+            super::MUSICAL_DIVISIONS.map(|(_, name)| name).to_vec(),
+            names,
+            "MUSICAL_DIVISIONS and main.slint's musical-snap-options disagree"
+        );
+    }
+
+    /// `Divisions.beats` in `controls.slint` against `ModTimeDivision::beats`.
+    ///
+    /// Twenty-one values, mirrored, and nothing checked them. The markup says
+    /// plainly what the stake is -- it is "the reason a delay and an LFO cannot
+    /// disagree about what `1/2` is worth, which they did, by a factor of four,
+    /// for as long as the delay had a grid of its own" -- and a table written to
+    /// end a factor-of-four disagreement had no guard against becoming one
+    /// again.
+    ///
+    /// Both callers turn these into time: `controls.slint` into the delay's
+    /// milliseconds, `modulation-device.slint` into the modulation rate in
+    /// hertz. A drift here is audibly wrong and silently arrived at.
+    #[test]
+    fn the_slint_division_table_matches_mod_time_division() {
+        use mooloop_core::modulation::ModTimeDivision;
+
+        let branches = ternary_chain(
+            CONTROLS_SLINT,
+            "public pure function beats(index: int) -> float",
+        );
+        assert_eq!(
+            branches.len(),
+            ModTimeDivision::ALL.len(),
+            "controls.slint offers {} divisions, ModTimeDivision has {}",
+            branches.len(),
+            ModTimeDivision::ALL.len()
+        );
+
+        for (index, division) in ModTimeDivision::ALL.iter().enumerate() {
+            // The markup spells thirds and sixths as divisions rather than as
+            // rounded decimals, the same way the Rust table does.
+            let branch = &branches[index];
+            let slint = match branch.split_once('/') {
+                Some((numerator, denominator)) => {
+                    numerator.trim().parse::<f32>().expect("a numerator")
+                        / denominator.trim().parse::<f32>().expect("a denominator")
+                }
+                None => branch.parse::<f32>().expect("a beat count"),
+            };
+            assert!(
+                (slint - division.beats()).abs() < 1e-6,
+                "division {index} ({division:?}): controls.slint says {slint} beats, \
+                 ModTimeDivision says {}",
+                division.beats()
+            );
+        }
     }
 
     #[test]
