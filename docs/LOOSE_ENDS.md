@@ -238,33 +238,53 @@ their own passes; nobody has decided whether they should match.
 
 ## One name, two policies
 
+**One descriptor id decodes to two enums, and they do not have the same
+number of variants.** `EQ_PARAM_CHARACTER` -- the EQ's "Shape" -- means
+`EqSlope` when a pass filter is the selected target and `EqQProfile` when a
+band is. `EqSlope` has five variants (Db6..Db36) and `EqQProfile` has two,
+and the descriptor is sized for the slope: `min: 0, max: 4,
+ParamCurve::Stepped(5)` (`effect.rs:340`).
+
+So on a band, positions 1, 2, 3 and 4 all mean `Proportional`, and all four
+read back as position 1. The face never sends the other three --
+`eq-device.slint:80` drives the band's control as a two-state toggle sending
+0 or 0.25 -- so it is not reachable by hand. **An automation lane is not the
+face.** A lane drawn at half travel writes position 2; what `get` returns is
+position 1. The lane and the parameter disagree about what the lane says, and
+the readout snaps somewhere the line is not.
+
+`mooloop-core`'s `stepped_round_trip_tests` covers every stepped parameter in
+every table -- effects, generators, modulators and the strip -- and this is
+the one id excluded, with `one_id_decodes_to_two_enums_of_different_arity`
+pinning exactly what it does instead. So it cannot get quietly worse, and the
+day it is fixed that test fails and says so.
+
+Fixing it means a second descriptor id, because a shipped id is frozen
+("never renumber a shipped id -- append instead", `effect.rs:198`). That is a
+decision about the project format and about which of the two meanings keeps
+`EQ_PARAM_CHARACTER`, plus whether a migration rewrites existing lanes --
+which is why it is recorded rather than done. Found 2026-09-12.
+
 **`from_index` answers out-of-range input two different ways depending on
-which enum you ask.** Around fifteen enums convert a Slint selector index to
-a variant, under one name, in two conventions that disagree at the edges:
+which enum you ask, and nothing currently reaches it.** Forty-five enums
+convert a selector index to a variant under one name, in two conventions: the
+`Self::ALL.get(index.clamp(0, len - 1))` body, thirteen times, clamps to the
+nearest end; a hand-written `match` with a `_ =>` arm, thirty-one times,
+falls through to the default variant. `NotePriority::from_index(99)` is
+variant 0 where an ML-P8 enum's is its last.
 
-- **Clamp to the nearest end** -- `Self::ALL.get(index.clamp(0, len - 1))` --
-  in `ds01.rs` (4 enums), `mlp8.rs` (3) and `modulation.rs` (5). Twelve
-  copies of one body.
-- **Fall through to the default variant** -- a hand-written `match` with a
-  `_ =>` arm -- in `mlm1.rs` (`NotePriority`, `EnvTrigger`, `GlideMode`,
-  `FilterModel`) and `synth.rs` (`DrumMode`, `KickCharacter`,
-  `SnareCharacter`, `HatCharacter`).
+**This was recorded as more dangerous than it is, earlier the same day, and
+the correction is the useful part.** Every parameter path runs through a
+`set` that calls `descriptor.clamp_natural` first, so an out-of-range index
+never reaches `from_index` from automation, modulation, a project file or the
+UI. All thirty-one hand-written pairs were checked and every one round-trips.
+The divergence is real and unreachable, which makes unifying the forty-five
+bodies churn rather than a fix -- and is why the pass that found it wrote a
+test instead.
 
-So `NotePriority::from_index(99)` is `Last`, variant 0, while an ML-P8
-enum's `from_index(99)` is its *last* variant. Both are defensible; having
-both under one name is not, and neither is written down as a choice.
-
-The input comes from markup, which is what makes this more than tidiness:
-an out-of-range index arises when a `SelectorBank`'s option list and the
-Rust table disagree about how many options there are, which is the failure
-this codebase keeps having. The two conventions mean the same disagreement
-shows up as "the control snapped to the first option" on one face and "it
-snapped to the last" on another, and neither looks like the same bug.
-
-Fixing it is one decision -- which policy is right at the edges -- and then a
-mechanical change, ideally to a shared trait carrying `ALL`, `from_index`,
-`to_index` and `label`, since `label` is now on `DeviceKind` and spelled by
-hand on the rest. Found 2026-09-12.
+What the two conventions do cost is a reader: the same call means two things
+depending on the enum, and neither says so. A sentence on each, or one shared
+trait, would settle it whenever one of these files is open anyway.
 
 **The five generators each split their own block at note events.**
 `mlm1.rs:572`, `mlp8.rs:2494`, `monosynth.rs:314`, `polysynth.rs:393` and

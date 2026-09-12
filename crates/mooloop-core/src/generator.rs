@@ -685,6 +685,27 @@ impl DeviceKind {
     /// does nothing while the device is in Snare mode. That is an audibility
     /// gate, the same one a route onto a bypassed effect already lives with,
     /// not an addressing bug.
+    /// This kind's parameters at their defaults, as the enum the engine and
+    /// the session both carry.
+    ///
+    /// Here rather than in the engine for the symmetry: [`crate::EffectKind`]
+    /// and [`crate::ModulatorKind`] both answer this about themselves, and the
+    /// generators were the one family whose version was a private function in
+    /// `render.rs` -- so the question "what does a fresh one of these look
+    /// like" had two shapes depending on which device you asked.
+    pub fn default_generator_params(self) -> GeneratorParams {
+        match self {
+            Self::Sampler => GeneratorParams::Sampler(SamplerParams::default()),
+            Self::MonoSynth => GeneratorParams::MonoSynth(MonoSynthParams::default()),
+            Self::PolySynth => GeneratorParams::PolySynth(PolySynthParams::default()),
+            Self::MlM1 => GeneratorParams::MlM1(MlM1Params::default()),
+            Self::MlP8 => GeneratorParams::MlP8(crate::MlP8Params::default()),
+            Self::Ds01 => GeneratorParams::Ds01(crate::Ds01Params::default()),
+            Self::DrumSynth => GeneratorParams::DrumSynth(DrumSynthParams::default()),
+            Self::AuxIn => GeneratorParams::AuxIn(crate::AuxInParams::default()),
+        }
+    }
+
     pub fn descriptors(self) -> &'static [ParamDescriptor] {
         match self {
             Self::Sampler => &SAMPLER_DESCRIPTORS,

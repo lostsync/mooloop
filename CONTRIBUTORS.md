@@ -243,7 +243,9 @@ Alphabetical by model name, then by harness.
   minimum; then the duplication audit that found the device-name table
   written twice and drifted on three of eight kinds, twelve effects each
   splitting their own block at parameter events, and three claims the source
-  made that the source no longer supported.
+  made that the source no longer supported; then the round-trip test over
+  every stepped parameter, which found one EQ id decoding to two enums of
+  different arity.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

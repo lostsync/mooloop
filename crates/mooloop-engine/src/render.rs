@@ -472,19 +472,6 @@ type ControlOutputs = [[f32; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_
 /// row at a time rather than built on the stack of the audio callback.
 type GateTable = [[NoteGateEvents; MAX_CHANNELS]; MAX_CONTROL_TICKS_PER_BLOCK];
 
-fn default_generator_params(kind: DeviceKind) -> GeneratorParams {
-    match kind {
-        DeviceKind::Sampler => GeneratorParams::Sampler(SamplerParams::default()),
-        DeviceKind::MonoSynth => GeneratorParams::MonoSynth(MonoSynthParams::default()),
-        DeviceKind::PolySynth => GeneratorParams::PolySynth(PolySynthParams::default()),
-        DeviceKind::MlM1 => GeneratorParams::MlM1(MlM1Params::default()),
-        DeviceKind::MlP8 => GeneratorParams::MlP8(MlP8Params::default()),
-        DeviceKind::Ds01 => GeneratorParams::Ds01(Ds01Params::default()),
-        DeviceKind::DrumSynth => GeneratorParams::DrumSynth(DrumSynthParams::default()),
-        DeviceKind::AuxIn => GeneratorParams::AuxIn(AuxInParams::default()),
-    }
-}
-
 /// Control-side identity of an effect's asynchronously prepared resource, for
 /// the kinds that have one. Reverb was the original case and no longer is:
 /// the FDN hall reallocates nothing, so its parameters travel as ordinary
@@ -2018,7 +2005,7 @@ impl ChannelStrip {
     }
 
     fn reset_sources_to_defaults(&mut self, source: DeviceKind) {
-        self.source_base = default_generator_params(source);
+        self.source_base = source.default_generator_params();
         self.sampler.reset();
         self.drum_synth.reset();
         self.mono_synth.reset();
@@ -3773,7 +3760,7 @@ impl RenderState {
             EngineCommand::SetChannelSource { channel, source } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
                     strip.reset_sources_to_defaults(source);
-                    strip.source_base = default_generator_params(source);
+                    strip.source_base = source.default_generator_params();
                 }
             }
             EngineCommand::SetChannelDrumSynthParams { channel, params } => {
