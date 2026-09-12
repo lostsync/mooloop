@@ -95,6 +95,7 @@ use mooloop_session::engine::{
 };
 use mooloop_session::history::Entry as HistoryEntry;
 use mooloop_session::roll::NoteEdit;
+use mooloop_session::steps::StepEdit;
 use mooloop_session::project::{
     fresh_starter_seed, normalize_project_pattern_banks, HistoryMove, ProjectEdit, ProjectSnapshot,
 };
@@ -2449,6 +2450,36 @@ impl UiState {
                 .map(|step| rack_cell(&ch.notes[pattern], step))
                 .collect();
             self.step_models[i].set_vec(cells);
+        }
+    }
+
+    /// Apply a step edit: redraw the cells it touched, refresh the note editor
+    /// when the edited channel is the one on screen, and send its commands in
+    /// the order the session produced them.
+    ///
+    /// Six callbacks did this by hand -- `on_step_clicked`, `on_step_removed`,
+    /// `on_step_velocity_edited`, `on_step_painted`, `on_step_sliced` and
+    /// `on_step_length_dragged` -- with the same thirteen lines in all six. The
+    /// one that would have been quiet to get wrong is the note editor: a step
+    /// operation that forgot it leaves the piano roll drawing the pattern as it
+    /// was before the edit, on the channel the user is looking at.
+    fn apply_step_edit(
+        &self,
+        channel: i32,
+        edit: StepEdit,
+        window: &slint::Weak<MainWindow>,
+        tx: &EngineCommandSender,
+    ) {
+        for cell in edit.redraw {
+            self.refresh_rack_cell(channel as usize, cell);
+        }
+        if channel as usize == self.session.selected {
+            if let Some(window) = window.upgrade() {
+                self.refresh_note_editor(&window);
+            }
+        }
+        for command in edit.commands {
+            let _ = tx.send(command);
         }
     }
 
@@ -5681,17 +5712,7 @@ impl AppUi {
                 let Some(edit) = st.session.toggle_step(channel, step) else {
                     return;
                 };
-                for cell in edit.redraw {
-                    st.refresh_rack_cell(channel as usize, cell);
-                }
-                if channel as usize == st.session.selected {
-                    if let Some(window) = weak.upgrade() {
-                        st.refresh_note_editor(&window);
-                    }
-                }
-                for command in edit.commands {
-                    let _ = tx.send(command);
-                }
+                st.apply_step_edit(channel, edit, &weak, &tx);
             });
         }
         {
@@ -5703,17 +5724,7 @@ impl AppUi {
                 let Some(edit) = st.session.clear_step(channel, step) else {
                     return;
                 };
-                for cell in edit.redraw {
-                    st.refresh_rack_cell(channel as usize, cell);
-                }
-                if channel as usize == st.session.selected {
-                    if let Some(window) = weak.upgrade() {
-                        st.refresh_note_editor(&window);
-                    }
-                }
-                for command in edit.commands {
-                    let _ = tx.send(command);
-                }
+                st.apply_step_edit(channel, edit, &weak, &tx);
             });
         }
         {
@@ -5725,17 +5736,7 @@ impl AppUi {
                 let Some(edit) = st.session.set_step_velocity(channel, step, value) else {
                     return;
                 };
-                for cell in edit.redraw {
-                    st.refresh_rack_cell(channel as usize, cell);
-                }
-                if channel as usize == st.session.selected {
-                    if let Some(window) = weak.upgrade() {
-                        st.refresh_note_editor(&window);
-                    }
-                }
-                for command in edit.commands {
-                    let _ = tx.send(command);
-                }
+                st.apply_step_edit(channel, edit, &weak, &tx);
             });
         }
 
@@ -5750,17 +5751,7 @@ impl AppUi {
                 let Some(edit) = st.session.paint_step(channel, step, on) else {
                     return;
                 };
-                for cell in edit.redraw {
-                    st.refresh_rack_cell(channel as usize, cell);
-                }
-                if channel as usize == st.session.selected {
-                    if let Some(window) = weak.upgrade() {
-                        st.refresh_note_editor(&window);
-                    }
-                }
-                for command in edit.commands {
-                    let _ = tx.send(command);
-                }
+                st.apply_step_edit(channel, edit, &weak, &tx);
             });
         }
 
@@ -5774,17 +5765,7 @@ impl AppUi {
                 let Some(edit) = st.session.slice_step(channel, step, divisions) else {
                     return;
                 };
-                for cell in edit.redraw {
-                    st.refresh_rack_cell(channel as usize, cell);
-                }
-                if channel as usize == st.session.selected {
-                    if let Some(window) = weak.upgrade() {
-                        st.refresh_note_editor(&window);
-                    }
-                }
-                for command in edit.commands {
-                    let _ = tx.send(command);
-                }
+                st.apply_step_edit(channel, edit, &weak, &tx);
             });
         }
 
@@ -5800,17 +5781,7 @@ impl AppUi {
                 let Some(edit) = st.session.drag_step_length(channel, step, length_in_steps) else {
                     return;
                 };
-                for cell in edit.redraw {
-                    st.refresh_rack_cell(channel as usize, cell);
-                }
-                if channel as usize == st.session.selected {
-                    if let Some(window) = weak.upgrade() {
-                        st.refresh_note_editor(&window);
-                    }
-                }
-                for command in edit.commands {
-                    let _ = tx.send(command);
-                }
+                st.apply_step_edit(channel, edit, &weak, &tx);
             });
         }
 
