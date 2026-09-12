@@ -36,6 +36,9 @@ pub mod time;
 #[cfg(test)]
 mod stepped_round_trip_tests;
 
+#[cfg(test)]
+mod param_id_freeze_tests;
+
 pub use automation::{
     AutomationLane, AutomationPoint, PointId, MAX_AUTOMATION_LANES_PER_CHANNEL,
     MAX_AUTOMATION_POINTS_PER_LANE,

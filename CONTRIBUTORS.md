@@ -256,7 +256,8 @@ Alphabetical by model name, then by harness.
   fader taper whose agreement test had been checking a list nothing read, and
   the division tables whose test compared them with a copy of themselves, and
   then the question behind all six turned into a check, and the frozen outlet
-  tables that pinned their names and not their numbers.
+  tables that pinned their names and not their numbers, and then the 441
+  persisted parameter ids that nothing held at all.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
