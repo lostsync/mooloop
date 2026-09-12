@@ -1540,6 +1540,16 @@ export component MiniKnob inherits Rectangle {
     in property <float> maximum: 1;
     in property <float> default-value: root.minimum;
     in property <float> step: 0;
+    /// How far the pointer travels to cross the whole range.
+    ///
+    /// A continuous parameter wants enough of it to resolve a value, and
+    /// 150px is what every knob in the app has always used. A **stepped**
+    /// one has nothing between two positions to resolve, so the same travel
+    /// makes each detent an expensive drag: a band with five frequency
+    /// positions needed 37px of pointer for one of them, which is what Adam
+    /// hit -- *"it is too hard to move the freq knobs with the mouse
+    /// pointer."* A caller that knows its parameter is stepped shortens it.
+    in property <length> travel: 150px;
     in property <ValueScale> scale: ValueScale.linear;
     in property <bool> enabled: true;
     in property <bool> bipolar;
@@ -1655,10 +1665,10 @@ export component MiniKnob inherits Rectangle {
                 } else if (e.kind == PointerEventKind.move && self.pressed) {
                     if (root.modulation-active) {
                         root.set-modulation-depth(root.pressed-modulation-depth
-                            + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : 150px));
+                            + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : root.travel));
                     } else {
                         root.set-normalized(root.pressed-normalized
-                            + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : 150px));
+                            + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : root.travel));
                     }
                 } else if (e.kind == PointerEventKind.up) {
                     if (root.modulation-active) {
@@ -1685,8 +1695,11 @@ export component MiniKnob inherits Rectangle {
             scroll-event(e) => {
                 if (root.modulation-active) { root.modulation-edit-started(); root.modulation-edited = false; }
                 else { root.edit-started(); }
+                // Four times the drag's travel, which keeps a wheel notch
+                // worth about the same fraction of the range on a knob that
+                // has shortened its throw as on one that has not.
                 root.set-normalized(root.normalized
-                    - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px));
+                    - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : root.travel * 4));
                 if (root.modulation-active) {
                     if (root.modulation-edited) { root.modulation-edit-finished(); }
                 } else {

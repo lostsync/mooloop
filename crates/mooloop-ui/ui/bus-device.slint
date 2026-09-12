@@ -33,10 +33,15 @@ export component StripRackRow inherits Rectangle {
     callback voicing-picked(int);
     callback point-dragged(int, float, float);
 
-    // Three units. Two is what the bus's own face needs for an output stage
-    // and its routing; the strip is four sections and three is the width at
-    // which an EQ band is still one row with its name beside it.
-    width: DeviceRackMetrics.unit-width * 3 + DeviceRackMetrics.half-gap;
+    // **Two units.** It was three while the EQ carried a response plot over
+    // its band rows and the two right-hand panels split the slack between
+    // them; with the plot moved under DRIVE the three columns add up to
+    // 150 + 118 + what is left, and the third unit was empty margin either
+    // side of two small knob clusters. Adam: *"there's a ton of space
+    // between the start of the rack area and the first device in a chain.
+    // i feel like we could come up with a more compact layout."* This is
+    // 220px of that, and the bus face beside it is the rest.
+    width: DeviceRackMetrics.unit-width * 2 + DeviceRackMetrics.half-gap;
     height: DeviceRackMetrics.face-height;
     background: Theme.surface;
     border-width: 1px;
@@ -62,7 +67,7 @@ export component StripRackRow inherits Rectangle {
         y: 0px;
         width: parent.width;
         name: root.name + " strip";
-        kind: "STRIP / 3U";
+        kind: "STRIP / 2U";
         role: "STRIP";
         device-color: Theme.accent;
         enabled: !root.muted;
@@ -121,6 +126,14 @@ export component BusDeviceFace inherits Rectangle {
             spacing: 8px;
             vertical-stretch: 1;
 
+            // **One panel, not two.** The output stage and the four small
+            // controls beside a fader were `OUTPUT` and `STRIP`, 116px and
+            // 92px, and the second was a 22px knob and a row of buttons in a
+            // box with room for four times that. Folding it in gives the
+            // hundred pixels to the routing and sends column, which is the
+            // part of this face that was actually short of width. The
+            // vertical order is the mixer strip's own -- pan over solo,
+            // mute, polarity -- so the two faces read the same way round.
             Rectangle {
                 width: 116px;
                 background: Theme.panel;
@@ -129,6 +142,44 @@ export component BusDeviceFace inherits Rectangle {
                     padding: 6px;
                     spacing: 4px;
                     SectionLabel { text: "OUTPUT"; }
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 4px;
+                        MiniKnob {
+                            label: "Pan";
+                            value: root.pan;
+                            minimum: -1;
+                            maximum: 1;
+                            default-value: 0;
+                            bipolar: true;
+                            value-text: abs(root.pan) < 0.01 ? "Center"
+                                : root.pan < 0 ? "L " + round(abs(root.pan) * 100)
+                                : "R " + round(root.pan * 100);
+                            changed(v) => { root.pan-changed(v); }
+                        }
+                        MuteButton {
+                            muted: root.muted;
+                            clicked => { root.mute-toggled(); }
+                        }
+                        // Both of these are on the mixer strip too, in this
+                        // same order: no control belongs to only one face.
+                        if !root.is-master : SoloButton {
+                            soloed: root.solo;
+                            clicked => { root.solo-toggled(); }
+                        }
+                        ToolButton {
+                            text: "\u{00f8}";
+                            tooltip: root.polarity ? "Inverted" : "Normal";
+                            hint: "Invert this track's polarity. It acts on the way in, so "
+                                + "everything after it -- including a pre-fader send -- is flipped.";
+                            active: root.polarity;
+                            min-width: 20px;
+                            max-width: 20px;
+                            min-height: 18px;
+                            max-height: 18px;
+                            clicked => { root.polarity-toggled(); }
+                        }
+                    }
                     HorizontalLayout {
                         spacing: 6px;
                         vertical-stretch: 1;
@@ -151,62 +202,6 @@ export component BusDeviceFace inherits Rectangle {
                             changed(v) => { root.volume-changed(v); }
                         }
                     }
-                }
-            }
-
-            Rectangle {
-                width: 92px;
-                background: Theme.panel;
-                border-radius: Theme.radius-sm;
-                VerticalLayout {
-                    padding: 6px;
-                    spacing: 4px;
-                    SectionLabel { text: "STRIP"; }
-                    HorizontalLayout {
-                        alignment: center;
-                        MiniKnob {
-                            label: "Pan";
-                            value: root.pan;
-                            minimum: -1;
-                            maximum: 1;
-                            default-value: 0;
-                            bipolar: true;
-                            value-text: abs(root.pan) < 0.01 ? "Center"
-                                : root.pan < 0 ? "L " + round(abs(root.pan) * 100)
-                                : "R " + round(root.pan * 100);
-                            changed(v) => { root.pan-changed(v); }
-                        }
-                    }
-                    HorizontalLayout {
-                        alignment: center;
-                        spacing: 4px;
-                        MuteButton {
-                            muted: root.muted;
-                            clicked => { root.mute-toggled(); }
-                        }
-                        // The mixer strip carries this too: no control
-                        // belongs to only one of the two faces.
-                        if !root.is-master : SoloButton {
-                            soloed: root.solo;
-                            clicked => { root.solo-toggled(); }
-                        }
-                        // The mixer strip carries this too, in the same
-                        // column beside mute: no control belongs to only one
-                        // of the two faces.
-                        ToolButton {
-                            text: "\u{00f8}";
-                            tooltip: root.polarity ? "Inverted" : "Normal";
-                            hint: "Invert this track's polarity. It acts on the way in, so "
-                                + "everything after it -- including a pre-fader send -- is flipped.";
-                            active: root.polarity;
-                            min-width: 22px;
-                            max-width: 22px;
-                            min-height: 18px;
-                            max-height: 18px;
-                            clicked => { root.polarity-toggled(); }
-                        }
-                    }
-                    Rectangle { vertical-stretch: 1; }
                 }
             }
 

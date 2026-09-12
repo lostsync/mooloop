@@ -155,6 +155,14 @@ component StripKnob inherits MiniKnob {
     maximum: root.spec.maximum;
     default-value: root.spec.default-value;
     scale: root.spec.logarithmic ? ValueScale.logarithmic : ValueScale.linear;
+    // A stepped parameter quantizes and takes a short throw. Both come off
+    // the descriptor's own step count, so a band that gains a position gains
+    // the travel for it: 14px a stop, against the 37px one of five cost
+    // while the knob was using a continuous control's 150px. The engine
+    // rounds the value anyway -- this is about the *gesture*, which was
+    // asking for a long drag to cross a switch.
+    step: root.spec.steps > 0 ? 1 : 0;
+    travel: root.spec.steps > 0 ? root.spec.steps * 14px : 150px;
     bipolar: root.bipolar-value;
     value: root.natural;
     // The caller owns the value: it comes from a model row, so the knob must
@@ -417,6 +425,14 @@ export component StripDrivePage inherits Rectangle {
         HorizontalLayout {
             spacing: 4px;
             height: root.wide ? StripMetrics.knob-major-wide : StripMetrics.knob-major;
+            // Centred on the rack column, where the knob is alone in the
+            // row; **stretch** on the mixer strip, where the voicing chip
+            // is beside it and has to be squeezed into the 52px left over.
+            // `start` there asked for the chip's preferred width and clipped
+            // it to nothing -- the trap `reference-slint-layout-gotchas`
+            // records as "alignment: start makes a layout's minimum the sum
+            // of its children's preferred sizes".
+            alignment: root.wide ? LayoutAlignment.center : LayoutAlignment.stretch;
             StripKnob {
                 param: StripSpec.drive-db;
                 natural: root.strip.drive-db;
@@ -428,14 +444,23 @@ export component StripDrivePage inherits Rectangle {
                     + "Turning it down re-balances the colour as well as reducing it.";
                 changed(v) => { root.moved(StripSpec.drive-db, v); }
             }
-            StripVoicingPicker {
+            // Beside the knob on the mixer strip, where it is a chip naming
+            // one voicing; **under** it on the rack column, where it is the
+            // four-way bank and wants the column's whole width. Sharing a
+            // row there left it 100px for four names and clipped `PUNCH`.
+            if !root.wide : StripVoicingPicker {
                 horizontal-stretch: 1;
                 y: (parent.height - self.height) / 2;
-                height: root.wide ? 26px : 18px;
+                height: 18px;
                 voicing: root.strip.voicing;
-                wide: root.wide;
                 picked(index) => { root.voicing-picked(index); }
             }
+        }
+        if root.wide : StripVoicingPicker {
+            height: 22px;
+            voicing: root.strip.voicing;
+            wide: true;
+            picked(index) => { root.voicing-picked(index); }
         }
     }
 }
@@ -485,21 +510,16 @@ export component StripEqPage inherits Rectangle {
                 + "section that is out does not touch the samples.";
             toggled => { root.switched(StripSpec.eq-in, !root.strip.eq-in); }
         }
-        // **No scope on the mixer strip.** Adam: *"no scopes on the mixer.
-        // that's partly the point."* The response plot is worth its 80px on
-        // the track's 3U rack row, where the curve is what you are looking
-        // at; on a 92px strip it was competing with the knobs for the one
-        // dimension the strip cannot spare.
-        if root.wide : EqResponseDisplay {
-            height: 72px;
-            band-data: root.strip.band-data;
-            selected-target: -1;
-            spectrum-visible: false;
-            opacity: root.strip.eq-in ? 1.0 : 0.45;
-            point-dragged(band, frequency, gain) => {
-                root.point-dragged(band, 20 * pow(1000, clamp(frequency, 0, 1)), gain * 36 - 18);
-            }
-        }
+        // **No plot in here, on either face.** On the 92px mixer strip
+        // there was never room -- Adam: *"no scopes on the mixer. that's
+        // partly the point."* On the rack row it was 72px above four band
+        // rows that needed 200 in a 224px face, so the fourth band was
+        // drawn *below* the panel: *"the EQ section in the rack version
+        // doesnt really fit. we dont really need the graah on the eq. only
+        // other thing we could do is move it."* Moved: `StripSections`
+        // gives it the room going spare under DRIVE, where it is taller and
+        // reads better than it did as a letterbox.
+        //
         // Which column is which, once at the top rather than under every
         // knob: the mockup's own `G F Q`.
         HorizontalLayout {
@@ -653,7 +673,9 @@ export component StripCompPage inherits Rectangle {
         // No scope here either, for the same reason -- the lamp above is the
         // feedback, and the curve is on the rack row.
         if root.wide : DynamicsCurveDisplay {
-            height: 80px;
+            // 72, not 80: the section is head + curve + three knob rows in
+            // 224px, and at 80 the last row was eight pixels over.
+            height: 72px;
             mode: 1;
             threshold-db: root.strip.threshold-db;
             ratio: root.strip.ratio;
@@ -797,25 +819,76 @@ export component StripSections inherits Rectangle {
 
     if root.wide : HorizontalLayout {
         spacing: 6px;
-        Rectangle {
-            width: 190px;
-            background: Theme.panel;
-            border-radius: Theme.radius-sm;
-            VerticalLayout {
-                padding: 6px;
-                spacing: 8px;
-                StripDrivePage {
-                    strip: root.strip;
-                    wide: true;
-                    moved(id, value) => { root.moved(id, value); }
-                    switched(id, on) => { root.switched(id, on); }
-                    voicing-picked(index) => { root.voicing-picked(index); }
+        // **Widths from the contents, not two stretches.** `EQ` and `COMP`
+        // both used to take `horizontal-stretch: 1`, which splits the
+        // *slack* and so handed them 232px and 212px for clusters 96px and
+        // 76px wide. Two unequal boxes with a small huddle of knobs in the
+        // middle of each is what Adam read as the compressor being pinned
+        // over -- *"the area itself seems pinned to the left of the channel
+        // strip, so the buttons are off center."* Measured, the knobs were
+        // dead centre; the box was simply twice the width of what was in
+        // it, which is the same fault as the face being a unit too wide.
+        VerticalLayout {
+            width: 150px;
+            spacing: 6px;
+            Rectangle {
+                vertical-stretch: 0;
+                background: Theme.panel;
+                border-radius: Theme.radius-sm;
+                VerticalLayout {
+                    padding: 6px;
+                    StripDrivePage {
+                        strip: root.strip;
+                        wide: true;
+                        moved(id, value) => { root.moved(id, value); }
+                        switched(id, on) => { root.switched(id, on); }
+                        voicing-picked(index) => { root.voicing-picked(index); }
+                    }
                 }
-                Rectangle { vertical-stretch: 1; }
+            }
+            // The EQ's own response, in the room the input stage does not
+            // want. It is the only drawing of what a voicing does to the Q
+            // law, and the only place a band can be dragged rather than
+            // dialled, so "we dont really need the graah" is answered by
+            // moving it rather than by deleting it -- and 138x100 reads
+            // better than the 232x72 letterbox it was.
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.panel;
+                border-radius: Theme.radius-sm;
+                VerticalLayout {
+                    padding: 6px;
+                    spacing: 2px;
+                    SectionLabel {
+                        // "CURVE", not "RESPONSE": the label is letter-spaced
+                        // and the column is 138px, where the longer word
+                        // wrapped to "RESPO NSE".
+                        text: "CURVE";
+                        // No in-and-out switch, because there is nothing
+                        // here to switch: that absence is what says this
+                        // row is a display and not a fourth section.
+                        color: Theme.text-faint;
+                    }
+                    EqResponseDisplay {
+                        vertical-stretch: 1;
+                        band-data: root.strip.band-data;
+                        selected-target: -1;
+                        spectrum-visible: false;
+                        opacity: root.strip.eq-in ? 1.0 : 0.45;
+                        point-dragged(band, frequency, gain) => {
+                            root.point-dragged(band,
+                                20 * pow(1000, clamp(frequency, 0, 1)), gain * 36 - 18);
+                        }
+                    }
+                }
             }
         }
         Rectangle {
-            horizontal-stretch: 1;
+            // Row label, gain, frequency, Q and their gutters. The band rows
+            // are the widest thing in here and nothing else in the section
+            // wants more, so the number is that sum rather than a share.
+            width: StripMetrics.row-label + StripMetrics.knob-major-wide
+                + 2 * StripMetrics.knob-minor-wide + 3px + 12px;
             background: Theme.panel;
             border-radius: Theme.radius-sm;
             VerticalLayout {
@@ -830,6 +903,9 @@ export component StripSections inherits Rectangle {
             }
         }
         Rectangle {
+            // The compressor takes what is left, which its curve wants and
+            // its three knob rows do not: the widest of them is A/R/K at
+            // 76px, so anything past that is the plot's.
             horizontal-stretch: 1;
             background: Theme.panel;
             border-radius: Theme.radius-sm;

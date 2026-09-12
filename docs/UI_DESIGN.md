@@ -189,7 +189,10 @@ alignment, and height contract as effects.
   need the fourth unit to hold three modules of 34 px dials without shrinking
   one; 2U for Aux In, whose whole content is a source, an outlet and a level,
   and which at 3U would be empty rather than generous. A bus's output stage
-  stands in the same position at 2U. An effect uses only the units its working
+  stands in the same position at 2U, and the track's pinned channel-strip row
+  takes 2U beside it -- three until 2026-09-11, when the EQ's response plot
+  moved into the room the input stage was not using and the third unit turned
+  out to have been margin. An effect uses only the units its working
   controls require, declared once in `effect_kind_units`
   (`mooloop-ui/src/lib.rs`) rather than in each face: 1U for filter, drive,
   preamp, bitcrush, limiter, plate, and Buffer; 2U for gate, compressor, EQ, and Mod;
@@ -561,6 +564,23 @@ decide its shape. Settled 2026-09-10.
   costs the control under it; leaving it out is most of why the three
   sections fit stacked with no tabs. Adam, on the mockup: *"no scopes on the
   mixer -- that's partly the point."*
+- **A plot does not have to live in the section it draws.** On the rack row
+  the EQ's response sat above its own four band rows and did not fit: 72 px
+  of plot and 200 px of rows in a 224 px face drew the fourth band below the
+  panel. The plot moved to the column under DRIVE, whose one knob and voicing
+  bank leave most of a column empty, and got taller in the move. What decides
+  where a display goes is where the room is, not which heading it belongs
+  under -- a section owns its *controls*.
+- **Size a panel from its contents, not from a share of the slack.** Two
+  panels on `horizontal-stretch: 1` split what is left over, which gave the
+  strip's EQ 232 px and its compressor 212 px for clusters 96 px and 76 px
+  wide. The knobs were centred and still read as misplaced, because a small
+  huddle in the middle of a box twice its width looks like a mistake wherever
+  it actually sits: Adam, *"the area itself seems pinned to the left of the
+  channel strip, so the buttons are off center."* Measure the widest row that
+  must not wrap, spell that as the width, and give the stretch to the one
+  panel that has something to do with extra room -- here the compressor,
+  whose curve widens.
 - **A face that is not showing is not built.** An `if`, not an `opacity: 0`:
   exactly one of the three is constructed at a time, which is what keeps the
   other two free on every track in a large project.
@@ -616,6 +636,15 @@ decide its shape. Settled 2026-09-10.
   say which hertz it currently is. This is the same rule as *a voicing selects
   laws, never values*, arrived at from the other end: the number the knob
   shows must be one no voicing can move.
+
+  **A stepped control also takes a shorter throw.** Every knob in the app
+  crosses its range in 150 px of pointer travel, which is right when there is
+  a value to resolve between two settings and wrong when there is not: five
+  frequency positions over 150 px is 37 px of drag for one of them, which
+  Adam hit immediately -- *"it is too hard to move the freq knobs with the
+  mouse pointer."* `MiniKnob.travel` is that distance, and a stepped
+  parameter sets it to 14 px a stop off its own descriptor, so a band that
+  gains a position gains the travel for it.
 - **Where the strip's processing sits in a track's chain is one statement.**
   `mooloop_core::mixer::STRIP_PIN` decides both when the engine runs it and
   where the rack draws its pinned row, so the drawing cannot say one thing

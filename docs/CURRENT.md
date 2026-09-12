@@ -676,8 +676,8 @@ land on its own when it starts to matter:
   selected and nothing set is the same audio as no strip.
 
   The strip is drawn in two places, and no parameter is reachable from only
-  one of them: the mixer strip's own face, and a **pinned row in the track's
-  device rack**. Where that row sits in the chain -- before the track's own
+  one of them: the mixer strip's own face, and a **pinned 2U row in the
+  track's device rack**. Where that row sits in the chain -- before the track's own
   devices -- is one statement, `mooloop_core::mixer::STRIP_PIN`, which the
   engine's block loop reads as well, so the drawing and the audio cannot
   disagree. The row has no insert or remove rails, because it can be neither.
