@@ -10,9 +10,10 @@ use mooloop_core::{
 };
 
 use crate::bus::StereoBus;
-use crate::event::{Event, EventList};
+use crate::event::EventList;
 use crate::node::{AudioNode, ProcessContext, REST_EPSILON};
 use crate::smooth::Smoothed;
+use super::{process_param_split, RangeProcessor};
 
 /// Mix is the only continuous, audible parameter here: bit depth and
 /// downsample rate are intentionally steppy, the effect *is* the aliasing.
@@ -78,21 +79,48 @@ impl BitcrushEffect {
         self.mix.reset_to(params.mix.clamp(0.0, 1.0));
     }
 
-    fn apply_param(&mut self, id: u32, value: f32) {
-        match id {
-            BITCRUSH_PARAM_BITS => self.params.bits = value.clamp(1.0, 16.0),
-            BITCRUSH_PARAM_DOWNSAMPLE => self.params.downsample = value.clamp(1.0, 64.0),
-            BITCRUSH_PARAM_MIX => {
-                self.params.mix = value.clamp(0.0, 1.0);
-                self.mix.set_target(self.params.mix);
-            }
-            BITCRUSH_PARAM_STYLE => {
-                self.params.style = BitcrushStyle::from_index(value.round() as i32)
-            }
-            _ => {}
+}
+
+/// Snap one held sample to the coarsened grid, in the manner `style` names.
+/// `noise` is the per-channel dither state; it is only advanced by `Dither`.
+fn crush(style: BitcrushStyle, sample: f32, step: f32, noise: &mut u32) -> f32 {
+    match style {
+        BitcrushStyle::Crush | BitcrushStyle::Glide => quantize(sample, step),
+        BitcrushStyle::Dither => {
+            // TPDF spanning one step: two uniforms summed. Wide enough to
+            // fully decorrelate the error from the signal without growing
+            // the noise floor past what the depth loss already costs.
+            let dither = (next_uniform(noise) + next_uniform(noise) - 1.0) * step;
+            quantize(sample + dither, step)
+        }
+        BitcrushStyle::Mu => {
+            // Compress, quantize in the compressed domain, expand back. The
+            // quantizer still sees `bits` of levels; where they land changes.
+            let sign = sample.signum();
+            let compressed = sign * (1.0 + MU * sample.abs()).ln() / (1.0 + MU).ln();
+            let quantized = quantize(compressed, step);
+            sign * ((1.0 + MU).powf(quantized.abs()) - 1.0) / MU
         }
     }
+}
 
+fn next_uniform(state: &mut u32) -> f32 {
+    let mut x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    // High 24 bits, so the float is uniform over [0, 1).
+    (x >> 8) as f32 / 16_777_216.0
+}
+
+/// Round to the nearest multiple of `step`. `step` is never zero: `bits` is
+/// clamped to at most 16, so the smallest step is 2^-15.
+fn quantize(sample: f32, step: f32) -> f32 {
+    (sample / step).round() * step
+}
+
+impl RangeProcessor for BitcrushEffect {
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let BitcrushParams {
             bits,
@@ -142,45 +170,21 @@ impl BitcrushEffect {
             bus.r[i] = dry_r + (wet_r - dry_r) * mix;
         }
     }
-}
 
-/// Snap one held sample to the coarsened grid, in the manner `style` names.
-/// `noise` is the per-channel dither state; it is only advanced by `Dither`.
-fn crush(style: BitcrushStyle, sample: f32, step: f32, noise: &mut u32) -> f32 {
-    match style {
-        BitcrushStyle::Crush | BitcrushStyle::Glide => quantize(sample, step),
-        BitcrushStyle::Dither => {
-            // TPDF spanning one step: two uniforms summed. Wide enough to
-            // fully decorrelate the error from the signal without growing
-            // the noise floor past what the depth loss already costs.
-            let dither = (next_uniform(noise) + next_uniform(noise) - 1.0) * step;
-            quantize(sample + dither, step)
-        }
-        BitcrushStyle::Mu => {
-            // Compress, quantize in the compressed domain, expand back. The
-            // quantizer still sees `bits` of levels; where they land changes.
-            let sign = sample.signum();
-            let compressed = sign * (1.0 + MU * sample.abs()).ln() / (1.0 + MU).ln();
-            let quantized = quantize(compressed, step);
-            sign * ((1.0 + MU).powf(quantized.abs()) - 1.0) / MU
+    fn apply_param(&mut self, id: u32, value: f32) {
+        match id {
+            BITCRUSH_PARAM_BITS => self.params.bits = value.clamp(1.0, 16.0),
+            BITCRUSH_PARAM_DOWNSAMPLE => self.params.downsample = value.clamp(1.0, 64.0),
+            BITCRUSH_PARAM_MIX => {
+                self.params.mix = value.clamp(0.0, 1.0);
+                self.mix.set_target(self.params.mix);
+            }
+            BITCRUSH_PARAM_STYLE => {
+                self.params.style = BitcrushStyle::from_index(value.round() as i32)
+            }
+            _ => {}
         }
     }
-}
-
-fn next_uniform(state: &mut u32) -> f32 {
-    let mut x = *state;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    *state = x;
-    // High 24 bits, so the float is uniform over [0, 1).
-    (x >> 8) as f32 / 16_777_216.0
-}
-
-/// Round to the nearest multiple of `step`. `step` is never zero: `bits` is
-/// clamped to at most 16, so the smallest step is 2^-15.
-fn quantize(sample: f32, step: f32) -> f32 {
-    (sample / step).round() * step
 }
 
 impl AudioNode for BitcrushEffect {
@@ -234,23 +238,14 @@ impl AudioNode for BitcrushEffect {
             self.mix.set_time(MIX_SMOOTH_S, ctx.sample_rate);
         }
         let frames = ctx.frames.min(bus.capacity());
-        let mut pos = 0usize;
-        for ev in events_in.iter() {
-            let off = (ev.offset as usize).min(frames).max(pos);
-            self.process_range(bus, pos, off);
-            if let Event::ParamValue { id, value } = ev.event {
-                self.apply_param(id, value);
-            }
-            pos = off;
-        }
-        self.process_range(bus, pos, frames);
+        process_param_split(self, bus, events_in, frames);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::TimedEvent;
+    use crate::event::{Event, TimedEvent};
 
     fn context(frames: usize) -> ProcessContext {
         ProcessContext {

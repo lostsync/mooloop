@@ -13,10 +13,11 @@ use mooloop_core::{
 
 use crate::bus::StereoBus;
 use crate::delayline::{DelayLine, ReadHead, MIN_READ_OFFSET};
-use crate::event::{Event, EventList};
+use crate::event::EventList;
 use crate::filter::OnePoleLp;
 use crate::node::{feedback_tail_frames, AudioNode, ProcessContext};
 use crate::smooth::Smoothed;
+use super::{process_param_split, RangeProcessor};
 
 /// Crossfade applied when the head jumps: a digital time change, or a reverse
 /// window wrapping. About 5 ms at 48 kHz — long enough to hide a jump between
@@ -103,31 +104,6 @@ impl DelayEffect {
         frames.clamp(MIN_READ_OFFSET, self.line.max_read_offset())
     }
 
-    fn apply_param(&mut self, id: u32, value: f32) {
-        match id {
-            DELAY_PARAM_TIME_MS => {
-                self.params.time_ms = value.clamp(0.0, DELAY_MAX_TIME_MS);
-                self.target_offset = self.resolve_offset();
-            }
-            DELAY_PARAM_FEEDBACK => {
-                self.params.feedback = value.clamp(0.0, 0.98);
-                self.feedback.set_target(self.params.feedback);
-            }
-            DELAY_PARAM_MODE => self.params.mode = DelayMode::from_index(value.round() as i32),
-            DELAY_PARAM_CROSS => self.params.cross = value.clamp(0.0, 1.0),
-            DELAY_PARAM_TONE => {
-                self.params.tone = value.clamp(0.0, 1.0);
-                self.damp_coeff
-                    .set_target(tone_coeff(self.params.tone, self.sample_rate));
-            }
-            DELAY_PARAM_MIX => {
-                self.params.mix = value.clamp(0.0, 1.0);
-                self.mix.set_target(self.params.mix);
-            }
-            _ => {}
-        }
-    }
-
     /// How far the head's offset should drift this frame, and any jump the
     /// mode wants. Drift is expressed relative to the advancing write head:
     /// 0 holds the delay time, 2 reads backwards at unity rate.
@@ -161,6 +137,22 @@ impl DelayEffect {
         }
     }
 
+}
+
+/// Ring size for the longest supported delay, plus the interpolator's margin.
+fn ring_frames(sample_rate: u32) -> usize {
+    (DELAY_MAX_TIME_MS / 1_000.0 * sample_rate as f32) as usize + 8
+}
+
+/// One-pole coefficient for the feedback damping, swept exponentially so the
+/// knob's lower half does something useful.
+fn tone_coeff(tone: f32, sample_rate: u32) -> f32 {
+    let sr = sample_rate.max(1) as f32;
+    let hz = TONE_MIN_HZ * (TONE_MAX_HZ / TONE_MIN_HZ).powf(tone.clamp(0.0, 1.0));
+    (1.0 - (-core::f32::consts::TAU * hz / sr).exp()).clamp(0.0, 1.0)
+}
+
+impl RangeProcessor for DelayEffect {
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let cross = self.params.cross;
 
@@ -191,19 +183,31 @@ impl DelayEffect {
             bus.r[i] = dry_r + (wet_r - dry_r) * mix;
         }
     }
-}
 
-/// Ring size for the longest supported delay, plus the interpolator's margin.
-fn ring_frames(sample_rate: u32) -> usize {
-    (DELAY_MAX_TIME_MS / 1_000.0 * sample_rate as f32) as usize + 8
-}
-
-/// One-pole coefficient for the feedback damping, swept exponentially so the
-/// knob's lower half does something useful.
-fn tone_coeff(tone: f32, sample_rate: u32) -> f32 {
-    let sr = sample_rate.max(1) as f32;
-    let hz = TONE_MIN_HZ * (TONE_MAX_HZ / TONE_MIN_HZ).powf(tone.clamp(0.0, 1.0));
-    (1.0 - (-core::f32::consts::TAU * hz / sr).exp()).clamp(0.0, 1.0)
+    fn apply_param(&mut self, id: u32, value: f32) {
+        match id {
+            DELAY_PARAM_TIME_MS => {
+                self.params.time_ms = value.clamp(0.0, DELAY_MAX_TIME_MS);
+                self.target_offset = self.resolve_offset();
+            }
+            DELAY_PARAM_FEEDBACK => {
+                self.params.feedback = value.clamp(0.0, 0.98);
+                self.feedback.set_target(self.params.feedback);
+            }
+            DELAY_PARAM_MODE => self.params.mode = DelayMode::from_index(value.round() as i32),
+            DELAY_PARAM_CROSS => self.params.cross = value.clamp(0.0, 1.0),
+            DELAY_PARAM_TONE => {
+                self.params.tone = value.clamp(0.0, 1.0);
+                self.damp_coeff
+                    .set_target(tone_coeff(self.params.tone, self.sample_rate));
+            }
+            DELAY_PARAM_MIX => {
+                self.params.mix = value.clamp(0.0, 1.0);
+                self.mix.set_target(self.params.mix);
+            }
+            _ => {}
+        }
+    }
 }
 
 impl AudioNode for DelayEffect {
@@ -285,23 +289,14 @@ impl AudioNode for DelayEffect {
             self.mix.set_time(GAIN_SMOOTH_S, ctx.sample_rate);
         }
         let frames = ctx.frames.min(bus.capacity());
-        let mut pos = 0usize;
-        for ev in events_in.iter() {
-            let off = (ev.offset as usize).min(frames).max(pos);
-            self.process_range(bus, pos, off);
-            if let Event::ParamValue { id, value } = ev.event {
-                self.apply_param(id, value);
-            }
-            pos = off;
-        }
-        self.process_range(bus, pos, frames);
+        process_param_split(self, bus, events_in, frames);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::TimedEvent;
+    use crate::event::{Event, TimedEvent};
     use mooloop_core::ModTimeDivision;
 
     const SR: u32 = 48_000;

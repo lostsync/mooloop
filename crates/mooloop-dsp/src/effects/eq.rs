@@ -32,8 +32,9 @@ use mooloop_core::{EqBand, EqBandKind, EqParams, EQ_MAX_BANDS};
 
 use crate::biquad::Biquad;
 use crate::bus::StereoBus;
-use crate::event::{Event, EventList};
+use crate::event::EventList;
 use crate::node::{AudioNode, ProcessContext};
+use super::{process_param_split, RangeProcessor};
 
 const PASS_STAGES: usize = 6;
 
@@ -127,16 +128,9 @@ impl EqEffect {
         }
     }
 
-    fn apply_param(&mut self, id: u32, value: f32) {
-        let mut state = mooloop_core::EffectParams::Eq(self.params);
-        if state.set(id, value).is_some() {
-            if let mooloop_core::EffectParams::Eq(params) = state {
-                self.params = params;
-                self.update_coefficients();
-            }
-        }
-    }
+}
 
+impl RangeProcessor for EqEffect {
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         // Nothing switched on is not "an EQ that happens to be flat": it is
         // no filter at all, and the samples should not be touched.
@@ -156,6 +150,16 @@ impl EqEffect {
             bus.r[frame] = r;
         }
     }
+
+    fn apply_param(&mut self, id: u32, value: f32) {
+        let mut state = mooloop_core::EffectParams::Eq(self.params);
+        if state.set(id, value).is_some() {
+            if let mooloop_core::EffectParams::Eq(params) = state {
+                self.params = params;
+                self.update_coefficients();
+            }
+        }
+    }
 }
 
 impl AudioNode for EqEffect {
@@ -172,20 +176,14 @@ impl AudioNode for EqEffect {
 
     fn process(&mut self, ctx: &ProcessContext, bus: &mut StereoBus, events_in: &EventList, _events_out: Option<&mut EventList>) {
         let frames = ctx.frames.min(bus.capacity());
-        let mut pos = 0;
-        for event in events_in.iter() {
-            let offset = (event.offset as usize).min(frames).max(pos);
-            self.process_range(bus, pos, offset);
-            if let Event::ParamValue { id, value } = event.event { self.apply_param(id, value); }
-            pos = offset;
-        }
-        self.process_range(bus, pos, frames);
+        process_param_split(self, bus, events_in, frames);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Event;
 
     fn ctx_for(sr: u32, frames: usize) -> ProcessContext {
         ProcessContext {

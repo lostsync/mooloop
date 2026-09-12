@@ -19,10 +19,11 @@ use mooloop_core::{
 };
 
 use crate::bus::StereoBus;
-use crate::event::{Event, EventList};
+use crate::event::EventList;
 use crate::filter::OnePoleLp;
 use crate::node::{AudioNode, ProcessContext};
 use crate::smooth::Smoothed;
+use super::{process_param_split, RangeProcessor};
 
 const NUM_COMBS: usize = 8;
 const NUM_ALLPASS: usize = 4;
@@ -300,34 +301,9 @@ impl PlateEffect {
         }
     }
 
-    fn apply_param(&mut self, id: u32, value: f32) {
-        match id {
-            PLATE_PARAM_SIZE => {
-                self.params.size = value.clamp(0.0, 1.0);
-                self.resize();
-            }
-            PLATE_PARAM_DECAY_S => {
-                self.params.decay_s = value.clamp(0.2, 10.0);
-                self.rebuild_feedback();
-            }
-            PLATE_PARAM_DAMPING => {
-                self.params.damping = value.clamp(0.0, 1.0);
-                self.rebuild_damping();
-            }
-            PLATE_PARAM_WIDTH => {
-                self.params.width = value.clamp(0.0, 1.0);
-                self.wet1.set_target(0.5 + self.params.width * 0.5);
-                self.wet2.set_target(0.5 - self.params.width * 0.5);
-            }
-            PLATE_PARAM_PREDELAY_MS => {
-                self.params.predelay_ms = value.clamp(0.0, PREDELAY_MAX_MS);
-                self.predelay_samples
-                    .set_target(predelay_samples(self.params.predelay_ms, self.sample_rate));
-            }
-            _ => {}
-        }
-    }
+}
 
+impl RangeProcessor for PlateEffect {
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         for i in start..end {
             let dry = (bus.l[i] + bus.r[i]) * 0.5 * INPUT_GAIN;
@@ -362,6 +338,34 @@ impl PlateEffect {
             let wet2 = self.wet2.advance();
             bus.l[i] = (wet_l * wet1 + wet_r * wet2) * OUTPUT_REFERENCE;
             bus.r[i] = (wet_r * wet1 + wet_l * wet2) * OUTPUT_REFERENCE;
+        }
+    }
+
+    fn apply_param(&mut self, id: u32, value: f32) {
+        match id {
+            PLATE_PARAM_SIZE => {
+                self.params.size = value.clamp(0.0, 1.0);
+                self.resize();
+            }
+            PLATE_PARAM_DECAY_S => {
+                self.params.decay_s = value.clamp(0.2, 10.0);
+                self.rebuild_feedback();
+            }
+            PLATE_PARAM_DAMPING => {
+                self.params.damping = value.clamp(0.0, 1.0);
+                self.rebuild_damping();
+            }
+            PLATE_PARAM_WIDTH => {
+                self.params.width = value.clamp(0.0, 1.0);
+                self.wet1.set_target(0.5 + self.params.width * 0.5);
+                self.wet2.set_target(0.5 - self.params.width * 0.5);
+            }
+            PLATE_PARAM_PREDELAY_MS => {
+                self.params.predelay_ms = value.clamp(0.0, PREDELAY_MAX_MS);
+                self.predelay_samples
+                    .set_target(predelay_samples(self.params.predelay_ms, self.sample_rate));
+            }
+            _ => {}
         }
     }
 }
@@ -411,16 +415,7 @@ impl AudioNode for PlateEffect {
             self.size_glide = glide_coeff(SIZE_GLIDE_S, ctx.sample_rate);
         }
         let frames = ctx.frames.min(bus.capacity());
-        let mut pos = 0usize;
-        for ev in events_in.iter() {
-            let off = (ev.offset as usize).min(frames).max(pos);
-            self.process_range(bus, pos, off);
-            if let Event::ParamValue { id, value } = ev.event {
-                self.apply_param(id, value);
-            }
-            pos = off;
-        }
-        self.process_range(bus, pos, frames);
+        process_param_split(self, bus, events_in, frames);
     }
 }
 
@@ -440,6 +435,7 @@ fn predelay_capacity(sample_rate: u32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Event;
 
     fn context(frames: usize) -> ProcessContext {
         ProcessContext {

@@ -11,11 +11,12 @@ use mooloop_core::{
 };
 
 use crate::bus::StereoBus;
-use crate::event::{Event, EventList};
+use crate::event::EventList;
 use crate::filter::OnePoleLp;
 use crate::node::{AudioNode, ProcessContext};
 use crate::shaper::{drive_compensation, shape, Oversampler2x, OVERSAMPLER_LATENCY_FRAMES};
 use crate::smooth::Smoothed;
+use super::{process_param_split, RangeProcessor};
 
 /// Corner frequency of the tilt filter's low/high split.
 const TONE_SPLIT_HZ: f32 = 1_500.0;
@@ -82,29 +83,6 @@ impl DriveEffect {
         self.output.reset_to(params.output.clamp(0.0, 2.0));
     }
 
-    fn apply_param(&mut self, id: u32, value: f32) {
-        match id {
-            DRIVE_PARAM_DRIVE => {
-                self.params.drive = value.clamp(1.0, 64.0);
-                self.drive.set_target(self.params.drive);
-            }
-            DRIVE_PARAM_CURVE => self.params.curve = DriveCurve::from_index(value.round() as i32),
-            DRIVE_PARAM_TONE => {
-                self.params.tone = value.clamp(-1.0, 1.0);
-                self.tone.set_target(self.params.tone);
-            }
-            DRIVE_PARAM_MIX => {
-                self.params.mix = value.clamp(0.0, 1.0);
-                self.mix.set_target(self.params.mix);
-            }
-            DRIVE_PARAM_OUTPUT => {
-                self.params.output = value.clamp(0.0, 2.0);
-                self.output.set_target(self.params.output);
-            }
-            _ => {}
-        }
-    }
-
     /// Split the low and high bands and re-weight the high one. At `tone == 0`
     /// the two bands sum back to the input exactly.
     fn tilt(state: &mut OnePoleLp, sample: f32, tone: f32) -> f32 {
@@ -118,6 +96,9 @@ impl DriveEffect {
         low + high * gain
     }
 
+}
+
+impl RangeProcessor for DriveEffect {
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let curve = self.params.curve;
 
@@ -143,6 +124,29 @@ impl DriveEffect {
 
             bus.l[i] = (aligned_l + (wet_l - aligned_l) * mix) * output;
             bus.r[i] = (aligned_r + (wet_r - aligned_r) * mix) * output;
+        }
+    }
+
+    fn apply_param(&mut self, id: u32, value: f32) {
+        match id {
+            DRIVE_PARAM_DRIVE => {
+                self.params.drive = value.clamp(1.0, 64.0);
+                self.drive.set_target(self.params.drive);
+            }
+            DRIVE_PARAM_CURVE => self.params.curve = DriveCurve::from_index(value.round() as i32),
+            DRIVE_PARAM_TONE => {
+                self.params.tone = value.clamp(-1.0, 1.0);
+                self.tone.set_target(self.params.tone);
+            }
+            DRIVE_PARAM_MIX => {
+                self.params.mix = value.clamp(0.0, 1.0);
+                self.mix.set_target(self.params.mix);
+            }
+            DRIVE_PARAM_OUTPUT => {
+                self.params.output = value.clamp(0.0, 2.0);
+                self.output.set_target(self.params.output);
+            }
+            _ => {}
         }
     }
 }
@@ -194,23 +198,14 @@ impl AudioNode for DriveEffect {
             self.output.set_time(PARAM_SMOOTH_S, ctx.sample_rate);
         }
         let frames = ctx.frames.min(bus.capacity());
-        let mut pos = 0usize;
-        for ev in events_in.iter() {
-            let off = (ev.offset as usize).min(frames).max(pos);
-            self.process_range(bus, pos, off);
-            if let Event::ParamValue { id, value } = ev.event {
-                self.apply_param(id, value);
-            }
-            pos = off;
-        }
-        self.process_range(bus, pos, frames);
+        process_param_split(self, bus, events_in, frames);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::TimedEvent;
+    use crate::event::{Event, TimedEvent};
 
     fn context(frames: usize) -> ProcessContext {
         ProcessContext {

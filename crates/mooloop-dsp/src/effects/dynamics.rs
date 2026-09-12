@@ -23,9 +23,10 @@ use crate::dynamics::{
     compressor_gain_db, db_to_lin, gate_gain_db, limiter_gain_db, lin_to_db, time_coeff,
     EnvelopeFollower,
 };
-use crate::event::{Event, EventList};
+use crate::event::EventList;
 use crate::node::{AudioNode, DynamicsFrame, ProcessContext};
 use crate::smooth::Smoothed;
+use super::{process_param_split, RangeProcessor};
 
 /// Peak detection for the limiter is effectively instantaneous: its whole job
 /// is to not let anything through, so its attack is not a user control.
@@ -115,17 +116,9 @@ impl GateEffect {
         self.params = params;
     }
 
-    fn apply_param(&mut self, id: u32, value: f32) {
-        match id {
-            GATE_PARAM_THRESHOLD_DB => self.params.threshold_db = value.clamp(-80.0, 0.0),
-            GATE_PARAM_ATTACK_MS => self.params.attack_ms = value.clamp(0.05, 100.0),
-            GATE_PARAM_HOLD_MS => self.params.hold_ms = value.clamp(0.0, 500.0),
-            GATE_PARAM_RELEASE_MS => self.params.release_ms = value.clamp(1.0, 2_000.0),
-            GATE_PARAM_RANGE_DB => self.params.range_db = value.clamp(-80.0, 0.0),
-            _ => {}
-        }
-    }
+}
 
+impl RangeProcessor for GateEffect {
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let GateParams {
             threshold_db,
@@ -168,6 +161,17 @@ impl GateEffect {
             let gain = db_to_lin(self.gain_db);
             bus.l[i] *= gain;
             bus.r[i] *= gain;
+        }
+    }
+
+    fn apply_param(&mut self, id: u32, value: f32) {
+        match id {
+            GATE_PARAM_THRESHOLD_DB => self.params.threshold_db = value.clamp(-80.0, 0.0),
+            GATE_PARAM_ATTACK_MS => self.params.attack_ms = value.clamp(0.05, 100.0),
+            GATE_PARAM_HOLD_MS => self.params.hold_ms = value.clamp(0.0, 500.0),
+            GATE_PARAM_RELEASE_MS => self.params.release_ms = value.clamp(1.0, 2_000.0),
+            GATE_PARAM_RANGE_DB => self.params.range_db = value.clamp(-80.0, 0.0),
+            _ => {}
         }
     }
 }
@@ -222,16 +226,7 @@ impl AudioNode for GateEffect {
         self.block.begin();
         self.sample_rate = ctx.sample_rate;
         let frames = ctx.frames.min(bus.capacity());
-        let mut pos = 0usize;
-        for ev in events_in.iter() {
-            let off = (ev.offset as usize).min(frames).max(pos);
-            self.process_range(bus, pos, off);
-            if let Event::ParamValue { id, value } = ev.event {
-                self.apply_param(id, value);
-            }
-            pos = off;
-        }
-        self.process_range(bus, pos, frames);
+        process_param_split(self, bus, events_in, frames);
     }
 }
 
@@ -278,6 +273,26 @@ impl CompressorEffect {
         self.makeup_db.reset_to(params.makeup_db.clamp(0.0, 24.0));
     }
 
+}
+
+impl RangeProcessor for CompressorEffect {
+    fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+        let knee_db = self.params.knee_db;
+
+        for i in start..end {
+            let threshold_db = self.threshold_db.advance();
+            let ratio = self.ratio.advance();
+            let makeup = db_to_lin(self.makeup_db.advance());
+            let envelope = self.detector.process(linked_peak(bus.l[i], bus.r[i]));
+            let reduction_db =
+                compressor_gain_db(lin_to_db(envelope), threshold_db, ratio, knee_db);
+            self.block.observe(envelope, reduction_db);
+            let gain = db_to_lin(reduction_db) * makeup;
+            bus.l[i] *= gain;
+            bus.r[i] *= gain;
+        }
+    }
+
     fn apply_param(&mut self, id: u32, value: f32) {
         match id {
             COMP_PARAM_THRESHOLD_DB => {
@@ -299,23 +314,6 @@ impl CompressorEffect {
         }
         self.detector
             .set_times(self.params.attack_ms, self.params.release_ms, self.sample_rate);
-    }
-
-    fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
-        let knee_db = self.params.knee_db;
-
-        for i in start..end {
-            let threshold_db = self.threshold_db.advance();
-            let ratio = self.ratio.advance();
-            let makeup = db_to_lin(self.makeup_db.advance());
-            let envelope = self.detector.process(linked_peak(bus.l[i], bus.r[i]));
-            let reduction_db =
-                compressor_gain_db(lin_to_db(envelope), threshold_db, ratio, knee_db);
-            self.block.observe(envelope, reduction_db);
-            let gain = db_to_lin(reduction_db) * makeup;
-            bus.l[i] *= gain;
-            bus.r[i] *= gain;
-        }
     }
 }
 
@@ -367,16 +365,7 @@ impl AudioNode for CompressorEffect {
             self.makeup_db.set_time(PARAM_SMOOTH_S, ctx.sample_rate);
         }
         let frames = ctx.frames.min(bus.capacity());
-        let mut pos = 0usize;
-        for ev in events_in.iter() {
-            let off = (ev.offset as usize).min(frames).max(pos);
-            self.process_range(bus, pos, off);
-            if let Event::ParamValue { id, value } = ev.event {
-                self.apply_param(id, value);
-            }
-            pos = off;
-        }
-        self.process_range(bus, pos, frames);
+        process_param_split(self, bus, events_in, frames);
     }
 }
 
@@ -427,23 +416,9 @@ impl LimiterEffect {
         self.gain_db.reset_to(params.gain_db.clamp(0.0, 24.0));
     }
 
-    fn apply_param(&mut self, id: u32, value: f32) {
-        match id {
-            LIMITER_PARAM_CEILING_DB => {
-                self.params.ceiling_db = value.clamp(-24.0, 0.0);
-                self.ceiling_db.set_target(self.params.ceiling_db);
-            }
-            LIMITER_PARAM_RELEASE_MS => self.params.release_ms = value.clamp(1.0, 500.0),
-            LIMITER_PARAM_GAIN_DB => {
-                self.params.gain_db = value.clamp(0.0, 24.0);
-                self.gain_db.set_target(self.params.gain_db);
-            }
-            _ => {}
-        }
-        self.detector
-            .set_times(LIMITER_ATTACK_MS, self.params.release_ms, self.sample_rate);
-    }
+}
 
+impl RangeProcessor for LimiterEffect {
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         for i in start..end {
             let ceiling_db = self.ceiling_db.advance();
@@ -466,6 +441,23 @@ impl LimiterEffect {
             bus.l[i] = (l * reduction).clamp(-ceiling, ceiling);
             bus.r[i] = (r * reduction).clamp(-ceiling, ceiling);
         }
+    }
+
+    fn apply_param(&mut self, id: u32, value: f32) {
+        match id {
+            LIMITER_PARAM_CEILING_DB => {
+                self.params.ceiling_db = value.clamp(-24.0, 0.0);
+                self.ceiling_db.set_target(self.params.ceiling_db);
+            }
+            LIMITER_PARAM_RELEASE_MS => self.params.release_ms = value.clamp(1.0, 500.0),
+            LIMITER_PARAM_GAIN_DB => {
+                self.params.gain_db = value.clamp(0.0, 24.0);
+                self.gain_db.set_target(self.params.gain_db);
+            }
+            _ => {}
+        }
+        self.detector
+            .set_times(LIMITER_ATTACK_MS, self.params.release_ms, self.sample_rate);
     }
 }
 
@@ -506,23 +498,14 @@ impl AudioNode for LimiterEffect {
             self.gain_db.set_time(PARAM_SMOOTH_S, ctx.sample_rate);
         }
         let frames = ctx.frames.min(bus.capacity());
-        let mut pos = 0usize;
-        for ev in events_in.iter() {
-            let off = (ev.offset as usize).min(frames).max(pos);
-            self.process_range(bus, pos, off);
-            if let Event::ParamValue { id, value } = ev.event {
-                self.apply_param(id, value);
-            }
-            pos = off;
-        }
-        self.process_range(bus, pos, frames);
+        process_param_split(self, bus, events_in, frames);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::TimedEvent;
+    use crate::event::{Event, TimedEvent};
 
     const SR: u32 = 48_000;
 

@@ -6,10 +6,11 @@ use mooloop_core::{
 };
 
 use crate::bus::StereoBus;
-use crate::event::{Event, EventList};
+use crate::event::EventList;
 use crate::filter::{apply_drive, Svf};
 use crate::node::{AudioNode, ProcessContext};
 use crate::smooth::Smoothed;
+use super::{process_param_split, RangeProcessor};
 
 /// Cutoff tracks the knob closely: `Svf` is built to stay well behaved with
 /// cutoff moving every sample, so there is no reason to lag a sweep.
@@ -64,28 +65,6 @@ impl FilterEffect {
         self.drive.reset_to(params.drive.clamp(0.0, 1.0));
     }
 
-    fn apply_param(&mut self, id: u32, value: f32) {
-        match id {
-            FILTER_PARAM_CUTOFF_HZ => {
-                self.params.cutoff_hz = value.max(0.0);
-                self.cutoff.set_target(self.params.cutoff_hz);
-            }
-            FILTER_PARAM_RESONANCE => {
-                self.params.resonance = value.clamp(0.0, 1.0);
-                self.resonance.set_target(self.params.resonance);
-            }
-            FILTER_PARAM_MODE => {
-                self.params.mode = FilterMode::from_index(value.round() as i32);
-            }
-            FILTER_PARAM_SLOPE => self.params.slope = FilterSlope::from_index(value.round() as i32),
-            FILTER_PARAM_DRIVE => {
-                self.params.drive = value.clamp(0.0, 1.0);
-                self.drive.set_target(self.params.drive);
-            }
-            _ => {}
-        }
-    }
-
     fn select_output(mode: FilterMode, output: (f32, f32, f32)) -> f32 {
         match mode {
             FilterMode::LowPass => output.0,
@@ -118,6 +97,9 @@ impl FilterEffect {
         }
     }
 
+}
+
+impl RangeProcessor for FilterEffect {
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let sr = self.sample_rate;
         for i in start..end {
@@ -146,6 +128,28 @@ impl FilterEffect {
             );
         }
     }
+
+    fn apply_param(&mut self, id: u32, value: f32) {
+        match id {
+            FILTER_PARAM_CUTOFF_HZ => {
+                self.params.cutoff_hz = value.max(0.0);
+                self.cutoff.set_target(self.params.cutoff_hz);
+            }
+            FILTER_PARAM_RESONANCE => {
+                self.params.resonance = value.clamp(0.0, 1.0);
+                self.resonance.set_target(self.params.resonance);
+            }
+            FILTER_PARAM_MODE => {
+                self.params.mode = FilterMode::from_index(value.round() as i32);
+            }
+            FILTER_PARAM_SLOPE => self.params.slope = FilterSlope::from_index(value.round() as i32),
+            FILTER_PARAM_DRIVE => {
+                self.params.drive = value.clamp(0.0, 1.0);
+                self.drive.set_target(self.params.drive);
+            }
+            _ => {}
+        }
+    }
 }
 
 impl AudioNode for FilterEffect {
@@ -170,26 +174,14 @@ impl AudioNode for FilterEffect {
         _events_out: Option<&mut EventList>,
     ) {
         let frames = ctx.frames.min(bus.capacity());
-
-        // Split the block at parameter events: process, apply, repeat —
-        // the same shape instruments use for note events.
-        let mut pos = 0usize;
-        for ev in events_in.iter() {
-            let off = (ev.offset as usize).min(frames).max(pos);
-            self.process_range(bus, pos, off);
-            if let Event::ParamValue { id, value } = ev.event {
-                self.apply_param(id, value);
-            }
-            pos = off;
-        }
-        self.process_range(bus, pos, frames);
+        process_param_split(self, bus, events_in, frames);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::TimedEvent;
+    use crate::event::{Event, TimedEvent};
 
     fn context(frames: usize) -> ProcessContext {
         ProcessContext {

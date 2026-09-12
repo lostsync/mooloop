@@ -41,10 +41,11 @@ use mooloop_core::{
 };
 
 use crate::bus::StereoBus;
-use crate::event::{Event, EventList};
+use crate::event::EventList;
 use crate::filter::OnePoleLp;
 use crate::node::{AudioNode, ProcessContext};
 use crate::smooth::Smoothed;
+use super::{process_param_split, RangeProcessor};
 
 /// Delay lines in the network. Eight is the point where the echo density of
 /// the first 50 ms already reads as a room; sixteen doubles the per-sample
@@ -454,47 +455,25 @@ impl ReverbEffect {
         }
     }
 
-    fn apply_param(&mut self, id: u32, value: f32) {
-        match id {
-            REVERB_PARAM_SIZE => {
-                self.params.size = value.clamp(0.0, 1.0);
-                self.resize();
-            }
-            REVERB_PARAM_DECAY_S => {
-                self.params.decay_s = value.clamp(0.2, 20.0);
-                self.rebuild_feedback();
-            }
-            REVERB_PARAM_DAMPING => {
-                self.params.damping = value.clamp(0.0, 1.0);
-                self.rebuild_damping();
-            }
-            REVERB_PARAM_PREDELAY_MS => {
-                self.params.predelay_ms = value.clamp(1.0, 200.0);
-                self.predelay_samples
-                    .set_target(predelay_samples(self.params.predelay_ms, self.sample_rate));
-            }
-            REVERB_PARAM_DIFFUSION => {
-                self.params.diffusion = value.clamp(0.0, 1.0);
-                self.diffusion
-                    .set_target(self.params.diffusion * DIFFUSION_MAX_GAIN);
-            }
-            REVERB_PARAM_WIDTH => {
-                self.params.width = value.clamp(0.0, 1.0);
-                self.width.set_target(self.params.width);
-            }
-            REVERB_PARAM_MODULATION => {
-                self.params.modulation = value.clamp(0.0, 1.0);
-                self.rebuild_modulation();
-            }
-            REVERB_PARAM_LOW_CUT_HZ => {
-                self.params.low_cut_hz = value.clamp(20.0, 500.0);
-                self.low_cut
-                    .set_cutoff(self.params.low_cut_hz, self.sample_rate);
-            }
-            _ => {}
-        }
-    }
+}
 
+/// One-pole coefficient reaching ~63% of a step in `time_s`. The same
+/// mapping `Smoothed` uses; spelled out here because the delay lengths are
+/// smoothed inside their own structs rather than through a `Smoothed`.
+fn glide_coeff(time_s: f32, sample_rate: u32) -> f32 {
+    let samples = (time_s.max(1.0e-5) * sample_rate.max(1) as f32).max(1.0);
+    1.0 - (-1.0 / samples).exp()
+}
+
+fn predelay_samples(predelay_ms: f32, sample_rate: u32) -> f32 {
+    (predelay_ms.clamp(1.0, 200.0) * 0.001 * sample_rate.max(1) as f32).max(1.0)
+}
+
+fn predelay_capacity(sample_rate: u32) -> usize {
+    (0.2 * sample_rate.max(1) as f32).ceil() as usize + 4
+}
+
+impl RangeProcessor for ReverbEffect {
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         for i in start..end {
             let dry = (bus.l[i] + bus.r[i]) * 0.5;
@@ -546,22 +525,47 @@ impl ReverbEffect {
             bus.r[i] = (mid - side) * OUTPUT_REFERENCE;
         }
     }
-}
 
-/// One-pole coefficient reaching ~63% of a step in `time_s`. The same
-/// mapping `Smoothed` uses; spelled out here because the delay lengths are
-/// smoothed inside their own structs rather than through a `Smoothed`.
-fn glide_coeff(time_s: f32, sample_rate: u32) -> f32 {
-    let samples = (time_s.max(1.0e-5) * sample_rate.max(1) as f32).max(1.0);
-    1.0 - (-1.0 / samples).exp()
-}
-
-fn predelay_samples(predelay_ms: f32, sample_rate: u32) -> f32 {
-    (predelay_ms.clamp(1.0, 200.0) * 0.001 * sample_rate.max(1) as f32).max(1.0)
-}
-
-fn predelay_capacity(sample_rate: u32) -> usize {
-    (0.2 * sample_rate.max(1) as f32).ceil() as usize + 4
+    fn apply_param(&mut self, id: u32, value: f32) {
+        match id {
+            REVERB_PARAM_SIZE => {
+                self.params.size = value.clamp(0.0, 1.0);
+                self.resize();
+            }
+            REVERB_PARAM_DECAY_S => {
+                self.params.decay_s = value.clamp(0.2, 20.0);
+                self.rebuild_feedback();
+            }
+            REVERB_PARAM_DAMPING => {
+                self.params.damping = value.clamp(0.0, 1.0);
+                self.rebuild_damping();
+            }
+            REVERB_PARAM_PREDELAY_MS => {
+                self.params.predelay_ms = value.clamp(1.0, 200.0);
+                self.predelay_samples
+                    .set_target(predelay_samples(self.params.predelay_ms, self.sample_rate));
+            }
+            REVERB_PARAM_DIFFUSION => {
+                self.params.diffusion = value.clamp(0.0, 1.0);
+                self.diffusion
+                    .set_target(self.params.diffusion * DIFFUSION_MAX_GAIN);
+            }
+            REVERB_PARAM_WIDTH => {
+                self.params.width = value.clamp(0.0, 1.0);
+                self.width.set_target(self.params.width);
+            }
+            REVERB_PARAM_MODULATION => {
+                self.params.modulation = value.clamp(0.0, 1.0);
+                self.rebuild_modulation();
+            }
+            REVERB_PARAM_LOW_CUT_HZ => {
+                self.params.low_cut_hz = value.clamp(20.0, 500.0);
+                self.low_cut
+                    .set_cutoff(self.params.low_cut_hz, self.sample_rate);
+            }
+            _ => {}
+        }
+    }
 }
 
 impl AudioNode for ReverbEffect {
@@ -639,22 +643,14 @@ impl AudioNode for ReverbEffect {
             self.size_glide = glide_coeff(SIZE_GLIDE_S, self.sample_rate);
         }
         let frames = ctx.frames.min(bus.capacity());
-        let mut pos = 0usize;
-        for ev in events_in.iter() {
-            let off = (ev.offset as usize).min(frames).max(pos);
-            self.process_range(bus, pos, off);
-            if let Event::ParamValue { id, value } = ev.event {
-                self.apply_param(id, value);
-            }
-            pos = off;
-        }
-        self.process_range(bus, pos, frames);
+        process_param_split(self, bus, events_in, frames);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Event;
 
     fn context(frames: usize) -> ProcessContext {
         ProcessContext {

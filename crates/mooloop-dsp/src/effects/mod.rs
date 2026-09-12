@@ -35,7 +35,60 @@ pub use reverb::ReverbEffect;
 
 use mooloop_core::EffectParams;
 
+use crate::bus::StereoBus;
+use crate::event::{Event, EventList};
 use crate::node::AudioNode;
+
+/// An effect that renders part of a block, so the block can be split at the
+/// offsets its parameter events carry.
+///
+/// Every effect in this module implements it, and every one of them did the
+/// splitting by hand until 2026-09-12: twelve copies of the same ten lines,
+/// which `scripts/dupe-audit` reported as ten because two of them had renamed
+/// the loop variables and one had reformatted the `if let` onto one line. A
+/// text search cannot hold a policy together; a trait can.
+pub(crate) trait RangeProcessor {
+    /// Render `bus[start..end]`. Called once per gap between events, so it
+    /// must be correct for an empty range as well as a whole block.
+    fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize);
+
+    /// Take one parameter value, in natural units, between ranges.
+    fn apply_param(&mut self, id: u32, value: f32);
+}
+
+/// Render `frames` of `bus`, splitting at each parameter event so a value
+/// lands on the sample it was timed for.
+///
+/// Two clamps carry the whole policy, and both are the kind of thing that is
+/// easy to get subtly wrong in the twelfth copy:
+///
+/// - `.min(frames)` — an event timed past the end of the block applies after
+///   everything audible, rather than indexing off the end of the bus. The
+///   engine can hand one over when a block is shortened.
+/// - `.max(pos)` — a list that is not sorted cannot rewind the render head. A
+///   negative-length range would otherwise be asked for, and the effect's own
+///   `process_range` should not have to defend against it.
+///
+/// Events other than `ParamValue` still split the block. That is deliberate:
+/// the split is where the *audio* is cut, and cutting it on a note event an
+/// effect ignores costs one extra call with the same coefficients.
+pub(crate) fn process_param_split(
+    node: &mut (impl RangeProcessor + ?Sized),
+    bus: &mut StereoBus,
+    events_in: &EventList,
+    frames: usize,
+) {
+    let mut pos = 0usize;
+    for ev in events_in.iter() {
+        let off = (ev.offset as usize).min(frames).max(pos);
+        node.process_range(bus, pos, off);
+        if let Event::ParamValue { id, value } = ev.event {
+            node.apply_param(id, value);
+        }
+        pos = off;
+    }
+    node.process_range(bus, pos, frames);
+}
 
 /// Construct the DSP node for a parameter set.
 ///
@@ -91,6 +144,87 @@ mod tests {
 
     const SAMPLE_RATE: u32 = 48_000;
     const BLOCK: usize = 512;
+
+    /// Records what [`process_param_split`] asked of it, in order, so the
+    /// splitting itself can be checked without a real effect's audio in the
+    /// way. Every effect in this module used to carry its own copy of that
+    /// loop, so its two clamps were never tested anywhere.
+    #[derive(Default)]
+    struct Recorder {
+        ranges: Vec<(usize, usize)>,
+        params: Vec<(u32, f32, usize)>,
+    }
+
+    impl RangeProcessor for Recorder {
+        fn process_range(&mut self, _bus: &mut StereoBus, start: usize, end: usize) {
+            self.ranges.push((start, end));
+        }
+
+        fn apply_param(&mut self, id: u32, value: f32) {
+            // Where in the block this value landed, as the ranges so far say.
+            let at = self.ranges.last().map_or(0, |(_, end)| *end);
+            self.params.push((id, value, at));
+        }
+    }
+
+    fn split(events: &EventList, frames: usize) -> Recorder {
+        let mut bus = StereoBus::with_capacity(frames.max(1));
+        let mut recorder = Recorder::default();
+        process_param_split(&mut recorder, &mut bus, events, frames);
+        recorder
+    }
+
+    fn events(offsets_and_ids: &[(u32, u32)]) -> EventList {
+        let mut list = EventList::empty();
+        for (offset, id) in offsets_and_ids {
+            list.push(crate::event::TimedEvent {
+                offset: *offset,
+                event: Event::ParamValue {
+                    id: *id,
+                    value: *id as f32,
+                },
+            });
+        }
+        list
+    }
+
+    /// No events is one range covering the block, not zero ranges.
+    #[test]
+    fn an_empty_event_list_renders_the_block_in_one_call() {
+        let recorder = split(&EventList::empty(), 64);
+        assert_eq!(recorder.ranges, vec![(0, 64)]);
+        assert!(recorder.params.is_empty());
+    }
+
+    /// The ordinary case: the block is cut at the event and the value lands
+    /// on the sample it was timed for.
+    #[test]
+    fn a_value_lands_on_the_sample_it_was_timed_for() {
+        let recorder = split(&events(&[(16, 7)]), 64);
+        assert_eq!(recorder.ranges, vec![(0, 16), (16, 64)]);
+        assert_eq!(recorder.params, vec![(7, 7.0, 16)]);
+    }
+
+    /// First clamp: an event timed past the end of the block applies after
+    /// everything audible rather than indexing off the end of the bus. The
+    /// engine hands one over when a block is shortened.
+    #[test]
+    fn an_event_past_the_block_end_applies_after_all_of_it() {
+        let recorder = split(&events(&[(999, 3)]), 64);
+        assert_eq!(recorder.ranges, vec![(0, 64), (64, 64)]);
+        assert_eq!(recorder.params, vec![(3, 3.0, 64)]);
+    }
+
+    /// Second clamp: an unsorted list cannot rewind the render head, so no
+    /// effect's `process_range` is ever handed a backwards range.
+    #[test]
+    fn an_out_of_order_event_does_not_rewind_the_render_head() {
+        let recorder = split(&events(&[(40, 1), (8, 2)]), 64);
+        assert_eq!(recorder.ranges, vec![(0, 40), (40, 40), (40, 64)]);
+        for (start, end) in &recorder.ranges {
+            assert!(start <= end, "range {start}..{end} runs backwards");
+        }
+    }
 
     fn context(frames: usize) -> ProcessContext {
         ProcessContext {

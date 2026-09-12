@@ -21,10 +21,11 @@ use mooloop_core::{
 
 use crate::analysis::{SpectrumAnalyzer, SPECTRUM_BINS, SPECTRUM_FLOOR_DB};
 use crate::bus::StereoBus;
-use crate::event::{Event, EventList};
+use crate::event::EventList;
 use crate::node::{AudioNode, ProcessContext};
 use crate::preamp::{preamp_voicing, Preamp};
 use crate::smooth::Smoothed;
+use super::{process_param_split, RangeProcessor};
 
 /// Drive, mix and output all scale amplitude directly, so a step in any of
 /// them is either a click or a zipper. Matches `drive.rs` for the same reason.
@@ -143,31 +144,9 @@ impl PreampEffect {
         self.right = Preamp::new(table, self.sample_rate);
     }
 
-    fn apply_param(&mut self, id: u32, value: f32) {
-        match id {
-            PREAMP_PARAM_DRIVE_DB => {
-                self.params.drive_db = value.clamp(-24.0, 24.0);
-                self.drive.set_target(db_to_linear(self.params.drive_db));
-            }
-            PREAMP_PARAM_VOICING => {
-                let voicing = PreampVoicing::from_index(value.round() as i32);
-                if voicing != self.params.voicing {
-                    self.params.voicing = voicing;
-                    self.rebuild_voicing();
-                }
-            }
-            PREAMP_PARAM_MIX => {
-                self.params.mix = value.clamp(0.0, 1.0);
-                self.mix.set_target(self.params.mix);
-            }
-            PREAMP_PARAM_OUTPUT_DB => {
-                self.params.output_db = value.clamp(-24.0, 24.0);
-                self.output.set_target(db_to_linear(self.params.output_db));
-            }
-            _ => {}
-        }
-    }
+}
 
+impl RangeProcessor for PreampEffect {
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let watching = self.params.display_enabled;
         for i in start..end {
@@ -191,6 +170,31 @@ impl PreampEffect {
                 self.dry.write((dry_l + dry_r) * 0.5);
                 self.wet.write((out_l + out_r) * 0.5);
             }
+        }
+    }
+
+    fn apply_param(&mut self, id: u32, value: f32) {
+        match id {
+            PREAMP_PARAM_DRIVE_DB => {
+                self.params.drive_db = value.clamp(-24.0, 24.0);
+                self.drive.set_target(db_to_linear(self.params.drive_db));
+            }
+            PREAMP_PARAM_VOICING => {
+                let voicing = PreampVoicing::from_index(value.round() as i32);
+                if voicing != self.params.voicing {
+                    self.params.voicing = voicing;
+                    self.rebuild_voicing();
+                }
+            }
+            PREAMP_PARAM_MIX => {
+                self.params.mix = value.clamp(0.0, 1.0);
+                self.mix.set_target(self.params.mix);
+            }
+            PREAMP_PARAM_OUTPUT_DB => {
+                self.params.output_db = value.clamp(-24.0, 24.0);
+                self.output.set_target(db_to_linear(self.params.output_db));
+            }
+            _ => {}
         }
     }
 }
@@ -261,16 +265,7 @@ impl AudioNode for PreampEffect {
             self.wet.prepare(ctx.sample_rate);
         }
         let frames = ctx.frames.min(bus.capacity());
-        let mut pos = 0usize;
-        for ev in events_in.iter() {
-            let off = (ev.offset as usize).min(frames).max(pos);
-            self.process_range(bus, pos, off);
-            if let Event::ParamValue { id, value } = ev.event {
-                self.apply_param(id, value);
-            }
-            pos = off;
-        }
-        self.process_range(bus, pos, frames);
+        process_param_split(self, bus, events_in, frames);
 
         // Both rings advance together and are the same length, so they come
         // due on the same sample. Taking one without the other would compare
@@ -286,7 +281,7 @@ impl AudioNode for PreampEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::TimedEvent;
+    use crate::event::{Event, TimedEvent};
 
     const SAMPLE_RATE: u32 = 48_000;
 

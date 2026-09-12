@@ -14,11 +14,12 @@ use mooloop_core::{
 
 use crate::bus::StereoBus;
 use crate::delayline::{DelayLine, MIN_READ_OFFSET};
-use crate::event::{Event, EventList};
+use crate::event::EventList;
 use crate::filter::{AllPass, OnePoleLp};
 use crate::lfo::Lfo;
 use crate::node::{feedback_tail_frames, AudioNode, ProcessContext};
 use crate::smooth::Smoothed;
+use super::{process_param_split, RangeProcessor};
 
 const MAX_DELAY_MS: f32 = 64.0;
 const MAX_PHASER_STAGES: usize = 12;
@@ -85,37 +86,6 @@ impl ModulationEffect {
         self.color.reset_to(params.color.clamp(0.0, 1.0));
     }
 
-    fn apply_param(&mut self, id: u32, value: f32) {
-        match id {
-            MODULATION_PARAM_MODE => {
-                self.params.mode = ModulationMode::from_index(value.round() as i32)
-            }
-            MODULATION_PARAM_RATE_HZ => self.params.rate_hz = value.clamp(0.02, 12.0),
-            MODULATION_PARAM_DEPTH => {
-                self.params.depth = value.clamp(0.0, 1.0);
-                self.depth.set_target(self.params.depth);
-            }
-            MODULATION_PARAM_COLOR => {
-                self.params.color = value.clamp(0.0, 1.0);
-                self.color.set_target(self.params.color);
-            }
-            MODULATION_PARAM_FEEDBACK => {
-                self.params.feedback = value.clamp(-0.92, 0.92);
-                self.feedback.set_target(self.params.feedback);
-            }
-            MODULATION_PARAM_SPREAD => {
-                self.params.spread = value.clamp(0.0, 1.0);
-                self.spread.set_target(self.params.spread);
-            }
-            MODULATION_PARAM_TONE => {
-                self.params.tone = value.clamp(0.0, 1.0);
-                self.tone.set_target(self.params.tone);
-            }
-            MODULATION_PARAM_STAGES => self.params.stages = value.round().clamp(4.0, 12.0) as u8,
-            _ => {}
-        }
-    }
-
     /// Replace `start..end` of `bus` with this node's wet output, without the
     /// event handling [`AudioNode::process`] wraps it in.
     ///
@@ -143,33 +113,6 @@ impl ModulationEffect {
         }
         for stage in &mut self.phaser_r {
             stage.reset();
-        }
-    }
-
-    fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
-        for i in start..end {
-            let depth = self.depth.advance();
-            let feedback = self.feedback.advance();
-            let spread = self.spread.advance();
-            let tone = self.tone.advance();
-            let color = self.color.advance();
-            // Two taps of one LFO cycle rather than two independently
-            // drifting oscillators, so the stereo image stays locked even
-            // as `spread` moves. Peek both before advancing once.
-            let sweep_l = self.lfo.peek_offset(0.0, LfoWave::Sine);
-            let sweep_r = self.lfo.peek_offset(spread * 0.25, LfoWave::Sine);
-            self.lfo.skip(1, self.params.rate_hz, self.sample_rate);
-            let (input_l, input_r) = (bus.l[i], bus.r[i]);
-            let (wet_l, wet_r) = match self.params.mode {
-                ModulationMode::Phaser => self.phaser_sample(
-                    input_l, input_r, feedback, sweep_l, sweep_r, depth, color, tone,
-                ),
-                mode => self.delay_sample(
-                    input_l, input_r, mode, depth, feedback, spread, sweep_l, sweep_r, color, tone,
-                ),
-            };
-            bus.l[i] = wet_l;
-            bus.r[i] = wet_r;
         }
     }
 
@@ -286,6 +229,66 @@ fn allpass_coefficient(hz: f32, sample_rate: u32) -> f32 {
     ((1.0 - g) / (1.0 + g)).clamp(-0.999, 0.999)
 }
 
+impl RangeProcessor for ModulationEffect {
+    fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+        for i in start..end {
+            let depth = self.depth.advance();
+            let feedback = self.feedback.advance();
+            let spread = self.spread.advance();
+            let tone = self.tone.advance();
+            let color = self.color.advance();
+            // Two taps of one LFO cycle rather than two independently
+            // drifting oscillators, so the stereo image stays locked even
+            // as `spread` moves. Peek both before advancing once.
+            let sweep_l = self.lfo.peek_offset(0.0, LfoWave::Sine);
+            let sweep_r = self.lfo.peek_offset(spread * 0.25, LfoWave::Sine);
+            self.lfo.skip(1, self.params.rate_hz, self.sample_rate);
+            let (input_l, input_r) = (bus.l[i], bus.r[i]);
+            let (wet_l, wet_r) = match self.params.mode {
+                ModulationMode::Phaser => self.phaser_sample(
+                    input_l, input_r, feedback, sweep_l, sweep_r, depth, color, tone,
+                ),
+                mode => self.delay_sample(
+                    input_l, input_r, mode, depth, feedback, spread, sweep_l, sweep_r, color, tone,
+                ),
+            };
+            bus.l[i] = wet_l;
+            bus.r[i] = wet_r;
+        }
+    }
+
+    fn apply_param(&mut self, id: u32, value: f32) {
+        match id {
+            MODULATION_PARAM_MODE => {
+                self.params.mode = ModulationMode::from_index(value.round() as i32)
+            }
+            MODULATION_PARAM_RATE_HZ => self.params.rate_hz = value.clamp(0.02, 12.0),
+            MODULATION_PARAM_DEPTH => {
+                self.params.depth = value.clamp(0.0, 1.0);
+                self.depth.set_target(self.params.depth);
+            }
+            MODULATION_PARAM_COLOR => {
+                self.params.color = value.clamp(0.0, 1.0);
+                self.color.set_target(self.params.color);
+            }
+            MODULATION_PARAM_FEEDBACK => {
+                self.params.feedback = value.clamp(-0.92, 0.92);
+                self.feedback.set_target(self.params.feedback);
+            }
+            MODULATION_PARAM_SPREAD => {
+                self.params.spread = value.clamp(0.0, 1.0);
+                self.spread.set_target(self.params.spread);
+            }
+            MODULATION_PARAM_TONE => {
+                self.params.tone = value.clamp(0.0, 1.0);
+                self.tone.set_target(self.params.tone);
+            }
+            MODULATION_PARAM_STAGES => self.params.stages = value.round().clamp(4.0, 12.0) as u8,
+            _ => {}
+        }
+    }
+}
+
 impl AudioNode for ModulationEffect {
     /// Measured against the longest tap the device can be asked for rather
     /// than the one the mode is currently using: `MAX_DELAY_MS` is both the
@@ -346,16 +349,7 @@ impl AudioNode for ModulationEffect {
             self.color.set_time(PARAM_SMOOTH_S, sample_rate);
         }
         let frames = ctx.frames.min(bus.capacity());
-        let mut position = 0;
-        for event in events_in.iter() {
-            let offset = (event.offset as usize).min(frames).max(position);
-            self.process_range(bus, position, offset);
-            if let Event::ParamValue { id, value } = event.event {
-                self.apply_param(id, value);
-            }
-            position = offset;
-        }
-        self.process_range(bus, position, frames);
+        process_param_split(self, bus, events_in, frames);
     }
 }
 
@@ -426,7 +420,7 @@ mod tests {
 
     #[test]
     fn depth_change_mid_block_does_not_click() {
-        use crate::event::TimedEvent;
+        use crate::event::{Event, TimedEvent};
 
         let frames = 8_192;
         let mut bus = StereoBus::with_capacity(frames);
