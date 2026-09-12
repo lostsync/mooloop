@@ -247,7 +247,8 @@ Alphabetical by model name, then by harness.
   every stepped parameter, which found one EQ id decoding to two enums of
   different arity, and the roll's tick count collapsed from twenty-five
   literals to one checked global, and the engine's seven test modules stopped
-  each carrying their own render helper.
+  each carrying their own render helper, and `dupe-audit` learned to find the
+  copies nothing is watching.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

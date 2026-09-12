@@ -103,6 +103,17 @@ scripts/dupe-audit twin-names   # one of them
 scripts/dupe-audit --list       # what they are
 ```
 
+A fifth check, `unchecked-face`, was added on 2026-09-12 and is a different
+shape from the other four: it does not look for a duplicate, it looks for a
+duplicate **nothing is watching**. `slint_face_agreement.rs` holds a device's
+face and its descriptor table together, and it works from a hand-written list
+of faces -- for a reason it states itself, that a derivation would move with
+whichever side it was derived from. A hand-written list then has the failure
+that keeps recurring here: the generator faces were covered for months while
+the effect faces were not. The check reports the faces the test cannot see,
+and it separates the two reasons a face might not be in it. Eight faces and
+twenty-three numbers were outside it the day it was written.
+
 Two things it deliberately does not do. It does not look for duplicated
 *formulas*: four synths computing `sin(2*pi*phi)` will agree forever, because
 a sine has no parameters to drift. And it does not chase Rust constants

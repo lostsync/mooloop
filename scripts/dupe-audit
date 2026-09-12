@@ -241,6 +241,80 @@ def twin_names():
     return [hit[2:] for hit in sorted(hits, reverse=True)]
 
 
+# --- 5 -----------------------------------------------------------------
+def unchecked_face():
+    """A face that spells a range in markup where no test reads it back.
+
+    A knob and an automation lane are two views of one value, and a face that
+    writes its own `default-value: 0.9` has stated a number the descriptor
+    table already states. `slint_face_agreement.rs` exists to hold the two
+    together, and it works from a hand-written list -- for a reason it gives
+    itself, that a derivation would move with whichever side it was derived
+    from. A hand-written list then has a hand-written list's failure, which
+    `AGENTS.md` records as recurring here: the generator faces were covered
+    for months while the effect faces were not.
+
+    The rule is *a literal in a face the test does not include*. Both halves
+    matter:
+
+    - A face the test never `include_str!`s has none of its knobs checked,
+      whatever they say.
+    - A `default-value: root.defaults[root.param]` is not a second copy of
+      anything. That face reads the table at run time, so it cannot drift, and
+      DS-01's whole paged face is built this way. Only a literal is a copy.
+
+    A literal here is not automatically a defect -- a control that is not
+    descriptor-backed at all has nowhere else for its number to live. What the
+    list is for is the other kind.
+
+    **It also reports what the guard cannot reach.** The agreement test finds a
+    knob by looking for one line carrying both the property binding and
+    `default-value:`. A face written with those on separate lines cannot be
+    added to it without changing the parser, and nothing else says so, so the
+    detail below names that shape where it appears.
+    """
+    agreement = ROOT / "crates/mooloop-ui/tests/slint_face_agreement.rs"
+    if not agreement.exists():
+        return [(rel(agreement), "the face-agreement test is gone; nothing checks any face")]
+    covered = set(
+        re.findall(r'include_str!\("\.\./ui/([a-z0-9-]+\.slint)"\)', agreement.read_text())
+    )
+
+    # These draw no device parameter of their own: the rack, the drag harness,
+    # the shared displays, the concepts sheet.
+    NOT_A_FACE = {
+        "device-concepts.slint",
+        "device-displays.slint",
+        "device-drag-harness.slint",
+        "device-rack.slint",
+    }
+
+    literal = re.compile(r"default-value:\s*(-?[0-9][0-9_.]*)\s*;")
+    binding = re.compile(r"root\.([a-z0-9-]+);")
+
+    hits = []
+    for path in slint_sources():
+        if "device" not in path.name or path.name in NOT_A_FACE or path.name in covered:
+            continue
+        lines = path.read_text().splitlines()
+        spelled = [
+            (index, match.group(1), binding.search(line) is not None)
+            for index, line in enumerate(lines, start=1)
+            if (match := literal.search(line))
+        ]
+        if not spelled:
+            continue
+        reachable = sum(1 for _, _, same_line in spelled if same_line)
+        detail = f"{len(spelled)} range(s) spelled in markup that no test reads back"
+        if reachable < len(spelled):
+            detail += (
+                f"; {len(spelled) - reachable} of them declare the binding on a separate"
+                " line, which the agreement test's one-line parser cannot reach as it stands"
+            )
+        hits.append((f"{rel(path)}:{spelled[0][0]}", detail))
+    return sorted(hits, key=lambda hit: -int(hit[1].split()[0]))
+
+
 # A sixth check was written and thrown away: Rust constants whose *value*
 # appears as a bare number in the markup. `TICKS_PER_STEP` really is spelled
 # `24` twenty-five times in the roll, and finding that automatically would be
@@ -258,6 +332,7 @@ CHECKS = {
     "repeated-line": repeated_line,
     "unit-spelling": unit_spelling,
     "twin-names": twin_names,
+    "unchecked-face": unchecked_face,
 }
 
 

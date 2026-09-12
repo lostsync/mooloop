@@ -310,6 +310,44 @@ renderer_name: "software" })`, `source_snapshot.rs` eleven times on its own.
 This is the same shape as the piano-roll grid constants below, wants the same
 `tests/common/` module, and would be worth doing in the same pass.
 
+## Numbers nothing is watching
+
+**Eight device faces spell a number the descriptor table already states, and
+`slint_face_agreement.rs` reads none of them.** `scripts/dupe-audit
+unchecked-face` lists them; it was written for this and the count was
+twenty-three the day it was added, 2026-09-12. The faces are
+`modulation-device` (7), `device-oscillator` (4), `eq-device` (3),
+`filter-device` (3), `buffer-device` (2), `bus-device` (2), `aux-in-device` (1)
+and `container-device` (1).
+
+Two things this is *not*, both worth knowing before spending an afternoon on
+it. DS-01 is absent and correctly so: its paged face reads the table at run
+time (`default-value: root.defaults[root.param]`), which is a copy of nothing
+and is the shape the rest could move to. And the modulation face was checked by
+hand when the list was made -- all seven of its defaults agree with
+`MODULATION_DESCRIPTORS`, including the two that are not obvious
+(`Feedback` 0.5 for a bipolar -0.92..0.92, `Stages` 0.5 for a stepped 4..12).
+So this is drift risk, not present drift.
+
+**Ten of the twenty-three cannot be added to the test as it stands.** The
+agreement test finds a knob by looking for one line carrying both the property
+binding and `default-value:`, and says why in a comment: a graphical editor
+binds the same property on a line of its own, so matching the binding alone
+finds the wrong line. Faces written with the binding and the default on
+separate lines are therefore structurally unreachable to it --
+`filter-device`, `buffer-device`, `bus-device`, `aux-in-device` and
+`container-device` are all that shape. Widening the parser is the first step,
+not the face lists.
+
+**And the faces that are covered are covered for their ranges, not their
+resting positions.** The two idioms differ: a covered face declares
+`minimum`/`maximum` in natural units, where `modulation-device` declares no
+range at all and a *normalized* `default-value` -- the position the knob rests
+at and what a double-click returns to. Those have to equal
+`descriptor.to_normalized(descriptor.default)`, which is a different assertion
+from the one the test makes. Covering both idioms means the test grows a second
+comparison, not just a longer list.
+
 ## Housekeeping
 
 **The piano roll's grid geometry is a constant in two test files and nothing
