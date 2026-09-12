@@ -150,6 +150,23 @@ came from, and `scripts/antibox --prune` deletes the caches whose checkout no
 longer exists. A run that finds the box above 90% full says so and points at
 it.
 
+**That warning does not look like compiler output, and it is easy to grep
+past.** It is one line beginning `antibox: warning --`, printed before the
+build starts; the failure it predicts arrives minutes later as
+`error: failed to write ... No space left on device`, which reads like a
+compiler error and is not one. An agent checking a backgrounded run with
+`grep -E '^error|^test result'` -- the habit the verification ladder above
+encourages -- sees the consequence and not the cause. Read the first lines of a
+remote run's log, not only the compiler-shaped ones.
+
+**One task per worktree means one remote cache per worktree.** A session that
+works through several tasks in a row, as `AGENTS.md` requires, leaves a
+`mooloop-ui` target behind for each branch it has finished with, and they are
+20-25 GB each. On 2026-09-12 six of them filled the box mid-run and `--prune`
+freed 153 GB. `--prune` only reclaims a cache once its *local* worktree is
+gone, so the moment to run it is just after `git worktree remove`, not when a
+build fails.
+
 ## Measuring what a block costs
 
 `crates/mooloop-engine/src/block_cost.rs` prints nanoseconds per
