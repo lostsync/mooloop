@@ -9420,21 +9420,80 @@ impl AppUi {
             });
         }
 
-        macro_rules! wire_mono_param {
-            ($callback:ident, $($field:ident).+) => {{
+        macro_rules! wire_source_param {
+            ($params:ident, $command:ident, $callback:ident, $($field:ident).+) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
                 window.$callback(move |value: f32| {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
-                    channel.mono_params.$($field).+ = value;
-                    let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
+                    channel.$params.$($field).+ = value;
+                    let _ = tx.send(EngineCommand::$command {
                         channel: channel_index as u8,
-                        params: channel.mono_params,
+                        params: channel.$params,
                     });
                 });
             }};
+        }
+        macro_rules! wire_mono_param {
+            ($callback:ident, $($field:ident).+) => { wire_source_param!(mono_params, SetChannelMonoSynthParams, $callback, $($field).+) };
+        }
+        macro_rules! wire_mlm1_param {
+            ($callback:ident, $($field:ident).+) => { wire_source_param!(mlm1_params, SetChannelMlM1Params, $callback, $($field).+) };
+        }
+        macro_rules! wire_poly_param {
+            ($callback:ident, $($field:ident).+) => { wire_source_param!(poly_params, SetChannelPolySynthParams, $callback, $($field).+) };
+        }
+        macro_rules! wire_source_osc_float {
+            ($params:ident, $command:ident, $callback:ident, $index:expr, $field:ident) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                window.$callback(move |value: f32| {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    channel.$params.osc[$index].$field = value;
+                    let _ = tx.send(EngineCommand::$command {
+                        channel: channel_index as u8,
+                        params: channel.$params,
+                    });
+                });
+            }};
+        }
+        macro_rules! wire_mono_osc_float {
+            ($callback:ident, $index:expr, $field:ident) => { wire_source_osc_float!(mono_params, SetChannelMonoSynthParams, $callback, $index, $field) };
+        }
+        macro_rules! wire_mlm1_osc_float {
+            ($callback:ident, $index:expr, $field:ident) => { wire_source_osc_float!(mlm1_params, SetChannelMlM1Params, $callback, $index, $field) };
+        }
+        macro_rules! wire_poly_osc_float {
+            ($callback:ident, $index:expr, $field:ident) => { wire_source_osc_float!(poly_params, SetChannelPolySynthParams, $callback, $index, $field) };
+        }
+        macro_rules! wire_source_osc_wave {
+            ($params:ident, $command:ident, $callback:ident, $index:expr) => {{
+                let tx = cmd_tx.clone();
+                let st = state.clone();
+                window.$callback(move |value| {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    channel.$params.osc[$index].wave = osc_wave_from_int(value);
+                    let _ = tx.send(EngineCommand::$command {
+                        channel: channel_index as u8,
+                        params: channel.$params,
+                    });
+                });
+            }};
+        }
+        macro_rules! wire_mono_osc_wave {
+            ($callback:ident, $index:expr) => { wire_source_osc_wave!(mono_params, SetChannelMonoSynthParams, $callback, $index) };
+        }
+        macro_rules! wire_mlm1_osc_wave {
+            ($callback:ident, $index:expr) => { wire_source_osc_wave!(mlm1_params, SetChannelMlM1Params, $callback, $index) };
+        }
+        macro_rules! wire_poly_osc_wave {
+            ($callback:ident, $index:expr) => { wire_source_osc_wave!(poly_params, SetChannelPolySynthParams, $callback, $index) };
         }
 
         wire_mono_param!(on_mono_glide_changed, glide);
@@ -9482,22 +9541,6 @@ impl AppUi {
             });
         }
 
-        macro_rules! wire_mlm1_param {
-            ($callback:ident, $($field:ident).+) => {{
-                let tx = cmd_tx.clone();
-                let st = state.clone();
-                window.$callback(move |value: f32| {
-                    let mut st = st.borrow_mut();
-                    let channel_index = st.session.selected;
-                    let channel = &mut st.session.channels[channel_index];
-                    channel.mlm1_params.$($field).+ = value;
-                    let _ = tx.send(EngineCommand::SetChannelMlM1Params {
-                        channel: channel_index as u8,
-                        params: channel.mlm1_params,
-                    });
-                });
-            }};
-        }
 
         wire_mlm1_param!(on_mlm1_glide_changed, glide);
         wire_mlm1_param!(on_mlm1_attack_changed, attack);
@@ -9551,38 +9594,6 @@ impl AppUi {
             FilterModel::from_index
         );
 
-        macro_rules! wire_mlm1_osc_float {
-            ($callback:ident, $index:expr, $field:ident) => {{
-                let tx = cmd_tx.clone();
-                let st = state.clone();
-                window.$callback(move |value: f32| {
-                    let mut st = st.borrow_mut();
-                    let channel_index = st.session.selected;
-                    let channel = &mut st.session.channels[channel_index];
-                    channel.mlm1_params.osc[$index].$field = value;
-                    let _ = tx.send(EngineCommand::SetChannelMlM1Params {
-                        channel: channel_index as u8,
-                        params: channel.mlm1_params,
-                    });
-                });
-            }};
-        }
-        macro_rules! wire_mlm1_osc_wave {
-            ($callback:ident, $index:expr) => {{
-                let tx = cmd_tx.clone();
-                let st = state.clone();
-                window.$callback(move |value| {
-                    let mut st = st.borrow_mut();
-                    let channel_index = st.session.selected;
-                    let channel = &mut st.session.channels[channel_index];
-                    channel.mlm1_params.osc[$index].wave = osc_wave_from_int(value);
-                    let _ = tx.send(EngineCommand::SetChannelMlM1Params {
-                        channel: channel_index as u8,
-                        params: channel.mlm1_params,
-                    });
-                });
-            }};
-        }
 
         wire_mlm1_osc_wave!(on_mlm1_osc1_wave_changed, 0);
         wire_mlm1_osc_float!(on_mlm1_osc1_semitones_changed, 0, semitones);
@@ -10173,38 +10184,6 @@ impl AppUi {
             });
         }
 
-        macro_rules! wire_mono_osc_float {
-            ($callback:ident, $index:expr, $field:ident) => {{
-                let tx = cmd_tx.clone();
-                let st = state.clone();
-                window.$callback(move |value: f32| {
-                    let mut st = st.borrow_mut();
-                    let channel_index = st.session.selected;
-                    let channel = &mut st.session.channels[channel_index];
-                    channel.mono_params.osc[$index].$field = value;
-                    let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
-                        channel: channel_index as u8,
-                        params: channel.mono_params,
-                    });
-                });
-            }};
-        }
-        macro_rules! wire_mono_osc_wave {
-            ($callback:ident, $index:expr) => {{
-                let tx = cmd_tx.clone();
-                let st = state.clone();
-                window.$callback(move |value| {
-                    let mut st = st.borrow_mut();
-                    let channel_index = st.session.selected;
-                    let channel = &mut st.session.channels[channel_index];
-                    channel.mono_params.osc[$index].wave = osc_wave_from_int(value);
-                    let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
-                        channel: channel_index as u8,
-                        params: channel.mono_params,
-                    });
-                });
-            }};
-        }
 
         wire_mono_osc_wave!(on_mono_osc1_wave_changed, 0);
         wire_mono_osc_float!(on_mono_osc1_semitones_changed, 0, semitones);
@@ -10222,22 +10201,6 @@ impl AppUi {
         wire_mono_osc_float!(on_mono_osc3_level_changed, 2, level);
         wire_mono_osc_float!(on_mono_osc3_pulse_width_changed, 2, pulse_width);
 
-        macro_rules! wire_poly_param {
-            ($callback:ident, $($field:ident).+) => {{
-                let tx = cmd_tx.clone();
-                let st = state.clone();
-                window.$callback(move |value: f32| {
-                    let mut st = st.borrow_mut();
-                    let channel_index = st.session.selected;
-                    let channel = &mut st.session.channels[channel_index];
-                    channel.poly_params.$($field).+ = value;
-                    let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
-                        channel: channel_index as u8,
-                        params: channel.poly_params,
-                    });
-                });
-            }};
-        }
 
         wire_poly_param!(on_poly_glide_changed, glide);
         wire_poly_param!(on_poly_attack_changed, attack);
@@ -10298,38 +10261,6 @@ impl AppUi {
             });
         }
 
-        macro_rules! wire_poly_osc_float {
-            ($callback:ident, $index:expr, $field:ident) => {{
-                let tx = cmd_tx.clone();
-                let st = state.clone();
-                window.$callback(move |value: f32| {
-                    let mut st = st.borrow_mut();
-                    let channel_index = st.session.selected;
-                    let channel = &mut st.session.channels[channel_index];
-                    channel.poly_params.osc[$index].$field = value;
-                    let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
-                        channel: channel_index as u8,
-                        params: channel.poly_params,
-                    });
-                });
-            }};
-        }
-        macro_rules! wire_poly_osc_wave {
-            ($callback:ident, $index:expr) => {{
-                let tx = cmd_tx.clone();
-                let st = state.clone();
-                window.$callback(move |value| {
-                    let mut st = st.borrow_mut();
-                    let channel_index = st.session.selected;
-                    let channel = &mut st.session.channels[channel_index];
-                    channel.poly_params.osc[$index].wave = osc_wave_from_int(value);
-                    let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
-                        channel: channel_index as u8,
-                        params: channel.poly_params,
-                    });
-                });
-            }};
-        }
 
         wire_poly_osc_wave!(on_poly_osc1_wave_changed, 0);
         wire_poly_osc_float!(on_poly_osc1_semitones_changed, 0, semitones);
