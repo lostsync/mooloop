@@ -9,6 +9,20 @@ directory should always contain live work.
 `docs/FOCUS.md` decides which of these is next. This file only says what state
 each one is in.
 
+`eq-v2/` was added 2026-09-12 and is **not started**. It came out of fixing one
+bug -- the EQ's Shape control was two settings of different arity behind one
+automatable id -- and out of Adam's question about what that implied: mooloop
+intends to host CLAP, a CLAP plugin exposes arbitrary independently automatable
+parameters, and our own devices should reach the automation system the same way.
+Under that test the EQ is not a device with a missing feature but the one native
+device whose parameter model a plugin host could not express. Step 01 is the only
+one that argument forces; steps 02 to 04 are an EQ that is merely better, and the
+faults they fix were each confirmed against the source -- the pass filters are
+absent from the response plot while their data is *already being sent* to it, a
+shelf ignores its Q in the DSP, and the plot draws shelves at a fixed exponent.
+Step 04 is the measured character from five reference EQs and is the only step
+that changes how the device sounds.
+
 `pattern-bank-floor/` was added 2026-09-08 and is **not started, and not on
 anyone's list**. It fell out of an audio-dropout investigation whose actual
 cause was `rtkit` demoting the machine's realtime threads. What it records is
