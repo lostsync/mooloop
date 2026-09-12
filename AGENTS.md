@@ -103,6 +103,14 @@ scripts/dupe-audit twin-names   # one of them
 scripts/dupe-audit --list       # what they are
 ```
 
+A sixth check, `one-sided-test`, is a regression guard rather than a lead
+generator: zero hits is its expected result and its answer. It reports a test
+named for a markup file that never reads one, which is item 2 above. It was
+verified by running it against `7024b2b~1`, where it finds the defect, and its
+first version *missed* it -- because the broken test mentioned `main.slint` in
+its own comment, and a mention is not a read. Validate a check of this kind
+against the commit it was written for, or it is decoration.
+
 A fifth check, `unchecked-face`, was added on 2026-09-12 and is a different
 shape from the other four: it does not look for a duplicate, it looks for a
 duplicate **nothing is watching**. `slint_face_agreement.rs` holds a device's
@@ -121,6 +129,35 @@ spelled as bare numbers in `.slint`, which is a real gap -- `TICKS_PER_STEP`
 is a literal `24` twenty-five times -- but a bare number carries no identity
 and the check produced a hundred leads for one answer. That one is written
 down in `LOOSE_ENDS.md`, where a sentence can say which number matters.
+
+**The fault worth looking for is one level up from a duplicate.** The
+2026-09-12 audit removed a fair amount of copied code and almost none of it
+could have hurt anybody: copied arithmetic does not drift. What it found six
+times was a *guard* that had come off a value written twice, and every one of
+those values was still correct when it was found -- so the tests were green, the
+program was right, and nothing would have reported the drift on the day it
+happened. In order:
+
+1. `slint_fader_taper_matches_the_rust_breakpoints` checked two lists in
+   `GainMath` that nothing read. The taper the faders run spelled its
+   breakpoints inline and no test evaluated it.
+2. `musical_divisions_match_the_snap_table_in_main_slint` compared its table
+   with a literal copy written inside the test, and never opened `main.slint`.
+3. `Divisions.beats` mirrored `ModTimeDivision::beats` -- twenty-one values,
+   after a factor-of-four disagreement that the table exists to prevent -- with
+   no test at all.
+4. Aux In's descriptor default held a hand-evaluated `reference_level_gain()`
+   pinned to nothing, while the sampler's identical literal had a test written
+   for exactly that reason.
+5. Four effect faces were outside `slint_face_agreement.rs`, whose list had
+   simply never been extended to them.
+6. Nothing checked any stepped parameter's *positions*, only its default --
+   which is how one EQ id came to decode to two enums of different arity.
+
+The question that found all six is short: **does anything read the copy the test
+checks?** Ask it of any mirrored value, and ask it before believing a green
+suite. `scripts/dupe-audit one-sided-test` automates the one of the six a search
+can reach; the rest need the question asked by hand.
 
 There is a third limit, and it is the one to keep in mind when a check comes
 back clean. **`repeated-line` matches bytes, so a rename hides a copy from it

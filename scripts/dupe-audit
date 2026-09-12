@@ -315,6 +315,91 @@ def unchecked_face():
     return sorted(hits, key=lambda hit: -int(hit[1].split()[0]))
 
 
+# --- 6 -----------------------------------------------------------------
+def one_sided_test():
+    """A test named for a markup file that never reads one.
+
+    Six faults of one shape turned up in the 2026-09-12 audit, and this is the
+    only one of them a search can find. `dupe-audit`'s other checks look for a
+    value written twice; this looks for the *guard* over a value written twice
+    having quietly come off it.
+
+    The instance it is built from:
+    `musical_divisions_match_the_snap_table_in_main_slint` was named for
+    `snap-ticks()` in `main.slint`, its comment warned that a drift "would set
+    the wrong length silently", and it compared `MUSICAL_DIVISIONS` to a literal
+    `[384, 192, 96, ...]` written inside the test. A third spelling of the same
+    eleven numbers, in the one place whose job was to notice a second. Editing
+    the markup could not have failed it.
+
+    **A mention is not a read, and that distinction is the whole check.** The
+    first version of this looked for the filename anywhere in the function and
+    found nothing, because the broken test *talked about* `main.slint` in its
+    own comment. So a read means the `include_str!` const for that file
+    appearing in the body, or the body calling `include_str!` itself. Verified
+    against `7024b2b~1`, where it reports the defect, and against the tree,
+    where it reports nothing.
+
+    Zero hits is the expected result. This is a regression guard for a fault
+    class, not a lead generator -- unlike the checks above it, an empty run here
+    is the answer rather than an absence of evidence.
+    """
+    hits = []
+    for path in sorted((ROOT / "crates/mooloop-ui").rglob("*.rs")):
+        text = path.read_text(errors="replace")
+        consts = {
+            match.group(1): match.group(2)
+            for match in re.finditer(
+                r'const ([A-Z0-9_]+): &str = include_str!\("\.\./ui/([a-z0-9-]+)\.slint"\)',
+                text,
+            )
+        }
+        opened = set(consts.values()) | set(
+            re.findall(r'include_str!\("\.\./ui/([a-z0-9-]+)\.slint"\)', text)
+        )
+        for match in re.finditer(r"fn ([a-z0-9_]+)\(\)", text):
+            name = match.group(1)
+            named = re.search(
+                r"(main|controls|gain|mixer|toolbar|strip|meters|theme|piano-grid)_slint", name
+            )
+            if not named:
+                continue
+            stem = named.group(1)
+            body = _brace_body(text, match.end())
+            if body is None:
+                continue
+            reads = any(const in body for const, owned in consts.items() if owned == stem)
+            reads = reads or f'include_str!("../ui/{stem}.slint")' in body
+            if reads:
+                continue
+            why = (
+                f"the file opens {stem}.slint but this test does not read it"
+                if stem in opened
+                else f"nothing in this file opens {stem}.slint"
+            )
+            line = text[: match.start()].count("\n") + 1
+            hits.append(
+                (f"{rel(path)}:{line}", f"{name} is named for {stem}.slint; {why}")
+            )
+    return hits
+
+
+def _brace_body(text: str, after: int) -> str | None:
+    """The `{ ... }` that follows `after`, brace-matched."""
+    start = text.find("{", after)
+    if start == -1:
+        return None
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return None
+
+
 # A sixth check was written and thrown away: Rust constants whose *value*
 # appears as a bare number in the markup. `TICKS_PER_STEP` really is spelled
 # `24` twenty-five times in the roll, and finding that automatically would be
@@ -333,6 +418,7 @@ CHECKS = {
     "unit-spelling": unit_spelling,
     "twin-names": twin_names,
     "unchecked-face": unchecked_face,
+    "one-sided-test": one_sided_test,
 }
 
 

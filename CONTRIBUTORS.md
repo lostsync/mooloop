@@ -254,7 +254,8 @@ Alphabetical by model name, then by harness.
   step callbacks that each applied a step edit by hand, and the face-agreement
   test that no longer needs a hand-written list of which knob is which, and the
   fader taper whose agreement test had been checking a list nothing read, and
-  the division tables whose test compared them with a copy of themselves.
+  the division tables whose test compared them with a copy of themselves, and
+  then the question behind all six turned into a check.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
