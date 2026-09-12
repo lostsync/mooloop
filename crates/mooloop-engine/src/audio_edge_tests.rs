@@ -11,13 +11,12 @@
 //! from.
 
 use crate::render::RenderState;
+use crate::render_test_support::{render_blocks, SAMPLE_RATE};
 use mooloop_core::{
     aux_in, ds01, mlp8, AudioSubscription, AutomationLane, AutomationPoint, AuxInParams,
     Ds01Params, MlP8Params, ModLfoParams, ModPolarity, ModRoute, ModulatorParams, NoteEvent,
     ParamAddr, ParamOwner, Project, ProjectChannel, EffectTarget, STRIP_PARAM_PAN,
 };
-
-const SAMPLE_RATE: u32 = 48_000;
 
 /// An ML-P8 channel playing one held note, with `Osc 3` a fifth above the
 /// fundamental and **silent in the device's own mix**.
@@ -50,21 +49,6 @@ fn aux_in_channel(index: usize, source: Option<AudioSubscription>) -> ProjectCha
     let mut channel = ProjectChannel::aux_in_with_params(index, 1, params);
     channel.setup.channel.volume = 1.0;
     channel
-}
-
-/// Render `seconds` of a project in fixed `block` frames; master left.
-fn render_blocks(project: &Project, seconds: f32, block: usize) -> Vec<f32> {
-    let mut render = RenderState::from_project(SAMPLE_RATE, project, &[]);
-    render.play();
-    let mut out = Vec::new();
-    let mut remaining = (SAMPLE_RATE as f32 * seconds) as usize;
-    while remaining > 0 {
-        let frames = remaining.min(block);
-        render.process_once_block(frames);
-        out.extend_from_slice(&render.master().l[..frames]);
-        remaining -= frames;
-    }
-    out
 }
 
 fn peak(samples: &[f32]) -> f32 {

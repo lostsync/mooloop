@@ -10,27 +10,10 @@
 //! that quietly reordered or dropped its children. These render whole
 //! projects and compare the master, sample for sample.
 
-use crate::render::RenderState;
+use crate::render_test_support::{render_blocks};
 use mooloop_core::{
     ChainParams, EffectKind, EffectParams, EffectSlotState, NoteEvent, Project, ProjectChannel,
 };
-
-const SAMPLE_RATE: u32 = 48_000;
-
-/// Render `seconds` of a project in fixed `block` frames; master left.
-fn render_blocks(project: &Project, seconds: f32, block: usize) -> Vec<f32> {
-    let mut render = RenderState::from_project(SAMPLE_RATE, project, &[]);
-    render.play();
-    let mut out = Vec::new();
-    let mut remaining = (SAMPLE_RATE as f32 * seconds) as usize;
-    while remaining > 0 {
-        let frames = remaining.min(block);
-        render.process_once_block(frames);
-        out.extend_from_slice(&render.master().l[..frames]);
-        remaining -= frames;
-    }
-    out
-}
 
 /// One drum channel hitting on the downbeat, through Filter, Drive and Delay.
 ///

@@ -11,14 +11,12 @@
 //! one thing that DS-01 can see: the block size. If the two agree sample for
 //! sample at two very different block sizes, they agree.
 
-use crate::render::RenderState;
+use crate::render_test_support::{render_blocks, SAMPLE_RATE};
 use mooloop_core::{
     ds01, AutomationLane, AutomationPoint, Ds01Params, EffectTarget, ModLfoParams,
     ModLfoWaveform, ModPolarity, ModRoute, ModulatorParams, NoteEvent, ParamAddr, ParamOwner,
     Project, ProjectChannel,
 };
-
-const SAMPLE_RATE: u32 = 48_000;
 
 /// A one-channel project whose DS-01 plays four hits in the first bar.
 fn ds01_project(params: Ds01Params) -> Project {
@@ -34,22 +32,6 @@ fn ds01_project(params: Ds01Params) -> Project {
         channels: vec![channel],
         ..Project::default()
     }
-}
-
-/// Render `seconds` of a project in fixed `block` frames and return the master
-/// left channel.
-fn render_blocks(project: &Project, seconds: f32, block: usize) -> Vec<f32> {
-    let mut render = RenderState::from_project(SAMPLE_RATE, project, &[]);
-    render.play();
-    let mut out = Vec::new();
-    let mut remaining = (SAMPLE_RATE as f32 * seconds) as usize;
-    while remaining > 0 {
-        let frames = remaining.min(block);
-        render.process_once_block(frames);
-        out.extend_from_slice(&render.master().l[..frames]);
-        remaining -= frames;
-    }
-    out
 }
 
 fn peak(samples: &[f32]) -> f32 {

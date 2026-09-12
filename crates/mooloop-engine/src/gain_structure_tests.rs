@@ -9,6 +9,7 @@
 //! without re-running anything.
 
 use crate::render::RenderState;
+use crate::render_test_support::{peak_of, render_master, SAMPLE_RATE};
 use mooloop_core::{
     DeviceKind, DrumMode, EffectKind, EffectParams, EffectSlotState, FilterParams, MonoSynthParams,
     NoteEvent, OscParams, PlateParams, PolySynthParams, Project, ProjectChannel, ReverbParams,
@@ -16,8 +17,6 @@ use mooloop_core::{
 };
 use mooloop_dsp::sampler::SampleData;
 use std::sync::Arc;
-
-const SAMPLE_RATE: u32 = 48_000;
 
 /// A project with the whole track address space materialised.
 ///
@@ -473,29 +472,6 @@ fn fader_travel_is_tapered_in_db() {
 // separate them, and they are also the regression fence for the summing
 // contract in `docs/GAIN_STRUCTURE.md`: "no summing point normalizes by its
 // input count".
-
-/// Render the project offline and keep the master's samples, not just its
-/// peak. Superposition can only be checked sample by sample.
-fn render_master(project: &Project, seconds: f32) -> (Vec<f32>, Vec<f32>) {
-    let mut render = RenderState::from_project(SAMPLE_RATE, project, &[]);
-    render.play();
-    let mut remaining = (SAMPLE_RATE as f32 * seconds) as usize;
-    let mut left = Vec::with_capacity(remaining);
-    let mut right = Vec::with_capacity(remaining);
-    while remaining > 0 {
-        let frames = remaining.min(1024);
-        render.process_once_block(frames);
-        let master = render.master();
-        left.extend_from_slice(&master.l[..frames]);
-        right.extend_from_slice(&master.r[..frames]);
-        remaining -= frames;
-    }
-    (left, right)
-}
-
-fn peak_of(samples: &[f32]) -> f32 {
-    samples.iter().fold(0.0f32, |p, s| p.max(s.abs()))
-}
 
 /// A sustained low note: the "pad" whose fader is the one being moved.
 fn pad_channel(volume: f32) -> ProjectChannel {

@@ -73,6 +73,9 @@ mod sequencer;
 mod transport;
 
 #[cfg(test)]
+mod render_test_support;
+
+#[cfg(test)]
 mod audio_edge_tests;
 #[cfg(test)]
 mod block_cost;

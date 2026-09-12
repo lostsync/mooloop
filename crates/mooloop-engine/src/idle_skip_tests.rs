@@ -20,8 +20,7 @@ use mooloop_core::{
 use mooloop_dsp::SILENCE_PEAK;
 
 use crate::render::RenderState;
-
-const SAMPLE_RATE: u32 = 48_000;
+use crate::render_test_support::{SAMPLE_RATE};
 
 /// A project with the whole track address space materialised.
 ///
@@ -114,7 +113,7 @@ fn render_counting(
     (out, render.slept_strip_blocks(), channel_blocks)
 }
 
-fn worst_difference(a: &[f32], b: &[f32]) -> (f32, usize) {
+fn worst_difference_at(a: &[f32], b: &[f32]) -> (f32, usize) {
     assert_eq!(a.len(), b.len());
     let mut worst = 0.0f32;
     let mut at = 0;
@@ -154,7 +153,7 @@ fn a_project_renders_the_same_whether_or_not_idle_channels_are_skipped() {
          this comparison is not measuring the thing it is named for"
     );
 
-    let (worst, at) = worst_difference(&slept, &ran);
+    let (worst, at) = worst_difference_at(&slept, &ran);
     assert!(
         worst <= SILENCE_PEAK * 16.0,
         "skipping idle channels changed the master by {worst} at frame {at} \
@@ -176,7 +175,7 @@ fn skipping_renders_the_same_at_any_block_size() {
     let large = render_blocks(&project, 6.0, 1024, true);
     assert!(peak(&small) > 0.05, "the comparison is against silence");
     assert_eq!(small.len(), large.len());
-    let (worst, at) = worst_difference(&small, &large);
+    let (worst, at) = worst_difference_at(&small, &large);
     assert!(
         worst == 0.0,
         "block size changed the render by {worst} at frame {at}"
@@ -196,7 +195,7 @@ fn a_channel_that_never_sounds_reaches_the_master_either_way() {
 
     let a = render_blocks(&with_silent, 4.0, 256, true);
     let b = render_blocks(&without, 4.0, 256, true);
-    let (worst, at) = worst_difference(&a, &b);
+    let (worst, at) = worst_difference_at(&a, &b);
     assert!(
         worst == 0.0,
         "a silent channel changed the master by {worst} at frame {at}"
@@ -306,7 +305,7 @@ fn a_note_off_on_the_pattern_boundary_does_not_depend_on_the_block_size() {
     let large = render_blocks(&project, 2.5, 1024, false);
     assert!(peak(&small) > 0.05, "the comparison is against silence");
     assert_eq!(small.len(), large.len());
-    let (worst, at) = worst_difference(&small, &large);
+    let (worst, at) = worst_difference_at(&small, &large);
     assert!(
         worst == 0.0,
         "block size changed the render by {worst} at frame {at}"
@@ -362,7 +361,7 @@ fn a_project_renders_the_same_whether_or_not_idle_buses_are_skipped() {
     let slept = render_blocks(&project, 8.0, 256, true);
     let ran = render_blocks(&project, 8.0, 256, false);
     assert!(peak(&ran) > 0.05, "the comparison is against silence");
-    let (worst, at) = worst_difference(&slept, &ran);
+    let (worst, at) = worst_difference_at(&slept, &ran);
     assert!(
         worst <= SILENCE_PEAK * 16.0,
         "skipping idle buses changed the master by {worst} at frame {at} \
@@ -401,7 +400,7 @@ fn skipping_idle_buses_renders_the_same_at_any_block_size() {
     let large = render_blocks(&project, 6.0, 1024, true);
     assert!(peak(&small) > 0.05, "the comparison is against silence");
     assert_eq!(small.len(), large.len());
-    let (worst, at) = worst_difference(&small, &large);
+    let (worst, at) = worst_difference_at(&small, &large);
     assert!(
         worst == 0.0,
         "block size changed the render by {worst} at frame {at}"

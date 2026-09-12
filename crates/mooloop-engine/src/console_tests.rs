@@ -13,10 +13,8 @@
 //! which this feature must not weaken. Console-on gets its own tests here
 //! rather than a tolerance added to that one.
 
-use crate::render::RenderState;
+use crate::render_test_support::{peak_of, render_master, render_master_in_blocks, worst_difference};
 use mooloop_core::{DeviceKind, NoteEvent, Project, ProjectChannel, SampleReference};
-
-const SAMPLE_RATE: u32 = 48_000;
 
 /// One channel of `kind` at unity with a single note, the shape
 /// `gain_structure_tests.rs` uses.
@@ -35,40 +33,6 @@ fn one_note_channel(kind: DeviceKind, pitch: u8) -> ProjectChannel {
     channel.setup.channel.volume = 1.0;
     channel.notes[0].push(NoteEvent::new(1, 0, 96 * 4, pitch, 127));
     channel
-}
-
-fn render_master(project: &Project, seconds: f32) -> (Vec<f32>, Vec<f32>) {
-    render_master_in_blocks(project, seconds, 1024)
-}
-
-/// The same render, at a chosen block size. Console summing happens between
-/// strips inside one block, so a block-size dependence would mean the encode
-/// and the decode had drifted apart across a boundary.
-fn render_master_in_blocks(project: &Project, seconds: f32, block: usize) -> (Vec<f32>, Vec<f32>) {
-    let mut render = RenderState::from_project(SAMPLE_RATE, project, &[]);
-    render.play();
-    let mut remaining = (SAMPLE_RATE as f32 * seconds) as usize;
-    let mut left = Vec::with_capacity(remaining);
-    let mut right = Vec::with_capacity(remaining);
-    while remaining > 0 {
-        let frames = remaining.min(block);
-        render.process_once_block(frames);
-        let master = render.master();
-        left.extend_from_slice(&master.l[..frames]);
-        right.extend_from_slice(&master.r[..frames]);
-        remaining -= frames;
-    }
-    (left, right)
-}
-
-fn worst_difference(a: &[f32], b: &[f32]) -> f32 {
-    a.iter()
-        .zip(b.iter())
-        .fold(0.0f32, |worst, (x, y)| worst.max((x - y).abs()))
-}
-
-fn peak_of(samples: &[f32]) -> f32 {
-    samples.iter().fold(0.0f32, |p, s| p.max(s.abs()))
 }
 
 /// Two sustained notes a fifth apart, each on its own **track**, both tracks
