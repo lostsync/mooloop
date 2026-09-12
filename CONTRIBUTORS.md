@@ -251,7 +251,8 @@ Alphabetical by model name, then by harness.
   copies nothing is watching, and Aux In's hand-evaluated operating level got
   the pin the sampler's already had, and the shared oscillator strip that reset
   two of every synth's three oscillators to a tuning no patch has, and the six
-  step callbacks that each applied a step edit by hand.
+  step callbacks that each applied a step edit by hand, and the face-agreement
+  test that no longer needs a hand-written list of which knob is which.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

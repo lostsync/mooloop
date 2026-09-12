@@ -41,6 +41,11 @@ const GATE_SLINT: &str = include_str!("../ui/gate-device.slint");
 const LIMITER_SLINT: &str = include_str!("../ui/limiter-device.slint");
 const PLATE_SLINT: &str = include_str!("../ui/plate-device.slint");
 const REVERB_SLINT: &str = include_str!("../ui/reverb-device.slint");
+const EQ_SLINT: &str = include_str!("../ui/eq-device.slint");
+const FILTER_SLINT: &str = include_str!("../ui/filter-device.slint");
+const MODULATION_SLINT: &str = include_str!("../ui/modulation-device.slint");
+const BUFFER_SLINT: &str = include_str!("../ui/buffer-device.slint");
+const CONTAINER_SLINT: &str = include_str!("../ui/container-device.slint");
 
 /// The face's declaration for one knob: its bounds, its resting value, and
 /// whether it is drawn in ratio.
@@ -454,6 +459,285 @@ fn every_effect_linear_readout_agrees_with_its_table() {
             descriptor.curve,
             ParamCurve::Linear,
             "{file} {property}: the face maps it linearly, so the table must too"
+        );
+    }
+}
+
+// --- Every knob on every effect face, paired by the markup's own index ------
+
+/// Every effect face, with the kind whose table its knobs address.
+///
+/// The lists above this one name each knob by hand, and say why: a derivation
+/// from either side would move with the side it was derived from. That is right
+/// about the *numbers* and it turned out to be unnecessary for the *pairing*,
+/// which is the part that made the lists expensive to extend and left four
+/// faces out of them entirely.
+///
+/// A knob already declares which parameter it edits. It has to: the modulation
+/// overlay reads `modulation-allowed[4]`, `modulation-depths[4]` and so on, and
+/// the index is the descriptor id, because an effect's ids are its table's
+/// positions. So the pairing is the face's own claim, and the numbers still
+/// come from two independent places. A face that starts routing a knob's
+/// modulation to a different parameter is making a real change and this should
+/// follow it there.
+const EFFECT_FACES: [(&str, &str, EffectKind); 13] = [
+    ("bitcrush-device.slint", BITCRUSH_SLINT, EffectKind::Bitcrush),
+    ("buffer-device.slint", BUFFER_SLINT, EffectKind::Buffer),
+    ("compressor-device.slint", COMPRESSOR_SLINT, EffectKind::Compressor),
+    ("delay-device.slint", DELAY_SLINT, EffectKind::Delay),
+    ("drive-device.slint", DRIVE_SLINT, EffectKind::Drive),
+    ("eq-device.slint", EQ_SLINT, EffectKind::Eq),
+    ("filter-device.slint", FILTER_SLINT, EffectKind::Filter),
+    ("gate-device.slint", GATE_SLINT, EffectKind::Gate),
+    ("limiter-device.slint", LIMITER_SLINT, EffectKind::Limiter),
+    ("modulation-device.slint", MODULATION_SLINT, EffectKind::Modulation),
+    ("plate-device.slint", PLATE_SLINT, EffectKind::Plate),
+    ("preamp-device.slint", PREAMP_SLINT, EffectKind::Preamp),
+    ("reverb-device.slint", REVERB_SLINT, EffectKind::Reverb),
+];
+
+/// One `ParameterKnob { .. }` as the markup declares it.
+struct FaceKnobBlock {
+    line: usize,
+    /// The face property the knob is bound to, for the knobs that carry no
+    /// modulation index to be found by.
+    property: Option<String>,
+    /// The descriptor id the knob's modulation overlay addresses, when it has
+    /// one. A knob that refuses modulation carries no index.
+    param: Option<u32>,
+    /// Present only when the knob works in the parameter's own units. A knob
+    /// with neither bound works in 0..1 and its `default-value` is a position.
+    minimum: Option<f32>,
+    maximum: Option<f32>,
+    default: f32,
+}
+
+/// Every `ParameterKnob` block in `markup` that states a numeric resting value
+/// and names the parameter it edits.
+///
+/// Knobs whose `default-value` is an expression rather than a number are
+/// skipped: `modulation-device`'s Rate is `root.tempo-sync ? 2 : 0.445` and
+/// `ds01-device`'s whole face reads `root.defaults[root.param]`, which is a
+/// copy of nothing and the shape the rest could move to.
+fn face_knobs(markup: &str) -> Vec<FaceKnobBlock> {
+    let mut out = Vec::new();
+    let bytes = markup.as_bytes();
+    let mut from = 0usize;
+    while let Some(found) = markup[from..].find("ParameterKnob") {
+        let start = from + found;
+        let Some(open) = markup[start..].find('{').map(|at| start + at) else {
+            break;
+        };
+        // `from` advances to the block's closing brace below, which is always
+        // past `start`, so the walk cannot stall on one knob.
+
+        let mut depth = 0i32;
+        let mut end = open;
+        for (offset, byte) in bytes[open..].iter().enumerate() {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + offset;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let block = &markup[open..=end];
+        from = end;
+        let Some(default) = optional_number(block, "default-value:") else {
+            continue;
+        };
+        out.push(FaceKnobBlock {
+            line: markup[..start].matches('\n').count() + 1,
+            property: bound_property(block),
+            param: indexed_param(block),
+            minimum: optional_number(block, "minimum:"),
+            maximum: optional_number(block, "maximum:"),
+            default,
+        });
+    }
+    out
+}
+
+/// The face property a knob is bound to, from either binding form.
+fn bound_property(block: &str) -> Option<String> {
+    for key in ["value <=> root.", "value: root."] {
+        if let Some(at) = block.find(key) {
+            let rest = &block[at + key.len()..];
+            let end = rest.find(';')?;
+            return Some(rest[..end].trim().to_string());
+        }
+    }
+    None
+}
+
+/// `key`'s value when it is a plain number, and `None` when it is anything
+/// else.
+///
+/// Deliberately not the `number` above, which panics on a non-number: several
+/// knobs state an expression on purpose. `modulation-device`'s Rate is
+/// `root.tempo-sync ? 2 : 0.445` because its range changes with the sync
+/// switch, and its `maximum` is a ternary for the same reason. Those are not
+/// copies of a table value and there is nothing for this test to compare them
+/// with.
+fn optional_number(text: &str, key: &str) -> Option<f32> {
+    let at = text.find(key)? + key.len();
+    let rest = text[at..].trim_start();
+    let end = rest
+        .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+/// The descriptor id a knob's modulation overlay addresses, from any of the
+/// four arrays it indexes.
+fn indexed_param(block: &str) -> Option<u32> {
+    for key in [
+        "modulation-allowed[",
+        "modulation-depths[",
+        "modulation-offsets[",
+        "modulation-route-counts[",
+    ] {
+        if let Some(at) = block.find(key) {
+            let rest = &block[at + key.len()..];
+            let end = rest.find(']')?;
+            if let Ok(param) = rest[..end].trim().parse::<u32>() {
+                return Some(param);
+            }
+        }
+    }
+    None
+}
+
+/// The whole point: every effect face's knobs, against the table, without a
+/// hand-written list of which knob is which.
+///
+/// It found three when it was written, all of them the same mistake -- a
+/// normalized resting position worked out by hand from an exponential range.
+/// Two were rounded (the EQ's Q to two places, the Buffer's crossfade to three)
+/// and the Filter's cutoff was simply a round number somebody liked: 0.9, which
+/// is 10 kHz, against a table that opens a fresh filter at 8 kHz.
+#[test]
+fn every_effect_face_knob_agrees_with_its_table() {
+    let mut checked = 0usize;
+    for (file, markup, kind) in EFFECT_FACES {
+        for knob in face_knobs(markup) {
+            // A knob that refuses modulation carries no index, so it cannot be
+            // paired from the markup. `UNROUTED_KNOBS` names those by hand.
+            let Some(param) = knob.param else {
+                continue;
+            };
+            let Some(descriptor) = kind.descriptor(param) else {
+                panic!(
+                    "{file}:{}: a knob routes modulation to parameter {param}, which \
+                     {kind:?} does not describe",
+                    knob.line
+                );
+            };
+            checked += 1;
+            match (knob.minimum, knob.maximum) {
+                // A knob in the parameter's own units states the range twice.
+                (None, None) => {
+                    let want = descriptor.to_normalized(descriptor.default);
+                    assert!(
+                        (knob.default - want).abs() < 1e-3,
+                        "{file}:{} {}: the face rests at {}, and the table's default \
+                         of {} is {want} of the way along its range. A knob with no \
+                         bounds works in 0..1, so these are the same number written \
+                         twice.",
+                        knob.line,
+                        descriptor.name,
+                        knob.default,
+                        descriptor.default,
+                    );
+                }
+                _ => {
+                    if let Some(minimum) = knob.minimum {
+                        assert!(
+                            (minimum - descriptor.min).abs() < 1e-4,
+                            "{file}:{} {}: face min {minimum}, table {}",
+                            knob.line,
+                            descriptor.name,
+                            descriptor.min
+                        );
+                    }
+                    if let Some(maximum) = knob.maximum {
+                        assert!(
+                            (maximum - descriptor.max).abs() < 1e-4,
+                            "{file}:{} {}: face max {maximum}, table {}",
+                            knob.line,
+                            descriptor.name,
+                            descriptor.max
+                        );
+                    }
+                    assert!(
+                        (knob.default - descriptor.default).abs() < 1e-4,
+                        "{file}:{} {}: face default {}, table {}",
+                        knob.line,
+                        descriptor.name,
+                        knob.default,
+                        descriptor.default
+                    );
+                }
+            }
+        }
+    }
+
+    // A parser that stops matching is a test that stops testing, and this one
+    // reads markup it does not compile. The count is the tripwire: it was 54
+    // across the thirteen faces when this was written, so a change that halves
+    // it has broken the parsing rather than the faces.
+    assert!(
+        checked >= 45,
+        "only {checked} knobs were compared; `face_knobs` has stopped matching \
+         the markup it is meant to read"
+    );
+}
+
+/// The knobs the pairing above cannot reach, named by hand.
+///
+/// A knob is paired with its parameter by the index its modulation overlay
+/// reads, so a control that refuses modulation has no index to be found by.
+/// There is one: the container's Mix, which cannot be a modulation destination
+/// because resolving a route onto it would mean rewriting the shape of the chain
+/// from the audio thread (`effect.rs`, above `CHAIN_PARAM_MIX`).
+///
+/// A list of one is worth having rather than a note, because `EffectKind::ALL`
+/// is fourteen and the automatic pass covers thirteen. Leaving the fourteenth to
+/// a sentence is how the effect faces came to be uncovered while the generators
+/// were checked.
+const UNROUTED_KNOBS: [(&str, &str, EffectKind, &str, u32); 1] = [(
+    "container-device.slint",
+    CONTAINER_SLINT,
+    EffectKind::Chain,
+    "mix",
+    mooloop_core::CHAIN_PARAM_MIX,
+)];
+
+#[test]
+fn every_unrouted_face_knob_agrees_with_its_table() {
+    for (file, markup, kind, property, id) in UNROUTED_KNOBS {
+        let descriptor = kind
+            .descriptor(id)
+            .unwrap_or_else(|| panic!("{kind:?} has no descriptor for id {id}"));
+        let knob = face_knobs(markup)
+            .into_iter()
+            .find(|knob| knob.property.as_deref() == Some(property))
+            .unwrap_or_else(|| panic!("{file} no longer declares a knob bound to {property}"));
+        let want = match (knob.minimum, knob.maximum) {
+            (None, None) => descriptor.to_normalized(descriptor.default),
+            _ => descriptor.default,
+        };
+        assert!(
+            (knob.default - want).abs() < 1e-4,
+            "{file}:{} {}: face rests at {}, table says {want}",
+            knob.line,
+            descriptor.name,
+            knob.default
         );
     }
 }

@@ -72,7 +72,11 @@ export component FilterDeviceFace inherits EffectDeviceShell {
                 label: "Cutoff";
                 tooltip: "Filter cutoff frequency: " + NoteFormat.name(20 * pow(1000, root.cutoff));
                 value <=> root.cutoff;
-                default-value: 0.9;
+                // Normalized, because this knob declares no range: the table's
+                // 8 kHz on an exponential 20 Hz..20 kHz. It was 0.9 -- about
+                // 10 kHz -- so a double-click reset the filter a quarter of an
+                // octave above where a fresh one opens.
+                default-value: 0.867353;
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[0];
                 modulation-depth: root.modulation-depths[0];
