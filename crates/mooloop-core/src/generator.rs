@@ -1309,6 +1309,17 @@ mod tests {
         }
     }
 
+    /// Every generator, which it was not until 2026-09-12: the Sampler and
+    /// Aux In were missing, and they are the two whose Level descriptor holds
+    /// a *hand-evaluated* default. `ParamDescriptor` is a const struct and
+    /// `db_to_linear` is not a const fn, so the operating level reaches these
+    /// tables as the literal `0.355_234_4` rather than as a call. The Sampler
+    /// had a test of its own for exactly that; Aux In shipped later and did
+    /// not, so its literal was pinned to nothing at all.
+    ///
+    /// Adding them needed no other change -- they passed on the first run,
+    /// which is what says the exclusion was an oversight rather than a
+    /// constraint.
     #[test]
     fn synth_descriptor_defaults_match_parameter_defaults() {
         for params in [
@@ -1318,6 +1329,8 @@ mod tests {
             GeneratorParams::MlM1(MlM1Params::default()),
             GeneratorParams::MlP8(crate::MlP8Params::default()),
             GeneratorParams::Ds01(Ds01Params::default()),
+            GeneratorParams::Sampler(SamplerParams::default()),
+            GeneratorParams::AuxIn(crate::AuxInParams::default()),
         ] {
             let kind = params.kind();
             for descriptor in kind.descriptors() {

@@ -248,7 +248,8 @@ Alphabetical by model name, then by harness.
   different arity, and the roll's tick count collapsed from twenty-five
   literals to one checked global, and the engine's seven test modules stopped
   each carrying their own render helper, and `dupe-audit` learned to find the
-  copies nothing is watching.
+  copies nothing is watching, and Aux In's hand-evaluated operating level got
+  the pin the sampler's already had.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

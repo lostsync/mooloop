@@ -196,6 +196,14 @@ pub static DESCRIPTORS: [ParamDescriptor; 3] = [
         min: 0.0,
         max: crate::gain::MAX_LINEAR_GAIN,
         curve: ParamCurve::Linear,
+        // The operating level, `gain::reference_level_gain()`, as a literal:
+        // this is a const struct and `db_to_linear` is not a const fn. Held to
+        // the real thing by two tests in a chain --
+        // `a_fresh_aux_in_subscribes_to_nothing_and_is_silent_rather_than_invalid`
+        // pins `AuxInParams::default().level` to the function, and
+        // `generator.rs`'s `synth_descriptor_defaults_match_parameter_defaults`
+        // pins this to that. Neither link existed for Aux In before
+        // 2026-09-12; do not turn this back into a bare number.
         default: 0.355_234_4,
     },
 ];
