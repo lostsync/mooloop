@@ -18,8 +18,19 @@ export global GainMath {
 
     // The mixer fader taper, (travel, dB) pairs, linear in dB between
     // breakpoints. Unity at three-quarter travel, +6 dB at full throw.
-    property <[float]> fader-travel: [1.0, 0.75, 0.5, 0.3, 0.15, 0.05, 0.0];
-    property <[float]> fader-db: [6.0, 0.0, -12.0, -24.0, -40.0, -60.0, -99999.0];
+    // Mirrors `mooloop_core::gain::FADER_BREAKPOINTS`, which
+    // `gain_slint_agreement.rs` checks these two lists against.
+    //
+    // **The functions below read these rather than spelling the numbers again.**
+    // They used to spell all seven breakpoints inline, which made the agreement
+    // test guard a pair of lists the application never read: changing the Rust
+    // table would have failed the test, been fixed by editing these lists, and
+    // left the taper the faders actually run exactly as it was.
+    //
+    // `out` so the faders can read the top of the throw from the same place
+    // instead of spelling `6.0` a fourth time.
+    out property <[float]> fader-travel: [1.0, 0.75, 0.5, 0.3, 0.15, 0.05, 0.0];
+    out property <[float]> fader-db: [6.0, 0.0, -12.0, -24.0, -40.0, -60.0, -99999.0];
 
     // At or below -60 dB is silence, not residual gain.
     public pure function db-to-linear(db: float) -> float {
@@ -31,25 +42,28 @@ export global GainMath {
     }
 
     public pure function fader-position-to-db(position: float) -> float {
-        if (position <= 0.0) { return -99999.0; }
-        if (position >= 1.0) { return 6.0; }
-        if (position <= 0.05) { return -60.0; }
-        if (position <= 0.15) { return between(position, 0.15, -40.0, 0.05, -60.0); }
-        if (position <= 0.3) { return between(position, 0.3, -24.0, 0.15, -40.0); }
-        if (position <= 0.5) { return between(position, 0.5, -12.0, 0.3, -24.0); }
-        if (position <= 0.75) { return between(position, 0.75, 0.0, 0.5, -12.0); }
-        return between(position, 1.0, 6.0, 0.75, 0.0);
+        if (position <= root.fader-travel[6]) { return root.fader-db[6]; }
+        if (position >= root.fader-travel[0]) { return root.fader-db[0]; }
+        if (position <= root.fader-travel[5]) { return root.fader-db[5]; }
+        if (position <= root.fader-travel[4]) { return between(position, root.fader-travel[4], root.fader-db[4], root.fader-travel[5], root.fader-db[5]); }
+        if (position <= root.fader-travel[3]) { return between(position, root.fader-travel[3], root.fader-db[3], root.fader-travel[4], root.fader-db[4]); }
+        if (position <= root.fader-travel[2]) { return between(position, root.fader-travel[2], root.fader-db[2], root.fader-travel[3], root.fader-db[3]); }
+        if (position <= root.fader-travel[1]) { return between(position, root.fader-travel[1], root.fader-db[1], root.fader-travel[2], root.fader-db[2]); }
+        return between(position, root.fader-travel[0], root.fader-db[0], root.fader-travel[1], root.fader-db[1]);
     }
 
     public pure function fader-db-to-position(db: float) -> float {
-        if (db <= -99998.0) { return 0.0; }
-        if (db >= 6.0) { return 1.0; }
-        if (db <= -60.0) { return 0.05; }
-        if (db <= -40.0) { return inverse(db, 0.15, -40.0, 0.05, -60.0); }
-        if (db <= -24.0) { return inverse(db, 0.3, -24.0, 0.15, -40.0); }
-        if (db <= -12.0) { return inverse(db, 0.5, -12.0, 0.3, -24.0); }
-        if (db <= 0.0) { return inverse(db, 0.75, 0.0, 0.5, -12.0); }
-        return inverse(db, 1.0, 6.0, 0.75, 0.0);
+        // The bottom breakpoint is Slint's stand-in for -inf, so anything near
+        // it is silence. `+ 1.0` keeps the comparison off the sentinel itself,
+        // which is what the literal -99998.0 here used to do.
+        if (db <= root.fader-db[6] + 1.0) { return root.fader-travel[6]; }
+        if (db >= root.fader-db[0]) { return root.fader-travel[0]; }
+        if (db <= root.fader-db[5]) { return root.fader-travel[5]; }
+        if (db <= root.fader-db[4]) { return inverse(db, root.fader-travel[4], root.fader-db[4], root.fader-travel[5], root.fader-db[5]); }
+        if (db <= root.fader-db[3]) { return inverse(db, root.fader-travel[3], root.fader-db[3], root.fader-travel[4], root.fader-db[4]); }
+        if (db <= root.fader-db[2]) { return inverse(db, root.fader-travel[2], root.fader-db[2], root.fader-travel[3], root.fader-db[3]); }
+        if (db <= root.fader-db[1]) { return inverse(db, root.fader-travel[1], root.fader-db[1], root.fader-travel[2], root.fader-db[2]); }
+        return inverse(db, root.fader-travel[0], root.fader-db[0], root.fader-travel[1], root.fader-db[1]);
     }
 
     // Linear interpolation in dB between a segment's endpoints.

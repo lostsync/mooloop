@@ -252,7 +252,8 @@ Alphabetical by model name, then by harness.
   the pin the sampler's already had, and the shared oscillator strip that reset
   two of every synth's three oscillators to a tuning no patch has, and the six
   step callbacks that each applied a step edit by hand, and the face-agreement
-  test that no longer needs a hand-written list of which knob is which.
+  test that no longer needs a hand-written list of which knob is which, and the
+  fader taper whose agreement test had been checking a list nothing read.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

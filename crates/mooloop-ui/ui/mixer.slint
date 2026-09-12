@@ -254,7 +254,7 @@ export component SendRow inherits Rectangle {
             track-min-width: 40px;
             layout-spacing: 4px;
             value: root.send.level;
-            maximum: GainMath.db-to-linear(6.0);
+            maximum: GainMath.db-to-linear(GainMath.fader-db[0]);
             default-value: 1.0;
             enabled: root.send.enabled;
             fill: root.send.enabled ? Theme.accent : Theme.text-faint;
@@ -516,7 +516,7 @@ component MixerStrip inherits Rectangle {
                 // component's constraint and its instance's.
                 min-height: MixerMetrics.fader-floor;
                 value: root.strip.volume;
-                maximum: GainMath.db-to-linear(6.0);
+                maximum: GainMath.db-to-linear(GainMath.fader-db[0]);
                 default-value: 1.0;
                 tooltip: root.strip.name + " level";
                 value-text: GainMath.format-db(GainMath.linear-to-db(root.strip.volume));

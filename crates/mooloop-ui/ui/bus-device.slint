@@ -195,7 +195,7 @@ export component BusDeviceFace inherits Rectangle {
                         MixerFader {
                             width: 30px;
                             value: root.volume;
-                            maximum: GainMath.db-to-linear(6.0);
+                            maximum: GainMath.db-to-linear(GainMath.fader-db[0]);
                             default-value: 1.0;
                             tooltip: root.name + " level";
                             value-text: GainMath.format-db(GainMath.linear-to-db(root.volume));
