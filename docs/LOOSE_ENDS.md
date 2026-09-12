@@ -236,6 +236,60 @@ their own passes; nobody has decided whether they should match.
 
 ---
 
+## One name, two policies
+
+**`from_index` answers out-of-range input two different ways depending on
+which enum you ask.** Around fifteen enums convert a Slint selector index to
+a variant, under one name, in two conventions that disagree at the edges:
+
+- **Clamp to the nearest end** -- `Self::ALL.get(index.clamp(0, len - 1))` --
+  in `ds01.rs` (4 enums), `mlp8.rs` (3) and `modulation.rs` (5). Twelve
+  copies of one body.
+- **Fall through to the default variant** -- a hand-written `match` with a
+  `_ =>` arm -- in `mlm1.rs` (`NotePriority`, `EnvTrigger`, `GlideMode`,
+  `FilterModel`) and `synth.rs` (`DrumMode`, `KickCharacter`,
+  `SnareCharacter`, `HatCharacter`).
+
+So `NotePriority::from_index(99)` is `Last`, variant 0, while an ML-P8
+enum's `from_index(99)` is its *last* variant. Both are defensible; having
+both under one name is not, and neither is written down as a choice.
+
+The input comes from markup, which is what makes this more than tidiness:
+an out-of-range index arises when a `SelectorBank`'s option list and the
+Rust table disagree about how many options there are, which is the failure
+this codebase keeps having. The two conventions mean the same disagreement
+shows up as "the control snapped to the first option" on one face and "it
+snapped to the last" on another, and neither looks like the same bug.
+
+Fixing it is one decision -- which policy is right at the edges -- and then a
+mechanical change, ideally to a shared trait carrying `ALL`, `from_index`,
+`to_index` and `label`, since `label` is now on `DeviceKind` and spelled by
+hand on the rest. Found 2026-09-12.
+
+**The five generators each split their own block at note events.**
+`mlm1.rs:572`, `mlp8.rs:2494`, `monosynth.rs:314`, `polysynth.rs:393` and
+`drumsynth.rs:437` carry the same loop the twelve effects carried until
+2026-09-12, when it became `effects::process_param_split`. The generator
+version is not a candidate for the same treatment without reading all five
+first: its `match` covers note-on, note-off and the events a synth ignores,
+and whether the differences between the five are deliberate is exactly the
+question. `render_range` is the per-synth method that would sit under it.
+
+**`render_blocks` is written about seven times.** `audio_edge_tests.rs`,
+`container_tests.rs`, `ds01_tests.rs`, `idle_skip_tests.rs`,
+`console_tests.rs`, `gain_structure_tests.rs` and `strip_tests.rs` each
+declare their own "render N seconds in blocks of M and collect the output".
+They are all `#[cfg(test)]` modules inside `mooloop-engine/src`, so unlike
+the `mooloop-ui` integration tests they can share a plain module without any
+`tests/common/` arrangement. The cheapest of the duplication items here.
+
+**The Slint testing backend is set up eighteen times.** Fifteen
+`mooloop-ui/tests/*.rs` files spell out the same
+`TestingBackend::new(TestingBackendOptions { mock_time, threading,
+renderer_name: "software" })`, `source_snapshot.rs` eleven times on its own.
+This is the same shape as the piano-roll grid constants below, wants the same
+`tests/common/` module, and would be worth doing in the same pass.
+
 ## Housekeeping
 
 **The piano roll's grid geometry is a constant in two test files and nothing

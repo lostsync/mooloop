@@ -111,6 +111,21 @@ is a literal `24` twenty-five times -- but a bare number carries no identity
 and the check produced a hundred leads for one answer. That one is written
 down in `LOOSE_ENDS.md`, where a sentence can say which number matters.
 
+There is a third limit, and it is the one to keep in mind when a check comes
+back clean. **`repeated-line` matches bytes, so a rename hides a copy from it
+completely.** On 2026-09-12 it reported the effect event-splitting loop in ten
+files; there were twelve. `modulation.rs` had spelled the loop variables
+`position`/`offset` instead of `pos`/`off`, and `eq.rs` had put its `if let` on
+one line. Both were the same ten lines doing the same thing, and neither was
+visible to a text search. A clean `repeated-line` is evidence that nothing was
+copied *verbatim*, which is weaker than it looks: the copy most likely to
+diverge is the one somebody edited on the way past.
+
+What found those two was reading every `fn process` in the module and asking
+which ones split their own block. That does not generalise into a search, but
+it does generalise into a habit: when a trait has one required method and a
+dozen implementors, read all twelve before believing they differ.
+
 Copied arithmetic is mostly waste. Copied numbers and copied policies are
 what diverge silently, and they are what the checks are aimed at.
 
