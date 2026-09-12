@@ -2043,25 +2043,34 @@ mod tests {
         // The plan names seven control outlets and seven audio ones, and
         // renumbering any of them breaks a saved route. Spelled out rather
         // than derived, because a derivation would move with the table.
-        for (id, name) in [
-            (OUTLET_LFO, "LFO"),
-            (OUTLET_AMP_ENV, "Amp Envelope"),
-            (OUTLET_FILTER_ENV, "Filter Envelope"),
-            (OUTLET_VELOCITY, "Velocity"),
-            (OUTLET_NOTE, "Note"),
-            (OUTLET_GATE, "Gate"),
-            (OUTLET_TRIGGER, "Trigger"),
-            (OUTLET_OSC1, "Osc 1"),
-            (OUTLET_OSC2, "Osc 2"),
-            (OUTLET_OSC3, "Osc 3"),
-            (OUTLET_SUB, "Sub"),
-            (OUTLET_NOISE, "Noise"),
-            (OUTLET_PRE_FILTER, "Pre-Filter Mix"),
-            (OUTLET_FILTER, "Filter"),
+        //
+        // **The number is a literal and the constant is checked against it.**
+        // Naming the id only through `OUTLET_SUB` pinned the name and not the
+        // number: move that constant and the table moves with it, the lookup
+        // finds the outlet it was always going to find, and a project holding a
+        // route to outlet 10 silently resolves to something else. The `id ==
+        // index` loop below caught that for the control run and the audio half
+        // had nothing.
+        for (number, id, name) in [
+            (0, OUTLET_LFO, "LFO"),
+            (1, OUTLET_AMP_ENV, "Amp Envelope"),
+            (2, OUTLET_FILTER_ENV, "Filter Envelope"),
+            (3, OUTLET_VELOCITY, "Velocity"),
+            (4, OUTLET_NOTE, "Note"),
+            (5, OUTLET_GATE, "Gate"),
+            (6, OUTLET_TRIGGER, "Trigger"),
+            (7, OUTLET_OSC1, "Osc 1"),
+            (8, OUTLET_OSC2, "Osc 2"),
+            (9, OUTLET_OSC3, "Osc 3"),
+            (10, OUTLET_SUB, "Sub"),
+            (11, OUTLET_NOISE, "Noise"),
+            (12, OUTLET_PRE_FILTER, "Pre-Filter Mix"),
+            (13, OUTLET_FILTER, "Filter"),
         ] {
-            let outlet = crate::outlet::find(&OUTLETS, id)
-                .unwrap_or_else(|| panic!("outlet {id} is missing"));
-            assert_eq!(outlet.name, name, "outlet {id} was renamed");
+            assert_eq!(id, number, "{name}'s outlet id moved off {number}");
+            let outlet = crate::outlet::find(&OUTLETS, number)
+                .unwrap_or_else(|| panic!("outlet {number} is missing"));
+            assert_eq!(outlet.name, name, "outlet {number} was renamed");
         }
         // The control run is indexable by outlet id, which is what lets the
         // realtime path publish without a lookup.

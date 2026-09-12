@@ -247,7 +247,12 @@ mod tests {
     fn the_outlet_table_is_one_audio_port_upstream_of_the_chain() {
         crate::outlet::tests::check_table(&OUTLETS);
         assert_eq!(crate::outlet::control_count(&OUTLETS), 0);
-        let out = crate::outlet::find(&OUTLETS, OUTLET_OUT).expect("Aux In publishes Out");
+        // Outlet 0 by number, not by constant: an id is what a saved audio
+        // edge holds, so moving the constant has to fail here rather than
+        // moving the table with it.
+        assert_eq!(OUTLET_OUT, 0, "Aux In's Out moved off outlet 0");
+        let out = crate::outlet::find(&OUTLETS, 0).expect("Aux In publishes Out");
+        assert_eq!(out.name, "Out", "Aux In's only outlet was renamed");
         assert_eq!(out.domain, OutletDomain::Audio);
         assert!(
             out.tap.is_upstream_of_chain(),

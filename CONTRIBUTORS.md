@@ -255,7 +255,8 @@ Alphabetical by model name, then by harness.
   test that no longer needs a hand-written list of which knob is which, and the
   fader taper whose agreement test had been checking a list nothing read, and
   the division tables whose test compared them with a copy of themselves, and
-  then the question behind all six turned into a check.
+  then the question behind all six turned into a check, and the frozen outlet
+  tables that pinned their names and not their numbers.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

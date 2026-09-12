@@ -1970,21 +1970,25 @@ mod tests {
         crate::outlet::tests::check_table(&OUTLETS);
         assert_eq!(crate::outlet::control_count(&OUTLETS), DS01_CONTROL_OUTLETS);
 
-        for (id, name) in [
-            (DS01_OUTLET_AMP_ENV, "Amp Envelope"),
-            (DS01_OUTLET_MOD_ENV, "Mod Envelope"),
-            (DS01_OUTLET_VELOCITY, "Velocity"),
-            (DS01_OUTLET_NOTE, "Note"),
-            (DS01_OUTLET_GATE, "Gate"),
-            (DS01_OUTLET_TRIGGER, "Trigger"),
-            (DS01_OUTLET_TONE, "Tone"),
-            (DS01_OUTLET_NOISE, "Noise"),
-            (DS01_OUTLET_BODY, "Body"),
-            (DS01_OUTLET_PRE_SHAPE, "Pre-Shape"),
+        // Number first and the constant checked against it, for the reason
+        // `mlp8.rs`'s copy of this spells out: a constant-only lookup pins the
+        // name and not the id, and an id is what a saved route holds.
+        for (number, id, name) in [
+            (0, DS01_OUTLET_AMP_ENV, "Amp Envelope"),
+            (1, DS01_OUTLET_MOD_ENV, "Mod Envelope"),
+            (2, DS01_OUTLET_VELOCITY, "Velocity"),
+            (3, DS01_OUTLET_NOTE, "Note"),
+            (4, DS01_OUTLET_GATE, "Gate"),
+            (5, DS01_OUTLET_TRIGGER, "Trigger"),
+            (6, DS01_OUTLET_TONE, "Tone"),
+            (7, DS01_OUTLET_NOISE, "Noise"),
+            (8, DS01_OUTLET_BODY, "Body"),
+            (9, DS01_OUTLET_PRE_SHAPE, "Pre-Shape"),
         ] {
-            let outlet = crate::outlet::find(&OUTLETS, id)
-                .unwrap_or_else(|| panic!("outlet {id} is missing"));
-            assert_eq!(outlet.name, name, "outlet {id} was renamed");
+            assert_eq!(id, number, "{name}'s outlet id moved off {number}");
+            let outlet = crate::outlet::find(&OUTLETS, number)
+                .unwrap_or_else(|| panic!("outlet {number} is missing"));
+            assert_eq!(outlet.name, name, "outlet {number} was renamed");
         }
         // The control run is indexable by outlet id, which is what lets the
         // realtime path publish without a lookup.
