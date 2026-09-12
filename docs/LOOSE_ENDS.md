@@ -411,17 +411,28 @@ width-jitter this pass took out of `format-db` itself. What is missing is an
 unsigned one-decimal formatter to sit beside `format-db`; that is a decision
 about the dB vocabulary rather than a typo, which is why it was left.
 
-**The roll's snap-division table is a second copy of `ModTimeDivision`.**
-`main.slint:820`'s `snap-ticks(index)` spells eleven tick values by hand --
-384, 192, 96, 64, 48, 32, 24, 16, 12, 8, 6 -- and every one of them is a
-division of `TICKS_PER_STEP`. It was left out of the 2026-09-12 `RollMetrics`
-pass on purpose: the other twenty-five literals were all the same number and
-folding them into one global was mechanical, where this is a *table*, and what
-it actually mirrors is `ModTimeDivision` -- which `controls.slint`'s
-`Divisions` global already mirrors separately, in beats rather than ticks. So
-there are three spellings of the division list and the question is which one is
-the source, not how to share a constant. Small only if that question has an
-obvious answer.
+**The division list is spelled three times, and all three are now checked.**
+`main.slint:820`'s `snap-ticks(index)` gives eleven divisions in ticks,
+`mooloop-ui`'s `MUSICAL_DIVISIONS` gives the same eleven with their names, and
+`controls.slint`'s `Divisions` gives twenty-one in beats, mirroring
+`ModTimeDivision::beats`. Every one of those numbers is a division of
+`TICKS_PER_STEP` or of a beat, so a single source is imaginable.
+
+What made this worth recording was that **none of the mirrors was held to
+anything** -- the test named for the snap table compared it with a literal copy
+of itself, and the beats table had no test at all. Both were fixed on
+2026-09-12 and both were mutation-checked, so what is left is tidiness rather
+than drift risk: three spellings that cannot part without a test naming which
+one moved.
+
+The remaining question is whether they should be one, and it is a real design
+question rather than a missing constant. The snap list is the *roll's* eleven,
+`ModTimeDivision` is the *modulator's* twenty-one, and they are different
+vocabularies that happen to overlap -- the roll offers no `1/2D` and the
+modulator offers no `1 Bar` under that name. Collapsing them means deciding
+whether the roll's picker should grow to twenty-one entries, which is a question
+about the interface and not about duplication. Worth leaving alone until
+somebody wants dotted snaps.
 
 **A rack unit is two different widths.** A device's total width -- face plus
 both rails -- is computed twice and not the same way. An effect slot uses
