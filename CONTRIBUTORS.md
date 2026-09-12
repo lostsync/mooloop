@@ -241,7 +241,9 @@ Alphabetical by model name, then by harness.
   constraints that each type-checked and then rendered wrongly, the worst of
   them an "overlay" that was quietly adding its own height to its parent's
   minimum; then the duplication audit that found the device-name table
-  written twice and drifted on three of eight kinds.
+  written twice and drifted on three of eight kinds, twelve effects each
+  splitting their own block at parameter events, and three claims the source
+  made that the source no longer supported.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

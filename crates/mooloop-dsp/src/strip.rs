@@ -347,7 +347,14 @@ fn bent_ratio(ratio: f32, over_db: f32, bend: f32) -> f32 {
 pub fn static_curve_db(params: &StripParams, floor_db: f32, samples: usize) -> Vec<f32> {
     let voicing = strip_voicing(params.voicing);
     let samples = samples.max(2);
-    let makeup = db_to_lin(params.makeup_db);
+    // `db_to_linear`, not `dynamics::db_to_lin`: the audio path converts this
+    // parameter through the control-side function when the knob moves
+    // (`snap_comp`, `apply_param`), and the two floor differently below
+    // -60 dB. Makeup's range is 0..24 dB so they agree on every reachable
+    // value -- but the claim above, that this is sampled "by the same two
+    // functions the audio path calls", was not true of this line until it
+    // said `db_to_linear`.
+    let makeup = db_to_linear(params.makeup_db);
     let mix = params.mix.clamp(0.0, 1.0);
     (0..samples)
         .map(|index| {

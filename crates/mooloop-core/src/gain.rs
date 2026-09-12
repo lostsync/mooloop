@@ -1,10 +1,28 @@
 //! The shared definition of decibels.
 //!
-//! One module for every dB/linear conversion, the +12 dB gain ceiling, and
-//! the mixer fader taper, so a control's readout and its audio can never
-//! disagree. Reference document: `docs/plans/archive/gain-structure/01-the-gain-contract.md`.
+//! One module for every dB/linear conversion a *control* makes, the +12 dB
+//! gain ceiling, and the mixer fader taper, so a control's readout and its
+//! audio can never disagree. Reference document:
+//! `docs/plans/archive/gain-structure/01-the-gain-contract.md`.
 //!
 //! These run per control change, not per sample: clarity beats speed.
+//!
+//! # The one pair that is deliberately not here
+//!
+//! `mooloop_dsp::dynamics` has its own `lin_to_db`/`db_to_lin`, and they are
+//! not duplicates of [`linear_to_db`]/[`db_to_linear`] -- they differ where it
+//! matters. A control floors at [`MIN_DB`], because a knob at the bottom of
+//! its travel means silence rather than -60 dB of residual gain. A gain
+//! computer must not: a compressor measuring a -70 dB input has to be told
+//! -70 dB, not -60, or its static curve reports a reduction the signal never
+//! had. So that pair floors at about -180 dB instead, low enough to keep
+//! `log10` away from negative infinity and far below anything audible.
+//!
+//! The consequence worth knowing before reaching for either: they disagree
+//! below -60 dB and agree above it. Anything converting a *parameter* uses
+//! this module; anything converting a measured *level* inside a dynamics
+//! stage uses that one. `mooloop_dsp::strip` calls both, for exactly that
+//! reason.
 
 /// Floor of every dB readout and scale: -inf collapses here.
 pub const MIN_DB: f32 = -60.0;
