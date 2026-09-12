@@ -67,8 +67,8 @@ Alphabetical by model name, then by harness.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-09-11
-- Sessions: 100
+- Last seen: 2026-09-12
+- Sessions: 101
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -240,7 +240,8 @@ Alphabetical by model name, then by harness.
   three faces where there had been two -- which cost three layout
   constraints that each type-checked and then rendered wrongly, the worst of
   them an "overlay" that was quietly adding its own height to its parent's
-  minimum.
+  minimum; then the duplication audit that found the device-name table
+  written twice and drifted on three of eight kinds.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

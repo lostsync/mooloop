@@ -100,7 +100,7 @@ impl ChannelState {
     /// loaded or a project assigns one.
     pub fn new(index: usize) -> Self {
         Self {
-            name: format!("Sampler {}", index + 1),
+            name: DeviceKind::Sampler.default_channel_name(index),
             kind: DeviceKind::Sampler,
             muted: false,
             volume: 0.8,

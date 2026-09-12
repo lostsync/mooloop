@@ -528,7 +528,7 @@ pub struct ProjectChannel {
 impl ProjectChannel {
     pub fn sampler(index: usize, pattern_count: usize) -> Self {
         Self {
-            setup: ChannelSetup::sampler(format!("Sampler {}", index + 1)),
+            setup: ChannelSetup::sampler(DeviceKind::Sampler.default_channel_name(index)),
             notes: vec![Vec::new(); pattern_count.max(1)],
             automation: vec![Vec::new(); pattern_count.max(1)],
             next_note_id: 1,
@@ -546,7 +546,7 @@ impl ProjectChannel {
     ) -> Self {
         Self {
             setup: ChannelSetup::drum_synth_with_params(
-                format!("Drum Synth {}", index + 1),
+                DeviceKind::DrumSynth.default_channel_name(index),
                 params,
             ),
             notes: vec![Vec::new(); pattern_count.max(1)],
@@ -566,7 +566,7 @@ impl ProjectChannel {
     ) -> Self {
         Self {
             setup: ChannelSetup::mono_synth_with_params(
-                format!("Mono Synth {}", index + 1),
+                DeviceKind::MonoSynth.default_channel_name(index),
                 params,
             ),
             notes: vec![Vec::new(); pattern_count.max(1)],
@@ -585,7 +585,7 @@ impl ProjectChannel {
         params: MlM1Params,
     ) -> Self {
         Self {
-            setup: ChannelSetup::mlm1_with_params(format!("ML-M1 {}", index + 1), params),
+            setup: ChannelSetup::mlm1_with_params(DeviceKind::MlM1.default_channel_name(index), params),
             notes: vec![Vec::new(); pattern_count.max(1)],
             automation: vec![Vec::new(); pattern_count.max(1)],
             next_note_id: 1,
@@ -598,7 +598,7 @@ impl ProjectChannel {
 
     pub fn mlp8_with_params(index: usize, pattern_count: usize, params: MlP8Params) -> Self {
         Self {
-            setup: ChannelSetup::mlp8_with_params(format!("ML-P8 {}", index + 1), params),
+            setup: ChannelSetup::mlp8_with_params(DeviceKind::MlP8.default_channel_name(index), params),
             notes: vec![Vec::new(); pattern_count.max(1)],
             automation: vec![Vec::new(); pattern_count.max(1)],
             next_note_id: 1,
@@ -611,7 +611,7 @@ impl ProjectChannel {
 
     pub fn ds01_with_params(index: usize, pattern_count: usize, params: Ds01Params) -> Self {
         Self {
-            setup: ChannelSetup::ds01_with_params(format!("DS-01 {}", index + 1), params),
+            setup: ChannelSetup::ds01_with_params(DeviceKind::Ds01.default_channel_name(index), params),
             notes: vec![Vec::new(); pattern_count.max(1)],
             automation: vec![Vec::new(); pattern_count.max(1)],
             next_note_id: 1,
@@ -628,7 +628,7 @@ impl ProjectChannel {
         params: crate::AuxInParams,
     ) -> Self {
         Self {
-            setup: ChannelSetup::aux_in_with_params(format!("Aux {}", index + 1), params),
+            setup: ChannelSetup::aux_in_with_params(DeviceKind::AuxIn.default_channel_name(index), params),
             notes: vec![Vec::new(); pattern_count.max(1)],
             automation: vec![Vec::new(); pattern_count.max(1)],
             next_note_id: 1,
@@ -646,7 +646,7 @@ impl ProjectChannel {
     ) -> Self {
         Self {
             setup: ChannelSetup::poly_synth_with_params(
-                format!("Poly Synth {}", index + 1),
+                DeviceKind::PolySynth.default_channel_name(index),
                 params,
             ),
             notes: vec![Vec::new(); pattern_count.max(1)],

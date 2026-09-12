@@ -290,138 +290,39 @@ impl Session {
         // A fresh device did not come from whatever preset the last one wore.
         self.source_preset_names.remove(&(index as u8));
         channel.kind = kind;
-        channel.name = match kind {
-            DeviceKind::Sampler => format!("Sampler {}", index + 1),
-            DeviceKind::DrumSynth => format!("Drum {}", index + 1),
-            DeviceKind::MonoSynth => format!("Mono {}", index + 1),
-            DeviceKind::PolySynth => format!("Poly {}", index + 1),
-            DeviceKind::MlM1 => format!("ML-M1 {}", index + 1),
-            DeviceKind::MlP8 => format!("ML-P8 {}", index + 1),
-            DeviceKind::Ds01 => format!("DS-01 {}", index + 1),
-            DeviceKind::AuxIn => format!("Aux {}", index + 1),
-        };
+        channel.name = kind.default_channel_name(index);
+        // Only the new kind's own parameter block is reset. The others keep
+        // whatever they held, so swapping a device out and back returns to
+        // the patch that was there -- which is why this is a match rather
+        // than a wholesale `Channel::default()`.
         match kind {
-            DeviceKind::Sampler => {
-                channel.params = SamplerParams::default();
-                channel.sample_name.clear();
-                channel.sample_description.clear();
-                channel.sample_duration = 0.0;
-                channel.sample_path = None;
-                channel.sample_embedded = false;
-                channel.sample_data = None;
-                channel.committed_sample = None;
-                channel.commit = None;
-                channel.slices.clear();
-                channel.waveform.clear();
-                channel.can_previous_sample = false;
-                channel.can_next_sample = false;
-            }
-            DeviceKind::DrumSynth => {
-                channel.drum_params = DrumSynthParams::default();
-                channel.sample_name.clear();
-                channel.sample_description.clear();
-                channel.sample_duration = 0.0;
-                channel.sample_path = None;
-                channel.sample_embedded = false;
-                channel.sample_data = None;
-                channel.committed_sample = None;
-                channel.commit = None;
-                channel.slices.clear();
-                channel.waveform.clear();
-                channel.can_previous_sample = false;
-                channel.can_next_sample = false;
-            }
-            DeviceKind::MlM1 => {
-                channel.mlm1_params = MlM1Params::default();
-                channel.sample_name.clear();
-                channel.sample_description.clear();
-                channel.sample_duration = 0.0;
-                channel.sample_path = None;
-                channel.sample_embedded = false;
-                channel.sample_data = None;
-                channel.committed_sample = None;
-                channel.commit = None;
-                channel.slices.clear();
-                channel.waveform.clear();
-                channel.can_previous_sample = false;
-                channel.can_next_sample = false;
-            }
-            DeviceKind::Ds01 => {
-                channel.ds01_params = Ds01Params::default();
-                channel.sample_name.clear();
-                channel.sample_description.clear();
-                channel.sample_duration = 0.0;
-                channel.sample_path = None;
-                channel.sample_embedded = false;
-                channel.sample_data = None;
-                channel.committed_sample = None;
-                channel.commit = None;
-                channel.slices.clear();
-                channel.waveform.clear();
-                channel.can_previous_sample = false;
-                channel.can_next_sample = false;
-            }
-            DeviceKind::AuxIn => {
-                channel.aux_in_params = AuxInParams::default();
-                channel.sample_name.clear();
-                channel.sample_description.clear();
-                channel.sample_duration = 0.0;
-                channel.sample_path = None;
-                channel.sample_embedded = false;
-                channel.sample_data = None;
-                channel.committed_sample = None;
-                channel.commit = None;
-                channel.slices.clear();
-                channel.waveform.clear();
-                channel.can_previous_sample = false;
-                channel.can_next_sample = false;
-            }
-            DeviceKind::MlP8 => {
-                channel.mlp8_params = MlP8Params::default();
-                channel.sample_name.clear();
-                channel.sample_description.clear();
-                channel.sample_duration = 0.0;
-                channel.sample_path = None;
-                channel.sample_embedded = false;
-                channel.sample_data = None;
-                channel.committed_sample = None;
-                channel.commit = None;
-                channel.slices.clear();
-                channel.waveform.clear();
-                channel.can_previous_sample = false;
-                channel.can_next_sample = false;
-            }
-            DeviceKind::MonoSynth => {
-                channel.mono_params = MonoSynthParams::default();
-                channel.sample_name.clear();
-                channel.sample_description.clear();
-                channel.sample_duration = 0.0;
-                channel.sample_path = None;
-                channel.sample_embedded = false;
-                channel.sample_data = None;
-                channel.committed_sample = None;
-                channel.commit = None;
-                channel.slices.clear();
-                channel.waveform.clear();
-                channel.can_previous_sample = false;
-                channel.can_next_sample = false;
-            }
-            DeviceKind::PolySynth => {
-                channel.poly_params = PolySynthParams::default();
-                channel.sample_name.clear();
-                channel.sample_description.clear();
-                channel.sample_duration = 0.0;
-                channel.sample_path = None;
-                channel.sample_embedded = false;
-                channel.sample_data = None;
-                channel.committed_sample = None;
-                channel.commit = None;
-                channel.slices.clear();
-                channel.waveform.clear();
-                channel.can_previous_sample = false;
-                channel.can_next_sample = false;
-            }
+            DeviceKind::Sampler => channel.params = SamplerParams::default(),
+            DeviceKind::DrumSynth => channel.drum_params = DrumSynthParams::default(),
+            DeviceKind::MonoSynth => channel.mono_params = MonoSynthParams::default(),
+            DeviceKind::PolySynth => channel.poly_params = PolySynthParams::default(),
+            DeviceKind::MlM1 => channel.mlm1_params = MlM1Params::default(),
+            DeviceKind::MlP8 => channel.mlp8_params = MlP8Params::default(),
+            DeviceKind::Ds01 => channel.ds01_params = Ds01Params::default(),
+            DeviceKind::AuxIn => channel.aux_in_params = AuxInParams::default(),
         }
+        // The sample state goes for every kind, the sampler included: a fresh
+        // device has loaded nothing, and a synth that kept a waveform would
+        // draw one. This was written out once per arm until 2026-09-12 --
+        // eight byte-identical copies of the next twelve lines, so a ninth
+        // device would have been one forgotten `clear()` away from a face
+        // showing the last sampler's audio.
+        channel.sample_name.clear();
+        channel.sample_description.clear();
+        channel.sample_duration = 0.0;
+        channel.sample_path = None;
+        channel.sample_embedded = false;
+        channel.sample_data = None;
+        channel.committed_sample = None;
+        channel.commit = None;
+        channel.slices.clear();
+        channel.waveform.clear();
+        channel.can_previous_sample = false;
+        channel.can_next_sample = false;
     }
 
     pub fn project_snapshot(&self, bpm: i32, swing_percent: i32) -> Project {

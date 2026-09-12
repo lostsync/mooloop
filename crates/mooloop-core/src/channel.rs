@@ -73,6 +73,47 @@ pub enum DeviceKind {
     AuxIn,
 }
 
+impl DeviceKind {
+    /// The name this device wears in the interface.
+    ///
+    /// These are product names, not on-disk identifiers -- `kind_slug` in
+    /// `mooloop-ui`'s settings is the frozen thing, and `serde`'s renames
+    /// above are the frozen thing for projects. This lives in the enum's own
+    /// module because three crates want it: the preset browser titles a
+    /// group with it, and both channel-creation paths build a default
+    /// channel name out of it.
+    ///
+    /// `main.slint`'s source picker holds the same eight strings, because a
+    /// picker row is markup. That copy is the one this cannot reach.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sampler => "Sampler",
+            Self::DrumSynth => "Drum Synth",
+            Self::MonoSynth => "Mono Synth",
+            Self::PolySynth => "Poly Synth",
+            Self::MlM1 => "ML-M1",
+            Self::MlP8 => "ML-P8",
+            Self::Ds01 => "DS-01",
+            Self::AuxIn => "Aux In",
+        }
+    }
+
+    /// The name a channel takes when it is created at `index`, or when its
+    /// device is swapped for this kind. One-based, because a channel is
+    /// numbered the way it is displayed.
+    ///
+    /// **There were two of these tables and they had drifted.** Adding a
+    /// channel produced `Drum Synth 3`; changing an existing channel's
+    /// device to the same kind produced `Drum 3` -- same device, same slot,
+    /// two names depending on how you got there. The three that disagreed
+    /// were the three oldest kinds, so the newer five had been added to both
+    /// copies correctly and the drift was invisible. Deriving the name from
+    /// [`Self::label`] is what stops it recurring.
+    pub fn default_channel_name(self, index: usize) -> String {
+        format!("{} {}", self.label(), index + 1)
+    }
+}
+
 /// One mixer channel.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Channel {
@@ -102,5 +143,37 @@ impl Channel {
             pan: 0.0,
             bus: crate::MASTER_BUS,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every kind's interface name, listed rather than derived, so a ninth
+    /// device cannot be added without someone writing down what it is called.
+    #[test]
+    fn every_kind_has_an_interface_name() {
+        for (kind, label) in [
+            (DeviceKind::Sampler, "Sampler"),
+            (DeviceKind::DrumSynth, "Drum Synth"),
+            (DeviceKind::MonoSynth, "Mono Synth"),
+            (DeviceKind::PolySynth, "Poly Synth"),
+            (DeviceKind::MlM1, "ML-M1"),
+            (DeviceKind::MlP8, "ML-P8"),
+            (DeviceKind::Ds01, "DS-01"),
+            (DeviceKind::AuxIn, "Aux In"),
+        ] {
+            assert_eq!(kind.label(), label);
+        }
+    }
+
+    /// The default name is the label plus a one-based slot number, and it is
+    /// the *same* name whichever path asked for it -- which is the property
+    /// the two drifted copies did not have.
+    #[test]
+    fn a_default_channel_name_is_its_label_and_its_slot() {
+        assert_eq!(DeviceKind::DrumSynth.default_channel_name(0), "Drum Synth 1");
+        assert_eq!(DeviceKind::MlP8.default_channel_name(7), "ML-P8 8");
     }
 }

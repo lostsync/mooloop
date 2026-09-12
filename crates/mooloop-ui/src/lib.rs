@@ -1430,21 +1430,15 @@ pub fn device_kind_to_int(kind: DeviceKind) -> i32 {
 
 /// The name a device kind wears in the interface.
 ///
-/// `main.slint`'s source picker holds the same eight strings, because a
-/// picker row is markup; this is the Rust-side copy the preset browser needs
-/// to title a group. Keep them in step -- these are product names, not
-/// on-disk identifiers, and `settings::kind_slug` is the frozen thing.
+/// The table moved to [`DeviceKind::label`] on 2026-09-12, when a second copy
+/// of it -- the one both channel-creation paths build a default channel name
+/// out of -- was found to have drifted on three of the eight kinds. This stays
+/// as the name the preset browser calls to title a group.
+///
+/// `main.slint`'s source picker still holds the same eight strings, because a
+/// picker row is markup, and that copy is the one no Rust table can reach.
 fn device_kind_label(kind: DeviceKind) -> &'static str {
-    match kind {
-        DeviceKind::Sampler => "Sampler",
-        DeviceKind::DrumSynth => "Drum Synth",
-        DeviceKind::MonoSynth => "Mono Synth",
-        DeviceKind::PolySynth => "Poly Synth",
-        DeviceKind::MlM1 => "ML-M1",
-        DeviceKind::MlP8 => "ML-P8",
-        DeviceKind::Ds01 => "DS-01",
-        DeviceKind::AuxIn => "Aux In",
-    }
+    kind.label()
 }
 
 /// Every device kind that can hold a generator preset, in picker order.
