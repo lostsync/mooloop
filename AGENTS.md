@@ -272,6 +272,26 @@ Reading the `test result:` lines, or clippy's own summary, is just as good and
 does not depend on remembering this at all. What is never good enough is a
 `[exited with code 0]` from a run with a pipe anywhere in it.
 
+**Read those lines for failures; do not do arithmetic on them.** A workspace
+run's test binaries write the same stream in parallel and occasionally
+interleave, so a line can come out as
+
+```
+test result: ok     Running unittests src/lib.rs (.../mooloop_session-940dc...)
+```
+
+-- one binary's result with another's progress line spliced through it, and its
+`129 passed` gone. On 2026-09-12 that made a summed total read 1404 where the
+suite had run 1533, and the missing 129 looked exactly like a crate whose tests
+had stopped existing, which is a real failure this file warns about elsewhere.
+Ten minutes went on establishing that nothing was wrong.
+
+So: grep for `test result: FAILED`, for `panicked at`, and for a non-zero count
+in `N failed`. Those are robust against a splice because a spliced line cannot
+invent a failure. A *sum* is not robust, and the exit code is better than a sum
+-- this run was redirected rather than piped, so its `0` was cargo's own and was
+right while the arithmetic was wrong.
+
 `set -o pipefail` fixes it too, but only where a script owns the whole shell;
 it is not on by default in the harness's shell, so do not assume it.
 
