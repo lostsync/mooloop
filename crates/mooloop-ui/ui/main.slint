@@ -4353,7 +4353,8 @@ export component MainWindow inherits Window {
                                                     frequency: slot.p2;
                                                     gain: slot.p3;
                                                     q: slot.p4;
-                                                    character: slot.p5;
+                                                    pass-slope: slot.p5;
+                                                    q-profile: slot.p6;
                                                     band-data: slot.eq-band-data;
                                                     spectrum-data: slot.eq-spectrum-data;
                                                     analyzer-enabled: slot.eq-analyzer-enabled;
@@ -4362,7 +4363,8 @@ export component MainWindow inherits Window {
                                                     frequency-changed(v) => { root.effect-param-changed(index, 2, v); }
                                                     gain-changed(v) => { root.effect-param-changed(index, 3, v); }
                                                     q-changed(v) => { root.effect-param-changed(index, 4, v); }
-                                                    character-changed(v) => { root.effect-param-changed(index, 5, v); }
+                                                    pass-slope-changed(v) => { root.effect-param-changed(index, 5, v); }
+                                                    q-profile-changed(v) => { root.effect-param-changed(index, 6, v); }
                                                     analyzer-toggled(v) => { root.eq-analyzer-changed(index, v); }
                                                     reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     select-requested => { root.device-selected(index); }

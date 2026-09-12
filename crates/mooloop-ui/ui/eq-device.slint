@@ -12,7 +12,13 @@ export component EqDeviceFace inherits EffectDeviceShell {
     in-out property <float> frequency;
     in-out property <float> gain;
     in-out property <float> q;
-    in-out property <float> character;
+    /// The selected *pass filter's* slope, five positions. Named for what it is
+    /// since 2026-09-12: this property used to carry either the slope or a
+    /// band's Q profile depending on the selected target, which is two settings
+    /// of different arity behind one parameter.
+    in-out property <float> pass-slope;
+    /// The selected *band's* Q profile, two positions.
+    in-out property <float> q-profile;
     in property <[float]> band-data;
     in property <[float]> spectrum-data;
     in property <bool> analyzer-enabled: false;
@@ -21,7 +27,8 @@ export component EqDeviceFace inherits EffectDeviceShell {
     callback frequency-changed(float);
     callback gain-changed(float);
     callback q-changed(float);
-    callback character-changed(float);
+    callback pass-slope-changed(float);
+    callback q-profile-changed(float);
     callback analyzer-toggled(bool);
 
     private property <int> target-index: round(root.target * 8);
@@ -29,7 +36,7 @@ export component EqDeviceFace inherits EffectDeviceShell {
     private property <float> gain-db: root.gain * 36 - 18;
     private property <float> q-value: 0.15 * pow(120, root.q);
     private property <bool> pass-target: root.target-index >= 7;
-    private property <bool> proportional-q: round(root.character * 4) >= 1;
+    private property <bool> proportional-q: root.q-profile >= 0.5;
 
     VerticalLayout {
         padding: 6px; padding-top: DeviceRackMetrics.header-height + 6px; spacing: 4px;
@@ -66,10 +73,10 @@ export component EqDeviceFace inherits EffectDeviceShell {
             Rectangle { horizontal-stretch: 1; }
             if root.pass-target : SelectorBank {
                 options: ["6", "12", "18", "24", "36"];
-                selected-index: round(root.character * 4);
+                selected-index: round(root.pass-slope * 4);
                 segment-width: 26px;
                 tooltip: "Pass filter slope (dB per octave)";
-                selected(i) => { root.character-changed(i / 4); }
+                selected(i) => { root.pass-slope-changed(i / 4); }
             }
             if !root.pass-target : ToolButton {
                 min-width: 26px; max-width: 26px; min-height: 26px; max-height: 26px;
@@ -77,7 +84,7 @@ export component EqDeviceFace inherits EffectDeviceShell {
                 icon: "M 2 12 L 5 12 L 8 4 L 11 12 L 14 12";
                 tooltip: "Proportional Q";
                 active: root.proportional-q;
-                clicked => { root.character-changed(root.proportional-q ? 0 : 0.25); }
+                clicked => { root.q-profile-changed(root.proportional-q ? 0 : 1); }
             }
         }
     }

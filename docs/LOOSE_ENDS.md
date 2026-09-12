@@ -238,33 +238,6 @@ their own passes; nobody has decided whether they should match.
 
 ## One name, two policies
 
-**One descriptor id decodes to two enums, and they do not have the same
-number of variants.** `EQ_PARAM_CHARACTER` -- the EQ's "Shape" -- means
-`EqSlope` when a pass filter is the selected target and `EqQProfile` when a
-band is. `EqSlope` has five variants (Db6..Db36) and `EqQProfile` has two,
-and the descriptor is sized for the slope: `min: 0, max: 4,
-ParamCurve::Stepped(5)` (`effect.rs:340`).
-
-So on a band, positions 1, 2, 3 and 4 all mean `Proportional`, and all four
-read back as position 1. The face never sends the other three --
-`eq-device.slint:80` drives the band's control as a two-state toggle sending
-0 or 0.25 -- so it is not reachable by hand. **An automation lane is not the
-face.** A lane drawn at half travel writes position 2; what `get` returns is
-position 1. The lane and the parameter disagree about what the lane says, and
-the readout snaps somewhere the line is not.
-
-`mooloop-core`'s `stepped_round_trip_tests` covers every stepped parameter in
-every table -- effects, generators, modulators and the strip -- and this is
-the one id excluded, with `one_id_decodes_to_two_enums_of_different_arity`
-pinning exactly what it does instead. So it cannot get quietly worse, and the
-day it is fixed that test fails and says so.
-
-Fixing it means a second descriptor id, because a shipped id is frozen
-("never renumber a shipped id -- append instead", `effect.rs:198`). That is a
-decision about the project format and about which of the two meanings keeps
-`EQ_PARAM_CHARACTER`, plus whether a migration rewrites existing lanes --
-which is why it is recorded rather than done. Found 2026-09-12.
-
 **`from_index` answers out-of-range input two different ways depending on
 which enum you ask, and nothing currently reaches it.** Forty-five enums
 convert a selector index to a variant under one name, in two conventions: the

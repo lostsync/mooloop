@@ -66,7 +66,8 @@ const FROZEN: &[(Owner, &[(u32, &str)])] = &[
         (2, "Freq"),
         (3, "Gain"),
         (4, "Q"),
-        (5, "Shape"),
+        (5, "Pass Slope"),
+        (6, "Q Profile"),
     ]),
     (Effect(EffectKind::Modulation), &[
         (0, "Mode"),

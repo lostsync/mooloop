@@ -258,7 +258,8 @@ Alphabetical by model name, then by harness.
   then the question behind all six turned into a check, and the frozen outlet
   tables that pinned their names and not their numbers, and then the 441
   persisted parameter ids that nothing held at all, and the nine callback-wiring
-  macros that were three.
+  macros that were three, and then the EQ's Shape, which was two settings of
+  different arity behind one automatable id.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

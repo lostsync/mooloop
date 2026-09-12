@@ -288,9 +288,20 @@ pub const EQ_PARAM_FREQUENCY_HZ: u32 = 2;
 pub const EQ_PARAM_GAIN_DB: u32 = 3;
 pub const EQ_PARAM_Q: u32 = 4;
 /// Bell bands: 0 constant-Q, 1 proportional-Q. Pass filters: slope index.
-pub const EQ_PARAM_CHARACTER: u32 = 5;
+/// The selected *pass filter's* slope. Id 5, which used to be "Shape" and
+/// meant two different things: a band's Q profile when a band was selected and
+/// this when a pass filter was. Two enums of different arity behind one id, so
+/// its five declared positions collapsed onto the Q profile's two and read back
+/// as one of them -- an automation lane at half travel wrote a setting and then
+/// reported a different one, with nothing to tell the user what to draw
+/// instead. The Q profile moved to [`EQ_PARAM_Q_PROFILE`] and this kept the
+/// range it already had, so a lane on a pass filter's slope is unchanged.
+pub const EQ_PARAM_PASS_SLOPE: u32 = 5;
+/// The selected *band's* Q profile. Appended rather than renumbered, which is
+/// the rule this table states for itself.
+pub const EQ_PARAM_Q_PROFILE: u32 = 6;
 
-static EQ_DESCRIPTORS: [ParamDescriptor; 6] = [
+static EQ_DESCRIPTORS: [ParamDescriptor; 7] = [
     ParamDescriptor {
         id: EQ_PARAM_TARGET,
         name: "Band",
@@ -337,12 +348,26 @@ static EQ_DESCRIPTORS: [ParamDescriptor; 6] = [
         default: 0.707,
     },
     ParamDescriptor {
-        id: EQ_PARAM_CHARACTER,
-        name: "Shape",
+        id: EQ_PARAM_PASS_SLOPE,
+        name: "Pass Slope",
         unit: "",
         min: 0.0,
         max: 4.0,
         curve: ParamCurve::Stepped(5),
+        // `Db12`, which is what both pass filters start at. It was declared as
+        // 0 while this id was still "Shape", and agreed with `get` only because
+        // a fresh EQ selects a *band*, so the ambiguous getter answered with the
+        // band's Q profile instead of a slope. Splitting the id is what made the
+        // declared default visibly wrong.
+        default: 1.0,
+    },
+    ParamDescriptor {
+        id: EQ_PARAM_Q_PROFILE,
+        name: "Q Profile",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Stepped(2),
         default: 0.0,
     },
 ];
@@ -566,6 +591,36 @@ impl Default for EqParams {
 impl EqParams {
     pub const HIGH_PASS_TARGET: usize = EQ_MAX_BANDS;
     pub const LOW_PASS_TARGET: usize = EQ_MAX_BANDS + 1;
+
+    /// Which band [`crate::EQ_PARAM_Q_PROFILE`] addresses for a selection.
+    ///
+    /// Every one of this device's parameters is "the selected target's", so the
+    /// Q profile has to answer for a selection that is not a band at all. It
+    /// clamps to the last band rather than refusing: a write that lands nowhere
+    /// would make `set` disagree with the `get` beside it, and the precedent
+    /// here is the drum synth, whose per-mode parameters keep their fields and
+    /// are merely inaudible in the wrong mode.
+    pub fn q_profile_band(target: usize) -> usize {
+        target.min(EQ_MAX_BANDS - 1)
+    }
+
+    /// Which pass filter [`crate::EQ_PARAM_PASS_SLOPE`] addresses, by the same
+    /// reasoning: the high-pass unless the low-pass is the one selected.
+    pub fn selected_pass(&self, target: usize) -> &EqPassFilter {
+        if target == Self::LOW_PASS_TARGET {
+            &self.low_pass
+        } else {
+            &self.high_pass
+        }
+    }
+
+    pub fn selected_pass_mut(&mut self, target: usize) -> &mut EqPassFilter {
+        if target == Self::LOW_PASS_TARGET {
+            &mut self.low_pass
+        } else {
+            &mut self.high_pass
+        }
+    }
 
     pub fn selected_target(self) -> usize {
         usize::from(self.selected_target).min(Self::LOW_PASS_TARGET)
@@ -2247,11 +2302,10 @@ impl EffectParams {
                     EqParams::HIGH_PASS_TARGET => p.high_pass.q,
                     _ => p.low_pass.q,
                 }),
-                EQ_PARAM_CHARACTER => Some(match p.selected_target() {
-                    0..EQ_MAX_BANDS => p.bands[p.selected_target()].q_profile.to_index() as f32,
-                    EqParams::HIGH_PASS_TARGET => p.high_pass.slope.to_index() as f32,
-                    _ => p.low_pass.slope.to_index() as f32,
-                }),
+                EQ_PARAM_PASS_SLOPE => Some(p.selected_pass(p.selected_target()).slope.to_index() as f32),
+                EQ_PARAM_Q_PROFILE => {
+                    Some(p.bands[EqParams::q_profile_band(p.selected_target())].q_profile.to_index() as f32)
+                }
                 _ => None,
             },
             Self::Modulation(p) => match id {
@@ -2386,16 +2440,16 @@ impl EffectParams {
                     EqParams::HIGH_PASS_TARGET => p.high_pass.q = value,
                     _ => p.low_pass.q = value,
                 },
-                EQ_PARAM_CHARACTER => match p.selected_target() {
-                    0..EQ_MAX_BANDS => {
-                        p.bands[p.selected_target()].q_profile =
-                            EqQProfile::from_index(value.round() as i32)
-                    }
-                    EqParams::HIGH_PASS_TARGET => {
-                        p.high_pass.slope = EqSlope::from_index(value.round() as i32)
-                    }
-                    _ => p.low_pass.slope = EqSlope::from_index(value.round() as i32),
-                },
+                EQ_PARAM_PASS_SLOPE => {
+                    let slope = EqSlope::from_index(value.round() as i32);
+                    let target = p.selected_target();
+                    p.selected_pass_mut(target).slope = slope;
+                }
+                EQ_PARAM_Q_PROFILE => {
+                    let profile = EqQProfile::from_index(value.round() as i32);
+                    let band = EqParams::q_profile_band(p.selected_target());
+                    p.bands[band].q_profile = profile;
+                }
                 _ => return None,
             },
             Self::Modulation(p) => match id {
@@ -2774,14 +2828,14 @@ mod tests {
         assert_eq!(params.get(EQ_PARAM_FREQUENCY_HZ), Some(480.0));
         assert_eq!(params.get(EQ_PARAM_GAIN_DB), Some(-8.0));
         assert_eq!(params.get(EQ_PARAM_Q), Some(0.4));
-        assert_eq!(params.get(EQ_PARAM_CHARACTER), Some(0.0));
+        assert_eq!(params.get(EQ_PARAM_Q_PROFILE), Some(0.0));
 
         params.set(EQ_PARAM_TARGET, 2.0);
         assert_eq!(params.get(EQ_PARAM_ENABLED), Some(0.0));
         assert_eq!(params.get(EQ_PARAM_FREQUENCY_HZ), Some(4_800.0));
         assert_eq!(params.get(EQ_PARAM_GAIN_DB), Some(9.0));
         assert_eq!(params.get(EQ_PARAM_Q), Some(6.0));
-        assert_eq!(params.get(EQ_PARAM_CHARACTER), Some(1.0));
+        assert_eq!(params.get(EQ_PARAM_Q_PROFILE), Some(1.0));
     }
 
     #[test]

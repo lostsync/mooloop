@@ -16,7 +16,8 @@ export component EqDeviceDragHarness inherits Window {
     in-out property <float> frequency;
     in-out property <float> gain;
     in-out property <float> q;
-    in-out property <float> character;
+    in-out property <float> pass-slope;
+    in-out property <float> q-profile;
     in property <[float]> band-data;
     in property <[float]> spectrum-data;
     in property <bool> analyzer-enabled;
@@ -25,7 +26,8 @@ export component EqDeviceDragHarness inherits Window {
     callback frequency-changed(float);
     callback gain-changed(float);
     callback q-changed(float);
-    callback character-changed(float);
+    callback pass-slope-changed(float);
+    callback q-profile-changed(float);
     callback analyzer-toggled(bool);
 
     preferred-width: 668px;
@@ -38,7 +40,8 @@ export component EqDeviceDragHarness inherits Window {
         frequency <=> root.frequency;
         gain <=> root.gain;
         q <=> root.q;
-        character <=> root.character;
+        pass-slope <=> root.pass-slope;
+        q-profile <=> root.q-profile;
         band-data: root.band-data;
         spectrum-data: root.spectrum-data;
         analyzer-enabled: root.analyzer-enabled;
@@ -47,7 +50,8 @@ export component EqDeviceDragHarness inherits Window {
         frequency-changed(v) => { root.frequency-changed(v); }
         gain-changed(v) => { root.gain-changed(v); }
         q-changed(v) => { root.q-changed(v); }
-        character-changed(v) => { root.character-changed(v); }
+        pass-slope-changed(v) => { root.pass-slope-changed(v); }
+        q-profile-changed(v) => { root.q-profile-changed(v); }
         analyzer-toggled(v) => { root.analyzer-toggled(v); }
     }
 }
