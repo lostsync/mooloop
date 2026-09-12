@@ -27,6 +27,7 @@ export component MlM1DeviceFace inherits Rectangle {
     in property <[bool]> modulation-allowed;
     in property <[float]> modulation-offsets;
     in property <[int]> modulation-route-counts;
+    in property <[float]> param-defaults;
     callback osc1-wave-changed(int); callback osc1-semitones-changed(float); callback osc1-cents-changed(float); callback osc1-level-changed(float); callback osc1-pulse-width-changed(float);
     callback osc2-wave-changed(int); callback osc2-semitones-changed(float); callback osc2-cents-changed(float); callback osc2-level-changed(float); callback osc2-pulse-width-changed(float);
     callback osc3-wave-changed(int); callback osc3-semitones-changed(float); callback osc3-cents-changed(float); callback osc3-level-changed(float); callback osc3-pulse-width-changed(float);
@@ -63,6 +64,7 @@ export component MlM1DeviceFace inherits Rectangle {
                 modulation-allowed: root.modulation-allowed;
                 modulation-offsets: root.modulation-offsets;
                 modulation-route-counts: root.modulation-route-counts;
+                param-defaults: root.param-defaults;
                 modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
                 modulation-edit-started(p) => { root.modulation-edit-started(p); }
                 modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
@@ -77,6 +79,7 @@ export component MlM1DeviceFace inherits Rectangle {
                 modulation-allowed: root.modulation-allowed;
                 modulation-offsets: root.modulation-offsets;
                 modulation-route-counts: root.modulation-route-counts;
+                param-defaults: root.param-defaults;
                 modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
                 modulation-edit-started(p) => { root.modulation-edit-started(p); }
                 modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
@@ -91,6 +94,7 @@ export component MlM1DeviceFace inherits Rectangle {
                 modulation-allowed: root.modulation-allowed;
                 modulation-offsets: root.modulation-offsets;
                 modulation-route-counts: root.modulation-route-counts;
+                param-defaults: root.param-defaults;
                 modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
                 modulation-edit-started(p) => { root.modulation-edit-started(p); }
                 modulation-edit-finished(p) => { root.modulation-edit-finished(p); }

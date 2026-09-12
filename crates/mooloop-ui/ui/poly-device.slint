@@ -21,6 +21,7 @@ export component PolyDeviceFace inherits Rectangle {
     in property <[bool]> modulation-allowed;
     in property <[float]> modulation-offsets;
     in property <[int]> modulation-route-counts;
+    in property <[float]> param-defaults;
     in-out property <int> lfo-wave; in-out property <float> lfo-rate; in-out property <bool> lfo-retrigger;
     in-out property <float> lfo-pitch; in-out property <float> lfo-filter; in-out property <float> lfo-pulse-width; in-out property <float> lfo-amp;
     in-out property <int> polyphony; in-out property <float> spread;
@@ -60,6 +61,7 @@ export component PolyDeviceFace inherits Rectangle {
                 modulation-allowed: root.modulation-allowed;
                 modulation-offsets: root.modulation-offsets;
                 modulation-route-counts: root.modulation-route-counts;
+                param-defaults: root.param-defaults;
                 modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
                 modulation-edit-started(p) => { root.modulation-edit-started(p); }
                 modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
@@ -74,6 +76,7 @@ export component PolyDeviceFace inherits Rectangle {
                 modulation-allowed: root.modulation-allowed;
                 modulation-offsets: root.modulation-offsets;
                 modulation-route-counts: root.modulation-route-counts;
+                param-defaults: root.param-defaults;
                 modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
                 modulation-edit-started(p) => { root.modulation-edit-started(p); }
                 modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
@@ -88,6 +91,7 @@ export component PolyDeviceFace inherits Rectangle {
                 modulation-allowed: root.modulation-allowed;
                 modulation-offsets: root.modulation-offsets;
                 modulation-route-counts: root.modulation-route-counts;
+                param-defaults: root.param-defaults;
                 modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
                 modulation-edit-started(p) => { root.modulation-edit-started(p); }
                 modulation-edit-finished(p) => { root.modulation-edit-finished(p); }

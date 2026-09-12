@@ -1550,6 +1550,22 @@ fn lfo_wave_to_int(wave: LfoWave) -> i32 {
 /// lives in `ModDestinationDescriptor`, so a device opts a control in or out
 /// through its own descriptor rather than through a UI special case. An id
 /// with no descriptor stays `false`, which is the safe answer.
+/// Each described parameter's resting value, indexed by descriptor id.
+///
+/// What a knob's double-click returns to, and the base a modulation arc is
+/// drawn from. Published rather than written into the markup because the one
+/// place that needed it most could not have a literal at all: the oscillator
+/// strip is instantiated three times from one component, and the table gives
+/// OSC 2 a default of +12 semitones and OSC 3 one of -12, so a single literal
+/// in the shared markup was necessarily wrong for two of the three.
+fn descriptor_defaults(descriptors: &[ParamDescriptor]) -> ModelRc<f32> {
+    let mut defaults = vec![0.0f32; descriptor_slots(descriptors)];
+    for descriptor in descriptors {
+        defaults[descriptor.id as usize] = descriptor.default;
+    }
+    defaults.as_slice().into()
+}
+
 fn descriptor_policies(descriptors: &[ParamDescriptor]) -> ModelRc<bool> {
     let mut allowed = vec![false; descriptor_slots(descriptors)];
     for descriptor in descriptors {
@@ -3390,6 +3406,7 @@ impl UiState {
             },
         ));
         window.set_source_modulation_allowed(descriptor_policies(generator.descriptors()));
+        window.set_source_param_defaults(descriptor_defaults(generator.descriptors()));
         window.set_source_modulation_offsets(self.destination_offsets(
             generator.descriptors(),
             |param| ParamAddr {
@@ -12578,6 +12595,66 @@ mod preset_browser_tests {
 #[cfg(test)]
 mod tests {
     use mooloop_session::browser::is_playable_sample;
+
+    /// The published defaults reach each oscillator's *own* resting value.
+    ///
+    /// The reason this array exists rather than a literal in the markup: the
+    /// three oscillator strips are one component instantiated three times, and
+    /// their Semi and Fine defaults differ by design -- OSC 1 at unison, OSC 2
+    /// an octave up, OSC 3 an octave down. One literal in the shared markup was
+    /// necessarily wrong for two of the three, and `default-value` is what a
+    /// double-click resets to, so two of every synth's six tuning knobs reset
+    /// to a value no fresh patch has.
+    ///
+    /// The second assertion is the one that matters: it fails if the defaults
+    /// are ever flattened to agree, which is exactly when someone would be
+    /// tempted to put the literal back.
+    #[test]
+    fn each_oscillator_publishes_its_own_resting_tuning() {
+        use mooloop_core::{synth_osc_param, OSC_OFFSET_CENTS, OSC_OFFSET_LEVEL, OSC_OFFSET_SEMITONES};
+
+        let descriptors = DeviceKind::MonoSynth.descriptors();
+        let defaults = descriptor_defaults(descriptors);
+        let at = |id: u32| {
+            slint::Model::row_data(&defaults, id as usize).expect("id is in the published array")
+        };
+
+        for oscillator in 0..3u32 {
+            for offset in [OSC_OFFSET_SEMITONES, OSC_OFFSET_CENTS] {
+                let id = synth_osc_param(oscillator, offset);
+                let descriptor = DeviceKind::MonoSynth
+                    .descriptor(id)
+                    .expect("every oscillator tuning parameter is described");
+                assert!(
+                    (at(id) - descriptor.default).abs() < 1e-6,
+                    "osc {oscillator} {}: published {}, table says {}",
+                    descriptor.name,
+                    at(id),
+                    descriptor.default
+                );
+            }
+        }
+
+        let semis = |oscillator| at(synth_osc_param(oscillator, OSC_OFFSET_SEMITONES));
+        assert_eq!(
+            (semis(0), semis(1), semis(2)),
+            (0.0, 12.0, -12.0),
+            "the three oscillators rest at different tunings; one shared literal \
+             cannot serve them, which is why this array is published at all"
+        );
+
+        // Level is the same fault with the audible symptom. Only OSC 1 rests
+        // at unity, and the face's literal was -60 dB for all three -- so a
+        // double-click on the one oscillator a fresh patch has turned up muted
+        // it. The face reads this through `GainMath.linear-to-db`, which floors
+        // at `MIN_DB`, so 0.0 here is the -60 the other two should show.
+        let level = |oscillator| at(synth_osc_param(oscillator, OSC_OFFSET_LEVEL));
+        assert_eq!(
+            (level(0), level(1), level(2)),
+            (1.0, 0.0, 0.0),
+            "OSC 1 rests at unity and the other two at silence"
+        );
+    }
 
     #[test]
     fn modulation_uses_two_rack_units() {

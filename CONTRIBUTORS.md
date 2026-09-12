@@ -249,7 +249,8 @@ Alphabetical by model name, then by harness.
   literals to one checked global, and the engine's seven test modules stopped
   each carrying their own render helper, and `dupe-audit` learned to find the
   copies nothing is watching, and Aux In's hand-evaluated operating level got
-  the pin the sampler's already had.
+  the pin the sampler's already had, and the shared oscillator strip that reset
+  two of every synth's three oscillators to a tuning no patch has.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

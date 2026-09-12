@@ -20,6 +20,7 @@ export component MonoDeviceFace inherits Rectangle {
     in property <[bool]> modulation-allowed;
     in property <[float]> modulation-offsets;
     in property <[int]> modulation-route-counts;
+    in property <[float]> param-defaults;
     in-out property <int> lfo-wave; in-out property <float> lfo-rate; in-out property <bool> lfo-retrigger;
     in-out property <float> lfo-pitch; in-out property <float> lfo-filter; in-out property <float> lfo-pulse-width; in-out property <float> lfo-amp;
     callback osc1-wave-changed(int); callback osc1-semitones-changed(float); callback osc1-cents-changed(float); callback osc1-level-changed(float); callback osc1-pulse-width-changed(float);
@@ -56,6 +57,7 @@ export component MonoDeviceFace inherits Rectangle {
                 modulation-allowed: root.modulation-allowed;
                 modulation-offsets: root.modulation-offsets;
                 modulation-route-counts: root.modulation-route-counts;
+                param-defaults: root.param-defaults;
                 modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
                 modulation-edit-started(p) => { root.modulation-edit-started(p); }
                 modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
@@ -70,6 +72,7 @@ export component MonoDeviceFace inherits Rectangle {
                 modulation-allowed: root.modulation-allowed;
                 modulation-offsets: root.modulation-offsets;
                 modulation-route-counts: root.modulation-route-counts;
+                param-defaults: root.param-defaults;
                 modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
                 modulation-edit-started(p) => { root.modulation-edit-started(p); }
                 modulation-edit-finished(p) => { root.modulation-edit-finished(p); }
@@ -84,6 +87,7 @@ export component MonoDeviceFace inherits Rectangle {
                 modulation-allowed: root.modulation-allowed;
                 modulation-offsets: root.modulation-offsets;
                 modulation-route-counts: root.modulation-route-counts;
+                param-defaults: root.param-defaults;
                 modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
                 modulation-edit-started(p) => { root.modulation-edit-started(p); }
                 modulation-edit-finished(p) => { root.modulation-edit-finished(p); }

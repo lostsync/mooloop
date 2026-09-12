@@ -24,6 +24,16 @@ export component OscillatorDeviceStrip inherits Rectangle {
     // derives each knob's destination from it rather than being written out
     // three times.
     in property <int> param-base;
+    // Each described parameter's resting value, indexed by descriptor id, so
+    // this strip's knobs reset to *their own* oscillator's default.
+    //
+    // It used to be a literal `0` here, once, for all three instances -- and
+    // the table gives OSC 2 a default of +12 semitones and OSC 3 one of -12
+    // (`osc_descriptors` in `generator.rs`), so a double-click on either reset
+    // it to unison instead of to what a fresh patch plays. The same shape the
+    // modulation arrays beside this already use, and it puts no copy of those
+    // numbers in the markup at all.
+    in property <[float]> param-defaults;
     in property <bool> modulation-armed;
     in property <[float]> modulation-depths;
     in property <[bool]> modulation-allowed;
@@ -66,7 +76,7 @@ export component OscillatorDeviceStrip inherits Rectangle {
             spacing: 0px;
             ParameterKnob {
                 width: 48px; diameter: 36px; label: "Semi"; tooltip: "Coarse tuning";
-                value <=> root.semitones; minimum: -48; maximum: 48; default-value: 0; step: 1;
+                value <=> root.semitones; minimum: -48; maximum: 48; default-value: root.param-defaults[root.param-base + 1]; step: 1;
                 value-text: (root.semitones > 0 ? "+" : "") + round(root.semitones) + " st";
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[root.param-base + 1];
@@ -80,7 +90,7 @@ export component OscillatorDeviceStrip inherits Rectangle {
             }
             ParameterKnob {
                 width: 48px; diameter: 36px; label: "Fine"; tooltip: "Fine tuning";
-                value <=> root.cents; minimum: -100; maximum: 100; default-value: 0; step: 1;
+                value <=> root.cents; minimum: -100; maximum: 100; default-value: root.param-defaults[root.param-base + 2]; step: 1;
                 value-text: (root.cents > 0 ? "+" : "") + round(root.cents) + " ct";
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[root.param-base + 2];
@@ -96,7 +106,13 @@ export component OscillatorDeviceStrip inherits Rectangle {
                 width: 48px; diameter: 36px; label: "Level";
                 value: GainMath.linear-to-db(root.level);
                 maximum: 0;
-                default-value: -60;
+                // In dB, because this knob is, from the table's linear value.
+                // It was a literal -60 -- silence -- for all three strips,
+                // where OSC 1's table default is a level of 1.0, or 0 dB. So a
+                // double-click on the one oscillator a fresh patch has turned
+                // up muted it. `linear-to-db` floors at MIN_DB, which is what
+                // makes the other two still read -60.
+                default-value: GainMath.linear-to-db(root.param-defaults[root.param-base + 3]);
                 changed(v) => {
                     // The knob works in dB but `level` is the stored linear
                     // value; restate it so the scope and the face property
@@ -116,7 +132,7 @@ export component OscillatorDeviceStrip inherits Rectangle {
             }
             ParameterKnob {
                 width: 48px; diameter: 36px; label: "Width"; tooltip: "Pulse width";
-                value <=> root.pulse-width; minimum: 0.05; maximum: 0.95; default-value: 0.5;
+                value <=> root.pulse-width; minimum: 0.05; maximum: 0.95; default-value: root.param-defaults[root.param-base + 4];
                 enabled: root.wave == 3;
                 value-text: round(root.pulse-width * 100) + "%";
                 modulation-armed: root.modulation-armed;
