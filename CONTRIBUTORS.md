@@ -245,7 +245,8 @@ Alphabetical by model name, then by harness.
   splitting their own block at parameter events, and three claims the source
   made that the source no longer supported; then the round-trip test over
   every stepped parameter, which found one EQ id decoding to two enums of
-  different arity.
+  different arity, and the roll's tick count collapsed from twenty-five
+  literals to one checked global.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

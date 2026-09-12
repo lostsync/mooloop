@@ -1,5 +1,29 @@
 import { Theme } from "theme.slint";
 
+// The piano roll's one shared number.
+//
+// `mooloop_core::TICKS_PER_STEP`. Slint has no way to read a Rust constant, so
+// this is a copy -- but it is now *one* copy: it was a literal `24` fifteen
+// times in this file and ten more in `main.slint`, and acting on a drift meant
+// finding twenty-five of them by hand. `roll_metrics.rs` asserts this against
+// the engine's value, so the two cannot part without a test saying which one
+// moved.
+//
+// Not every tick number in the markup belongs here. `main.slint`'s
+// `snap-ticks` table spells a whole set of divisions (384 down to 6) that are
+// all derived from this one; folding that table into this global is a separate
+// question, because what it actually mirrors is `ModTimeDivision`.
+export global RollMetrics {
+    out property <int> ticks-per-step: 24;
+    /// `mooloop_core::STEPS_PER_BAR`.
+    out property <int> steps-per-bar: 16;
+    /// Derived rather than spelled, exactly as `mooloop_core::TICKS_PER_BAR`
+    /// is: the playlist had this as a bare `384` in four places, one of which
+    /// was a `playlist-bar-ticks` property that the two beside it then ignored
+    /// in favour of the literal again.
+    out property <int> ticks-per-bar: root.steps-per-bar * root.ticks-per-step;
+}
+
 // One note event on the piano roll's canvas, as the Rust side publishes it.
 // Declared here rather than in `main.slint` because this component owns the
 // note canvas and its hit test; `main.slint` imports both structs back.
@@ -164,7 +188,7 @@ export component PianoGrid inherits Rectangle {
         let note = root.note-at(y);
         let start = clamp(
             quantise ? floor(tick / root.snap-ticks) * root.snap-ticks : tick,
-            0, max(0, root.pattern-length * 24 - root.snap-ticks));
+            0, max(0, root.pattern-length * RollMetrics.ticks-per-step - root.snap-ticks));
         if (start == piano-touch.painted-tick && note == piano-touch.painted-note) {
             return;
         }
@@ -174,7 +198,7 @@ export component PianoGrid inherits Rectangle {
             return;
         }
         root.cell-painted(start, note,
-            min(root.snap-ticks, root.pattern-length * 24 - start));
+            min(root.snap-ticks, root.pattern-length * RollMetrics.ticks-per-step - start));
     }
 
     // Whether this gesture should quantise, given the toggle and whatever
@@ -209,7 +233,7 @@ export component PianoGrid inherits Rectangle {
         return 0;
     }
     pure function note-x(start: int) -> length {
-        return start * root.step-width / 24;
+        return start * root.step-width / RollMetrics.ticks-per-step;
     }
     // A floor in pixels, not in ticks. Flooring at one snap step made every
     // note shorter than the grid *draw* as a full grid step, so changing the
@@ -217,10 +241,10 @@ export component PianoGrid inherits Rectangle {
     // inflated the edge grab zones to match. 3px only keeps a very short
     // note from vanishing.
     pure function note-width(duration: int) -> length {
-        return max(3px, duration * root.step-width / 24);
+        return max(3px, duration * root.step-width / RollMetrics.ticks-per-step);
     }
     pure function tick-at(x: length) -> int {
-        return floor(x * 24 / root.step-width);
+        return floor(x * RollMetrics.ticks-per-step / root.step-width);
     }
     pure function note-at(y: length) -> int {
         return clamp(root.high-note - floor(y / root.row-height),
@@ -266,19 +290,19 @@ export component PianoGrid inherits Rectangle {
             ? Theme.surface : Theme.surface-raised;
     }
 
-    for division in root.pattern-length * 24 / root.snap-ticks : Rectangle {
+    for division in root.pattern-length * RollMetrics.ticks-per-step / root.snap-ticks : Rectangle {
         x: division * root.snap-ticks
-            * root.step-width / 24;
+            * root.step-width / RollMetrics.ticks-per-step;
         width: 1px;
         height: parent.height;
-        background: mod(division * root.snap-ticks, 24) == 0
+        background: mod(division * root.snap-ticks, RollMetrics.ticks-per-step) == 0
             ? Theme.text-faint : Theme.border;
-        opacity: mod(division * root.snap-ticks, 24) == 0
+        opacity: mod(division * root.snap-ticks, RollMetrics.ticks-per-step) == 0
             ? 0.8 : 0.5;
     }
 
     for cell in root.notes : Rectangle {
-        x: cell.start-tick * root.step-width / 24;
+        x: cell.start-tick * root.step-width / RollMetrics.ticks-per-step;
         y: (root.high-note - cell.note) * root.row-height;
         width: root.note-width(cell.duration-ticks);
         height: root.row-height;
@@ -512,10 +536,10 @@ export component PianoGrid inherits Rectangle {
                         quantise
                             ? floor(tick / root.snap-ticks) * root.snap-ticks
                             : tick,
-                        0, max(0, root.pattern-length * 24
+                        0, max(0, root.pattern-length * RollMetrics.ticks-per-step
                             - root.snap-ticks));
                     let duration = min(root.snap-ticks,
-                        root.pattern-length * 24 - start-tick);
+                        root.pattern-length * RollMetrics.ticks-per-step - start-tick);
                     // Draw creates on the first click. Select needs a second
                     // one, so that a press on empty grid is free to start a
                     // marquee instead.
@@ -607,14 +631,14 @@ export component PianoGrid inherits Rectangle {
                 let free = !root.snapping(e.modifiers.control, e.modifiers.shift,
                     e.modifiers.alt, e.modifiers.meta);
                 let raw-ticks = (self.mouse-x - self.origin-x)
-                    * 24 / root.step-width;
+                    * RollMetrics.ticks-per-step / root.step-width;
                 let delta-ticks = free
                     ? round(raw-ticks)
                     : round(raw-ticks / root.snap-ticks)
                         * root.snap-ticks;
                 if (self.grab-mode == 2) {
                     let max-duration = max(root.snap-ticks,
-                        root.pattern-length * 24 - self.original-start);
+                        root.pattern-length * RollMetrics.ticks-per-step - self.original-start);
                     let duration = clamp(
                         self.original-duration + delta-ticks,
                         free
@@ -643,7 +667,7 @@ export component PianoGrid inherits Rectangle {
                         }
                     }
                     let tick = clamp(self.original-start + delta-ticks,
-                        0, max(0, root.pattern-length * 24 - self.original-duration));
+                        0, max(0, root.pattern-length * RollMetrics.ticks-per-step - self.original-duration));
                     let note = clamp(self.original-note
                             + round((self.origin-y - self.mouse-y)
                                 / root.row-height),

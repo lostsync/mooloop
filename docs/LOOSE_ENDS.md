@@ -357,17 +357,17 @@ width-jitter this pass took out of `format-db` itself. What is missing is an
 unsigned one-decimal formatter to sit beside `format-db`; that is a decision
 about the dB vocabulary rather than a typo, which is why it was left.
 
-**Ticks-per-step is twenty-five bare `24`s in the markup.** `mooloop_core`
-owns `TICKS_PER_STEP`; the roll spells it as a literal `24` fifteen times in
-`piano-grid.slint` and ten in `main.slint`, because Slint has no shared
-constant for it the way `GainMath` and `DeviceRackMetrics` are shared for
-gain and rack geometry. Drift is now *detected* -- `piano_tools.rs` and
-`piano_drag.rs` compute from the engine's value since 2026-09-10, so a table
-edit that the markup does not follow fails them -- but acting on that
-failure means finding twenty-five literals by hand. A `RollMetrics`
-global beside the other two, with a test asserting it against
-`mooloop_core::TICKS_PER_STEP`, would make it one edit. Mechanical, and
-larger than a detail fix, which is why it is here.
+**The roll's snap-division table is a second copy of `ModTimeDivision`.**
+`main.slint:820`'s `snap-ticks(index)` spells eleven tick values by hand --
+384, 192, 96, 64, 48, 32, 24, 16, 12, 8, 6 -- and every one of them is a
+division of `TICKS_PER_STEP`. It was left out of the 2026-09-12 `RollMetrics`
+pass on purpose: the other twenty-five literals were all the same number and
+folding them into one global was mechanical, where this is a *table*, and what
+it actually mirrors is `ModTimeDivision` -- which `controls.slint`'s
+`Divisions` global already mirrors separately, in beats rather than ticks. So
+there are three spellings of the division list and the question is which one is
+the source, not how to share a constant. Small only if that question has an
+obvious answer.
 
 **A rack unit is two different widths.** A device's total width -- face plus
 both rails -- is computed twice and not the same way. An effect slot uses

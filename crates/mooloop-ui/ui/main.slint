@@ -20,7 +20,7 @@ import { SaveErrorDialog } from "save-error-dialog.slint";
 import { AboutDialog } from "about-dialog.slint";
 import { ExportDialog } from "export-dialog.slint";
 import { MenuBar, MenuBarItem, MenuRow, MenuSeparator } from "menubar.slint";
-import { PianoGrid, NoteCell, NoteHit, GestureMod, PianoGestures } from "piano-grid.slint";
+import { PianoGrid, NoteCell, NoteHit, GestureMod, PianoGestures, RollMetrics } from "piano-grid.slint";
 import {
     ContainerEnclosure, DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DeviceOutputRail,
     DevicePageButton, DeviceRackMetrics, RackDrag
@@ -744,10 +744,10 @@ export component MainWindow inherits Window {
     in-out property <bool> song-mode;
     in-out property <[PlaylistClip]> playlist-clips;
     in-out property <int> playlist-position-ticks;
-    in-out property <int> playlist-song-length-ticks: 384;
+    in-out property <int> playlist-song-length-ticks: RollMetrics.ticks-per-bar;
     in-out property <int> playlist-bars: 64;
     in-out property <length> playlist-bar-width: 24px;
-    property <int> playlist-bar-ticks: 384;
+    property <int> playlist-bar-ticks: RollMetrics.ticks-per-bar;
     property <[string]> musical-snap-options: [
         "1 Bar", "1/2", "1/4", "1/4T", "1/8", "1/8T",
         "1/16", "1/16T", "1/32", "1/32T", "1/64",
@@ -5028,7 +5028,7 @@ export component MainWindow inherits Window {
                                                 property <length> level:
                                                     (parent.height - self.head-size)
                                                     * (127 - cell.velocity) / 127;
-                                                x: cell.start-tick * root.piano-step-width / 24;
+                                                x: cell.start-tick * root.piano-step-width / RollMetrics.ticks-per-step;
                                                 width: max(root.piano-step-width / 4, 9px);
                                                 height: parent.height;
                                                 background: transparent;
@@ -5158,7 +5158,7 @@ export component MainWindow inherits Window {
                                                     / max(1px, self.height - self.inset * 2), 0, 1);
                                             }
                                             pure function tick-x(tick: int) -> length {
-                                                return tick * root.piano-step-width / 24;
+                                                return tick * root.piano-step-width / RollMetrics.ticks-per-step;
                                             }
                                             // Grid-snapped tick under `x`, unless
                                             // `free` (Shift held), matching the note
@@ -5166,11 +5166,11 @@ export component MainWindow inherits Window {
                                             // Grab radius in ticks for a ~7px reach
                                             // at the current time zoom.
                                             pure function grab-ticks() -> int {
-                                                return max(1, round(7px * 24 / root.piano-step-width));
+                                                return max(1, round(7px * RollMetrics.ticks-per-step / root.piano-step-width));
                                             }
                                             pure function snap(x: length, free: bool) -> int {
-                                                let tick = x * 24 / root.piano-step-width;
-                                                let limit = root.pattern-length * 24;
+                                                let tick = x * RollMetrics.ticks-per-step / root.piano-step-width;
+                                                let limit = root.pattern-length * RollMetrics.ticks-per-step;
                                                 if (free) {
                                                     return clamp(round(tick), 0, limit);
                                                 }
@@ -5178,14 +5178,14 @@ export component MainWindow inherits Window {
                                                     * root.piano-snap-ticks, 0, limit);
                                             }
 
-                                            for division in root.pattern-length * 24 / root.piano-snap-ticks : Rectangle {
+                                            for division in root.pattern-length * RollMetrics.ticks-per-step / root.piano-snap-ticks : Rectangle {
                                                 x: division * root.piano-snap-ticks
-                                                    * root.piano-step-width / 24;
+                                                    * root.piano-step-width / RollMetrics.ticks-per-step;
                                                 width: 1px;
                                                 height: parent.height;
-                                                background: mod(division * root.piano-snap-ticks, 24) == 0
+                                                background: mod(division * root.piano-snap-ticks, RollMetrics.ticks-per-step) == 0
                                                     ? Theme.text-faint : Theme.border;
-                                                opacity: mod(division * root.piano-snap-ticks, 24) == 0
+                                                opacity: mod(division * root.piano-snap-ticks, RollMetrics.ticks-per-step) == 0
                                                     ? 0.5 : 0.3;
                                             }
 
@@ -5362,8 +5362,8 @@ export component MainWindow inherits Window {
                                         // reads the same whether
                                         // the division truncates
                                         // or not.
-                                        ? "bar " + (floor(root.playlist-loop-start-ticks / 384) + 1)
-                                            + " – " + (floor((root.playlist-loop-end-ticks - 1) / 384) + 1)
+                                        ? "bar " + (floor(root.playlist-loop-start-ticks / root.playlist-bar-ticks) + 1)
+                                            + " – " + (floor((root.playlist-loop-end-ticks - 1) / root.playlist-bar-ticks) + 1)
                                         : "drag the strip above the bar numbers";
                                     color: root.playlist-has-loop
                                         ? Theme.text-muted : Theme.text-faint;
@@ -5647,7 +5647,7 @@ export component MainWindow inherits Window {
                                             for clip in root.playlist-clips : Rectangle {
                                                 visible: clip.pattern == pattern;
                                                 property <int> clip-end-tick:
-                                                    clip.start-tick + clip.length-steps * 24;
+                                                    clip.start-tick + clip.length-steps * RollMetrics.ticks-per-step;
                                                 x: clip.start-tick * root.playlist-bar-width
                                                     / root.playlist-bar-ticks;
                                                 y: 2px;
