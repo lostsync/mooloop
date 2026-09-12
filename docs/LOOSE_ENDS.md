@@ -286,14 +286,30 @@ What the two conventions do cost is a reader: the same call means two things
 depending on the enum, and neither says so. A sentence on each, or one shared
 trait, would settle it whenever one of these files is open anyway.
 
-**The five generators each split their own block at note events.**
-`mlm1.rs:572`, `mlp8.rs:2494`, `monosynth.rs:314`, `polysynth.rs:393` and
-`drumsynth.rs:437` carry the same loop the twelve effects carried until
-2026-09-12, when it became `effects::process_param_split`. The generator
-version is not a candidate for the same treatment without reading all five
-first: its `match` covers note-on, note-off and the events a synth ignores,
-and whether the differences between the five are deliberate is exactly the
-question. `render_range` is the per-synth method that would sit under it.
+**The five generators each split their own block at note events, and this was
+read and left alone.** `mlm1.rs:572`, `monosynth.rs:314`, `polysynth.rs:393`,
+`drumsynth.rs:437` and `mlp8.rs:2494` carry the loop the twelve effects carried
+until `effects::process_param_split` replaced it. The entry that recorded this
+said it needed all five read before anyone decided; they were, on 2026-09-12,
+and the answer is **no**:
+
+- **mlm1, monosynth and polysynth are byte-identical.** Three real copies.
+- **drumsynth shares the loop and not the handler.** Note-on triggers without
+  an id, note-off ends nothing because drums are one-shot, and a stopped
+  transport chokes rather than releasing. Those are the device, not an
+  oversight.
+- **mlp8 cannot participate at all.** Its `render_range` also takes `ctx.bpm`
+  and `&mut AudioTaps`, so it cannot match a trait method shaped like the
+  others, and the alternative -- holding the taps in a field across the call --
+  is what `AUDIO_ARCHITECTURE.md` forbids ("a node must not retain a borrowed
+  bus reference received at construction").
+
+So it is four copies with two principled exceptions, where the effects case was
+twelve copies of a loop whose handler was *identical*. Unifying these needs a
+trait plus a per-device `handle_event`, which is net-neutral in lines and adds a
+hop to follow. The two clamps the loop carries are now tested once, in
+`effects::mod`, and they are the same two here -- so if this is ever revisited,
+the reason to do it is sharing those tests, not the line count.
 
 **`render_blocks` is written about seven times.** `audio_edge_tests.rs`,
 `container_tests.rs`, `ds01_tests.rs`, `idle_skip_tests.rs`,
