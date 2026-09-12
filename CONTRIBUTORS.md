@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-12
-- Sessions: 101
+- Sessions: 102
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -260,7 +260,11 @@ Alphabetical by model name, then by harness.
   persisted parameter ids that nothing held at all, and the nine callback-wiring
   macros that were three, and then the EQ's Shape, which was two settings of
   different arity behind one automatable id, and then the `eq-v2` plan that
-  question turned into.
+  question turned into, and then the mixer strip that draws everything once
+  the pane is tall enough to hold it -- the third of the console plan's three
+  drawings, arriving as a measurement rather than a zoom -- whose other half
+  was that a turned strip had been handing every spare pixel to a scrolling
+  page that could not spend it.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

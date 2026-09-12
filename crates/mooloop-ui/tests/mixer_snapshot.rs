@@ -360,14 +360,119 @@ fn turning_a_strip_over_reaches_its_own_parameters() {
     );
 }
 
+/// **Responsive rather than a mode.** Adam, 2026-09-12: *"i'd like this to
+/// basically just be responsive design -- if the mixer is big enough, it
+/// shows everything: pre, eq, comp, sends, fader."* So there is no zoom to
+/// press and nothing to turn: a pane given `MixerMetrics.full-height` draws
+/// the whole strip on the face you are already looking at.
+///
+/// The height comes out of the global rather than being written here, and
+/// the chrome above the pane carries a margin, because what this asserts is
+/// the *reachability* -- the same claim `THE-STRIP.md` makes about the three
+/// paged faces, applied to the fourth arrangement of the same controls.
+#[test]
+fn a_tall_enough_mixer_draws_the_whole_strip_without_turning_it() {
+    let ui = headless();
+    ui.invoke_show_view(view::MIXER);
+    let full = ui.global::<MixerMetrics>().get_full_height();
+    ui.window()
+        .set_size(LogicalSize::new(1100.0, PANE_CHROME + full));
+
+    let moved = Rc::new(Cell::new((-1, -1)));
+    let sink = moved.clone();
+    ui.on_bus_strip_param(move |bus, param, _| sink.set((bus, param)));
+    write_snapshot(
+        &ui.window().take_snapshot().unwrap(),
+        "MOOLOOP_FULL_SNAPSHOT",
+    );
+
+    // Nothing was turned: the sections are simply there, above the sends and
+    // the fader, in the order the mockup stacks them.
+    let ids = sweep_column(&ui, &moved, SECTIONS_TOP, SECTIONS_BOTTOM);
+    assert!(
+        ids.contains(&(mooloop_core::strip::STRIP_EQ_IN as i32)),
+        "the EQ was not on the strip the pane had room to draw whole: {ids:?}"
+    );
+    assert!(
+        ids.contains(&(mooloop_core::strip::STRIP_COMP_IN as i32)),
+        "the compressor was not on it either, so the sections are cut off \
+         rather than laid out: {ids:?}"
+    );
+
+    // And the fader is still the strip's, under the sends where the mockup
+    // puts it -- it is what the room a tall pane leaves is *for*.
+    let volume = Rc::new(Cell::new(-1.0_f32));
+    let level = volume.clone();
+    ui.on_bus_volume_changed(move |bus, value| {
+        if bus == 1 {
+            level.set(value);
+        }
+    });
+    // Dragged, not clicked. A mixer fader is deliberately **relative** --
+    // grabbing it never jumps the level -- so a press and a release in the
+    // same place is exactly the gesture it is built to ignore.
+    drag(&ui, FULL_FADER_X, FULL_FADER_Y, FULL_FADER_Y - 40.0);
+    assert!(
+        volume.get() >= 0.0,
+        "the fader is not under the sends on the full strip"
+    );
+}
+
+/// A press, a move and a release, for the controls that only answer to a
+/// drag.
+fn drag(ui: &MainWindow, x: f32, from: f32, to: f32) {
+    let start = LogicalPosition::new(x, from);
+    let end = LogicalPosition::new(x, to);
+    ui.window()
+        .dispatch_event(WindowEvent::PointerMoved { position: start });
+    ui.window().dispatch_event(WindowEvent::PointerPressed {
+        position: start,
+        button: PointerEventButton::Left,
+    });
+    ui.window()
+        .dispatch_event(WindowEvent::PointerMoved { position: end });
+    ui.window().dispatch_event(WindowEvent::PointerReleased {
+        position: end,
+        button: PointerEventButton::Left,
+    });
+}
+
+/// The chrome above the mixer pane: the menu bar, both toolbar rows and the
+/// pane's own tab row, plus the dock below it. Measured against
+/// `headless()`'s 760, where the pane comes out about 200 tall, and rounded
+/// **up** so the pane clears the breakpoint rather than landing on it.
+const PANE_CHROME: f32 = 600.0;
+/// The band strip 1's three sections occupy on the full face: from just
+/// under the name plate to `MixerMetrics.strip-page-height` below it. Probed
+/// off `MOOLOOP_FULL_SNAPSHOT`.
+const SECTIONS_TOP: f32 = 125.0;
+const SECTIONS_BOTTOM: f32 = 460.0;
+/// Strip 1's fader on the full face, probed off the same snapshot: it runs
+/// from about 548 to 660, under the sends and above the destination. The x
+/// is the same on every face -- the fader does not move sideways -- and only
+/// the y is particular to this arrangement.
+const FULL_FADER_X: f32 = 156.0;
+const FULL_FADER_Y: f32 = 620.0;
+
 /// Every parameter id reported by clicking over strip 1's own column, from
 /// just above its turn-over button up to just below its fader. Deliberately
 /// clear of the corner, so the sweep cannot turn the strip over half way
 /// through and start testing the other face.
 fn sweep_strip(ui: &MainWindow, moved: &Rc<Cell<(i32, i32)>>) -> Vec<i32> {
+    sweep_column(ui, moved, 190.0, 285.0)
+}
+
+/// The same sweep between two heights, for the faces that put the strip's
+/// sections somewhere else.
+fn sweep_column(
+    ui: &MainWindow,
+    moved: &Rc<Cell<(i32, i32)>>,
+    top: f32,
+    bottom: f32,
+) -> Vec<i32> {
     let mut ids: Vec<i32> = Vec::new();
-    let mut y = 285.0;
-    while y > 190.0 {
+    let mut y = bottom;
+    while y > top {
         // Clear of the page's own scroll bar at the strip's right edge,
         // which is a control and would otherwise be most of what this
         // sweep clicks.

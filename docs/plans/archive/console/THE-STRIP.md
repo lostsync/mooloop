@@ -377,6 +377,14 @@ needs nothing new -- `StripSections` is the full-format arrangement and takes
 the room it is given -- and the two faces that are built already satisfy the
 rule that no parameter is reachable from only one of them.
 
+**Built 2026-09-12, and it is not a zoom.** Adam: *"i'd like this to
+basically just be responsive design -- if the mixer is big enough, it shows
+everything."* So the third drawing arrives when the pane is at least
+`MixerMetrics.full-height` tall and by nothing else: no control, no state,
+and no zoom level of its own. It was what this section predicted -- the same
+four parts stacked in the mockup's order, with the meter and fader under the
+sends and the arrows gone.
+
 ## Still open
 
 - **Whether the sequencer rack draws a group.** Routing several channels to

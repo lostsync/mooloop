@@ -195,7 +195,15 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   faders. The name, the meter and the fader do not turn, and neither does the
   column of four small controls beside the fader -- pan, solo, mute, polarity
   -- because an EQ is set by ear while watching what it does to the level and
-  a send is set against the fader that feeds it. Clicking a strip's name plate points the
+  a send is set against the fader that feeds it. **A tall enough mixer stops
+  paging and draws the whole strip**: given the room, a strip lays out drive,
+  EQ, compressor, sends and then the meter and fader with its destination and
+  analog sum beneath them, and the two arrows go away because there is
+  nothing left to turn to. There is no zoom and no mode -- it is the pane's
+  height and nothing else, so a mixer that is given a slot of its own or
+  dragged taller shows more of every track at once. Below that height, a
+  turned strip's fader takes whatever height its sections do not want rather
+  than leaving it empty. Clicking a strip's name plate points the
   device rack below at that track, so a chain on a group of channels is built
   with the same gesture as a chain on one channel. Channels name their track
   from a picker in their rack row, beside their other output controls.

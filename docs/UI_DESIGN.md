@@ -542,6 +542,17 @@ decide its shape. Settled 2026-09-10.
   strip's height is its fader's, and the fader is the one element on it with a
   floor -- so an area that toggles open below the fader spends the only
   dimension that cannot give. Turning the strip over changes nothing's size.
+- **Where there is height, the strip stops paging -- and that is a
+  measurement, not a control.** Added 2026-09-12. `MixerMetrics.full-height`
+  is what the whole arrangement needs, stated as the sum of the parts the
+  paged face already has to name, and a pane with that much room draws drive,
+  EQ, comp, sends and then the meter and fader with the destination under
+  them, in the order the mockup stacks them, with no arrows because there is
+  nothing left to turn to. Adam: *"i'd like this to basically just be
+  responsive design -- if the mixer is big enough, it shows everything."* The
+  interface has no zoom for this and no mode to be in: the same pane in the
+  same place shows more because it is taller, which is the one form of
+  progressive disclosure that costs a user nothing to discover.
 - **There are three faces and the fader is the middle one.** Sends to the
   left, the strip to the right, reached by a `‹` and a `›` in the strip's
   bottom row. Two, not one: a single cycling button makes the user press it
@@ -588,9 +599,11 @@ decide its shape. Settled 2026-09-10.
   strip face, the track's pinned row in the device rack, and the zoomed console
   strip are one parameter set drawn three ways. A control that exists in only
   one of them makes the mixer's own state something a user has to manage
-  before they can do the work. Built 2026-09-11 for the first two; the zoomed
-  console is recorded in `docs/plans/archive/console/00-status.md` and needs nothing
-  new.
+  before they can do the work. Built 2026-09-11 for the first two, and
+  2026-09-12 for the third, which needed nothing new as
+  `docs/plans/archive/console/00-status.md` predicted -- it is the same four
+  components in a taller column, and it arrives by the pane being big enough
+  rather than by a zoom.
 - **A strip control declares no range of its own.** Every knob on the channel
   strip takes its minimum, maximum, default, curve, name and unit from the
   descriptor table the engine reads, handed to the markup once at startup as
@@ -674,6 +687,14 @@ columns with tiny `+` and `-` glyphs.
 - Horizontal scrolling is acceptable for a fixed-format instrument panel when
   wrapping would destroy comparison or alignment.
 - Dynamic content must not resize toolbar, rack cells, knobs, or selectors.
+- **Spend spare height on the control that has a floor, not on the one that
+  scrolls.** A pane taller than its content has to give the surplus to
+  something, and the default -- whichever child happens to carry the stretch
+  -- is usually a scrolling page, which cannot spend it and turns it into
+  empty space. State what a fixed page wants, let it stop there, and the
+  slack goes to the fader, the meter or the plot that reads better bigger.
+  The mixer strip had this backwards until 2026-09-12: a turned strip's
+  sections page took the room and its fader stayed at its minimum.
 
 ## Toolbars
 
