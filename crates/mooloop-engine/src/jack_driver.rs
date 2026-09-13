@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use jack::{
-    AudioOut, Client, ClientOptions, Control, MidiIn, Port, PortId, ProcessHandler, ProcessScope,
+    AudioOut, Client, ClientOptions, Control, MidiIn, Port, PortFlags, PortId, ProcessHandler,
+    ProcessScope,
 };
 
 use crate::driver::{AudioConfig, OutputTarget};
@@ -24,6 +25,10 @@ const DEFAULT_OUTPUT_L: &str = "system:playback_1";
 /// nothing rather than failing.
 const AUDIO_PORT_TYPE: &str = "32 bit float mono audio";
 const DEFAULT_OUTPUT_R: &str = "system:playback_2";
+const MIDI_IN_NAME: &str = "mooloop:midi_in";
+/// JACK's built-in MIDI port type, spelled here for the same reason as
+/// [`AUDIO_PORT_TYPE`].
+const MIDI_PORT_TYPE: &str = "8 bit raw midi";
 
 struct Graph {
     executor: Executor,
@@ -66,8 +71,21 @@ impl jack::NotificationHandler for Notifications {
     // hot-plugged device (e.g. headphones) surfaces to a JACK client as
     // ports registering, not as a "default device changed" event, so port
     // registration is what auto-reconnect actually watches.
-    fn port_registration(&mut self, client: &Client, _port_id: PortId, is_registered: bool) {
-        if !is_registered || !self.auto_reconnect.load(Ordering::Relaxed) {
+    fn port_registration(&mut self, client: &Client, port_id: PortId, is_registered: bool) {
+        if !is_registered {
+            return;
+        }
+        // A keyboard plugged in while mooloop runs is listened to the way one
+        // present at startup is. Not behind auto-reconnect, which is about
+        // where the audio goes.
+        if let Some(port) = client.port_by_id(port_id) {
+            if is_hardware_midi_source(port.flags(), port.port_type().ok().as_deref()) {
+                if let Ok(name) = port.name() {
+                    connect_midi_source(client, &name);
+                }
+            }
+        }
+        if !self.auto_reconnect.load(Ordering::Relaxed) {
             return;
         }
         let target = self.target.load_full();
@@ -88,6 +106,41 @@ impl jack::NotificationHandler for Notifications {
                 ),
             }
         }
+    }
+}
+
+/// A MIDI output port that belongs to hardware: a keyboard or controller, as
+/// the JACK server (or PipeWire's MIDI bridge) presents it. Other programs'
+/// MIDI outputs are left to the patchbay, since something sending to mooloop
+/// on purpose is already connected by whoever set that up.
+fn is_hardware_midi_source(flags: PortFlags, port_type: Option<&str>) -> bool {
+    flags.contains(PortFlags::IS_OUTPUT | PortFlags::IS_PHYSICAL)
+        && port_type == Some(MIDI_PORT_TYPE)
+}
+
+/// Listen to one MIDI source. Called from JACK's notification thread or the
+/// control thread, never the process callback.
+fn connect_midi_source(client: &Client, source: &str) {
+    match client.connect_ports_by_name(source, MIDI_IN_NAME) {
+        Ok(()) => mooloop_core::log_info!("midi", "listening to the MIDI input {source}"),
+        Err(jack::Error::PortAlreadyConnected(_, _)) => {}
+        Err(e) => {
+            mooloop_core::log_warn!("midi", "could not connect {source} -> {MIDI_IN_NAME} ({e})")
+        }
+    }
+}
+
+/// Listen to every hardware MIDI source in the graph. Without this a keyboard
+/// plays nothing until it is wired in a patchbay, which is not where anybody
+/// looks when a key makes no sound.
+fn connect_midi_sources(client: &Client) {
+    let sources = client.ports(
+        None,
+        Some(MIDI_PORT_TYPE),
+        PortFlags::IS_OUTPUT | PortFlags::IS_PHYSICAL,
+    );
+    for source in sources {
+        connect_midi_source(client, &source);
     }
 }
 
@@ -135,8 +188,8 @@ impl Opening {
         let out_r = client
             .register_port("out_r", AudioOut::default())
             .map_err(|e| Error::PortRegister(e.to_string()))?;
-        // One input for now. Per-channel MIDI routing is a later concern;
-        // what the control layer needs first is any way in at all.
+        // One input, which every hardware source is connected to below. The
+        // notes play whichever channel the editor has selected.
         let midi_in = client
             .register_port("midi_in", MidiIn::default())
             .map_err(|e| Error::PortRegister(e.to_string()))?;
@@ -168,6 +221,7 @@ impl Opening {
         // audible out of the box. Auto-reconnect (if enabled) picks this back
         // up whenever the JACK graph changes and this connection is missing.
         let c = async_client.as_client();
+        connect_midi_sources(c);
         let sources = [OUT_L_NAME, OUT_R_NAME];
         let destinations = [target.0.as_str(), target.1.as_str()];
         let mut connected = true;

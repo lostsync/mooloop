@@ -11,7 +11,7 @@
 //! `Engine` keeps the audio driver alive and must outlive the handle's use.
 //! Dropping it, with the handle, shuts the driver down.
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
@@ -405,7 +405,9 @@ impl Engine {
         let preview_gain = Arc::new(AtomicU32::new(mooloop_core::gain::db_to_linear(mooloop_core::gain::REFERENCE_PEAK_DBFS).to_bits()));
         let buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>> =
             Arc::new(ArcSwapOption::empty());
+        let keyboard_channel = Arc::new(AtomicU8::new(render::NO_KEYBOARD_CHANNEL));
         let mut render = RenderState::new(sample_rate, sample_slots.clone(), slice_slots.clone());
+        render.attach_keyboard_channel(keyboard_channel.clone());
         render.attach_meters(bus_meters.clone());
         render.attach_device_meters(device_meters.clone());
         render.attach_device_telemetry(device_telemetry.clone());
@@ -438,6 +440,7 @@ impl Engine {
                 device_meters,
                 device_telemetry,
                 buffer_midi_map,
+                keyboard_channel,
                 playhead_meters,
                 modulator_meters,
                 sample_slots,
@@ -463,6 +466,7 @@ pub struct EngineHandle {
     device_meters: Arc<DeviceMeters>,
     device_telemetry: Arc<DeviceTelemetry>,
     buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>>,
+    keyboard_channel: Arc<AtomicU8>,
     playhead_meters: Arc<PlayheadMeters>,
     modulator_meters: Arc<ModulatorMeters>,
     sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
@@ -647,6 +651,7 @@ impl EngineHandle {
         render.attach_device_meters(self.device_meters.clone());
         render.attach_device_telemetry(self.device_telemetry.clone());
         render.attach_buffer_midi_map(self.buffer_midi_map.clone());
+        render.attach_keyboard_channel(self.keyboard_channel.clone());
         render.attach_playhead_meters(self.playhead_meters.clone());
         render.attach_modulator_meters(self.modulator_meters.clone());
         render.attach_preview_gain(self.preview_gain.clone());
@@ -725,6 +730,16 @@ impl EngineHandle {
     pub fn effect_spectrum(&self, target: EffectTarget, slot: u8) -> [f32; SPECTRUM_BINS] {
         self.device_telemetry
             .read_spectrum(effect_target_index(target), usize::from(slot) + 1)
+    }
+
+    /// Point MIDI keyboard input at a channel, or at none. Notes a buffer
+    /// mapping claims still go to the buffer. Cheap enough to call every
+    /// frame, which is how the UI keeps it on the selected channel.
+    pub fn set_keyboard_channel(&self, channel: Option<u8>) {
+        let channel = channel
+            .filter(|&channel| channel != render::NO_KEYBOARD_CHANNEL)
+            .unwrap_or(render::NO_KEYBOARD_CHANNEL);
+        self.keyboard_channel.store(channel, Ordering::Relaxed);
     }
 
     /// Install the MIDI mapping that drives a buffer insert, or clear it.

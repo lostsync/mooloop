@@ -12,7 +12,8 @@ each one is in.
 `coreaudio-driver/` was added 2026-09-13 and is **in progress, outside the
 `FOCUS.md` sequence**, because Adam asked for it directly: he wants to develop
 on a Mac as well as on Fedora. It builds a Core Audio driver beside JACK,
-chosen at compile time, and stops short of packaging or a macOS release.
+chosen at compile time, and stops short of packaging or a macOS release. Every
+step has landed; the macOS CI job is the one thing that has not yet run.
 
 **`FOCUS.md` was rewritten on 2026-09-12 and it decided five of the entries
 below.** The sequence is: finish `interface-iteration/` (steps 03 and 04), then

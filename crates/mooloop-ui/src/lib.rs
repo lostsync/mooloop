@@ -11479,6 +11479,11 @@ impl AppUi {
                 let editing_bus = w.get_editing_bus();
                 let edited_bus = w.get_editing_bus_index().max(0) as usize;
                 let selected_channel = st.borrow().session.selected;
+                // A MIDI keyboard plays the channel the editor is on. Set
+                // every tick rather than on each selection change, because the
+                // selection moves from clicks, keys, loads, deletes and undo,
+                // and an atomic store is cheaper than finding all of them.
+                handle.set_keyboard_channel(u8::try_from(selected_channel).ok());
                 // The strips' gain-reduction lamps, as one model rather than
                 // a field on every row: this is the only thing about a strip
                 // that moves at frame rate, and both faces index the same

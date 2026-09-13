@@ -240,9 +240,9 @@ Still open:
   modify working audio?
 - How much live performance behavior matters relative to composition and
   export?
-- When should MIDI input and output enter the roadmap? A decoded JACK port
-  exists and reaches nothing, which is the current answer by default rather
-  than by decision.
+- How far should MIDI go past a keyboard playing the selected channel? Adam
+  asked for exactly that on 2026-09-13 and it is in; recording, controller
+  mapping, input choice and MIDI output are still undecided.
 
 ## Decision Precedence
 

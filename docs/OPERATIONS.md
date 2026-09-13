@@ -75,6 +75,11 @@ Audio instead of JACK (`docs/plans/coreaudio-driver/`). The Xcode command-line
 tools and `rustup` are all it needs -- Homebrew's `rustup` is keg-only, so put
 `$(brew --prefix rustup)/bin` on `PATH` -- and `mold` is not used.
 
+MIDI input comes from Core MIDI with nothing to set up: mooloop listens to
+every source and logs each one as `listening to the MIDI input "<name>"`. If a
+keyboard plays nothing, that log line is the first thing to look for, and Audio
+MIDI Setup's MIDI Studio window shows whether macOS sees the device at all.
+
 The JACK adapter does not compile on a Mac, so an edit to it, or to anything
 else behind `cfg(not(target_os = "macos"))`, goes unchecked there.
 `scripts/linux-check` checks the Linux build from the Mac instead:

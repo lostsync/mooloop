@@ -381,15 +381,22 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   no audio behind it yet.
 - There is no metronome. The toolbar deliberately does not offer a click-track
   toggle, since nothing in the DSP graph produces one yet.
-- MIDI input is wired but reaches nothing, and exists only under JACK: the
-  Core Audio driver opens no MIDI input yet. Under JACK the engine registers a
-  `midi_in` port and decodes a bounded number of messages per block into
-  `mooloop_core::midi` types, and `RenderState` will apply a
+- A MIDI keyboard plays the selected channel, on every MIDI channel, whether
+  or not the transport is running. Under JACK the engine's `midi_in` port is
+  connected to every physical MIDI source at startup and to each one that
+  registers later; under Core Audio every Core MIDI source is listened to
+  through `midir`, and a keyboard plugged in later is picked up within a
+  second. JACK notes keep their frame offsets; Core MIDI notes act at the top
+  of the next block. A key comes up on the channel it went down on, so moving
+  the selection while holding one does not strand a note. Only note-on and
+  note-off play: velocity is passed through, and CC, pitch bend, sustain, and
+  program change do nothing on a channel. Notes are not recorded. A
   `BufferMidiMap` — note and CC mappings onto one Buffer insert's gestures —
-  if one is installed. Nothing installs one: `EngineHandle::set_buffer_midi_map`
-  has no caller outside its own tests, so decoded messages are dropped. There
-  is no note input, no learn, no mapping editor, and no controls on the MIDI
-  preferences page.
+  takes the notes it maps ahead of the keyboard, but nothing installs one:
+  `EngineHandle::set_buffer_midi_map` has no caller outside its own tests.
+  There is no MIDI device list, input choice, learn, or mapping editor, and the
+  MIDI preferences page has no controls; which inputs are listened to is in
+  the log.
 
 ## Current Audio Path
 

@@ -16,13 +16,21 @@
 //! once: the old one is dropped before the new one plays, so the lock is
 //! uncontended in every block except, at most, the one a reopen interrupts,
 //! and that block plays silence rather than waiting.
+//!
+//! MIDI input comes from Core MIDI, through `midir`. There is no patchbay to
+//! connect a keyboard to mooloop in, so mooloop listens to every source there
+//! is, and [`CoreAudioDriver::service`] picks up a keyboard plugged in later.
+//! Messages cross to the audio callback over a bounded ring and act at the
+//! top of the next block: a callback's worth of timing, a few milliseconds.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use midir::{Ignore, MidiInput, MidiInputConnection};
 use mooloop_dsp::MAX_BLOCK_SIZE;
+use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::driver::{AudioConfig, OutputTarget};
 use crate::executor::Executor;
@@ -36,6 +44,44 @@ const SYSTEM_DEFAULT_LABEL: &str = "System default";
 /// Device enumeration is a round of HAL property reads, which is nothing once
 /// a second and not nothing on every GUI frame.
 const PROBE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// The Core MIDI client name, which MIDI utilities show as the listener.
+const MIDI_CLIENT_NAME: &str = "mooloop";
+
+/// MIDI messages that can wait for the audio callback. A callback runs every
+/// few milliseconds, so this is seconds of playing even if one is missed.
+const MIDI_QUEUE_CAPACITY: usize = 1024;
+
+/// The most MIDI messages one callback hands the executor. The rest wait in
+/// the ring for the next callback rather than being dropped.
+const MAX_MIDI_PER_CALLBACK: usize = 256;
+
+/// One channel message, copied out of Core MIDI's buffer so it can cross
+/// threads without allocating. System exclusive is filtered before it gets
+/// here, so three bytes is every message mooloop reads.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct MidiBytes {
+    len: u8,
+    bytes: [u8; 3],
+}
+
+impl MidiBytes {
+    fn new(message: &[u8]) -> Option<Self> {
+        if message.is_empty() || message.len() > 3 {
+            return None;
+        }
+        let mut bytes = [0; 3];
+        bytes[..message.len()].copy_from_slice(message);
+        Some(Self {
+            len: message.len() as u8,
+            bytes,
+        })
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.bytes[..usize::from(self.len)]
+    }
+}
 
 /// A device and the two of its channels the master bus plays through, both
 /// counted from zero.
@@ -94,9 +140,15 @@ fn parse_channel(address: &str) -> Result<(&str, u16), String> {
         .ok_or_else(|| format!("{address:?} does not name a device channel"))
 }
 
+/// What the audio callback owns while it runs, under one lock.
+struct Realtime {
+    executor: Executor,
+    midi_rx: Consumer<MidiBytes>,
+}
+
 /// What the realtime callbacks share with the control thread.
 struct Shared {
-    executor: Mutex<Executor>,
+    realtime: Mutex<Realtime>,
     xrun_count: Arc<AtomicU64>,
     /// Set from cpal's error callback when the stream's device has gone. The
     /// callback may run on the realtime thread, so it sets a flag and nothing
@@ -113,6 +165,104 @@ struct State {
     wanted: Route,
     buffer_size: Option<u32>,
     last_probe: Option<Instant>,
+}
+
+/// Every Core MIDI source mooloop is listening to.
+struct MidiInputs {
+    /// Lists the sources. Connecting consumes a `MidiInput`, so each
+    /// connection is made from a fresh one and this one is kept for looking.
+    /// `None` when Core MIDI refused a client, and then there is no input.
+    scanner: Option<MidiInput>,
+    /// Shared by every connection's callback. Those run on Core MIDI's own
+    /// thread, not the audio thread, so taking a lock there is fine.
+    queue: Arc<Mutex<Producer<MidiBytes>>>,
+    /// By source id, which survives a rename.
+    connections: Vec<(String, String, MidiInputConnection<()>)>,
+    /// Sources that refused a connection, by id, so a broken one is reported
+    /// once rather than once a second.
+    refused: Vec<String>,
+    last_scan: Option<Instant>,
+}
+
+impl MidiInputs {
+    fn new(queue: Producer<MidiBytes>) -> Self {
+        let scanner = match MidiInput::new(MIDI_CLIENT_NAME) {
+            Ok(input) => Some(input),
+            Err(e) => {
+                mooloop_core::log_warn!("midi", "Core MIDI is not available ({e}); no MIDI input");
+                None
+            }
+        };
+        Self {
+            scanner,
+            queue: Arc::new(Mutex::new(queue)),
+            connections: Vec::new(),
+            refused: Vec::new(),
+            last_scan: None,
+        }
+    }
+
+    /// Listen to every source not yet listened to, and let go of the ones
+    /// that went away.
+    fn scan(&mut self) {
+        self.last_scan = Some(Instant::now());
+        let Some(scanner) = self.scanner.as_ref() else {
+            return;
+        };
+        let present: Vec<_> = scanner
+            .ports()
+            .into_iter()
+            .filter_map(|port| Some((port.id(), scanner.port_name(&port).ok()?, port)))
+            .collect();
+        let is_present = |id: &String| present.iter().any(|(present, _, _)| present == id);
+        self.connections.retain(|(id, name, _)| {
+            let keep = is_present(id);
+            if !keep {
+                mooloop_core::log_info!("midi", "the MIDI input {name:?} went away");
+            }
+            keep
+        });
+        self.refused.retain(is_present);
+
+        for (id, name, port) in present {
+            let known = self
+                .connections
+                .iter()
+                .any(|(connected, _, _)| *connected == id);
+            if known || self.refused.contains(&id) {
+                continue;
+            }
+            let mut input = match MidiInput::new(MIDI_CLIENT_NAME) {
+                Ok(input) => input,
+                Err(e) => {
+                    mooloop_core::log_warn!("midi", "could not listen to {name:?} ({e})");
+                    self.refused.push(id);
+                    continue;
+                }
+            };
+            // Clock, active sensing and system exclusive: none of it plays a
+            // note, and a clock alone is 24 messages a beat.
+            input.ignore(Ignore::All);
+            let queue = self.queue.clone();
+            let listener = move |_timestamp: u64, message: &[u8], _: &mut ()| {
+                if let Some(message) = MidiBytes::new(message) {
+                    // Full means the audio callback has stopped taking; a
+                    // note from then is not one anybody is waiting to hear.
+                    let _ = lock(&queue).push(message);
+                }
+            };
+            match input.connect(&port, "input", listener, ()) {
+                Ok(connection) => {
+                    mooloop_core::log_info!("midi", "listening to the MIDI input {name:?}");
+                    self.connections.push((id, name, connection));
+                }
+                Err(e) => {
+                    mooloop_core::log_warn!("midi", "could not listen to {name:?} ({e})");
+                    self.refused.push(id);
+                }
+            }
+        }
+    }
 }
 
 /// A Core Audio host whose sample rate is known but whose stream is not yet
@@ -159,14 +309,16 @@ impl Opening {
             }
             None => default.clone(),
         };
+        let (midi_tx, midi_rx) = RingBuffer::new(MIDI_QUEUE_CAPACITY);
         let driver = CoreAudioDriver {
             host: self.host,
             sample_rate: self.sample_rate,
             shared: Arc::new(Shared {
-                executor: Mutex::new(executor),
+                realtime: Mutex::new(Realtime { executor, midi_rx }),
                 xrun_count,
                 lost: AtomicBool::new(false),
             }),
+            midi: Mutex::new(MidiInputs::new(midi_tx)),
             state: Mutex::new(State {
                 stream: None,
                 route: default.clone(),
@@ -214,6 +366,7 @@ impl Opening {
             (Some(_), None) => {}
         }
         drop(state);
+        lock(&driver.midi).scan();
         Ok(driver)
     }
 }
@@ -224,6 +377,7 @@ pub(crate) struct CoreAudioDriver {
     sample_rate: u32,
     shared: Arc<Shared>,
     state: Mutex<State>,
+    midi: Mutex<MidiInputs>,
     auto_reconnect: AtomicBool,
 }
 
@@ -302,10 +456,19 @@ impl CoreAudioDriver {
         lock(&self.state).route.target()
     }
 
-    /// Control-thread upkeep, called from the handle's event poll: reopen a
-    /// stream whose device went away, and return to the asked-for device when
-    /// it is back.
+    /// Control-thread upkeep, called from the handle's event poll: listen to
+    /// MIDI sources that have appeared, reopen a stream whose device went
+    /// away, and return to the asked-for device when it is back.
     pub(crate) fn service(&self) {
+        {
+            let mut midi = lock(&self.midi);
+            if midi
+                .last_scan
+                .is_none_or(|scanned| scanned.elapsed() >= PROBE_INTERVAL)
+            {
+                midi.scan();
+            }
+        }
         let lost = self.shared.lost.swap(false, Ordering::Relaxed);
         let mut state = lock(&self.state);
         if lost {
@@ -404,7 +567,7 @@ impl CoreAudioDriver {
         // Stop the old stream before the new one plays; then the next block
         // arrives on a new thread, after a gap that is not a late wake-up.
         state.stream = None;
-        lock(&self.shared.executor).begin_run();
+        lock(&self.shared.realtime).executor.begin_run();
         if let Err(e) = stream.play() {
             // Nothing is playing now. Say so to `service`, which will find
             // something that does.
@@ -432,17 +595,36 @@ fn render_callback(
     // renders at once.
     let mut scratch_l = vec![0.0f32; MAX_BLOCK_SIZE];
     let mut scratch_r = vec![0.0f32; MAX_BLOCK_SIZE];
+    let mut midi = [MidiBytes::default(); MAX_MIDI_PER_CALLBACK];
     move |data, _info| {
         data.fill(0.0);
         // `try_lock`, never `lock`: the only other holder is a reopen on the
         // control thread, and a block of silence is the right answer to one.
-        let Ok(mut executor) = shared.executor.try_lock() else {
+        // MIDI stays in the ring through a missed callback, so no key is lost.
+        let Ok(mut realtime) = shared.realtime.try_lock() else {
             return;
         };
-        for block in data.chunks_mut(MAX_BLOCK_SIZE * channels) {
+        let Realtime { executor, midi_rx } = &mut *realtime;
+        let mut arrived = 0;
+        while arrived < midi.len() {
+            let Ok(message) = midi_rx.pop() else {
+                break;
+            };
+            midi[arrived] = message;
+            arrived += 1;
+        }
+        for (index, block) in data.chunks_mut(MAX_BLOCK_SIZE * channels).enumerate() {
             let frames = block.len() / channels;
             let (out_l, out_r) = (&mut scratch_l[..frames], &mut scratch_r[..frames]);
-            executor.process(std::iter::empty(), out_l, out_r);
+            // Everything that arrived since the last callback acts at the top
+            // of its first block: Core MIDI's timestamps are on another clock,
+            // and a key's lateness is already smaller than one callback.
+            let block_midi = if index == 0 { &midi[..arrived] } else { &[] };
+            executor.process(
+                block_midi.iter().map(|message| (0, message.as_slice())),
+                out_l,
+                out_r,
+            );
             for (frame, (l, r)) in block
                 .chunks_exact_mut(channels)
                 .zip(out_l.iter().zip(out_r.iter()))
@@ -476,7 +658,19 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{channel_address, parse_channel, Route};
+    use super::{channel_address, parse_channel, MidiBytes, Route};
+
+    /// A channel message crosses whole; system exclusive, which Core MIDI
+    /// hands over in one piece, and an empty packet do not cross at all.
+    #[test]
+    fn only_a_channel_message_fits_the_ring() {
+        let note = MidiBytes::new(&[0x90, 60, 100]).expect("a note-on fits");
+        assert_eq!(note.as_slice(), [0x90, 60, 100]);
+        let program = MidiBytes::new(&[0xC0, 5]).expect("a program change fits");
+        assert_eq!(program.as_slice(), [0xC0, 5]);
+        assert_eq!(MidiBytes::new(&[]), None);
+        assert_eq!(MidiBytes::new(&[0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7]), None);
+    }
 
     #[test]
     fn a_route_survives_its_own_spelling() {

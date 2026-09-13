@@ -1,6 +1,6 @@
 //! JACK-independent render state shared by realtime playback and file export.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
@@ -2424,8 +2424,10 @@ fn add_encoded(sum: &mut StereoBus, source: &StereoBus, frames: usize) {
 
 
 /// The most auditions one block may carry. A block is a couple of
-/// milliseconds; anything past this is a stuck key, not playing.
-const MAX_AUDITIONS_PER_BLOCK: usize = 16;
+/// milliseconds; anything past this is a stuck key, not playing. Sized for
+/// both hands on a MIDI keyboard landing a chord and releasing the last one
+/// in the same block, because what falls past the cap can be a note-off.
+const MAX_AUDITIONS_PER_BLOCK: usize = 64;
 
 /// Note ids for auditioned notes, kept clear of the sequencer's.
 ///
@@ -2437,10 +2439,23 @@ fn audition_note_id(note: u8) -> u64 {
     u64::MAX - u64::from(note)
 }
 
-/// One note the UI asked a channel to sound this block.
+/// Note ids for keys played on a MIDI keyboard: the block below the UI's
+/// auditions, so releasing a key never releases a slice being auditioned on
+/// the same pitch, or the other way round.
+fn keyboard_note_id(note: u8) -> u64 {
+    u64::MAX - 128 - u64::from(note)
+}
+
+/// The keyboard channel's value when no channel should hear the keyboard.
+pub(crate) const NO_KEYBOARD_CHANNEL: u8 = u8::MAX;
+
+/// One note the UI or the keyboard asked a channel to sound this block.
 #[derive(Clone, Copy)]
 struct Audition {
     channel: u8,
+    /// Frames into the block. Zero for the UI, whose gesture has no position
+    /// inside one; where the driver timestamps MIDI, a key keeps its own.
+    offset: u32,
     event: Event,
 }
 
@@ -2594,6 +2609,14 @@ pub(crate) struct RenderState {
     /// decoding it.
     buffer_midi: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>>,
     buffer_cc: BufferCcState,
+    /// The channel a MIDI keyboard plays, or [`NO_KEYBOARD_CHANNEL`]. Shared
+    /// with the control layer, which follows the editor's selection with it.
+    keyboard_channel: Arc<AtomicU8>,
+    /// Per MIDI note, the channel its key went down on plus one, or zero
+    /// while the key is up. The release goes where the press went: a key held
+    /// while the selection moves would otherwise send its note-off to a
+    /// channel that never started it and leave the first one sounding.
+    held_keys: [u8; 128],
     playhead_meters: Arc<PlayheadMeters>,
     modulator_meters: Arc<ModulatorMeters>,
     /// The sample browser's audition voice, if something is playing. One at
@@ -2718,6 +2741,8 @@ impl RenderState {
             device_telemetry: DeviceTelemetry::new(),
             buffer_midi: Arc::new(ArcSwapOption::empty()),
             buffer_cc: BufferCcState::default(),
+            keyboard_channel: Arc::new(AtomicU8::new(NO_KEYBOARD_CHANNEL)),
+            held_keys: [0; 128],
             playhead_meters: PlayheadMeters::new(),
             modulator_meters: ModulatorMeters::new(),
             auditions: [None; MAX_AUDITIONS_PER_BLOCK],
@@ -3834,21 +3859,27 @@ impl RenderState {
                 channel,
                 note,
                 velocity,
-            } => self.queue_audition(
-                channel,
-                Event::NoteOn {
-                    id: audition_note_id(note),
-                    note,
-                    velocity,
-                },
-            ),
-            EngineCommand::ReleaseChannelNote { channel, note } => self.queue_audition(
-                channel,
-                Event::NoteOff {
-                    id: audition_note_id(note),
-                    note,
-                },
-            ),
+            } => {
+                self.queue_audition(
+                    channel,
+                    0,
+                    Event::NoteOn {
+                        id: audition_note_id(note),
+                        note,
+                        velocity,
+                    },
+                );
+            }
+            EngineCommand::ReleaseChannelNote { channel, note } => {
+                self.queue_audition(
+                    channel,
+                    0,
+                    Event::NoteOff {
+                        id: audition_note_id(note),
+                        note,
+                    },
+                );
+            }
             EngineCommand::SetChannelSamplerParams { channel, params } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
                     strip.sampler.set_params(params);
@@ -4083,12 +4114,21 @@ impl RenderState {
         self.buffer_midi = map;
     }
 
-    /// Translate one block's MIDI input into buffer events. Runs before the
-    /// block renders, so input acts on the audio it arrived with.
+    /// Share the control layer's keyboard channel cell. An atomic rather than
+    /// a command because it follows the selection, which changes from more
+    /// places than any one command would be sent from.
+    pub(crate) fn attach_keyboard_channel(&mut self, channel: Arc<AtomicU8>) {
+        self.keyboard_channel = channel;
+    }
+
+    /// Translate one block's MIDI input into notes and buffer events. Runs
+    /// before the block renders, so input acts on the audio it arrived with.
     ///
-    /// Note says what and how long, velocity says how hard, and a CC carries
-    /// whatever else the tuple needs — the note table holds the shape of an
-    /// edit and the controls bend it.
+    /// A note a buffer mapping claims drives the buffer; every other note
+    /// plays the keyboard channel. For the buffer, note says what and how
+    /// long, velocity says how hard, and a CC carries whatever else the tuple
+    /// needs — the note table holds the shape of an edit and the controls bend
+    /// it.
     pub(crate) fn apply_midi(&mut self, messages: &[mooloop_core::MidiMessage]) {
         use mooloop_core::midi::BufferCcTarget;
         use mooloop_core::MidiKind;
@@ -4097,33 +4137,39 @@ impl RenderState {
             return;
         }
         let map = self.buffer_midi.load();
-        let Some(map) = map.as_deref().copied() else {
-            return;
-        };
+        let map = map.as_deref().copied();
         for message in messages {
-            if !map.accepts(message) {
-                continue;
-            }
-            let slot = map.slot as usize;
+            let claimed = |note| {
+                map.filter(|map| map.accepts(message))
+                    .filter(|map| map.note_event(note, 1).is_some())
+            };
             match message.kind {
-                MidiKind::NoteOn { note, velocity } => {
-                    if let Some(event) = map.note_event(note, velocity) {
-                        let event = self.buffer_cc.apply(event);
-                        if let Some(chain) = self.chain_mut(map.target) {
-                            chain.queue_buffer(slot, event);
+                MidiKind::NoteOn { note, velocity } => match claimed(note) {
+                    Some(map) => {
+                        if let Some(event) = map.note_event(note, velocity) {
+                            let event = self.buffer_cc.apply(event);
+                            if let Some(chain) = self.chain_mut(map.target) {
+                                chain.queue_buffer(map.slot as usize, event);
+                            }
                         }
                     }
-                }
-                MidiKind::NoteOff { note } => {
+                    None => self.press_key(message.offset, note, velocity),
+                },
+                MidiKind::NoteOff { note } => match claimed(note) {
                     // Only a note this map owns may release; an unmapped key
                     // must not cancel an edit it never started.
-                    if map.note_event(note, 1).is_some() {
+                    Some(map) => {
                         if let Some(chain) = self.chain_mut(map.target) {
-                            chain.queue_buffer_release(slot);
+                            chain.queue_buffer_release(map.slot as usize);
                         }
                     }
-                }
+                    None => self.release_key(message.offset, note),
+                },
                 MidiKind::ControlChange { controller, value } => {
+                    let Some(map) = map.filter(|map| map.accepts(message)) else {
+                        continue;
+                    };
+                    let slot = map.slot as usize;
                     let Some(target) = map.cc_target(controller) else {
                         continue;
                     };
@@ -4167,32 +4213,65 @@ impl RenderState {
         self.sample_rate as f64 * 60.0 / self.transport.bpm.max(1.0) / 128.0
     }
 
+    /// A key went down: sound it on the keyboard channel, and remember which
+    /// channel that was.
+    fn press_key(&mut self, offset: u32, note: u8, velocity: u8) {
+        let channel = self.keyboard_channel.load(Ordering::Relaxed);
+        // A key pressed again before its release arrived -- a dropped
+        // note-off, or two controllers on one pitch -- lets the first go
+        // rather than stranding it under an id the second is about to reuse.
+        self.release_key(offset, note);
+        if channel == NO_KEYBOARD_CHANNEL {
+            return;
+        }
+        let id = keyboard_note_id(note);
+        if self.queue_audition(channel, offset, Event::NoteOn { id, note, velocity }) {
+            self.held_keys[usize::from(note & 0x7f)] = channel + 1;
+        }
+    }
+
+    /// A key came up: release it on the channel it went down on.
+    fn release_key(&mut self, offset: u32, note: u8) {
+        let held = std::mem::take(&mut self.held_keys[usize::from(note & 0x7f)]);
+        if held != 0 {
+            let id = keyboard_note_id(note);
+            self.queue_audition(held - 1, offset, Event::NoteOff { id, note });
+        }
+    }
+
     /// Hold an auditioned note until the block's event lists exist.
     ///
-    /// Silently dropped past the cap: sixteen notes inside one block is a
-    /// stuck key, and refusing the seventeenth is better than growing a
-    /// buffer on the audio thread.
-    fn queue_audition(&mut self, channel: u8, event: Event) {
-        if let Some(slot) = self.auditions.iter_mut().find(|slot| slot.is_none()) {
-            *slot = Some(Audition { channel, event });
-        }
+    /// Silently dropped past the cap, which returns `false`: that many notes
+    /// inside one block is a stuck key, and refusing the next is better than
+    /// growing a buffer on the audio thread.
+    fn queue_audition(&mut self, channel: u8, offset: u32, event: Event) -> bool {
+        let Some(slot) = self.auditions.iter_mut().find(|slot| slot.is_none()) else {
+            return false;
+        };
+        *slot = Some(Audition {
+            channel,
+            offset,
+            event,
+        });
+        true
     }
 
     /// Dispatch this block's auditions into the channels' event lists.
     ///
-    /// At offset zero, and after the sequencer has scheduled: an audition is
-    /// a live gesture that already happened, so it belongs at the top of the
-    /// block rather than somewhere inside it. They go in whether or not the
-    /// transport is running, which is the point -- auditioning a slice must
-    /// not require pressing play.
-    fn dispatch_auditions(&mut self) {
+    /// After the sequencer has scheduled, and at the offset each one carries
+    /// -- the top of the block for the UI's, whose gesture already happened.
+    /// They go in whether or not the transport is running, which is the point
+    /// -- auditioning a slice or playing a keyboard must not require pressing
+    /// play.
+    fn dispatch_auditions(&mut self, frames: usize) {
+        let last_frame = frames.saturating_sub(1) as u32;
         for slot in self.auditions.iter_mut() {
             let Some(audition) = slot.take() else {
                 continue;
             };
             if let Some(events) = self.events.get_mut(audition.channel as usize) {
                 let _ = events.push_ordered(TimedEvent {
-                    offset: 0,
+                    offset: audition.offset.min(last_frame),
                     event: audition.event,
                 });
             }
@@ -4286,7 +4365,7 @@ impl RenderState {
         if seeked {
             release_all_voices(0, self.live_channels(), &mut self.events);
         }
-        self.dispatch_auditions();
+        self.dispatch_auditions(frames);
 
         let context = ProcessContext {
             sample_rate: self.sample_rate,
@@ -5052,6 +5131,89 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 Event::NoteOn { .. }
             ));
         }
+    }
+
+    /// A MIDI keyboard plays the selected channel with the transport stopped,
+    /// and a key comes up on the channel it went down on. Holding a key while
+    /// the selection moves is exactly how a performer changes sounds, and a
+    /// release routed to the new channel would leave the old one sounding.
+    #[test]
+    fn a_keyboard_key_is_released_on_the_channel_it_went_down_on() {
+        use mooloop_core::{MidiKind, MidiMessage};
+
+        // A full second on both channels, so a note left held is still
+        // sounding when the check looks.
+        let sample = Arc::new(SampleData {
+            frames: vec![[0.5, -0.5]; 48_000],
+            sample_rate: 48_000,
+            root_note: 60,
+        });
+        let slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>> = Arc::new(
+            (0..MAX_CHANNELS)
+                .map(|_| Arc::new(ArcSwapOption::empty()))
+                .collect(),
+        );
+        slots[0].store(Some(sample.clone()));
+        slots[1].store(Some(sample));
+        let slice_slots = Arc::new(
+            (0..MAX_CHANNELS)
+                .map(|_| Arc::new(ArcSwapOption::empty()))
+                .collect(),
+        );
+        let mut render = RenderState::new(48_000, slots, slice_slots);
+        let mut project = Project::default();
+        project.channels.push(ProjectChannel::sampler(1, 1));
+        render.load_project(&project);
+        let keyboard = Arc::new(AtomicU8::new(NO_KEYBOARD_CHANNEL));
+        render.attach_keyboard_channel(keyboard.clone());
+        let sounding = |render: &RenderState, channel: usize| {
+            !render.strips[channel].sampler.voice_positions()[0].is_nan()
+        };
+        let key = |kind| MidiMessage {
+            offset: 0,
+            channel: 0,
+            kind,
+        };
+
+        // With no channel to play, a key plays nothing and holds nothing.
+        render.apply_midi(&[key(MidiKind::NoteOn {
+            note: 60,
+            velocity: 100,
+        })]);
+        render.process_block(128);
+        assert!(!sounding(&render, 0) && !sounding(&render, 1));
+        assert!(render.held_keys.iter().all(|&held| held == 0));
+
+        keyboard.store(0, Ordering::Relaxed);
+        render.apply_midi(&[key(MidiKind::NoteOn {
+            note: 62,
+            velocity: 100,
+        })]);
+        render.process_block(128);
+        assert!(sounding(&render, 0), "the key should play the selected channel");
+        assert!(!sounding(&render, 1));
+
+        // The selection moves to the second channel with the key still down,
+        // and then the key comes up. Asserted on the queued release rather
+        // than on the voice: the default sampler is one-shot and ignores a
+        // note-off, so silence could not tell a right release from a lost one.
+        keyboard.store(1, Ordering::Relaxed);
+        render.apply_midi(&[key(MidiKind::NoteOff { note: 62 })]);
+        let releases: Vec<_> = render
+            .auditions
+            .iter()
+            .flatten()
+            .map(|audition| (audition.channel, audition.event))
+            .collect();
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].0, 0, "the release went to a channel the key never started");
+        assert!(matches!(
+            releases[0].1,
+            Event::NoteOff { id, note: 62 } if id == keyboard_note_id(62)
+        ));
+        assert!(render.held_keys.iter().all(|&held| held == 0));
+        render.process_block(128);
+        assert!(!sounding(&render, 1), "the second channel was never played");
     }
 
     /// Auditioning has to work with the transport stopped -- that is the
