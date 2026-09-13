@@ -454,7 +454,11 @@ pub fn save_effect_preset(
     info: PresetInfo,
     mode: AssetMode,
 ) -> Result<SaveReport, Error> {
-    let mut effect = *effect;
+    // A preset is what a device sounds like, not which device it is --
+    // `EffectSlotState::id`'s own documentation says a preset carries no
+    // identity. `save_effect_run_preset` below strips it; this one relied on
+    // every caller having done so first.
+    let mut effect = effect.with_id(mooloop_core::DeviceId::UNASSIGNED);
     let diagnosis = integrity::repair_effect(DocumentKind::Effect, &mut effect);
     if !diagnosis.is_usable() {
         return Err(diagnosis.into());
@@ -2263,6 +2267,53 @@ id = "default_kick"
             panic!("`type = \"ml1\"` must load as the ML-M1");
         };
         assert_eq!(state.params.filter_decay, 0.08);
+    }
+
+    /// A delay saved before 2026-09-08 named the five-entry
+    /// `DelayTimeDivision`, whose serde names are a subset of the
+    /// twenty-one-entry `ModTimeDivision` grid that replaced it. Those five
+    /// strings are on-disk identifiers now, and the round-trip tests cannot
+    /// see a break here because they write and read with the same build --
+    /// rename both ends and they still pass. Same reason as
+    /// `a_source_saved_under_the_old_ml1_name_still_loads`, so the same
+    /// shape: decode from a literal manifest.
+    ///
+    /// `half` is deliberately not an identity. It was worth half a beat
+    /// under the old five and is worth two under the grid it now shares, so
+    /// such a delay reopens four times slower -- playing the half note its
+    /// own label always claimed. `docs/PROJECT_FORMAT.md` records that as
+    /// intended, and this pins it so nobody "fixes" it by accident.
+    #[test]
+    fn a_delay_division_saved_under_the_old_five_entry_grid_still_decodes() {
+        #[derive(serde::Deserialize)]
+        struct Held {
+            division: mooloop_core::ModTimeDivision,
+        }
+
+        for (name, expected, beats) in [
+            ("half", mooloop_core::ModTimeDivision::Half, 2.0),
+            ("quarter", mooloop_core::ModTimeDivision::Quarter, 1.0),
+            (
+                "dotted_eighth",
+                mooloop_core::ModTimeDivision::DottedEighth,
+                0.75,
+            ),
+            (
+                "eighth_triplet",
+                mooloop_core::ModTimeDivision::EighthTriplet,
+                1.0 / 3.0,
+            ),
+            ("sixteenth", mooloop_core::ModTimeDivision::Sixteenth, 0.25),
+        ] {
+            let held: Held = toml::from_str(&format!("division = \"{name}\""))
+                .unwrap_or_else(|error| panic!("`{name}` must still decode: {error}"));
+            assert_eq!(held.division, expected, "`{name}` decoded to the wrong division");
+            assert!(
+                (held.division.beats() - beats).abs() < 1e-6,
+                "`{name}` is worth {} beats, expected {beats}",
+                held.division.beats()
+            );
+        }
     }
 
     #[test]
