@@ -243,7 +243,7 @@ impl Session {
             return SliceEdit::Refused;
         }
         let markers = slice_fractions(channel);
-        self.dirty = true;
+        self.mark_dirty();
         SliceEdit::Changed(markers)
     }
 
@@ -265,7 +265,7 @@ impl Session {
             return None;
         }
         let markers = slice_fractions(channel);
-        self.dirty = true;
+        self.mark_dirty();
         Some(markers)
     }
 
@@ -278,7 +278,7 @@ impl Session {
             .map(|marker| marker.id)?;
         channel.slices.remove(id);
         let markers = slice_fractions(channel);
-        self.dirty = true;
+        self.mark_dirty();
         Some(markers)
     }
 
@@ -311,7 +311,7 @@ impl Session {
             channel.slices.rebuild(snapped);
         }
         let markers = slice_fractions(channel);
-        self.dirty = true;
+        self.mark_dirty();
         Some(markers)
     }
 
@@ -319,7 +319,7 @@ impl Session {
     pub fn clear_slices(&mut self) -> Option<Vec<f32>> {
         let (_, channel) = self.sliced_channel()?;
         channel.slices.clear();
-        self.dirty = true;
+        self.mark_dirty();
         Some(Vec::new())
     }
 
@@ -354,7 +354,7 @@ impl Session {
         channel.committed_sample = Some(committed.sample);
         refresh_sample_view(channel);
         let params = channel.params;
-        self.dirty = true;
+        self.mark_dirty();
         Ok(Committed {
             ratio,
             command: EngineCommand::SetChannelSamplerParams {
@@ -377,7 +377,7 @@ impl Session {
         channel.slices = slices;
         channel.committed_sample = None;
         refresh_sample_view(channel);
-        self.dirty = true;
+        self.mark_dirty();
         Some((
             params,
             EngineCommand::SetChannelSamplerParams {
