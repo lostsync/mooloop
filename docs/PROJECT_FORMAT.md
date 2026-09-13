@@ -106,12 +106,17 @@ enabled = false
 next_note_id = 2
 notes = [[{ id = 1, start_tick = 0, duration_ticks = 24, note = 60, velocity = 100 }]]
 
+[[document.pattern_meta]]
+name = "Chorus"
+color = "#EAB308"
+
 [document.channels.setup.channel]
 name = "Sampler 1"
 kind = "sampler"
 muted = false
 volume = 0.8
 pan = 0.0
+color = "#84CC16"
 
 [document.channels.setup.source]
 type = "sampler"
@@ -120,6 +125,32 @@ type = "sampler"
 kind = "builtin"
 id = "default_kick"
 ```
+
+**Names and colours are content, and both default.** A channel carries an
+optional `color`, and `pattern_meta` carries one `{ name, color }` entry per
+pattern, parallel to `pattern_lengths` -- which stays the field that decides
+how many patterns a song has. Three rules govern them:
+
+- **A colour is a colour, not a palette index.** It is stored as `#RRGGBB`,
+  so a song looks the same under every theme and nothing here commits the
+  palette to having a fixed number of slots. `ENHANCEMENTS.md` holds the
+  palette question this deliberately does not settle.
+- **Absent means "nobody chose one", and stays absent.** Both fields are
+  skipped when they are empty, and `pattern_meta` is written with its
+  trailing empty entries trimmed, so a song where nothing has been named or
+  coloured writes exactly the bytes it wrote before these fields existed.
+  Opening and saving does not rewrite it. A list longer than the pattern bank
+  is repaired on load, and a shorter one -- the ordinary case -- is filled out
+  in memory and left alone on disk.
+- **A malformed colour costs the colour, not the song.** `color = "octarine"`
+  reads as no colour rather than refusing the document, because a cosmetic
+  field is the wrong thing to lose a song's worth of work to.
+
+`pattern_meta` was added on 2026-09-13, and the name half of it is a fix
+rather than a feature: patterns had been renamable since 2026-09-07, the
+session held the name, and the format had nowhere to put it -- so every
+reopened song came back with its patterns numbered and nothing reported a
+thing.
 
 `channels[].notes` is a pattern-indexed array of note lanes. Notes beyond a
 pattern's current logical length remain stored, so shortening and re-extending

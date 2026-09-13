@@ -128,6 +128,17 @@ pub struct Channel {
     /// the mixer existed land on the master.
     #[serde(default)]
     pub bus: u8,
+    /// The colour the user gave this channel, or `None` for one nobody has
+    /// chosen. Content rather than theme: it is stored as a colour the song
+    /// owns, never as an index into the current palette, so a song looks the
+    /// same under every scheme. A malformed one reads as `None` rather than
+    /// failing the load -- see [`crate::color::deserialize_lenient`].
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::color::deserialize_lenient"
+    )]
+    pub color: Option<crate::color::ProjectColor>,
 }
 
 impl Channel {
@@ -142,6 +153,7 @@ impl Channel {
             volume: 1.0,
             pan: 0.0,
             bus: crate::MASTER_BUS,
+            color: None,
         }
     }
 }

@@ -8,6 +8,7 @@ pub mod aux_in;
 pub mod bridge;
 pub mod buffer;
 pub mod channel;
+pub mod color;
 pub mod ds01;
 pub mod ds01_factory;
 pub mod effect;
@@ -126,6 +127,7 @@ pub use generator::{
     synth_osc_param,
 };
 pub use channel::{Channel, DeviceKind, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_PATTERNS};
+pub use color::ProjectColor;
 pub use gain::{
     db_to_linear, format_db, linear_to_db, reference_level_gain, MAX_DB, MAX_LINEAR_GAIN, METER_HOT_DB,
     METER_WARNING_DB, MIN_DB, REFERENCE_PEAK_DBFS,
@@ -179,7 +181,8 @@ pub use playlist::{
 pub use project::{
     AuxInState, ChannelPreset, ChannelSetup, ChannelSource, Ds01State, DrumSynthState, Kit,
     MonoSynthState,
-    MlM1State, MlP8State, PolySynthState, Project, ProjectChannel, SampleReference, SamplerState,
+    MlM1State, MlP8State, PatternMeta, PolySynthState, Project, ProjectChannel, SampleReference,
+    SamplerState, trim_pattern_meta,
     DEFAULT_SWING_PERCENT, MAX_SWING_PERCENT, MIN_SWING_PERCENT,
 };
 pub use sampler::{

@@ -671,6 +671,25 @@ fn check_patterns(doctor: &mut Doctor, project: &mut Project) {
             MAX_PATTERN_STEPS,
         );
     }
+    // `pattern_meta` is parallel to `pattern_lengths`, and only one of the two
+    // decides how many patterns a song has. A *short* list is the ordinary
+    // case -- every song written before the field existed has none, and a
+    // pattern nobody named or coloured has nothing to store -- so it is not
+    // reported; the session fills it out on the way in. A long one names
+    // patterns that do not exist, which is worth saying out loud before the
+    // entries are dropped.
+    let patterns = project.pattern_lengths.len();
+    if project.pattern_meta.len() > patterns {
+        let found = project.pattern_meta.len();
+        if doctor.correct(
+            "song.pattern.meta",
+            SONG,
+            format!("{found} pattern names and colours are stored for {patterns} patterns"),
+            format!("drop the {} past the last pattern", found - patterns),
+        ) {
+            project.pattern_meta.truncate(patterns);
+        }
+    }
 }
 
 fn check_buses(doctor: &mut Doctor, project: &mut Project) {

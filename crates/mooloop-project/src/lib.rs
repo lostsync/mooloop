@@ -1233,7 +1233,7 @@ mod tests {
     use mooloop_core::{
         AutomationLane, AutomationPoint, DrumSynthParams, MlM1Params, MlP8Params, MonoSynthParams,
         NoteEvent,
-        ParamAddr, PatternPlacement, MAX_CHOKE_GROUP,
+        ParamAddr, PatternMeta, PatternPlacement, ProjectColor, MAX_CHOKE_GROUP,
     };
     use tempfile::tempdir;
 
@@ -1310,6 +1310,87 @@ mod tests {
         let loaded = load_bundle(&bundle).unwrap();
         assert!(loaded.warnings.is_empty());
         assert_eq!(loaded.document, LoadedDocument::Song(project));
+    }
+
+    /// **Names and colours are content, so they survive the round trip.**
+    ///
+    /// The pattern name half of this is a fix rather than a feature: patterns
+    /// could be renamed from 2026-09-07, `Session::pattern_names` held the
+    /// name, and `Project` had nowhere to put it -- so every reopened song
+    /// came back with "Pattern 1", and nothing failed.
+    #[test]
+    fn channel_and_pattern_identity_round_trips() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.channels[0].setup.channel.name = "Kick".into();
+        project.channels[0].setup.channel.color = Some(ProjectColor::new(0x84, 0xCC, 0x16));
+        project.pattern_lengths.push(16);
+        project.channels[0].notes.push(Vec::new());
+        project.channels[0].automation.push(Vec::new());
+        project.pattern_meta = vec![
+            PatternMeta { name: "Verse".into(), color: None },
+            PatternMeta {
+                name: "Chorus".into(),
+                color: Some(ProjectColor::new(0xEA, 0xB3, 0x08)),
+            },
+        ];
+
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let loaded = load_bundle(&bundle).unwrap();
+        assert!(loaded.warnings.is_empty());
+        assert_eq!(loaded.document, LoadedDocument::Song(project));
+    }
+
+    /// **Opening a song and saving it must not rewrite it.**
+    ///
+    /// A song nobody has coloured writes no colour and no pattern list at
+    /// all, which is what makes the defaulted-field rule hold in both
+    /// directions: the field is absent from an old song *and* from a new one
+    /// that has not used it, so the two are the same document.
+    #[test]
+    fn a_song_with_no_colours_writes_nothing_about_them() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.pattern_lengths.push(16);
+        project.channels[0].notes.push(Vec::new());
+        project.channels[0].automation.push(Vec::new());
+        // What the session hands the snapshot: one entry per pattern, every
+        // one of them saying nothing.
+        project.pattern_meta = vec![PatternMeta::default(), PatternMeta::default()];
+        project.pattern_meta = mooloop_core::trim_pattern_meta(&project.pattern_meta);
+
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        // A song with no assets to embed saves as one file, and that file is
+        // the manifest.
+        let manifest = fs::read_to_string(&bundle).unwrap();
+        assert!(!manifest.contains("pattern_meta"), "an empty list was written:\n{manifest}");
+        assert!(!manifest.contains("color"), "a colour nobody chose was written:\n{manifest}");
+    }
+
+    /// A colour that is not a colour reads as "none chosen" rather than
+    /// refusing the song. It is a cosmetic field, and losing a whole document
+    /// to a hand-edited one would be the wrong trade -- `ProjectColor`'s
+    /// lenient deserializer is where this is decided.
+    #[test]
+    fn a_malformed_colour_loses_the_colour_and_not_the_song() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.channels[0].setup.channel.color = Some(ProjectColor::new(1, 2, 3));
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+
+        let manifest_path = bundle.clone();
+        let manifest = fs::read_to_string(&manifest_path)
+            .unwrap()
+            .replace("#010203", "octarine");
+        fs::write(&manifest_path, manifest).unwrap();
+
+        let LoadedDocument::Song(loaded) = load_bundle(&bundle).unwrap().document else {
+            panic!("the song was refused over a colour");
+        };
+        assert_eq!(loaded.channels[0].setup.channel.color, None);
     }
 
     #[test]

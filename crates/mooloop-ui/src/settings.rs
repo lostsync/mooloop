@@ -446,6 +446,13 @@ pub(crate) struct LayoutSettings {
     pub sidebar_visible: bool,
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: f32,
+    /// The channel sidebar on the left, which is a different panel from the
+    /// browser on the right and remembers its own width. Both default to
+    /// hidden: a first run should show the work, not the chrome around it.
+    #[serde(default)]
+    pub channel_sidebar_visible: bool,
+    #[serde(default = "default_channel_sidebar_width")]
+    pub channel_sidebar_width: f32,
 }
 
 pub(crate) const VIEW_COUNT: usize = 5;
@@ -478,6 +485,9 @@ fn default_playlist_dock_height() -> f32 {
 fn default_sidebar_width() -> f32 {
     260.0
 }
+fn default_channel_sidebar_width() -> f32 {
+    220.0
+}
 
 impl Default for LayoutSettings {
     fn default() -> Self {
@@ -492,6 +502,8 @@ impl Default for LayoutSettings {
             bottom_pane_visible: true,
             sidebar_visible: false,
             sidebar_width: default_sidebar_width(),
+            channel_sidebar_visible: false,
+            channel_sidebar_width: default_channel_sidebar_width(),
         }
     }
 }
@@ -547,6 +559,9 @@ impl LayoutSettings {
         }
         self.sidebar_width = self
             .sidebar_width
+            .clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+        self.channel_sidebar_width = self
+            .channel_sidebar_width
             .clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
         self
     }

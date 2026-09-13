@@ -7,6 +7,7 @@
 //! via commands. The engine keeps its own pre-allocated copy.
 
 mod actions;
+mod channel_colors;
 mod gestures;
 mod meter;
 #[cfg(feature = "mockup")]
@@ -581,6 +582,8 @@ fn apply_layout(window: &MainWindow, layout: &LayoutSettings) {
     window.set_bottom_pane_visible(layout.bottom_pane_visible);
     window.set_sidebar_visible(layout.sidebar_visible);
     window.set_sidebar_width(layout.sidebar_width);
+    window.set_channel_sidebar_visible(layout.channel_sidebar_visible);
+    window.set_channel_sidebar_width(layout.channel_sidebar_width);
 }
 
 /// Read the arrangement back off the window. The window is the live truth
@@ -607,6 +610,8 @@ fn read_layout(window: &MainWindow) -> LayoutSettings {
         bottom_pane_visible: window.get_bottom_pane_visible(),
         sidebar_visible: window.get_sidebar_visible(),
         sidebar_width: window.get_sidebar_width(),
+        channel_sidebar_visible: window.get_channel_sidebar_visible(),
+        channel_sidebar_width: window.get_channel_sidebar_width(),
     }
 }
 
@@ -2493,14 +2498,14 @@ impl UiState {
     /// window. An empty name falls back to `Pattern N` in the menu.
     fn sync_pattern_menu(&self, window: &MainWindow) {
         let options: Vec<slint::SharedString> = self
-            .session.pattern_names
+            .session.pattern_meta
             .iter()
             .enumerate()
-            .map(|(i, name)| {
-                let label = if name.is_empty() {
+            .map(|(i, meta)| {
+                let label = if meta.name.is_empty() {
                     format!("Pattern {}", i + 1)
                 } else {
-                    name.clone()
+                    meta.name.clone()
                 };
                 format!("{:02}  {label}", i + 1).into()
             })
@@ -2510,17 +2515,25 @@ impl UiState {
         // and number it themselves. The playlist gutter drew "Pattern N" from
         // its own loop index and so was the one place a rename never reached.
         let names: Vec<slint::SharedString> = self
-            .session.pattern_names
+            .session.pattern_meta
             .iter()
-            .map(|name| name.as_str().into())
+            .map(|meta| meta.name.as_str().into())
             .collect();
         window.set_pattern_names(ModelRc::from(Rc::new(VecModel::from(names))));
-        let current = self
-            .session.pattern_names
-            .get(self.session.current_pattern)
-            .cloned()
-            .unwrap_or_default();
-        window.set_current_pattern_name(current.into());
+        let current = self.session.pattern_meta.get(self.session.current_pattern);
+        window.set_current_pattern_name(
+            current.map(|meta| meta.name.clone()).unwrap_or_default().into(),
+        );
+        let color = current.and_then(|meta| meta.color);
+        window.set_current_pattern_has_color(color.is_some());
+        window.set_current_pattern_color_hex(
+            color.map(|color| color.to_hex()).unwrap_or_default().into(),
+        );
+        window.set_current_pattern_color(
+            color
+                .map(|color| slint::Color::from_rgb_u8(color.r, color.g, color.b))
+                .unwrap_or_default(),
+        );
     }
 
     fn sync_generator_preset_menu(&self, window: &MainWindow) {
@@ -3767,6 +3780,20 @@ impl UiState {
         let drum = ch.drum_params;
         let mono = ch.mono_params;
         window.set_selected_channel_name(ch.name.as_str().into());
+        // Three properties for one optional colour, because Slint has no
+        // `Option`: whether there is one, what it is to draw, and what it is
+        // to store and to compare a swatch against. The hex is the canonical
+        // upper-case spelling, which is what makes the selected swatch
+        // findable by string comparison.
+        window.set_selected_channel_has_color(ch.color.is_some());
+        window.set_selected_channel_color_hex(
+            ch.color.map(|color| color.to_hex()).unwrap_or_default().into(),
+        );
+        window.set_selected_channel_color(
+            ch.color
+                .map(|color| slint::Color::from_rgb_u8(color.r, color.g, color.b))
+                .unwrap_or_default(),
+        );
         window.set_selected_channel_volume_db(linear_to_db(ch.volume));
         window.set_source_kind(device_kind_to_int(ch.kind));
         // Derived rather than remembered per channel: the selection names one
@@ -4161,6 +4188,13 @@ impl AppUi {
         // Two lists the device declares once; nothing about a patch moves
         // them, so they are installed here rather than on every refresh.
         install_mlp8_route_vocabularies(&window);
+        // The channel sidebar's swatches. A property of the application, not
+        // of any song: a project stores the colour it was given, never which
+        // swatch was clicked, so this list can change without touching a
+        // single saved file.
+        window.set_color_choices(ModelRc::from(Rc::new(VecModel::from(
+            channel_colors::color_choices(),
+        ))));
         handle.send(EngineCommand::SetTempo(INITIAL_BPM as f64));
         handle.send(EngineCommand::SetSwing(DEFAULT_SWING_PERCENT));
 
@@ -5571,8 +5605,16 @@ impl AppUi {
                 if !st.session.rename_pattern(index as usize, &name) {
                     return;
                 }
+                // **This did not mark the document dirty until 2026-09-13**,
+                // and until the same day it did not need to: the name lived
+                // only in the session and was thrown away by the next save,
+                // so there was nothing for a dirty flag to protect. Persisting
+                // the name is what turned a harmless omission into a rename
+                // that could be lost at quit without being asked about.
+                st.session.mark_dirty();
                 if let Some(window) = weak.upgrade() {
                     st.sync_pattern_menu(&window);
+                    st.update_document_title(&window);
                 }
             });
         }
@@ -7359,6 +7401,75 @@ impl AppUi {
                     // because neither reads the other.
                     guard.sync_row_flags();
                     guard.refresh_editor(&window);
+                    guard.update_document_title(&window);
+                }
+            });
+        }
+
+        // The channel sidebar's colour swatches and its hex field, which are
+        // one gesture as far as this is concerned: both hand over the string
+        // the project should store, and "" means no colour at all.
+        //
+        // **An unparseable hex is ignored rather than corrected.** The field
+        // reports every keystroke, so a half-typed `#84CC1` arrives here on
+        // the way to a real colour; treating it as an error would fight the
+        // user typing, and treating it as "clear the colour" would lose the
+        // colour they are in the middle of replacing.
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_channel_color_chosen(move |hex| {
+                let mut guard = st.borrow_mut();
+                let color = if hex.trim().is_empty() {
+                    None
+                } else {
+                    match mooloop_core::ProjectColor::from_hex(hex.trim()) {
+                        Some(color) => Some(color),
+                        None => return,
+                    }
+                };
+                let channel = guard.session.selected as i32;
+                if !guard.session.set_channel_color(channel, color) {
+                    return;
+                }
+                guard.session.mark_dirty();
+                if let Some(window) = weak.upgrade() {
+                    // The same pair the rename handler refreshes, and for the
+                    // same reason: the sidebar and the rack row each read the
+                    // channel rather than each other.
+                    guard.sync_row_flags();
+                    guard.refresh_editor(&window);
+                    guard.update_document_title(&window);
+                }
+            });
+        }
+
+        // A pattern's colour, which is the channel handler one index over: the
+        // pattern is named rather than assumed, the way `pattern-renamed`
+        // takes one, because the toolbar can outlive the selection it was
+        // drawn for.
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_pattern_color_chosen(move |pattern, hex| {
+                let mut guard = st.borrow_mut();
+                let color = if hex.trim().is_empty() {
+                    None
+                } else {
+                    match mooloop_core::ProjectColor::from_hex(hex.trim()) {
+                        Some(color) => Some(color),
+                        None => return,
+                    }
+                };
+                let Ok(pattern) = usize::try_from(pattern) else {
+                    return;
+                };
+                if !guard.session.set_pattern_color(pattern, color) {
+                    return;
+                }
+                guard.session.mark_dirty();
+                if let Some(window) = weak.upgrade() {
+                    guard.sync_pattern_menu(&window);
                     guard.update_document_title(&window);
                 }
             });

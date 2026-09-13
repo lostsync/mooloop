@@ -67,8 +67,8 @@ Alphabetical by model name, then by harness.
 
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-09-12
-- Sessions: 112
+- Last seen: 2026-09-13
+- Sessions: 113
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,

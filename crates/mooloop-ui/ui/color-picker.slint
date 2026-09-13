@@ -1,0 +1,229 @@
+// Choosing a colour a song will keep.
+//
+// Two surfaces want this: the channel sidebar, which has room to show the
+// swatches outright, and the pattern field in the transport toolbar, which
+// has room for one 20px chip and a popup. They share the grid rather than
+// each drawing their own, because the grid is where the arithmetic is and
+// arithmetic written twice is this codebase's characteristic fault.
+
+import { Theme, StatusHint } from "theme.slint";
+import { NameField, ToolbarMetrics } from "toolbar.slint";
+
+// One colour a channel or pattern can be given: the hex the project stores,
+// and the colour to draw it in.
+//
+// Both halves come from Rust for the reason `appearance-dialog.slint` states
+// about its own seeds: **Slint cannot turn a hex string into a colour**, so
+// the swatch cannot derive its own tint, and the string is the thing that goes
+// into the song. One table in Rust hands over both, which is what stops the
+// palette being spelled once in the markup and once beside the model.
+export struct ColorChoice {
+    value: string,
+    tint: color,
+}
+
+// One square of colour, selected or not.
+export component ColorSwatch inherits Rectangle {
+    in property <color> tint;
+    in property <bool> selected;
+    // Drawn as a crossed-out square rather than a colour: this is the "no
+    // colour chosen" choice, which is a real choice and not an empty slot.
+    in property <bool> is-none;
+    in property <string> tooltip;
+    callback clicked();
+
+    width: 20px;
+    height: 20px;
+    border-radius: Theme.radius-md;
+    background: root.is-none ? Theme.surface-raised : root.tint;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? Theme.text : Theme.border;
+    accessible-role: button;
+    accessible-label: root.tooltip;
+
+    if root.is-none : Path {
+        width: 100%;
+        height: 100%;
+        stroke: Theme.text-faint;
+        stroke-width: 1px;
+        viewbox-width: 20;
+        viewbox-height: 20;
+        MoveTo { x: 4; y: 16; }
+        LineTo { x: 16; y: 4; }
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+        changed has-hover => {
+            if (self.has-hover) { StatusHint.show(root.tooltip); }
+            else { StatusHint.clear(root.tooltip); }
+        }
+    }
+}
+
+// The palette, and the square that means "none", as a grid.
+//
+// **Placed rather than laid out.** A `for` inside a row cannot skip the items
+// belonging to the other row -- a hidden child still costs the layout its
+// spacing, which drew the second row indented by six gaps -- so each swatch is
+// positioned from its own index instead. The row count is derived from the
+// model, so adding a colour to the Rust table needs no edit here.
+export component ColorSwatchGrid inherits Rectangle {
+    in property <[ColorChoice]> choices;
+    in property <bool> has-color;
+    in property <string> color-hex;
+    in property <int> columns: 6;
+    callback chosen(string);
+
+    // Six columns of 18px on a 22px pitch is 128px, which fits the sidebar's
+    // 180px minimum width with 8px of padding either side and room to spare.
+    property <length> swatch: 18px;
+    property <length> cell: 22px;
+    // `+ 1` is the "no colour" square, which is why this counts the choices
+    // rather than being told how many there are.
+    property <int> rows: ceil((root.choices.length + 1) / root.columns);
+
+    width: root.columns * root.cell - (root.cell - root.swatch);
+    height: root.rows * root.cell - (root.cell - root.swatch);
+
+    for choice[i] in root.choices : ColorSwatch {
+        x: mod(i, root.columns) * root.cell;
+        y: floor(i / root.columns) * root.cell;
+        width: root.swatch;
+        height: root.swatch;
+        tint: choice.tint;
+        tooltip: choice.value;
+        selected: root.has-color && root.color-hex == choice.value;
+        clicked => { root.chosen(choice.value); }
+    }
+    // Last, and after the colours rather than among them: it is the absence
+    // of a colour, not one more of them.
+    ColorSwatch {
+        x: mod(root.choices.length, root.columns) * root.cell;
+        y: floor(root.choices.length / root.columns) * root.cell;
+        width: root.swatch;
+        height: root.swatch;
+        is-none: true;
+        tooltip: "No color";
+        selected: !root.has-color;
+        clicked => { root.chosen(""); }
+    }
+}
+
+// The grid plus the field that reaches the colours it does not offer.
+//
+// The swatches are suggestions; what a song stores is a colour, so the field
+// beside them is not an advanced mode but the rest of the same control.
+export component ColorChooser inherits VerticalLayout {
+    in property <[ColorChoice]> choices;
+    in property <bool> has-color;
+    in property <color> tint;
+    in property <string> color-hex;
+    callback chosen(string);
+
+    spacing: 6px;
+
+    ColorSwatchGrid {
+        choices: root.choices;
+        has-color: root.has-color;
+        color-hex: root.color-hex;
+        chosen(value) => { root.chosen(value); }
+    }
+    HorizontalLayout {
+        spacing: 4px;
+        NameField {
+            horizontal-stretch: 1;
+            text: root.color-hex;
+            placeholder: "#RRGGBB";
+            tooltip: "Color, as #RRGGBB";
+            edited(value) => { root.chosen(value); }
+        }
+        Rectangle {
+            width: 20px;
+            height: ToolbarMetrics.control-height;
+            border-radius: Theme.radius-md;
+            border-width: 1px;
+            border-color: Theme.border;
+            background: root.has-color ? root.tint : Theme.surface-raised;
+        }
+    }
+}
+
+// A 20px chip that opens the chooser, for a toolbar that has no room for it.
+//
+// The chip *is* the current colour, so the control shows its own value the way
+// a knob does rather than needing a label to say what it holds.
+export component ColorChipButton inherits Rectangle {
+    in property <[ColorChoice]> choices;
+    in property <bool> has-color;
+    in property <color> tint;
+    in property <string> color-hex;
+    in property <string> tooltip: "Color";
+    callback chosen(string);
+
+    width: 20px;
+    height: ToolbarMetrics.control-height;
+    accessible-role: button;
+    accessible-label: root.tooltip;
+
+    Rectangle {
+        width: 20px;
+        height: 20px;
+        y: (parent.height - self.height) / 2;
+        border-radius: Theme.radius-md;
+        background: root.has-color ? root.tint : Theme.surface-raised;
+        border-width: 1px;
+        border-color: touch.has-hover ? Theme.focus : Theme.border;
+
+        if !root.has-color : Path {
+            width: 100%;
+            height: 100%;
+            stroke: Theme.text-faint;
+            stroke-width: 1px;
+            viewbox-width: 20;
+            viewbox-height: 20;
+            MoveTo { x: 4; y: 16; }
+            LineTo { x: 16; y: 4; }
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { popup.show(); }
+        changed has-hover => {
+            if (self.has-hover) { StatusHint.show(root.tooltip); }
+            else { StatusHint.clear(root.tooltip); }
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: root.height + 2px;
+        width: chooser.preferred-width + 16px;
+        height: chooser.preferred-height + 16px;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.panel;
+            border-color: Theme.border;
+            border-width: 1px;
+            border-radius: Theme.radius-md;
+            chooser := ColorChooser {
+                x: 8px;
+                y: 8px;
+                width: parent.width - 16px;
+                choices: root.choices;
+                has-color: root.has-color;
+                tint: root.tint;
+                color-hex: root.color-hex;
+                // Deliberately does not close the popup. A `close()` before
+                // the callback has run is what `device-presets` paid for once
+                // already -- a row that closed itself took its own callback
+                // with it -- and leaving it open lets a colour be compared
+                // against its neighbours, which is the whole reason to see
+                // eleven at a time.
+                chosen(value) => { root.chosen(value); }
+            }
+        }
+    }
+}

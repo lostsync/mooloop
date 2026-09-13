@@ -681,6 +681,36 @@ compact horizontal action strip or familiar icon buttons with tooltips. Their
 dimensions must match the rack row/control scale. Never use two tall blank
 columns with tiny `+` and `-` glyphs.
 
+## Side Panels
+
+Two panels flank the work area, and they are deliberately one mechanism: the
+**channel sidebar** on the left and the **browser** on the right.
+
+- **A panel is in flow, always, and hides by animating its width to zero.**
+  Not an `if`: a panel that leaves the tree snaps the layout and cannot
+  animate. The content sits in a clipped child so the panel can reach zero
+  width without its controls spilling, and the resize grip stays *outside*
+  that clip, because `clip` cuts pointer events along with pixels.
+- **A grip rides the edge it moves.** Each pointer event folds its own offset
+  into the current width rather than replaying from the press, and a bound
+  that swallows a move re-anchors the grab — otherwise reversing direction
+  spends the overshoot before anything happens. The left panel's grip widens
+  rightward and the right panel's leftward; that sign is the only difference
+  between them.
+- **Two panels cannot each clamp against the whole window.** At 1000px a pair
+  that each allowed itself 400px would leave 200 for the editor, so each
+  measures its ceiling against the window *minus its sibling*. That is one
+  function, `sidebar-ceiling`, and not a constant.
+- **What a panel shows is the selection, not a copy of it.** The channel
+  sidebar edits whatever `selected-channel` names and holds no selection of
+  its own. It reuses the rename callback the `DEVICES` toolbar already has,
+  because a second way to rename a channel is a second thing to drift.
+- **A control drawn for a setting that does not exist yet is disabled, and
+  looks it.** The sidebar's MIDI rows are the standing example: MIDI is
+  decoded and routed and configurable nowhere, so the rows say what the panel
+  will hold without claiming to hold it. A disabled field mutes its value as
+  well as its background — a greyed box with black text reads as live.
+
 ## Responsive Behavior
 
 - Design the desktop module grid first, then define explicit narrow variants.
@@ -712,8 +742,11 @@ columns with tiny `+` and `-` glyphs.
   out of the pane. A dense row clips its own controls at a narrow width
   instead, which is what the piano roll's already did.
 - **The status bar's layout chips read in the screen order of the regions
-  they toggle**, by each region's left edge: the dock at `x 0`, the split at
-  the divider, the browser at the sidebar's edge. Their glyphs share one
+  they toggle**, by each region's left edge: the channel sidebar at `x 0`,
+  the dock below it, the split at the divider, the browser at the right
+  sidebar's edge. The row's arithmetic counts the chips rather than stating
+  how many there are, because a fourth chip arriving is exactly when a
+  hardcoded three stops being true — which is what happened on 2026-09-13. Their glyphs share one
   outline, and what separates them is **fill, not position** — a docked panel
   appears and disappears and is drawn solid; a split is two editors and is
   drawn as two empty halves. Two rules 2px apart are the same square at 16px.

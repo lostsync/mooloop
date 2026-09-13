@@ -1,5 +1,105 @@
 # Interface iteration status
 
+## Step 03 — a channel is a thing you named
+
+Landed on `feat/channel-identity` (2026-09-13). A channel has a name and a
+colour, both saved; a pattern has both in the project format; a left channel
+sidebar holds the controls; and the gesture that used to throw a name away
+does not.
+
+### What the doing changed about the step
+
+**Two of the three pieces were already in, and a fourth was missing.** The
+step file had been corrected on 2026-09-12 to record that `rename_track` and
+`rename_channel` landed with the console pass, so what was left was colour,
+the reset bug and the inert MIDI rows. What it did not know is that
+**`rename_pattern` had nowhere to write.** `Session::pattern_names` existed,
+the transport toolbar wrote to it, and `Project` had no field for it at all --
+`load_project` blanked the list outright -- so a pattern named "Chorus" came
+back numbered after a save and reload, and nothing reported a thing. It had
+been that way since patterns became renamable on 2026-09-07.
+
+That is why this step touches the project format twice. Persisting a pattern
+*colour* beside a name that evaporates would have been incoherent, so the
+name is persisted with it, and both live in one `pattern_meta` entry per
+pattern rather than two parallel lists that can disagree about their length.
+
+**The canonical form of "no colour" had to be decided before anything could
+round-trip.** The first version gave `Project::default()` one blank entry per
+pattern and a legacy-loading test failed on it, correctly: an entry that says
+nothing is not the same as no entry, and a song where nobody has named or
+coloured anything must write the bytes it wrote before these fields existed.
+So the session holds one entry per pattern -- nothing bounds-checks an index
+-- and `trim_pattern_meta` drops the trailing empties on the way out. Opening
+a song and saving it does not rewrite it.
+
+### The bug, and the question that separates its two cases
+
+`reset_channel_source` re-derived `channel.name` from the index on every
+source change. Live from 2026-09-09, when renaming shipped, and correct
+before that: while every name was derived, re-deriving one was a refresh.
+
+The fix is not a flag saying "the user named this". It is a question asked at
+the moment of the change: **is the current name still the *outgoing* device's
+default?** If it is, nobody chose it and it follows the device; if it is not,
+it stays. No new state, and a channel that was renamed back to "Sampler 1" by
+hand behaves like one that was never renamed -- which is right, because those
+two channels are not distinguishable and should not be.
+
+### The panel
+
+Built because Adam asked for it on 2026-09-13 -- *"i think we were going to
+put some of this in a left sidebar like that mockup had"* -- which overrides
+the step file's "do not build the sidebar in this step". It is the mockup's
+CHANNEL tab and only that: the PLUGINS and MIXER tabs it also draws are
+second views of the rack and the mixer, and the plan's own rule is that an
+interface change is judged by whether something already built becomes easier
+to reach.
+
+Three things in it outlive the feature:
+
+- **The two side panels are one mechanism.** The channel sidebar is the
+  browser's mirror -- in flow so it can animate to zero width, content
+  clipped, grip outside the clip because `clip` cuts pointer events with
+  pixels. What differs is the sign of the drag. `UI_DESIGN.md`'s new "Side
+  Panels" section is that mechanism written down.
+- **Two panels cannot each clamp against the whole window.** At 1000px a pair
+  that each allowed itself 400px leaves 200 for the editor. Each measures its
+  ceiling against the window minus its sibling, which is why
+  `sidebar-ceiling` is a function.
+- **The palette is a Rust table and cannot be anything else.** Slint cannot
+  parse a hex string into a colour, so a swatch cannot derive its tint from
+  the value it writes -- the same constraint `appearance-dialog.slint`
+  records about its seed colours. In the markup the palette would have to be
+  spelled twice, as colours to draw and as strings to store.
+
+**The status bar's chip row had a hardcoded count**, `(3 - k) * 26px`, and a
+fourth chip is exactly the event that makes a hardcoded three wrong. It reads
+the list's length now. The chips still read in the screen order of the
+regions they toggle, which is why the new one goes first.
+
+One change is visible outside this feature: **a disabled `MenuField` now
+mutes its value text.** The background already said "disabled" and the value
+did not, which is not enough for a control drawn because a setting *will*
+exist. The piano roll's snap division field gets it too, when snap is off.
+
+### What is not here
+
+- **The colour is stored and shown nowhere but the panel that sets it.** The
+  step says to get it saved and shown in one place first and let the rack,
+  mixer and playlist each adopt it afterwards, each being a place to check it
+  reads at that size. Which surface goes first is Adam's call and is open.
+- **A pattern's colour is set from the transport toolbar, not the sidebar.**
+  The sidebar is a channel panel, so the chip went beside the pattern's name
+  field instead -- the two facts about a pattern in one place. It shares the
+  channel's palette: one set of suggested colours across the application,
+  because a song colouring its Kick and its Chorus from two different elevens
+  is harder to read rather than richer.
+- **Colour is not undoable**, exactly like the two renames beside it. It
+  marks the document dirty and nothing more, which is the shape
+  `rename_channel` and `rename_track` already have.
+- **The MIDI rows are inert on purpose** and say so by being disabled.
+
 ## Step 02 — a device can be copied
 
 Landed on `feat/device-clipboard` (2026-09-07). A rack device -- or a

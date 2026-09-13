@@ -17,6 +17,14 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   misreport what is on screen. Each slot's rectangle is computed rather than
   nested in layouts, which is what lets a view be drawn anywhere off one
   instance.
+- **A channel sidebar flanks the work area on the left**, as of 2026-09-13.
+  It holds the selected channel's name, its colour and three inert MIDI rows,
+  and it is hidden until the status bar's leftmost chip opens it. It resizes
+  by its right edge between 180 and 400px, remembers its width, and edits
+  whatever channel is selected rather than holding a selection of its own.
+  The `reference/img/mooloop-1.0-mockup.png` panel also draws PLUGINS and
+  MIXER tabs; those are second views of the rack and the mixer and are
+  deliberately not built.
 - **The top pane splits.** The status bar's middle chip opens it with the main
   pane's other view; the divider between the two halves drags, resets to even
   on a double-click, and closes the split when dragged to either bound —
@@ -37,8 +45,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   height that view was left at rather than sharing one number.
 - **The pane arrangement survives a restart**, in `[ui.layout]` of
   `settings.toml` beside the palette seeds: which slot each view is in, what
-  each pane is showing, the divider position, each view's dock height, and
-  whether the dock and the browser are open. Zoom is deliberately not saved —
+  each pane is showing, the divider position, each view's dock height, the
+  width of each side panel, and whether the dock, the browser and the channel
+  sidebar are open. Zoom is deliberately not saved —
   it is a glance, not an arrangement. An arrangement that could not be worked
   in falls back to the default panes and keeps the rest of the file.
 - **A view moves between panes by dragging its tab.** Drop it on another
@@ -101,12 +110,18 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - Patterns are created explicitly from a one-pattern project, with up to 256
   addressable pattern IDs and independent logical lengths from 1 to 256 steps.
   Hidden steps survive shortening and re-extending a pattern.
-- **Channels, tracks and patterns can each be named.** A channel is renamed on the
-  `DEVICES` toolbar, a track on its own device face, a pattern in the
-  transport toolbar. A channel or a track refuses a blank name, because its
-  rack plate or its mixer column is the only thing identifying it; a pattern
-  accepts one and reads as `Pattern N` wherever it is drawn -- the pattern
-  menu and the playlist's gutter -- because its number is beside it there.
+- **Channels, tracks and patterns can each be named, and the names are
+  saved.** A channel is renamed on the `DEVICES` toolbar, a track on its own
+  device face, a pattern in the transport toolbar. A channel or a track
+  refuses a blank name, because its rack plate or its mixer column is the only
+  thing identifying it; a pattern accepts one and reads as `Pattern N`
+  wherever it is drawn -- the pattern menu and the playlist's gutter --
+  because its number is beside it there. A channel keeps the name it was given
+  when its source device is changed: only a channel still wearing the outgoing
+  device's default name is renamed after the new one. **A pattern's name
+  survived save and reload only from 2026-09-13**; before that the session
+  held it and the project format had nowhere to put it, so reopening a song
+  numbered every pattern again.
 - Pattern and Song transport modes are independent of the visible editor.
   The playlist is a lower-pane tab, supports layered tick-addressed pattern
   instances, and remains editable while either mode plays. Clip width follows
@@ -1197,9 +1212,14 @@ land on its own when it starts to matter:
   keys move an existing note selection but cannot build one, and the browser
   tree — either tab of it — cannot be reached or driven from the keyboard at
   all. `docs/plans/interface-iteration/04-the-keyboard-pass.md` owns this.
-- Channels have no colour. There is no track-colour field in the UI, the
-  session model, or the project format, so nothing in the rack, mixer, or
-  playlist is colour-coded by channel.
+- **A channel takes a colour from the channel sidebar**, either from its
+  eleven swatches or by typing any `#RRGGBB` into the field beside them, and
+  the colour survives save and reload. It is stored as a colour the song owns
+  rather than an index into the theme's palette, so a song looks the same
+  under every scheme. **A pattern takes one on the same terms**, from a colour
+  chip beside its name field in the transport toolbar, which opens the same
+  swatches in a popup. Nothing in the rack, mixer or playlist is colour-coded
+  by either yet.
 - One automation lane is visible at a time. Its picker reaches the selected
   channel's generator and every parameter of every effect on that channel and
   on every bus, but several lanes cannot be shown at once, the velocity lane

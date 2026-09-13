@@ -26,6 +26,8 @@ import {
     DevicePageButton, DeviceRackMetrics, RackDrag
 } from "device-rack.slint";
 import { ChannelDrag } from "channel-rack.slint";
+import { ChannelSidebar } from "channel-sidebar.slint";
+import { ColorChipButton, ColorChoice } from "color-picker.slint";
 import { DrumDeviceFace } from "drum-device.slint";
 import { FilterDeviceFace } from "filter-device.slint";
 import { DriveDeviceFace } from "drive-device.slint";
@@ -1212,12 +1214,71 @@ export component MainWindow inherits Window {
     // wider than the window minus room for the work surface.
     in-out property <bool> sidebar-visible;
     in-out property <length> sidebar-width: 260px;
+    // The channel sidebar on the left: the selected channel's name, its
+    // colour, and the MIDI rows it will one day configure. A separate panel
+    // from the browser with its own width, and hidden by default for the same
+    // reason -- a first run should show the work rather than the chrome.
+    in-out property <bool> channel-sidebar-visible;
+    in-out property <length> channel-sidebar-width: 220px;
+    // What is left for the work surface once the *other* panel has had its
+    // share. Two panels sharing one window cannot each clamp against the
+    // whole of it: at 1000px they would agree on 400px apiece and leave 200
+    // for the editor. Each therefore measures against the window minus its
+    // sibling, which is why this is a function rather than a constant.
+    pure function sidebar-ceiling(other: length) -> length {
+        return max(180px, min(400px, root.width - 280px - other));
+    }
     changed width => {
         if (root.sidebar-visible) {
-            root.sidebar-width = max(180px,
-                min(root.sidebar-width, min(400px, root.width - 280px)));
+            root.sidebar-width = max(180px, min(root.sidebar-width,
+                root.sidebar-ceiling(root.channel-sidebar-visible
+                    ? root.channel-sidebar-width : 0px)));
+        }
+        if (root.channel-sidebar-visible) {
+            root.channel-sidebar-width = max(180px, min(root.channel-sidebar-width,
+                root.sidebar-ceiling(root.sidebar-visible ? root.sidebar-width : 0px)));
         }
     }
+    // The status bar's layout chips, as a property so the row's arithmetic
+    // can count them. **They read in the screen order of the regions they
+    // toggle**, by each region's left edge: the channel sidebar at x 0, the
+    // dock below it, the split at the divider, the browser at the right
+    // sidebar's edge. Adam asked for that ordering on 2026-09-08, and it is
+    // why the channel sidebar's chip goes first rather than last -- and why
+    // it draws `panel-left`, which is the glyph the browser chip wrongly wore
+    // until that pass.
+    property <[{ on: bool, fill: string, line: string, label: string }]> layout-chips: [
+        { on: root.channel-sidebar-visible, fill: ToolIcons.panel-left-fill,
+          line: ToolIcons.panel-left, label: "Toggle channel sidebar" },
+        { on: root.bottom-pane-visible, fill: ToolIcons.panel-bottom-fill,
+          line: ToolIcons.panel-bottom, label: "Toggle bottom pane" },
+        { on: root.split-active >= 0, fill: "",
+          line: ToolIcons.panel-split, label: "Split top pane" },
+        { on: root.sidebar-visible, fill: ToolIcons.panel-right-fill,
+          line: ToolIcons.panel-right, label: "Toggle browser" },
+    ];
+    // The selected channel's colour, in the three shapes the face needs
+    // because Slint has no `Option`: whether it has one, the colour to draw,
+    // and the canonical `#RRGGBB` to store and to match a swatch against.
+    in-out property <bool> selected-channel-has-color;
+    in-out property <color> selected-channel-color;
+    in-out property <string> selected-channel-color-hex;
+    // The swatch palette, handed over once by Rust. Markup cannot hold it:
+    // Slint cannot parse a hex string into a colour, so a swatch cannot
+    // derive its tint from the value it writes. Not the *channel's* palette:
+    // one set of suggested colours serves channels and patterns alike.
+    in-out property <[ColorChoice]> color-choices;
+    // The colour the selected channel should take, or "" for none. Rust
+    // parses it, ignores what is not a colour, and pushes the result back.
+    callback channel-color-chosen(string);
+    // The current pattern's colour, in the same three shapes and for the same
+    // reason. It shares the channel's swatch palette: one set of suggested
+    // colours across the application, because a song that colours its Kick
+    // and its Chorus from two different elevens is harder to read, not richer.
+    in-out property <bool> current-pattern-has-color;
+    in-out property <color> current-pattern-color;
+    in-out property <string> current-pattern-color-hex;
+    callback pattern-color-chosen(int, string);
     // Sample browser tree, flattened by Rust into one row per visible
     // folder/file. Adding a location opens the folder picker on a worker
     // thread; toggling expands or collapses that folder in place. Clicking
@@ -2505,6 +2566,98 @@ export component MainWindow inherits Window {
             HorizontalLayout {
                 spacing: 0px;
 
+                // ===== Channel sidebar =====
+                //
+                // The mirror of the browser on the other side of the window,
+                // and deliberately the same mechanism: always in flow so
+                // hide/show animates the width rather than snapping the
+                // layout, clipped content so the panel can reach zero, and
+                // the grip outside the clip because pointer events are cut
+                // along with pixels. What differs is the side: this grip
+                // rides the panel's *right* edge, so dragging right widens.
+                Rectangle {
+                    width: root.channel-sidebar-visible ? root.channel-sidebar-width : 0px;
+                    background: Theme.panel;
+                    animate width {
+                        duration: Motion.duration;
+                        easing: Motion.curve;
+                        enabled: !Motion.gesture-active;
+                    }
+
+                    Rectangle {
+                        clip: true;
+                        x: 0;
+                        width: parent.width;
+                        height: parent.height;
+
+                        ChannelSidebar {
+                            width: root.channel-sidebar-width;
+                            height: parent.height;
+                            channel-name: root.selected-channel-name;
+                            channel-number: root.selected-channel + 1;
+                            has-color: root.selected-channel-has-color;
+                            tint: root.selected-channel-color;
+                            color-hex: root.selected-channel-color-hex;
+                            color-choices: root.color-choices;
+                            // The rename the `DEVICES` toolbar already does.
+                            // A second callback would be a second way to
+                            // rename a channel, and they would drift.
+                            renamed(value) => {
+                                root.channel-renamed(root.selected-channel, value);
+                            }
+                            color-chosen(value) => { root.channel-color-chosen(value); }
+                        }
+
+                        // The panel's own right edge, drawn inside the clip so
+                        // it disappears with the panel.
+                        Rectangle {
+                            x: parent.width - 1px;
+                            y: 0;
+                            width: 1px;
+                            height: parent.height;
+                            background: channel-grip.has-hover || channel-grip.pressed
+                                ? Theme.focus : Theme.border;
+                        }
+                    }
+
+                    channel-grip := TouchArea {
+                        x: parent.width - 1px;
+                        width: 6px;
+                        height: parent.height;
+                        enabled: root.channel-sidebar-visible;
+                        mouse-cursor: ew-resize;
+                        property <length> grab-x;
+                        pointer-event(e) => {
+                            if (e.kind == PointerEventKind.down) {
+                                Motion.gesture-active = true;
+                                self.grab-x = self.mouse-x;
+                            } else if (e.kind == PointerEventKind.move && self.pressed) {
+                                // Dragging right widens, so the offset adds
+                                // where the browser's subtracts. The moving
+                                // origin is the same: the grip travels with
+                                // the edge it sets, so each event folds its
+                                // own offset into the current width.
+                                let target = root.channel-sidebar-width
+                                    + (self.mouse-x - self.grab-x);
+                                let clamped = max(180px, min(target,
+                                    root.sidebar-ceiling(root.sidebar-visible
+                                        ? root.sidebar-width : 0px)));
+                                if (clamped != target) {
+                                    // A bound swallowed the move; re-anchor so
+                                    // reversing direction responds immediately
+                                    // instead of unwinding the overshoot.
+                                    self.grab-x = self.mouse-x;
+                                }
+                                root.channel-sidebar-width = clamped;
+                            } else if (e.kind == PointerEventKind.up
+                                    || e.kind == PointerEventKind.cancel) {
+                                Motion.gesture-active = false;
+                                root.layout-changed();
+                            }
+                        }
+                    }
+                }
+
                 // The work container. Every slot rectangle is computed here rather
                 // than nested in layouts, because a view lives in exactly one slot
                 // and therefore needs exactly one instance: what changes when a view
@@ -2630,6 +2783,21 @@ export component MainWindow inherits Window {
                                     placeholder: root.pattern-label(root.current-pattern);
                                     tooltip: "Name this pattern";
                                     edited(t) => { root.pattern-renamed(root.current-pattern, t); }
+                                }
+                                // Beside the name, because they are the same
+                                // kind of fact about a pattern and the panel
+                                // that holds the channel's pair is a channel
+                                // panel. A chip and a popup rather than the
+                                // swatches outright: this is a toolbar.
+                                ColorChipButton {
+                                    choices: root.color-choices;
+                                    has-color: root.current-pattern-has-color;
+                                    tint: root.current-pattern-color;
+                                    color-hex: root.current-pattern-color-hex;
+                                    tooltip: "Color this pattern";
+                                    chosen(value) => {
+                                        root.pattern-color-chosen(root.current-pattern, value);
+                                    }
                                 }
                                 IconButton {
                                     text: "+";
@@ -6307,19 +6475,15 @@ export component MainWindow inherits Window {
                 // found the browser chip drawing `panel-left` for a sidebar
                 // that is docked on the right -- which it had done since the
                 // chip was written.
-                for chip[k] in [
-                    { on: root.bottom-pane-visible, fill: ToolIcons.panel-bottom-fill,
-                      line: ToolIcons.panel-bottom, label: "Toggle bottom pane" },
-                    { on: root.split-active >= 0, fill: "",
-                      line: ToolIcons.panel-split, label: "Split top pane" },
-                    { on: root.sidebar-visible, fill: ToolIcons.panel-right-fill,
-                      line: ToolIcons.panel-right, label: "Toggle browser" },
-                ] : Rectangle {
+                for chip[k] in root.layout-chips : Rectangle {
                     width: 20px;
                     height: 20px;
                     y: 2px;
-                    // Chip k spans [width - (3 - k) * 26, +20].
-                    x: parent.width - (3 - k) * 26px;
+                    // Chip k spans [width - (n - k) * 26, +20], where n is the
+                    // number of chips -- read off the list rather than spelled
+                    // beside it, because a fourth chip arriving is exactly
+                    // when a hardcoded three would stop being true.
+                    x: parent.width - (root.layout-chips.length - k) * 26px;
                     border-radius: Theme.radius-sm;
                     border-width: 1px;
                     border-color: chip-touch.has-hover ? Theme.border : transparent;
@@ -6350,13 +6514,16 @@ export component MainWindow inherits Window {
                     }
                     chip-touch := TouchArea {
                         mouse-cursor: pointer;
-                        enabled: k != 1 || root.split-active >= 0
+                        enabled: k != 2 || root.split-active >= 0
                             || root.other-main-view() >= 0;
                         clicked => {
                             if (k == 0) {
-                                root.bottom-pane-visible = !root.bottom-pane-visible;
+                                root.channel-sidebar-visible = !root.channel-sidebar-visible;
                                 root.layout-changed();
                             } else if (k == 1) {
+                                root.bottom-pane-visible = !root.bottom-pane-visible;
+                                root.layout-changed();
+                            } else if (k == 2) {
                                 root.toggle-split();
                             } else {
                                 root.sidebar-visible = !root.sidebar-visible;

@@ -18,6 +18,10 @@ use std::sync::Arc;
 
 pub struct ChannelState {
     pub name: String,
+    /// The colour the user gave this channel, or `None` for one nobody has
+    /// coloured. Content, like the name: it survives a save and it survives a
+    /// change of source device.
+    pub color: Option<mooloop_core::ProjectColor>,
     pub kind: DeviceKind,
     pub muted: bool,
     pub volume: f32,
@@ -101,6 +105,7 @@ impl ChannelState {
     pub fn new(index: usize) -> Self {
         Self {
             name: DeviceKind::Sampler.default_channel_name(index),
+            color: None,
             kind: DeviceKind::Sampler,
             muted: false,
             volume: 0.8,

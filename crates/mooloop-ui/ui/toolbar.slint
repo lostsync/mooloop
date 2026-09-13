@@ -252,7 +252,11 @@ export component MenuField inherits Rectangle {
             width: root.field-width;
             Text {
                 text: root.display-text;
-                color: Theme.text;
+                // A disabled field reads as disabled. The background already
+                // said so and the value did not, which is not enough for a
+                // control that is drawn because the setting will exist rather
+                // than because it does -- the channel sidebar's MIDI rows.
+                color: root.enabled ? Theme.text : Theme.text-faint;
                 font-size: ToolbarMetrics.value-size;
                 horizontal-alignment: left;
                 vertical-alignment: center;

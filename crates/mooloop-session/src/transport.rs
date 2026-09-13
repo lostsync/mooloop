@@ -7,7 +7,7 @@
 
 use crate::session::Session;
 use mooloop_core::{
-    EngineCommand, LoopRange, PatternPlacement, PlaybackMode, DEFAULT_STEPS,
+    EngineCommand, LoopRange, PatternMeta, PatternPlacement, PlaybackMode, ProjectColor, DEFAULT_STEPS,
     MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS,
     MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_STEP,
 };
@@ -90,7 +90,7 @@ impl Session {
         }
         let pattern = self.pattern_lengths.len();
         self.pattern_lengths.push(DEFAULT_STEPS as usize);
-        self.pattern_names.push(String::new());
+        self.pattern_meta.push(PatternMeta::default());
         for channel in &mut self.channels {
             channel.notes.push(Vec::new());
             channel.automation.push(Vec::new());
@@ -102,10 +102,27 @@ impl Session {
 
     /// Renames a pattern. An empty name is legal and reads as "Pattern N".
     pub fn rename_pattern(&mut self, index: usize, name: &str) -> bool {
-        let Some(slot) = self.pattern_names.get_mut(index) else {
+        let Some(slot) = self.pattern_meta.get_mut(index) else {
             return false;
         };
-        *slot = name.trim().to_string();
+        slot.name = name.trim().to_string();
+        true
+    }
+
+    /// Gives a pattern a colour, or takes its colour away with `None`.
+    ///
+    /// Returns whether anything changed, so a caller does not mark a document
+    /// dirty for re-choosing the colour it already had. The same shape as
+    /// `rename_pattern`, and for the same reason: this is content, and the
+    /// only thing it can be wrong about is which pattern it addresses.
+    pub fn set_pattern_color(&mut self, index: usize, color: Option<ProjectColor>) -> bool {
+        let Some(slot) = self.pattern_meta.get_mut(index) else {
+            return false;
+        };
+        if slot.color == color {
+            return false;
+        }
+        slot.color = color;
         true
     }
 
@@ -265,12 +282,86 @@ mod tests {
         let mut session = Session::default();
 
         assert!(session.rename_pattern(0, "  Chorus  "), "a real name was refused");
-        assert_eq!(session.pattern_names[0], "Chorus", "the name was not trimmed");
+        assert_eq!(session.pattern_meta[0].name, "Chorus", "the name was not trimmed");
 
         assert!(session.rename_pattern(0, "   "), "blanking a pattern name was refused");
-        assert_eq!(session.pattern_names[0], "", "the name did not clear");
+        assert_eq!(session.pattern_meta[0].name, "", "the name did not clear");
 
-        assert!(!session.rename_pattern(session.pattern_names.len(), "Nope"));
+        assert!(!session.rename_pattern(session.pattern_meta.len(), "Nope"));
+    }
+
+    /// A colour is the other half of the same entry, and the difference from
+    /// the name is that nothing is derived when it is absent: no colour is the
+    /// ordinary case rather than a fallback.
+    #[test]
+    fn a_pattern_takes_a_colour_and_may_give_it_back() {
+        let mut session = Session::default();
+        let green = ProjectColor::new(0x84, 0xCC, 0x16);
+
+        assert!(session.set_pattern_color(0, Some(green)));
+        assert_eq!(session.pattern_meta[0].color, Some(green));
+
+        // Choosing the colour it already has is not an edit, so a caller does
+        // not mark the document dirty for it.
+        assert!(!session.set_pattern_color(0, Some(green)));
+
+        assert!(session.set_pattern_color(0, None), "clearing a colour was refused");
+        assert_eq!(session.pattern_meta[0].color, None);
+
+        assert!(!session.set_pattern_color(session.pattern_meta.len(), Some(green)));
+    }
+
+    /// Every pattern has an entry, so adding one cannot leave the name and
+    /// colour lists short of the bank -- which is what an index into them
+    /// would panic on.
+    #[test]
+    fn a_new_pattern_arrives_with_an_entry_of_its_own() {
+        let mut session = Session::default();
+        session.add_pattern().expect("the bank was full");
+        assert_eq!(session.pattern_meta.len(), session.pattern_lengths.len());
+        assert!(session.pattern_meta.last().expect("no entry").is_empty());
+    }
+
+    /// **The round trip the whole pattern-metadata field exists for.**
+    ///
+    /// A name and a colour set on a pattern, written into a project snapshot,
+    /// and loaded back. This is the test that would have failed every day
+    /// between 2026-09-07 and 2026-09-13, when `rename_pattern` wrote to a
+    /// session field the document had no room for: the name went in, the
+    /// snapshot dropped it, and the load blanked what was left.
+    #[test]
+    fn a_patterns_name_and_colour_survive_a_snapshot_and_a_load() {
+        let mut session = Session::default();
+        let amber = ProjectColor::new(0xEA, 0xB3, 0x08);
+        session.add_pattern().expect("the bank was full");
+        assert!(session.rename_pattern(1, "Chorus"));
+        assert!(session.set_pattern_color(1, Some(amber)));
+        // Pattern 0 is left untouched on purpose: the trimming on the way out
+        // drops trailing empties, and an empty entry *before* a full one has
+        // to keep its place or every colour after it shifts by one.
+        let project = session.project_snapshot(120, 50);
+        assert_eq!(project.pattern_meta.len(), 2, "a leading empty entry was dropped");
+
+        let mut reopened = Session::default();
+        reopened.replace_project(&project, &[None]);
+        assert_eq!(reopened.pattern_meta[1].name, "Chorus");
+        assert_eq!(reopened.pattern_meta[1].color, Some(amber));
+        assert!(reopened.pattern_meta[0].is_empty(), "pattern 1 gained something");
+        assert_eq!(
+            reopened.pattern_meta.len(),
+            reopened.pattern_lengths.len(),
+            "the loaded bank and its metadata disagree about how many patterns there are"
+        );
+    }
+
+    /// A song where nobody named or coloured anything writes no entries at
+    /// all, which is what keeps an untouched song byte-identical to one saved
+    /// before the field existed.
+    #[test]
+    fn a_song_nobody_has_named_writes_no_pattern_metadata() {
+        let mut session = Session::default();
+        session.add_pattern().expect("the bank was full");
+        assert!(session.project_snapshot(120, 50).pattern_meta.is_empty());
     }
 
     /// Shortening a pattern must not leave the roll highlighting notes it has

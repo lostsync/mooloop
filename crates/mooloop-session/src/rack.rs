@@ -3,7 +3,8 @@
 use crate::channel::ChannelState;
 use crate::session::Session;
 use mooloop_core::{
-    DeviceKind, EffectTarget, EngineCommand, MAX_BUSES, MAX_CHANNELS, MAX_LINEAR_GAIN,
+    DeviceKind, EffectTarget, EngineCommand, ProjectColor, MAX_BUSES, MAX_CHANNELS,
+    MAX_LINEAR_GAIN,
 };
 
 impl Session {
@@ -46,6 +47,27 @@ impl Session {
             return false;
         }
         state.name = name.to_string();
+        true
+    }
+
+    /// Gives a channel a colour, or takes its colour away with `None`.
+    ///
+    /// Unlike a name, a colour has no default worth deriving and no reason to
+    /// be refused: a blank name would leave a rack row identifying nothing,
+    /// where a channel with no colour is simply the ordinary case. Returns
+    /// whether anything changed, so re-choosing the colour a channel already
+    /// has does not dirty the document.
+    pub fn set_channel_color(&mut self, channel: i32, color: Option<ProjectColor>) -> bool {
+        let Ok(channel) = usize::try_from(channel) else {
+            return false;
+        };
+        let Some(state) = self.channels.get_mut(channel) else {
+            return false;
+        };
+        if state.color == color {
+            return false;
+        }
+        state.color = color;
         true
     }
 
@@ -159,6 +181,61 @@ mod tests {
         session.select_channel(1);
         session.change_selected_source(DeviceKind::Sampler);
         assert_eq!(session.source_preset_name(1), None);
+    }
+
+    /// **A name the user typed survives a change of source device.**
+    ///
+    /// Live from 2026-09-09, when renaming shipped, to 2026-09-13: a channel
+    /// called "Kick" switched from the sampler to the DS-01 came back called
+    /// "DS-01 1", because the source change re-derived the name from the
+    /// index unconditionally. That was correct while every name was derived
+    /// and became a gesture that discards user content the day one could be
+    /// typed.
+    #[test]
+    fn a_named_channel_keeps_its_name_when_its_device_changes() {
+        let mut session = Session::default();
+        session.select_channel(0);
+        assert!(session.rename_channel(0, "Kick"));
+
+        session.change_selected_source(DeviceKind::Ds01);
+
+        assert_eq!(session.channels[0].name, "Kick", "the source change ate the name");
+        assert_eq!(session.channels[0].kind, DeviceKind::Ds01, "the device did not change");
+    }
+
+    /// The other half of the same rule: a channel still wearing the *outgoing*
+    /// device's default name was never named by anybody, so the name follows
+    /// the device. Without this the rack would fill up with rows called
+    /// "Sampler 1" running a DS-01.
+    #[test]
+    fn an_unnamed_channel_still_follows_its_device() {
+        let mut session = Session::default();
+        session.select_channel(0);
+        assert_eq!(session.channels[0].name, DeviceKind::Sampler.default_channel_name(0));
+
+        session.change_selected_source(DeviceKind::Ds01);
+
+        assert_eq!(session.channels[0].name, DeviceKind::Ds01.default_channel_name(0));
+    }
+
+    /// A colour is content the same way a name is, and it is content the
+    /// channel keeps: a source change is not a statement about it either.
+    #[test]
+    fn a_channel_takes_a_colour_and_keeps_it_across_a_source_change() {
+        let mut session = Session::default();
+        let green = ProjectColor::new(0x84, 0xCC, 0x16);
+        session.select_channel(0);
+
+        assert!(session.set_channel_color(0, Some(green)));
+        assert_eq!(session.channels[0].color, Some(green));
+        assert!(!session.set_channel_color(0, Some(green)), "re-choosing is not an edit");
+
+        session.change_selected_source(DeviceKind::MlP8);
+        assert_eq!(session.channels[0].color, Some(green), "the source change ate the colour");
+
+        assert!(session.set_channel_color(0, None), "clearing a colour was refused");
+        assert_eq!(session.channels[0].color, None);
+        assert!(!session.set_channel_color(99, Some(green)), "a missing channel was coloured");
     }
 
     /// Clicking the channel already selected is a no-op -- unless the device

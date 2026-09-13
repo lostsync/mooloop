@@ -1,0 +1,168 @@
+// The left channel sidebar: what the selected channel is called, what colour
+// it is, and where its MIDI comes from.
+//
+// `reference/img/mooloop-1.0-mockup.png` draws this panel with four tabs --
+// CHANNEL, MIDI, PLUGINS, MIXER -- and this is the CHANNEL one. The other
+// three would each be a second view of a surface that already exists (the
+// rack, the mixer), and `docs/plans/interface-iteration/README.md`'s rule is
+// that an interface change is judged by whether something already built
+// becomes easier to reach. So the tab strip is drawn with one tab rather than
+// four stubs: it is the shape, without the promise.
+//
+// **The MIDI rows are deliberately inert.** MIDI is decoded and routed and
+// configurable nowhere, and `docs/FOCUS.md` is explicit that this panel must
+// not pull MIDI configuration forward. They are drawn disabled so the panel
+// says what it will hold without claiming to hold it yet.
+
+import { Theme } from "theme.slint";
+import { SectionLabel } from "controls.slint";
+import { MenuField, NameField } from "toolbar.slint";
+import { ColorChoice, ColorChooser } from "color-picker.slint";
+// Re-exported so `main.slint` has one import for the panel and the struct its
+// model is made of.
+export { ColorChoice }
+
+// A label above a control, which is how a 180px column has to stack what a
+// toolbar puts side by side.
+component SidebarField inherits VerticalLayout {
+    in property <string> label;
+    spacing: 3px;
+    SectionLabel { text: root.label; }
+    @children
+}
+
+export component ChannelSidebar inherits Rectangle {
+    // The channel these controls edit. The sidebar edits the selected channel
+    // and nothing else: `selected-channel` already exists, is saved with the
+    // document, and is what every other surface means by "this channel".
+    in property <string> channel-name;
+    in property <int> channel-number;
+    in property <bool> has-color;
+    // Named `tint` rather than `color`, which a `Rectangle` already owns.
+    in property <color> tint;
+    in property <string> color-hex;
+    in property <[ColorChoice]> color-choices;
+
+    callback renamed(string);
+    // The hex the project should store, or "" for no colour at all. A string
+    // rather than a `color` because a colour is what Slint draws and a hex is
+    // what the song keeps -- and because Rust is the only thing here that can
+    // parse one.
+    callback color-chosen(string);
+
+    background: Theme.panel;
+    VerticalLayout {
+        spacing: 0px;
+
+        // The tab strip, with one tab. Same 24px header the browser sidebar
+        // wears on the other side of the window, so the two panels line up.
+        Rectangle {
+            height: 24px;
+            background: Theme.surface;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 3px;
+                padding-top: 2px;
+                padding-bottom: 2px;
+                spacing: 4px;
+                Rectangle {
+                    width: tab-label.preferred-width + 10px;
+                    border-radius: Theme.radius-sm;
+                    background: Theme.surface-active;
+                    tab-label := Text {
+                        text: "CHANNEL";
+                        color: Theme.text;
+                        font-size: 9px;
+                        letter-spacing: 0.5px;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: root.channel-number > 0 ? "CH " + root.channel-number : "";
+                    color: Theme.text-faint;
+                    font-size: 9px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: Theme.border; opacity: 0.6; }
+
+        VerticalLayout {
+            padding: 8px;
+            spacing: 10px;
+
+            SidebarField {
+                label: "NAME";
+                name-field := NameField {
+                    width: 100%;
+                    text: root.channel-name;
+                    placeholder: "Channel name";
+                    tooltip: "Rename this channel";
+                    edited(value) => { root.renamed(value); }
+                }
+            }
+
+            SidebarField {
+                label: "COLOR";
+                ColorChooser {
+                    choices: root.color-choices;
+                    has-color: root.has-color;
+                    tint: root.tint;
+                    color-hex: root.color-hex;
+                    chosen(value) => { root.color-chosen(value); }
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.border; opacity: 0.6; }
+
+            // Inert. See the header of this file: the setting is drawn, the
+            // configuration is not built, and the rows say which of those two
+            // they are by being disabled.
+            SidebarField {
+                label: "MIDI";
+                VerticalLayout {
+                    spacing: 4px;
+                    // **A constant, not `root.width - padding`.** A
+                    // `MenuField` sizes itself from `field-width`, so a row
+                    // told to span the panel makes the panel size itself to a
+                    // child that is reading the panel's width -- a binding
+                    // loop through `layoutinfo-h`, which Slint now warns may
+                    // panic at runtime. 96px clears the 180px minimum with
+                    // the 16px of padding and the 38px the label and caret
+                    // take, and a wider panel simply leaves slack to the
+                    // right, which is what every toolbar field here does.
+                    property <length> value-width: 96px;
+                    MenuField {
+                        field-width: parent.value-width;
+                        label: "IN";
+                        enabled: false;
+                        options: ["All Inputs"];
+                        selected-index: 0;
+                        tooltip: "MIDI input — not configurable yet";
+                    }
+                    MenuField {
+                        field-width: parent.value-width;
+                        label: "OUT";
+                        enabled: false;
+                        options: ["None"];
+                        selected-index: 0;
+                        tooltip: "MIDI output — not configurable yet";
+                    }
+                    MenuField {
+                        field-width: parent.value-width;
+                        label: "CH";
+                        enabled: false;
+                        options: ["All"];
+                        selected-index: 0;
+                        tooltip: "MIDI channel — not configurable yet";
+                    }
+                }
+            }
+
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}

@@ -689,6 +689,51 @@ impl ProjectChannel {
     }
 }
 
+/// What a pattern is called and what colour it was given.
+///
+/// Both are optional in the only sense that matters to a document: an empty
+/// name is a pattern shown by its number -- which is why `rename_pattern`
+/// accepts a blank where `rename_channel` refuses one, the number being right
+/// beside it -- and no colour is a pattern drawn in the theme's own.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PatternMeta {
+    #[serde(default)]
+    pub name: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::color::deserialize_lenient"
+    )]
+    pub color: Option<crate::color::ProjectColor>,
+}
+
+impl PatternMeta {
+    /// Whether this entry says nothing at all, and so is worth neither
+    /// writing nor keeping.
+    pub fn is_empty(&self) -> bool {
+        self.name.is_empty() && self.color.is_none()
+    }
+}
+
+/// The form of a pattern-metadata list worth writing to disk: the same
+/// entries, with the trailing ones that say nothing dropped.
+///
+/// The session holds one entry per pattern so nothing has to bounds-check an
+/// index. A document does not need them, and a song where nobody has named or
+/// coloured anything should write the same bytes it wrote before the field
+/// existed -- otherwise merely opening and saving a song rewrites it, which is
+/// the thing `PROJECT_FORMAT.md`'s defaulted-field rule is there to prevent.
+///
+/// Only the *trailing* empties go: an unnamed pattern 1 in front of a named
+/// pattern 2 has to keep its place in the list.
+pub fn trim_pattern_meta(meta: &[PatternMeta]) -> Vec<PatternMeta> {
+    let keep = meta
+        .iter()
+        .rposition(|entry| !entry.is_empty())
+        .map_or(0, |last| last + 1);
+    meta[..keep].to_vec()
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Project {
     pub bpm: u16,
@@ -707,6 +752,21 @@ pub struct Project {
     #[serde(default = "default_buses")]
     pub buses: Vec<BusSetup>,
     pub pattern_lengths: Vec<u16>,
+    /// Pattern-indexed names and colours, parallel to `pattern_lengths`.
+    ///
+    /// Defaulted, and shorter or longer than the bank is not an error -- the
+    /// loader fits it to `pattern_lengths`, which is the field that decides
+    /// how many patterns a song has. A pattern with no entry is a pattern
+    /// nobody has named or coloured, which is what every song written before
+    /// this field existed is.
+    ///
+    /// **Patterns could be renamed for months and the name was never saved**:
+    /// `Session::pattern_names` existed, `rename_pattern` wrote to it, and
+    /// nothing carried it into the document, so reopening a song blanked every
+    /// one. Colour arrives with the name rather than beside it for that
+    /// reason.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pattern_meta: Vec<PatternMeta>,
     pub playlist: Vec<PatternPlacement>,
     /// The repeating section of the arrangement. Defaulted on load, so a song
     /// written before looping existed opens with the loop off and its points
@@ -735,6 +795,8 @@ impl Project {
             + self.buses.capacity() * std::mem::size_of::<BusSetup>()
             + self.buses.iter().map(BusSetup::heap_bytes).sum::<usize>()
             + self.pattern_lengths.capacity() * std::mem::size_of::<u16>()
+            + self.pattern_meta.capacity() * std::mem::size_of::<PatternMeta>()
+            + self.pattern_meta.iter().map(|meta| meta.name.capacity()).sum::<usize>()
             + self.playlist.capacity() * std::mem::size_of::<PatternPlacement>()
     }
 }
@@ -820,6 +882,12 @@ impl Default for Project {
             channels: vec![ProjectChannel::sampler(0, 1)],
             buses: default_buses(),
             pattern_lengths: vec![DEFAULT_STEPS],
+            // Empty rather than one blank entry per pattern: an entry that
+            // says nothing is not worth storing, and a song nobody has named
+            // or coloured must be byte-identical to one written before this
+            // field existed. `Session` fits the list to the bank on the way
+            // in and `trim_pattern_meta` trims it on the way out.
+            pattern_meta: Vec::new(),
             playlist: Vec::new(),
             loop_range: LoopRange::default(),
         }

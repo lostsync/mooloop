@@ -21,8 +21,10 @@ use mooloop_core::{
     EffectParams, EffectSlotState, EffectTarget, MlM1Params, MlM1State, MlP8Params, MlP8State,
     LoopRange, ModDestinationDescriptor, ModEnvelopeParams, ModPolarity, ModRoute, ModulatorParams,
     MonoSynthParams, MonoSynthState, NoteId, ParamAddr,
-    ParamDescriptor, ParamOwner, PatternPlacement, PlaybackMode, PointId, PolySynthParams,
+    ParamDescriptor, ParamOwner, PatternMeta, PatternPlacement, PlaybackMode, PointId,
+    PolySynthParams,
     PolySynthState, Project, ProjectChannel, SampleReference, SamplerParams, SamplerState,
+    trim_pattern_meta,
     modulation::CONTROL_SOURCE_SLOTS,
     MAX_MODULATORS_PER_CHANNEL, MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_BAR,
     TICKS_PER_STEP, DELAY_PARAM_TIME_MS, MODULATION_PARAM_RATE_HZ,
@@ -157,7 +159,11 @@ pub struct Session {
     /// master and repairs routing on the way in.
     pub buses: Vec<BusSetup>,
     pub pattern_lengths: Vec<usize>,
-    pub pattern_names: Vec<String>,
+    /// What each pattern is called and what colour it was given, parallel to
+    /// `pattern_lengths`. One entry per pattern, always: `add_pattern` pushes
+    /// and a load fits the document's list to the bank, so nothing indexes
+    /// past the end.
+    pub pattern_meta: Vec<PatternMeta>,
     pub playlist: Vec<PatternPlacement>,
     /// The section of the arrangement the transport repeats. Document state,
     /// not a session gesture: a loop is set around the part being worked on
@@ -242,7 +248,7 @@ impl Default for Session {
             default_sample_duration: 0.0,
             buses: default_buses(),
             pattern_lengths: vec![DEFAULT_STEPS as usize],
-            pattern_names: vec![String::new()],
+            pattern_meta: vec![PatternMeta::default()],
             playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
             loop_range: LoopRange::default(),
             song_mode: false,
@@ -289,8 +295,25 @@ impl Session {
         self.source_revision = self.source_revision.wrapping_add(1);
         // A fresh device did not come from whatever preset the last one wore.
         self.source_preset_names.remove(&(index as u8));
+        // **A name the user typed outlives the device it was typed over.**
+        //
+        // This re-derived the name unconditionally until 2026-09-13, which was
+        // right while every name was derived and became wrong on 2026-09-09,
+        // when renaming shipped: a channel called "Kick", switched from the
+        // sampler to the DS-01, came back called "DS-01 1". The question that
+        // separates the two cases is whether the current name is still the
+        // *outgoing* device's default -- if it is, nobody chose it and it
+        // should follow the device; if it is not, the user chose it and a
+        // gesture about the source device has no business discarding it.
+        //
+        // The colour is not consulted for the same reason it is not reset
+        // below: it was chosen or it was not, and a source change is not a
+        // statement about either.
+        let named_by_user = channel.name != channel.kind.default_channel_name(index);
         channel.kind = kind;
-        channel.name = kind.default_channel_name(index);
+        if !named_by_user {
+            channel.name = kind.default_channel_name(index);
+        }
         // Only the new kind's own parameter block is reset. The others keep
         // whatever they held, so swapping a device out and back returns to
         // the patch that was there -- which is why this is a match rather
@@ -373,6 +396,7 @@ impl Session {
                     setup: ChannelSetup {
                         channel: Channel {
                             name: channel.name.clone(),
+                            color: channel.color,
                             kind: channel.kind,
                             muted: channel.muted,
                             volume: channel.volume,
@@ -410,6 +434,7 @@ impl Session {
                 .iter()
                 .map(|length| *length as u16)
                 .collect(),
+            pattern_meta: trim_pattern_meta(&self.pattern_meta),
             playlist: self.playlist.clone(),
             loop_range: self.loop_range,
         }
@@ -1104,6 +1129,7 @@ impl Session {
                     .unwrap_or((false, false));
                 ChannelState {
                     name: setup.channel.name.clone(),
+                    color: setup.channel.color,
                     kind: setup.channel.kind,
                     muted: setup.channel.muted,
                     volume: setup.channel.volume,
@@ -1164,7 +1190,13 @@ impl Session {
             .iter()
             .map(|length| *length as usize)
             .collect();
-        self.pattern_names = vec![String::new(); self.pattern_lengths.len()];
+        // Fitted to the bank rather than trusted: `pattern_meta` is a
+        // defaulted field, so a song written before it existed has none and a
+        // hand-edited one may have any number. Until 2026-09-13 this line
+        // blanked the names outright, which is why a pattern called "Chorus"
+        // came back as "Pattern 1" -- the document had nowhere to put it.
+        self.pattern_meta = project.pattern_meta.clone();
+        self.pattern_meta.resize(self.pattern_lengths.len(), PatternMeta::default());
         self.playlist = project.playlist.clone();
         self.loop_range = project.loop_range;
         self.song_mode = project.playback_mode == PlaybackMode::Song;
