@@ -11517,6 +11517,14 @@ impl AppUi {
                     for slot in 0..state.effect_slot_model.row_count() {
                         let ((in_l, in_r), (out_l, out_r)) =
                             handle.take_device_peak(device_target, slot + 1);
+                        // Drained whether or not anything is drawing it, the
+                        // same argument the bus-strip reduction above makes:
+                        // these are `fetch_max` holds, so a cell nobody read
+                        // lights the lamp with a minutes-old transient the
+                        // moment the rack is opened. It used to sit inside
+                        // the `showing_device_rack` arm below.
+                        let (detector, reduction_db) =
+                            handle.take_device_dynamics(device_target, slot + 1);
                         if showing_device_rack {
                             if let Some(mut row) = state.effect_slot_model.row_data(slot) {
                                 let input_left_db = linear_to_db(in_l);
@@ -11530,8 +11538,7 @@ impl AppUi {
                                 // Non-dynamics stages never publish here, so
                                 // they read the resting pair and need no
                                 // check for what kind of device they hold.
-                                let (detector, reduction_db) =
-                                    handle.take_device_dynamics(device_target, slot + 1);
+                                // Taken above, unconditionally.
                                 let detector_db = linear_to_db(detector);
                                 let dynamics_changed =
                                     dynamics_display_changed(row.detector_db, detector_db)
