@@ -52,6 +52,8 @@ fn render_playlist_snapshot() {
     ]));
     ui.set_channels(ModelRc::from(Rc::new(VecModel::from(vec![ChannelRow {
         name: SharedString::from("Sampler 1"),
+        color: Default::default(),
+        has_color: false,
         muted: false,
         volume_db: -1.9382, // linear 0.8 in dB
         pan: 0.0,

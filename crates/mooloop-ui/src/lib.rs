@@ -2387,6 +2387,8 @@ impl UiState {
             .enumerate()
             .map(|(index, channel)| ChannelRow {
                 name: channel.name.as_str().into(),
+                color: channel_colors::to_slint(channel.color),
+                has_color: channel.color.is_some(),
                 muted: channel.muted,
                 volume_db: linear_to_db(channel.volume),
                 pan: channel.pan,
@@ -2443,6 +2445,8 @@ impl UiState {
                 row.pan = ch.pan;
                 row.bus = ch.bus as i32;
                 row.name = ch.name.as_str().into();
+                row.color = channel_colors::to_slint(ch.color);
+                row.has_color = ch.color.is_some();
                 self.rows.set_row_data(i, row);
             }
         }
@@ -2529,11 +2533,7 @@ impl UiState {
         window.set_current_pattern_color_hex(
             color.map(|color| color.to_hex()).unwrap_or_default().into(),
         );
-        window.set_current_pattern_color(
-            color
-                .map(|color| slint::Color::from_rgb_u8(color.r, color.g, color.b))
-                .unwrap_or_default(),
-        );
+        window.set_current_pattern_color(channel_colors::to_slint(color));
     }
 
     fn sync_generator_preset_menu(&self, window: &MainWindow) {
@@ -3789,11 +3789,7 @@ impl UiState {
         window.set_selected_channel_color_hex(
             ch.color.map(|color| color.to_hex()).unwrap_or_default().into(),
         );
-        window.set_selected_channel_color(
-            ch.color
-                .map(|color| slint::Color::from_rgb_u8(color.r, color.g, color.b))
-                .unwrap_or_default(),
-        );
+        window.set_selected_channel_color(channel_colors::to_slint(ch.color));
         window.set_selected_channel_volume_db(linear_to_db(ch.volume));
         window.set_source_kind(device_kind_to_int(ch.kind));
         // Derived rather than remembered per channel: the selection names one
@@ -4232,6 +4228,8 @@ impl AppUi {
         let playlist_model = Rc::new(VecModel::from(Vec::<PlaylistClip>::new()));
         let row = ChannelRow {
             name: first.name.as_str().into(),
+            color: channel_colors::to_slint(first.color),
+            has_color: first.color.is_some(),
             muted: false,
             volume_db: linear_to_db(first.volume),
             pan: first.pan,
@@ -6647,6 +6645,8 @@ impl AppUi {
                 let model = Rc::new(VecModel::from(cells));
                 let row = ChannelRow {
                     name: ch.name.as_str().into(),
+                    color: channel_colors::to_slint(ch.color),
+                    has_color: ch.color.is_some(),
                     muted: false,
                     volume_db: linear_to_db(ch.volume),
                     pan: ch.pan,

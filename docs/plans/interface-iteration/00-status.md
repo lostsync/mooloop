@@ -85,10 +85,14 @@ exist. The piano roll's snap division field gets it too, when snap is off.
 
 ### What is not here
 
-- **The colour is stored and shown nowhere but the panel that sets it.** The
-  step says to get it saved and shown in one place first and let the rack,
-  mixer and playlist each adopt it afterwards, each being a place to check it
-  reads at that size. Which surface goes first is Adam's call and is open.
+- **The mixer and the playlist do not colour anything, and neither does a
+  pattern's colour anywhere.** The step says to show a colour in one place
+  first and let the surfaces adopt it one at a time, each being a place to
+  check it reads at that size. The rack plate is that one place: a 3px bar
+  down its left edge, which holds its width whether or not there is a colour
+  so that colouring a channel does not shift its name sideways. The plate's
+  fill already means "selected", which is why the colour is a bar and not a
+  tint -- a background carrying two meanings says neither clearly.
 - **A pattern's colour is set from the transport toolbar, not the sidebar.**
   The sidebar is a channel panel, so the chip went beside the pattern's name
   field instead -- the two facts about a pattern in one place. It shares the

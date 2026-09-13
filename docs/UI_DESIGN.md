@@ -148,6 +148,14 @@ Use contrast and spacing to show hierarchy, not floating cards within cards.
   will swallow the rightmost control in a row -- reserve for it in the row's
   padding, and test the reachability with a click rather than an invoke.
 
+- **A surface that already means something does not get a second meaning; a
+  mark is added beside it.** A channel's rack plate uses its fill to say
+  whether the channel is selected, so a user's colour draws as a bar down its
+  left edge rather than tinting the plate — a background carrying two
+  meanings says neither clearly, and one of the two is always the one being
+  read at a glance. The mark holds its width whether or not it has anything
+  to show, so acquiring a colour does not shift the label beside it.
+
 The source editor should feel like one instrument front panel. It should not
 look like several cards dropped into the center of a page.
 

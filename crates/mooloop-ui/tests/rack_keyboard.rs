@@ -63,6 +63,10 @@ fn effect_x(index: usize) -> f32 {
 fn channels() -> ModelRc<ChannelRow> {
     ModelRc::from(Rc::new(VecModel::from(vec![ChannelRow {
         name: SharedString::from("Kick"),
+        // No colour: these harnesses are about the rack's behaviour, and a
+        // channel nobody has coloured is the ordinary case.
+        color: Default::default(),
+        has_color: false,
         muted: false,
         volume_db: -1.9382,
         pan: 0.0,

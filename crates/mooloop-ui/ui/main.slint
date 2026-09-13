@@ -119,6 +119,12 @@ struct AutomationTargetRow {
 // One channel row in the rack.
 struct ChannelRow {
     name: string,
+    // The colour the user gave this channel, and whether there is one. Two
+    // fields because Slint has no `Option` and a `color` has no absent value
+    // -- a transparent one would draw the same as no bar and mean something
+    // different.
+    color: color,
+    has-color: bool,
     muted: bool,
     // Channel gain in dB from unity; the Rust side stores linear.
     volume-db: float,
@@ -2973,6 +2979,24 @@ export component MainWindow inherits Window {
                                             drop-shadow-blur: channel-row.dragging ? 16px : 0px;
                                             drop-shadow-color: #00000099;
                                             drop-shadow-offset-y: channel-row.dragging ? 6px : 0px;
+                                            // The channel's colour, as the
+                                            // plate's left edge. A bar rather
+                                            // than a tinted plate: the plate
+                                            // already says whether the channel
+                                            // is selected, and a background
+                                            // carrying two meanings can say
+                                            // neither clearly. It holds its
+                                            // 3px whether or not there is a
+                                            // colour, so naming a channel does
+                                            // not shift its name sideways.
+                                            if row.has-color : Rectangle {
+                                                x: 0;
+                                                width: 3px;
+                                                height: parent.height;
+                                                background: row.color;
+                                                border-top-left-radius: Theme.radius-md;
+                                                border-bottom-left-radius: Theme.radius-md;
+                                            }
                                             Text {
                                                 text: row.name;
                                                 color: row.selected ? Theme.text : Theme.text-muted;

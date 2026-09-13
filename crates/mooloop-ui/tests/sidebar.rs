@@ -15,12 +15,14 @@ use slint::{ComponentHandle, LogicalPosition, LogicalSize, SharedString};
 
 const CONTENT_RIGHT: f32 = 952.0;
 const DEFAULT_WIDTH: f32 = 260.0;
-// The browser's chip is the *rightmost* of the status bar's three layout
-// chips, which read in the screen order of the regions they toggle: dock,
-// split, browser. It was the middle one of two until 2026-09-08, and it was
-// drawing a left-docked panel for a sidebar that is docked on the right.
-// Chip k spans [width - (3 - k) * 26, +20] in a 960px window, so the
-// browser's centre is width - 16.
+// The browser's chip is the *rightmost* of the status bar's layout chips,
+// which read in the screen order of the regions they toggle: channel
+// sidebar, dock, split, browser. It was the middle one of two until
+// 2026-09-08, when it was also drawing a left-docked panel for a sidebar
+// docked on the right, and the fourth chip arrived on 2026-09-13. Chip k
+// spans [width - (n - k) * 26, +20] in a 960px window, so the *last* chip's
+// centre is width - 16 whatever n is -- which is why this constant did not
+// move when the channel sidebar's chip was added in front of it.
 const BUTTON_X: f32 = 944.0;
 const BUTTON_Y: f32 = 740.0;
 const NEUTRAL: (f32, f32) = (300.0, 400.0);

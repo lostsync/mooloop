@@ -1218,8 +1218,11 @@ land on its own when it starts to matter:
   rather than an index into the theme's palette, so a song looks the same
   under every scheme. **A pattern takes one on the same terms**, from a colour
   chip beside its name field in the transport toolbar, which opens the same
-  swatches in a popup. Nothing in the rack, mixer or playlist is colour-coded
-  by either yet.
+  swatches in a popup. **A channel's colour draws as a 3px bar down the left
+  edge of its rack plate**, which is the one surface that adopts it so far --
+  a bar rather than a tinted plate, because the plate's fill already says
+  whether the channel is selected. The mixer and the playlist do not colour
+  anything yet, and a pattern's colour is stored but drawn nowhere.
 - One automation lane is visible at a time. Its picker reaches the selected
   channel's generator and every parameter of every effect on that channel and
   on every bus, but several lanes cannot be shown at once, the velocity lane

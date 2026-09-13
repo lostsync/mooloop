@@ -49,6 +49,18 @@ pub(crate) fn color_choices() -> Vec<crate::ColorChoice> {
         .collect()
 }
 
+/// A stored colour as the markup wants it.
+///
+/// One function rather than the same three lines at every push site: the
+/// sidebar, the pattern chip and every channel row all need it, and a colour
+/// nobody chose draws as the default rather than as a fifth spelling of
+/// "absent" -- which is why every caller sends a `has-color` beside it.
+pub(crate) fn to_slint(color: Option<ProjectColor>) -> slint::Color {
+    color
+        .map(|color| slint::Color::from_rgb_u8(color.r, color.g, color.b))
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

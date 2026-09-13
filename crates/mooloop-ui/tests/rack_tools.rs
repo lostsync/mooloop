@@ -54,6 +54,8 @@ fn harness() -> MainWindow {
         .collect();
     ui.set_channels(ModelRc::from(Rc::new(VecModel::from(vec![ChannelRow {
         name: SharedString::from("Sampler 1"),
+        color: Default::default(),
+        has_color: false,
         muted: false,
         volume_db: 20.0f32.mul_add(0.8f32.log10(), 0.0), // -1.94 dB, linear 0.8
         pan: 0.0,

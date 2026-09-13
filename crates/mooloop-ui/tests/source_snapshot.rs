@@ -25,6 +25,8 @@ fn rack_rows() -> ModelRc<ChannelRow> {
         .enumerate()
         .map(|(index, name)| ChannelRow {
             name: SharedString::from(name),
+            color: Default::default(),
+            has_color: false,
             muted: false,
             volume_db: -1.9382, // linear 0.8 in dB
             pan: 0.0,
