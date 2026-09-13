@@ -1442,9 +1442,15 @@ impl EffectChain {
                 // still does nothing, which is the part that needs a decision
                 // -- see `docs/LOOSE_ENDS.md`.
                 if depth >= MAX_CONTAINER_DEPTH {
-                    if let Some((meters, _, target)) = device_display {
-                        meters.publish_output(target, slot + 1, left, right);
-                    }
+                    // No OUT published. This branch cannot open a run --
+                    // `scratch.dry` is `MAX_CONTAINER_DEPTH` long, which is
+                    // what the cap is for -- so `close_run` never publishes
+                    // the box's real output, and the peak in hand here is the
+                    // one taken going *in*. Publishing that was the same
+                    // defect `close_run`'s comment describes, introduced at
+                    // this second site while the bypass ordering was being
+                    // fixed. A box past the cap is inert and draws no chrome
+                    // anyway; `docs/LOOSE_ENDS.md` carries the whole of it.
                     continue;
                 }
                 if let Some(scratch) = self.container_dry.as_mut() {
@@ -4732,13 +4738,16 @@ impl RenderState {
                     }
                     strip.console_dirty = false;
                 }
-                // Written rather than left alone: a meter that stops being
-                // published holds its last value, and a silent bus reading
-                // its last audible peak is exactly the stale needle the
-                // playhead publish below the channel loop exists to avoid.
-                self.device_meters
-                    .publish_input(MAX_CHANNELS + index, 0, 0.0, 0.0);
-                self.meters.publish(index, 0.0, 0.0);
+                // Nothing is published here. Both `publish` and
+                // `publish_input` are `fetch_max`, so writing zero cannot
+                // lower a cell -- this used to be two such writes under a
+                // comment claiming they cleared the meter, which they never
+                // did. The mechanism that actually empties a peak cell is the
+                // GUI's own read (`AUDIO_ARCHITECTURE.md`), so not writing one
+                // *is* publishing silence for every cell somebody drains. The
+                // bus peaks are drained every tick; a resting bus's head-stage
+                // input is not, and that is recorded in `docs/LOOSE_ENDS.md`
+                // rather than papered over here.
                 if index == MASTER_BUS as usize {
                     master_peak = (0.0, 0.0);
                 }
@@ -4854,6 +4863,18 @@ impl RenderState {
             self.meters.publish(index, peak_l, peak_r);
 
             if index == MASTER_BUS as usize {
+                // A non-master track is silenced by `mix_into` not running.
+                // The master has no `mix_into` -- it *is* the output, copied
+                // straight to the ports and to an export -- so nothing was
+                // applying its mute at all: the button lit, both of its
+                // meters read silent because the peak above is zeroed, and
+                // the audio carried on at full level. An export made in that
+                // state was full level too. Buses are cleared at the top of
+                // every block, so emptying it here is safe, and the preview
+                // is summed after this walk on purpose and stays audible.
+                if strip.output.muted {
+                    strip.bus.clear(frames);
+                }
                 master_peak = (peak_l, peak_r);
             } else if !muted {
                 let console = strip.console;
@@ -8127,6 +8148,44 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         );
         assert!(replaced.node.is_some());
         assert_eq!(chain.slot(0).unwrap().resource_key, Some(11));
+    }
+
+    /// **Muting the master silences the master**, and not only its meters.
+    ///
+    /// A non-master track is silenced by `mix_into` not running. The master
+    /// has no `mix_into` -- it *is* the output, copied straight to the ports
+    /// and to an export -- so nothing applied its mute: the button lit, both
+    /// of its meters read silent (the published peak is zeroed a few lines
+    /// up), and the audio carried on at full level. An export made in that
+    /// state was full level too. `CURRENT.md` already said a muted bus
+    /// "contributes no audio and meters as silent"; only the second half was
+    /// true.
+    ///
+    /// Measured through the master buffer rather than the meter, because the
+    /// meter was the half that already worked.
+    #[test]
+    fn muting_the_master_silences_it_and_not_just_its_meter() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+
+        let peak_of = |muted: bool| {
+            let mut render = RenderState::from_project(48_000, &project, &[]);
+            if muted {
+                render.apply_command(EngineCommand::SetBusMuted {
+                    bus: mooloop_core::MASTER_BUS,
+                    muted: true,
+                });
+            }
+            render.play();
+            render.process_block(1024);
+            let master = render.master();
+            master.l[..1024]
+                .iter()
+                .fold(0.0f32, |peak, s| peak.max(s.abs()))
+        };
+
+        let heard = peak_of(false);
+        assert!(heard > 0.001, "the song has to be making sound: {heard}");
+        assert_eq!(peak_of(true), 0.0, "a muted master is silent");
     }
 
     #[test]
