@@ -89,6 +89,51 @@ ends.
 
 ## Wired but unreachable
 
+**A generator's internal route amounts are a working automation destination
+no picker can reach.** The engine resolves `ParamOwner::SourceRoute` lanes per
+control tick and emits `Event::SourceRouteAmount` for them
+(`render.rs:4468`), `restore_base_param` has an arm for them, `integrity`
+validates them, there is an engine test named for them
+(`removing_a_route_lane_restores_the_authored_depth`), and
+`Session::automation_descriptor` has an arm to turn their breakpoints into a
+readout. `automation_destinations` never produces one -- it emits generator
+and effect descriptors and nothing else -- and `open_automation_lane(index)`
+indexes that list, which is the only path in from the app. So the descriptor
+arm is unreachable code, and a file that *already* holds such a lane is worse
+off than one that does not: `refresh_automation` clears a target it cannot
+find in `destinations`, so the lane plays, persists, and cannot be seen,
+edited or deleted. This is the exact mirror of the container-Mix item above --
+there the picker offers what the engine cannot read; here the engine reads
+what the picker does not offer. Not small because a route row is not a device
+row: the descriptors come from `route_descriptors()` and each needs the
+route's durable id, so the picker's rows need a label naming the *route*,
+which is a naming decision on ML-P8's internal matrix rather than a loop over
+a table. Either extend `automation_destinations` to walk
+`base.internal_routes()` the way the engine does, or -- if route automation is
+not wanted -- delete the engine's route pass and the dead descriptor arm,
+rather than leaving a destination reachable only by hand-edited files. Found
+2026-09-13.
+
+**The ninth automation lane draws, edits and saves, and never plays.** A file
+carrying more than `MAX_AUTOMATION_LANES_PER_CHANNEL` lanes in one (pattern,
+channel) is handled three ways: `integrity::check_lanes` calls `refuse`,
+which records the issue and **repairs nothing**, so the project loads
+unchanged; `Session::replace_project` clones them all, so the editor lists,
+draws, edits and re-saves them; and `Pattern::set_lanes` takes the first
+eight, so the engine has never heard of the rest. Not reachable from the app
+now that the picker refuses past the ceiling (fixed 2026-09-13), so this is
+hand-edited, foreign-build or future-version files -- which is what keeps it
+out of the fixable list, not its severity. `refuse` was chosen because the
+only correction discards authored work, which is the right instinct except
+that `set_lanes` already discards it, silently and on one side only.
+`PROJECT_FORMAT.md` does not state the cap at all. Options: make
+`check_lanes` correct and truncate so both sides agree and the `Doctor` says
+which lanes went; or truncate in `replace_project` too so the document matches
+the engine; or raise the cap, since eight per channel per pattern is low for a
+song automating a channel and two buses, and `CAPACITY_POLICY.md` says "it was
+easier to preallocate" is not a sufficient reason. In every case the number
+belongs in `PROJECT_FORMAT.md`. Found 2026-09-13.
+
 **A container's Mix is offered as an automation destination the engine
 cannot read.** `automation_destinations` (`session.rs:485`) walks every
 slot's `kind.descriptors()` with no filter, and `EffectKind::Chain`'s table is
@@ -182,6 +227,50 @@ blocked by this; it is one more click than a user coming from FL will expect
 (`main.slint`, the `NameField` beside `CHANNEL PRESET`).
 
 ## Edits that do not undo
+
+**A lane that stops covering the playhead leaves its destination stuck at the
+last value it wrote.** `restore_base_param` exists for exactly this and its
+comment names the hazard -- "Removing a lane or a matrix route otherwise
+leaves the device holding whatever the control signal last resolved, until
+someone happens to touch that knob" -- but it is called only when a lane is
+*deleted* or *cleared*, never when a lane stops covering the playhead.
+Pattern 1 sweeps a cutoff down to 200 Hz, pattern 2 has no such lane; switch
+to pattern 2 and `has_automation_at` answers false, `control_events_for_slot`
+takes its early return, and the device never receives another `ParamValue`.
+The filter plays at 200 Hz while its knob and its face both read 1 kHz, until
+the knob is touched or the song reloaded. Same on a song-mode clip boundary
+and on `SetPlaybackMode`. It bites only destinations that are automated and
+*not* modulated -- a modulated one takes `base_normalized = knob_normalized`
+when the curve is `None` and so restores the knob every block by accident.
+Not small: a complete fix needs the engine to know which destinations had a
+curve last block and no longer do, which is per-channel state across blocks on
+the audio thread, and `AutomationBlock` is explicitly "a read-only view".
+Options: restore on the *commands* only (`SetCurrentPattern`,
+`SetPlaybackMode`, `Seek`), walking the outgoing pattern's lanes on the
+command drain where `forget_device` already runs -- bounded, and fixes the
+reachable pattern-mode half; or carry a "driven last block" set and diff it,
+the only complete answer; or declare that automation latches and say so in
+`CURRENT.md`, which is a defensible DAW convention but then makes
+`restore_base_param`'s three existing callers the inconsistency. Found
+2026-09-13.
+
+**Shortening a pattern hides automation points that still shape the sound --
+the opposite of what it does to notes.** `refresh_automation_points` filters
+the drawn points to `point.tick <= length_ticks`; the engine applies no such
+filter, folding the position into `[0, length_ticks)` and interpolating
+between whichever pair brackets it, which for a shortened pattern is the last
+visible point and an invisible one past the end. Draw a ramp 0 to 1 across 16
+steps and shorten to 8: the lane draws as a single point at 0 with a flat line
+at 0.0, and plays a ramp from 0.0 to 0.5. Nothing on screen accounts for the
+movement. For *notes*, past the new end means hidden **and silent** (the
+stranded-NoteOff entry above); for automation points it means hidden and
+**audible** -- the two banks in one clip answer the same question opposite
+ways, and only one of them is written down. Not small because the three fixes
+are three different products: ignore points past the end (matches the note
+rule, but a lane briefly dragged short loses its tail on the way back); draw
+them, which needs a way to show a point outside the roll's own width; or crop
+on shorten, which destroys authored work and needs the same drag-release
+gesture the `set_pattern_length` entry already needs. Found 2026-09-13.
 
 **An undo of one edit silently destroys every unrecorded edit made after
 it**, and whole surfaces are unrecorded. Undo installs `entry.before`, a full
@@ -443,23 +532,57 @@ pattern or to the song grid is a decision rather than a defect; if it stays as
 it is, it belongs in `CURRENT.md` where a user would find it and not only in a
 test name. Found 2026-09-12.
 
-**Automation may not follow the song-loop fold inside the block that contains
-it** -- *unconfirmed, and bounded*. Notes are scheduled span by span
-(`render.rs:4140`); `AutomationBlock` is built once per block from
-`spans[0].start_tick` (`:4262`) and `value_at` advances it linearly across the
-whole block, folding on `curve.length_ticks` -- the *pattern's* length. In
-pattern mode that is also the fold period and so is right. In song mode the
-fold period is the loop range, which need not be a multiple of the covering
-pattern's length, so the frames after a fold read the lane at a position the
-playhead is not at. The comment at `:543` claims the case is handled;
-recomputing per tick is what makes the *pattern* wrap correct and does not
-address the *loop* wrap. No audible scenario was constructed: the error is
-bounded by one block (170 ms at 48 kHz), it is control-rate only, and a lane's
-value either side of a fold is usually close. The fix is not local --
-`AutomationBlock` would have to be built per span and `curve_for` re-resolved
-per span, which undoes the once-per-block hoisting that exists so
-`has_automation_at` is asked once. Confirm it is real before spending on it.
-Found 2026-09-12.
+**Automation does not follow a fold inside the block that contains it.**
+Raised unconfirmed 2026-09-12 and **confirmed 2026-09-13**, with a condition
+the first pass did not have and a second trigger it did not know about.
+
+`AutomationBlock` is built once per block from `spans[0].start_tick`
+(`render.rs:4315`), `curve_for` resolves the lane at that pre-fold position,
+and `value_at` advances linearly across the whole block, folding only on
+`curve.length_ticks` -- the *pattern's* length. The transport meanwhile cuts
+the block into spans at the fold and schedules notes span by span. For a
+frame past the split the computed tick exceeds the true one by exactly the
+loop length `L`, so the lane is read at `(true_local + L) mod P`:
+
+> **The read is correct iff `L` is an exact multiple of the covering
+> pattern's length `P`.** That is the whole condition.
+
+Worked case. 48 kHz, 120 BPM, PPQ 96, one 16-step pattern (384 ticks) at song
+tick 0, `LoopRange { 0, 192 }` -- two beats, on the editor's own snap grid --
+a lane ramping 0 to 1 across the pattern, 512-frame period. The block starting
+at tick 191.5 splits at frame 125, and frames 128-511 read the lane **192
+ticks ahead of the playhead, half the pattern**: the cutoff sits at 0.50
+normalized where it should be 0.0. That is 8 ms on every pass, twice a second,
+and up to 170 ms at the 8192-frame maximum. The next block resolves fresh, so
+it is a periodic blip rather than a drift.
+
+Two things the first pass missed. **A loop range is not required** -- in song
+mode the song itself repeats by `wrap_tick(song_tick, song_length_ticks())`,
+which is bar-rounded, so the block straddling the song repeat reads the
+outgoing clip's lane too. And **notes are handled correctly**:
+`schedule_note_edge` walks `absolute_tick += period` across the whole block,
+so automation's linear advance is the only reader of a folded position that
+does not fold. What bounds it: `process_once_block` passes `looping = false`,
+so **an offline export is correct and only realtime monitoring is wrong** --
+which is exactly when someone is looping a section.
+
+Not small, because the once-per-block hoisting is load-bearing:
+`has_automation_at` exists to be asked once, and `curve_for` walks every
+active channel's lanes for every descriptor of every device. Options, cheapest
+first. **(1) One line, strictly better than today:** when `span_count > 1`,
+clamp `AutomationBlock::ticks` to the control ticks inside span 0, so the
+destination *holds* across the fold instead of jumping half a pattern away --
+stale for at most one block, and the audible blip is gone. **(2)** Give
+`AutomationBlock` the span list and map a control tick's frame to its span
+before computing the position, keeping one resolved curve; fixes the position
+error and the common case, but not the case where the fold lands in a
+*different* placement. **(3)** Build one `AutomationBlock` per span and
+re-resolve per span -- complete, and a fold is rare enough that the amortised
+cost is near zero; the cost is structural rather than cyclic.
+
+Whichever is taken, `render.rs:543`'s comment must go with it: it claims this
+case is handled, and recomputing per tick is what makes the *pattern* wrap
+correct while saying nothing about the loop or the song wrap.
 
 **A departed producer and a departed device are handled oppositely.** Aux In
 sends a subscription whose source channel was deleted to `DEPARTED_SOURCE`

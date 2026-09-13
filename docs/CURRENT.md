@@ -162,9 +162,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   quantises one when it is off.
 - Two lanes sit under the roll and toggle independently: a velocity lane
   drawn as stems with drag heads, and one variable automation lane. The
-  automation lane's picker lists every parameter of every effect on the
-  selected channel and on every bus, grouped by device, with already-open
-  lanes marked and clear/remove actions. Points are drawn by clicking,
+  automation lane's picker lists the selected channel's generator and every
+  parameter of every effect on that channel and on every bus, grouped by
+  device, with already-open lanes marked and clear/remove actions. Points are drawn by clicking,
   dragged to move, right-clicked to remove, and interpolate linearly. Lanes
   a clip is not currently showing are retained, not discarded.
 - Sixteenth-note rack cells summarize their four 64th-note substeps without
@@ -1196,10 +1196,11 @@ land on its own when it starts to matter:
 - Channels have no colour. There is no track-colour field in the UI, the
   session model, or the project format, so nothing in the rack, mixer, or
   playlist is colour-coded by channel.
-- One automation lane is visible at a time. Its picker reaches every
-  parameter of every effect on the selected channel and on every bus, but
-  several lanes cannot be shown at once, and the velocity lane is a separate
-  fixed lane rather than one entry in that list.
+- One automation lane is visible at a time. Its picker reaches the selected
+  channel's generator and every parameter of every effect on that channel and
+  on every bus, but several lanes cannot be shown at once, the velocity lane
+  is a separate fixed lane rather than one entry in that list, and a pattern
+  holds at most eight lanes per channel.
 - A rack device can be selected, copied, cut, pasted and duplicated. The
   selection is a `DeviceId` rather than a slot, so it follows its device
   through a reorder and clears when the device is removed; clicking a device's
