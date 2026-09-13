@@ -313,6 +313,39 @@ impl SendBank {
         }
     }
 
+    /// Empty `producer`'s send rings.
+    ///
+    /// For every path that skips [`Self::emit`] -- a muted or solo-silenced
+    /// track, a sleeping one, a muted channel. The rings are advanced *only*
+    /// inside `emit`, so without this they freeze rather than drain: the
+    /// frames captured just before a mute sat in the ring and were the first
+    /// thing the return heard on unmute, a fragment of the previous phrase
+    /// arriving where nothing was played.
+    ///
+    /// It is the statement `emit` already makes for a *disabled* send, and
+    /// the one the track's own ring already makes at `render.rs`'s mute
+    /// check -- "a muted bus still advances its ring rather than holding
+    /// stale audio to emit when it is unmuted".
+    ///
+    /// **Not covered by a test, and the reason is worth knowing before
+    /// writing one.** A muted track also goes to sleep, so the frozen ring is
+    /// unobservable at the destination until that track wakes -- which needs
+    /// a second note after the unmute, and then a differential render against
+    /// an unmuted control to separate the stale frames from the new ones. An
+    /// attempt that muted, idled and unmuted measures zero either way. See
+    /// `docs/LOOSE_ENDS.md`.
+    fn reset(&mut self, producer: EffectTarget) {
+        if self.is_empty() {
+            return;
+        }
+        let range = self.range(producer);
+        for send in &mut self.sends[range] {
+            if let Some(delay) = send.compensation.as_mut() {
+                delay.reset();
+            }
+        }
+    }
+
     /// Sum `producer`'s captured sends into the tracks they feed.
     ///
     /// Called once the strip's own borrow has ended. A disabled send resets
@@ -1811,10 +1844,16 @@ impl OutputStage {
     }
 }
 
-/// One mixer bus: an effect chain, an output stage, and the index of the bus
-/// it feeds. `output` is always lower than the bus's own index (see
-/// `mooloop_core::mixer`), which is what lets `process_block` render the whole
-/// bank in one descending pass with no sorting or scratch buffers.
+/// One mixer bus: an effect chain and an output stage.
+///
+/// Where it feeds is **not** a field here -- the destination lives in
+/// `CompiledBusGraph`, and any track may feed any other. `process_block`
+/// walks `bus_graph.render_order()`, a compiled topological permutation that
+/// places every producer before the summing point it reaches, with scratch
+/// buffers when sends exist. This used to say `output` was always lower than
+/// the bus's own index and that the bank was rendered in one descending
+/// pass; steps 04 and 05 replaced that model, and `compensation`,
+/// `console_sum` and `solo_silenced` below only exist because they did.
 struct BusStrip {
     effects: EffectChain,
     bus: StereoBus,
@@ -2990,18 +3029,6 @@ impl RenderState {
         *self.audio = AudioTapBank::new(project.audio_graph());
     }
 
-    /// Install the console switches from `project`, and the second input
-    /// accumulator for every bus something encoded actually reaches.
-    ///
-    /// Here as well as through the session's incremental sync, for the reason
-    /// [`Self::install_compensation`] gives: an **offline render** builds its
-    /// own `RenderState` and never runs a pump, so without this a bounce
-    /// would be the one place console summing did not happen -- which is the
-    /// export-versus-live disagreement everything in this engine is arranged
-    /// to prevent, and it is one of step 02's acceptance cases.
-    ///
-    /// Allocates, and is allowed to: `load_project` runs on the control
-    /// thread while a state is prepared, never from the callback.
     /// Install the solo state from `project`.
     ///
     /// Here as well as through the session's incremental sync, for the
@@ -3017,6 +3044,18 @@ impl RenderState {
         }
     }
 
+    /// Install the console switches from `project`, and the second input
+    /// accumulator for every bus something encoded actually reaches.
+    ///
+    /// Here as well as through the session's incremental sync, for the reason
+    /// [`Self::install_compensation`] gives: an **offline render** builds its
+    /// own `RenderState` and never runs a pump, so without this a bounce
+    /// would be the one place console summing did not happen -- which is the
+    /// export-versus-live disagreement everything in this engine is arranged
+    /// to prevent, and it is one of step 02's acceptance cases.
+    ///
+    /// Allocates, and is allowed to: `load_project` runs on the control
+    /// thread while a state is prepared, never from the callback.
     fn install_console(&mut self, project: &Project) {
         for (index, strip) in self.buses.iter_mut().enumerate() {
             // The master feeds nothing, so a switch on it would encode into a
@@ -4587,6 +4626,9 @@ impl RenderState {
                 if let Some(delay) = self.strips[index].compensation.as_mut() {
                     delay.reset();
                 }
+                // And its sends', on the same argument. Dormant while nothing
+                // authors a channel send, correct the day something does.
+                self.sends.reset(EffectTarget::Channel(index as u8));
                 self.strips[index].source_silent_frames = 0;
                 continue;
             }
@@ -4680,6 +4722,11 @@ impl RenderState {
                     // audio from before the silence.
                     let capacity = strip.bus.capacity();
                     strip.bus.clear(capacity);
+                    // Its send rings too: `is_resting` weighs the strip's own
+                    // compensation against the silence and knows nothing
+                    // about these, so a track that idles would truncate its
+                    // send tail and freeze the remainder until it woke.
+                    self.sends.reset(EffectTarget::Bus(index as u8));
                     if let Some(sum) = strip.console_sum.as_mut() {
                         sum.clear(capacity);
                     }
@@ -4815,6 +4862,8 @@ impl RenderState {
             }
             if !muted {
                 self.sends.emit(producer, &mut self.buses, frames);
+            } else {
+                self.sends.reset(producer);
             }
         }
         // After the walk on purpose: the preview bypasses every chain, so it
