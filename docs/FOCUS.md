@@ -1,318 +1,243 @@
 # Focus
 
-Status: active working sequence, rewritten 2026-09-05; step 3 rescoped
-2026-09-07 from one mockup-driven push into `docs/plans/interface-iteration/`.
+Status: active working sequence, rewritten 2026-09-12. The previous version was
+written 2026-09-05 and amended 2026-09-07 and 2026-09-08; it is being replaced
+rather than amended again, because the mixer it describes is not the mixer that
+exists and the work it parks includes a feature that shipped.
 
 `ROADMAP.md` orders the whole product by dependency. This document is narrower:
 it names the active sequence and the work that should not interrupt it. Rewrite
-it when that sequence is exhausted; do not let it become a second roadmap.
+it when that sequence is exhausted. Two failure modes to keep it out of: do not
+let it become a second roadmap, and **do not let it accumulate the archaeology
+of closed steps** — that is what `docs/plans/<name>/00-status.md` and
+`JOURNAL.md` are for, and it is most of why the last version reached
+twenty-four kilobytes.
 
-Read `PRODUCT.md` for the product argument and `CURRENT.md` for the implemented
-surface. Source and tests settle any disagreement with either document.
+Read `PRODUCT.md` for the product argument, `CURRENT.md` for the implemented
+surface, and `docs/plans/README.md` for what state each plan is in. Source and
+tests settle any disagreement with any of them.
 
-## The line has moved
+## The line has moved, and it moved somewhere this document did not name
 
-The previous sequence was ML-P8, then DS-01, then Buffer. **Its first two steps
-are done**, the last of it on 2026-09-05.
+The 2026-09-05 sequence was outlets, then the v1 drum synth's parameters, then
+the interface, then Buffer. Its first two steps closed the same day and are
+recorded in `docs/plans/archive/`. Then eleven days happened, and the largest
+single arc in them was never a step here at all.
 
-- **ML-P8 plays.** Steps 02 through 05 are in: the three-oscillator network,
-  all six directed XMOD routes, sync, the derived sub, coloured noise, both
-  envelopes, four filter modes, the feedback loop with drive inside it, its own
-  audio-rate LFO and six per-voice sources onto thirty-one destinations, group
-  allocation, Unison, Detune, Spread, Drift and a chorus that is off by
-  default. Its face spends five pages so the controls can be read.
-- **DS-01 plays, and was signed off.** Adam played the device and its
-  seventeen-patch bank on 2026-09-04 and closed step 09. One universal
-  percussion voice reaches a kit from range and patches rather than mode
-  branches, every parameter is descriptor-addressed, and the six-page face
-  holds all ninety-two of them at a readable size.
-- **What both were waiting on was one mechanism, and it landed 2026-09-05.**
-  ML-P8 step 06 and DS-01 step 07 both publish device outlets.
-  `mooloop_core::outlet` is the vocabulary; the control half went through the
-  modulation shelf, and the audio half through the typed audio edges
-  `AUDIO_ARCHITECTURE.md` describes, whose consumer is an `Aux In` channel.
-  Both instrument directories are archived, and so is
-  `typed-audio-edges/` itself.
+- **The console pass, 2026-09-09 to 2026-09-11, closed and archived.** Four
+  items from one morning's list — reorder channels, group them, make the mixer
+  work like a console, proper sends — which turned out to be one design with a
+  character layer on top. The mixer is a list of tracks somebody made rather
+  than a fixed seventeen. A track routes a copy of itself to another track, so
+  **sends exist**. Any summing point can glue what feeds it, and the bus that
+  decodes is invisible. Every track carries a channel strip — an input stage,
+  four EQ bands, a compressor and polarity, all out by default, under one
+  strip-wide voicing. Solo is **in place**, not the monitor tap
+  `MIXER_PLAN.md` had specified since the mixer's first pass. Adam played it
+  on 2026-09-11: *"three distinct and musical characters"* on headphones, with
+  the studio still to come.
 
-The debt those two instruments left is cleared, so **step 3 — the interface —
-is where the sequence stands**, and it is where Adam's standing list has
-accumulated. Steps 1 and 2 are kept below as a record of what they were and
-what closing them turned up.
+  Read `docs/plans/archive/console/00-status.md` before touching the mixer,
+  the strip or the summing, and `THE-STRIP.md` beside it for the strip's
+  shape. Two rules in it outlive the feature: **a voicing selects laws, never
+  values**, and **no control on a strip face declares a range** — the
+  descriptor table crosses into the markup once at startup and
+  `tests/strip_face.rs` fails if a bound is ever spelled in `strip.slint`.
+- **`pane-layout/` closed 2026-09-08.** Five views, three slots, a view in
+  exactly one slot at a time; the top pane splits, any pane zooms, a tab drags
+  between panes, and `editor-page` is gone. Read its `README.md` before
+  touching the work area.
+- **`ui-consistency-pass/` closed 2026-09-08.** The audit Adam's standing list
+  asked for, and every finding was a control saying something the engine was
+  not doing. Its `README.md` records the method, so the sweep can be re-run
+  rather than re-invented.
+- **`interface-iteration/` steps 01 and 02 landed 2026-09-07.** The browser
+  has a PRESETS tab, and a device — or a whole container — can be copied, cut,
+  pasted and duplicated by identity rather than by slot.
+- **Three days of correctness work, 2026-09-10 to 2026-09-12, that are not a
+  plan and are worth knowing as a class.** Faces held to their descriptors by
+  index rather than by order, the 441 persisted parameter ids frozen where
+  they sit, the outlet tables pinned by number rather than by name, two of
+  every synth's three oscillators found resetting to a tuning no patch has, a
+  duplication audit with a tool (`scripts/dupe-audit`) and three recorded
+  limits, one event splitter where twelve effects each had their own, and one
+  device-name table where two had already drifted. None of it was asked for
+  and all of it is the same shape: **a claim the source no longer supported.**
 
 ## The rule
 
 **Prefer changes that produce a musical decision over changes that merely add
 capacity.**
 
-The engine already has more breadth than the instrument has identity. A new
-source type, graph abstraction, effect, or routing primitive is not progress by
+The engine has more breadth than the instrument has identity. A new source
+type, graph abstraction, effect, or routing primitive is not progress by
 itself. Each step below must end in something that can be played, heard, saved,
 reopened, and rendered through the ordinary UI.
 
-Step 3 is interface work, and it gets a sibling rule: **an interface change is
-judged by whether something that already exists becomes easier to reach, not by
-how much new surface it adds.** A new pane that shows what a menu already
-showed is not progress either.
+Steps 1 and 2 are interface and parameter-model work, and they get a sibling
+rule: **an interface change is judged by whether something that already exists
+becomes easier to reach, not by how much new surface it adds.** A pane that
+shows what a menu already showed is not progress either.
 
 ## The sequence
 
-### 1. ~~Publish device outlets, and close two plans~~ — done, 2026-09-05
+Set by Adam on 2026-09-12: finish the interface iteration, then the EQ, then
+Buffer.
 
-**All three directories are in `docs/plans/archive/`.** ML-P8's step 06 and
-DS-01's step 07 both closed on the one mechanism, which is why they were done
-together: a channel set to `Aux In` plays another channel's published audio
-outlet, in the same block, and a `Osc 3` muted in ML-P8's own mix is audible
-through one while staying absent from its producer's output. That was the
-acceptance case both instrument plans named, and it is a test.
+### 1. Finish `docs/plans/interface-iteration/` — steps 03 and 04
 
-`docs/plans/archive/typed-audio-edges/00-status.md` records what the doing
-changed. The two worth knowing from here: a subscriber had to become a reason
-to *run* a source, since both devices skip a layer at level zero that nothing
-else needs — which is precisely the layer a pre-level tap exists to publish —
-and `Aux In` publishes its own output, without which no ring of edges could be
-constructed from the program and the compiler's cycle refusal would have been
-reachable only from a unit test.
+The plan is four independent steps, each ending in something usable, in an
+order that can be rearranged. Two are in. Its rule is this document's
+interface rule applied: every step exposes a mechanism that is **already
+built** and currently reachable only from a menu, a rail button, or not at all.
+If a step starts wanting engine capability, it has left the plan.
 
-Parallel sends and sidechain key inputs are still absent. They are what the
-compiled edge model exists for next, and they are now a feature on top of a
-mechanism rather than a mechanism.
+**Step 03 — a channel is a thing you named. Two of its three pieces landed
+without it**, and the step file has been corrected. The console pass built
+`rename_track` on 2026-09-09 and `rename_channel` beside it, both wired to a
+`NameField`, so a bus can be called "Drums" and a channel can be called "Kick"
+— which was the step's cheapest win and is gone from it.
 
-The original entry follows.
+What is left is the part that was always the real work. A channel colour **does
+not exist at all** — no field in the UI, the session model, or the project
+format — so it is the one piece that adds persisted state, and
+`PROJECT_FORMAT.md`'s defaulted-field rule governs it. Pattern colour comes with
+it, because it is the same design and deciding it twice is how it gets decided
+differently. A pattern can already be renamed, so colour is the only gap there
+too.
 
-Finish `docs/plans/archive/poly-synth-v2/` step 06 and `docs/plans/archive/drum-synth-v2/`
-step 07. They are the same work seen from two devices, which is why doing it
-once is the point.
+Two constraints on it, both already written into the step:
 
-Two pieces, in order:
+- **A channel colour must not settle the palette question.** It is content in
+  the project file and travels with the song. Store a colour the project owns,
+  not an index into the current palette.
+- **Build the MIDI rows inert.** The sidebar must not pull MIDI configuration
+  forward.
 
-- ~~**The control slice.**~~ **Done, 2026-09-05.** The shelf grows an OUTLETS
-  pane beside its module grid on any channel whose generator publishes control
-  outlets, and a chip selects and arms exactly like a module, so the ordinary
-  assign-then-drag gesture builds an outlet route. DS-01 publishes its six —
-  `Trigger` reaches a later device one block after the hit, which is what a
-  kick ducking a bass needs and what its step 07 asked for.
-- **Typed auxiliary audio edges.** ML-P8's `Osc 1/2/3`, `Sub`, `Noise`,
-  `Pre-Filter Mix` and `Filter` taps are audio-rate ports. The one-block
-  control table cannot carry them and downsampling them destroys the reason
-  they exist. `AUDIO_ARCHITECTURE.md` describes the edge type they need;
-  nothing implements it. This is the one genuine architecture gap left behind
-  by the instrument push, and it is also what parallel sends and sidechain
-  will want later — build it as an edge type, not as an ML-P8 feature.
-  **Planned 2026-09-05 in `docs/plans/archive/typed-audio-edges/`**, five steps: the
-  edge is same-block rather than one-block latent, because a block-sized delay
-  is a delay whose length is the host's buffer size, so what this really
-  builds is a compiled channel order with cycle refusal. Adam's call on the
-  consumer: an `Aux In` source device, whose sound is another channel's
-  published outlet. **All five steps landed the same day.**
+The step also carries a bug found on 2026-09-09 while the console plan was
+being written, and **naming landing first is what turned it from latent into
+live.** `Session::reset_channel_source` still re-derives a channel's name from
+its index (`session.rs:293`), so a channel called "Kick" switched from the
+sampler to the DS-01 comes back called "DS-01 1". A name the user typed is
+thrown away by a gesture that is not about the name. That was tolerable while
+every name was derived; it stopped being tolerable on 2026-09-09, which makes
+it eligible for the interrupt list rather than something to wait for its step.
+The distinguishing question is whether the current name is still the default
+one for the *outgoing* device: if it is, re-derive it; if it is not, the user
+named it and it stays.
 
-This is first because two finished instruments are sitting in `plans/` unable
-to be archived on account of it, because the contract gets designed once
-instead of twice, and because it is the only item on this list that is
-architecture rather than surface.
+**Step 04 — the keyboard reaches the rest of the application.** Adam has asked
+for this in stronger terms than anything else on his list, and the foundation
+is in: `ACTIONS.md` is the contract, `actions.rs` is the registry, Preferences
+rebinds every entry, and since 2026-09-07 a shortcut fires from wherever focus
+happens to be. What is missing is coverage — the registry is 47 actions and
+transport is two of them, nothing is device-level, and the browser tree has no
+`FocusScope` of its own and so cannot be reached by a key at all — and one
+decision: **what `Ctrl+C` means** once a channel, a device and a note clipboard
+all want it. The smallest correct answer is an
+action that resolves against the focused surface with a defined fallback, and
+it should be designed so a console could later invoke an action by id without a
+keypress.
 
-**Ordering, settled 2026-09-05.** `AUDIO_ARCHITECTURE.md`'s migration sequence
-puts typed audio and dependency edges at its step 6 and says step 6 depends on
-its step 5 — preallocated compensation delays and compiled cumulative latency
-— which had not landed. Adam's call: if compensation is on the path either
-way, building the edge type against an uncompensated tree means building it
-twice. So the second piece above is really two, and compensation went first.
-**It landed on 2026-09-05** and `docs/plans/archive/latency-compensation/` is
-archived: a device declares its latency without being built, the tree compiles
-to a per-producer delay, the delays are installed structurally and reconciled
-by deriving the plan rather than tracking it, and an export is asserted
-sample-identical to a live render. Bypass was found not to be time transparent
-and now is. That supersedes this document's "deliberately not now" entry on
-compensation, which was written on the opposite reading. **The typed audio
-edges are what is left of step 1**, and they now go on top of an aligned
-tree.
+**One instruction in step 04 has gone stale and should be read in its altered
+form.** It says "do not add a solo action; there is no solo". There is now:
+solo landed 2026-09-11, on a **track**. Bind that. Solo on a *channel* rather
+than its track is still unbuilt, and inventing it here would be the step
+adding capability.
 
-**Both directories archive together now, on this one gap.**
-`drum-synth-v2/` archives the moment its step 07 closes. `poly-synth-v2/` no
-longer has anything after this: its step 07 was ML-P8's factory bank and
-listening pass, the bank shipped on 2026-09-05 — eight patches in
-`presets/generators/mlp8/`, seven of them at Unison 1x with the chorus off —
-and Adam played it and closed the step the same day. The range decisions step
-07 listed (XMOD curve, self-feedback scaling, Sub balance, LP24 resonance,
-Voice Feedback bounds, LFO Warp/Slew, Detune maximum, whether Chorus needs a
-Mix) were ear decisions and the pass moved none of them, so they are the
-ranges rather than provisional values. ML-P8's audio outlets are the last
-thing in its plan.
+Done when: `interface-iteration/00-status.md` records four landed steps, and
+the directory moves to `archive/`.
 
-Done when: a route can name a device outlet from the picker; audio outlets obey
-their declared rate and latency contracts; `poly-synth-v2/` and
-`drum-synth-v2/` both move to `docs/plans/archive/`. **All of it closed on
-2026-09-05**: the picker on the control half, an edge that delivers in the
-same block and renders identically offline and at any block size on the audio
-half, and both directories archived.
+### 2. `docs/plans/eq-v2/` — the parameter model first, the EQ second
 
-### 2. ~~Give the v1 drum synth automation support~~ — done, 2026-09-05
+Written 2026-09-12, nothing landed. It came out of fixing one bug — the EQ's
+Shape control was two settings of different arity behind one automatable id —
+and out of Adam's question about what that implied.
 
-Adam's ask, 2026-09-05, in his words: *"og drumsynth was simple but honestly
-sounded pretty good. why has simply updating it for automation support never
-been on the table?"*
+**The argument, which is bigger than the EQ.** mooloop intends to host CLAP. A
+CLAP plugin hands the host N independent parameters, each with a stable id,
+each individually automatable, and no context; there is no way to say "the
+selected band's frequency" to a plugin. The EQ is built around exactly that
+idea — six parameters cover seven bands and two pass filters, resolved through
+`selected_target` — so **it is the one native device whose parameter model a
+plugin host could not express.** `EQ_PARAM_TARGET` is itself automatable, and
+a lane on it changes which band every other EQ lane refers to. And the
+codebase already does it the other way four times: the strip's EQ, DS-01,
+ML-P8 and the modulator modules are all per-band or per-module.
 
-It has not been on the table because of a recorded argument, and **that
-argument does not survive being checked.** The doc comment on `DeviceKind::descriptors` said
-`DrumSynthParams` is a mode-union whose flat descriptor table would hand out
-ids whose meaning changes with the Mode switch. It is not a union. It is a flat
-struct of twenty-one named fields (`synth.rs:70`), every one of which means
-exactly one thing forever: `kick_start_hz` is the kick sweep start whatever the
-Mode switch says, and `drumsynth.rs:7` states outright that the other modes'
-knobs are *retained* so switching modes never loses settings. Mode selects
-which fields are audible, and it is latched per voice at note-on
-(`drumsynth.rs:216`).
+So **step 01 is the only step the argument forces**, and it is worth doing
+before any plugin work rather than after: it is a small instance of the same
+instance-scoped-parameters problem, on a device whose behaviour is already
+understood, which makes it a cheap way to find out whether the model holds.
+Note what it does *not* settle — `EffectKind::descriptors()` is a table per
+*kind*, and a plugin's parameters belong to an instance. That crossing is real
+and is not this plan.
 
-That leaves a real but much smaller objection: a route onto `kick_start_hz`
-does nothing while the device is in Snare mode. That is an audibility gate, not
-an addressing bug, and it is the same situation as a route onto a bypassed
-effect — which the application already permits everywhere.
+Steps 02 and 03 are an EQ that is merely better, and each fault in them was
+confirmed against the source rather than reported from use: the pass filters
+are absent from the response plot while their data is *already being sent* to
+it, a shelf ignores its Q in the DSP where `Biquad::shelf_slope` already
+exists, and the plot draws shelves at a fixed exponent. Step 04 is the
+measured character from five reference EQs, is optional, and is the only step
+that changes how the device sounds when nobody asked it to.
 
-So this is close to what the old note called it before the correction:
-sixteen continuous fields, one descriptor table, the same shape every other
-generator already has. `render_sample` already takes `params` by value per
-sample, so there is no structural obstacle on the DSP side either.
+Done when: every EQ band and pass filter has its own stable ids, a lane on a
+band means one band forever, and `eq-v2/00-status.md` says which of 02 to 04
+were taken.
 
-Do not scope-creep it into DS-01. The v1 device stays what it is — three modes,
-simple, and by Adam's ear good — and gets addressable parameters, nothing else.
-Do not delete it: it is the only source that cannot be modulated today, and
-after this step that sentence stops being true, which also removes the last
-standing reason to hurry it out of the tree.
+### 3. Turn Buffer into a composition workflow
 
-Done when: `DrumSynthParams`' continuous fields are descriptor-addressed with
-stable ids, a modulation route and an automation lane both reach them, old
-projects load unchanged, and the inert-while-out-of-mode case is documented
-rather than special-cased. **All four hold.** Sixteen continuous controls and
-four selectors under their own ids; `a_lane_and_a_route_both_reach_the_v1_drum_synth`
-is the acceptance case, and it runs the device in Snare mode so the inert-kick
-case is exercised rather than described. Two things it turned up:
-
-- **`GeneratorParams::DrumSynth` was a unit variant.** The device's parameters
-  never travelled through the shuttle every other generator uses, which is the
-  structural half nobody had named — the missing table was the visible half.
-- **The character selectors' index mapping was UI-local and is now wire
-  format.** An automation lane persists a stepped parameter's index, so the
-  mapping moved to core beside the enums and is frozen. `mooloop-ui` had the
-  only copy; there is one now rather than two.
-
-The face and the table are two places one range is written, which is how a
-knob comes to disagree with the lane drawn against it, so
-`slint_face_agreement.rs` holds them together on bounds, resting value, and
-whether the control is drawn in ratio.
-
-### 3. The interface, iterated
-
-**Rescoped 2026-09-07, by Adam, and the rescope is the point.** This step was
-"one push, mockup-driven", with `reference/img/mooloop-1.0-mockup.png` as the
-target. In his words that morning:
-
-> we were supposed to go straight into making the 1.0 mockup a reality but im
-> not sure i want to do that anymore. i think we should just keep iterating and
-> let it take shape.
-
-So the push became `docs/plans/interface-iteration/`: four independent steps,
-each ending in something usable, in an order that can be rearranged. The
-mockup is demoted from target to reference — a left sidebar, a right-hand
-modulation panel and a browser that earns its panel are still where this is
-heading, but the layout is likelier to be right if it is arrived at than if it
-is declared.
-
-The plan's own rule is this document's rule for interface work, applied: every
-step exposes a mechanism that is **already built** and currently reachable
-only from a menu, a rail button, or not at all. None of them adds engine
-capability.
-
-**A second directory joined it on 2026-09-08: `docs/plans/ui-consistency-pass/`.**
-It is not iteration and not a feature — it is the audit Adam's standing list
-asked for, and what it found is a different class of problem from anything
-`interface-iteration/` covers. Those steps make a built mechanism easier to
-reach; these were controls saying things the engine was not doing. A clip
-light nothing could clear, a sampler envelope printing 2.5x what it played, a
-delay whose `1/2` was an eighth note, eighteen envelope stages laid across a
-linear range their own descriptors call exponential, and twenty-six tooltips
-that were sentences. Read its `README.md` before the next interface pass: it
-records the method, so the sweep can be re-run rather than re-invented.
-
-**A third directory joined them on 2026-09-08: `docs/plans/pane-layout/`.**
-It is iteration and it obeys the plan's rule -- the mixer, the playlist and
-the piano roll all already exist, and what it changes is where they can be put
-and how big they can be. Adam's opening was that at 1080p with sixteen steps
-the top pane is mostly negative space, and his four requirements turned out to
-be one requirement asked about four surfaces, so the plan answers it once:
-five views, three slots, and a view in exactly one slot at a time. Read its
-`README.md` before touching the work area. The one thing worth carrying out of
-it here is that the rearrangement does **not** require every view to become a
-component instantiated once per slot; a view is only ever in one place, so it
-is instantiated once and *positioned*, which is what keeps a layout change off
-the four-minute `mooloop-ui` rebuild.
-
-The four items as they stood follow, because the plan's steps are these and
-the notes are still the argument for them.
-
-- ~~**Keyboard and focus.**~~ *"keyboard is still wonky. you often have to
-  click into a background area to make shortcuts work, even spacebar."*
-  **Done 2026-09-07**, and it interrupted the sequence exactly as the rule
-  below allows. The diagnosis recorded here was wrong in a way worth keeping:
-  it blamed the caret, and the fix was not to take the caret away. Slint
-  delivers a key to the focused item and then walks *parent* items towards
-  the window, so the root `FocusScope` — a **sibling** of the layout holding
-  the UI — only ever heard a key while it personally held focus. It surrounds
-  the UI now, with `focus-on-click: false` so it swallows no presses, and
-  where focus sits stopped mattering. The one control that was genuinely
-  eating Space was `ToolButton`, which every toggle, segmented control, pane
-  tab and mute button is built from; knobs and faders always rejected
-  correctly. **This unblocks the keyboard navigation the other three items
-  wanted**, which is why it was first.
-- **A left channel sidebar.** Channel name, track colour, input channel, and
-  the rest of the per-channel settings that today are scattered across the
-  rack row and nowhere. Note that **track colour does not exist at all** — no
-  field, no persistence — so this crosses `PROJECT_FORMAT.md`, and the
-  defaulted-field rule there applies.
-- **Move and redesign the modulation rack.** The shelf is 1,539 lines under
-  the device rack; the mockup puts modulation in a right-hand panel with its
-  own tabs. Read `MODULATOR_SYSTEM_SPEC.md` before moving it: the assign
-  gesture and the destination policy are contracts, and a relocation must
-  keep them. The mockup also draws its modulator as a *tracker*, which is the
-  same idea `IDEAS.md` has been holding since before this list — decide
-  whether that is one design or two before building either.
-- **The browser earns its panel.** Keyboard navigation in the sample browser,
-  and preset browsing beside samples. The preset half is not new work waiting
-  on a decision: `docs/plans/preset-system/` already decided a preset's unit
-  is a device, both instrument banks now ship, and the browser was explicitly
-  the thing waiting for them.
-
-Order, set by Adam on 2026-09-07: **presets in the browser first.** The
-modulation rack's move is deliberately *not* one of the plan's steps — it is
-the one piece of the mockup that is a genuine design question rather than a
-relocation, and Adam's own note says the first thing to settle is whether its
-tracker and the modulation panel are one design or two. Settle that before
-planning it.
-
-Done when: `docs/plans/interface-iteration/` has a `00-status.md` recording
-four landed steps — presets browsable and loadable from the panel, a device
-copyable between channels, a channel with a name and a colour that survive a
-save, and the action registry reaching the surfaces it never reached. Each of
-those is done on its own terms, and none waits for the others.
-
-### 4. Turn Buffer into a composition workflow
-
-Unchanged, and still the honest product test.
+Still the honest product test, and still last, because its value is a workflow
+judgement better made against finished instruments and an interface that can
+be driven than against neither.
 
 The retained-audio engine, insert position, collision policy, gestures,
-automation addresses, and UI face already exist. The remaining question is not
-more Buffer DSP; it is whether a musician can deliberately route a source into
+automation addresses and UI face all exist. The remaining question is not more
+Buffer DSP; it is whether a musician can deliberately route a source into
 Buffer, sequence a transformation, understand the active head, and keep the
 result as part of a project without relying on debug controls or a hidden MIDI
 mapping.
 
-It sits last because its value is a workflow judgement, and that judgement is
-better made against finished instruments and an interface that can be driven
-than against neither.
+**Raise the shape of the device before building the workflow.** Adam's
+position, 2026-08-30: making Buffer an ordinary insert device was partly the
+wrong call. He designed it as though it had to work unchanged in another DAW,
+and Buffer is not meant to be portable — it is meant to be part of how audio
+playback works inside mooloop. His stated intent is to build it into the **end
+of a device rack, with its own sequencing lane**. The lane design is not worked
+out and he deprioritized it at the time. `BUFFER_ENGINE.md` still specifies the
+insert model, so **do not treat that document as settled when this step
+starts**: ask first, and do not begin the redesign unprompted.
+
+One piece of Stage 1 is still unverified and is not a design question: its
+acceptance test 8 — no allocations or locks in the callback — needs an
+allocation-tracking harness rather than a reading of the code.
 
 Done when: a project can generate or load sound, capture it continuously at a
 chosen insert point, sequence an audible jump/reverse/repeat transformation,
 show what the read head is doing, survive save and reload, and render the same
 result offline. If that workflow is not materially better than bouncing a
 sample and loading it again, record why before expanding the device.
+
+## Waiting on Adam, not on work
+
+Four things are finished or priced and are held up by a judgement rather than
+by a branch. None of them is a step above, and none should be worked around.
+
+- **`ui-consistency-pass/`** — all six steps landed; it archives once Adam has
+  played it.
+- **`pane-layout/`** — done including the two pieces first left out; ready for
+  `archive/` now.
+- **`mono-synth-v2/`** — complete and played, kept out of the archive by one
+  finding: Acid's Cutoff knob means 0.41x nominal where the other two models
+  mean 0.65–0.68x. The compensation constant is load-bearing rather than a
+  typo, so lining the corners up means re-deriving it, and whether it *should*
+  track the others is a taste question.
+- **`containers/06-layers-and-selectors.md`** — layers are priced and
+  deferred to Adam after living with chain containers. Step 02's clipboard is
+  more time living with them, not a reason to revisit.
+
+The console's studio listening pass is the fifth, and it is the one that could
+still change something that shipped.
 
 ## Fixes that may interrupt the sequence
 
@@ -321,110 +246,136 @@ rendering the active step; threatens realtime safety or project compatibility;
 or is a small regression in the surface being touched. Record larger adjacent
 work instead of folding it into the current branch.
 
-- ~~**The focus caret eating shortcuts qualifies on its own terms.**~~ Taken
-  2026-09-07 on `fix/toolbutton-space`, on exactly the grounds this entry
-  gave: spacebar not starting the transport blocks *playing*.
-- **The stretching-polyphony cap is not enforced anywhere.** `StretchPool::new`
-  builds a reader for every one of the sampler's sixteen voices and nothing
-  limits how many stretch at once, although the contract in #13 names four.
-- **`poly-v1-mono-mode` is one step and unblocks a deletion.** It is the only
+- **Changing a channel's source throws away the name you gave it.**
+  `reset_channel_source` re-derives `channel.name` from the index
+  (`session.rs:293`). It qualifies now and did not before: naming landed
+  2026-09-09, so the gesture destroys user content rather than refreshing a
+  derived label. Step 03 owns the design; the one-line guard does not have to
+  wait for it.
+- **The sampler's stretching-polyphony cap is not enforced anywhere.**
+  `StretchPool::new` builds a reader for all sixteen voices at 100 KB each —
+  1.6 MB a stretching channel against 401 KB for four — although the contract
+  in #13 names four. Sizing the pool to `polyphony` is not free: it arrives on
+  the audio thread, so voices above the old size would silently stop
+  stretching when it was raised.
+- **`poly-v1-mono-mode/` is one step and unblocks a deletion.** It is the only
   thing keeping `DeviceKind::MonoSynth` alive, and that deletion is what lets
   `MlM1` take the plain name. The held-note stack it needs already exists.
+- **`from_index` answers out-of-range input two different ways**, depending on
+  which enum is asked: the `ALL`-table convention clamps to the nearest end,
+  the hand-written `match` convention falls through to variant 0. The input is
+  a Slint selector index, so the disagreement arises from this codebase's
+  recurring fault — an option list and a Rust table differing about how many
+  options exist — and the two conventions make one bug present as two. It is a
+  decision about the edges before it is a refactor, which is why it is
+  recorded rather than done.
+
+The Sampler v2 GitHub issues (#20 and its children) are real work and are not
+in this sequence. Weigh them against the loop story — chopped and stuttered
+breaks, loops mangled per repeat — rather than against generic sampler
+completeness, and do not treat them as the default pick when nothing else is
+named.
 
 ## Deliberately not now
 
-**More effect kinds or a broad effect-polish pass.** The 2026 effects-feedback
-pass is complete and archived. The rack has twelve effects, a common host, and
-a thirteenth kind that is not an effect at all -- the container from
-`docs/plans/containers/`, which holds a run of the other twelve. A
+**All four queued plans, by Adam's call on 2026-09-12.** Each has a written
+argument and none of them produces a musical decision, which is the rule at the
+top of this document doing its job:
+
+- **`device-registry/`** — a survey, not a work order. Adding a device kind
+  touches fourteen files, nine of which hold a one-line arm stating one fact.
+  Three findings are worth having before anyone tries: the typed
+  `EffectParams` enum is the reason the DSP reads well and should not be
+  flattened into function pointers; a table spanning crates cannot exist; and
+  Slint has no dynamic component instantiation. What *is* cheap is that those
+  arms are 444 lines of which 245 are the same eleven bindings fourteen times
+  — a face host component would take an arm from twenty-seven lines to eight
+  with no Rust change at all. Take that piece if a device step is already open
+  in `main.slint`; do not open one for it.
+- **`theming/`** — `Theme` already is the stylesheet, and the survey says
+  which axes it is missing: colour, radius and motion are tokenized, type and
+  stroke are not at all (313 literal `font-size`, 81 literal `border-width`).
+  The reason to build it is **accessibility rather than the homage** — the
+  working type size is 7–11px and is not adjustable — and that reason does not
+  expire. It also costs more with every device face added, so it gets cheaper
+  to defer and more expensive to do, which is a fact to re-read rather than
+  forget.
+- **`pattern-bank-floor/`** — every project reserves 1.00 GiB of pattern
+  storage before it holds anything, and an ordinary edit rebuilds it at 20 ms
+  a time. The measurements are committed either way, which is what makes this
+  safe to park: nothing has to be re-derived to take it later.
+- **`egui-view-layer/`** — `mooloop-ui` rebuilds in four minutes because
+  `build.rs` expands `ui/main.slint` into a single 39 MB Rust module, and
+  `edit-loop/04-decide.md` found no Slint arrangement that reaches it. That is
+  a real cost and it is still not a musical decision. `scripts/antibox` took
+  64% off `cargo test --workspace` and is the cheap half already taken; a view
+  layer is a rewrite of how the application is drawn, and it needs step 01's
+  spike and one post-change `scripts/loop-profile` run before it is even a
+  decision.
+
+**The modulation rack's move, and whether its modulator is a tracker.** The
+shelf is a relocation and a layout; the tracker is a genuine design question
+that `IDEAS.md` has held longer than this document has existed. Settle whether
+they are one design or two before planning either. `MODULATOR_SYSTEM_SPEC.md`
+holds the contracts a move must not break.
+
+**More effect kinds or a broad effect-polish pass.** Thirteen effects now, a
+common host, and a fourteenth kind that is not an effect — the container. A
 step may fix a concrete defect it exposes; the suite does not need more
 breadth.
 
 **More modulator kinds, or raising the slot count.** Five kinds, eight slots,
 durable identity, and a measured price per slot are enough. Raising
-`MAX_MODULATORS_PER_CHANNEL` is now a one-line decision — which is the point of
-the capacity work, not an invitation to make it. Note that the modulation
-rack's move is still coming; that is a relocation and a layout, not a licence
-to add kinds while it is open — and as of 2026-09-07 it is not a step of
-`interface-iteration/` at all, because whether its modulator is a tracker is
-an unanswered design question rather than a build.
+`MAX_MODULATORS_PER_CHANNEL` is a one-line decision, which is the point of the
+capacity work and not an invitation to make it.
 
-**The text-label-to-icon pass, and colour scheme support.** Both are on Adam's
-list as of 2026-09-05 and both are wanted. Both are also polish over a shell
-that is still moving, so doing either first means doing it twice — and the
-2026-09-07 rescope does not change that, it only spreads the moving out. The
-colour work in particular has somewhere real to land — Appearance already
-derives the whole palette from three seeds plus roundness and contrast — and
-that is exactly why it can wait for the panes to settle. `ENHANCEMENTS.md`
-holds both in Adam's words, including the pywal/wallust half. Note that
-`interface-iteration/` step 03 adds a *channel* colour: that is content in the
-project file, it is independent of the palette question, and it must not be
-allowed to answer it.
+**The text-label-to-icon pass.** Wanted, and polish over a shell that is still
+moving. `ENHANCEMENTS.md` holds it in Adam's words.
 
-**Parallel sends, sidechains, and plugin delay compensation for hosted
-plugins.** Still not now. But the *mixer's own* delay compensation is neither
-parked nor pending: it turned out to be the prerequisite for step 1's typed
-audio edges rather than the other way round, and it landed on 2026-09-05 in
-`docs/plans/archive/latency-compensation/`. Sends and sidechains themselves
-wait for a product task that wants them, and are no longer untrustworthy when
-one arrives.
+**Sidechain key inputs, and plugin delay compensation for hosted plugins.**
+Sends are no longer on this list — they landed 2026-09-09 and did it without
+extending the compiled edge model, because a send carries its own compensation
+and is aligned by construction. Sidechain still needs what sends did not: a
+dependency edge that schedules a producer without summing it in. Read
+`docs/plans/archive/typed-audio-edges/` before building it.
 
-**One has now arrived and been priced rather than taken.** A *layer* -- a
-container whose branches run in parallel and sum -- is the product task that
-wants them, and `docs/plans/containers/06-layers-and-selectors.md` says what it
-would cost: N branch buffers instead of one dry copy, branch alignment to the
-longest, a second representation in `EffectSlotState` because a contiguous span
-cannot describe parallel paths, and a visual treatment that is not vertical
-adjacency (step 04 spent that on "the chain continues"). Chain containers
-landed 2026-09-07 and are most of the value; whether layers are worth
-un-parking parallel routing is a decision to make after living with them, and
-it is Adam's.
+**Plugin hosting itself** (#10, #26–#30). Deferred rather than refused, and
+`PRODUCT.md` says why: not before the instrument model is coherent. Step 2
+above is the part of it worth doing early, and the only part.
+
+**A curated factory bank.** Every device that ships presets ships them to
+prove its architecture reaches its range from the controls, and that is the
+only bar they are held to. Authoring content by taste, across every device, is
+a deliberate later push. Do not fold it into a device step, and do not hold a
+device step open waiting for it.
 
 **Broad arrangement and recovery work.** Playlist clip manipulation, autosave,
 crash recovery, and richer missing-sample relinking remain important. They do
 not interrupt this sequence unless one becomes necessary to preserve its work.
 
-**The song loop was on that list and came off it, by Adam, on 2026-09-07**,
-in his words: *"kinda hilarious for an app named mooloop but there's no loop
-mode."* Which is the argument. Everything else on this list is a convenience
-the application can be judged without; a loop is how a section of music gets
-worked on at all, and its absence was reachable from the product's name. It
-landed the same day, on `feat/song-loop`, with the draggable playhead the same
-gesture wanted -- the two are one mechanism, a transport that can jump, and
-building either alone would have been building half of it twice.
-
-It is not a fifth step of `interface-iteration/` and should not be read as
-one: that plan's rule is that every step exposes a mechanism already built,
-and this built the mechanism.
-
-**A curated factory bank.** Every device that ships presets ships them to prove
-its architecture reaches its range from the controls, and that is the only bar
-they are held to — Adam's ruling closing DS-01's step 09 was that *"they don't
-have to be flawless presets. for now we just need something there, mostly to
-prove the system works."* Authoring content by taste, across every device, is a
-deliberate later push. Do not fold it into a device step, and do not hold a
-device step open waiting for it.
-
-**Metronome, plugin hosting, MIDI configuration, and the graph editor.** None is
-required to prove the active workflows. Note that step 3's channel sidebar
-draws a MIDI input row: build the *setting*, and let it stay inert, rather than
-letting the sidebar pull MIDI configuration forward.
+**Metronome, MIDI configuration, and the graph editor.** None is required to
+prove the active workflows. MIDI in particular is decoded and routed and
+configurable nowhere, and step 1's channel identity work draws rows for it:
+build the setting, let it stay inert.
 
 ## Working discipline
 
 Keep one audible acceptance case per branch and run it through realtime,
 persistence, and offline rendering where the change crosses those boundaries.
 The plan files define the order inside a plan; update their status as steps
-land rather than duplicating implementation notes here.
+land rather than duplicating implementation notes here. When every step of a
+plan is done, **move the directory to `archive/`** — an active directory should
+always hold live work.
 
 Keep branches small enough to listen to and revert independently. Preserve
 stable parameter IDs, conservative project defaults, deterministic rendering,
 and the realtime rules in `AUDIO_ARCHITECTURE.md`. `AGENTS.md` governs
 worktrees, commits, and verification.
 
-**Listening is a step, not a formality.** The last recorded listening passes
-were DS-01 and its bank on 2026-09-04 and ML-P8 and its bank on 2026-09-05,
-which closed that plan's step 07. Step 2 changes nothing about how the v1 drum synth sounds
-and does not need a pass of its own; step 3 changes what can be *done* to a
-sound rather than how it sounds, and a moving patch is the only proof it
-worked.
+**Listening is a step, not a formality.** The last recorded passes are DS-01
+and its kit on 2026-09-04, ML-P8 and its bank on 2026-09-05, the ML-M1 with
+its patches, and the channel strip's three voicings on headphones on
+2026-09-11. Two of the three steps above change what can be *done* to a sound
+rather than how it sounds, and a moving patch is the only proof they worked;
+`eq-v2`'s step 04 is the one that changes a sound outright and needs a pass of
+its own.

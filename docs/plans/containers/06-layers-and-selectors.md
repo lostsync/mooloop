@@ -35,9 +35,12 @@ What it would actually cost, priced against what exists:
   means "the chain continues", so a layer needs a visual treatment that does
   not exist.
 
-`FOCUS.md` says sends and sidechains "wait for a product task that wants
-them, and are no longer untrustworthy when one arrives." A layer device is a
-product task that wants them. It is not one that has arrived.
+`FOCUS.md` used to park sends and sidechains together, waiting for "a product
+task that wants them". **Sends landed 2026-09-09 and did not need this**: a
+send is a track-level route that carries its own compensation, so it is aligned
+by construction. What a layer wants is parallel routing *inside* a chain, which
+is still unbuilt and still parked. A layer device is the product task that
+wants it. It is not one that has arrived.
 
 ## Selector — one active branch, others idle
 

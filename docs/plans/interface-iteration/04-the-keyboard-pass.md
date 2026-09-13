@@ -16,21 +16,31 @@ rebinds every entry, and as of 2026-09-07 a shortcut fires from wherever focus
 happens to be, which it did not before. This step is about what the registry
 does not yet cover.
 
-## What thirty-nine actions do not include
+## What the registry does not include
+
+**Corrected 2026-09-12: the registry is 47 actions, not thirty-nine**, and two
+of the gaps below have closed on their own. `transport.loop-toggle` arrived with
+the song loop on 2026-09-07, so transport is two verbs rather than one. And
+**solo exists** as of 2026-09-11, on a *track*: the "do not add a solo action"
+instruction below was written against an engine that had no solo state at all,
+and now means bind the track's, not invent a channel's.
+
 
 Reading `ACTIONS` (`actions.rs:100`) against what the application can do:
 
-- **Transport is one action.** `transport.play-pause` and nothing else. There
-  is no stop, no return-to-start, no toggle-loop, no record — and
+- **Transport is two actions**, `transport.play-pause` and (since 2026-09-07)
+  `transport.loop-toggle`. There is no stop, no return-to-start and no record —
+  and
   `stop-clicked` already exists as a callback on the window
   (`main.slint:1249`), so at least one of these is a registry line.
 - **Nothing is device-level.** No add effect, no bypass, no wrap in
   container, no save preset, no next/previous device. Step 02 adds the
   clipboard half; this is the rest.
 - **Nothing is channel-level except add/remove/clone.** No mute, no solo, no
-  arm. Mute is a real command; solo is a button with nothing behind it
-  (`controls.slint:1856` has the property, `mooloop-core` has no solo state),
-  so **do not add a solo action in this step** — bind what exists.
+  arm. Mute is a real command; solo became one on 2026-09-11 -- **on a track**,
+  in place, `BusSetup::solo` with `mixer::solo_silenced` deriving what it
+  quiets. Bind that. A channel still has no solo of its own, so an action named
+  for one would be an action bound to nothing.
 - **The browser has no actions and cannot hold focus.** Adam: *"we need
   keyboard nav in the sample browser panel."* The tree is a flattened
   `[BrowserRow]` list (`main.slint:553`) with no `FocusScope` of its own, so
@@ -81,12 +91,14 @@ an action here should gain its hint at the same time.
 
 ## Do not
 
-- **Do not add a solo action.** There is no solo. `MIXER_PLAN.md` specifies an
-  AFL-style monitor tap; building it is its own change.
+- **Do not add a *channel* solo action.** Track solo exists and should be
+  bound; a channel's does not. `MIXER_PLAN.md`'s AFL-style monitor tap was not
+  what got built either -- Adam chose solo in place, which needs no second
+  output path -- and it is still its own change.
 - **Do not raise `MAX_MOD_ROUTES_PER_CHANNEL` or any other ceiling** because a
   keyboard made one easier to hit.
-- **Do not rebuild the shortcut preferences page.** It rebinds all thirty-nine
-  actions and works; a context dimension is a column in it, not a rewrite.
+- **Do not rebuild the shortcut preferences page.** It rebinds every action in
+  the registry and works; a context dimension is a column in it, not a rewrite.
 
 ## Done when
 

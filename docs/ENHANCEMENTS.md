@@ -121,7 +121,9 @@ og drumsynth was simple but honestly sounded pretty good. why has simply updatin
   untouched and old projects load unchanged.
 
 i want to move and redesign the modulation rack. i have an image somewhere, a mockup from chatgpt. ah its here: reference/img/mooloop-1.0-mockup.png
-  IN THE SEQUENCE (`FOCUS.md` step 3). The mockup puts modulation in a
+  DELIBERATELY NOT YET, and parked in `FOCUS.md` rather than queued. The
+  relocation itself is ready; what is not is the design question under it. The
+  mockup puts modulation in a
   right-hand panel with PATTERN/CONTROL/PLAYBACK/MAPPING tabs, and draws the
   modulator itself as a *tracker* — which is the same shape as the automation
   idea already sitting in `IDEAS.md`. Whether those are one design or two is
@@ -129,7 +131,9 @@ i want to move and redesign the modulation rack. i have an image somewhere, a mo
   move must not break.
 
 i want to make a sidebar on the left that lets you change channel settings like name, track color, input channel, etc. its also illustrated in the mockup
-  IN THE SEQUENCE (`FOCUS.md` step 3). Track colour does not exist anywhere
+  IN THE SEQUENCE (`docs/plans/interface-iteration/` step 03, which builds the
+  *content* of this sidebar and leaves the sidebar itself for later). Track
+  colour does not exist anywhere
   today — not as a field, not in the project format — so this one adds
   persisted state and `PROJECT_FORMAT.md`'s defaulted-field rule applies. The
   mockup's MIDI input/output/channel rows are settings for a MIDI path that is
@@ -137,17 +141,21 @@ i want to make a sidebar on the left that lets you change channel settings like 
   the sidebar pull MIDI configuration forward.
 
 we need keyboard nav in the sample browser panel
-  IN THE SEQUENCE (`FOCUS.md` step 3). Downstream of the focus fix above: a
+  IN THE SEQUENCE (`docs/plans/interface-iteration/` step 04, the keyboard
+  pass, which is the largest single piece in it). Downstream of the focus fix
+  above: a
   tree that cannot hold focus predictably cannot be navigated either.
 
 i think i want that panel to also be able to browse and load presets
-  IN THE SEQUENCE (`FOCUS.md` step 3). This is the browser that
-  `docs/plans/preset-system/` has been holding for two instrument banks to
-  design against. Both banks now ship, so nothing is blocking it.
+  LANDED 2026-09-07, as `docs/plans/interface-iteration/` step 01. The browser
+  sidebar has a PRESETS tab over one row model, and an effect preset loaded
+  from it *appends* a device rather than replacing one -- which is the better
+  gesture and is why an effect preset is always loadable. What it does not have
+  is keyboard navigation, which is step 04's.
 
 i want to do a text label -> icon pass at some point
-  DELIBERATELY NOT YET. Wanted, but it is polish over panes that step 3 is
-  about to move, so doing it first means doing it twice.
+  DELIBERATELY NOT YET. Wanted, but it is polish over a shell that is still
+  moving, so doing it first means doing it twice.
 
 i think i want to expand our use of color. some of the app is ide-inspired so maybe we should build toward colorscheme support. imo it would be dope as hell to have a music app that had dracula, monokai, everforest, nord, etc built in. base16? mmm. this idea holds hands with pywal/wallust support
   DELIBERATELY NOT YET, same reason, and there is somewhere real for it to

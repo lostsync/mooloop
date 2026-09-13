@@ -80,8 +80,9 @@ keeping those two apart. But they clearly want the same editor.
 
 That is the thing to settle before either is built, and it is a real fork:
 one tracker widget over two different backing models, or one of them borrowing
-the other's look and nothing else. `FOCUS.md` step 3 names it as the first
-question the modulation-rack redesign has to answer.
+the other's look and nothing else. `FOCUS.md` parks the modulation-rack
+redesign *on* this question: it is the first thing that redesign has to answer,
+and it is why the move is not a step of `interface-iteration/`.
 
 **2026-09-09, a third thing that wants the same answer.** Adam's morning list
 asked for the playlist to work "more like DAW lanes", to zoom to fit the

@@ -6935,9 +6935,10 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         }
     }
 
-    /// `docs/FOCUS.md` step 2's whole acceptance case: a modulation route and
-    /// an automation lane both reach the v1 drum synth, which until now was
-    /// the one source nothing could move.
+    /// The whole acceptance case of the v1 drum synth's descriptor table
+    /// (`docs/FOCUS.md`, 2026-09-05, closed): a modulation route and an
+    /// automation lane both reach the v1 drum synth, which until then was the
+    /// one source nothing could move.
     ///
     /// Both halves in one test because they share the resolve pass and the
     /// interesting question is whether a *generator* that had no table until

@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-12
-- Sessions: 102
+- Sessions: 103
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -264,7 +264,12 @@ Alphabetical by model name, then by harness.
   the pane is tall enough to hold it -- the third of the console plan's three
   drawings, arriving as a measurement rather than a zoom -- whose other half
   was that a turned strip had been handing every spare pixel to a scrolling
-  page that could not spend it.
+  page that could not spend it, and then `FOCUS.md` rewritten around a sequence
+  that had been overtaken -- the console arc was never a step in it and sends
+  were still parked in it as future work -- which meant renumbering the steps,
+  and so chasing twelve "step 3" pointers across the documentation to the thing
+  each one meant, and finding that two of the three pieces of the channel
+  identity step had quietly landed with the console pass.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

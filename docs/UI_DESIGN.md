@@ -394,7 +394,10 @@ to aim.
 
 **Its location is under review as of 2026-09-05.** Adam wants the modulation
 rack moved and redesigned into its own panel; `reference/img/mooloop-1.0-mockup.png`
-puts it on the right with its own tabs, and `FOCUS.md` step 3 carries the work.
+puts it on the right with its own tabs. `FOCUS.md` parks the move until one
+question is settled -- whether the mockup's tracker and `IDEAS.md`'s automation
+tracker are one design or two -- because the relocation is a layout and that is
+not.
 What follows describes where it is today and, more usefully, the two rules that
 a move must carry with it — one shelf for the whole channel, and no fixed row
 of permanent empty slots.

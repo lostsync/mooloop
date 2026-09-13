@@ -12,7 +12,8 @@ item is a sweep rather than a feature:
 > values or labels only.
 
 This directory is the audit that ask produced and the order the findings are
-worked in. It sits under `FOCUS.md` step 3 beside `interface-iteration/`,
+worked in. It sat under `FOCUS.md`'s interface step beside
+`interface-iteration/`,
 which is about *reaching* what exists; this one is about the things that are
 already reachable and wrong.
 

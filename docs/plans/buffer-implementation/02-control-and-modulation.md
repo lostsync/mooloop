@@ -2,7 +2,7 @@
 
 `01-the-whole-thing.md` is done. This document is the handoff for what comes
 next. It is **not** a new design: `docs/MODULATION_PLAN.md` is the approved
-design and `docs/FOCUS.md` step 3 is the work order. Read both. This file
+design and `docs/FOCUS.md`'s Buffer step is the work order. Read both. This file
 records what already landed, the one amendment that plan needs, and the
 order to build in.
 

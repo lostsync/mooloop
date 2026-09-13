@@ -11,6 +11,16 @@ exists because we stopped making layout decisions all at once.
 
 ## The three pieces, and how different they are
 
+**Corrected 2026-09-12: two of the three are already in**, built by the console
+pass rather than by this step. `Session::rename_track`
+(`crates/mooloop-session/src/mixer.rs:61`) landed 2026-09-09 and
+`Session::rename_channel` (`rack.rs:37`) beside it, both refusing a blank name
+and both wired to a `NameField` — the bus on its own face, the channel on the
+`DEVICES` view, because a channel has no face of its own. So the naming half of
+this step is done and what remains is colour, the reset bug below, and the
+inert MIDI rows. The two entries as they stood follow, because the argument for
+where the controls went is still the argument.
+
 **A channel name exists and is editable.** `channel.setup.channel.name` is
 real, saved, and already has a rename path — `copied_channel_name`
 (`crates/mooloop-session/src/channel.rs:161`) even knows how to derive
@@ -31,7 +41,12 @@ adds persisted state, and `PROJECT_FORMAT.md`'s defaulted-field rule applies:
 an old project must load without one and be indistinguishable from a new
 project that has not chosen one.
 
-## The bug this step has to fix, found 2026-09-09
+## The bug this step has to fix, found 2026-09-09 and live since it
+
+Still true at `session.rs:293` as of 2026-09-12, and **worse than when it was
+written**: naming landed on 2026-09-09, so this is now a gesture that discards
+a name a user typed rather than one that re-derives a name nobody chose.
+
 
 `Session::reset_channel_source` (`crates/mooloop-session/src/session.rs`)
 rewrites the channel's name from its index whenever the source device changes:

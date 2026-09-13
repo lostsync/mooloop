@@ -70,7 +70,8 @@ The fill is the same brush as the stroke at 0.55 opacity, drawn as a second
 outline would fill the whole window shape.
 
 `panel-left` keeps its definition in `ToolIcons` for a left-docked panel,
-because `FOCUS.md` step 3 draws a left channel sidebar and it will want it.
+because a left channel sidebar is still where the interface is heading and it
+will want it.
 It just stops being what the browser toggle uses. `panel-bottom` gains its
 fill; it is the same icon, saying the same thing, in the family the other two
 now belong to.

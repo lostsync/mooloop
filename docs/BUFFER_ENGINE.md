@@ -5,7 +5,16 @@ settled.** Stage 1 shipped — see "What shipped" below — so the engineering
 questions this document poses are answered and the product question it poses
 is not. Do not read the future tense in the rest of this file as a statement
 that nothing exists. `docs/plans/buffer-implementation/` is the build order;
-`docs/FOCUS.md` step 3 is the remaining product test.
+`docs/FOCUS.md`'s Buffer step is the remaining product test.
+
+**The insert model below is not settled, as of 2026-08-30.** Adam's position is
+that making Buffer an ordinary insert device was partly the wrong call: he
+designed it as though it had to work unchanged in another DAW, and Buffer is
+not meant to be portable -- it is meant to be part of how audio playback works
+inside mooloop. His stated intent is the **end of a device rack, with its own
+sequencing lane**. The lane design is not worked out. So read what follows as
+what shipped rather than as what the device should be, and raise the shape
+before building on it.
 
 ## What shipped
 

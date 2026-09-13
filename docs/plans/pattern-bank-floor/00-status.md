@@ -34,9 +34,11 @@ what is worth doing next, not about which is better.
 
 ## Where this sits against FOCUS.md
 
-Nowhere yet. It was not on anyone's list; it is a bug that fell out of chasing
-a different one. `FOCUS.md` decides whether it is worth a step, and the honest
-argument against is that the memory is reserved rather than used, the machine
+**Parked, by Adam on 2026-09-12**, under `FOCUS.md`'s "deliberately not now".
+It was not on anyone's list; it is a bug that fell out of chasing a different
+one. What makes it safe to park is that the measurements are committed either
+way, so nothing has to be re-derived to take it later. The honest argument
+against is that the memory is reserved rather than used, the machine
 showed no pressure, and nothing a user does is broken by it. The honest
 argument for is that a 20 ms edit is felt every time anybody drags anything,
 and it gets worse with every channel added to a song.

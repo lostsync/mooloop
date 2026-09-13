@@ -10,7 +10,7 @@ Adam, 2026-09-07, opening the week:
 > have a lot of new internals that we could expose or use.
 
 That is a decision about *method*, and this directory is what it replaces the
-old method with. `FOCUS.md` step 3 was "one push, mockup-driven," with
+old method with. `FOCUS.md`'s interface step was "one push, mockup-driven," with
 `reference/img/mooloop-1.0-mockup.png` as the argument for a layout that would
 arrive all at once. It is now four independent steps that each end in
 something usable, in an order that can be rearranged, with the mockup demoted
@@ -70,7 +70,7 @@ says is wrong with it.
 ## Source questions this plan does not answer
 
 - **Whether the modulation rack moves, and whether its modulator becomes a
-  tracker.** `FOCUS.md` step 3 held both, `IDEAS.md` has held the tracker
+  tracker.** `FOCUS.md` held both and now parks them together, `IDEAS.md` has held the tracker
   idea longer, and `MODULATOR_SYSTEM_SPEC.md` holds the contracts a move must
   not break. It is deliberately not a step here: it is the one piece of the
   mockup that is a genuine design question rather than a relocation, and

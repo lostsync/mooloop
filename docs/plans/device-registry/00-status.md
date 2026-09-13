@@ -27,7 +27,10 @@ the three lists are checked for agreement in about a millisecond.
 
 ## Where this sits against FOCUS.md
 
-Nowhere. Adam asked what it would take, not for it to be built. The survey's
+**Parked, by Adam on 2026-09-12**, under `FOCUS.md`'s "deliberately not now".
+Adam asked what it would take, not for it to be built. One piece of it is
+exempt and `FOCUS.md` says so: take the face host component if a device step
+already has `main.slint` open, but do not open one for it. The survey's
 own recommendation is that the first item -- a face host component that takes
 the 245 duplicated lines out of `main.slint`'s fourteen face arms -- is worth
 doing on its own terms whether or not anything else here ever is, and that

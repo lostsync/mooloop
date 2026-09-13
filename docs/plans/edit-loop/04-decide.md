@@ -185,9 +185,10 @@ the evidence points one way, and it does.
 changes that add capacity. Both this plan and the egui port are capacity.
 Neither makes a sound.
 
-So the next task is not in this directory. It is `docs/FOCUS.md`'s sequence:
-**finish ML-P8** — `docs/plans/archive/poly-synth-v2/` steps 05 through 07 — which is
-half built with its cost known. The honest measure of a fixed loop is that it
+So the next task is not in this directory. It is whatever `docs/FOCUS.md`'s
+earliest open step is — which when this was written meant **finishing ML-P8**,
+`docs/plans/archive/poly-synth-v2/` steps 05 through 07, half built with its
+cost known, and closed on 2026-09-05. The honest measure of a fixed loop is that it
 stops being something anyone thinks about, and the way to find out whether
 this one is fixed is to go and use it on something that makes a noise.
 

@@ -139,8 +139,8 @@ Three content decisions, each answering something Adam named:
   today because the shared header drew it for `editor-page != 2`, and on the
   piano roll a whole-channel preset browser is noise — you are editing notes,
   not the channel's sound. `DEVICES` is the view whose subject *is* the
-  channel's sound. `FOCUS.md` step 3's left channel sidebar is its eventual
-  home; this is where it lives until that exists.
+  channel's sound. The left channel sidebar the 1.0 mockup draws is its
+  eventual home; this is where it lives until that exists.
 - **`SONG ARRANGEMENT` goes.** It is a label saying what the pane is, and the
   tab beside it already says that. It is the same permanent-chrome sentence
   the work-surface row's own comment records deleting once already.
@@ -183,7 +183,7 @@ column is something Adam is actually working in.
   and the piano-roll-only branches around lines 1383-1416. Each becomes a
   question about a *view* — "is NOTES the active view of its slot" — not about
   an index. Find them all before moving anything; a missed one is a shortcut
-  that silently stops working, which is the failure mode `FOCUS.md` step 3
+  that silently stops working, which is the failure mode `fix/toolbutton-space`
   spent a branch on already.
 - **Computed geometry drops Slint's minimum-size propagation.** The clamps in
   `changed height` and inside the grip are load-bearing and must survive.

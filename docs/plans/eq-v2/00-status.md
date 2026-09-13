@@ -19,8 +19,9 @@ parameter model cannot be expressed in the model a plugin host has to have.
 
 ## Where this sits against FOCUS.md
 
-Nowhere yet -- Adam asked for a plan, not for it to be built. `FOCUS.md` decides
-whether it is next.
+**Step 2 of the sequence, as of the 2026-09-12 rewrite**, behind finishing
+`interface-iteration/` and ahead of Buffer. Adam asked for a plan, not for it
+to be built; then he put it in the order.
 
 Two things about the sequencing are worth saying here rather than in a step.
 Step 01 is the only one the CLAP argument forces; 02 to 04 are an EQ that is

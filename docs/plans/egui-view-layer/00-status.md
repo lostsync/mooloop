@@ -111,7 +111,11 @@ one is built.
 **`docs/FOCUS.md`'s own rule.** It says to prefer changes that produce a musical
 decision over changes that merely add capacity. A toolkit migration is the
 largest available non-musical change. That rule is Adam's own and it argues
-against this plan regardless of how well it would compile.
+against this plan regardless of how well it would compile. **He applied it on
+2026-09-12**: this directory is parked under "deliberately not now", on the
+grounds that `scripts/antibox` already took the cheap 64% and what is left is
+a rewrite of how the application is drawn. Step 01's spike and one post-change
+`scripts/loop-profile` run are what would make it a decision again.
 
 ## How to decide cheaply
 
