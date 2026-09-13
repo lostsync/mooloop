@@ -10,7 +10,9 @@
 //! that quietly reordered or dropped its children. These render whole
 //! projects and compare the master, sample for sample.
 
-use crate::render_test_support::{render_blocks};
+use crate::meters::DeviceMeters;
+use crate::render::RenderState;
+use crate::render_test_support::{render_blocks, SAMPLE_RATE};
 use mooloop_core::{
     ChainParams, EffectKind, EffectParams, EffectSlotState, NoteEvent, Project, ProjectChannel,
 };
@@ -307,4 +309,58 @@ fn a_container_decodes_from_a_manifest_that_names_neither_field() {
         toml::from_str("type = \"chain\"\n[state]\n").expect("an empty state decodes");
     assert_eq!(params, EffectParams::Chain(ChainParams::default()));
     assert_eq!(params.kind(), EffectKind::Chain);
+}
+
+/// **A container's OUT reads the end of its run, not its input.**
+///
+/// `DeviceOutputRail` is drawn past everything the box holds, precisely so it
+/// reads as the box's output -- and until 2026-09-13 the engine published the
+/// peak taken *going in* to both of the container's meter cells and then
+/// `continue`d, so a run that boosted 12 dB or blended half its dry back read
+/// as no change at all.
+///
+/// The cells are `fetch_max` peak holds, which is what makes it worth a test
+/// rather than a glance: writing the input into the OUT cell does not merely
+/// report the wrong figure, it *survives* a correct later write for any run
+/// that attenuates. So the assertion here is the attenuating direction.
+#[test]
+fn a_containers_out_meter_reads_the_end_of_its_run() {
+    let mut project = three_device_chain();
+    // Take most of the level out inside the box, so its two cells cannot be
+    // mistaken for each other.
+    project.channels[0].setup.effects[0].params =
+        EffectParams::Filter(mooloop_core::FilterParams {
+            cutoff_hz: 100.0,
+            resonance: 0.0,
+            mode: mooloop_core::FilterMode::LowPass,
+            ..mooloop_core::FilterParams::default()
+        });
+    // The filter alone, not the whole chain: Drive is in `three_device_chain`
+    // and it *boosts*, so a box around all three reads hotter coming out than
+    // going in -- which is a true reading and the wrong one to assert on. The
+    // attenuating direction is the one the `fetch_max` hold would hide.
+    wrap(&mut project, 0..1, 1.0);
+
+    let meters = DeviceMeters::new();
+    let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    render.attach_device_meters(meters.clone());
+    render.play();
+    render.process_block(1024);
+
+    // Stage `slot + 1`, and the container took slot 0 when `wrap` inserted it.
+    let (container_in, container_out) = meters.take(0, 1);
+    assert!(
+        container_in.0 > 0.001,
+        "the box has to be hearing something for this to mean anything, got {container_in:?}"
+    );
+    // Strictly less, with no margin, because the margin is not what is being
+    // tested: the unfixed engine wrote *the same peak* into both cells, so
+    // the two were bit-identical. Any difference in the attenuating direction
+    // is the whole result, and a threshold would only make the test fragile
+    // about how much a 100 Hz lowpass takes off one drum hit.
+    assert!(
+        container_out.0 < container_in.0,
+        "the OUT cell must read past the run's filter, and the unfixed engine \
+         made these equal: in {container_in:?}, out {container_out:?}"
+    );
 }

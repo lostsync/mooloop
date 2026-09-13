@@ -1325,7 +1325,7 @@ impl EffectChain {
             while depth > 0 && open[depth - 1].end == slot {
                 depth -= 1;
                 let run = open[depth];
-                self.close_run(run, depth, bus, context);
+                self.close_run(run, depth, bus, context, device_display);
             }
             if slot < skip_until {
                 continue;
@@ -1363,17 +1363,17 @@ impl EffectChain {
                 self.note_input_level(slot, left.max(right), context.frames);
                 if let Some((meters, _, target)) = device_display {
                     meters.publish_input(target, slot + 1, left, right);
-                    meters.publish_output(target, slot + 1, left, right);
                 }
                 if let Some(state) = self.slots[slot].as_mut() {
                     state.events.clear();
                 }
                 let children = self.container_children(slot);
-                if children == 0 || depth >= MAX_CONTAINER_DEPTH {
-                    // An empty box, or one nested past the cap, is a row that
-                    // does nothing. Deeper than the cap is unreachable
-                    // through the interface and loadable from a file, so it
-                    // has to mean *something* rather than panic.
+                if children == 0 {
+                    // An empty box is a row that does nothing, so what comes
+                    // out of it is what went in.
+                    if let Some((meters, _, target)) = device_display {
+                        meters.publish_output(target, slot + 1, left, right);
+                    }
                     continue;
                 }
                 let open_run = OpenRun {
@@ -1394,7 +1394,24 @@ impl EffectChain {
                             );
                         }
                     }
+                    // Past the delay its run declares, which is what the
+                    // box costs while it is out.
+                    if let Some((meters, _, target)) = device_display {
+                        let (left, right) = bus.peak(context.frames);
+                        meters.publish_output(target, slot + 1, left, right);
+                    }
                     skip_until = open_run.end;
+                    continue;
+                }
+                // Checked *below* the bypass branch, so a box nested past the
+                // cap still bypasses its run: being too deep to blend is no
+                // reason for its bypass button to do nothing too. Its Mix
+                // still does nothing, which is the part that needs a decision
+                // -- see `docs/LOOSE_ENDS.md`.
+                if depth >= MAX_CONTAINER_DEPTH {
+                    if let Some((meters, _, target)) = device_display {
+                        meters.publish_output(target, slot + 1, left, right);
+                    }
                     continue;
                 }
                 if let Some(scratch) = self.container_dry.as_mut() {
@@ -1552,7 +1569,32 @@ impl EffectChain {
         while depth > 0 {
             depth -= 1;
             let run = open[depth];
-            self.close_run(run, depth, bus, context);
+            self.close_run(run, depth, bus, context, device_display);
+        }
+    }
+
+    /// Close a container's run: blend it back against its dry copy, then
+    /// publish what came out as the box's OUT.
+    fn close_run(
+        &mut self,
+        run: OpenRun,
+        depth: usize,
+        bus: &mut StereoBus,
+        context: &ProcessContext,
+        device_display: Option<(&DeviceMeters, &DeviceTelemetry, usize)>,
+    ) {
+        self.blend_run(run, depth, bus, context);
+        // The box's OUT is what leaves the far end of its run, taken after
+        // the blend. It used to be published at the container's own row from
+        // the peak going *in*, which is the one number it certainly is not:
+        // `DeviceOutputRail` is drawn past everything the box holds
+        // precisely so it reads as the box's output. The meter cells are
+        // `fetch_max` peak holds, so publishing the input there did not
+        // merely report the wrong figure -- it survived a correct later
+        // write for any run that attenuates.
+        if let Some((meters, _, target)) = device_display {
+            let (left, right) = bus.peak(context.frames);
+            meters.publish_output(target, run.slot + 1, left, right);
         }
     }
 
@@ -1563,7 +1605,11 @@ impl EffectChain {
     /// deliberately the same crossfade: equal-power, because the runs people
     /// will actually blend are the decorrelated ones a linear fade dips 3 dB
     /// in the middle of. `docs/GAIN_STRUCTURE.md` records the trade.
-    fn close_run(
+    ///
+    /// The blend alone -- [`Self::close_run`] publishes what comes out,
+    /// which has to happen on every path including the two this one returns
+    /// early on.
+    fn blend_run(
         &mut self,
         run: OpenRun,
         depth: usize,
