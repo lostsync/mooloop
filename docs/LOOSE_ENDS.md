@@ -183,6 +183,72 @@ blocked by this; it is one more click than a user coming from FL will expect
 
 ## Edits that do not undo
 
+**An undo of one edit silently destroys every unrecorded edit made after
+it**, and whole surfaces are unrecorded. Undo installs `entry.before`, a full
+snapshot taken when *that* edit happened, so anything done since that never
+reached the history is discarded -- and redo cannot bring it back, because
+`entry.after` predates it too. Not recorded: every step-grid edit (click,
+right-click, velocity, paint), pattern length, add-pattern, playlist
+placement add and remove, **every effect and generator parameter**, both
+renames, and channel/generator preset loads from the browser.
+
+So: draw a note (recorded), click eight steps, turn a filter's cutoff, press
+Ctrl+Z -- and the eight steps and the cutoff are gone with no redo path. The
+boundary was deliberate in one direction (pattern clone/remove/clear and the
+channel clipboard verbs were given the `ProjectEdit` path on purpose, "reuse
+the same whole-project undo pipeline") and nobody wrote down what it costs in
+the other.
+
+Not one patch per callback. A knob reports on every move frame, so making
+parameters undoable needs a gesture token per control, and only the piano
+roll and the slice editor have a `drag-started`/`finished` pair today -- so it
+is a `main.slint` contract change across every face, the eight-minute build
+`AGENTS.md` says to batch. `NameField.edited` fires on every *keystroke*, so
+a naively recorded rename is one undo step per character. Options: give the
+UI a general `gesture-begin`/`gesture-end` pair and route these through
+`record_project_history`; or declare the boundary and leave the destruction,
+which `CURRENT.md` now at least describes honestly; or make undo refuse to
+run over unrecorded state, which needs a "changed since the last entry"
+marker `record` has no way to set today. Found 2026-09-13.
+
+**Pattern names are wiped by every project edit and never reach disk.**
+`replace_project` does `self.pattern_names = vec![String::new(); ...]`
+(`session.rs:1146`), and every `ProjectEdit` runs through it -- so naming
+three patterns "Verse", "Chorus", "Bridge" and then adding a channel, cloning
+a pattern, or pressing Ctrl+Z blanks all three. `pattern_names` appears
+nowhere in `mooloop-core`, `mooloop-project` or `PROJECT_FORMAT.md`, so they
+do not survive a save either. `CURRENT.md` documents naming a pattern as a
+peer of naming a channel or a track, with a paragraph on why a pattern may be
+blank where the others may not, and says nothing about the name being
+transient. Not small because a name has to survive `replace_project`: either
+carry it in `Project` -- a persisted field, a migration, and length
+validation in `integrity.rs`, which is also the only option that makes
+`CURRENT.md` true and fixes persistence -- or keep it session-side and give
+`ProjectEdit` a pattern-edit field beside `channel_edit`, since
+`queue_pattern_clone` and `queue_pattern_remove` insert and remove pattern
+indices in a cloned `Project` that the session's name vector knows nothing
+about. Found 2026-09-13.
+
+**Two preset producers mutate the live session before queueing, so a refused
+install leaves the document and the engine disagreeing.**
+`on_effect_preset_selected` (`lib.rs:8076`) and `append_effect_preset`
+(`lib.rs:12205`) apply the preset to the live session, take `after` from it,
+and only then queue -- where every sibling (`queue_channel_insert`,
+`queue_pattern_clone`) clones `before.project`, mutates the clone, and leaves
+the session untouched until the pump installs it. When `install_project_in_ui`
+returns false because the 1024-slot realtime queue is full, the pump prints
+"Channel edit is waiting for audio" and **drops the edit** -- nothing retries
+-- so the rack draws the new device while the engine keeps playing the old
+one, and the edit is in no history entry. Not small because
+`load_effect_preset` is a `Session` method that also writes
+`effect_preset_names`, so it cannot run against a detached `Project` clone
+without splitting the name-setting out. Options: split it and follow the
+`queue_channel_insert` shape; or have the pump's failure branch roll the
+session back, which needs the pre-edit snapshot it currently discards; or make
+the failure retriable by parking the edit and re-sending next tick -- which
+also makes the status message true, since "waiting for audio" describes
+behaviour nothing implements. Found 2026-09-13.
+
 **Shortening a pattern hides a sounding note rather than releasing it.**
 `sequencer.rs:698` (and `:761` in song mode) filters notes by
 `note.start_tick < pattern_ticks`, which is what implements "a shortened
@@ -224,11 +290,14 @@ the guard in `add_playlist_placement`; or drop the covered placements and
 report them, which is the only one that also needs a repair path on load.
 Found 2026-09-12.
 
-**Sampler slice and marker edits are not undoable.** `add_slice`,
-`move_slice`, `remove_slice`, `divide_slices`, `clear_slices` and
-`snap_all_markers` in `mooloop-session/src/sampler.rs` never touch history —
-the file has no reference to it. This is pre-existing rather than introduced
-by the slice work; wiring sampler params into undo is its own change.
+**Snap-all-markers and the four trim/loop markers are not undoable**, where
+the five slice verbs beside them now are. `add_slice`, `move_slice`,
+`remove_slice`, `divide_slices` and `clear_slices` record from the *caller*
+(`lib.rs:8840`-`8922`, with a gesture token for drags), which is why this
+entry used to say none of them did: it looked for history in `sampler.rs` and
+the snapshot is taken one level up. `snap_all_markers` (`lib.rs:8545`) and
+`wire_marker_param!` (`lib.rs:8410`-`8456`) are still on the cheap path.
+Corrected 2026-09-13.
 
 **Send edits are not undoable, because routing never was.** `add_send`,
 `remove_send`, `set_send_level`, `set_send_tap` and `set_send_enabled` in

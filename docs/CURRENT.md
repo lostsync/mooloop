@@ -587,8 +587,9 @@ land on its own when it starts to matter:
 - **The mixer is a list of tracks, and a track is made because somebody made
   it.** A new song opens with the master; the starter kit adds `Drums` and
   `Bass`, with its four drum channels grouped onto the first. `+` in the mixer
-  adds a track, and a track's device face renames it or removes it — both
-  undoable. Removing one falls anything routed to it back to the master rather
+  adds a track, and a track's device face renames it or removes it. Removing
+  is undoable; renaming is not, though an undo of some *other* edit reverts
+  the name with the rest of the snapshot. Removing one falls anything routed to it back to the master rather
   than leaving it unheard.
 
   **There is no `+ Bus` and no `+ Send`.** What a track *is* — an ordinary
@@ -1214,9 +1215,14 @@ land on its own when it starts to matter:
   device to another channel. That is the question `docs/plans/containers/`
   reserved rather than answered, and this inherits its answer.
 - A canonical action registry drives the menu bar and rebindable shortcuts.
-  Note multi-selection supports Select All and bulk deletion; channel,
-  pattern, note, and modulation edits feed a project-snapshot undo/redo stack.
-  Project-level navigation remains limited.
+  Note multi-selection supports Select All and bulk deletion. **Undo is not
+  universal**: channel structure, pattern clone/remove/clear, note edits,
+  modulation, effect presets and the sampler's five slice verbs feed a
+  project-snapshot undo/redo stack, while device and generator *parameters*,
+  step-grid edits, pattern length, add-pattern, playlist placements and the
+  two renames do not -- and because an undo installs a whole snapshot, an
+  unrecorded edit made after the last recorded one is discarded by it. See
+  `docs/LOOSE_ENDS.md`. Project-level navigation remains limited.
 
 ## Architecture Risks To Resolve Early
 
