@@ -425,6 +425,15 @@ pub const OUTLET_FILTER: u16 = 13;
 /// How many of the outlets below are control signals.
 pub const MLP8_CONTROL_OUTLETS: usize = 7;
 
+/// The control run has to fit the channel's outlet band, which is a ceiling
+/// on the *address space* rather than on any device. `Strip::publish_outlets`
+/// copies this run into a `[f32; MAX_GENERATOR_OUTLETS]`, so a table that
+/// overran it would panic on the audio thread on the first block. DS-01
+/// states the same bound beside its own count; ML-P8 has the larger run and
+/// did not. The test below checks the table against this number, which is a
+/// different question from whether the number fits.
+const _: () = assert!(MLP8_CONTROL_OUTLETS <= crate::modulation::MAX_GENERATOR_OUTLETS);
+
 /// What ML-P8 publishes.
 ///
 /// Not every internal value: the plan's rule is that an outlet is designed

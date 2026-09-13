@@ -623,7 +623,19 @@ impl ModulatorRack {
                 *existing = Some(Source::Step(StepSequencer::new(next)))
             }
             (Some(ModulatorParams::Random(next)), Some(Source::Random(random))) => {
+                // `held` is kept in the source's *own* range, so the Bipolar
+                // switch changes what the stored number means. Without the
+                // re-fold, a held -0.8 read back through the unipolar arm of
+                // `value` is -2.6 -- outside the -1..1 the rack is entitled
+                // to assume, and nothing downstream clamps a source value.
+                // It would persist until the next draw, which never comes if
+                // the trigger is Note and no notes arrive, or if Chance is 0.
+                let refolded = random.params.bipolar != next.bipolar;
                 random.params = next;
+                if refolded {
+                    let floor = random.floor();
+                    random.held = random.held.clamp(floor, 1.0);
+                }
             }
             (Some(ModulatorParams::Random(next)), _) => {
                 *existing = Some(Source::Random(RandomSource::new(next, slot)))
@@ -758,6 +770,51 @@ mod tests {
         let mut rack = ModulatorRack::new();
         rack.set_slot(0, Some(ModulatorParams::Lfo(params)));
         rack
+    }
+
+    /// A Random module keeps its held value in the range its own Bipolar
+    /// flag declares, so turning the flag off has to re-fold it. Without
+    /// that, a held -0.8 read back through the unipolar arm of `value` is
+    /// -2.6 -- outside the -1..1 the rack is entitled to assume, and nothing
+    /// downstream clamps a source value: `offset_for` multiplies it by depth
+    /// and only the summed result meets a clamp. A depth-1.0 route would pin
+    /// its destination to the bottom of its range, and stay there until the
+    /// next draw, which never comes with Chance at 0.
+    #[test]
+    fn a_random_module_refolds_its_held_value_when_bipolar_changes() {
+        use mooloop_core::{ModRandomParams, ModRandomTrigger};
+
+        // Chance 0 freezes the held value, so the only thing that can move
+        // the reading is the re-fold under test.
+        let frozen = |bipolar: bool| ModRandomParams {
+            bipolar,
+            probability: 0.0,
+            trigger: ModRandomTrigger::Clock,
+            ..ModRandomParams::default()
+        };
+
+        let mut rack = ModulatorRack::new();
+        rack.set_slot(0, Some(ModulatorParams::Random(frozen(true))));
+        rack.tick(48_000, 64, 120.0);
+        let bipolar_value = rack.outputs()[0];
+        // Stated rather than assumed: the re-fold only moves a *negative*
+        // held value, so a seed that draws positive would make everything
+        // below pass whether the fix is present or not. The seed is
+        // deterministic, so this cannot fail today -- it is here to fail
+        // loudly on the day someone changes it, instead of going quiet.
+        assert!(
+            bipolar_value < 0.0,
+            "this test needs a negative draw to mean anything; the seed now \
+             gives {bipolar_value}, so re-pick the slot or the params"
+        );
+
+        rack.set_slot(0, Some(ModulatorParams::Random(frozen(false))));
+        rack.tick(48_000, 64, 120.0);
+        let after = rack.outputs()[0];
+        assert!(
+            (-1.0..=1.0).contains(&after),
+            "the held value must be re-folded into the new range, got {after}"
+        );
     }
 
     #[test]
