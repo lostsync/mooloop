@@ -550,7 +550,12 @@ impl Session {
     /// one modulus.
     pub fn transport_position(&self, tick: u64) -> TransportPosition {
         let length = self.pattern_lengths[self.current_pattern] as u64;
-        let ticks_per_step = (mooloop_core::Ppq::DEFAULT.ticks_per_beat() / 4) as u64;
+        // The constant, not a derivation from PPQ. `TICKS_PER_STEP` is a
+        // hard 24 and would not follow a PPQ change, so this line would have
+        // drifted away from the scheduler while the readout looked right --
+        // and being a derivation rather than a literal, no text search would
+        // have found it. The line below already takes `TICKS_PER_BAR` whole.
+        let ticks_per_step = u64::from(mooloop_core::TICKS_PER_STEP);
         let ticks_per_beat = mooloop_core::Ppq::DEFAULT.ticks_per_beat() as u64;
         let (position_ticks, playlist_ticks) = if self.song_mode {
             let position = tick % u64::from(self.song_length_ticks());

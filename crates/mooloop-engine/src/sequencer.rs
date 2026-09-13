@@ -183,6 +183,12 @@ impl Sequencer {
                 .take(self.playlist.capacity()),
         );
         self.playlist.sort_unstable();
+        // Two identical placements schedule the same pattern twice at the
+        // same offset, and `instance_offset` is derived from the pattern and
+        // the start tick -- so both NoteOns carry the *same* voice id and one
+        // NoteOff half-releases them. `set_playlist_placement` refuses a
+        // duplicate; the load path is the way one gets in.
+        self.playlist.dedup();
 
         for pattern in &mut self.patterns {
             pattern.set_length_steps(DEFAULT_STEPS as usize);
@@ -190,10 +196,19 @@ impl Sequencer {
                 channel.clear();
             }
         }
-        for (pattern_index, length) in project.pattern_lengths.iter().enumerate() {
+        // Both banks are preallocated and both counts were clamped above, so
+        // take the same bound here: `load_bundle` can be driven without the
+        // integrity pass that refuses an oversized file, and an unclamped
+        // index into a realtime-owned array panics on the audio thread.
+        for (pattern_index, length) in project
+            .pattern_lengths
+            .iter()
+            .enumerate()
+            .take(self.patterns.len())
+        {
             self.patterns[pattern_index].set_length_steps(*length as usize);
         }
-        for (channel_index, channel) in project.channels.iter().enumerate() {
+        for (channel_index, channel) in project.channels.iter().enumerate().take(MAX_CHANNELS) {
             for (pattern_index, notes) in
                 channel.notes.iter().enumerate().take(self.active_patterns)
             {
