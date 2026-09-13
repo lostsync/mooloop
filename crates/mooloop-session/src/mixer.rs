@@ -147,6 +147,15 @@ impl Session {
         let output = u8::try_from(output).ok()?;
         let output = sanitize_route(index as u8, output);
         self.buses.get(index)?;
+        // `sanitize_route` bounds by the address space, which is not the same
+        // as the bank being that long -- the distinction step 04 found for
+        // channels, and which `sanitize_bank` and `integrity` both repair on
+        // load. Without it `set_bus_output(1, 9)` on a three-track bank
+        // succeeded: `would_create_cycle` answers false for a track that is
+        // not there, the graph compiles with a phantom feeding the master,
+        // and `mix_into` then returns early so the track is silently
+        // inaudible. `add_send` two functions below has always checked.
+        self.buses.get(output as usize)?;
         if would_create_cycle(&self.buses, index as u8, output) {
             return Some(Err(RoutingLoop {
                 feeder: self.buses[output as usize].bus.name.clone(),
@@ -385,6 +394,33 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+
+    /// `sanitize_route` bounds by the address space; the *bank* is what has
+    /// to hold the destination. `set_bus_output` checked the source and not
+    /// the target, so routing a track at a number the bank does not reach
+    /// succeeded: no cycle (there is nothing there to loop back), the graph
+    /// compiles with a phantom feeding the master, and `mix_into` then
+    /// returns early so the track is silently inaudible -- exactly what the
+    /// channel-side repair exists to prevent. `add_send` has always checked.
+    #[test]
+    fn a_track_cannot_be_routed_past_the_end_of_the_bank() {
+        let mut session = Session::default();
+        session.ensure_tracks(3);
+
+        assert!(
+            session.set_bus_output(1, 9).is_none(),
+            "index 9 is inside the address space and outside this bank"
+        );
+        assert_eq!(
+            session.buses[1].bus.output,
+            mooloop_core::MASTER_BUS,
+            "and the routing it had is untouched"
+        );
+        assert!(
+            matches!(session.set_bus_output(1, 2), Some(Ok(()))),
+            "a destination the bank holds is still accepted"
+        );
+    }
     use super::*;
     use mooloop_core::{EffectKind, MASTER_BUS};
 

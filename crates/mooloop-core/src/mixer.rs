@@ -235,7 +235,17 @@ impl AuxSend {
 /// Whether `from` could send to `target` at all, ignoring the rest of the
 /// graph. Nothing sends to itself, and both ends must be addressable.
 pub fn is_legal_send(from: u8, target: u8) -> bool {
-    from != target && (from as usize) < MAX_BUSES && (target as usize) < MAX_BUSES
+    // `from != MASTER_BUS` for the same reason `is_legal_route` has it: the
+    // master is the sink every route reaches and has no outgoing edge of any
+    // kind. Without it, a hand-edited master send was counted as an in-degree
+    // by `compile_bus_graph` and never released -- the Kahn loop skips the
+    // master *before* the release step -- so the whole bank failed to sort
+    // and was reported cyclic when it was not. `sanitize_bank` then ran its
+    // cycle branch, which clears the sends on every track in the song.
+    from != MASTER_BUS
+        && from != target
+        && (from as usize) < MAX_BUSES
+        && (target as usize) < MAX_BUSES
 }
 
 /// A bus plus the effect chain inserted on it, mirroring `ChannelSetup`.
@@ -1603,6 +1613,56 @@ mod tests {
     /// already reaches it. It is refused rather than delayed, which is the
     /// whole answer to "or it'd feedback like crazy" -- there is no return
     /// object to get this wrong with.
+    /// The master is a sink on *every* edge type, not just on outputs.
+    ///
+    /// `is_legal_route` has refused it an output since the mixer's first
+    /// pass; `is_legal_send` did not refuse it a send. That was not a
+    /// cosmetic gap: `compile_bus_graph` counts a master send as an
+    /// in-degree on its target and never releases it, because the Kahn loop
+    /// skips the master *before* the release step -- so the bank fails to
+    /// sort and is reported cyclic when there is no cycle. `sanitize_bank`
+    /// then runs its cycle branch, which clears the sends on **every** track
+    /// in the song and, per `docs/LOOSE_ENDS.md`, persists that on the next
+    /// save. Not reachable through the interface; reachable from a
+    /// hand-edited or foreign-build file, which nothing upstream checks
+    /// because `integrity` fits a send's level and never its target.
+    #[test]
+    fn the_master_may_not_own_a_send_any_more_than_it_owns_an_output() {
+        assert!(!is_legal_send(MASTER_BUS, 2), "the master is a sink");
+        assert!(!is_legal_route(MASTER_BUS, 2), "and always was, for outputs");
+        assert!(is_legal_send(1, 2), "an ordinary send is untouched");
+
+        // The bank that used to lose every send in it.
+        let mut buses: Vec<BusSetup> = (0..3).map(BusSetup::new).collect();
+        buses[0].sends.push(AuxSend {
+            target: 2,
+            level: 1.0,
+            tap: SendTap::PostFader,
+            enabled: true,
+        });
+        buses[1].sends.push(AuxSend {
+            target: 2,
+            level: 0.5,
+            tap: SendTap::PostFader,
+            enabled: true,
+        });
+
+        assert!(
+            compile_bus_graph(&buses).is_some(),
+            "a master send is not a cycle and must not be reported as one"
+        );
+        let repaired = sanitize_bank(&buses);
+        assert!(
+            repaired[0].sends.is_empty(),
+            "the master's impossible send is dropped"
+        );
+        assert_eq!(
+            repaired[1].sends.len(),
+            1,
+            "and every other track keeps the sends it authored"
+        );
+    }
+
     #[test]
     fn a_send_that_would_loop_is_refused() {
         // 3 feeds 4, so a send from 4 back to 3 closes the ring.
