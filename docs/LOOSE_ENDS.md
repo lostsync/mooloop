@@ -238,6 +238,38 @@ their own passes; nobody has decided whether they should match.
 
 ## One name, two policies
 
+**Half the bus-bank repair happens in `mooloop-core` and reports nothing, and
+one branch of it can delete every send in the project.** `PROJECT_FORMAT.md`
+attributes three repairs to the loader; only the out-of-range destination is
+there. `mixer::sanitize_bank` (`mooloop-core/src/mixer.rs:305`) does the other
+two -- drop a send whose target is gone, flatten a cycle to
+everything-to-master -- and it is called from `Session::load_project`
+(`session.rs:1140`), after the integrity pass, with no `Doctor` in reach.
+
+Four consequences, in order of how much they cost a user. The repair is
+**unreported**: `LoadReport::repairs` is empty for it, so the status bar, the
+repair log and the copyable `Diagnosis::report()` all omit it. It is then
+**persisted** -- the sanitized bank becomes `self.buses`, and the next save
+writes it -- so the sends are gone from the file and not just from the running
+document. The cycle branch clears `sends` on **every** track rather than the
+ones in the cycle, so one bad `output` edge in a hand-edited or foreign-build
+file costs a whole bank's aux routing silently. And `load_bundle` on its own
+returns an unsanitised bank, so anything driving the loader directly -- an
+offline render, a headless measurement loop -- gets a graph `compile_bus_graph`
+will refuse.
+
+The fix is not small because the repair needs the whole graph: moving it into
+`integrity::check_buses` means `mooloop-project` calling `compile_bus_graph`
+itself, and it changes *when* the sanitising runs relative to what
+`Session::load_project` assumes about the bank it is handed. Three options,
+and the third is worth doing whichever of the first two wins: move it into the
+integrity pass and report each dropped send and the cycle flatten through
+`Doctor`; or leave it where it is and have it return its issues for `Session`
+to fold into the `LoadReport`; or narrow the cycle branch to break the smallest
+set of edges that makes the graph compile, instead of clearing everything.
+`PROJECT_FORMAT.md`'s limits section now says where these actually happen
+rather than claiming the loader does all three. Found 2026-09-12.
+
 **`from_index` answers out-of-range input two different ways depending on
 which enum you ask, and nothing currently reaches it.** Forty-five enums
 convert a selector index to a variant under one name, in two conventions: the
@@ -300,6 +332,38 @@ This is the same shape as the piano-roll grid constants below, wants the same
 `tests/common/` module, and would be worth doing in the same pass.
 
 ## Numbers nothing is watching
+
+**`default_band_position()` returns the middle position for two of the four
+strip EQ bands and one step low for the other two, and no test reads it.**
+`mooloop-core/src/strip.rs:147` returns a bare `2`. `STRIP_BAND_POSITIONS` is
+`[5, 7, 7, 5]`, so the middle of a seven-position mid band is 3 --
+`DEFAULT_POSITIONS` says `[2, 3, 3, 2]` and the four descriptors read it. Four
+things state what the middle is; the one serde reaches is wrong for the two
+mids, and its own doc comment and `PROJECT_FORMAT.md` both claim the band
+"loads centred". `grep -rn default_band_position crates/` returns two hits:
+the attribute and the definition. This is `AGENTS.md`'s question -- *does
+anything read the copy the test checks?* -- answering no, and it is the same
+shape as item 6 in that list.
+
+It bites exactly one class of file: a song saved on 2026-09-11, the day
+`StripBand` carried `frequency_hz` instead of `position`, which is the only
+reason the default exists. `kind`, `gain_db` and `q` have no default, so such a
+band decodes with those and takes `2` for its position -- under `MOO_EQ` band 1
+opens at 2 kHz where the file meant 3 kHz, while the face and the descriptor's
+double-click-to-default both say 3.
+
+Why it is not a one-character fix: serde's `default = "fn"` gets no array
+index, so no single `u8` is right and changing `2` to `3` just moves the error
+to the outer bands. Three options. Decode `bands` through a wire type with
+`position: Option<u8>` filled from `DEFAULT_POSITIONS[i]` (~25 lines, contained
+to `strip.rs`, makes the code match both claims) -- this is the fix if that
+day's files are still meant to open. Or accept `2` and correct the function's
+comment and `PROJECT_FORMAT.md`, which writes drift down as intent. Or drop
+the `#[serde(default)]` and the doc paragraph together, so a band without a
+position fails to load like its three siblings -- cleanest format, but it is a
+decision about whether one day's files still have to open. Found 2026-09-12;
+the load-time range check added the same day would have caught this class of
+thing, and now does for everything else on the strip.
 
 **Eight device faces spell a number the descriptor table already states, and
 `slint_face_agreement.rs` reads none of them.** `scripts/dupe-audit

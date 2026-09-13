@@ -290,7 +290,7 @@ before any of them existed still loads:
   pinned position is a policy the application states once, and a per-track
   copy of it would be a thing to keep in step for a feature nobody has asked
   for. See `docs/plans/archive/console/03-the-channel-strip-device.md`.
-- **A track's solo is stored, and what solo *does* is not.** `buses[].solo`
+- **A track's solo is stored, and what solo *does* is not.** `buses[].bus.solo`
   is a defaulted bool, so a project reopens with the same tracks soloed. What
   it silences is derived every pump tick from the whole bank -- a soloed
   track's feeders and destinations stay audible -- and never written, because
@@ -433,8 +433,10 @@ audio file.
 - 1 to 256 channels and 1 to 256 patterns. Channel count follows the complete
   `u8` realtime-address space, not a small product cap.
 - Pattern lengths from 1 to 256 sixteenth-note steps.
-- Playlist starts within the 64-bar playlist canvas, and a loop range within
-  the same canvas.
+- Playlist starts within the 64-bar playlist canvas. A loop range is *not* in
+  this list: it is clamped against the song length at playback by
+  `LoopRange::active`, not validated on load, which is what lets a range
+  reaching past the end of the song survive a shortening edit.
 - Tempo from 1 to 999 BPM.
 - Swing from 50 to 75 percent.
 - Unique nonzero note IDs, nonzero durations, MIDI notes `0..=127`, and
@@ -447,10 +449,18 @@ audio file.
   `MAX_MOD_ROUTES_PER_CHANNEL` (16) routes per channel. Both are engine
   constants rather than format fields: a manifest carrying more is truncated
   at load, not refused.
-- Seventeen buses (master plus sixteen inserts). A short stored bank is
-  padded, an out-of-range destination is repaired to the master, and a bank
-  whose routing contains a cycle is flattened to everything-to-master so the
-  file still opens.
+- Up to seventeen buses (master plus sixteen inserts), and a bank may hold
+  fewer. A short stored bank is a small mixer and is **left as it is** --
+  padding it back to seventeen was removed because it silently added fifteen
+  tracks to every song it opened. The master is the one track that is not
+  optional and is restored if it is missing.
+
+  Two routing repairs run, and **they do not both run in the same place.** An
+  out-of-range destination is repaired to the master by the integrity pass,
+  which reports it. A bank whose routing contains a cycle is flattened to
+  everything-to-master, and a send naming a track that is not there is
+  dropped, by `mooloop_core::mixer::sanitize_bank` -- which `Session` calls
+  after the load, and which reports nothing. See `docs/LOOSE_ENDS.md`.
 - **No limit on sends.** Nothing in the format, the plan or the face reserves
   for a number of them; a track carries as many as it was given.
   `docs/CAPACITY_POLICY.md` is why.

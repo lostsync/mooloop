@@ -701,7 +701,9 @@ pub struct Project {
     pub selected_channel: u8,
     pub channels: Vec<ProjectChannel>,
     /// Mixer buses, master first. Defaulted on load so songs written before
-    /// the mixer existed get the full bank with everything on the master.
+    /// the mixer existed get the master and nothing else -- a bank is the
+    /// tracks somebody made, and `default_buses` stopped returning seventeen
+    /// of them when the mixer became a list rather than a fixed bank.
     #[serde(default = "default_buses")]
     pub buses: Vec<BusSetup>,
     pub pattern_lengths: Vec<u16>,

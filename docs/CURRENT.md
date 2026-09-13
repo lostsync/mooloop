@@ -638,9 +638,11 @@ land on its own when it starts to matter:
 - Destinations and their matching render order are one fixed-size compiled
   value, and a track's sends travel with it as one command, so no block can
   render edges against a stale order or a send whose target the order has not
-  been told about. Short stored banks are padded, invalid individual routes are
-  repaired to the master, and a send naming a track that is gone is dropped, at
-  this compilation boundary.
+  been told about. A short stored bank is a small mixer and is left
+  as it is -- padding it back to seventeen was removed. Invalid individual
+  routes are repaired to the master by the integrity pass, which reports the
+  repair; a send naming a track that is gone is dropped by `sanitize_bank`
+  after the load, which reports nothing (`docs/LOOSE_ENDS.md`).
 - A send orders its target after its source, the same way an output does, and
   a cycle closed through a send is refused the same way one closed through an
   output is.
