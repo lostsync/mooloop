@@ -84,47 +84,37 @@ shows what a menu already showed is not progress either.
 Set by Adam on 2026-09-12: finish the interface iteration, then the EQ, then
 Buffer.
 
-### 1. Finish `docs/plans/interface-iteration/` — steps 03 and 04
+### 1. Finish `docs/plans/interface-iteration/` — step 04
 
 The plan is four independent steps, each ending in something usable, in an
-order that can be rearranged. Two are in. Its rule is this document's
+order that can be rearranged. Three are in. Its rule is this document's
 interface rule applied: every step exposes a mechanism that is **already
 built** and currently reachable only from a menu, a rail button, or not at all.
 If a step starts wanting engine capability, it has left the plan.
 
-**Step 03 — a channel is a thing you named. Two of its three pieces landed
-without it**, and the step file has been corrected. The console pass built
-`rename_track` on 2026-09-09 and `rename_channel` beside it, both wired to a
-`NameField`, so a bus can be called "Drums" and a channel can be called "Kick"
-— which was the step's cheapest win and is gone from it.
+**Step 03 closed on 2026-09-13**, and what it found is worth carrying rather
+than the work it did. A channel and a pattern each take a colour, stored as a
+colour the song owns rather than an index into the palette, so the palette
+question in `ENHANCEMENTS.md` stays open and a song looks the same under every
+theme. The controls live in a **left channel sidebar** — Adam asked for it that
+day, which overrode the step file's instruction not to build one — and it is
+the browser sidebar's mirror, with the MIDI rows drawn inert as this document
+required. `reset_channel_source` no longer eats a name the user typed.
 
-What is left is the part that was always the real work. A channel colour **does
-not exist at all** — no field in the UI, the session model, or the project
-format — so it is the one piece that adds persisted state, and
-`PROJECT_FORMAT.md`'s defaulted-field rule governs it. Pattern colour comes with
-it, because it is the same design and deciding it twice is how it gets decided
-differently. A pattern can already be renamed, so colour is the only gap there
-too.
+The two things the step did not know about are the ones to remember. **A
+pattern's name had never been saved**: `rename_pattern` wrote to a session
+field the project format had no room for, so every reopened song renumbered its
+patterns, silently, since patterns became renamable on 2026-09-07 — and
+renaming one did not mark the document dirty either, which was harmless only
+for as long as the name was going to be discarded anyway. Both are the class
+this document already names: a claim the source no longer supported. Neither
+was findable by looking at the feature; they turned up because a *colour* had
+to persist beside the name.
 
-Two constraints on it, both already written into the step:
-
-- **A channel colour must not settle the palette question.** It is content in
-  the project file and travels with the song. Store a colour the project owns,
-  not an index into the current palette.
-- **Build the MIDI rows inert.** The sidebar must not pull MIDI configuration
-  forward.
-
-The step also carries a bug found on 2026-09-09 while the console plan was
-being written, and **naming landing first is what turned it from latent into
-live.** `Session::reset_channel_source` still re-derives a channel's name from
-its index (`session.rs:293`), so a channel called "Kick" switched from the
-sampler to the DS-01 comes back called "DS-01 1". A name the user typed is
-thrown away by a gesture that is not about the name. That was tolerable while
-every name was derived; it stopped being tolerable on 2026-09-09, which makes
-it eligible for the interrupt list rather than something to wait for its step.
-The distinguishing question is whether the current name is still the default
-one for the *outgoing* device: if it is, re-derive it; if it is not, the user
-named it and it stays.
+What is left of the colour work is adoption, and it is deliberately unfinished:
+the rack plate draws a channel's colour and nothing else does. The mixer and
+the playlist take their turn one at a time, each being a place to check the
+colour reads at that size, and a pattern's colour is stored but drawn nowhere.
 
 **Step 04 — the keyboard reaches the rest of the application.** Adam has asked
 for this in stronger terms than anything else on his list, and the foundation
@@ -145,8 +135,8 @@ solo landed 2026-09-11, on a **track**. Bind that. Solo on a *channel* rather
 than its track is still unbuilt, and inventing it here would be the step
 adding capability.
 
-Done when: `interface-iteration/00-status.md` records four landed steps, and
-the directory moves to `archive/`.
+Done when: step 04 lands, `interface-iteration/00-status.md` records four
+landed steps, and the directory moves to `archive/`.
 
 ### 2. `docs/plans/eq-v2/` — the parameter model first, the EQ second
 
@@ -246,12 +236,6 @@ rendering the active step; threatens realtime safety or project compatibility;
 or is a small regression in the surface being touched. Record larger adjacent
 work instead of folding it into the current branch.
 
-- **Changing a channel's source throws away the name you gave it.**
-  `reset_channel_source` re-derives `channel.name` from the index
-  (`session.rs:293`). It qualifies now and did not before: naming landed
-  2026-09-09, so the gesture destroys user content rather than refreshing a
-  derived label. Step 03 owns the design; the one-line guard does not have to
-  wait for it.
 - **The sampler's stretching-polyphony cap is not enforced anywhere.**
   `StretchPool::new` builds a reader for all sixteen voices at 100 KB each —
   1.6 MB a stretching channel against 401 KB for four — although the contract
