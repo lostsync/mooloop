@@ -647,12 +647,20 @@ fn prepare_song_asset(
         let asset_name = target_assets
             .file_name()
             .expect("song assets path has a file name");
-        let relative = PathBuf::from(asset_name)
-            .join("samples")
-            .join(format!("{channel:02}-{name}"));
-        let destination = staging_assets
-            .join("samples")
-            .join(format!("{channel:02}-{name}"));
+        // A sample the bundle already owns keeps the leaf name it has. It was
+        // given its `NN-` on the save that embedded it, and the app writes the
+        // resolved path back into the live session afterwards -- so prefixing
+        // again turned `00-kick.wav` into `00-00-kick.wav`, three bytes per
+        // Ctrl+S, until the name hit `NAME_MAX` and the song could not be
+        // saved at all. Permanently: the long name is in the manifest, so
+        // every later save fails too and a restart reloads it.
+        let leaf = if keep_owned {
+            name
+        } else {
+            format!("{channel:02}-{name}")
+        };
+        let relative = PathBuf::from(asset_name).join("samples").join(&leaf);
+        let destination = staging_assets.join("samples").join(&leaf);
         fs::create_dir_all(destination.parent().expect("sample destination has parent"))?;
         fs::copy(&source, destination)?;
         copied.insert(canonical, relative.clone());
@@ -874,7 +882,13 @@ fn prepare_setup_asset(
             .map(sanitize_preset_name)
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "sample.wav".into());
-        let relative = PathBuf::from("samples").join(format!("{channel:02}-{name}"));
+        // As in `prepare_song_asset`: a sample the bundle already owns keeps
+        // its leaf, or the prefix accumulates on every save.
+        let relative = PathBuf::from("samples").join(if keep_owned {
+            name
+        } else {
+            format!("{channel:02}-{name}")
+        });
         fs::copy(&source, staging.join(&relative))?;
         copied.insert(canonical, relative.clone());
         relative
@@ -1222,6 +1236,57 @@ mod tests {
         ParamAddr, PatternPlacement, MAX_CHOKE_GROUP,
     };
     use tempfile::tempdir;
+
+    /// **Saving twice must not rename the sample twice.**
+    ///
+    /// The app reloads the bundle after a save and writes the resolved paths
+    /// back into the live session, so the next save sees a path that is
+    /// already inside the sidecar and already carries its `NN-`. Prefixing
+    /// again grew the name three bytes per Ctrl+S -- `00-kick.wav`,
+    /// `00-00-kick.wav`, ... -- until it hit `NAME_MAX` and the song could
+    /// not be saved at all, permanently, because the long name was in the
+    /// manifest and a restart reloaded it.
+    ///
+    /// Two saves, not one: a single round trip is what the old test checked,
+    /// and a single round trip is exactly what this bug survives.
+    #[test]
+    fn an_embedded_sample_keeps_its_name_across_repeated_saves() {
+        let temp = tempdir().unwrap();
+        let source = temp.path().join("kick.wav");
+        std::fs::write(&source, b"RIFF....WAVEfmt ").unwrap();
+
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.channels[0].setup.sampler_state_mut().unwrap().sample =
+            mooloop_core::SampleReference::File {
+                path: source.clone(),
+                embedded: true,
+            };
+
+        let leaf_of = |project: &Project| {
+            let mooloop_core::SampleReference::File { path, .. } =
+                &project.channels[0].setup.sampler_state().unwrap().sample
+            else {
+                panic!("the channel holds a file reference");
+            };
+            path.file_name().unwrap().to_string_lossy().into_owned()
+        };
+
+        for round in 1..=4 {
+            save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+            // What the application does after every save: reload, and take the
+            // resolved paths back into the document it will save next.
+            let LoadedDocument::Song(reloaded) = load_bundle(&bundle).unwrap().document else {
+                panic!("a song bundle loads as a song");
+            };
+            project = reloaded;
+            assert_eq!(
+                leaf_of(&project),
+                "00-kick.wav",
+                "the prefix accumulated on round {round}"
+            );
+        }
+    }
 
     #[test]
     fn song_round_trip_retains_hidden_notes_and_playlist() {
