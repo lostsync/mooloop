@@ -85,7 +85,8 @@ use mooloop_session::dialogs::{
     pick_save_via_zenity, pick_song_via_zenity,
 };
 use mooloop_session::document::{
-    log_repairs, quarantine_song, repair_suffix, resolve_document, warning_suffix, DocumentProblem,
+    log_asset_warnings, log_repairs, quarantine_song, repair_suffix, resolve_document,
+    warning_suffix, DocumentProblem,
     DocumentResult, LoadTarget, ResolvedDocument,
 };
 use mooloop_session::engine::{
@@ -4715,6 +4716,21 @@ impl AppUi {
                     },
                 };
                 let path = dir.join(format!("{file_stem}.{extension}"));
+                // `replace_bundle` backs the old one up, installs the new one
+                // and deletes the backup, so a name collision is a silent
+                // overwrite of somebody's work. `factory.rs` refuses to do
+                // this and says why -- "a first launch after an update
+                // silently replacing someone's work is the worst thing this
+                // code could do" -- and the ordinary save dialog was doing it
+                // on every confirm. Note the collision can also come from
+                // sanitising: "My Delay" and "My/Delay" are both `My_Delay`.
+                if path.exists()
+                    && !confirm_via_zenity(&format!(
+                        "A preset called \"{file_stem}\" already exists here. Replace it?"
+                    ))
+                {
+                    return;
+                }
                 window.set_document_busy(true);
                 window.set_status_message("Saving preset...".into());
                 let tx = tx.clone();
@@ -10727,6 +10743,7 @@ impl AppUi {
                                 report.repairs.len()
                             );
                             log_repairs("saving the song", &report.repairs);
+                            log_asset_warnings("saving the song", &report.warnings);
                             window.set_status_message(
                                 operation_status(
                                     "Song saved",
@@ -10740,6 +10757,7 @@ impl AppUi {
                         DocumentResult::SavedOther { label, report } => {
                             log_info!("project", "{label}");
                             log_repairs(label, &report.repairs);
+                            log_asset_warnings(label, &report.warnings);
                             window.set_status_message(
                                 format!(
                                     "{label}{}{}",
@@ -10752,6 +10770,7 @@ impl AppUi {
                         DocumentResult::SavedPreset { label, report } => {
                             log_info!("project", "{label}");
                             log_repairs(label, &report.repairs);
+                            log_asset_warnings(label, &report.warnings);
                             window.set_status_message(
                                 format!(
                                     "{label}{}{}",
@@ -10807,6 +10826,7 @@ impl AppUi {
                                 repairs.len()
                             );
                             log_repairs("opening the file", &repairs);
+                            log_asset_warnings("opening the file", &warnings);
                             let current = st
                                 .borrow()
                                 .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
@@ -11031,7 +11051,11 @@ impl AppUi {
                         None => handle.clear_slices(update.channel),
                     }
                 }
-                let mut deferred_new_channel_load = None;
+                // A `Vec`, not an `Option`: two "Load in New Channel"
+                // decodes can land in the same 60 Hz tick, and an `Option`
+                // silently kept the last -- one sample gone and one channel
+                // created where two were asked for.
+                let mut deferred_new_channel_loads = Vec::new();
                 while let Ok(load) = load_rx.try_recv() {
                     let still_current = {
                         let st = st.borrow();
@@ -11061,12 +11085,12 @@ impl AppUi {
                         // deferred to below, where its default-sample reset
                         // can be spent before this load lands rather than
                         // after.
-                        deferred_new_channel_load = Some(loaded);
+                        deferred_new_channel_loads.push(loaded);
                         continue;
                     }
                     apply_loaded_sample(&handle, &st, &weak, load.channel, loaded);
                 }
-                if let Some(loaded) = deferred_new_channel_load {
+                for loaded in deferred_new_channel_loads {
                     if let Some(window) = weak.upgrade() {
                         window.invoke_add_channel_clicked(0);
                         // Creating the channel queues its own default-sample
@@ -11897,6 +11921,16 @@ fn refresh_preset_menus(state: &Rc<RefCell<UiState>>, window: &MainWindow) {
         st.session.generator_presets = generator_presets;
         st.session.channel_presets = channel_presets;
         st.session.effect_presets = effect_presets;
+        // The browser's own catalogue, which `refresh_browser` below renders
+        // from. It was rescanned only on entering the PRESETS tab, so a
+        // preset saved *while that tab was open* did not appear in it -- the
+        // rail menus updated and the browser re-rendered from the stale
+        // catalogue. The comment at the save site claimed this landed "by way
+        // of the tab being re-entered", which only happens if the user
+        // actually leaves and comes back.
+        if st.browser_tab == BrowserTab::Presets {
+            st.preset_catalog = scan_preset_catalog();
+        }
     }
     let st = state.borrow();
     st.sync_generator_preset_menu(window);
@@ -12037,7 +12071,14 @@ fn push_browser_rows(
         if is_dir {
             // A folder with nothing playable below it is noise, however
             // legitimately it exists on disk.
-            if has_playable_descendant(&child, depth + 1) {
+            //
+            // From zero, not from `depth`: that argument is the *scan's* own
+            // recursion counter, which exists to terminate a symlink cycle,
+            // and `depth` here is how deep the row is drawn. Passing the
+            // display depth made the scan give up early, so a folder nested
+            // past sixteen rows vanished from the tree even when it was full
+            // of samples.
+            if has_playable_descendant(&child, 0) {
                 push_browser_rows(rows, &child, depth + 1, expanded);
             }
         } else {
