@@ -247,6 +247,25 @@ pub fn log_repairs(what: &str, repairs: &[Issue]) {
     }
 }
 
+/// The same, for the asset warnings the status bar can only count.
+///
+/// `warning_suffix` above says "(1 sample warning)" and stops, and an
+/// `AssetWarning` carries the channel, the path and the message -- so a song
+/// opened with a missing sample played silence and the name of the file it
+/// wanted reached nothing. `CURRENT.md` says a missing sample is "recoverable
+/// by loading a replacement audio file", which needs knowing which one it is.
+pub fn log_asset_warnings(what: &str, warnings: &[AssetWarning]) {
+    for warning in warnings {
+        log_warn!(
+            "project",
+            "{what}: channel {} - {} ({})",
+            warning.channel + 1,
+            warning.message,
+            warning.path.display()
+        );
+    }
+}
+
 /// Everything an offline render needs, resolved from the session in one go.
 ///
 /// The render runs on a worker thread, so it takes the project and its audio
