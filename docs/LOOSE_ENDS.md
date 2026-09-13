@@ -311,6 +311,108 @@ their own passes; nobody has decided whether they should match.
 
 ## One name, two policies
 
+**Load silently deletes authored modulation the spec says to keep as an
+orphan, and the mechanism built for keeping it is unreachable.**
+`ModRack::deserialize` drops four things with no diagnostic: a slot whose
+index is past `MAX_MODULATORS_PER_CHANNEL` (`modulation.rs:1510`), a route
+whose source id names no surviving slot (`:1543`) -- which is exactly what a
+capacity truncation produces -- a route whose `to_local_slot` fails (`:1536`),
+and every route past `MAX_MOD_ROUTES_PER_CHANNEL`, because `apply_route`'s
+`None` is discarded into `let _` (`:1548`). `MODULATOR_SYSTEM_SPEC.md` says
+the opposite: "project persistence retains it as an inspectable orphan rather
+than silently deleting authored work." The truncation itself is the accepted
+design -- `AGENTS.md` records both constants as engine constants rather than
+format fields -- and it is *coherent*, in that a route naming a module that
+did not survive is dropped rather than re-aimed at a survivor. The silence is
+the divergence.
+
+`UNRESOLVED_SLOT` was built for this and **no reachable path parks anything
+on it.** Its own doc comment (`modulation.rs:1386`) describes behaviour
+nothing implements: `add_route` stamps from an occupied slot, `apply_route`
+refuses an unheld id, `clear` removes routes both ways, `move_module` and
+`swap_slots` never drop a module, and the deserializer drops rather than
+parks. The only producer is an out-of-range generator outlet, and that is
+refused at the door. Two tests were asserting this correctly while their own
+comments claimed the spec's behaviour; the comments were corrected 2026-09-13
+and the behaviour was left alone, because changing it is this entry.
+
+Options: implement the spec -- park un-sourced routes and report the
+truncation through `mooloop-project`'s `Doctor`, so the user is told rather
+than surprised; or keep the deletion and have the `Doctor` report *that*,
+which is the cheap honest half; or amend the spec to say load-time truncation
+deletes. Whoever decides this should also decide the departed-producer versus
+departed-device inconsistency above, which is the same question at a
+different site. Found 2026-09-13.
+
+**Reordering the modulator grid restarts or cross-wires every moved module's
+running state.** `EngineCommand::MoveModulator` goes through
+`edit_modulation` (`render.rs:3168`), whose only mirror into the DSP rack is a
+params diff *by slot number*. A reorder is a permutation, so every moved
+position reads as "the params changed" and gets `set_slot`, which knows about
+a slot being reconfigured and not about a module having moved. Different kinds
+swap and both are rebuilt from scratch: an envelope dragged to the front
+restarts at level 0 stage `Idle`, so a held note's contour drops to zero
+mid-sustain and will not re-arm until the next Note On; a Random module is
+reseeded, changing the sequence that is supposed to be identical between
+realtime and offline. Same kinds **cross-wire**: two LFOs dragged past each
+other keep their own phase, smoothing state and fade position and take the
+other's params, so both jump and nothing shows why. The session layer's own
+comment (`session/modulation.rs:120`) claims "both racks run the same
+permutation", which is true of the data and not of the running state. Not a
+small fix because `edit_modulation` is deliberately generic over
+`FnOnce(&mut ModRack)` and cannot tell a reorder from any other edit -- the
+diff is what makes narrow commands cheap. Options: give `ModulatorRack` a
+`move_slot(from, to)` that permutes `slots` and `outputs` together and give
+`MoveModulator` its own handler ahead of the diff, which then correctly finds
+nothing changed; or key the DSP rack by `ModSourceId` rather than by slot,
+which removes the class; or accept the restart and say so in the spec -- but
+the same-kind cross-wiring is not defensible under any reading. Found
+2026-09-13.
+
+**A unipolar route only rests at its base when the module's own Amount is
+exactly 1.** `offset_for`'s lift is `(output + 1.0) * 0.5`
+(`modulation.rs:1997`), which assumes the source spans the full `-1..1`. An
+Envelope and a unipolar Random do; an LFO does not, because its output is
+`raw * depth * fade`, so the lift's minimum is `(1 - depth)/2` rather than 0.
+`mlm1_factory.rs:272` ships an LFO to pulse-width route at `Unipolar` with the
+module's Amount at 1.0, which is correct today -- turn that AMOUNT to 0.5 and
+the destination does not modulate less around the same floor, it shrinks its
+swing *and rises*. At Amount 0 the module contributes a constant `+0.5 *
+depth` offset while visibly producing no movement: "the modulator is off" and
+"the destination is parked half a depth up" become the same knob position.
+The spec names this exact hazard for outlets (lines 305-309) and does not
+address it one level down, where it says flatly "A unipolar route maps that
+output to `0..1`, making the base the floor." Not a small fix because it is a
+question about what `Unipolar` means and the answer changes resting values in
+saved projects: map the source's *declared* range onto `0..1`, which needs
+`ModSourceDescriptor.signal` carried into the realtime path where it is not
+today; or accept it on the grounds that reducing a bipolar source's amount
+legitimately collapses it to its midpoint -- defensible, but then the spec's
+polarity paragraph has to say so. Found 2026-09-13.
+
+**A Math module's `input_slot` follows a reorder but not a removal.**
+`retarget` (`modulation.rs:1767`) goes out of its way to carry the input
+across a `move_module`, and `clear` (`:1678`) does not touch it -- although
+`clear`'s own comment is explicit that "a destination left on an emptied slot
+would be inherited by whatever module is installed there next", which is
+precisely what happens here. Remove the LFO in slot 0 that a Math in slot 1
+reads, and the Math correctly reads 0.0; install anything else, `free_slot`
+returns 0, and the Math is silently multiplying the new module. The rack has
+`a_new_module_never_inherits_a_removed_ones_routes` for this hazard on the
+route side and the math input is outside it. Compaction has the same hole:
+`move_module` fills `remap` only for occupied slots, so an input pointing at
+an empty slot is left alone while a different module compacts into that
+number. Rated lower confidence than the rest because `input_slot` is half
+visible -- it is `MATH_PARAM_INPUT_SLOT`, a persisted stepped parameter drawn
+as the shelf's INPUT selector showing a slot *number*, so "it points at slot 1
+and slot 1 changed" is a defensible reading. Options: give Math a
+`ModSourceId` input the way a route has one, which is what the code's own
+comment (`:952`) anticipates but changes a persisted field's meaning; or park
+a dependent input out of range on `clear` and map empty-slot references in
+`move_module`, which is small but leaves the INPUT selector showing a position
+it cannot represent; or decide the slot number is the contract and delete the
+`retarget` remap so the three behaviours at least agree. Found 2026-09-13.
+
 **Half the bus-bank repair happens in `mooloop-core` and reports nothing, and
 one branch of it can delete every send in the project.** `PROJECT_FORMAT.md`
 attributes three repairs to the loader; only the out-of-range destination is
@@ -405,6 +507,27 @@ This is the same shape as the piano-roll grid constants below, wants the same
 `tests/common/` module, and would be worth doing in the same pass.
 
 ## Numbers nothing is watching
+
+**The modulation shelf spells twenty-one ranges by hand and nothing checks
+any of them.** `modulation-shelf.slint:1208-1658` declares
+`minimum`/`maximum`/`default-value`/`free-*` for the LFO, Envelope, Step,
+Random and Math modules. All twenty-one were compared against `LFO_`,
+`ENVELOPE_`, `STEP_`, `RANDOM_` and `MATH_DESCRIPTORS` on 2026-09-13 and every
+one agrees -- including the non-obvious `QUANT 0..16` (a 17-position selector)
+and `LENGTH 1..16`. So this is drift risk rather than present drift, the same
+shape as the eight device faces above. It is *not* reachable by extending
+`slint_face_agreement.rs`'s list: that test works from a list of device faces
+and the shelf is not a device face, so covering it is a new check rather than
+a longer list.
+
+One curiosity for whoever writes it. The shelf draws the LFO and Random RATE
+knobs with `ValueScale.logarithmic` while `LFO_PARAM_RATE_HZ` and
+`RANDOM_PARAM_RATE_HZ` declare `ParamCurve::Linear`. Nothing reads those
+curves on the modulator path today -- the shelf sends natural values straight
+to `ModulatorParams::set`, and modulator parameters are neither automation nor
+modulation destinations -- so it is inert, and a naive agreement test would
+trip over it on the first run. The correct resolution is to fix the Rust
+curve, not the markup.
 
 **`default_band_position()` returns the middle position for two of the four
 strip EQ bands and one step low for the other two, and no test reads it.**
