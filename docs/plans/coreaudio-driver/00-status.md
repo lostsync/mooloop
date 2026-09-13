@@ -1,7 +1,8 @@
 # Core Audio driver status
 
 Written 2026-09-13. Adam wants to develop mooloop on a Mac as well as on
-Fedora, and asked for it to build and run there. Step 01 is in progress.
+Fedora, and asked for it to build and run there. It does, as of the same day:
+steps 01, 02, 04 and 05 have landed and step 03 is open.
 
 ## What prompted it
 
@@ -38,8 +39,23 @@ does not provide.
 
 | Step | State |
 | --- | --- |
-| 01 One executor, two adapters | in progress |
-| 02 Core Audio output | not started |
+| 01 One executor, two adapters | landed 2026-09-13 |
+| 02 Core Audio output | landed 2026-09-13 |
 | 03 Core MIDI input | not started |
-| 04 The preferences page names its driver | not started |
-| 05 Keep the Mac build honest | not started |
+| 04 The preferences page names its driver | landed 2026-09-13 |
+| 05 Keep the Mac build honest | landed 2026-09-13; the macOS CI job has not run yet |
+
+## What the doing changed
+
+- **The Linux build can be checked from the Mac.** The build box does not
+  resolve from every network the Mac sits on, and the JACK adapter no longer
+  compiles there, so `scripts/linux-check` cross-checks for x86_64 Linux: a
+  stand-in `pkg-config` for jack-sys, `zig cc` for mp3lame-sys's autoconf.
+  Check and clippy both run through it.
+- **The first launch of a fresh dev build sat for over ten seconds** before
+  the engine reported starting; the second started at once. Not reproduced
+  since, and most likely macOS's first-run scan of a new binary rather than
+  anything in the driver, but worth knowing before calling it a hang.
+- **A dev build reported a few xruns a second at idle**, in a run that was also
+  being stack-sampled. Judge Core Audio dropouts in a release build before
+  treating that as a driver fault.

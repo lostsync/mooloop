@@ -327,7 +327,9 @@ Exit criteria:
 - Stem and bus export.
 - Groove extraction from audio.
 - A text or algebraic pattern view.
-- Platform support beyond Linux.
+- Platform support beyond Linux as a release. macOS builds and runs through
+  Core Audio for development (`plans/coreaudio-driver/`); packaging, signing
+  and a macOS release are not started.
 
 These are not rejected. They should not distort the current architecture until
 the core instrument and buffer hypothesis work.

@@ -55,3 +55,27 @@ jobs:
 
       - name: cargo test
         run: cargo test --workspace
+
+  macos:
+    name: Check, clippy, test (macOS)
+    # The Core Audio driver compiles only here. Without this job a change that
+    # breaks it stays green until somebody next builds on a Mac.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo check
+        run: cargo check --workspace --all-targets
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
