@@ -89,6 +89,45 @@ ends.
 
 ## Wired but unreachable
 
+**A container's Mix is offered as an automation destination the engine
+cannot read.** `automation_destinations` (`session.rs:485`) walks every
+slot's `kind.descriptors()` with no filter, and `EffectKind::Chain`'s table is
+one entry, `Mix`. So "Chain 3 - Mix" lists in the lane picker, a curve draws
+on it, it persists as an ordinary `ParamAddr` and it survives load and
+reorder. The engine never reads it: the container branch in
+`EffectChain::process` clears `state.events` and `continue`s without calling
+`control_events_for_slot`, and `close_run` takes the mix from
+`state.base_params`, which only `SetEffectParam`, `install` and `load` write.
+The playhead crosses the curve and the audio does not move.
+
+The contrast that makes it an oversight rather than a policy: **modulation is
+not reachable the same way.** `ContainerDeviceFace` does not bind
+`modulation-depths`, `modulation-allowed`, `modulation-offsets` or
+`modulation-route-counts`, where every other face does -- so the Mix knob has
+no depth ring and no drop target. Somebody decided that for modulation and
+the automation picker never heard about it. Not small either way: filtering it
+out matches the face but silently deletes any lane already drawn on one
+(`refresh_automation` drops targets not in `destinations`), and making the
+engine read it means a slot with no node has to carry a resolved parameter,
+which today every device receives as a `ParamValue` event and a container has
+nothing to hand one to. That is question 4 in
+`docs/plans/containers/README.md`. Found 2026-09-13.
+
+**Input trim and output trim on a container row are inert.** Both are read
+only inside the leaf branch, past the container's `continue`, and both are
+enabled unconditionally in markup -- including the output trim on the
+*detached* tail rail (`main.slint:4544`), which is wired specifically to the
+container, so somebody deliberately gave a box its own output trim and the
+engine does not apply it. Unlike the shell's wet/dry, which was removed from
+container rows on 2026-09-13 because a box has no node to be wet with, there
+is nothing wrong with the idea: a gain going into a box and a gain coming out
+of it are both meaningful, and the output one falls naturally out of
+`close_run`. So this is apply-them or hide-them, not a deletion. If they are
+applied, the input trim has to land *before* the dry copy is taken, or the
+blend stops nulling at mix 0 and
+`a_container_at_zero_mix_is_its_input_delayed_by_its_run` is what breaks.
+Found 2026-09-13.
+
 **The channel strip's parameters are not automation or modulation
 destinations.** Every one has a stable id (`mooloop_core::strip`) and the
 engine applies them by id, so the values are addressable; what is missing is
@@ -203,6 +242,40 @@ Unifying them means routing joining `ProjectEdit`, not a per-callback patch.
 
 ## Ceilings and one-shots
 
+**`MAX_CONTAINER_DEPTH` is enforced by nothing, reported by nothing, and
+spelled a fifth time as bare numbers in the markup.** `structure.rs:38` says
+it is "a limit on the *gesture*, not on the format: a deeper chain loads and
+is reported by `integrity.rs` the way an over-long one is", and
+`CAPACITY_POLICY.md:189` and `docs/plans/containers/02-...md:66` repeat the
+same two sentences. Both are false. The constant appears in four places in the
+workspace -- its definition, its re-export, and two uses in `render.rs` --
+and neither `mooloop-session` nor `mooloop-ui` mentions it. No gesture checks
+it: `wrap_in_container`, `insert_into_container` and
+`move_effect_into_container` have no depth test, and `wrap-enabled` is
+unconditional on every row. `integrity.rs` has no depth check either;
+`span_problem`'s own doc says "Depth is deliberately not checked".
+
+So five clicks reach it with no warning: wrap a device, then wrap the box four
+more times. Past the cap the render branch `continue`s, so the innermost box's
+**Mix does nothing at any value**, and `main.slint`'s `for level in [1, 2, 3,
+4]` -- `MAX_CONTAINER_DEPTH` written out as four literals, read by no test --
+has no level 5, so it draws no chrome either. It is inert and invisible at the
+same time.
+
+Its **bypass** used to be dead too, because the depth `continue` sat above the
+bypass branch; that half was fixed 2026-09-13 by moving the check below it,
+which needs no decision -- being too deep to blend is no reason for a bypass
+button to lie. The rest is a decision, because `CAPACITY_POLICY.md:255` has a
+standing rule for a cap on a user-created collection (document it beside the
+type *and in the persisted-format validation*, make the UI communicate it
+honestly, test the boundary) and one of the four is done. Options: make the
+three claims true -- refuse the gesture, add an `effect.container.depth` check
+to `check_spans`, and derive the Slint level list rather than spelling it; or
+drop the cap, since all it buys is one `StereoBus` per level in a `Box`
+allocated off the audio thread, and 8 or 16 costs a few hundred KB on chains
+that hold a box at all; or cap the gesture only and delete the integrity
+sentence from all three documents. Found 2026-09-13.
+
 **`MAX_MOD_ROUTES_PER_CHANNEL` is 16** (`modulation.rs:1290`) — two routes per
 module across eight slots. It was left there deliberately, to be raised once
 the modulator grid has been lived in. The price of raising it is now measured
@@ -267,6 +340,25 @@ thing it exists to replace.
 ---
 
 ## Consistency questions, not bugs
+
+**Duplicating the last device in a container puts the copy outside the
+box.** `duplicate_device` is `copy_device` then `paste_device` at the same
+slot, and `paste_device` inserts at `run_of(slot).end` -- where a run's end
+boundary counts as *outside* the container, which is the documented and
+tested rule for paste
+(`pasting_onto_a_containers_last_child_lands_outside_the_box`). For duplicate
+it produces a boundary inconsistency rather than a rule: in `[Chain(2),
+Filter, Drive]`, duplicating the Filter inserts at 2, inside the span, and the
+box grows to 3; duplicating the Drive inserts at 3, the span's exclusive end,
+and the copy lands outside. Same gesture, same box, two answers depending on
+which child was clicked -- and the ejecting one is the case a user reaches for
+most, duplicating the thing at the end of the run they just built. Not a
+one-liner because the ambiguity is the one `insert_into_container` exists to
+resolve: the index after a run's last row means both "still inside" and "just
+after", and only the gesture can say which. Either give `duplicate_device` its
+own landing rule -- grow the parent explicitly when the insertion point is its
+span's end -- or state in `CURRENT.md` that a duplicate lands beside the
+original at the original's own depth. Found 2026-09-13.
 
 **Song-mode swing follows pattern phase, and only a test name says so.**
 `swing_offset_ticks` (`sequencer.rs:867`) takes the offbeat parity from a
