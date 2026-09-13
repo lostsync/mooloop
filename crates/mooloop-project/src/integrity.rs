@@ -726,6 +726,18 @@ fn check_buses(doctor: &mut Doctor, project: &mut Project) {
             1.0,
         );
 
+        check_strip(doctor, &name, &mut setup.bus.strip);
+        for (slot, send) in setup.sends.iter_mut().enumerate() {
+            doctor.fit(
+                "song.bus.send.level",
+                &name,
+                &format!("send {}'s level", slot + 1),
+                &mut send.level,
+                0.0,
+                mooloop_core::MAX_LINEAR_GAIN,
+            );
+        }
+
         let bus = u8::try_from(index).unwrap_or(u8::MAX);
         let mut routed = sanitize_route(bus, setup.bus.output);
         // `sanitize_route` bounds by the address space, which is not the same
@@ -1600,6 +1612,39 @@ fn check_aux_in(doctor: &mut Doctor, who: &str, params: &mut mooloop_core::AuxIn
         );
         if value != stored {
             aux_in::set(params, descriptor.id, descriptor.clamp_natural(value));
+        }
+    }
+}
+
+/// Hold a stored channel strip to its own descriptor table.
+///
+/// The strip and the sends were the last document values reaching the audio
+/// thread with no range or finiteness guard on the way: `check_buses` fitted
+/// the fader and the pan and then skipped twenty-five floats that
+/// `render.rs` hands straight to `StripProcessor::set_params`. A stored
+/// `drive_db` of NaN is `db_to_linear(NaN)` and a silent track, which is the
+/// case `Doctor::fit` exists for.
+///
+/// The table drives both the check and the correction, so no range is
+/// written down a second time here. `StripParams::set` clamps again on the
+/// way in and substitutes the descriptor default for a non-finite value, so
+/// the correction cannot itself store something out of range.
+fn check_strip(doctor: &mut Doctor, who: &str, strip: &mut mooloop_core::StripParams) {
+    for descriptor in mooloop_core::StripParams::descriptors() {
+        let Some(stored) = strip.get(descriptor.id) else {
+            continue;
+        };
+        let mut value = stored;
+        doctor.fit(
+            "song.bus.strip.range",
+            who,
+            &format!("the {} (strip)", descriptor.name.to_lowercase()),
+            &mut value,
+            descriptor.min,
+            descriptor.max,
+        );
+        if value != stored {
+            strip.set(descriptor.id, value);
         }
     }
 }
@@ -2734,6 +2779,60 @@ mod tests {
         assert!(diagnosis.is_clean(), "{diagnosis}");
         assert_eq!(project.buses.len(), 2);
         assert_eq!(project.buses[1].bus.name, "Drums");
+    }
+
+    /// The strip reaches `StripProcessor::set_params` unfiltered, so a stored
+    /// NaN is `db_to_linear(NaN)` and a track that plays silence. Nothing
+    /// checked any of the strip's twenty-five values until 2026-09-12; the
+    /// fader beside them had been fitted since the mixer's first pass.
+    #[test]
+    fn a_strip_value_outside_its_range_is_repaired() {
+        let mut project = Project::default();
+        project.ensure_tracks(2);
+        project.buses[1].bus.strip.pre_in = true;
+        project.buses[1].bus.strip.drive_db = f32::NAN;
+        project.buses[1].bus.strip.ratio = 1.0e9;
+
+        let diagnosis = repair_project(&mut project);
+        assert!(diagnosis.is_usable(), "{diagnosis}");
+
+        let strip = project.buses[1].bus.strip;
+        assert!(strip.drive_db.is_finite(), "a NaN drive must not survive load");
+        let ratio = mooloop_core::StripParams::descriptor(mooloop_core::STRIP_COMP_RATIO)
+            .expect("the compressor ratio is a strip parameter");
+        assert!(
+            (ratio.min..=ratio.max).contains(&strip.ratio),
+            "the ratio must be fitted to its descriptor, got {}",
+            strip.ratio
+        );
+        assert!(
+            !diagnosis.is_clean(),
+            "a repair the user cannot see is the failure this pass exists to avoid"
+        );
+    }
+
+    /// A send's level is a fader by another name and gets a fader's range.
+    /// `render.rs` feeds it to `Smoothed::new`, where a NaN poisons every
+    /// sample the send ever writes.
+    #[test]
+    fn a_send_level_outside_the_fader_range_is_repaired() {
+        let mut project = Project::default();
+        project.ensure_tracks(3);
+        project.buses[1].sends.push(mooloop_core::AuxSend {
+            target: 2,
+            level: f32::NAN,
+            tap: Default::default(),
+            enabled: true,
+        });
+
+        let diagnosis = repair_project(&mut project);
+        assert!(diagnosis.is_usable(), "{diagnosis}");
+
+        let level = project.buses[1].sends[0].level;
+        assert!(
+            level.is_finite() && (0.0..=mooloop_core::MAX_LINEAR_GAIN).contains(&level),
+            "a send level must be fitted to the fader range, got {level}"
+        );
     }
 
     /// The master is the one track that is not optional: it is the sink every
