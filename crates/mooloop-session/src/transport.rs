@@ -140,13 +140,21 @@ impl Session {
 
     /// Moves the transport to `tick` along the arrangement.
     ///
-    /// Clamped to the editable canvas rather than refused: this is the
+    /// Clamped to the drawn timeline rather than refused: this is the
     /// playhead being dragged, and a drag that runs off the end of the
     /// timeline means the end of the timeline. Not a document edit -- where
     /// the transport is playing from is not something a song should have to
     /// be saved to keep.
+    ///
+    /// The bound is the *song*, not `MAX_PLAYLIST_TICKS`. That constant is
+    /// the end of the grid a placement may start on, and a long clip placed
+    /// near the end legally overhangs it -- so clamping to it would have
+    /// stopped the playhead at bar 64 of an eighty-bar song the transport
+    /// plays to the end of on its own. `.max` keeps the empty-song case at
+    /// the full canvas, which is what the view draws.
     pub fn seek_playlist(&mut self, tick: i32) -> EngineCommand {
-        let tick = tick.clamp(0, MAX_PLAYLIST_TICKS as i32 - 1);
+        let limit = self.song_length_ticks().max(MAX_PLAYLIST_TICKS) as i32;
+        let tick = tick.clamp(0, limit - 1);
         EngineCommand::Seek { tick: tick.into() }
     }
 
@@ -246,7 +254,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mooloop_core::TICKS_PER_BAR;
+    use mooloop_core::{MAX_PLAYLIST_BARS, TICKS_PER_BAR};
 
     /// A pattern may go nameless -- the playlist gutter and the pattern menu
     /// both fall back to its number -- so blanking one is an edit, not a
@@ -449,5 +457,31 @@ mod tests {
             EngineCommand::Seek { tick } if tick == f64::from(MAX_PLAYLIST_TICKS - 1)
         ));
         assert!(!session.dirty, "moving the playhead is not a document edit");
+    }
+
+    /// `MAX_PLAYLIST_TICKS` bounds where a clip may *start*, and
+    /// `playlist.rs` says so: "Long clips may extend past this point and
+    /// still contribute to the derived song length." The seek borrowed that
+    /// bound for a different question, so the playhead stopped at bar 64 of
+    /// a song the view draws eighty bars of and the transport plays to the
+    /// end of on its own.
+    #[test]
+    fn a_seek_reaches_the_end_of_a_song_that_overhangs_the_canvas() {
+        let mut session = Session::default();
+        session.set_pattern_length(MAX_PATTERN_STEPS as i32);
+        let start = (MAX_PLAYLIST_BARS - 1) * TICKS_PER_BAR;
+        session
+            .add_playlist_placement(0, start as i32)
+            .expect("a clip may start on the last bar of the canvas");
+
+        let length = session.song_length_ticks();
+        assert!(
+            length > MAX_PLAYLIST_TICKS,
+            "the clip must overhang for this to test anything, got {length}"
+        );
+        assert!(matches!(
+            session.seek_playlist(i32::MAX),
+            EngineCommand::Seek { tick } if tick == f64::from(length - 1)
+        ));
     }
 }
