@@ -162,11 +162,15 @@ pub(crate) struct GeneralSettings {
     pub snap_markers_to_zero: bool,
 }
 
+/// The driver a settings file was written under. The build decides which
+/// driver runs; [`AudioSettings::active`] follows the build, not this.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum AudioDriverKind {
-    #[default]
+    #[cfg_attr(not(target_os = "macos"), default)]
     Jack,
+    #[cfg_attr(target_os = "macos", default)]
+    CoreAudio,
 }
 
 fn default_true() -> bool {
@@ -189,21 +193,25 @@ fn default_alert() -> String {
     DEFAULT_ALERT.to_owned()
 }
 
+/// One driver's persisted output choices. JACK and Core Audio share the shape
+/// because the engine's output target is a left/right pair under both: two
+/// JACK port names, or two `<device>#<channel>` addresses on one Core Audio
+/// device.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) struct JackSettings {
+pub(crate) struct DriverSettings {
     #[serde(default)]
     pub output_port_l: Option<String>,
     #[serde(default)]
     pub output_port_r: Option<String>,
-    /// `None` leaves the JACK server's current buffer size alone.
+    /// `None` leaves the driver's current buffer size alone.
     #[serde(default)]
     pub buffer_size: Option<u32>,
     #[serde(default = "default_true")]
     pub auto_reconnect: bool,
 }
 
-impl Default for JackSettings {
+impl Default for DriverSettings {
     fn default() -> Self {
         Self {
             output_port_l: None,
@@ -214,7 +222,11 @@ impl Default for JackSettings {
     }
 }
 
-impl JackSettings {
+impl DriverSettings {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
     pub(crate) fn output_target(&self) -> Option<(String, String)> {
         match (&self.output_port_l, &self.output_port_r) {
             (Some(l), Some(r)) => Some((l.clone(), r.clone())),
@@ -228,19 +240,47 @@ impl JackSettings {
 pub(crate) struct AudioSettings {
     #[serde(default)]
     pub driver: AudioDriverKind,
+    // A section this build does not use is written only once it holds
+    // something, so a Linux settings file does not grow an empty Core Audio
+    // section, nor a Mac's a JACK one.
     #[serde(default)]
-    pub jack: JackSettings,
+    #[cfg_attr(target_os = "macos", serde(skip_serializing_if = "DriverSettings::is_default"))]
+    pub jack: DriverSettings,
+    #[serde(default)]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        serde(skip_serializing_if = "DriverSettings::is_default")
+    )]
+    pub core_audio: DriverSettings,
 }
 
 impl AudioSettings {
+    /// The section this build's driver reads and writes. The other is carried
+    /// through a save untouched, so a configuration directory shared between
+    /// a Linux and a Mac checkout keeps both machines' choices.
+    pub(crate) fn active(&self) -> &DriverSettings {
+        #[cfg(target_os = "macos")]
+        return &self.core_audio;
+        #[cfg(not(target_os = "macos"))]
+        return &self.jack;
+    }
+
+    pub(crate) fn active_mut(&mut self) -> &mut DriverSettings {
+        #[cfg(target_os = "macos")]
+        return &mut self.core_audio;
+        #[cfg(not(target_os = "macos"))]
+        return &mut self.jack;
+    }
+
     /// Maps this crate's persisted settings onto the engine's driver-facing
     /// config. Kept as an explicit conversion, not a shared type, so
     /// `mooloop-engine` never depends on `mooloop-ui`'s settings schema.
     pub(crate) fn engine_config(&self) -> mooloop_engine::AudioConfig {
+        let active = self.active();
         mooloop_engine::AudioConfig {
-            buffer_size: self.jack.buffer_size,
-            output_target: self.jack.output_target(),
-            auto_reconnect: self.jack.auto_reconnect,
+            buffer_size: active.buffer_size,
+            output_target: active.output_target(),
+            auto_reconnect: active.auto_reconnect,
         }
     }
 }
@@ -1195,13 +1235,21 @@ mod tests {
             appearance: appearance("#151617", "#F59E0B", "#38BDF8")
                 .validated()
                 .unwrap(),
+            // Both drivers' sections, and neither at its default, so the one
+            // this build does not use has to survive the trip as well.
             audio: AudioSettings {
                 driver: AudioDriverKind::Jack,
-                jack: JackSettings {
+                jack: DriverSettings {
                     output_port_l: Some("Carla:audio-in1".to_owned()),
                     output_port_r: Some("Carla:audio-in2".to_owned()),
                     buffer_size: Some(256),
                     auto_reconnect: false,
+                },
+                core_audio: DriverSettings {
+                    output_port_l: Some("coreaudio:BuiltInSpeakerDevice#1".to_owned()),
+                    output_port_r: Some("coreaudio:BuiltInSpeakerDevice#2".to_owned()),
+                    buffer_size: Some(512),
+                    auto_reconnect: true,
                 },
             },
             shortcuts: ShortcutSettings {
@@ -1292,21 +1340,18 @@ mod tests {
         assert!(settings.appearance.smooth_curves);
         let audio = settings.audio;
         assert_eq!(audio, AudioSettings::default());
-        assert!(audio.jack.auto_reconnect);
-        assert_eq!(audio.jack.output_target(), None);
+        assert!(audio.active().auto_reconnect);
+        assert_eq!(audio.active().output_target(), None);
     }
 
     #[test]
-    fn maps_jack_settings_onto_engine_config() {
-        let jack = JackSettings {
+    fn maps_the_builds_driver_settings_onto_engine_config() {
+        let mut audio = AudioSettings::default();
+        *audio.active_mut() = DriverSettings {
             output_port_l: Some("Carla:audio-in1".to_owned()),
             output_port_r: Some("Carla:audio-in2".to_owned()),
             buffer_size: Some(512),
             auto_reconnect: true,
-        };
-        let audio = AudioSettings {
-            driver: AudioDriverKind::Jack,
-            jack,
         };
         let config = audio.engine_config();
         assert_eq!(config.buffer_size, Some(512));
@@ -1315,6 +1360,21 @@ mod tests {
             Some(("Carla:audio-in1".to_owned(), "Carla:audio-in2".to_owned()))
         );
         assert!(config.auto_reconnect);
+    }
+
+    /// The section the build does not use never reaches the engine, and is not
+    /// written until it holds something.
+    #[test]
+    fn the_other_drivers_section_stays_out_of_the_way() {
+        let mut audio = AudioSettings::default();
+        let written = toml::to_string(&audio).unwrap();
+        #[cfg(target_os = "macos")]
+        let (unused, other) = ("jack", &mut audio.jack);
+        #[cfg(not(target_os = "macos"))]
+        let (unused, other) = ("core-audio", &mut audio.core_audio);
+        assert!(!written.contains(unused), "{written}");
+        other.buffer_size = Some(2048);
+        assert_eq!(audio.engine_config().buffer_size, Some(256));
     }
 
     #[test]

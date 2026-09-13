@@ -132,9 +132,52 @@ use std::sync::Arc;
 const PUMP_INTERVAL_MS: u64 = 8;
 const INITIAL_BPM: i32 = 120;
 
-/// Fixed JACK buffer size choices offered by the segmented control on the
-/// Audio preferences page. Index-addressed to match `SegmentedControl`.
-const JACK_BUFFER_SIZES: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
+/// Fixed buffer size choices offered by the segmented control on the Audio
+/// preferences page. Index-addressed to match `SegmentedControl`.
+const BUFFER_SIZES: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
+
+/// What the Audio preferences page says that depends on the driver this build
+/// was compiled with. Spelled here, once, so the markup names no driver.
+struct DriverCopy {
+    name: &'static str,
+    note: &'static str,
+    targets_empty: &'static str,
+    buffer_note: &'static str,
+    auto_reconnect_hint: &'static str,
+    sample_rate_source: &'static str,
+}
+
+#[cfg(not(target_os = "macos"))]
+const DRIVER_COPY: DriverCopy = DriverCopy {
+    name: "JACK",
+    note: "ALSA support is planned.",
+    targets_empty: "No connectable JACK inputs found.",
+    buffer_note: "Changes the buffer for every JACK client on this machine.",
+    auto_reconnect_hint: "Reconnects to the output above when it reappears on the JACK graph — for example after unplugging and replugging a device.",
+    sample_rate_source: "set by the JACK server",
+};
+
+#[cfg(target_os = "macos")]
+const DRIVER_COPY: DriverCopy = DriverCopy {
+    name: "Core Audio",
+    note: "",
+    targets_empty: "No audio output devices found.",
+    buffer_note: "Changes the buffer of the device mooloop plays through, and nothing else.",
+    auto_reconnect_hint: "Returns to the output above when its device comes back — for example after unplugging and replugging it. Until then mooloop plays through the system default.",
+    sample_rate_source: "the system output's rate when mooloop started",
+};
+
+impl DriverCopy {
+    fn to_slint(&self) -> AudioDriverCopy {
+        AudioDriverCopy {
+            name: self.name.into(),
+            note: self.note.into(),
+            targets_empty: self.targets_empty.into(),
+            buffer_note: self.buffer_note.into(),
+            auto_reconnect_hint: self.auto_reconnect_hint.into(),
+        }
+    }
+}
 const DRUM_PREVIEW_BINS: usize = 144;
 
 /// Bins in DS-01's rendered hit. Wider than v1's because its scope is wider:
@@ -398,15 +441,16 @@ fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
     motion.set_speed(settings::motion_speed_index(&appearance.motion_speed));
     motion.set_easing(settings::motion_easing_index(&appearance.motion_easing));
     window.set_preferences_error("".into());
+    window.set_preferences_audio_driver(DRIVER_COPY.to_slint());
     let buffer_index = settings
         .audio
-        .jack
+        .active()
         .buffer_size
-        .and_then(|frames| JACK_BUFFER_SIZES.iter().position(|&f| f == frames))
+        .and_then(|frames| BUFFER_SIZES.iter().position(|&f| f == frames))
         .map(|i| i as i32)
         .unwrap_or(-1);
     window.set_preferences_audio_buffer_size_index(buffer_index);
-    window.set_preferences_audio_auto_reconnect(settings.audio.jack.auto_reconnect);
+    window.set_preferences_audio_auto_reconnect(settings.audio.active().auto_reconnect);
     window.set_preferences_audio_error("".into());
 }
 
@@ -501,10 +545,10 @@ fn sync_shortcut_rows(window: &MainWindow, table: &actions::ShortcutTable) {
     )))));
 }
 
-/// Re-read live JACK driver status and connectable output targets, and push
-/// them onto the window. Called from the pump, which is the only place that
-/// holds `EngineHandle`; a non-realtime JACK graph query, not something to
-/// run every tick.
+/// Re-read live driver status and connectable output targets, and push them
+/// onto the window. Called from the pump, which is the only place that holds
+/// `EngineHandle`; a non-realtime driver query, not something to run every
+/// tick.
 fn sync_audio_status(handle: &EngineHandle, window: &MainWindow) {
     let status = handle.driver_status();
     let rows: Vec<OutputTargetRow> = handle
@@ -522,14 +566,14 @@ fn sync_audio_status(handle: &EngineHandle, window: &MainWindow) {
         })
         .collect();
     window.set_preferences_audio_output_targets(ModelRc::from(Rc::new(VecModel::from(rows))));
-    let buffer_index = JACK_BUFFER_SIZES
+    let buffer_index = BUFFER_SIZES
         .iter()
         .position(|&f| f == status.buffer_size)
         .map(|i| i as i32)
         .unwrap_or(-1);
     window.set_preferences_audio_buffer_size_index(buffer_index);
     window.set_preferences_audio_sample_rate_text(
-        format!("{} Hz — set by the JACK server", status.sample_rate).into(),
+        format!("{} Hz — {}", status.sample_rate, DRIVER_COPY.sample_rate_source).into(),
     );
 }
 
@@ -5393,7 +5437,7 @@ impl AppUi {
         {
             let tx = audio_tx.clone();
             window.on_preferences_audio_select_buffer_size(move |index| {
-                if let Some(&frames) = JACK_BUFFER_SIZES.get(index as usize) {
+                if let Some(&frames) = BUFFER_SIZES.get(index as usize) {
                     tx.send(AudioAction::SelectBufferSize(frames));
                 }
             });
@@ -11214,8 +11258,8 @@ impl AppUi {
                                     {
                                         Ok(()) => {
                                             let mut settings = ui_settings_for_pump.borrow_mut();
-                                            settings.audio.jack.output_port_l = Some(port_l);
-                                            settings.audio.jack.output_port_r = Some(port_r);
+                                            settings.audio.active_mut().output_port_l = Some(port_l);
+                                            settings.audio.active_mut().output_port_r = Some(port_r);
                                             if let Err(error) = settings.save() {
                                                 window.set_preferences_audio_error(
                                                     format!("Could not save settings: {error}")
@@ -11236,7 +11280,7 @@ impl AppUi {
                                     match handle.set_buffer_size(frames) {
                                         Ok(()) => {
                                             let mut settings = ui_settings_for_pump.borrow_mut();
-                                            settings.audio.jack.buffer_size = Some(frames);
+                                            settings.audio.active_mut().buffer_size = Some(frames);
                                             if let Err(error) = settings.save() {
                                                 window.set_preferences_audio_error(
                                                     format!("Could not save settings: {error}")
@@ -11256,7 +11300,7 @@ impl AppUi {
                                 AudioAction::SetAutoReconnect(enabled) => {
                                     handle.set_auto_reconnect(enabled);
                                     let mut settings = ui_settings_for_pump.borrow_mut();
-                                    settings.audio.jack.auto_reconnect = enabled;
+                                    settings.audio.active_mut().auto_reconnect = enabled;
                                     if let Err(error) = settings.save() {
                                         window.set_preferences_audio_error(
                                             format!("Could not save settings: {error}").into(),

@@ -1,6 +1,7 @@
 //! Headless render of the Preferences dialog's Audio page, so a driver
 //! control surface change can be checked visually without the live app.
 
+use mooloop_ui::AudioDriverCopy as MainAudioDriverCopy;
 use mooloop_ui::MainWindow;
 use mooloop_ui::OutputTargetRow as MainOutputTargetRow;
 use slint::platform::{PointerEventButton, WindowEvent};
@@ -35,14 +36,34 @@ fn click_at(window: &slint::Window, p: (f32, f32)) {
     });
 }
 
-slint::slint! {
-    import { JackControlSurface, OutputTargetRow } from "../ui/audio-preferences.slint";
+/// The JACK page's wording, as a fixture for the render. The real copy is
+/// chosen by the build in `lib.rs`; this only has to be representative.
+macro_rules! jack_copy {
+    ($ty:ident) => {
+        $ty {
+            name: SharedString::from("JACK"),
+            note: SharedString::from("ALSA support is planned."),
+            targets_empty: SharedString::from("No connectable JACK inputs found."),
+            buffer_note: SharedString::from(
+                "Changes the buffer for every JACK client on this machine.",
+            ),
+            auto_reconnect_hint: SharedString::from(
+                "Reconnects to the output above when it reappears on the JACK graph.",
+            ),
+        }
+    };
+}
 
-    export component JackControlSurfaceHarness inherits Window {
+slint::slint! {
+    import { AudioDriverCopy, DriverControlSurface, OutputTargetRow } from "../ui/audio-preferences.slint";
+
+    export component DriverControlSurfaceHarness inherits Window {
         width: 340px;
         height: 400px;
         in property <[OutputTargetRow]> targets;
-        JackControlSurface {
+        in property <AudioDriverCopy> driver;
+        DriverControlSurface {
+            driver: root.driver;
             output-targets: root.targets;
             buffer-size-index: 3;
             sample-rate-text: "48000 Hz — set by the JACK server";
@@ -68,6 +89,7 @@ fn render_preferences_audio_snapshots() {
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(800.0, 600.0));
     ui.set_preferences_open(true);
+    ui.set_preferences_audio_driver(jack_copy!(MainAudioDriverCopy));
     ui.set_preferences_audio_output_targets(ModelRc::from(Rc::new(VecModel::from(vec![
         MainOutputTargetRow {
             client: SharedString::from("system"),
@@ -98,7 +120,8 @@ fn render_preferences_audio_snapshots() {
 
     // The surface alone, unclipped, to check the controls below that fold
     // too: buffer size, sample rate, and auto-reconnect.
-    let harness = JackControlSurfaceHarness::new().unwrap();
+    let harness = DriverControlSurfaceHarness::new().unwrap();
+    harness.set_driver(jack_copy!(AudioDriverCopy));
     harness.set_targets(ModelRc::from(Rc::new(VecModel::from(vec![
         OutputTargetRow {
             client: SharedString::from("system"),
@@ -114,5 +137,5 @@ fn render_preferences_audio_snapshots() {
         },
     ]))));
     let surface_snapshot = harness.window().take_snapshot().expect("headless snapshot");
-    write_snapshot(&surface_snapshot, "MOOLOOP_JACK_CONTROL_SURFACE_SNAPSHOT");
+    write_snapshot(&surface_snapshot, "MOOLOOP_DRIVER_CONTROL_SURFACE_SNAPSHOT");
 }

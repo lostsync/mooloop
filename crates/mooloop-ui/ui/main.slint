@@ -14,7 +14,7 @@ import {
 } from "toolbar.slint";
 import { MasterMeter } from "meters.slint";
 import { EnvelopeEditor } from "envelope.slint";
-import { PreferencesDialog, AppearanceSchemeRow, OutputTargetRow, ShortcutRow, GestureRow } from "appearance-dialog.slint";
+import { PreferencesDialog, AppearanceSchemeRow, AudioDriverCopy, OutputTargetRow, ShortcutRow, GestureRow } from "appearance-dialog.slint";
 import { SavePresetDialog } from "save-preset-dialog.slint";
 import { SaveErrorDialog } from "save-error-dialog.slint";
 import { AboutDialog } from "about-dialog.slint";
@@ -71,7 +71,7 @@ export { DeviceRackConcepts } from "device-concepts.slint";
 export { CompressorDeviceDragHarness, Ds01DeviceDragHarness, EqDeviceDragHarness, FilterDeviceDragHarness } from "device-drag-harness.slint";
 export { MixerSendRow }
 export { MixerStripRow }
-export { OutputTargetRow }
+export { AudioDriverCopy, OutputTargetRow }
 export { ShortcutRow }
 export { AppearanceSchemeRow }
 
@@ -652,6 +652,7 @@ export component MainWindow inherits Window {
     in property <string> preferences-audio-sample-rate-text;
     in property <bool> preferences-audio-auto-reconnect;
     in property <string> preferences-audio-error;
+    in property <AudioDriverCopy> preferences-audio-driver;
     in property <[ShortcutRow]> preferences-shortcut-rows;
     in property <[GestureRow]> preferences-gesture-rows;
     in property <[string]> preferences-gesture-choices;
@@ -6396,6 +6397,7 @@ export component MainWindow inherits Window {
         audio-sample-rate-text: root.preferences-audio-sample-rate-text;
         audio-auto-reconnect: root.preferences-audio-auto-reconnect;
         audio-error: root.preferences-audio-error;
+        audio-driver: root.preferences-audio-driver;
         shortcut-rows: root.preferences-shortcut-rows;
         gesture-rows: root.preferences-gesture-rows;
         gesture-choices: root.preferences-gesture-choices;

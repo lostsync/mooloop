@@ -1,13 +1,24 @@
 import { Theme } from "theme.slint";
 import { SectionLabel, SegmentedControl, ToggleButton, ToolButton } from "controls.slint";
 
-// One JACK client offered as an output destination, as the Rust side
-// discovers it from the live port graph.
+// One output destination the driver offers, as the Rust side discovers it: a
+// JACK client and two of its input ports, or a Core Audio device and two of
+// its channels.
 export struct OutputTargetRow {
     client: string,
     port-l: string,
     port-r: string,
     selected: bool,
+}
+
+// What the Audio page says that depends on the driver the build was compiled
+// with. Rust fills it once, so no driver is spelled in markup.
+export struct AudioDriverCopy {
+    name: string,
+    note: string,
+    targets-empty: string,
+    buffer-note: string,
+    auto-reconnect-hint: string,
 }
 
 component OutputTargetItem inherits Rectangle {
@@ -30,11 +41,12 @@ component OutputTargetItem inherits Rectangle {
     tap := TouchArea { mouse-cursor: pointer; clicked => { root.picked(); } }
 }
 
-// The JACK-specific half of the Audio preferences page. A future ALSA
-// control surface is a sibling component next to this one, not a rewrite of
-// it, since the two drivers expose genuinely different controls (JACK has no
-// settable sample rate; ALSA has no server-wide buffer to warn about).
-export component JackControlSurface inherits VerticalLayout {
+// The output half of the Audio preferences page, for a driver that routes the
+// master bus to a chosen stereo destination, takes a buffer size and reports a
+// sample rate -- JACK and Core Audio both. A driver whose controls differ in
+// kind is a sibling component next to this one, not a rewrite of it.
+export component DriverControlSurface inherits VerticalLayout {
+    in property <AudioDriverCopy> driver;
     in property <[OutputTargetRow]> output-targets;
     in property <[string]> buffer-size-options: ["64", "128", "256", "512", "1024", "2048"];
     in property <int> buffer-size-index;
@@ -71,7 +83,7 @@ export component JackControlSurface inherits VerticalLayout {
             padding: 4px;
             spacing: 2px;
             if root.output-targets.length == 0 : Text {
-                text: "No connectable JACK inputs found.";
+                text: root.driver.targets-empty;
                 color: Theme.text-muted;
                 font-size: 10px;
                 height: 20px;
@@ -91,7 +103,7 @@ export component JackControlSurface inherits VerticalLayout {
         selected(i) => { root.select-buffer-size(i); }
     }
     Text {
-        text: "Changes the buffer for every JACK client on this machine.";
+        text: root.driver.buffer-note;
         color: Theme.text-faint;
         font-size: 9px;
         height: 12px;
@@ -102,7 +114,7 @@ export component JackControlSurface inherits VerticalLayout {
 
     ToggleButton {
         text: "Auto-reconnect output";
-        hint: "Reconnects to the output above when it reappears on the JACK graph — for example after unplugging and replugging a device.";
+        hint: root.driver.auto-reconnect-hint;
         checked: root.auto-reconnect;
         toggled(v) => { root.auto-reconnect-toggled(v); }
     }
