@@ -38,21 +38,31 @@ impl Session {
     }
 
     /// Opens the lane for `target`, by address rather than by picker position.
+    ///
+    /// Refuses when the pattern already holds
+    /// [`MAX_AUTOMATION_LANES_PER_CHANNEL`] lanes and this target is not one
+    /// of them. It used to set the target and report success either way, so
+    /// the ninth pick left the editor showing that destination's name over a
+    /// blank, inert canvas -- `automation_lane()` was `None`, so every point
+    /// gesture returned `None` -- and wrote an undo entry whose `before` and
+    /// `after` were identical. The engine refused the push too, so nothing
+    /// diverged; it was simply silent.
     pub fn open_automation_lane_at(&mut self, target: ParamAddr) -> Option<EngineCommand> {
-        self.automation_target.set(Some(target));
-        self.automation_selected_point.set(None);
         let (pattern, channel) = (self.current_pattern, self.selected);
         if let Some(lanes) = self
             .channels
             .get_mut(channel)
             .and_then(|state| state.automation.get_mut(pattern))
         {
-            if !lanes.iter().any(|lane| lane.target == target)
-                && lanes.len() < MAX_AUTOMATION_LANES_PER_CHANNEL
-            {
+            if !lanes.iter().any(|lane| lane.target == target) {
+                if lanes.len() >= MAX_AUTOMATION_LANES_PER_CHANNEL {
+                    return None;
+                }
                 lanes.push(AutomationLane::new(target));
             }
         }
+        self.automation_target.set(Some(target));
+        self.automation_selected_point.set(None);
         Some(EngineCommand::OpenAutomationLane {
             pattern: pattern as u8,
             channel: channel as u8,
@@ -202,6 +212,42 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+
+    /// The ninth lane is refused rather than half-opened. It used to set the
+    /// target and report success whatever happened, so the pick left the
+    /// editor showing that destination's name over a blank canvas that no
+    /// point gesture could touch -- and recorded an undo entry whose two
+    /// snapshots were identical.
+    ///
+    /// `CAPACITY_POLICY.md` asks for a boundary test on any cap over a
+    /// user-created collection; there was none for this one.
+    #[test]
+    fn the_lane_ceiling_refuses_rather_than_opening_nothing() {
+        let mut session = Session::default();
+        let target = |param: u32| {
+            ParamAddr::effect(mooloop_core::EffectTarget::Channel(0), mooloop_core::DeviceId(0), param)
+        };
+
+        for param in 0..MAX_AUTOMATION_LANES_PER_CHANNEL as u32 {
+            assert!(
+                session.open_automation_lane_at(target(param)).is_some(),
+                "lane {param} is within the ceiling"
+            );
+        }
+
+        // One past. Nothing is opened, and the shown target is left where it
+        // was rather than pointing at a lane that does not exist.
+        let shown = session.automation_target.get();
+        assert!(session
+            .open_automation_lane_at(target(MAX_AUTOMATION_LANES_PER_CHANNEL as u32))
+            .is_none());
+        assert_eq!(session.automation_target.get(), shown);
+
+        // A target already open is still reachable at the ceiling: it is not
+        // a new lane, so the cap does not apply to it.
+        assert!(session.open_automation_lane_at(target(0)).is_some());
+        assert_eq!(session.automation_target.get(), Some(target(0)));
+    }
     use super::*;
 
     fn with_lane() -> Session {
