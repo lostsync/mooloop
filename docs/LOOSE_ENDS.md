@@ -144,6 +144,47 @@ blocked by this; it is one more click than a user coming from FL will expect
 
 ## Edits that do not undo
 
+**Shortening a pattern hides a sounding note rather than releasing it.**
+`sequencer.rs:698` (and `:761` in song mode) filters notes by
+`note.start_tick < pattern_ticks`, which is what implements "a shortened
+pattern keeps its notes" -- but the filter is applied to *both* edges. A note
+already sounding whose start is now past the new end stops being scheduled at
+all, so its NoteOff never arrives and the voice holds until Stop. Same root as
+the pattern-switch bug fixed 2026-09-12, and the one-line fix there does not
+transfer: `Session::set_pattern_length` returns `Some` on every value a drag
+crosses, so reusing the seek release would fire a full-rack choke twelve times
+on a drag from 16 steps to 4. Three options. Release only on a *decrease*, and
+only for channels with a note in the vacated range -- which needs the
+sequencer to answer "was anything sounding past here", and it cannot today.
+Or make the length command fire once on drag release, which changes what the
+control means during the drag. Or keep scheduling the off edge for filtered
+notes while suppressing their on edge, which strands nothing and chokes
+nothing but needs a decision about what a hidden note's NoteOff means on the
+second pass. Found 2026-09-12.
+
+**A pattern-length change can create the overlapping placements the editor
+refuses to create.** `session/transport.rs:213` guards `add_playlist_placement`
+against overlap, correctly and half-open, and it is the only place the
+invariant exists: `set_pattern_length` (`:123`) rewrites the length with no
+revalidation, `Sequencer::set_playlist_placement` has no overlap notion, and
+`integrity::check_playlist` checks only the pattern index and the start tick.
+Place pattern 0 at ticks 0 and 384 at 16 steps -- accepted, they abut exactly
+-- then set it to 32 steps, and the first clip covers the second. Both are
+scheduled: `instance_offset` differs, so the voice ids differ, and **every
+note fires twice 384 ticks apart at doubled amplitude**. The view draws them
+overlapping, and `placement_covering` uses `find` on a list sorted by
+`(pattern, start_tick)`, so a click in the overlap always removes the earlier
+clip and the buried one cannot be reached. Not a small fix because the
+invariant has no owner: enforcing it in `set_pattern_length` means deciding
+what a length increase does to the clips it now swallows, and the same
+decision has to be made in `integrity` for files that already carry the
+overlap -- a `Doctor` entry and a `PROJECT_FORMAT.md` change across two
+crates. Options: clamp the length change to the largest value that keeps the
+pattern's placements disjoint; or make the overlap legal everywhere and drop
+the guard in `add_playlist_placement`; or drop the covered placements and
+report them, which is the only one that also needs a repair path on load.
+Found 2026-09-12.
+
 **Sampler slice and marker edits are not undoable.** `add_slice`,
 `move_slice`, `remove_slice`, `divide_slices`, `clear_slices` and
 `snap_all_markers` in `mooloop-session/src/sampler.rs` never touch history —
@@ -226,6 +267,38 @@ thing it exists to replace.
 ---
 
 ## Consistency questions, not bugs
+
+**Song-mode swing follows pattern phase, and only a test name says so.**
+`swing_offset_ticks` (`sequencer.rs:867`) takes the offbeat parity from a
+note's position *inside its pattern*, so a clip placed at an odd number of
+steps swings on the opposite sixteenths from every other clip.
+`song_swing_uses_pattern_phase_not_playlist_position` (`sequencer.rs:993`)
+asserts exactly this, so it is deliberate -- but the editor makes the
+conflicting case easy to reach, because `main.slint:820`'s snap table bottoms
+out at 6 ticks and will place a clip at tick 6, 12, 18 or 24. At 66% swing two
+copies of one pattern a step apart play their offbeats 16 ticks apart in
+opposite directions, about 40 ms at 120 BPM. Whether swing belongs to the
+pattern or to the song grid is a decision rather than a defect; if it stays as
+it is, it belongs in `CURRENT.md` where a user would find it and not only in a
+test name. Found 2026-09-12.
+
+**Automation may not follow the song-loop fold inside the block that contains
+it** -- *unconfirmed, and bounded*. Notes are scheduled span by span
+(`render.rs:4140`); `AutomationBlock` is built once per block from
+`spans[0].start_tick` (`:4262`) and `value_at` advances it linearly across the
+whole block, folding on `curve.length_ticks` -- the *pattern's* length. In
+pattern mode that is also the fold period and so is right. In song mode the
+fold period is the loop range, which need not be a multiple of the covering
+pattern's length, so the frames after a fold read the lane at a position the
+playhead is not at. The comment at `:543` claims the case is handled;
+recomputing per tick is what makes the *pattern* wrap correct and does not
+address the *loop* wrap. No audible scenario was constructed: the error is
+bounded by one block (170 ms at 48 kHz), it is control-rate only, and a lane's
+value either side of a fold is usually close. The fix is not local --
+`AutomationBlock` would have to be built per span and `curve_for` re-resolved
+per span, which undoes the once-per-block hoisting that exists so
+`has_automation_at` is asked once. Confirm it is real before spending on it.
+Found 2026-09-12.
 
 **A departed producer and a departed device are handled oppositely.** Aux In
 sends a subscription whose source channel was deleted to `DEPARTED_SOURCE`
