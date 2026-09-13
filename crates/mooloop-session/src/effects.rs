@@ -598,7 +598,24 @@ impl Session {
         // *device*, and loading a preset changes what it sounds like rather
         // than which one it is.
         let device = effect.id;
+        // Nor may it take this row's *span*. `children` is structure -- the
+        // reason `CHAIN_PARAM_MIX` deliberately has no id for it is that a
+        // curve drawn on it would rewrite the shape of the chain -- and a
+        // whole-struct assignment carried it in from the file. Nothing else
+        // caught it: the doctor checks descriptor values and `children` is
+        // not a descriptor, so a preset declaring 200 children made the box
+        // swallow every device after it, and the next open of the saved song
+        // flattened every container on the channel. The two sibling paths,
+        // `insert_run` and `load_effect_run`, both check `span_problem`
+        // already; this one had no check to skip.
+        let children = match effect.params {
+            EffectParams::Chain(chain) => Some(chain.children),
+            _ => None,
+        };
         *effect = preset.with_id(device);
+        if let (Some(children), EffectParams::Chain(chain)) = (children, &mut effect.params) {
+            chain.children = children;
+        }
         self.set_effect_preset_name(target, device, name);
         self.mark_dirty();
         Some(target)
@@ -1207,6 +1224,43 @@ mod tests {
     /// obvious: pasting onto a container's last child lands *after* the box,
     /// because a run's end boundary is outside it -- the same rule
     /// `insert_effect` follows for the rack's own `+`.
+    /// A preset carries what a device *sounds like*, never the shape of the
+    /// chain around it. `children` is structure -- `CHAIN_PARAM_MIX` has no
+    /// id for it precisely so a curve cannot rewrite the chain -- and the
+    /// whole-struct assignment in `load_effect_preset` carried it in from
+    /// the file. Nothing downstream caught it: the doctor checks descriptor
+    /// values and `children` is not a descriptor, so the box swallowed every
+    /// device after it and the next open of the saved song flattened every
+    /// container on the channel.
+    #[test]
+    fn a_chain_preset_cannot_rewrite_the_span_of_the_row_it_lands_on() {
+        let mut session = Session::default();
+        for kind in [EffectKind::Delay, EffectKind::Filter] {
+            session.insert_effect_at(kind, usize::MAX).expect("room");
+        }
+        session.wrap_effects_in_container(0..2).expect("wrapped");
+        // [Chain, Delay, Filter]
+        assert_eq!(depths(&session), [0, 1, 1]);
+
+        // A hand-written bundle claiming a span far past the end of the rack.
+        let mut preset = session.channels[0].effects[0];
+        preset.params = EffectParams::Chain(mooloop_core::ChainParams {
+            children: 200,
+            mix: 0.25,
+        });
+
+        session
+            .load_effect_preset(0, &preset, "wide")
+            .expect("a chain preset loads onto a chain row");
+
+        let EffectParams::Chain(chain) = session.channels[0].effects[0].params else {
+            panic!("slot 0 is still the container it was");
+        };
+        assert_eq!(chain.children, 2, "the row keeps its own span");
+        assert_eq!(chain.mix, 0.25, "and still takes the preset's sound");
+        assert_eq!(depths(&session), [0, 1, 1]);
+    }
+
     #[test]
     fn pasting_onto_a_containers_last_child_lands_outside_the_box() {
         let mut session = Session::default();
