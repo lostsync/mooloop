@@ -2070,8 +2070,10 @@ pub struct ChainParams {
     /// How many of the rows following this one are inside it.
     #[serde(default)]
     pub children: u8,
-    /// Dry/wet across the whole run. Inert until step 03 gives the container
-    /// its dry path; a container at any mix is currently transparent.
+    /// Dry/wet across the whole run, applied when the run closes -- see
+    /// `EffectChain::close_run`. The dry copy is taken as the box opens and
+    /// delayed by the run's declared latency, so the blend is against what
+    /// went in rather than against what went in `run_latency` frames ago.
     #[serde(default = "default_chain_mix")]
     pub mix: f32,
 }

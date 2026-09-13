@@ -4,14 +4,16 @@
 //! node.** Its children are rows of the same chain, and the chain's own loop
 //! already runs them in order, so there is nothing here to process: the
 //! container's work -- keeping a copy of its input and crossfading it back in
-//! at the end of the run -- belongs to the host, beside the per-slot dry path
-//! that already exists (`docs/plans/containers/03-the-chain-mixes.md`).
+//! at the end of the run -- belongs to the host, beside the per-slot dry
+//! path, and `EffectChain::close_run` is where it happens
+//! (`docs/plans/containers/03-the-chain-mixes.md`).
 //!
 //! What this exists for is that the engine's chain is an array of nodes
 //! indexed by position, and a container takes one of those positions. Giving
 //! it a transparent node means the container becomes addressable, bypassable,
-//! saveable and installable without the realtime loop learning anything new,
-//! which is what lets step 02 land silent and step 03 be about the mix alone.
+//! saveable and installable without the realtime loop learning anything new.
+//! That is what let the container land silent and the mix arrive afterwards
+//! as a change to the host alone.
 
 use mooloop_core::ChainParams;
 
@@ -50,7 +52,7 @@ impl AudioNode for ContainerEffect {
         true
     }
 
-    /// Zero, and it stays zero when the mix arrives in step 03: a container's
+    /// Zero, and it stayed zero when the mix arrived: a container's
     /// declared latency is not the sum of its children's, because those
     /// children are rows of the same chain and `chain_latency` already counts
     /// them. See question 4 in `docs/plans/containers/README.md`.
@@ -84,10 +86,11 @@ mod tests {
         }
     }
 
-    /// The claim step 02 rests on, stated where it can fail: a container
-    /// passes its input through untouched, whatever its mix says. The mix is
-    /// step 03's, and until then a container that changed the sound would
-    /// leave that step's null test nothing to stand on.
+    /// Stated where it can fail: the container *node* passes its input
+    /// through untouched, whatever its mix says. The mix is real and is
+    /// applied by `EffectChain::close_run`, against a dry copy the host
+    /// keeps -- so a node that started honouring the mix itself would blend
+    /// twice, and the run's bit-exact null at mix 0 is what would break.
     #[test]
     fn a_container_is_transparent_at_every_mix() {
         for mix in [0.0, 0.25, 0.5, 1.0] {

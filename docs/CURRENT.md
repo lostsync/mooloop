@@ -862,7 +862,9 @@ land on its own when it starts to matter:
   device is meant to be the second rather than growing its own ring.
 - A rack device may be a **container**: `EffectKind::Chain` holds an ordered
   run of the devices after it, appears in the rack exactly where a device
-  would, and nests four deep. It is made either from the insert menu, like any
+  would, and is designed to nest four deep -- though nothing refuses a fifth,
+  and a box past the cap stops blending (it still bypasses; see
+  `docs/LOOSE_ENDS.md`). It is made either from the insert menu, like any
   other device, or by wrapping a device that is already there (the fourth
   button on its left rail). Inserting from a container's own `+` puts the new
   device *inside* it; inserting from a leaf's `+` puts it before that leaf.
@@ -871,8 +873,10 @@ land on its own when it starts to matter:
   empty box, "just inside" and "just after" are the same position, so which
   one is meant has to come from the gesture rather than from the index. Its one control is a dry/wet mix across the
   whole run, delayed to match that run's latency — the wet/dry that a
-  *single* device has always had, applied to a group. Bypassing a container
-  skips its run without moving the channel in time. **Nothing in the
+  *single* device has always had, applied to a group. It really is the one
+  control: the shell's own dry/wet is not offered on a container row, because
+  a box has no node to be wet with. Bypassing a container skips its run
+  without moving the channel in time. **Nothing in the
   interface**: a device's left rail wraps it in a container, a container's
   right rail unwraps it, and dragging a device onto a row already inside a box
   puts it in that box, and **dropping onto an emptied box puts it back
@@ -881,8 +885,9 @@ land on its own when it starts to matter:
   Dropping on a container that still holds something keeps meaning "before
   it". **The run is drawn as a box, and the box is the container's own
   chrome**: its input rail stands at the head, its *output* rail stands past
-  the last device it holds, and the recessed space between them is what its
-  devices sit in. Both rails and that space are one colour, darker than a
+  the last device it holds and meters what leaves the run rather than what
+  entered it, and the recessed space between them is what its devices sit
+  in. Both rails and that space are one colour, darker than a
   device, so the container reads as the thing the faces are inside of; the
   devices inside keep their outline but not their fill, so they stay unified
   chunks sitting in something rather than cards floating on it. Every device

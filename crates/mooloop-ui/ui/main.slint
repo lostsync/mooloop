@@ -4039,7 +4039,17 @@ export component MainWindow inherits Window {
                                                 output-trim-enabled: true;
                                                 output-trim: slot.output-trim-db;
                                                 output-trim-changed(v) => { root.effect-output-trim-changed(index, v); }
-                                                wet-dry-enabled: true;
+                                                // A container has no node to
+                                                // be wet with, and the engine
+                                                // refuses this one outright --
+                                                // `EffectChain::process` says
+                                                // why. The Mix knob on its own
+                                                // face is the box's blend; an
+                                                // inert second dry/wet beside
+                                                // it is the "convincing but
+                                                // inert control" the rack's own
+                                                // rule names.
+                                                wet-dry-enabled: slot.kind != 13;
                                                 wet-dry: slot.wet-dry;
                                                 wet-dry-text: round(slot.wet-dry * 100) + "% wet";
                                                 wet-dry-changed(v) => { root.effect-wet-dry-changed(index, v); }

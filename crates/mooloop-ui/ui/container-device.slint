@@ -19,7 +19,6 @@ export component ContainerDeviceFace inherits EffectDeviceShell {
     in-out property <float> mix;
     // How many rows of the rack are inside this one.
     in property <int> children;
-    in property <bool> mix-inert: false;
     callback mix-changed(float);
 
     // A lane at its own end of the blend is drawn at full strength and the
@@ -151,12 +150,6 @@ export component ContainerDeviceFace inherits EffectDeviceShell {
                 default-value: 1.0;
                 value-text: round(root.mix * 100) + "%";
                 changed(v) => { root.mix-changed(v); }
-            }
-            if root.mix-inert : Text {
-                text: "mix pending";
-                color: Theme.text-faint;
-                font-size: 9px;
-                vertical-alignment: center;
             }
             Rectangle { horizontal-stretch: 1; }
         }
