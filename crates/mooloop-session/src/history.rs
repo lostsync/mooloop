@@ -137,6 +137,16 @@ impl<T: Retained> History<T> {
                         *size = open.before.retained_bytes() + open.after.retained_bytes();
                     }
                     self.trim();
+                    // `trim`'s own doc says dropping from the front "leaves
+                    // the cursor at the end either way", which is only true
+                    // if somebody puts it there. The push path below does;
+                    // this one returned without it, so a trim here left
+                    // `cursor > entries.len()` -- `can_undo` true, and
+                    // `undo_target` `None`, which is an enabled Ctrl+Z that
+                    // does nothing until the next non-coalescing record.
+                    // Reachable because this branch re-measures a growing
+                    // gesture against a budget already at its ceiling.
+                    self.cursor = self.entries.len();
                     return;
                 }
             }
@@ -146,6 +156,20 @@ impl<T: Retained> History<T> {
         self.entries.push(entry);
         self.trim();
         self.cursor = self.entries.len();
+    }
+
+    /// Forget everything.
+    ///
+    /// An entry holds a whole-document snapshot, so it is only meaningful
+    /// against the document it was taken from: undoing into a snapshot of a
+    /// song that is no longer open installs *that song* over this one, and
+    /// the save path would then write it to this one's path. Opening or
+    /// starting a document calls this for the same reason it clears the
+    /// preset-label maps beside it.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.sizes.clear();
+        self.cursor = 0;
     }
 
     /// Drop the oldest entries until both ceilings are satisfied.
@@ -228,6 +252,72 @@ mod tests {
             label: "heavy",
             gesture: None,
         }
+    }
+
+    /// A coalescing record that trims must leave the cursor where the
+    /// pushing one does.
+    ///
+    /// The push path re-syncs the cursor after `trim`; the coalescing path
+    /// returned without it, so a trim there left `cursor > entries.len()` --
+    /// `can_undo()` true (the cursor is non-zero) while `undo_target()`
+    /// returns `None` (the index is past the end). An enabled Ctrl+Z that
+    /// does nothing, until the next non-coalescing record puts the cursor
+    /// back.
+    ///
+    /// It is reachable because this is the branch that *re-measures* a
+    /// growing gesture against a budget already at its ceiling -- which is
+    /// the steady state for a heavy song, since `trim` leaves the history at
+    /// or just under the budget after every record.
+    #[test]
+    fn a_coalescing_record_that_trims_leaves_the_cursor_at_the_end() {
+        let mut history: History<Heavy> = History::default();
+        // Small enough that the *count* is not what binds -- `MIN_ENTRIES`
+        // outranks the budget, so a history sitting at sixteen huge entries
+        // cannot trim at all and the branch never runs. Forty cheap ones
+        // leave room to evict.
+        let each = MAX_RETAINED_BYTES / 64;
+        for _ in 0..40 {
+            history.record(heavy(each));
+        }
+        assert!(
+            history.entries.len() > MIN_ENTRIES,
+            "the count must not be the binding cap, or nothing can be evicted"
+        );
+
+        // Open a gesture, then grow it enough to breach the budget. The
+        // second record coalesces, re-measures the entry upward, and trims.
+        history.record(Entry {
+            gesture: Some(1),
+            ..heavy(each)
+        });
+        let before = history.entries.len();
+        // Only `after` is replaced when an entry coalesces -- `before` is
+        // the one the gesture opened with -- so the growth has to be spelled
+        // on `after` alone to be sure it breaches the budget.
+        history.record(Entry {
+            before: Heavy(each / 2),
+            after: Heavy(MAX_RETAINED_BYTES),
+            label: "heavy",
+            gesture: Some(1),
+        });
+
+        assert!(
+            history.entries.len() < before,
+            "the grown gesture has to have evicted something, or this test \
+             proves nothing: {} entries before, {} after",
+            before,
+            history.entries.len()
+        );
+        assert_eq!(
+            history.cursor,
+            history.entries.len(),
+            "the cursor has to land at the end, as it does on the push path"
+        );
+        assert_eq!(
+            history.can_undo(),
+            history.undo_target().is_some(),
+            "an enabled Undo must have something to undo"
+        );
     }
 
     /// The ceiling that binds on a small document is still the count, and it

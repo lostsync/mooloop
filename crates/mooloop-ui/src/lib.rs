@@ -7288,7 +7288,7 @@ impl AppUi {
                 if !guard.session.rename_track(track, &name) {
                     return;
                 }
-                guard.session.dirty = true;
+                guard.session.mark_dirty();
                 if let Some(window) = weak.upgrade() {
                     guard.sync_mixer(&window);
                     guard.sync_bus_editor(&window);
@@ -7308,7 +7308,7 @@ impl AppUi {
                 if !guard.session.rename_channel(channel, &name) {
                     return;
                 }
-                guard.session.dirty = true;
+                guard.session.mark_dirty();
                 if let Some(window) = weak.upgrade() {
                     // The rack plate is the name's home, and the device-chain
                     // header is where it was just typed; both are redrawn
@@ -10663,6 +10663,17 @@ impl AppUi {
                             state.session.dirty = false;
                             state.session.revision = state.session.revision.wrapping_add(1);
                             state.update_document_title(&window);
+                            drop(state);
+                            // An entry is a snapshot of the document it was
+                            // taken from, so carrying one across a document
+                            // boundary means an undo installs the *other*
+                            // song -- and the save path would then write it
+                            // to this one's path.
+                            {
+                                let mut commands = commands.borrow_mut();
+                                commands.history.clear();
+                                sync_command_availability(&window, &commands);
+                            }
                             window.set_status_message("New randomized kit".into());
                         }
                         DocumentResult::SavedSong {
@@ -10936,6 +10947,17 @@ impl AppUi {
                                         state.session.effect_preset_names.clear();
                                         window.set_source_preset_name(Default::default());
                                         state.sync_effects();
+                                        // And the history, for the sharper
+                                        // version of the same reason: a
+                                        // label that outlives its document
+                                        // is wrong on screen, where an undo
+                                        // that outlives its document
+                                        // installs the closed song over this
+                                        // one and saves it to this one's
+                                        // path.
+                                        let mut commands = commands.borrow_mut();
+                                        commands.history.clear();
+                                        sync_command_availability(&window, &commands);
                                     }
                                 }
                                 state.update_document_title(&window);
@@ -11064,6 +11086,30 @@ impl AppUi {
                                 // and are renumbered here.
                                 if let Some(edit) = edit.channel_edit {
                                     state.session.rescope_after(edit);
+                                }
+                                // An undo carries no `channel_edit`, so
+                                // nothing above renumbered the label maps --
+                                // and the snapshot does not restore them
+                                // either, which is what three doc comments
+                                // already say ("It does not survive undo,
+                                // which restores the project but not this
+                                // map"). Left alone they stay keyed to the
+                                // *pre-undo* numbering: a label lands on a
+                                // channel that never wore it, and
+                                // `effect_preset_names` is keyed by a
+                                // `DeviceId` minted per channel, so ids
+                                // alias and the label can land on another
+                                // channel's device rather than merely
+                                // vanishing. Dropping them is what the
+                                // comments describe.
+                                if matches!(
+                                    edit.history,
+                                    Some((HistoryMove::Undo | HistoryMove::Redo, _))
+                                ) {
+                                    state.session.source_preset_names.clear();
+                                    state.session.effect_preset_names.clear();
+                                    window.set_source_preset_name(Default::default());
+                                    state.sync_effects();
                                 }
                                 state.session.dirty = true;
                                 state.session.revision = state.session.revision.wrapping_add(1);
