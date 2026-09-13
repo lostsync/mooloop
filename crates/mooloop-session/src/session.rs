@@ -459,10 +459,12 @@ impl Session {
     /// effect chain plus every bus's, because a clip's automation is allowed
     /// to reach the buses its channel feeds into.
     ///
-    /// Generators are deliberately absent. They ship whole parameter structs
-    /// rather than descriptor-addressed params, so there is nothing to name
-    /// yet (`docs/plans/buffer-implementation/02-control-and-modulation.md`,
-    /// build order step 2).
+    /// The generator is included, and listed first -- it is the top of the
+    /// signal path and what most channels have instead of an effect chain.
+    /// This comment used to say generators were deliberately absent, which
+    /// stopped being true when they gained descriptor-addressed params: the
+    /// engine resolves `ParamOwner::Source` lanes, `restore_base_param` has
+    /// an arm for them, and `integrity` validates them.
     pub fn automation_destinations(&self) -> Vec<(ParamAddr, String, &'static ParamDescriptor)> {
         let mut rows = Vec::new();
         let channel = EffectTarget::Channel(self.selected as u8);
@@ -1127,7 +1129,26 @@ impl Session {
                     can_previous_sample: can_previous,
                     can_next_sample: can_next,
                     notes: project_channel.notes.clone(),
-                    automation: project_channel.automation.clone(),
+                    // Cloned lanes arrive with `capacity == len`, which
+                    // `AutomationLane::upsert` reads as full -- so without
+                    // this every lane in a loaded song, and every lane that
+                    // survives an undo or any project edit, silently refuses
+                    // its next point. Restored here because this is the
+                    // session's own load path and is allowed to allocate.
+                    automation: project_channel
+                        .automation
+                        .iter()
+                        .map(|lanes| {
+                            lanes
+                                .iter()
+                                .map(|lane| {
+                                    let mut lane = lane.clone();
+                                    lane.reserve_points();
+                                    lane
+                                })
+                                .collect()
+                        })
+                        .collect(),
                     next_note_id: project_channel.next_note_id,
                     effects: setup.effects.clone(),
                     next_device_id: setup.next_device_id,

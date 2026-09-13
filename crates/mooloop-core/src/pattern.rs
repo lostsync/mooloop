@@ -199,7 +199,10 @@ impl ChannelPattern {
     /// caller allowed to allocate.
     pub fn set_lanes(&mut self, lanes: Vec<AutomationLane>) {
         self.lanes.clear();
-        for lane in lanes.into_iter().take(MAX_AUTOMATION_LANES_PER_CHANNEL) {
+        for mut lane in lanes.into_iter().take(MAX_AUTOMATION_LANES_PER_CHANNEL) {
+            // This is the caller allowed to allocate, and a lane arriving
+            // from a decode or a clone has none of its preallocation left.
+            lane.reserve_points();
             self.lanes.push(lane);
         }
     }

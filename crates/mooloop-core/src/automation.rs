@@ -88,6 +88,29 @@ impl AutomationLane {
         self.points.capacity()
     }
 
+    /// Restore the preallocated point storage that `Clone` and serde drop.
+    ///
+    /// `upsert` measures fullness against *capacity*, because the audio
+    /// thread must never reallocate -- and `Vec::clone` allocates exactly
+    /// `len`. So a lane that has been through `replace_project` or a decode
+    /// has `capacity == len` and refuses the next point for ever, silently:
+    /// the click returns `None` and nothing is reported. Dragging an
+    /// existing point still works, because that path removes before it
+    /// inserts, which is what makes it read as "this lane is finished"
+    /// rather than as a fault.
+    ///
+    /// Called where a lane becomes editable, never on the audio thread.
+    /// Deliberately not a manual `Clone`: preallocating on every clone would
+    /// put 12 KB per lane into every undo snapshot, against the budget
+    /// `edit_cost.rs` measures.
+    pub fn reserve_points(&mut self) {
+        let have = self.points.capacity();
+        if have < MAX_AUTOMATION_POINTS_PER_LANE {
+            self.points
+                .reserve_exact(MAX_AUTOMATION_POINTS_PER_LANE - have);
+        }
+    }
+
     /// Allocate an id that no live point in this lane holds. Kept on the lane
     /// so a point id is meaningful without also naming a channel and pattern.
     pub fn allocate_id(&mut self) -> PointId {
@@ -179,6 +202,43 @@ impl AutomationLane {
 
 #[cfg(test)]
 mod tests {
+
+    /// **A cloned lane is a full lane.** `upsert` measures fullness against
+    /// capacity, because the audio thread must not reallocate -- and
+    /// `Vec::clone` allocates exactly `len`. So every lane that had been
+    /// through `Session::replace_project` (project load, undo, redo, and
+    /// every `ProjectEdit`) refused its next point for ever, silently: the
+    /// click returned `None` and nothing was reported. Opening a saved song
+    /// froze every lane in it at its saved point count.
+    ///
+    /// Nothing caught it because no test built a lane by cloning one, and
+    /// the engine was frozen in step -- `Pattern::set_lanes` moved the same
+    /// short vectors in -- so the two sides agreed.
+    #[test]
+    fn a_cloned_lane_still_takes_its_full_complement_of_points() {
+        let mut lane = lane();
+        for tick in 0..3u32 {
+            let id = lane.allocate_id();
+            assert!(lane.upsert(AutomationPoint::new(id, tick, 0.5)));
+        }
+
+        let mut cloned = lane.clone();
+        assert_eq!(cloned.points().len(), 3);
+        cloned.reserve_points();
+
+        // The whole remaining complement, not just one more.
+        for tick in 3..MAX_AUTOMATION_POINTS_PER_LANE as u32 {
+            let id = cloned.allocate_id();
+            assert!(
+                cloned.upsert(AutomationPoint::new(id, tick, 0.5)),
+                "a restored lane must accept point {tick}"
+            );
+        }
+        assert_eq!(cloned.points().len(), MAX_AUTOMATION_POINTS_PER_LANE);
+        // And still refuses past the ceiling, which is what the guard is for.
+        let id = cloned.allocate_id();
+        assert!(!cloned.upsert(AutomationPoint::new(id, 9_999, 0.5)));
+    }
     use super::*;
     use crate::EffectTarget;
 
