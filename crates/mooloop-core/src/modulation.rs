@@ -1920,10 +1920,41 @@ impl ModRack {
         changed
     }
 
-    /// Re-scope every channel-addressed route after a channel edit, dropping
-    /// those whose channel is gone. Returns whether anything changed.
+    /// Re-scope every channel-addressed address after a channel edit,
+    /// dropping the routes whose channel is gone. Returns whether anything
+    /// changed.
+    ///
+    /// An envelope's gate channel is one of these addresses and moves here
+    /// too. It was outside this pass until 2026-09-13, so inserting or
+    /// reordering a channel left every envelope gating off whichever channel
+    /// inherited the old index -- and `ChannelEdit::Moved` never returns
+    /// `None`, so a mixer reorder retargeted every gate in the song
+    /// silently. `gates.get` is bounded by `MAX_CHANNELS`, so a wrong index
+    /// always names *some* channel: there is no inert failure mode to fall
+    /// into.
     pub fn rescope_channels(&mut self, edit: crate::structure::ChannelEdit) -> bool {
         let mut changed = false;
+        for entry in self.slots.iter_mut().flatten() {
+            let ModulatorParams::Envelope(envelope) = &mut entry.params else {
+                continue;
+            };
+            match edit.channel(envelope.input_channel) {
+                Some(moved) => {
+                    changed |= moved != envelope.input_channel;
+                    envelope.input_channel = moved;
+                }
+                // The gated channel is gone. Park on the last addressable
+                // index rather than inherit whoever closed the gap -- the
+                // same marker and the same reasoning as
+                // [`crate::aux_in::DEPARTED_SOURCE`], which answered this
+                // question first for a subscription. `gates.get` finds
+                // nothing there, so the envelope stays idle and inspectable.
+                None => {
+                    envelope.input_channel = u8::MAX;
+                    changed = true;
+                }
+            }
+        }
         for entry in self.routes.iter_mut() {
             let Some(route) = entry else {
                 continue;
@@ -2061,6 +2092,54 @@ mod tests {
 
     fn open(param: u32) -> ModDestinationDescriptor {
         ModDestinationDescriptor::unrestricted(param)
+    }
+
+    /// An envelope's gate is a channel-scoped address and follows a channel
+    /// edit like every other one. It did not until 2026-09-13: a reorder or
+    /// an insert left every envelope in the song gating off a different
+    /// channel's notes, and `gates.get` is bounded by `MAX_CHANNELS`, so the
+    /// stale index always named *some* channel rather than failing inertly.
+    #[test]
+    fn an_envelope_gate_follows_a_channel_edit() {
+        use crate::structure::ChannelEdit;
+
+        let envelope = |channel: u8| {
+            ModulatorParams::Envelope(ModEnvelopeParams {
+                input_channel: channel,
+                ..ModEnvelopeParams::default()
+            })
+        };
+        let gate_of = |rack: &ModRack| match rack.slots[0].unwrap().params {
+            ModulatorParams::Envelope(params) => params.input_channel,
+            _ => panic!("slot 0 holds the envelope this test installed"),
+        };
+
+        // An insert below the gate pushes it up.
+        let mut rack = ModRack::default();
+        rack.install(0, envelope(2));
+        assert!(rack.rescope_channels(ChannelEdit::Inserted(0)));
+        assert_eq!(gate_of(&rack), 3);
+
+        // A removal below it pulls it down, rather than leaving it on the
+        // channel that closed the gap.
+        let mut rack = ModRack::default();
+        rack.install(0, envelope(2));
+        assert!(rack.rescope_channels(ChannelEdit::Removed(0)));
+        assert_eq!(gate_of(&rack), 1);
+
+        // The gated channel itself going away parks the gate out of range,
+        // the same marker `aux_in::DEPARTED_SOURCE` uses for a subscription.
+        let mut rack = ModRack::default();
+        rack.install(0, envelope(2));
+        assert!(rack.rescope_channels(ChannelEdit::Removed(2)));
+        assert_eq!(gate_of(&rack), u8::MAX);
+
+        // A gate that does not move reports no change, so an edit elsewhere
+        // in the song does not mark the rack dirty.
+        let mut rack = ModRack::default();
+        rack.install(0, envelope(0));
+        assert!(!rack.rescope_channels(ChannelEdit::Inserted(4)));
+        assert_eq!(gate_of(&rack), 0);
     }
 
     #[test]
@@ -2418,12 +2497,17 @@ retrigger = true
         assert_eq!(rack.offset_for(addr(1), sources(&outputs), &open(1)), 0.25);
     }
 
-    /// A route naming an outlet the address space cannot hold is inert
-    /// rather than aimed at whatever happens to sit at that index. The rack
-    /// keeps it, because the spec says an unresolvable route stays as
-    /// inspectable authored work.
+    /// A route naming an outlet the address space cannot hold is **refused**,
+    /// so nothing is aimed at whatever happens to sit at that index.
+    ///
+    /// The comment here used to say the rack *keeps* it as an inspectable
+    /// orphan, which is what `MODULATOR_SYSTEM_SPEC.md` promises and is not
+    /// what the code does -- the assertions below have always said so. The
+    /// divergence is real and is recorded in `docs/LOOSE_ENDS.md`; this test
+    /// now describes the behaviour it actually checks, so that reading it
+    /// does not re-confirm the spec.
     #[test]
-    fn an_out_of_range_outlet_resolves_to_nothing() {
+    fn an_out_of_range_outlet_is_refused_rather_than_misaimed() {
         let mut rack = ModRack::default();
         assert!(rack
             .add_route(ModRoute::from_outlet(
@@ -2716,15 +2800,25 @@ param = 7
         assert_eq!(toml::from_str::<ModRack>(&text).unwrap(), rack);
     }
 
-    /// A route whose module is gone parks out of range rather than resolving
-    /// onto whatever now occupies its old slot.
+    /// `resolve_routes` parks a route whose module is gone on
+    /// `UNRESOLVED_SLOT` rather than resolving it onto whatever now occupies
+    /// the old slot.
+    ///
+    /// **No reachable path reaches this state**, which is worth knowing
+    /// before trusting the test. The comment below used to claim a decode
+    /// could produce it; `ModRack::deserialize` in fact *drops* a route whose
+    /// source resolves to nothing, and `add_route`, `apply_route`, `clear`,
+    /// `move_module` and `swap_slots` all refuse or remove rather than park.
+    /// So this covers `resolve_routes` in isolation and the behaviour
+    /// `UNRESOLVED_SLOT`'s own documentation describes is not implemented
+    /// anywhere a user can reach. See `docs/LOOSE_ENDS.md`.
     #[test]
     fn an_unresolvable_route_is_inert_rather_than_misaimed() {
         let mut rack = ModRack::default();
         rack.install(0, ModulatorParams::Lfo(ModLfoParams::default()));
         rack.add_route(ModRoute::to_slot(0, addr(7), 1.0, ModPolarity::Bipolar));
-        // Drop the module without going through `clear`, as a decode of a
-        // hand-edited project could.
+        // Reached by poking the rack directly: see the note above for why no
+        // decode and no edit can put it here.
         rack.slots[0] = None;
         rack.resolve_routes();
 
