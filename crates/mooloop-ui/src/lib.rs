@@ -6954,7 +6954,17 @@ impl AppUi {
                 match guard.session.add_send(bus, target) {
                     Some(Ok(_)) => {
                         if let Some(w) = weak.upgrade() {
-                            guard.sync_bus_editor(&w);
+                            // `sync_mixer`, not `sync_bus_editor`: the mixer
+                            // strip draws `MixerStripRow.sends`, which only
+                            // `sync_mixer` writes, so the row the gesture was
+                            // made on never appeared and the empty-state text
+                            // stayed up. And a send is a graph edge, so every
+                            // strip's `allowed` mask moves with it -- the
+                            // reason `on_bus_output_changed` already calls
+                            // this. `sync_mixer` ends by calling
+                            // `sync_bus_editor`, so the rack face is still
+                            // covered.
+                            guard.sync_mixer(&w);
                             guard.update_document_title(&w);
                         }
                     }
@@ -6980,7 +6990,10 @@ impl AppUi {
                 let mut guard = st.borrow_mut();
                 if guard.session.remove_send(bus, send) {
                     if let Some(w) = weak.upgrade() {
-                        guard.sync_bus_editor(&w);
+                        // As above: the row has to leave the mixer strip too,
+                        // and removing an edge reopens destinations for every
+                        // other track.
+                        guard.sync_mixer(&w);
                         guard.update_document_title(&w);
                     }
                 }
@@ -6996,6 +7009,11 @@ impl AppUi {
                     return;
                 };
                 if let Some(w) = weak.upgrade() {
+                    // The mixer strip's own back face draws these rows too,
+                    // and only `sync_mixer_strip` writes them. One strip and
+                    // no edge changed, so this rather than a whole
+                    // `sync_mixer`.
+                    guard.sync_mixer_strip(bus.max(0) as usize);
                     guard.sync_bus_editor(&w);
                 }
                 let _ = tx.send(command);
@@ -7016,6 +7034,11 @@ impl AppUi {
                     return;
                 };
                 if let Some(w) = weak.upgrade() {
+                    // The mixer strip's own back face draws these rows too,
+                    // and only `sync_mixer_strip` writes them. One strip and
+                    // no edge changed, so this rather than a whole
+                    // `sync_mixer`.
+                    guard.sync_mixer_strip(bus.max(0) as usize);
                     guard.sync_bus_editor(&w);
                 }
                 let _ = tx.send(command);
@@ -7038,6 +7061,11 @@ impl AppUi {
                     return;
                 };
                 if let Some(w) = weak.upgrade() {
+                    // The mixer strip's own back face draws these rows too,
+                    // and only `sync_mixer_strip` writes them. One strip and
+                    // no edge changed, so this rather than a whole
+                    // `sync_mixer`.
+                    guard.sync_mixer_strip(bus.max(0) as usize);
                     guard.sync_bus_editor(&w);
                 }
                 let _ = tx.send(command);
