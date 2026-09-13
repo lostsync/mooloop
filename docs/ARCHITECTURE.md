@@ -27,12 +27,12 @@ flowchart LR
         Render["RenderState<br/>realtime executor"]
         Sequencer["Transport and sequencer<br/>PPQ to sample-timed events"]
         Mixer["Channel strips and buses<br/>compiled routing, meters"]
-        Jack["JACK / PipeWire-JACK<br/>stereo output ports"]
+        Driver["Driver adapter<br/>JACK ports on Linux,<br/>Core Audio on macOS"]
         Queues --> Prepare
         Prepare -->|"prepared project swap<br/>at block boundary"| Render
         Render --> Sequencer
         Sequencer --> Mixer
-        Mixer --> Jack
+        Mixer --> Driver
     end
 
     subgraph DSP[DSP library: mooloop-dsp]
@@ -87,7 +87,8 @@ flowchart LR
   frames, which the engine resolves against each destination's base and emits
   as ordinary sample-timed `ParamValue` events, so no device knows it is
   being modulated.
-- Realtime and offline export share the render path. JACK is an output adapter
+- Realtime and offline export share the render path. The driver -- JACK on
+  Linux, Core Audio on macOS, chosen at compile time -- is an output adapter
   for the realtime path, while `mooloop-project` owns durable documents and
   sample-asset handling.
 

@@ -29,6 +29,7 @@ mooloop-ui = { path = "crates/mooloop-ui" }
 slint = "1.17"
 slint-build = "1.17"
 jack = "0.13"
+cpal = "0.18"
 rtrb = "0.3"
 serde = { version = "1", features = ["derive"] }
 toml = "1"

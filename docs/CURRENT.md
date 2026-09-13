@@ -318,10 +318,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   schemes, user schemes that can be saved and removed, and roundness and
   contrast scalars that retune the whole UI. All of it previews live and
   persists on Apply or OK. Shared audio controls, tooltips, and master
-  peak-meter ballistics. A fresh install requests a 256-frame JACK buffer by
-  default (Preferences > Audio picks from 64/128/256/512/1024/2048); a saved
+  peak-meter ballistics. A fresh install requests a 256-frame buffer by
+  default (Preferences > Audio picks from 64/128/256/512/1024/2048) --
+  server-wide under JACK, the output device's own under Core Audio; a saved
   config that already has a buffer size choice keeps it, and the engine
-  falls back to the server's current buffer size with a printed warning if
+  falls back to the driver's current buffer size with a printed warning if
   the request is rejected. Sluggish input latency is a buffer-size symptom
   to check here before assuming a DSP bottleneck. The Shortcuts page lists
   every action in the registry (`ACTIONS.md`), grouped by category, each
@@ -380,7 +381,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   no audio behind it yet.
 - There is no metronome. The toolbar deliberately does not offer a click-track
   toggle, since nothing in the DSP graph produces one yet.
-- MIDI input is wired but reaches nothing. The engine registers a JACK
+- MIDI input is wired but reaches nothing, and exists only under JACK: the
+  Core Audio driver opens no MIDI input yet. Under JACK the engine registers a
   `midi_in` port and decodes a bounded number of messages per block into
   `mooloop_core::midi` types, and `RenderState` will apply a
   `BufferMidiMap` — note and CC mappings onto one Buffer insert's gestures —
@@ -412,14 +414,24 @@ selected source (sampler / drum synth / DS-01 / v1 mono / ML-M1 / ML-P8 / poly /
                                             master effect chain -> gain/pan
                                                            |
                                                            v
-                                                       JACK outputs
+                                  driver output (JACK ports or a Core Audio device)
 ```
 
 The engine preallocates channel strips, pattern storage, event lists, and audio
-buses. A JACK-independent render state owns transport, scheduling, instruments,
-effects, mixing, and metering. The JACK adapter drains fixed-size commands into
-that state and publishes position and master peak events; offline export drives
-the same render path without JACK ports.
+buses. A driver-independent render state owns transport, scheduling,
+instruments, effects, mixing, and metering. One executor drains fixed-size
+commands into that state and publishes position and master peak events, and a
+driver adapter hands it buffers: JACK on Linux, Core Audio through cpal on
+macOS, chosen at compile time. Offline export drives the same render path with
+no driver at all.
+
+Core Audio has no port graph, so an output target there names a device and two
+of its channels. The system default follows whatever the system output is; a
+named device that disappears hands playback to the system default, and with
+auto-reconnect on, playback returns to the device when it comes back. A new
+device or buffer size reopens the stream without rebuilding the engine. The
+engine keeps the sample rate the system output had when it started and asks
+later devices for the same one.
 
 Channels render in a compiled order rather than in index order, so a producer
 runs before any channel subscribed to one of its audio outlets and the samples
@@ -447,7 +459,7 @@ directory scanning occur off the audio thread. A decoded sample is published
 through an `ArcSwapOption` slot.
 
 Project installation prepares a complete `RenderState`, including effect
-construction and sequencer import, on the control thread. The JACK callback
+construction and sequencer import, on the control thread. The audio callback
 receives that state through the ordered command stream, swaps one box at a
 block boundary, and returns the displaced state through the reclaim ring for
 control-thread destruction. Parameter commands cannot cross that generation
@@ -1168,8 +1180,8 @@ land on its own when it starts to matter:
   re-renders the decoded source off-thread under a stored spec, and the
   Buffer insert's rolling ring. Neither writes a channel's own output back
   into a project asset: there is still no capture-to-sample gesture.
-- The render graph is independent of JACK and supports finite offline passes.
-  WAV uses the active JACK sample rate; MP3 renders at 48 kHz through an
+- The render graph is independent of the audio driver and supports finite
+  offline passes. WAV uses the engine's sample rate; MP3 renders at 48 kHz through an
   in-process LAME encoder. Stem/bus export and realtime-vs-offline null testing
   are not implemented.
 - Replaced sample lifetimes need a deliberate deferred-reclamation design so

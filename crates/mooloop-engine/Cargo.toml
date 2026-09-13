@@ -8,14 +8,22 @@ authors.workspace = true
 [dependencies]
 mooloop-core = { workspace = true }
 mooloop-dsp = { workspace = true }
-jack = { workspace = true }
 rtrb = { workspace = true }
 arc-swap = "1"
 hound = "3"
 mp3lame-encoder = "0.2.4"
 
-# Only for `sched_getscheduler`, to ask the callback thread whether the
-# realtime scheduling JACK requested on its behalf was actually granted.
+# The platform picks the audio driver at compile time: JACK, and pipewire-jack
+# behind it, everywhere but macOS; Core Audio through cpal on macOS.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+jack = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cpal = { workspace = true }
+
+# Only to ask the callback thread whether the realtime scheduling its driver
+# requested on its behalf was actually granted: `sched_getscheduler` on Linux,
+# the Mach time-constraint policy on macOS.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

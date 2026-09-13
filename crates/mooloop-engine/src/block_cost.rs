@@ -617,14 +617,14 @@ fn install_churn_disturbs_a_deadline_thread() {
 
     /// Ask for realtime scheduling on this thread, and say whether it worked.
     /// The whole question is what happens to a thread that *has* priority.
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     fn request_realtime() -> bool {
         let param = libc::sched_param { sched_priority: 55 };
         // SAFETY: `param` outlives the call and `sched_setscheduler` reads it
         // without retaining it. Pid 0 is the calling thread.
         unsafe { libc::sched_setscheduler(0, libc::SCHED_FIFO, &param) == 0 }
     }
-    #[cfg(not(unix))]
+    #[cfg(not(target_os = "linux"))]
     fn request_realtime() -> bool {
         false
     }

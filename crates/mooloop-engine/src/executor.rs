@@ -1,12 +1,17 @@
-//! JACK adapter around the allocation-free shared render state.
+//! The driver-neutral half of the realtime callback.
+//!
+//! Everything the audio thread does between "a block is due" and "here are
+//! its samples" lives here: the ordered command stream, the reclaim ring,
+//! MIDI decoding, rendering, metering, xrun reporting and the load meter. A
+//! driver adapter owns one [`Executor`] and, once per block, hands it that
+//! block's MIDI input and output buffers. What the adapter keeps is only what
+//! its host API makes different: where the buffers come from, how the thread
+//! is created, and how dropouts are reported.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use arc_swap::ArcSwap;
-use jack::ProcessHandler;
-use jack::{AudioOut, Client, Control, MidiIn, Port, PortId, ProcessScope};
 use mooloop_core::{EngineEvent, MidiMessage};
 use mooloop_dsp::{SampleData, MAX_BLOCK_SIZE};
 use rtrb::Consumer;
@@ -25,20 +30,14 @@ const MAX_MIDI_PER_BLOCK: usize = 256;
 /// is a `Vec` growing on the realtime thread.
 const MAX_RETIRED_PREVIEWS: usize = 64;
 
-pub(crate) struct GraphIo {
-    pub out_l: Port<AudioOut>,
-    pub out_r: Port<AudioOut>,
-    pub midi_in: Port<MidiIn>,
+pub(crate) struct ExecutorIo {
     pub cmd_rx: Consumer<RealtimeCommand>,
     pub evt_tx: rtrb::Producer<EngineEvent>,
     pub reclaim_tx: rtrb::Producer<StructuralReclaim>,
 }
 
-pub(crate) struct Graph {
+pub(crate) struct Executor {
     render: Box<RenderState>,
-    out_l: Port<AudioOut>,
-    out_r: Port<AudioOut>,
-    midi_in: Port<MidiIn>,
     /// Decoded once per block into a fixed buffer. Sized for far more input
     /// than a human or a sequencer produces in one period; the overflow is
     /// dropped rather than allocated for.
@@ -51,6 +50,7 @@ pub(crate) struct Graph {
     pending_command: Option<RealtimeCommand>,
     /// Preview samples whose voice has finished, awaiting reclaim-ring slots.
     retired_previews: Vec<Arc<SampleData>>,
+    /// Incremented by the driver, wherever its host reports a dropout.
     xrun_count: Arc<AtomicU64>,
     last_seen_xruns: u64,
     /// Frames per second, for turning a block length into the wall-clock
@@ -61,14 +61,15 @@ pub(crate) struct Graph {
     /// can be measured. `None` before the first block of a run.
     last_entered: Option<Instant>,
     /// Whether the scheduling policy of this thread has been asked for yet.
-    /// The answer cannot change without JACK making a new thread, and a new
-    /// thread starts a new `Graph`, so it is asked exactly once.
+    /// The answer cannot change without the driver making a new thread, and
+    /// a driver that does calls [`Executor::begin_run`], so it is asked once
+    /// per thread.
     checked_scheduling: bool,
 }
 
-impl Graph {
+impl Executor {
     pub(crate) fn new(
-        io: GraphIo,
+        io: ExecutorIo,
         render: Box<RenderState>,
         xrun_count: Arc<AtomicU64>,
         sample_rate: u32,
@@ -76,9 +77,6 @@ impl Graph {
     ) -> Self {
         Self {
             render,
-            out_l: io.out_l,
-            out_r: io.out_r,
-            midi_in: io.midi_in,
             midi_scratch: [MidiMessage {
                 offset: 0,
                 channel: 0,
@@ -97,43 +95,37 @@ impl Graph {
             checked_scheduling: false,
         }
     }
-}
 
-/// Flush subnormal floats to zero on this thread. Recursive DSP state
-/// (filter feedback, envelope followers, parameter smoothers) decays
-/// asymptotically toward zero and spends time in subnormal range on the way;
-/// without this, the CPU can take an order of magnitude longer per
-/// arithmetic op on those values, which reads as constant background load
-/// with no single attributable cause. MXCSR is per-thread, so this must run
-/// on the realtime callback's own thread rather than at engine construction.
-#[cfg(target_arch = "x86_64")]
-#[inline]
-fn enable_flush_to_zero() {
-    // `_mm_getcsr`/`_mm_setcsr` are deprecated for soundness reasons (their
-    // signature doesn't tell the optimizer they observe/change global FP
-    // state), so this reads and writes MXCSR directly instead.
-    use std::arch::asm;
-    const FLUSH_TO_ZERO: u32 = 1 << 15;
-    const DENORMALS_ARE_ZERO: u32 = 1 << 6;
-    unsafe {
-        let mut csr: u32 = 0;
-        asm!("stmxcsr [{0}]", in(reg) &mut csr, options(nostack, preserves_flags));
-        csr |= FLUSH_TO_ZERO | DENORMALS_ARE_ZERO;
-        asm!("ldmxcsr [{0}]", in(reg) &csr, options(nostack, preserves_flags));
+    /// Forget everything that belonged to the previous callback thread.
+    ///
+    /// For a driver that reopens its stream under a living executor -- a new
+    /// device, a new buffer size -- the next block arrives on a thread nobody
+    /// has asked about, after a gap that is not a late wake-up. Without this
+    /// the scheduling readout would describe a thread that no longer exists,
+    /// and the load meter would report the reopen as the worst deadline miss
+    /// of the session.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn begin_run(&mut self) {
+        self.last_entered = None;
+        self.checked_scheduling = false;
     }
-}
 
-#[cfg(not(target_arch = "x86_64"))]
-#[inline]
-fn enable_flush_to_zero() {}
-
-impl ProcessHandler for Graph {
-    fn process(&mut self, _client: &Client, scope: &ProcessScope) -> Control {
+    /// Render one block into `out_l` and `out_r`.
+    ///
+    /// `midi` yields `(frame offset, raw message)` pairs for this block, in
+    /// time order and one whole message each. At most [`MAX_BLOCK_SIZE`]
+    /// frames are rendered; anything past that in the buffers is silenced.
+    pub(crate) fn process<'m>(
+        &mut self,
+        midi: impl IntoIterator<Item = (u32, &'m [u8])>,
+        out_l: &mut [f32],
+        out_r: &mut [f32],
+    ) {
         enable_flush_to_zero();
         // On this thread rather than at engine construction, and for the same
         // reason as the flush-to-zero write above: the property being read
-        // belongs to the callback's own thread, which JACK created. Whether
-        // the realtime request JACK made on its behalf was actually granted
+        // belongs to the callback's own thread, which the driver created.
+        // Whether the realtime request made on its behalf was actually granted
         // is not observable anywhere else, and a denied one is silent -- the
         // audio simply glitches under load and nothing in the program says
         // why.
@@ -141,14 +133,15 @@ impl ProcessHandler for Graph {
             self.checked_scheduling = true;
             self.load.set_realtime(crate::load::thread_realtime_status());
         }
-        // `Instant::now` on Linux is a vDSO read of the monotonic clock: no
-        // syscall, no lock, tens of nanoseconds against a budget of millions.
+        // `Instant::now` is a vDSO read of the monotonic clock on Linux and
+        // `mach_absolute_time` on macOS: no syscall, no lock, tens of
+        // nanoseconds against a budget of millions.
         let entered = Instant::now();
         let period = self
             .last_entered
             .map(|last| entered.duration_since(last).as_nanos() as u64);
         self.last_entered = Some(entered);
-        let frames = (scope.n_frames() as usize).min(MAX_BLOCK_SIZE);
+        let frames = out_l.len().min(out_r.len()).min(MAX_BLOCK_SIZE);
         // Value edits, structural ownership transfers, and prepared projects
         // share one ordered stream. Only apply an ownership-changing command
         // when its displaced object can immediately leave through the reclaim
@@ -210,14 +203,14 @@ impl ProcessHandler for Graph {
         }
 
         // Decode before rendering so this block's input can act on this
-        // block's audio. JACK hands over whole messages already ordered by
+        // block's audio. Drivers hand over whole messages already ordered by
         // time, so no sort is needed.
         let mut midi_len = 0;
-        for raw in self.midi_in.iter(scope) {
+        for (offset, bytes) in midi {
             if midi_len == MAX_MIDI_PER_BLOCK {
                 break;
             }
-            if let Some(message) = MidiMessage::decode(raw.time, raw.bytes) {
+            if let Some(message) = MidiMessage::decode(offset, bytes) {
                 self.midi_scratch[midi_len] = message;
                 midi_len += 1;
             }
@@ -240,12 +233,10 @@ impl ProcessHandler for Graph {
             }
         }
         let master = self.render.master();
-        let buffer_l = self.out_l.as_mut_slice(scope);
-        let buffer_r = self.out_r.as_mut_slice(scope);
-        buffer_l[..frames].copy_from_slice(&master.l[..frames]);
-        buffer_r[..frames].copy_from_slice(&master.r[..frames]);
-        buffer_l[frames..].fill(0.0);
-        buffer_r[frames..].fill(0.0);
+        out_l[..frames].copy_from_slice(&master.l[..frames]);
+        out_r[..frames].copy_from_slice(&master.r[..frames]);
+        out_l[frames..].fill(0.0);
+        out_r[frames..].fill(0.0);
 
         let _ = self.evt_tx.push(EngineEvent::Position {
             tick: report.position_tick,
@@ -269,61 +260,41 @@ impl ProcessHandler for Graph {
             });
         }
         // Last, so the figure covers everything the callback does and not
-        // just the render. The budget is this block's own: JACK may change
-        // the buffer size under a running client.
+        // just the render. The budget is this block's own: a driver may
+        // change the buffer size under a running stream.
         let budget = (frames as u64)
             .saturating_mul(1_000_000_000)
             .checked_div(u64::from(self.sample_rate))
             .unwrap_or(0);
         self.load
             .record(entered.elapsed().as_nanos() as u64, budget, period);
-        Control::Continue
     }
 }
 
-pub(crate) struct Notifications {
-    pub xrun_count: Arc<AtomicU64>,
-    /// Whether to retry connecting `target` when the port graph changes and
-    /// it is currently unconnected. Shared with `EngineHandle::set_auto_reconnect`.
-    pub auto_reconnect: Arc<AtomicBool>,
-    /// The configured output target, shared with `EngineHandle`.
-    pub target: Arc<ArcSwap<(String, String)>>,
-}
-
-impl jack::NotificationHandler for Notifications {
-    fn xrun(&mut self, _: &Client) -> Control {
-        self.xrun_count.fetch_add(1, Ordering::Relaxed);
-        Control::Continue
-    }
-
-    // Runs on JACK's notification thread, not the realtime audio thread, so
-    // ordinary allocation and the `ArcSwap` load below are fine here. A
-    // hot-plugged device (e.g. headphones) surfaces to a JACK client as
-    // ports registering, not as a "default device changed" event, so port
-    // registration is what auto-reconnect actually watches.
-    fn port_registration(&mut self, client: &Client, _port_id: PortId, is_registered: bool) {
-        if !is_registered || !self.auto_reconnect.load(Ordering::Relaxed) {
-            return;
-        }
-        let target = self.target.load_full();
-        if client.port_by_name(&target.0).is_none() || client.port_by_name(&target.1).is_none() {
-            return;
-        }
-        for (src, dst) in [
-            (crate::OUT_L_NAME, target.0.as_str()),
-            (crate::OUT_R_NAME, target.1.as_str()),
-        ] {
-            match client.connect_ports_by_name(src, dst) {
-                Ok(()) | Err(jack::Error::PortAlreadyConnected(_, _)) => {}
-                // JACK's graph-change notification, not the process callback:
-                // formatting and locking are both fine here.
-                Err(e) => mooloop_core::log_warn!(
-                    "audio",
-                    "auto-reconnect could not connect {src} -> {dst} ({e})"
-                ),
-            }
-        }
+/// Flush subnormal floats to zero on this thread. Recursive DSP state
+/// (filter feedback, envelope followers, parameter smoothers) decays
+/// asymptotically toward zero and spends time in subnormal range on the way;
+/// without this, the CPU can take an order of magnitude longer per
+/// arithmetic op on those values, which reads as constant background load
+/// with no single attributable cause. MXCSR is per-thread, so this must run
+/// on the realtime callback's own thread rather than at engine construction.
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn enable_flush_to_zero() {
+    // `_mm_getcsr`/`_mm_setcsr` are deprecated for soundness reasons (their
+    // signature doesn't tell the optimizer they observe/change global FP
+    // state), so this reads and writes MXCSR directly instead.
+    use std::arch::asm;
+    const FLUSH_TO_ZERO: u32 = 1 << 15;
+    const DENORMALS_ARE_ZERO: u32 = 1 << 6;
+    unsafe {
+        let mut csr: u32 = 0;
+        asm!("stmxcsr [{0}]", in(reg) &mut csr, options(nostack, preserves_flags));
+        csr |= FLUSH_TO_ZERO | DENORMALS_ARE_ZERO;
+        asm!("ldmxcsr [{0}]", in(reg) &csr, options(nostack, preserves_flags));
     }
 }
 
-pub(crate) type AsyncClient = jack::AsyncClient<Notifications, Graph>;
+#[cfg(not(target_arch = "x86_64"))]
+#[inline]
+fn enable_flush_to_zero() {}

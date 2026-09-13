@@ -217,10 +217,11 @@ fn raise(cell: &AtomicU32, value: u32) {
 /// Ask the kernel how *this* thread is scheduled.
 ///
 /// Called from the callback thread itself, because that is the only thread
-/// whose answer matters: JACK -- and pipewire-jack behind it -- creates the
-/// thread and requests realtime scheduling for it, and whether that request
-/// was granted is invisible from anywhere else in the program.
-#[cfg(unix)]
+/// whose answer matters: the driver -- JACK and pipewire-jack behind it, or
+/// Core Audio -- creates the thread and requests realtime scheduling for it,
+/// and whether that request was granted is invisible from anywhere else in
+/// the program.
+#[cfg(target_os = "linux")]
 pub fn thread_realtime_status() -> RealtimeStatus {
     // SAFETY: `sched_getscheduler(0)` reads the calling thread's policy and
     // takes no pointer. It cannot fail for pid 0.
@@ -231,7 +232,42 @@ pub fn thread_realtime_status() -> RealtimeStatus {
     }
 }
 
-#[cfg(not(unix))]
+/// macOS has no `SCHED_FIFO` for an audio thread to hold. Core Audio's I/O
+/// thread runs under the Mach time-constraint policy instead, and asking for
+/// that policy's current parameters is how a thread learns whether it has it:
+/// when it does not, the kernel sets `get_default` and hands back the
+/// defaults.
+#[cfg(target_os = "macos")]
+pub fn thread_realtime_status() -> RealtimeStatus {
+    let mut policy = libc::thread_time_constraint_policy {
+        period: 0,
+        computation: 0,
+        constraint: 0,
+        preemptible: 0,
+    };
+    let mut count = libc::THREAD_TIME_CONSTRAINT_POLICY_COUNT;
+    let mut get_default: libc::boolean_t = 0;
+    // SAFETY: `pthread_mach_thread_np` borrows the calling thread's port
+    // without adding a right, so nothing needs deallocating. `policy` is the
+    // struct the flavor names and `count` says how many integers it holds;
+    // the kernel writes no more than that.
+    let status = unsafe {
+        libc::thread_policy_get(
+            libc::pthread_mach_thread_np(libc::pthread_self()),
+            libc::THREAD_TIME_CONSTRAINT_POLICY as libc::thread_policy_flavor_t,
+            (&mut policy as *mut libc::thread_time_constraint_policy).cast(),
+            &mut count,
+            &mut get_default,
+        )
+    };
+    match (status, get_default) {
+        (libc::KERN_SUCCESS, 0) => RealtimeStatus::Realtime,
+        (libc::KERN_SUCCESS, _) => RealtimeStatus::TimeShared,
+        _ => RealtimeStatus::Unsupported,
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn thread_realtime_status() -> RealtimeStatus {
     RealtimeStatus::Unsupported
 }
@@ -241,6 +277,16 @@ mod tests {
     use super::*;
 
     const BUDGET: u64 = 2_666_666;
+
+    /// Not a claim about the driver's thread, which only a running stream
+    /// has, but a check that the question is asked correctly: a test thread
+    /// is ordinary and time-shared, where a malformed call would come back
+    /// `Unsupported`.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn an_ordinary_thread_is_reported_time_shared() {
+        assert_eq!(thread_realtime_status(), RealtimeStatus::TimeShared);
+    }
 
     #[test]
     fn a_quiet_window_reports_no_trouble() {

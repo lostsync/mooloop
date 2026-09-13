@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Check the Linux build from a Mac, with no Linux machine in reach.
+#
+#   scripts/linux-check                          # cargo check -p mooloop-engine --all-targets
+#   scripts/linux-check -p mooloop-session       # any `cargo check` arguments instead
+#   scripts/linux-check clippy -p mooloop-engine --all-targets -- -D warnings
+#
+# The JACK adapter compiles only for Linux, so an edit to it made on a Mac is
+# otherwise unchecked until CI or the Fedora machine builds it. This checks
+# for x86_64-unknown-linux-gnu instead. `cargo check` never links, so Rust
+# needs no Linux sysroot; two build scripts still have to be satisfied:
+#
+# - jack-sys asks pkg-config whether JACK exists and panics without an answer.
+#   It loads libjack at runtime regardless, so a stand-in that answers yes is
+#   honest enough for a check that never runs anything.
+# - mp3lame-sys builds LAME from C through autoconf, which wants a working
+#   Linux C compiler. `zig cc` is one, headers included. It spells the target
+#   `x86_64-linux-gnu` and rejects the cc crate's `--target=`, so the wrapper
+#   drops that argument. And given a compiler it does not recognise by name,
+#   the build script stops passing `--host`, so autoconf thinks it is building
+#   natively and tries to run what it compiled; `MP3LAME_SYS_OVERRIDE_HOST`
+#   says otherwise.
+#
+# Needs `rustup target add x86_64-unknown-linux-gnu` and `brew install zig`,
+# and says so when either is missing. `mooloop-engine` is the default because
+# it holds every line of JACK code.
+set -euo pipefail
+
+TARGET=x86_64-unknown-linux-gnu
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  awk 'NR>1 && !/^#/ { exit } NR>1 { sub(/^# ?/, ""); print }' "$0"
+  exit 0
+fi
+if ! command -v zig >/dev/null 2>&1; then
+  echo "linux-check: needs zig as a Linux C compiler: brew install zig" >&2
+  exit 2
+fi
+if ! rustup target list --installed 2>/dev/null | grep -qx "$TARGET"; then
+  echo "linux-check: needs the Rust target: rustup target add $TARGET" >&2
+  exit 2
+fi
+
+TOOLS="$(mktemp -d "${TMPDIR:-/tmp}/linux-check.XXXXXX")"
+trap 'rm -rf "$TOOLS"' EXIT
+
+cat > "$TOOLS/pkg-config" <<'EOF'
+#!/bin/sh
+case "$*" in *--modversion*) echo 1.9.22 ;; esac
+exit 0
+EOF
+for pair in cc:cc cxx:c++; do
+  cat > "$TOOLS/${pair%%:*}" <<EOF
+#!/bin/sh
+for arg do
+  shift
+  case "\$arg" in --target=*) ;; *) set -- "\$@" "\$arg" ;; esac
+done
+exec zig ${pair#*:} -target x86_64-linux-gnu "\$@"
+EOF
+done
+printf '#!/bin/sh\nexec zig ar "$@"\n' > "$TOOLS/ar"
+chmod +x "$TOOLS"/*
+
+SUBCOMMAND=check
+case "${1:-}" in
+  check | clippy) SUBCOMMAND=$1; shift ;;
+esac
+if [ "$#" -eq 0 ]; then
+  set -- -p mooloop-engine --all-targets
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+PKG_CONFIG="$TOOLS/pkg-config" PKG_CONFIG_ALLOW_CROSS=1 RUSTFLAGS="" \
+  MP3LAME_SYS_OVERRIDE_HOST=x86_64-linux-gnu \
+  CC_x86_64_unknown_linux_gnu="$TOOLS/cc" \
+  CXX_x86_64_unknown_linux_gnu="$TOOLS/cxx" \
+  AR_x86_64_unknown_linux_gnu="$TOOLS/ar" \
+  cargo "$SUBCOMMAND" --target "$TARGET" "$@"
