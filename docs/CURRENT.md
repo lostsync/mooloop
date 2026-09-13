@@ -305,8 +305,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   greyed otherwise. **An effect preset appends a device to the end of the
   selected channel's chain rather than replacing one**, so it is always
   loadable; the rack row's own rail is still where a preset replaces what is
-  already in a row. Loading is one undoable edit either way. Neither tab can
-  be driven from the keyboard.
+  already in a row. An **effect** preset loads as one undoable edit; a
+  channel or generator preset does not -- it installs the document without
+  recording history, so Ctrl+Z after one reaches past it to the previous
+  recorded edit (`docs/LOOSE_ENDS.md`). Neither tab can be driven from the
+  keyboard.
 - A two-pane Preferences dialog with General, Audio, MIDI, Appearance, and
   Shortcuts pages; General persists developer mode and reveals the presently
   empty Developer page, and the MIDI page is a placeholder with no controls

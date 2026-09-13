@@ -24,6 +24,29 @@ a wish belongs in `ENHANCEMENTS.md`; a described behaviour gap belongs in
 
 ## Wrong-looking UI over correct behaviour
 
+**Saving with embedded assets repoints the sampler's prev/next-sample arrows
+into the song's own bundle.** The app writes the resolved paths back into the
+live session after a save, and `selected_sample_target` lists
+`sample_path.parent()` -- so a kick loaded from a fifty-file drum folder, once
+saved with Embed Assets on (the default), has arrows that walk
+`<song>-assets/samples/` instead. With four sampler channels embedded that
+directory is `00-kick.wav, 01-snare.wav, 02-hat.wav, 03-clap.wav`, so "next
+sample" on the kick loads the snare out of the bundle.
+`can_previous_sample`/`can_next_sample` are computed only in
+`apply_loaded_sample` and never recomputed on save, so the buttons stay lit
+and lie about it. The fix is a second field -- the browse origin, which the
+save's write-back must not overwrite -- rather than a change to what is
+stored, because only `project_snapshot` needs the bundle-relative form. Found
+2026-09-13.
+
+**A preset's name appears on the device before the save is known to have
+worked.** `set_effect_preset_name`/`set_source_preset_name` run synchronously
+on confirm, while the write happens on a worker thread and can fail -- a
+too-long name, a permission, a full disk. The error dialog opens and the rack
+row goes on showing the name of a preset that was never written. The fix is to
+move both calls into the `SavedPreset` arm, which means carrying the name on
+that variant. Found 2026-09-13.
+
 **The preamp face has no transfer-curve display, where Drive's has one.**
 `preamp-device.slint` leaves the panel Drive fills with
 `DriveTransferDisplay` empty. Drawing this stage's curve needs the
@@ -508,6 +531,30 @@ Recorded so the deferral stays deliberate.
 
 ## Decisions whose reason expired
 
+**A song's embedded samples can never be turned back into references, and
+unticking the box is discarded in silence.** `keep_owned` is true whenever an
+embedded sample already lives inside the bundle, and it skips the
+`AssetMode::Referenced` branch entirely -- so after the first embedded save,
+every later save keeps them embedded whatever the user asked for. The guard
+itself is **necessary**: without it `replace_song_file` would delete the
+sidecar the new reference points at, destroying the only copy. What is wrong
+is everything around it. Unticking "Embed assets" and saving produces no
+warning, no status message and no change. The manifest records `asset_mode =
+"referenced"` beside `embedded = true` on every sample. And reopening sets the
+checkbox from the document-level `asset_mode`, so the box shows *unticked* on
+a bundle whose samples are all embedded, and the state never converges.
+`CURRENT.md`'s "embedded and referenced asset policies are available per save"
+is true only of a song that has never been embedded.
+
+Not small because un-embedding has to mean something -- copy out to where, and
+under whose name. Options: refuse honestly, reporting "N samples stay in the
+bundle; there is no other copy" in the save report's warnings and leaving the
+box showing embedded; make the checkbox follow the *per-sample* flags rather
+than the document-level mode so it at least tells the truth; or implement a
+real un-embed that copies bundle-owned samples out to a chosen folder first,
+which is a new user-facing gesture. The first two together are cheap and
+remove the lie. Found 2026-09-13.
+
 **The limiter still has no lookahead, and the code's stated reason is now
 false.** `mooloop-dsp/src/effects/dynamics.rs:391` says "Add lookahead when
 the engine can compensate for it, not before." The mixer became latency
@@ -653,6 +700,49 @@ their own passes; nobody has decided whether they should match.
 ---
 
 ## One name, two policies
+
+**Renaming a song file makes it permanently unopenable, even when the assets
+sidecar is renamed with it.** `safe_embedded_path` requires a stored relative
+path to begin with *this song's exact file name* followed by `-assets`. Rename
+the pair the only sane way -- in a file manager, both together -- and the song
+refuses to open with "channel 0 has unsafe embedded path
+Untitled.mooloop-assets/samples/00-kick.wav", about a path that is present,
+relative, traversal-free and sitting right beside the file. It is
+`Error::Invalid`, so the whole song is refused rather than one sample warned
+about, and recovery means hand-editing TOML. (Copying the song *without* its
+sidecar is handled correctly: the name matches, the file is missing, you get a
+warning.)
+
+Not small because it is a question about what the check is for. The
+`Component::Normal | CurDir` filter above it already guarantees the path
+cannot escape the song's directory; the name equality only adds "and it is
+*this* song's sidecar", which is exactly what a rename breaks. Options: drop
+the name equality, keeping "first component ends in `-assets`, second is
+`samples`" -- two lines, every traversal property kept, but the stored
+component still names the *old* sidecar so the song then opens with the
+samples missing, turning a brick into a silent loss (pair it with the asset
+warnings now being logged); or repoint on load, substituting the bundle's
+actual assets directory name, so a rename self-repairs -- the behaviour a user
+expects, and the option that makes the product right, but it makes the loader
+a path rewriter and that needs a ruling; or downgrade the mismatch to a
+warning, which is least code and worst outcome. Found 2026-09-13.
+
+**An embedded sample that is a symlink escapes the bundle, is read, and is
+copied into the next bundle saved from it.** `safe_embedded_path` is purely
+lexical and `resolve_setup_asset` then does `is_file()` and reads, so a shared
+`.mooloop-channel` or kit bundle can make the app read an arbitrary local file
+as audio -- and, the part that matters, **re-saving that preset stages the
+symlink target's bytes into the new bundle**, which the user may then share.
+`PROJECT_FORMAT.md` says embedded paths "must remain below the document's
+`samples/` directory", which reads as a containment guarantee the check does
+not provide; the doc overstates and the code under-delivers. Not small because
+the fix is a decision about how much the loader may touch the filesystem:
+canonicalising and re-checking containment costs a syscall per sample and
+changes behaviour for anyone deliberately symlinking a shared sample library
+into a bundle. Options: canonicalise both sides and require containment for
+embedded references only; refuse a symlink under `samples/` outright; or
+accept it and correct `PROJECT_FORMAT.md` to say the check is lexical. Found
+2026-09-13.
 
 **The compensation plan is derived twice, in two crates, and the copies have
 already diverged.** `RenderState::install_compensation` guards the send half
