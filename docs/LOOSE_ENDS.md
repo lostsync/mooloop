@@ -228,6 +228,24 @@ blocked by this; it is one more click than a user coming from FL will expect
 
 ## Edits that do not undo
 
+**Removing a track does the silent orphan repair `MIXER_PLAN.md` says must
+not happen interactively.** The plan is explicit: deleting a non-master slot
+"is an explicit structural operation", the confirmation "names them and offers
+an explicit replacement destination (Master by default)", and **"There is no
+invisible orphan repair in an interactive edit."** What happens is
+`queue_track_remove` with no confirmation, no naming and no picker:
+`rescope_tracks_after` silently re-points every inbound output to the master
+and silently **drops** every send that named the track -- two different
+repairs, neither reported. `CURRENT.md` mentions the first and not the send
+drop. Undo does restore the snapshot, which is the half the plan asked for and
+got. Not small because it needs a confirmation surface that counts and names
+inbound routes and sends, plus a destination threaded into `remove_track`,
+which today takes an index and hard-codes the master. Options: build it as
+specified; or keep the silent repair and *report* it in the status bar, which
+is much cheaper and shares the diagnostic channel `sanitize_bank`'s entry
+already wants; or narrow the plan to what undo buys. Either of the last two
+still needs the send-drop sentence adding to `CURRENT.md`. Found 2026-09-13.
+
 **A lane that stops covering the playhead leaves its destination stuck at the
 last value it wrote.** `restore_base_param` exists for exactly this and its
 comment names the hazard -- "Removing a lane or a matrix route otherwise
@@ -453,6 +471,28 @@ marker or the directory under `presets/` is deleted by hand.
 
 ## Meter and time
 
+**A track silenced by someone else's solo still meters, and can still latch
+its clip lamp.** `render.rs` computes `let muted = strip.output.muted ||
+strip.solo_silenced` and governs the sends, the summing and the send emission
+with it -- then twenty-four lines later the meter alone re-reads
+`strip.output.muted`. So under a solo, a silenced track's strip meter, its
+peak hold and its clip latch all report a signal nobody can hear, while the
+comment directly above that line says the meter shows "what is heard rather
+than what is running" and `MIXER_PLAN.md` says the strip shows **audible**
+post-fader output.
+
+There is a real argument on the other side, which is why this is a note rather
+than a one-word fix: `MixerStripRow.solo_silenced` exists so a silenced
+strip's name plate *dims* rather than looking muted -- "it is set up and
+waiting" -- and a live meter under a dimmed name is arguably the same
+statement. What is not defensible is the current split, where `muted` means
+one thing for audio and another for the meter in the block that computes it.
+Options: meter it silent, matching the two documents; or keep it live and
+change both documents, which then needs a separate ruling on the clip latch,
+since latching a clip on a track that produced no audible sample is the
+hardest part to defend either way; or publish it as a third state and draw it
+in the dimmed treatment the name already uses. Found 2026-09-13.
+
 **The project is 4/4 end to end.** `render.rs:1709` hardcodes
 `const BEATS_PER_BAR: f32 = 4.0`, and `integrity.rs:480` rewrites any other
 meter back to 4/4 on load with a doctor message. `Project.beats_per_bar`
@@ -483,6 +523,25 @@ Nothing in the repository captures the rethink; the doc reads as settled.
 ---
 
 ## Cannot currently be tested
+
+**A muted track's frozen send rings could not be shown failing.** Fixed
+2026-09-13 -- `SendBank::reset` now drains them on every path that skips
+`emit` -- but the fix went in on symmetry (with `emit`'s own reset for a
+disabled send, and the track's own compensation ring, which resets on the same
+mute) rather than against a failing test, which is not the standard the rest
+of this sweep held to.
+
+The obstacle is worth writing down. A muted track also goes to *sleep*, so the
+frozen ring contributes nothing at the destination until that track wakes
+again -- an attempt that muted, idled for forty-eight blocks and unmuted
+measures exactly zero with the fix and without it. Observing it needs a second
+note after the unmute so the producer wakes, and then a differential render
+against an unmuted control to tell the stale frames from the new ones, since
+both arrive in the same block. Worth building if the send path is touched
+again; the setup also has to put the latency-declaring device in the
+*project*, because `RenderState::from_project` computes the compensation plan
+and an effect installed afterwards leaves the send with no ring at all --
+which is how the first attempt at this test came to pass without the fix.
 
 **The modulator plan's acceptance test 8 — RT hygiene, no allocations or
 locks in the audio callback — still has no harness that can express it.**
@@ -594,6 +653,32 @@ their own passes; nobody has decided whether they should match.
 ---
 
 ## One name, two policies
+
+**The compensation plan is derived twice, in two crates, and the copies have
+already diverged.** `RenderState::install_compensation` guards the send half
+on whether the bank sorts -- `let sorts = compile_bus_graph(..).is_some()`,
+with a comment giving the reason: a send compiled against an order that is not
+the one being walked would arrive a block late, so a bank running the
+everything-to-master repair gets no sends either. `Session::latency_plan`
+calls `send_edges` unconditionally and `send_specs` iterates every bus
+unconditionally, so on a bank that does not sort the session would hand the
+engine a full `SendBank` compiled against arrival numbers derived from a
+default order.
+
+Unreachable today, because the session's bank is sanitized on load and both
+`set_bus_output` and `add_send` refuse cycles. It is the characteristic fault
+in its pure form: two copies of one policy, one corrected and one not, with
+nothing able to notice. `an_offline_render_compiles_the_same_compensation_as_a
+_live_one` looks like the test that holds them together and does not -- both
+sides of that comparison go through `install_compensation`, and the session's
+derivation is never compared against anything. The same shape one size down
+holds for `Session::console_plan` against `RenderState::install_console`.
+Options: extract the shared derivation into `mooloop-core` so both call sites
+become three lines, which removes the copy permanently; or add a test that
+renders one `Project` through both and asserts the plans match, which is
+cheaper and is at least a test that reads both copies; or, minimum, port the
+`sorts` guard across so the two agree today, which does not stop the next
+divergence. Found 2026-09-13.
 
 **Load silently deletes authored modulation the spec says to keep as an
 orphan, and the mechanism built for keeping it is unreachable.**

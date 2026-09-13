@@ -113,8 +113,10 @@ enabled               explicit on/off; a zero level is still a valid setting
 The v0.1 behavior is precise:
 
 - A **pre-fader** send is tapped after inserts but before the source slot's
-  fader, main mute, and stereo balance. Its own enabled state and level still
-  apply. This is useful for a cue-like effect feed or a deliberately constant
+  fader and stereo balance. **Mute is not one of the things it is before**:
+  a muted track's sends are silenced, pre-fader ones included, which is the
+  reading a desk gives and is Adam's step-05 ruling. Its own enabled state
+  and level still apply. This is useful for a cue-like effect feed or a deliberately constant
   parallel path.
 - A **post-fader** send is tapped after fader, mute, and stereo balance. It is
   the default and has the familiar console behavior: pulling down or muting a
@@ -318,10 +320,14 @@ continues to show individual device input/output. Send meters are deferred:
 they can be added once they materially improve diagnosis without turning every
 strip into a patch bay.
 
-Mute silences only the slot's post-fader main output and post-fader sends.
-The slot and its inserts continue processing so tails decay. Pre-fader sends
-continue, by definition. This behavior is shown in the tooltip and is why a
-send has its own enabled control.
+Mute silences the slot's main output **and all of its sends, pre-fader
+included** -- `mute_silences_a_tracks_sends` asserts it with a pre-fader
+fixture, and `docs/CURRENT.md` states it correctly. This paragraph used to say
+pre-fader sends continue "by definition"; step 05 ruled the other way, on the
+grounds that a muted channel on a desk is silent everywhere. The slot and its
+inserts continue processing so tails decay. A send's own enabled control is
+for switching one path without touching the others, not for overriding
+mute.
 
 Solo is part of the v0.1 mixer pass, rather than a decorative button. Built
 2026-09-11 as **solo in place**, which is a narrowing of what this section
