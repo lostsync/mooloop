@@ -112,6 +112,39 @@ ends.
 
 ## Wired but unreachable
 
+**Spectrum subscriptions are keyed by slot index and nothing re-keys them
+when the chain changes.** `set_effect_spectrum_enabled` is called from the FFT
+toggle (by the slot index at that moment) and from
+`sync_effect_spectrum_subscriptions`, which runs only inside a project
+install. Effect insert, removal, reorder and wrap do not go through one. So:
+turn the FFT on for an EQ in slot 2, delete the device in slot 1, and the
+analyzer draws a flat line behind a lit button until it is toggled twice or
+the project reloaded. The orphaned stage keeps its pool entry, so enough
+add/enable/remove cycles exhaust `SPECTRUM_SLOTS` and every later analyzer
+silently draws zeros; and if a later device lands on that stage, the engine
+runs a full Goertzel bank every hop for a display nobody is drawing. Not small
+because the fix is a decision about where the subscription lives: re-sync
+after every structural rack edit (cheapest, an O(channels x slots) walk on
+every device drag, still keyed on a position); permute `spectrum_enabled`
+alongside `MoveEffect`/`RemoveEffect` in the engine; or key the subscription
+by the device's durable id, which cannot drift and is the largest change. Same
+shape as the modulator-reorder entry above -- a permutation mirrored by index
+rather than by identity. Found 2026-09-13.
+
+**Two device faces draw a clip lamp that can never light.** The device rack's
+IN and OUT rails and the bus face all instantiate `ChannelMeter`, which always
+draws a `ClipIndicator`, and none of the three binds `clipping` or
+`clip-reset` -- so every device row shows two faint red bars that cannot light
+and do nothing when clicked, which is the "convincing but inert control" the
+rack's own rule names. The bus face is the sharper case because the data is in
+hand and thrown away: the same `MeterReading` the mixer strip uses carries
+`held_db` and `clipping`, and `main.slint` declares only the two level
+properties for that face -- so one track has two faces whose meters behave
+differently. Fixing it is a `main.slint` contract change (three new
+properties), so it belongs in the next batched cross per `AGENTS.md`'s "face
+contract last". `ChannelMeter` could also grow a `show-clip` so a rail can opt
+out honestly. Found 2026-09-13.
+
 **A generator's internal route amounts are a working automation destination
 no picker can reach.** The engine resolves `ParamOwner::SourceRoute` lanes per
 control tick and emits `Event::SourceRouteAmount` for them
@@ -493,6 +526,65 @@ marker or the directory under `presets/` is deleted by hand.
 ---
 
 ## Meter and time
+
+**Device meters are drained only for the chain currently on screen.** The
+pump takes `take_device_peak`/`take_device_dynamics` for one `device_target`,
+and every other channel's and bus's stage cells are `fetch_max` holds that
+nothing ever empties -- so switching the rack to a channel last viewed ten
+minutes ago draws that ten-minute maximum for one 8 ms tick before the next
+read clears it. Two lines in the bus loop used to be an attempt at this and
+could never have worked: both `publish` and `publish_input` are `fetch_max`,
+so writing zero cannot lower a cell. They are gone (2026-09-13) along with the
+comment claiming they cleared the meter. Not small because draining every
+target every tick is `(MAX_CHANNELS + MAX_BUSES) x (MAX_EFFECTS+1) x 6` atomic
+swaps at 125 Hz, which is the cost the spectrum pool exists to avoid in the
+analogous case. Options: drain the *previous* target once when `device_target`
+changes, which needs one `last_device_target` local in the pump and is
+correct; or drain the whole array on a slow secondary timer; or accept the
+one-frame flash and write it down. Found 2026-09-13.
+
+**A bus clip latch outlives the track it belongs to.** Removing a track shifts
+every later one down an index, and nothing resets the per-bus
+`MeterBallistics` the pump owns -- whose clip latch never self-clears, by
+design. Delete track 3 with its clip lamp lit and old track 4, now track 3,
+opens with a latched clip it never earned, permanently, until somebody clicks
+it. Peak hold and decay transfer too but wash out in under two seconds. Not
+small because the ballistics are `move`d locals inside the pump closure with
+no outside handle, so clearing them on a track edit needs the same flag
+handoff `master_clip_clear`/`bus_clip_clear` already use. Options: a
+`meters_reset` flag raised by `install_project_in_ui` (bluntest, also covers
+reorder); reset the removed index and shift the rest, which needs the edit's
+shape rather than "something changed"; or rule that a clip latch belongs to
+the strip position rather than the track. Found 2026-09-13.
+
+**The master is metered twice, through two transports, with two clip
+latches.** `graph.rs` pushes `EngineEvent::Metering` onto the bounded event
+ring every block and `render.rs` publishes the same numbers into `BusMeters`
+cell 0. The transport bar reads the event; the mixer's master strip reads the
+cell. The event push is `let _ = evt_tx.push(..)`, so under ring pressure the
+**always-visible toolbar meter** is the lossy one while the atomic cell cannot
+drop a block -- the two meters for one signal can disagree. And there are two
+independent clip latches for the master: clicking the toolbar's does not clear
+the mixer strip's, or the reverse. Options: drop `EngineEvent::Metering` and
+read bus 0 for both, which unifies the latch for free and removes a per-block
+ring push; or keep both and share one `MeterBallistics` pair. Found
+2026-09-13.
+
+**A muted channel that something taps meters silent and freezes its playhead
+while its audio flows.** There are two mute paths for a channel. The one where
+nobody taps it skips the render, so a frozen playhead is honest. The other --
+muted, but an Aux In reads this channel -- runs `strip.process`, so voices
+advance and the audio *is* heard through the Aux In, and then `continue`s
+before both the device-meter publish and the playhead publish. So the source
+rail reads silent, and the sampler playhead stops at the mute and never moves
+again or clears, because `source_silent_frames` is reset every block and the
+sleep branch's zero-publish can never run. Adjacent to the solo entry above
+but the opposite sign: there a silenced track meters live, here an audible one
+meters dead. Options: publish both before the `continue`, matching the comment
+that already says "a muted producer publishes"; or publish only the playhead,
+since a frozen line over a moving voice is indefensible under any reading; or
+rule that the Aux In's own channel is where that signal should be metered.
+Whoever rules on the solo entry should rule on this one too. Found 2026-09-13.
 
 **A track silenced by someone else's solo still meters, and can still latch
 its clip lamp.** `render.rs` computes `let muted = strip.output.muted ||
@@ -966,6 +1058,30 @@ This is the same shape as the piano-roll grid constants below, wants the same
 `tests/common/` module, and would be worth doing in the same pass.
 
 ## Numbers nothing is watching
+
+**`gain::MIN_DB` is spelled twenty-six times in markup and the test that
+checks its two siblings does not check it.**
+`slint_meter_thresholds_match_the_rust_constants` holds `meter-warning-db`,
+`meter-hot-db` and `reference-peak-dbfs` to their Rust constants. It does not
+hold the meter *floor*, because `GainMath` has no property for it:
+`gain.slint` spells `-60.0` inline inside `db-to-linear`/`linear-to-db`, and
+`meters.slint` and `controls.slint` spell `-60` twenty-two more times across
+`minimum-db` defaults and resting values. The Rust side is clean -- everything
+goes through `METER_FLOOR_DB`. So this is the characteristic question
+answering *no* for the floor of every meter in the application while answering
+*yes* for the two colour thresholds beside it, and the `declares()` helper the
+test would need already exists. Not a one-liner because the four `minimum-db`
+properties are scale *declarations* (legitimately overridable per meter) and
+the rest are resting *values*, so one shared `GainMath.min-db` has to be
+threaded through both kinds across three files.
+
+Two smaller instances worth folding into that pass: the Rust repaint throttle
+passes a segment count of 14 for the mixer strip and 12 for the device rails,
+mirroring `MixerMetrics.meter-segments: 14` and `segments: 12` in the markup.
+They agree today; if the markup's count is raised, the throttle would suppress
+repaints that change a visible segment -- which is exactly the "peak marker one
+segment behind where the audio put it" failure its own comment names. Found
+2026-09-13.
 
 **The modulation shelf spells twenty-one ranges by hand and nothing checks
 any of them.** `modulation-shelf.slint:1208-1658` declares

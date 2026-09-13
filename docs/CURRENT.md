@@ -769,8 +769,9 @@ land on its own when it starts to matter:
 - Per-bus peaks reach the GUI through a shared array of atomics rather than the
   event ring, which the ring's drain rate could not keep up with. The published
   value is a peak hold that only the GUI's read clears, so a transient landing
-  between two UI frames is still shown. Per-channel meters are still drawn but
-  unfed.
+  between two UI frames is still shown. The channel rack has no meter of its
+  own: `ChannelMeter` is drawn on the mixer strip, the device rack's two rails
+  and the bus face, and nowhere else.
 - Channels retain the historical constant-power pan law, so existing project
   levels do not jump. Mixer buses use a distinct stereo balance law that is
   unity at centre and never boosts an endpoint; adding centred routing stages

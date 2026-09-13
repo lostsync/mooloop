@@ -251,8 +251,12 @@ Peak metering in dBFS, floor -60 dBFS (`gain::MIN_DB`). Green below -10
 the SegmentedMeter/PeakMeter defaults read from there. Ballistics per
 IEC 60268-18 digital peak: instantaneous attack, 20 dB fall in 1.7 s,
 1 s peak hold (`MeterBallistics` in `mooloop-ui/src/meter.rs`). The clip
-latch is a separate full-scale detector (≥ 0 dBFS, 2 s latch) and is not
-tied to the colour thresholds.
+latch is a separate full-scale detector (≥ 0 dBFS) held **until it is
+clicked**, not on a timer, and is not tied to the colour thresholds.
+`clear_clip`'s own comment gives the reason: "A clip light that puts itself
+out is a light that is off by the time anyone looks at the meter." This
+paragraph said "2 s latch" until 2026-09-13; no such timer has ever
+existed.
 
 ## Where things live
 
