@@ -81,8 +81,8 @@ use mooloop_session::channel::{
 };
 use mooloop_session::command::{cycle_pane, CommandState, Pane};
 use mooloop_session::dialogs::{
-    confirm_via_zenity, pick_bundle_via_zenity, pick_export_via_zenity, pick_sample_via_zenity,
-    pick_save_via_zenity, pick_song_via_zenity,
+    confirm_dialog, pick_bundle_dialog, pick_export_dialog, pick_sample_dialog,
+    pick_save_dialog, pick_song_dialog,
 };
 use mooloop_session::document::{
     log_asset_warnings, log_repairs, quarantine_song, repair_suffix, resolve_document,
@@ -4325,10 +4325,10 @@ impl AppUi {
             let st = state.clone();
             window.on_quit_requested(move || {
                 // Same guard as Open Song: unsaved work must be confirmed
-                // away, and the zenity round-trip must not block the UI.
+                // away, and the dialog round-trip must not block the UI.
                 let dirty = st.borrow().session.dirty;
                 std::thread::spawn(move || {
-                    if dirty && !confirm_via_zenity("Discard unsaved song changes and quit?") {
+                    if dirty && !confirm_dialog("Discard unsaved song changes and quit?") {
                         return;
                     }
                     let _ = slint::invoke_from_event_loop(|| {
@@ -4349,7 +4349,7 @@ impl AppUi {
                 }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    if dirty && !confirm_via_zenity("Discard unsaved song changes?") {
+                    if dirty && !confirm_dialog("Discard unsaved song changes?") {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
                     }
@@ -4372,11 +4372,11 @@ impl AppUi {
                 }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    if dirty && !confirm_via_zenity("Discard unsaved song changes?") {
+                    if dirty && !confirm_dialog("Discard unsaved song changes?") {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
                     }
-                    let Some(path) = pick_song_via_zenity("Open mooloop song") else {
+                    let Some(path) = pick_song_dialog("Open mooloop song") else {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
                     };
@@ -4422,7 +4422,7 @@ impl AppUi {
                 let tx = tx.clone();
                 std::thread::spawn(move || {
                     let path = current
-                        .or_else(|| pick_save_via_zenity("Save mooloop song", "Untitled.mooloop"));
+                        .or_else(|| pick_save_dialog("Save mooloop song", "Untitled.mooloop"));
                     let Some(path) = path else {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
@@ -4522,7 +4522,7 @@ impl AppUi {
                 let tx = tx.clone();
                 std::thread::spawn(move || {
                     let Some(path) =
-                        pick_save_via_zenity("Save mooloop kit", "Untitled.mooloop-kit")
+                        pick_save_dialog("Save mooloop kit", "Untitled.mooloop-kit")
                     else {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
@@ -4560,7 +4560,7 @@ impl AppUi {
                 let tx = tx.clone();
                 std::thread::spawn(move || {
                     let Some(path) =
-                        pick_save_via_zenity("Save mooloop channel", "Untitled.mooloop-channel")
+                        pick_save_dialog("Save mooloop channel", "Untitled.mooloop-channel")
                     else {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
@@ -4592,7 +4592,7 @@ impl AppUi {
                 }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    let Some(path) = pick_bundle_via_zenity(title) else {
+                    let Some(path) = pick_bundle_dialog(title) else {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
                     };
@@ -4769,7 +4769,7 @@ impl AppUi {
                 // on every confirm. Note the collision can also come from
                 // sanitising: "My Delay" and "My/Delay" are both `My_Delay`.
                 if path.exists()
-                    && !confirm_via_zenity(&format!(
+                    && !confirm_dialog(&format!(
                         "A preset called \"{file_stem}\" already exists here. Replace it?"
                     ))
                 {
@@ -4849,7 +4849,7 @@ impl AppUi {
                 window.set_status_message("Rendering audio...".into());
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    let Some(path) = pick_export_via_zenity(request.extension()) else {
+                    let Some(path) = pick_export_dialog(request.extension()) else {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
                     };
@@ -4878,7 +4878,7 @@ impl AppUi {
         {
             let st = state.clone();
             window.window().on_close_requested(move || {
-                if st.borrow().session.dirty && !confirm_via_zenity("Quit without saving this song?") {
+                if st.borrow().session.dirty && !confirm_dialog("Quit without saving this song?") {
                     CloseRequestResponse::KeepWindowShown
                 } else {
                     CloseRequestResponse::HideWindow
@@ -4961,6 +4961,7 @@ impl AppUi {
                     "transport.loop-toggle" => window.invoke_playlist_loop_enabled_changed(
                         !window.get_playlist_loop_enabled(),
                     ),
+                    "file.new" => window.invoke_new_song(),
                     "file.open" => window.invoke_open_song(),
                     "file.save" => window.invoke_save_song(),
                     "file.save-as" => window.invoke_save_song_as(),
@@ -10368,7 +10369,7 @@ impl AppUi {
 
         // --- Sample browser: locations persist in settings.toml and the
         //     tree re-flattens on every change. The folder picker runs on a
-        //     worker thread like every other zenity call, handing the picked
+        //     worker thread like every other dialog call, handing the picked
         //     path to the pump, which applies it on the UI thread. ---
         let (browser_pick_tx, browser_pick_rx) = std::sync::mpsc::channel::<PathBuf>();
         let (browser_info_tx, browser_info_rx) =
@@ -10396,7 +10397,7 @@ impl AppUi {
             window.on_browser_add_location(move || {
                 let tx = browser_pick_tx.clone();
                 std::thread::spawn(move || {
-                    if let Some(path) = pick_bundle_via_zenity("Add sample folder") {
+                    if let Some(path) = pick_bundle_dialog("Add sample folder") {
                         let _ = tx.send(path);
                     }
                 });
@@ -10540,7 +10541,7 @@ impl AppUi {
             });
         }
 
-        // --- Sample loading via zenity + Symphonia (selected channel) ---
+        // --- Sample loading via a file dialog + Symphonia (selected channel) ---
         // The dialog + decode run on a worker thread so the UI stays
         // responsive (a blocking dialog makes the OS mark the app frozen and
         // offer to kill it). Results come back through `load_rx` and are
@@ -10579,7 +10580,7 @@ impl AppUi {
                 let tx = load_tx.clone();
                 log_debug!("ui", "loading sample for channel {channel}");
                 std::thread::spawn(move || {
-                    let result = pick_sample_via_zenity().map(|path| load_sample_at_path(&path));
+                    let result = pick_sample_dialog().map(|path| load_sample_at_path(&path));
                     let _ = tx.send(LoadResult {
                         channel,
                         source_revision,
@@ -10893,7 +10894,7 @@ impl AppUi {
                                             },
                                         );
                                     if dropping_notes
-                                        && !confirm_via_zenity(
+                                        && !confirm_dialog(
                                             "This kit removes channels containing notes. Continue?",
                                         )
                                     {

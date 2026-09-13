@@ -591,6 +591,11 @@ land on its own when it starts to matter:
   when the device wearing it goes: changing the channel's source, loading a
   channel preset over it, or opening a song or kit, which replaces the whole
   rack.
+- File > New Song (Ctrl+N) starts a fresh starter song, asking first when the
+  current one has unsaved changes, as Open Song does. Every file and
+  confirmation dialog is a separate program: `zenity` on Linux, and on macOS
+  the system's own panels through `osascript`. A dialog program that will not
+  start is logged, since to its caller it looks exactly like a cancel.
 - Missing samples are recoverable by loading a replacement audio file, but
   there is no dedicated path-search/relink dialog, autosave, or crash recovery
   yet.

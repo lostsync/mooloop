@@ -2151,8 +2151,13 @@ export component MainWindow inherits Window {
                     bar-width: menu-bar.width;
                     enabled: !root.document-busy;
 
-                    // Target: start a fresh song from scratch.
-                    MenuRow { text: "New Song"; shortcut: "Ctrl+N"; enabled: false; selected => { } }
+                    // A fresh starter song. The handler asks before
+                    // discarding unsaved work, as Open Song does.
+                    MenuRow {
+                        text: "New Song";
+                        shortcut: "Ctrl+N";
+                        selected => { root.new-song(); }
+                    }
                     MenuRow {
                         text: "Open Song...";
                         shortcut: "Ctrl+O";
