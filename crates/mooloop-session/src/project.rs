@@ -102,6 +102,65 @@ mod tests {
     use super::*;
     use mooloop_core::NoteEvent;
 
+    /// **The budget's own guard.** The application's history is
+    /// `History<ProjectSnapshot>` (`CommandState::history`), and every test
+    /// of the ceiling builds a `History<Project>`, a `History<Heavy>`, or a
+    /// `History<i32>` -- so if *this* impl returned zero, all four budget
+    /// tests would stay green while the history kept as much as it liked.
+    /// `edit_cost.rs` names that exact hazard: "an estimate that reads low
+    /// would let the history keep more than it is allowed to, which is the
+    /// bug it exists to prevent". This is `AGENTS.md`'s question -- does
+    /// anything read the copy the test checks? -- answered for the one impl
+    /// that ships.
+    #[test]
+    fn a_snapshots_retained_bytes_counts_the_project_and_the_sample_table() {
+        use crate::history::Retained;
+
+        let mut project = Project::default();
+        for _ in 0..8 {
+            project.channels.push(mooloop_core::ProjectChannel::sampler(0, 1));
+        }
+        for note in 0..256u32 {
+            project.channels[0].notes[0].push(NoteEvent::new(note + 1, note, 24, 60, 100));
+        }
+
+        let empty = ProjectSnapshot {
+            project: Project::default(),
+            samples: Vec::new(),
+        };
+        let loaded = ProjectSnapshot {
+            project: project.clone(),
+            samples: vec![None; 8],
+        };
+
+        // Against the snapshot's *own* project, not the one it was cloned
+        // from: `heap_bytes` counts capacity, and `Vec::clone` allocates
+        // exactly `len`, so a clone of a pushed-into project legitimately
+        // reads smaller than its source.
+        assert!(
+            loaded.retained_bytes() >= loaded.project.heap_bytes(),
+            "a snapshot has to charge at least the project it holds: {} against {}",
+            loaded.retained_bytes(),
+            loaded.project.heap_bytes()
+        );
+        assert!(
+            loaded.retained_bytes() > empty.retained_bytes(),
+            "and has to grow with what it holds, or the ceiling is not a ceiling"
+        );
+
+        // The sample table is charged by capacity, as pointers -- the reason
+        // is in `retained_bytes`'s own doc, and this pins that it is charged
+        // at all.
+        let with_table = ProjectSnapshot {
+            project: Project::default(),
+            samples: vec![None; 64],
+        };
+        assert!(
+            with_table.retained_bytes() > empty.retained_bytes(),
+            "the sample table's own capacity is part of what a snapshot keeps"
+        );
+    }
+
     #[test]
     fn project_pattern_banks_are_normalized_for_stale_clipboard_channels() {
         let mut project = Project {

@@ -115,9 +115,10 @@ fn allocated_bytes() -> usize {
 
 /// What one undo entry costs in memory.
 ///
-/// `History` has no cap: `entries` is a plain `Vec` and every edit pushes a
-/// `before` and an `after`, each a whole project. A long session therefore
-/// grows without bound, and the question this answers is how fast.
+/// `History` has two caps now -- `MAX_ENTRIES` and the `MAX_RETAINED_BYTES`
+/// budget -- and the test below asserts the second one holds. This one still
+/// answers the question that produced them: how fast an entry grows, since
+/// every edit pushes a `before` and an `after`, each a whole project.
 #[test]
 #[ignore = "measures resident memory; run deliberately in release"]
 fn undo_entry_memory() {
