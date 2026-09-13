@@ -1658,6 +1658,11 @@ pub struct MlP8 {
     scratch: StereoBus,
     wet: StereoBus,
     chorus: Chorus,
+    /// Whether the last block ran with the transport playing. A stop releases
+    /// what was sounding when it happened, once, rather than on every stopped
+    /// block: a note played while stopped -- a MIDI keyboard, an audition --
+    /// has to last until its own note-off.
+    was_playing: bool,
 }
 
 impl MlP8 {
@@ -1674,6 +1679,7 @@ impl MlP8 {
             scratch: StereoBus::with_capacity(CHORUS_CHUNK),
             wet: StereoBus::with_capacity(CHORUS_CHUNK),
             chorus: Chorus::new(params.chorus, sample_rate),
+            was_playing: false,
         };
         synth.routes.compile(&synth.params.routes);
         synth.apply_params_to_voices();
@@ -2493,9 +2499,10 @@ impl MlP8 {
     ) {
         let frames = ctx.frames.min(bus.capacity());
 
-        if !ctx.playing {
+        if self.was_playing && !ctx.playing {
             self.release_all();
         }
+        self.was_playing = ctx.playing;
 
         let mut pos = 0usize;
         for ev in events_in.iter() {
@@ -4452,6 +4459,26 @@ mod tests {
                 "a voice was left running without a gate"
             );
         }
+    }
+
+    /// A note played with the transport already stopped -- a MIDI keyboard,
+    /// an audition -- is held until its own note-off. Releasing on every
+    /// stopped block cut it to a blip.
+    #[test]
+    fn a_note_played_while_stopped_is_held() {
+        let mut synth = MlP8::new(init_saw(), SR);
+        let mut bus = StereoBus::with_capacity(1024);
+        let mut stopped = ctx(1024);
+        stopped.playing = false;
+        synth.process(&stopped, &mut bus, &EventList::empty(), None);
+
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 48));
+        synth.process(&stopped, &mut bus, &events, None);
+        for _ in 0..8 {
+            synth.process(&stopped, &mut bus, &EventList::empty(), None);
+        }
+        assert_eq!(held(&synth).0, 1, "the stopped transport let go of the key");
     }
 
     /// Detune and Spread are symmetric about the note, so a group plays the

@@ -9201,7 +9201,11 @@ mod footprint {
         // Containers added the eight above and nothing else: the dry buffers
         // themselves are behind the pointer and only allocated for a chain
         // that holds a box.
-        assert_eq!(size_of::<ChannelStrip>(), 41_936);
+        // Playing a key with the transport stopped added 24: a `was_playing`
+        // flag in every generator, so a stop releases once at the transition
+        // instead of on every stopped block. DS-01's fits its padding, which
+        // is why its assertion above did not move; the others round up.
+        assert_eq!(size_of::<ChannelStrip>(), 41_960);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -9226,7 +9230,7 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 60_376);
+        assert_eq!(per_live, 60_400);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -9275,6 +9279,9 @@ mod footprint {
         // dry buffers a chain needs while it is inside a box -- and the
         // buffers themselves only exist on a chain that holds one. 128 bytes
         // across sixteen channels, which does not move the figure below.
+        // Releasing on the transport's stop edge rather than on every stopped
+        // block added 24 bytes a live channel, the generators' `was_playing`
+        // flags: 384 bytes across sixteen.
         assert_eq!((fixed + per_live * 16) / 1024, 1_430);
     }
 

@@ -63,6 +63,13 @@ does not provide.
   input" alone would have delivered notes to the same dead end. The keyboard
   now plays the selected channel through the audition path the slice editor
   already used, under its own note ids.
+- **Every synth played a key as a blip with the transport stopped.** ML-M1,
+  ML-P8, DS-01, the mono, poly and drum synths all released (or choked) every
+  voice on every stopped block, so a note lived one block. The sampler had
+  already been moved to releasing on the playing-to-stopped edge, which is
+  why the slice audition never showed it; the synths now do the same. Found
+  by Adam on the first keyboard test, not by the engine test, which played a
+  one-shot sampler.
 - **JACK needed a patchbay before a key made a sound.** The adapter now
   connects physical MIDI sources itself, which assumes PipeWire's MIDI bridge
   flags its ports physical the way a JACK server's `system:midi_capture_*`

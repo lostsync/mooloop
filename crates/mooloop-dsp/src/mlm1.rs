@@ -251,6 +251,11 @@ pub struct MlM1 {
     /// Every note currently down, not just the one sounding. This is what
     /// makes trills, fallback, and note priority possible at all.
     held: HeldNotes,
+    /// Whether the last block ran with the transport playing. A stop releases
+    /// what was sounding when it happened, once, rather than on every stopped
+    /// block: a note played while stopped -- a MIDI keyboard, an audition --
+    /// has to last until its own note-off.
+    was_playing: bool,
 }
 
 impl MlM1 {
@@ -263,6 +268,7 @@ impl MlM1 {
             sample_rate,
             voice,
             held: HeldNotes::new(),
+            was_playing: false,
         }
     }
 
@@ -571,9 +577,10 @@ impl AudioNode for MlM1 {
     ) {
         let frames = ctx.frames.min(bus.capacity());
 
-        if !ctx.playing {
+        if self.was_playing && !ctx.playing {
             self.release_all();
         }
+        self.was_playing = ctx.playing;
 
         // Split the block at event offsets: render, apply event, repeat.
         let mut pos = 0usize;
@@ -1098,6 +1105,30 @@ mod tests {
         events.push(note_off(0, 2, 67));
         synth.process(&stopped, &mut bus, &events, None);
         assert!(synth.voice.amp_env.is_releasing() || !synth.voice.active);
+    }
+
+    /// A note played with the transport already stopped -- a MIDI keyboard,
+    /// an audition -- is held until its own note-off. The stop releases what
+    /// was sounding when the transport stopped, not everything after it.
+    #[test]
+    fn a_note_played_while_stopped_is_held() {
+        let mut synth = sustained(|_| {});
+        let mut bus = StereoBus::with_capacity(512);
+        let mut stopped = ctx(512);
+        stopped.playing = false;
+        synth.process(&stopped, &mut bus, &EventList::empty(), None);
+
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        synth.process(&stopped, &mut bus, &events, None);
+        for _ in 0..8 {
+            synth.process(&stopped, &mut bus, &EventList::empty(), None);
+        }
+        assert!(
+            !synth.held.is_empty(),
+            "the stopped transport let go of the key"
+        );
+        assert!(synth.voice.active && !synth.voice.amp_env.is_releasing());
     }
 
     /// A sine so that saturation is unmistakable in the spectrum — a saw
