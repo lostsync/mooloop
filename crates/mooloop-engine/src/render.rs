@@ -3558,7 +3558,14 @@ impl RenderState {
             EngineCommand::SetTempo(bpm) => self.transport.set_tempo(bpm),
             EngineCommand::SetSwing(percent) => self.sequencer.set_swing(percent),
             EngineCommand::SetCurrentPattern(pattern) => {
-                self.sequencer.set_current_pattern(pattern as usize)
+                self.sequencer.set_current_pattern(pattern as usize);
+                // The same debt a seek owes, for the same reason: the
+                // note-off that would have ended a sounding voice lives in
+                // the pattern we just stopped scheduling, so without this it
+                // is never emitted and the voice holds until Stop. Pattern
+                // mode has no loop fold to catch it either -- `loop_range` is
+                // `None` outside Song mode.
+                self.seeked = true;
             }
             EngineCommand::AddPattern => {
                 self.sequencer.add_pattern();
@@ -4856,6 +4863,7 @@ fn full_bank_project() -> Project {
     let mut project = Project::default();
     project.ensure_tracks(mooloop_core::MAX_BUSES);
     project
+
 }
 
 /// The same bank on its own, for the tests that build a routing graph
@@ -8645,6 +8653,64 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             "scrub must resolve against tempo"
         );
     }
+
+    /// Switching the current pattern while the transport runs is a
+    /// discontinuity in the *note source* rather than in the position, and it
+    /// owes the same release a seek owes. `schedule_pattern` reads
+    /// `patterns[current]` fresh every block, so the moment `current` moves,
+    /// the note-off of anything still sounding is in a list nobody schedules
+    /// any more. Nothing else let it go: pattern mode takes no loop fold
+    /// (`loop_range` is `None` outside song mode, so no span is ever
+    /// `jumped`), and the generators only release on `!ctx.playing`, which is
+    /// false here -- the transport is still running. The voice held at full
+    /// sustain until Stop.
+    #[test]
+    fn switching_pattern_while_playing_releases_the_sounding_voices() {
+        use crate::render_test_support::{peak_of, SAMPLE_RATE};
+
+        // A flat, fully sustaining envelope: the only thing that can end
+        // this note is the switch.
+        let params = mooloop_core::MlP8Params {
+            attack: 0.0,
+            decay: 0.0,
+            sustain: 1.0,
+            release: 0.0,
+            ..mooloop_core::MlP8Params::default()
+        };
+        let mut channel = ProjectChannel::mlp8_with_params(0, 2, params);
+        channel.setup.channel.volume = 1.0;
+        // Long enough that its off edge is many blocks away, so the only
+        // thing that can end this note is the switch.
+        channel.notes[0].push(NoteEvent::new(1, 0, 4608, 60, 127));
+
+        let project = Project {
+            channels: vec![channel],
+            pattern_lengths: vec![DEFAULT_STEPS, DEFAULT_STEPS],
+            ..Project::default()
+        };
+
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        render.play();
+        for _ in 0..8 {
+            render.process_once_block(1_024);
+        }
+        let sounding = peak_of(&render.master().l[..1_024]);
+        assert!(
+            sounding > 0.01,
+            "the note has to be sounding before the switch, got {sounding}"
+        );
+
+        render.apply_command(EngineCommand::SetCurrentPattern(1));
+        for _ in 0..24 {
+            render.process_once_block(1_024);
+        }
+        let after = peak_of(&render.master().l[..1_024]);
+        assert!(
+            after < sounding * 0.01,
+            "the voice must be released by the switch; it was {after} against \
+             {sounding} before, which is the note still held"
+        );
+    }
 }
 
 
@@ -8895,5 +8961,6 @@ mod footprint {
         // across sixteen channels, which does not move the figure below.
         assert_eq!((fixed + per_live * 16) / 1024, 1_430);
     }
+
 }
 

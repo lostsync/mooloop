@@ -540,10 +540,14 @@ land on its own when it starts to matter:
   to an offline render, which walks the arrangement once from the top. A loop
   reaching past the song's own end plays the part of it that exists, so
   shortening a song under a loop stops the loop rather than being refused.
-  Every sounding voice is released at the loop point and at a seek, because
+  Every sounding voice is released at the loop point, at a seek, and when the
+  current pattern is switched under a running transport, because in each case
   the note-off it was waiting for is no longer on the way.
 - The playhead can be moved with the transport running or stopped, snapped to
-  the playlist's own musical snap. Stop still returns it to the start.
+  the playlist's own musical snap, and it reaches the end of the *song* --
+  including the part of a long clip that overhangs the 64-bar start canvas --
+  rather than stopping at the canvas edge. Stop still returns it to the
+  start.
 - Playlist starts use the shared musical snap while retaining absolute PPQ
   ticks and are bounded to a 64-bar start canvas. The timeline is horizontally
   zoomable. Global swing delays alternate sixteenth notes from 50% (straight)
