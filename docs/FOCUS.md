@@ -129,18 +129,27 @@ Note what it did *not* settle — `EffectKind::descriptors()` is a table per
 and is not this plan; it is `SCOPE.md` §"the four things standing between here
 and CLAP", item 1.
 
-Steps 02 and 03 are an EQ that is merely better, and each fault in them was
+**Step 03 landed 2026-09-14** and corrected this paragraph on the way past.
+A shelf ignored its Q in the DSP -- so a band's Q knob did nothing whatever
+while that band was a shelf -- and the fix is `Biquad::eq_band`, one function
+the channel strip's bank calls too, which also deleted a private copy of
+`eq_effective_q` that `effects::eq` had been running instead of the core law.
+**It changes how an existing shelf boost sounds**, which the sentence below
+said only step 04 would: the two shelf forms agree on a flat shelf and nothing
+else. A default EQ is unaffected, because both its shelves rest at 0 dB. A song
+that boosted one is not, and that wants a listening pass.
+
+Step 02 is what is left of "an EQ that is merely better", and its faults were
 confirmed against the source rather than reported from use: the pass filters
 are absent from the response plot while their data is *already being sent* to
-it, a shelf ignores its Q in the DSP where `Biquad::shelf_slope` already
-exists, and the plot draws shelves at a fixed exponent. Step 04 is the
-measured character from five reference EQs, is optional, and is the only step
-that changes how the device sounds when nobody asked it to.
+it, and the plot draws shelves at a fixed exponent -- which matters more now
+that a shelf has a slope to draw. Step 04 is the measured character from five
+reference EQs and is optional.
 
 Done when: ~~every EQ band and pass filter has its own stable ids, a lane on a
 band means one band forever~~ (2026-09-14), and `eq-v2/00-status.md` says which
-of 02 to 04 were taken. Steps 02 to 04 are what is left of this step, and 04 is
-optional.
+of 02 to 04 were taken. 03 landed 2026-09-14; **02 and 04 are what is left**,
+and 04 is optional and wants Adam's ear.
 
 ### 2. Turn Buffer into a composition workflow
 

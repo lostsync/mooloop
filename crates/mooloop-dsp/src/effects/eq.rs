@@ -28,7 +28,7 @@
 //! here for a fortnight, so a fix to the shared RBJ primitive could silently
 //! miss the only EQ that needed it.
 
-use mooloop_core::{EqBand, EqBandKind, EqParams, EQ_MAX_BANDS};
+use mooloop_core::{EqBand, EqParams, EQ_MAX_BANDS};
 
 use crate::biquad::Biquad;
 use crate::bus::StereoBus;
@@ -76,18 +76,43 @@ impl EqEffect {
         effect
     }
 
-    fn effective_q(band: EqBand) -> f32 {
-        let boost = match band.q_profile { mooloop_core::EqQProfile::Constant => 1.0, mooloop_core::EqQProfile::Proportional => 1.0 + band.gain_db.abs() / 12.0 };
-        (band.q * boost).clamp(0.15, 30.0)
-    }
-
+    /// One band's coefficients, from the one place those laws live.
+    ///
+    /// **A shelf's `q` is its slope.** Until 2026-09-14 this called
+    /// `Biquad::shelf`, which takes no Q at all, so a band's Q knob did
+    /// nothing whatever while that band was a shelf -- and said nothing about
+    /// it. The strip had run `shelf_slope` since it was built, and its own
+    /// comment says why: a band's `q` knob is its slope when it is a shelf
+    /// and its Q when it is a bell, which is what makes the same knob honest
+    /// in both positions.
+    ///
+    /// The bell arm was not wrong, and was worse than wrong: it applied a
+    /// **private copy** of `eq_effective_q`, byte-identical and therefore
+    /// green, in a codebase whose core function carries the sentence "the law
+    /// written twice is the law that drifts, and the copy that drifts is the
+    /// one deciding what is heard." Both arms are `Biquad::eq_band` now, which
+    /// the strip calls too, so there is nothing left to hold in agreement.
+    ///
+    /// **This changes how an existing shelf boost sounds**, and it has to:
+    /// the two shelf forms reach `alpha` differently, so the only shelf they
+    /// agree on is a flat one. A shelf at 0 dB is unaffected whatever its
+    /// slope -- `A == 1` makes numerator and denominator identical -- so a
+    /// default EQ, whose two shelves rest at 0 dB, sounds exactly as it did.
+    /// A song that boosted one does not. `docs/plans/eq-v2/00-status.md`
+    /// records that as the thing to listen to.
     fn set_band_coefficients(filter: &mut Biquad, band: EqBand, sr: u32) {
-        if !band.enabled { *filter = Biquad::identity(); return; }
-        match band.kind {
-            EqBandKind::Bell => filter.peak(band.frequency_hz, Self::effective_q(band), band.gain_db, sr),
-            EqBandKind::LowShelf => filter.shelf(band.frequency_hz, band.gain_db, true, sr),
-            EqBandKind::HighShelf => filter.shelf(band.frequency_hz, band.gain_db, false, sr),
+        if !band.enabled {
+            *filter = Biquad::identity();
+            return;
         }
+        filter.eq_band(
+            band.kind,
+            band.frequency_hz,
+            band.gain_db,
+            band.q,
+            band.q_profile,
+            sr,
+        );
     }
 
     fn update_coefficients(&mut self) {

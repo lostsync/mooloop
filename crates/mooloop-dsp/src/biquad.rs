@@ -11,6 +11,8 @@
 //! frequency they were designed at, while `Svf` stays stable through a
 //! sweep.
 
+use mooloop_core::{eq_effective_q, EqBandKind, EqQProfile};
+
 use crate::node::REST_EPSILON;
 
 /// One RBJ-cookbook biquad section in Direct Form I, normalized so `a0` is
@@ -168,6 +170,44 @@ impl Biquad {
         self.set_shelf(a, 2.0 * a.sqrt() * alpha, w.cos(), low);
     }
 
+    /// Design one EQ band's stage: a bell at its effective Q, or a shelf
+    /// whose `q` is its slope.
+    ///
+    /// **Two banks run these laws and they must not be two copies of them.**
+    /// The channel strip's four bands and the seven-band effect EQ design the
+    /// same three kinds from the same fields, and on 2026-09-14 they were the
+    /// same `match` written twice in two files -- with the effect's arm
+    /// calling `shelf`, which takes no Q, so a shelf's Q knob did nothing
+    /// there and did something on the strip. `eq-v2/03` asked for a test
+    /// holding the two together; one function is the stronger form of the
+    /// same answer, because there is nothing left to hold apart.
+    ///
+    /// What stays with the callers is what genuinely differs: the strip
+    /// resolves a band's frequency from a *position* through its voicing, and
+    /// takes the Q profile from that voicing, while the effect EQ has a
+    /// frequency and a per-band profile. Those are the two banks' own
+    /// vocabulary. The law is this.
+    pub fn eq_band(
+        &mut self,
+        kind: EqBandKind,
+        frequency_hz: f32,
+        gain_db: f32,
+        q: f32,
+        q_profile: EqQProfile,
+        sample_rate: u32,
+    ) {
+        match kind {
+            EqBandKind::Bell => self.peak(
+                frequency_hz,
+                eq_effective_q(q, gain_db, q_profile),
+                gain_db,
+                sample_rate,
+            ),
+            EqBandKind::LowShelf => self.shelf_slope(frequency_hz, gain_db, q, true, sample_rate),
+            EqBandKind::HighShelf => self.shelf_slope(frequency_hz, gain_db, q, false, sample_rate),
+        }
+    }
+
     /// RBJ high- or low-pass, one Butterworth-Q stage.
     pub fn pass(&mut self, frequency: f32, q: f32, high: bool, sample_rate: u32) {
         let w = core::f32::consts::TAU * frequency.clamp(20.0, sample_rate as f32 * 0.45)
@@ -295,6 +335,88 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A shelf's `q` reaches its curve.
+    ///
+    /// The thing this pins is not the arithmetic -- `shelf_slope` has its own
+    /// tests -- but that `eq_band` *passes the Q through* on the shelf arms.
+    /// The seven-band EQ called `shelf`, which takes no Q, until 2026-09-14,
+    /// so its Q knob moved nothing at all while a band was a shelf, and no
+    /// test in six hundred noticed.
+    #[test]
+    fn a_shelfs_q_changes_its_curve() {
+        let sr = 48_000;
+        let mut gentle = Biquad::identity();
+        let mut steep = Biquad::identity();
+        gentle.eq_band(EqBandKind::LowShelf, 1_000.0, 12.0, 0.4, EqQProfile::Constant, sr);
+        steep.eq_band(EqBandKind::LowShelf, 1_000.0, 12.0, 1.8, EqQProfile::Constant, sr);
+        // Deliberately *not* at the corner: a shelf passes through the
+        // geometric mean of its two asymptotes there whatever its slope, so
+        // 1 kHz is the one frequency at which these two agree. The slope is
+        // the shape of the transition, so the probe goes into it.
+        let probe = 2_000.0;
+        let gentle_gain = respond(gentle, probe, sr);
+        let steep_gain = respond(steep, probe, sr);
+        assert!(
+            (gentle_gain - steep_gain).abs() > 1e-3,
+            "the shelf's slope did not reach its curve: {gentle_gain} vs {steep_gain}"
+        );
+    }
+
+    /// A flat shelf is flat at every slope, which is what makes calling
+    /// `shelf_slope` instead of `shelf` safe for a *default* EQ: both of its
+    /// shelves rest at 0 dB. A song that boosted one does change.
+    #[test]
+    fn a_shelf_at_unity_is_flat_whatever_its_slope() {
+        let sr = 48_000;
+        for slope in [0.2, 0.707, 1.0, 2.0] {
+            let mut stage = Biquad::identity();
+            stage.eq_band(EqBandKind::HighShelf, 4_000.0, 0.0, slope, EqQProfile::Constant, sr);
+            for probe in [100.0, 1_000.0, 8_000.0] {
+                // Against the identity's own answer, because `respond` is an
+                // RMS and a unit sine's is 0.707 rather than 1.
+                let gain = respond(stage, probe, sr);
+                let flat = respond(Biquad::identity(), probe, sr);
+                assert!(
+                    (gain - flat).abs() < 1e-4,
+                    "slope {slope} at {probe} Hz is {gain}, not the flat {flat}"
+                );
+            }
+        }
+    }
+
+    /// A proportional bell narrows as it is pushed, by the core law rather
+    /// than by a copy of it. There was a private copy in `effects::eq` until
+    /// 2026-09-14 -- byte-identical, therefore green, and exactly the shape
+    /// `AGENTS.md` names as the one that diverges silently.
+    #[test]
+    fn a_proportional_bell_narrows_as_it_is_pushed() {
+        let sr = 48_000;
+        let mut gentle = Biquad::identity();
+        let mut hard = Biquad::identity();
+        gentle.eq_band(EqBandKind::Bell, 1_000.0, 3.0, 1.0, EqQProfile::Proportional, sr);
+        hard.eq_band(EqBandKind::Bell, 1_000.0, 12.0, 1.0, EqQProfile::Proportional, sr);
+        // An octave out, the harder-pushed band has narrowed, so it is doing
+        // proportionally *less* there than its gain alone would suggest.
+        let skirt_gentle = respond(gentle, 2_000.0, sr) / respond(gentle, 1_000.0, sr);
+        let skirt_hard = respond(hard, 2_000.0, sr) / respond(hard, 1_000.0, sr);
+        assert!(
+            skirt_hard < skirt_gentle,
+            "a boosted proportional bell did not narrow: {skirt_hard} vs {skirt_gentle}"
+        );
+
+        // And a constant-Q band does not narrow, which is the other half of
+        // the law being real rather than always-on.
+        let mut constant_gentle = Biquad::identity();
+        let mut constant_hard = Biquad::identity();
+        constant_gentle.eq_band(EqBandKind::Bell, 1_000.0, 3.0, 1.0, EqQProfile::Constant, sr);
+        constant_hard.eq_band(EqBandKind::Bell, 1_000.0, 12.0, 1.0, EqQProfile::Constant, sr);
+        let flat_gentle =
+            respond(constant_gentle, 2_000.0, sr) / respond(constant_gentle, 1_000.0, sr);
+        let flat_hard = respond(constant_hard, 2_000.0, sr) / respond(constant_hard, 1_000.0, sr);
+        assert!(flat_hard > skirt_hard);
+        let _ = flat_gentle;
     }
 
     #[test]

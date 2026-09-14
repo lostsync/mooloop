@@ -901,7 +901,11 @@ land on its own when it starts to matter:
   so an automation lane on band 3's frequency means band 3 forever, whatever
   the face happens to be showing, and the band selector is a view control
   rather than an automatable parameter that decided what every other EQ lane
-  meant; a
+  meant. Its bands run the same two laws the channel strip does, from the same
+  function: **a band's Q is its slope while that band is a shelf** and its Q
+  while it is a bell, and a proportional bell narrows as it is pushed. The
+  shelf half of that arrived 2026-09-14 -- before it, a shelf's Q knob moved
+  nothing; a
   feedback-delay-network hall reverb; and one five-mode modulation processor
   (chorus, flange, phaser, ensemble, and ADT) whose Rate carries the same
   sync lamp the delay does, over the same grid, clamped to the 12 Hz its LFO

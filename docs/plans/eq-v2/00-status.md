@@ -1,5 +1,70 @@
 # EQ v2 status
 
+## Step 03 — a shelf has a slope, and one bank designs both EQs
+
+Landed on `feat/eq-shelf-slope` (2026-09-14), out of order: step 02 is a
+display rewrite and this is two function calls, so it went first.
+
+**A band's Q knob did nothing at all while that band was a shelf.**
+`effects/eq.rs` called `Biquad::shelf`, which takes no Q. It calls
+`Biquad::eq_band` now, and so does the channel strip.
+
+### The step asked for a test and the answer was to delete the copy
+
+Its third acceptance line: *"a test compares the effect EQ's designed
+coefficients against the strip's for one identical band, so the two banks
+cannot diverge while claiming the same laws."* They were the same three-arm
+`match` in two files. One function is the stronger form of that test, because
+there is nothing left to hold in agreement -- `Biquad::eq_band` is the law, and
+what stays with each caller is what genuinely differs: the strip resolves a
+band's frequency from a *position* through its voicing and takes the Q profile
+from the voicing, while the effect EQ has a frequency and a per-band profile.
+
+### The plan said the effect EQ "does not apply" proportional Q. It did — badly
+
+`effects::eq` carried a **private copy of `eq_effective_q`**, byte-identical
+to the core function and therefore green. `mooloop-core`'s own doc comment on
+that function says it lives there because three callers need one answer, and
+ends "the law written twice is the law that drifts, and the copy that drifts
+is the one deciding what is heard." This was the caller that had stopped
+asking. Exactly `AGENTS.md`'s shape: still correct when found, nothing able to
+report the day it stopped being.
+
+### **This changes how an existing shelf boost sounds**
+
+Say it plainly, because `FOCUS.md` believed otherwise -- it records steps 02
+and 03 as "an EQ that is merely better" and step 04 as "the only step that
+changes how the device sounds when nobody asked it to". That is not true of
+this step and could not have been: `shelf` and `shelf_slope` reach `alpha`
+differently, so the only shelf the two forms agree on is a flat one.
+
+What that means concretely:
+
+- **A default EQ is unaffected.** Both its shelves rest at 0 dB, and a shelf
+  at 0 dB is flat whatever its slope -- `A == 1` makes the numerator and
+  denominator identical. `a_shelf_at_unity_is_flat_whatever_its_slope` pins
+  that, and it is what makes the change safe to ship without a migration.
+- **A song that boosted or cut a shelf now sounds different.** There is no
+  honest alternative: the knob was doing nothing, so any value it takes is a
+  change from "ignored".
+- **It wants a listening pass**, on `FOCUS.md`'s own rule that listening is a
+  step. Step 04's pass was always going to be needed; this adds a smaller one
+  in front of it.
+
+### The limit this leaves, and why it is not fixable here
+
+`Biquad::shelf_slope` clamps the slope to 0.1..2.0 -- past 2 the cookbook's
+radicand goes negative -- and a band's Q descriptor runs to 18, because the
+*same id* has to serve that band as a bell. So a shelf's knob stops steepening
+above 2 and the face does not say so, which is the thing `strip.rs` calls
+dishonest and avoids by giving its two shelf-capable bands a narrower range.
+
+That answer is not available here: every band of a seven-band EQ can be any
+kind, so the range would have to depend on a *value*, and a descriptor is
+static per id. It is the same shape as everything else in this plan -- a
+parameter model that cannot express a condition -- and it is recorded in
+`LOOSE_ENDS.md` rather than bodged.
+
 ## Step 01 — per-band parameters
 
 Landed on `feat/eq-per-band-parameters` (2026-09-14). Every band and both pass

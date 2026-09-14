@@ -42,7 +42,7 @@ use mooloop_core::strip::{
     STRIP_COMP_THRESHOLD_DB, STRIP_DRIVE_DB, STRIP_EQ_BANDS, STRIP_EQ_IN, STRIP_PRE_IN,
     STRIP_VOICING,
 };
-use mooloop_core::{db_to_linear, eq_effective_q, EqBandKind, EqQProfile, StripBand};
+use mooloop_core::{db_to_linear, EqQProfile, StripBand};
 
 use crate::biquad::Biquad;
 use crate::bus::StereoBus;
@@ -441,21 +441,21 @@ impl StripEq {
         voicing: &StripVoicing,
         sample_rate: u32,
     ) {
+        // What is the strip's own is the two lines above and the profile:
+        // a band's frequency is a *position* resolved by the voicing, and the
+        // profile is the voicing's rather than the band's. The design itself
+        // is `Biquad::eq_band`, which the seven-band effect EQ calls too --
+        // it was the same `match` in both files until 2026-09-14, and the
+        // copy in the other one had a shelf arm that ignored `q`.
         let frequency_hz = voicing.eq.frequency(index, band.position);
-        match band.kind {
-            EqBandKind::Bell => stage.peak(
-                frequency_hz,
-                eq_effective_q(band.q, band.gain_db, voicing.q_profile()),
-                band.gain_db,
-                sample_rate,
-            ),
-            EqBandKind::LowShelf => {
-                stage.shelf_slope(frequency_hz, band.gain_db, band.q, true, sample_rate)
-            }
-            EqBandKind::HighShelf => {
-                stage.shelf_slope(frequency_hz, band.gain_db, band.q, false, sample_rate)
-            }
-        }
+        stage.eq_band(
+            band.kind,
+            frequency_hz,
+            band.gain_db,
+            band.q,
+            voicing.q_profile(),
+            sample_rate,
+        );
     }
 
     fn process(&mut self, bus: &mut StereoBus, frames: usize) {
@@ -1617,7 +1617,7 @@ mod tests {
             // under this voicing's profile, so those have to be one value.
             assert_eq!(
                 params.effective_q(1),
-                eq_effective_q(
+                mooloop_core::eq_effective_q(
                     params.bands[1].q,
                     params.bands[1].gain_db,
                     voicing.q_profile()

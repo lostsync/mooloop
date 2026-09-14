@@ -24,6 +24,19 @@ a wish belongs in `ENHANCEMENTS.md`; a described behaviour gap belongs in
 
 ## Wrong-looking UI over correct behaviour
 
+**A shelf's Q knob stops steepening above 2 and the face does not say so.**
+`Biquad::shelf_slope` clamps the slope to 0.1..2.0, where the cookbook's
+radicand goes negative; a seven-band EQ band's Q descriptor runs to 18, because
+the same id has to serve that band as a bell. So the top four-fifths of the
+knob's travel does nothing while the band is a shelf -- which is better than
+2026-09-14, when *all* of it did nothing (`Biquad::shelf` took no Q at all),
+and is still a control showing a number the filter is not using. The channel
+strip avoids this by giving its two shelf-capable bands a narrower Q range, and
+that answer is not available here: every band can be any kind, so the range
+would depend on a *value*, and a descriptor is static per id. Same shape as the
+rest of `eq-v2` -- a parameter model that cannot express a condition. Found
+2026-09-14.
+
 **Double-clicking an EQ knob returns to band 2's default, whatever band is
 selected.** The face is one control set over a selection and its resting
 values are hardcoded -- `default-value: 0.566` is 1 kHz, which is what band 2
