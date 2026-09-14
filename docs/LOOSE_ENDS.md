@@ -131,20 +131,6 @@ by the device's durable id, which cannot drift and is the largest change. Same
 shape as the modulator-reorder entry above -- a permutation mirrored by index
 rather than by identity. Found 2026-09-13.
 
-**Two device faces draw a clip lamp that can never light.** The device rack's
-IN and OUT rails and the bus face all instantiate `ChannelMeter`, which always
-draws a `ClipIndicator`, and none of the three binds `clipping` or
-`clip-reset` -- so every device row shows two faint red bars that cannot light
-and do nothing when clicked, which is the "convincing but inert control" the
-rack's own rule names. The bus face is the sharper case because the data is in
-hand and thrown away: the same `MeterReading` the mixer strip uses carries
-`held_db` and `clipping`, and `main.slint` declares only the two level
-properties for that face -- so one track has two faces whose meters behave
-differently. Fixing it is a `main.slint` contract change (three new
-properties), so it belongs in the next batched cross per `AGENTS.md`'s "face
-contract last". `ChannelMeter` could also grow a `show-clip` so a rail can opt
-out honestly. Found 2026-09-13.
-
 **A generator's internal route amounts are a working automation destination
 no picker can reach.** The engine resolves `ParamOwner::SourceRoute` lanes per
 control tick and emits `Event::SourceRouteAmount` for them

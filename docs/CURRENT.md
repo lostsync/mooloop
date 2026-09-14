@@ -826,7 +826,16 @@ land on its own when it starts to matter:
   value is a peak hold that only the GUI's read clears, so a transient landing
   between two UI frames is still shown. The channel rack has no meter of its
   own: `ChannelMeter` is drawn on the mixer strip, the device rack's two rails
-  and the bus face, and nowhere else.
+  and a track's fader row, and nowhere else.
+
+  **Only a meter with a clip latch behind it draws a clip lamp.**
+  `ChannelMeter` takes `show-clip`, and the rack's two rails set it false:
+  they meter a chain, and a chain has no latch to light or to clear. A track's
+  fader row does have one -- the same latch its mixer strip shows, cleared
+  from whichever of the two the user clicks -- and shows peak hold from the
+  same reading. Until 2026-09-14 the rails drew a lamp that could not light
+  and the fader row drew one that was never bound, while its peak marker was
+  pinned to the level.
 - Channels retain the historical constant-power pan law, so existing project
   levels do not jump. Mixer buses use a distinct stereo balance law that is
   unity at centre and never boosts an endpoint; adding centred routing stages
