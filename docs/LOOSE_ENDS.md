@@ -529,19 +529,33 @@ changes, which needs one `last_device_target` local in the pump and is
 correct; or drain the whole array on a slow secondary timer; or accept the
 one-frame flash and write it down. Found 2026-09-13.
 
-**A bus clip latch outlives the track it belongs to.** Removing a track shifts
-every later one down an index, and nothing resets the per-bus
-`MeterBallistics` the pump owns -- whose clip latch never self-clears, by
-design. Delete track 3 with its clip lamp lit and old track 4, now track 3,
-opens with a latched clip it never earned, permanently, until somebody clicks
-it. Peak hold and decay transfer too but wash out in under two seconds. Not
-small because the ballistics are `move`d locals inside the pump closure with
-no outside handle, so clearing them on a track edit needs the same flag
-handoff `master_clip_clear`/`bus_clip_clear` already use. Options: a
-`meters_reset` flag raised by `install_project_in_ui` (bluntest, also covers
-reorder); reset the removed index and shift the rest, which needs the edit's
-shape rather than "something changed"; or rule that a clip latch belongs to
-the strip position rather than the track. Found 2026-09-13.
+**A bus clip latch is cleared by any project edit, which is broader than the
+problem it fixes.** Removing a track shifts every later one down an index and
+the per-bus `MeterBallistics` are keyed by that index, so old track 4 would
+open as track 3 wearing track 3's latched clip -- permanently, because a
+latch has no timer and only a click releases one. That is fixed: a project
+install raises `UiState::bus_meters_stale` and the pump resets every
+non-master pair on its next tick, which is the bluntest of the three options
+the entry named and the only one that also handles undo, redo and reorder
+without being told the edit's shape.
+
+What it costs is a false *clear*: a legitimately lit lamp on a track nobody
+touched goes out when the user adds a channel or clones a pattern. That was
+chosen deliberately -- for an alarm, losing one is an inconvenience and
+showing one nobody earned is the meter lying -- but it is broader than it
+needs to be, and the narrow version is still available. The bank's shape is
+in hand at the install, so resetting only when the track count changed, or
+only the indices at or after a removal, would both work. Neither was done
+because a project install is already a rare, deliberate act and the extra
+machinery would need the edit's shape threaded to a place that currently
+knows only "something was installed". The master is exempt: it is always
+track 0, so its meter never reads somebody else's audio.
+
+Peak hold and decay are reset by the same call, which is right for the same
+reason and invisible anyway -- they wash out in under two seconds.
+`MeterBallistics::reset` has a test; the wiring that calls it does not, and
+could not without driving the application. Found 2026-09-13, fixed
+2026-09-14.
 
 **The master is metered twice, through two transports, with two clip
 latches.** `executor.rs` pushes `EngineEvent::Metering` onto the bounded event
