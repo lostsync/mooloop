@@ -112,38 +112,33 @@ ends.
 
 ## Wired but unreachable
 
-**Spectrum subscriptions are keyed by slot index and nothing re-keys them
-when the chain changes.** `set_effect_spectrum_enabled` is called from the FFT
-toggle (by the slot index at that moment) and from
-`sync_effect_spectrum_subscriptions`, which runs only inside a project
-install. Effect insert, removal, reorder and wrap do not go through one. So:
-turn the FFT on for an EQ in slot 2, delete the device in slot 1, and the
-analyzer draws a flat line behind a lit button until it is toggled twice or
-the project reloaded. The orphaned stage keeps its pool entry, so enough
-add/enable/remove cycles exhaust `SPECTRUM_SLOTS` and every later analyzer
-silently draws zeros; and if a later device lands on that stage, the engine
-runs a full Goertzel bank every hop for a display nobody is drawing. Not small
-because the fix is a decision about where the subscription lives: re-sync
-after every structural rack edit (cheapest, an O(channels x slots) walk on
-every device drag, still keyed on a position); permute `spectrum_enabled`
-alongside `MoveEffect`/`RemoveEffect` in the engine; or key the subscription
-by the device's durable id, which cannot drift and is the largest change. Same
-shape as the modulator-reorder entry above -- a permutation mirrored by index
-rather than by identity. Found 2026-09-13.
+**Spectrum subscriptions are still keyed by slot index; they are now
+re-stated after every rack edit.** The orphan is gone. The walk that syncs
+them said `true` or `false` for each device that *is* an analyzer, so a stage
+an analyzer had moved off was never mentioned and kept its subscription --
+the engine ran a Goertzel bank every hop for a display nobody drew, whatever
+took that slot number drew a flat line behind a lit button, and the orphan
+held one of the sixty-four `SPECTRUM_SLOTS` until the project was reloaded.
+It now walks *stages* and states the answer for each, one past the end of the
+chain, and `UiState::sync_effects` -- the one function every rack edit already
+calls -- raises a flag the pump consumes on its next tick.
 
-**Two device faces draw a clip lamp that can never light.** The device rack's
-IN and OUT rails and the bus face all instantiate `ChannelMeter`, which always
-draws a `ClipIndicator`, and none of the three binds `clipping` or
-`clip-reset` -- so every device row shows two faint red bars that cannot light
-and do nothing when clicked, which is the "convincing but inert control" the
-rack's own rule names. The bus face is the sharper case because the data is in
-hand and thrown away: the same `MeterReading` the mixer strip uses carries
-`held_db` and `clipping`, and `main.slint` declares only the two level
-properties for that face -- so one track has two faces whose meters behave
-differently. Fixing it is a `main.slint` contract change (three new
-properties), so it belongs in the next batched cross per `AGENTS.md`'s "face
-contract last". `ChannelMeter` could also grow a `show-clip` so a rail can opt
-out honestly. Found 2026-09-13.
+Two things about the fix worth knowing before touching it. **One past the end
+is only enough because of an invariant**: nothing above a chain's length can
+be subscribed when the sync returns, and a project install, the one edit that
+shortens a chain by more than one, calls `DeviceTelemetry::clear_spectra`
+first. And it deliberately does *not* clear before re-stating, because
+re-stating a correct subscription is an early return in
+`set_spectrum_enabled` while a clear zeroes the bins -- which would make every
+open analyzer in the program blink on an unrelated device drag.
+
+What is unchanged is the keying, which was the third and largest of the
+options the entry named: a subscription is still `(target, slot)` rather than
+the device's durable id. Nothing drifts now, because nothing outlives the
+tick that renumbered it, but an id-keyed subscription would not need the
+re-sync at all. `spectrum_subscription_plan` has a test; the flag and the
+pump's consumption of it do not, and could not without driving the
+application. Found 2026-09-13, fixed 2026-09-14.
 
 **A generator's internal route amounts are a working automation destination
 no picker can reach.** The engine resolves `ParamOwner::SourceRoute` lanes per
@@ -261,16 +256,24 @@ a design question.
 
 ## Focus
 
-**A text field is left with Enter, and by nothing else.** The toolbar's search
-and rename fields and the knob/fader numeric entries all call `clear-focus()`
-on `accepted` (`toolbar.slint:395`, `controls.slint:959`,
-`controls.slint:2005`; the three line numbers this entry carried were all
-stale by 2026-09-10) and have no Escape handler, so clicking into one and
-then clicking away leaves the caret in it. While it is there, Space types a
-space instead of starting the transport — which is correct for a field being
-edited and wrong for a field nobody is editing. The 2026-09-07 focus fix made
-every *control* transparent to shortcuts; text fields are the remaining case,
-and they need a way out rather than a change to what they consume.
+**A text field is left with Enter or Escape, and clicking away still leaves
+the caret in it.** Escape is the exit, added 2026-09-14: the rename field, the
+tempo entry and the knob's two numeric entries all take it, and
+`every_editable_text_field_has_a_way_out` fails the next field that does not.
+For the tempo and the numeric entries it is also a cancel, because those
+commit only on `accepted`; for a rename it is not, because `NameField`
+reports every keystroke as it happens and the application already has them.
+
+What is unchanged is the click. Slint has no click-outside for a focused
+input, so leaving one by clicking on something that is not a control still
+leaves the caret where it was, and Space still types a space until Escape or
+Tab. Closing that means a focus-owning surface above the whole work area,
+which is a change to what takes focus rather than a handler on a field.
+
+A `read-only` `TextInput` is not a field and has no exit: that is the
+selectable label `save-error-dialog.slint` and the Developer page's log path
+use so a reason or a path can be lifted out by hand. They sit in dialogs,
+where the transport is not reachable anyway.
 
 **A name is renamed where its subject is edited, and nowhere nearer to it.**
 A channel is renamed on the `DEVICES` toolbar and a track on its own device
@@ -543,19 +546,33 @@ changes, which needs one `last_device_target` local in the pump and is
 correct; or drain the whole array on a slow secondary timer; or accept the
 one-frame flash and write it down. Found 2026-09-13.
 
-**A bus clip latch outlives the track it belongs to.** Removing a track shifts
-every later one down an index, and nothing resets the per-bus
-`MeterBallistics` the pump owns -- whose clip latch never self-clears, by
-design. Delete track 3 with its clip lamp lit and old track 4, now track 3,
-opens with a latched clip it never earned, permanently, until somebody clicks
-it. Peak hold and decay transfer too but wash out in under two seconds. Not
-small because the ballistics are `move`d locals inside the pump closure with
-no outside handle, so clearing them on a track edit needs the same flag
-handoff `master_clip_clear`/`bus_clip_clear` already use. Options: a
-`meters_reset` flag raised by `install_project_in_ui` (bluntest, also covers
-reorder); reset the removed index and shift the rest, which needs the edit's
-shape rather than "something changed"; or rule that a clip latch belongs to
-the strip position rather than the track. Found 2026-09-13.
+**A bus clip latch is cleared by any project edit, which is broader than the
+problem it fixes.** Removing a track shifts every later one down an index and
+the per-bus `MeterBallistics` are keyed by that index, so old track 4 would
+open as track 3 wearing track 3's latched clip -- permanently, because a
+latch has no timer and only a click releases one. That is fixed: a project
+install raises `UiState::bus_meters_stale` and the pump resets every
+non-master pair on its next tick, which is the bluntest of the three options
+the entry named and the only one that also handles undo, redo and reorder
+without being told the edit's shape.
+
+What it costs is a false *clear*: a legitimately lit lamp on a track nobody
+touched goes out when the user adds a channel or clones a pattern. That was
+chosen deliberately -- for an alarm, losing one is an inconvenience and
+showing one nobody earned is the meter lying -- but it is broader than it
+needs to be, and the narrow version is still available. The bank's shape is
+in hand at the install, so resetting only when the track count changed, or
+only the indices at or after a removal, would both work. Neither was done
+because a project install is already a rare, deliberate act and the extra
+machinery would need the edit's shape threaded to a place that currently
+knows only "something was installed". The master is exempt: it is always
+track 0, so its meter never reads somebody else's audio.
+
+Peak hold and decay are reset by the same call, which is right for the same
+reason and invisible anyway -- they wash out in under two seconds.
+`MeterBallistics::reset` has a test; the wiring that calls it does not, and
+could not without driving the application. Found 2026-09-13, fixed
+2026-09-14.
 
 **The master is metered twice, through two transports, with two clip
 latches.** `executor.rs` pushes `EngineEvent::Metering` onto the bounded event
@@ -836,31 +853,31 @@ embedded references only; refuse a symlink under `samples/` outright; or
 accept it and correct `PROJECT_FORMAT.md` to say the check is lexical. Found
 2026-09-13.
 
-**The compensation plan is derived twice, in two crates, and the copies have
-already diverged.** `RenderState::install_compensation` guards the send half
-on whether the bank sorts -- `let sorts = compile_bus_graph(..).is_some()`,
-with a comment giving the reason: a send compiled against an order that is not
-the one being walked would arrive a block late, so a bank running the
-everything-to-master repair gets no sends either. `Session::latency_plan`
-calls `send_edges` unconditionally and `send_specs` iterates every bus
-unconditionally, so on a bank that does not sort the session would hand the
-engine a full `SendBank` compiled against arrival numbers derived from a
-default order.
+**The compensation plan is still derived twice, in two crates, but the
+policy in it is not.** The divergence the row here described is fixed: the
+send half's guard -- a bank whose routing does not sort has no compensable
+sends, because a send compiled against an order that is not the one being
+walked arrives a block late -- was in `RenderState::install_compensation` and
+not in `Session::latency_plan`, so the session would have handed over a full
+`SendBank` compiled against a default order's arrival numbers. It is now
+`mixer::sends_are_compensable` and `mixer::compensable_send_edges`, which both
+call sites read, and `mooloop-core` and `mooloop-session` each have a test on
+it.
 
-Unreachable today, because the session's bank is sanitized on load and both
-`set_bus_output` and `add_send` refuse cycles. It is the characteristic fault
-in its pure form: two copies of one policy, one corrected and one not, with
-nothing able to notice. `an_offline_render_compiles_the_same_compensation_as_a
-_live_one` looks like the test that holds them together and does not -- both
-sides of that comparison go through `install_compensation`, and the session's
-derivation is never compared against anything. The same shape one size down
-holds for `Session::console_plan` against `RenderState::install_console`.
-Options: extract the shared derivation into `mooloop-core` so both call sites
-become three lines, which removes the copy permanently; or add a test that
-renders one `Project` through both and asserts the plans match, which is
-cheaper and is at least a test that reads both copies; or, minimum, port the
-`sorts` guard across so the two agree today, which does not stop the next
-divergence. Found 2026-09-13.
+What is left is the *shape*: both sides still walk their own channels and
+buses to build `channel_latency`, `channel_bus` and `bus_latency` before
+calling `compile_latency`. They cannot share that walk as it stands, because
+the engine reads `ProjectChannel.setup` and the session reads its own channel
+type -- the arithmetic is identical and the iteration is not. Extracting it
+means a shared input type or a trait, which is a bigger change than the one
+the drift called for. The same shape one size down still holds for
+`Session::console_plan` against `RenderState::install_console`, where nothing
+has diverged and nothing is checked.
+
+`an_offline_render_compiles_the_same_compensation_as_a_live_one` still does
+not read the session's derivation -- both sides of that comparison go through
+`install_compensation` -- so the two new tests are what hold the policy, not
+that one. Found 2026-09-13, half-fixed 2026-09-14.
 
 **Load silently deletes authored modulation the spec says to keep as an
 orphan, and the mechanism built for keeping it is unreachable.**
@@ -1042,150 +1059,63 @@ hop to follow. The two clamps the loop carries are now tested once, in
 `effects::mod`, and they are the same two here -- so if this is ever revisited,
 the reason to do it is sharing those tests, not the line count.
 
-**`render_blocks` is written about seven times.** `audio_edge_tests.rs`,
-`container_tests.rs`, `ds01_tests.rs`, `idle_skip_tests.rs`,
-`console_tests.rs`, `gain_structure_tests.rs` and `strip_tests.rs` each
-declare their own "render N seconds in blocks of M and collect the output".
-They are all `#[cfg(test)]` modules inside `mooloop-engine/src`, so unlike
-the `mooloop-ui` integration tests they can share a plain module without any
-`tests/common/` arrangement. The cheapest of the duplication items here.
-
-**The Slint testing backend is set up eighteen times.** Fifteen
-`mooloop-ui/tests/*.rs` files spell out the same
-`TestingBackend::new(TestingBackendOptions { mock_time, threading,
-renderer_name: "software" })`, `source_snapshot.rs` eleven times on its own.
-This is the same shape as the piano-roll grid constants below, wants the same
-`tests/common/` module, and would be worth doing in the same pass.
-
 ## Numbers nothing is watching
 
-**`gain::MIN_DB` is spelled twenty-six times in markup and the test that
-checks its two siblings does not check it.**
-`slint_meter_thresholds_match_the_rust_constants` holds `meter-warning-db`,
-`meter-hot-db` and `reference-peak-dbfs` to their Rust constants. It does not
-hold the meter *floor*, because `GainMath` has no property for it:
-`gain.slint` spells `-60.0` inline inside `db-to-linear`/`linear-to-db`, and
-`meters.slint` and `controls.slint` spell `-60` twenty-two more times across
-`minimum-db` defaults and resting values. The Rust side is clean -- everything
-goes through `METER_FLOOR_DB`. So this is the characteristic question
-answering *no* for the floor of every meter in the application while answering
-*yes* for the two colour thresholds beside it, and the `declares()` helper the
-test would need already exists. Not a one-liner because the four `minimum-db`
-properties are scale *declarations* (legitimately overridable per meter) and
-the rest are resting *values*, so one shared `GainMath.min-db` has to be
-threaded through both kinds across three files.
+**Two spellings of the meter floor are kept as literals on purpose, and the
+reason is a guard that wants them that way.** The floor moved into
+`GainMath.min-db` on 2026-09-13 and fifty literal `-60`s across ten `.slint`
+files became references to it. `device-displays.slint`'s `threshold-min-db`
+and `floor-db` did not, because `strip_face.rs` holds them to
+`gain::MIN_DB` by *parsing the number out of the declaration* -- so replacing
+the number with a property reference takes the guard off rather than improves
+it. `no_face_spells_the_floor_for_itself` skips that one file and says why.
 
-Two smaller instances worth folding into that pass: the Rust repaint throttle
-passes a segment count of 14 for the mixer strip and 12 for the device rails,
-mirroring `MixerMetrics.meter-segments: 14` and `segments: 12` in the markup.
-They agree today; if the markup's count is raised, the throttle would suppress
-repaints that change a visible segment -- which is exactly the "peak marker one
-segment behind where the audio put it" failure its own comment names. Found
-2026-09-13.
+Fixing it properly means teaching `strip_face.rs` to resolve
+`GainMath.min-db` instead of reading a literal, which is a second parser for
+one file's two lines. Left as a note rather than done, because the copy is
+currently the safer of the two arrangements: it is the only one anything
+checks.
 
-**The modulation shelf spells twenty-one ranges by hand and nothing checks
-any of them.** `modulation-shelf.slint:1208-1658` declares
-`minimum`/`maximum`/`default-value`/`free-*` for the LFO, Envelope, Step,
-Random and Math modules. All twenty-one were compared against `LFO_`,
-`ENVELOPE_`, `STEP_`, `RANDOM_` and `MATH_DESCRIPTORS` on 2026-09-13 and every
-one agrees -- including the non-obvious `QUANT 0..16` (a 17-position selector)
-and `LENGTH 1..16`. So this is drift risk rather than present drift, the same
-shape as the eight device faces above. It is *not* reachable by extending
-`slint_face_agreement.rs`'s list: that test works from a list of device faces
-and the shelf is not a device face, so covering it is a new check rather than
-a longer list.
+**Nothing outside `modulation.rs` read the five modulator descriptor tables
+until 2026-09-14.** `LFO_`, `ENVELOPE_`, `STEP_`, `RANDOM_` and
+`MATH_DESCRIPTORS` are all `pub`, all exported from `mooloop-core`'s root, and
+`grep` found no reader anywhere else -- so the shelf's twenty-one ranges and
+forty-two parameter ids were mirrored by hand against tables the program never
+consulted. `shelf_agreement.rs` is their first reader and now holds all three
+mirrors: the ids, the ranges, and the two scales.
 
-One curiosity for whoever writes it. The shelf draws the LFO and Random RATE
-knobs with `ValueScale.logarithmic` while `LFO_PARAM_RATE_HZ` and
-`RANDOM_PARAM_RATE_HZ` declare `ParamCurve::Linear`. Nothing reads those
-curves on the modulator path today -- the shelf sends natural values straight
-to `ModulatorParams::set`, and modulator parameters are neither automation nor
-modulation destinations -- so it is inert, and a naive agreement test would
-trip over it on the first run. The correct resolution is to fix the Rust
-curve, not the markup.
+What that had cost was one real disagreement, found the day the check was
+written. The LFO's and the Random module's Rate knobs are drawn
+`ValueScale.logarithmic` and their descriptors said `ParamCurve::Linear` --
+the same law from the two ends, disagreeing. Fixed to `Exponential`, and the
+check reproduces it against the tree as it stood the day before.
 
-**`default_band_position()` returns the middle position for two of the four
-strip EQ bands and one step low for the other two, and no test reads it.**
-`mooloop-core/src/strip.rs:147` returns a bare `2`. `STRIP_BAND_POSITIONS` is
-`[5, 7, 7, 5]`, so the middle of a seven-position mid band is 3 --
-`DEFAULT_POSITIONS` says `[2, 3, 3, 2]` and the four descriptors read it. Four
-things state what the middle is; the one serde reaches is wrong for the two
-mids, and its own doc comment and `PROJECT_FORMAT.md` both claim the band
-"loads centred". `grep -rn default_band_position crates/` returns two hits:
-the attribute and the definition. This is `AGENTS.md`'s question -- *does
-anything read the copy the test checks?* -- answering no, and it is the same
-shape as item 6 in that list.
+The remaining question is whether the shelf should read these tables rather
+than be checked against them, as DS-01's face reads its defaults at run time.
+That is a bigger change than a test, and the test is what was missing.
 
-It bites exactly one class of file: a song saved on 2026-09-11, the day
-`StripBand` carried `frequency_hz` instead of `position`, which is the only
-reason the default exists. `kind`, `gain_db` and `q` have no default, so such a
-band decodes with those and takes `2` for its position -- under `MOO_EQ` band 1
-opens at 2 kHz where the file meant 3 kHz, while the face and the descriptor's
-double-click-to-default both say 3.
+**One device face still spells a number the descriptor table already
+states.** `scripts/dupe-audit unchecked-face` names it. The count was eight
+faces and twenty-three numbers when the check was written on 2026-09-12; it is
+`bus-device.slint` and two numbers now. The test's parser became block-based
+-- which is what the entry here said had to come first -- and its list then
+grew to take `modulation-device`, `device-oscillator`, `eq-device`,
+`filter-device`, `buffer-device` and `container-device`. `aux-in-device`
+followed on 2026-09-13, and needed a test of its own rather than a longer
+list, because Aux In is not an `EffectKind`. DS-01 is still absent and still
+correctly so: its paged face reads the table at run time
+(`default-value: root.defaults[root.param]`), which is a copy of nothing.
 
-Why it is not a one-character fix: serde's `default = "fn"` gets no array
-index, so no single `u8` is right and changing `2` to `3` just moves the error
-to the outer bands. Three options. Decode `bands` through a wire type with
-`position: Option<u8>` filled from `DEFAULT_POSITIONS[i]` (~25 lines, contained
-to `strip.rs`, makes the code match both claims) -- this is the fix if that
-day's files are still meant to open. Or accept `2` and correct the function's
-comment and `PROJECT_FORMAT.md`, which writes drift down as intent. Or drop
-the `#[serde(default)]` and the doc paragraph together, so a band without a
-position fails to load like its three siblings -- cleanest format, but it is a
-decision about whether one day's files still have to open. Found 2026-09-12;
-the load-time range check added the same day would have caught this class of
-thing, and now does for everything else on the strip.
-
-**Eight device faces spell a number the descriptor table already states, and
-`slint_face_agreement.rs` reads none of them.** `scripts/dupe-audit
-unchecked-face` lists them; it was written for this and the count was
-twenty-three the day it was added, 2026-09-12. The faces are
-`modulation-device` (7), `device-oscillator` (4), `eq-device` (3),
-`filter-device` (3), `buffer-device` (2), `bus-device` (2), `aux-in-device` (1)
-and `container-device` (1).
-
-Two things this is *not*, both worth knowing before spending an afternoon on
-it. DS-01 is absent and correctly so: its paged face reads the table at run
-time (`default-value: root.defaults[root.param]`), which is a copy of nothing
-and is the shape the rest could move to. And the modulation face was checked by
-hand when the list was made -- all seven of its defaults agree with
-`MODULATION_DESCRIPTORS`, including the two that are not obvious
-(`Feedback` 0.5 for a bipolar -0.92..0.92, `Stages` 0.5 for a stepped 4..12).
-So this is drift risk, not present drift.
-
-**Ten of the twenty-three cannot be added to the test as it stands.** The
-agreement test finds a knob by looking for one line carrying both the property
-binding and `default-value:`, and says why in a comment: a graphical editor
-binds the same property on a line of its own, so matching the binding alone
-finds the wrong line. Faces written with the binding and the default on
-separate lines are therefore structurally unreachable to it --
-`filter-device`, `buffer-device`, `bus-device`, `aux-in-device` and
-`container-device` are all that shape. Widening the parser is the first step,
-not the face lists.
-
-**And the faces that are covered are covered for their ranges, not their
-resting positions.** The two idioms differ: a covered face declares
-`minimum`/`maximum` in natural units, where `modulation-device` declares no
-range at all and a *normalized* `default-value` -- the position the knob rests
-at and what a double-click returns to. Those have to equal
-`descriptor.to_normalized(descriptor.default)`, which is a different assertion
-from the one the test makes. Covering both idioms means the test grows a second
-comparison, not just a longer list.
+What is left needs the parser widened first, and may not be worth it.
+`bus-device`'s two numbers are a `MiniKnob`'s pan range (`-1..1`, resting at
+`0`) and a `MixerFader`'s `default-value: 1.0`, whose `maximum` already reads
+`GainMath.fader-db[0]` rather than spelling one. `face_knobs` walks
+`ParameterKnob` blocks and nothing else, so neither is reachable -- and
+neither is descriptor-backed, so there is no table entry for a widened parser
+to compare them against. Unity and centre are the kind of literal that has
+nowhere else to live.
 
 ## Housekeeping
-
-**The piano roll's grid geometry is a constant in two test files and nothing
-holds them together.** `piano_drag.rs:32` and `piano_tools.rs:16` each declare
-`GRID_ORIGIN_X` / `GRID_TOP_Y` / `ROW_HEIGHT` / `STEP_WIDTH` / `HIGH_NOTE`,
-measured off a software render of the 960x760 window, and `piano_tools.rs`
-says "matching `piano_drag.rs`" in a comment that nothing enforces. Both moved
-on 2026-09-08 when the dock's two toolbars merged; fixing the first and
-running the suite reported the second as nineteen fresh failures, which is how
-the copy was found. The cost is one wasted five-minute remote run per toolbar
-change, so it is small — but it is exactly the shape `slint_face_agreement.rs`
-exists to prevent for faces, and a shared `tests/common/` module or one
-element-derived origin would end it. `rack_tools.rs:28` has a third
-`GRID_ORIGIN_X` for the step grid; that one is genuinely a different grid.
 
 **`mooloop-ui` had never been linted, and two things had ridden in on that.**
 Fixed 2026-09-07, recorded because the *shape* of it will recur: `cargo
@@ -1201,11 +1131,6 @@ nothing downstream of it is being checked at all.
 **The README hero screenshot predates effects.** `mooloop-screenshot.png`,
 captioned "channel rack and Mono Synth" — accurate, but no longer showing the
 most interesting part of the app. A fresh one can be rendered headlessly.
-
-**`CURRENT.md` has two bullets spliced into one line.** At line 554 the
-limiter-lookahead sentence runs straight into "Each kind publishes a static
-`ParamDescriptor` table", which belongs to a separate bullet that lost its
-list marker in the 2026-09-05 edit.
 
 **Six dB readouts still round for themselves.** `GainMath.format-db` now
 covers every readout that is a *gain*, but six sites spell their own number

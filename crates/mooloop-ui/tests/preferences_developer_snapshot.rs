@@ -6,6 +6,8 @@ use mooloop_ui::MainWindow;
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, SharedString};
 
+mod common;
+
 /// Center of the compact "Developer" vertical tab at 800x600. The nav list is
 /// a zero-spacing column of 28px items starting at y=90, and Developer is the
 /// sixth -- the one that only renders when `developer-mode` is on.
@@ -26,14 +28,7 @@ fn click_at(window: &slint::Window, p: (f32, f32)) {
 
 #[test]
 fn render_preferences_developer_snapshot() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .expect("initialize headless renderer");
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(800.0, 600.0));

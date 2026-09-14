@@ -6,19 +6,14 @@ use mooloop_ui::{view,
     default_piano_gestures, note_hit_test, AutomationPointCell, AutomationTargetRow,
     MainWindow, NoteCell,
 };
-use slint::{ComponentHandle, LogicalSize, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, LogicalSize, Model, ModelRc, VecModel};
 use std::rc::Rc;
+
+mod common;
 
 #[test]
 fn render_piano_snapshot() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
     let ui = MainWindow::new().unwrap();
     // `run` resolves these from the user's settings; without them every
     // gesture role is unbound and no modifier does anything.
@@ -62,14 +57,7 @@ fn render_piano_snapshot() {
 /// scale handles are in the one rendering that shows the whole editor.
 #[test]
 fn render_piano_lanes_snapshot() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
     let ui = MainWindow::new().unwrap();
     // `run` resolves these from the user's settings; without them every
     // gesture role is unbound and no modifier does anything.

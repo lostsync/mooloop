@@ -9,6 +9,8 @@ use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString
 use std::cell::Cell;
 use std::rc::Rc;
 
+mod common;
+
 fn write_snapshot(snapshot: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, variable: &str) {
     if let Ok(path) = std::env::var(variable) {
         let mut ppm = format!("P6\n{} {}\n255\n", snapshot.width(), snapshot.height()).into_bytes();
@@ -27,6 +29,8 @@ fn rack_rows() -> ModelRc<ChannelRow> {
             name: SharedString::from(name),
             color: Default::default(),
             has_color: false,
+            track_color: Default::default(),
+            has_track_color: false,
             muted: false,
             volume_db: -1.9382, // linear 0.8 in dB
             pan: 0.0,
@@ -68,6 +72,10 @@ fn strips(selected: usize) -> Rc<VecModel<MixerStripRow>> {
                 } else {
                     format!("Bus {index}")
                 }),
+                // Uncoloured: these harnesses are about the strip's controls,
+                // and a track nobody has coloured is the ordinary case.
+                color: Default::default(),
+                has_color: false,
                 muted: false,
                 volume: 1.0,
                 pan: 0.0,
@@ -154,14 +162,7 @@ fn demo_strip() -> StripRow {
 }
 
 fn headless() -> MainWindow {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .expect("initialize headless renderer");
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     // The strip's faces read every range and every parameter id out of this,
@@ -607,18 +608,21 @@ const CHANNEL_ROW_Y: f32 = 116.0;
 /// 22px owner and each option is 21px tall after 4px top padding.
 const CHANNEL_MENU_BUS_3_Y: f32 = 216.0;
 
-/// The three sends a track's face is given, drawn in the real window and the
-/// real layout.
+/// The three sends a track is given, drawn in the real window and the real
+/// layout.
 ///
-/// The face draws exactly the sends it has -- there is no fixed number of
-/// bars and no empty bays -- so this is what says the model reaches it and
-/// that three rows, a scroll and the add affordance fit the room the face
-/// has. Render it with `MOOLOOP_SENDS_SNAPSHOT` to probe the coordinates the
-/// test below uses.
+/// **They moved on 2026-09-13.** They were an area of the track's device face
+/// and are now the channel sidebar's, so this opens the sidebar rather than
+/// relying on the bottom pane: the panel draws exactly the sends that exist,
+/// there is no fixed number of bars and no empty bays, and this is what says
+/// the model reaches it. Render with `MOOLOOP_SENDS_SNAPSHOT` to probe the
+/// coordinates the tests below use.
 fn face_with_sends() -> MainWindow {
     let ui = headless();
     ui.invoke_show_view(view::MIXER);
     ui.invoke_show_view(view::DEVICES);
+    ui.set_channel_sidebar_visible(true);
+    ui.set_channel_sidebar_width(260.0);
     ui.set_editing_bus(true);
     ui.set_editing_bus_index(1);
     ui.set_editing_bus_name(SharedString::from("Drums"));
@@ -661,9 +665,15 @@ fn render_a_tracks_sends() {
 
 /// Where the send rows' switches land, measured from
 /// `MOOLOOP_SENDS_SNAPSHOT` rather than derived. Probe it again if these move.
-const SEND_ENABLE_X: f32 = 433.0;
-const SEND_ROW_0_Y: f32 = 580.0;
-const SEND_ROW_1_Y: f32 = 623.0;
+///
+/// They moved on 2026-09-13, when sends left the track's device face for the
+/// channel sidebar: the row pitch is 45px and the first row's controls sit at
+/// y 248 in a 260px-wide panel. The lamps were found by scanning the render
+/// for accent-coloured pixels rather than by counting paddings, which is the
+/// same reason the old numbers were measured rather than derived.
+const SEND_ENABLE_X: f32 = 216.0;
+const SEND_ROW_0_Y: f32 = 248.0;
+const SEND_ROW_1_Y: f32 = 293.0;
 
 /// A send row reports **its own** index.
 ///
@@ -695,8 +705,9 @@ fn a_send_row_reports_its_own_index() {
     );
 }
 
-/// The remove button, one gap to the right of the switch above.
-const SEND_REMOVE_X: f32 = 455.0;
+/// The remove button, one gap to the right of the switch above. It spans
+/// x 230..=247 in the sidebar, so this is its centre.
+const SEND_REMOVE_X: f32 = 238.0;
 
 /// The remove button is **reachable**, which is the half of the row the test
 /// above does not cover.

@@ -509,7 +509,12 @@ pub const LFO_DESCRIPTORS: [ParamDescriptor; 12] = [
         unit: "Hz",
         min: 0.05,
         max: 20.0,
-        curve: ParamCurve::Linear,
+        // Exponential, matching the `ValueScale.logarithmic` the shelf draws
+        // this knob with. It said `Linear` until 2026-09-14, which nothing
+        // noticed because nothing outside this module read these five tables
+        // at all -- `shelf_agreement.rs` is their first reader. A rate knob is
+        // even in ratio for the same reason a frequency knob is.
+        curve: ParamCurve::Exponential,
         default: 1.0,
     },
     ParamDescriptor {
@@ -707,7 +712,12 @@ pub const RANDOM_DESCRIPTORS: [ParamDescriptor; 9] = [
         unit: "Hz",
         min: 0.05,
         max: 20.0,
-        curve: ParamCurve::Linear,
+        // Exponential, matching the `ValueScale.logarithmic` the shelf draws
+        // this knob with. It said `Linear` until 2026-09-14, which nothing
+        // noticed because nothing outside this module read these five tables
+        // at all -- `shelf_agreement.rs` is their first reader. A rate knob is
+        // even in ratio for the same reason a frequency knob is.
+        curve: ParamCurve::Exponential,
         default: 2.0,
     },
     toggle(RANDOM_PARAM_TEMPO_SYNC, "Rate sync"),

@@ -18,8 +18,18 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   nested in layouts, which is what lets a view be drawn anywhere off one
   instance.
 - **A channel sidebar flanks the work area on the left**, as of 2026-09-13.
-  It holds the selected channel's name, its colour and three inert MIDI rows,
-  and it is hidden until the status bar's leftmost chip opens it. It resizes
+  It holds the selected **channel or track**'s name and colour -- following
+  the same selection the device rack does, so the two cannot describe
+  different things -- plus three inert MIDI rows for a channel. A track draws
+  no MIDI rows at all rather than disabled ones: disabled means "not
+  configurable yet", which is true of a channel's and would be a lie about a
+  track, which has no MIDI input to configure. It is hidden until the status
+  bar's leftmost chip opens it. For a track it also holds that track's
+  **sends**: one row each with destination, level, pre/post tap, enable and
+  remove, plus a picker that routes a copy to another track. They were an area
+  of the track's device face until 2026-09-13, and moving them put the editor
+  somewhere always to hand rather than behind whichever view the bottom pane
+  was showing; the mixer strip keeps its send levels for riding them live. It resizes
   by its right edge between 180 and 400px, remembers its width, and edits
   whatever channel is selected rather than holding a selection of its own.
   The `reference/img/mooloop-1.0-mockup.png` panel also draws PLUGINS and
@@ -37,6 +47,13 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   `Ctrl+Shift+\` do the same. Zoom never moves a view, so leaving it puts
   everything back where it was. The zoomed tab takes the full accent rather
   than the muted active fill, and the status bar says how to get out.
+- **A track's rack reads in signal order**, as of 2026-09-13: its head (name,
+  routing, polarity, then its channel strip's drive/EQ/comp, bundled into one
+  row rather than two beside each other since 2026-09-14), its own devices as
+  inserts, and its fader last. The fader used to be drawn first, inside the
+  head face, because that face sits where a channel's *generator* sits -- the
+  start of a channel's path and the wrong end of a track's. Nothing sounded
+  different; the rack simply showed a stage before the stages that precede it.
 - **The bottom pane resizes for any view that does not declare its own
   height**, which is every view except `DEVICES` — a device face is a fixed
   268px and does not stretch. The playlist became resizable on 2026-09-08;
@@ -810,7 +827,16 @@ land on its own when it starts to matter:
   value is a peak hold that only the GUI's read clears, so a transient landing
   between two UI frames is still shown. The channel rack has no meter of its
   own: `ChannelMeter` is drawn on the mixer strip, the device rack's two rails
-  and the bus face, and nowhere else.
+  and a track's fader row, and nowhere else.
+
+  **Only a meter with a clip latch behind it draws a clip lamp.**
+  `ChannelMeter` takes `show-clip`, and the rack's two rails set it false:
+  they meter a chain, and a chain has no latch to light or to clear. A track's
+  fader row does have one -- the same latch its mixer strip shows, cleared
+  from whichever of the two the user clicks -- and shows peak hold from the
+  same reading. Until 2026-09-14 the rails drew a lamp that could not light
+  and the fader row drew one that was never bound, while its peak marker was
+  pinned to the level.
 - Channels retain the historical constant-power pan law, so existing project
   levels do not jump. Mixer buses use a distinct stereo balance law that is
   unity at centre and never boosts an endpoint; adding centred routing stages
@@ -895,7 +921,8 @@ land on its own when it starts to matter:
   had no delay compensation, so lookahead latency would have shifted a
   channel against its neighbours -- expired on 2026-09-05 when the mixer
   became latency compensated, and whether the limiter should now take
-  lookahead is an open decision rather than a settled no. Each kind publishes a static `ParamDescriptor` table
+  lookahead is an open decision rather than a settled no.
+- Each kind publishes a static `ParamDescriptor` table
   (range, curve, unit, default) in `mooloop-core`, which is the single source
   of truth for normalization and clamping; `Event::ParamValue` carries natural
   units so nodes never handle curves. `EffectSlotState.params` is a tagged
@@ -1242,11 +1269,19 @@ land on its own when it starts to matter:
   rather than an index into the theme's palette, so a song looks the same
   under every scheme. **A pattern takes one on the same terms**, from a colour
   chip beside its name field in the transport toolbar, which opens the same
-  swatches in a popup. **A channel's colour draws as a 3px bar down the left
-  edge of its rack plate**, which is the one surface that adopts it so far --
-  a bar rather than a tinted plate, because the plate's fill already says
-  whether the channel is selected. The mixer and the playlist do not colour
-  anything yet, and a pattern's colour is stored but drawn nowhere.
+  swatches in a popup.
+- **A colour is drawn wherever the thing it names is drawn, and a colour a
+  thing *inherits* is drawn differently from one it owns.** A colour something
+  owns is a 3px bar down the left edge of its plate: a channel's on its rack
+  plate, a pattern's on its playlist gutter plate, a track's on its mixer
+  strip. A colour it inherits is a wash through the whole face: a channel
+  routed to a coloured track is tinted 12% with that track's colour, leaving
+  its own bar free to mean its own colour. Neither indicator ever has two
+  sources. A pattern's colour is also the fill of every clip that plays it. The difference is what the shape already says: a plate's background
+  means "selected", so a colour beside it is a mark, while a clip's background
+  only means "a clip is here" and a coloured clip still says that. A clip's
+  number is drawn in black or white by the colour's luminance, so a label is
+  readable on every colour that can be picked.
 - One automation lane is visible at a time. Its picker reaches the selected
   channel's generator and every parameter of every effect on that channel and
   on every bus, but several lanes cannot be shown at once, the velocity lane

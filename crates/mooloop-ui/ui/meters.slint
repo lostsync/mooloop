@@ -18,7 +18,7 @@ export global MeterScaleMath {
 
 // Tick marks with dB labels, to sit alongside a meter.
 export component MeterScale inherits Rectangle {
-    in property <float> minimum-db: -60;
+    in property <float> minimum-db: GainMath.min-db;
     in property <[float]> ticks: [0, -6, -12, -18, -24, -36, -48];
     in property <AudioOrientation> orientation: AudioOrientation.vertical;
     in property <bool> show-labels: true;
@@ -84,9 +84,9 @@ export component MeterScale inherits Rectangle {
 // scale, not by the current level, so the meter reads like hardware: the top
 // of the range is always red whether or not it is lit.
 export component SegmentedMeter inherits Rectangle {
-    in property <float> level-db: -60;
-    in property <float> held-db: -60;
-    in property <float> minimum-db: -60;
+    in property <float> level-db: GainMath.min-db;
+    in property <float> held-db: GainMath.min-db;
+    in property <float> minimum-db: GainMath.min-db;
     in property <float> warning-db: GainMath.meter-warning-db;
     in property <float> hot-db: GainMath.meter-hot-db;
     in property <int> segments: 22;
@@ -171,12 +171,21 @@ export component ClipIndicator inherits Rectangle {
 // Narrow stereo meter for a channel strip: two segment columns, a shared clip
 // light, and no scale. Sized to sit beside a fader.
 export component ChannelMeter inherits Rectangle {
-    in property <float> left-db: -60;
-    in property <float> right-db: -60;
-    in property <float> held-left-db: -60;
-    in property <float> held-right-db: -60;
+    in property <float> left-db: GainMath.min-db;
+    in property <float> right-db: GainMath.min-db;
+    in property <float> held-left-db: GainMath.min-db;
+    in property <float> held-right-db: GainMath.min-db;
     in property <bool> clipping;
     in property <int> segments: 18;
+    /// Whether to draw the clip lamp at all.
+    ///
+    /// **A meter whose owner has no clip state must turn this off.** The lamp
+    /// is drawn from `clipping` and cleared by `clip-reset`, so a caller that
+    /// binds neither gets two faint red bars that cannot light and do nothing
+    /// when clicked -- the "convincing but inert control" the device rack's
+    /// own rule names. The rack's IN and OUT rails were exactly that until
+    /// 2026-09-14: they meter a chain, and a chain has no clip latch.
+    in property <bool> show-clip: true;
     callback clip-reset();
 
     width: 22px;
@@ -184,7 +193,7 @@ export component ChannelMeter inherits Rectangle {
 
     VerticalLayout {
         spacing: 2px;
-        ClipIndicator {
+        if root.show-clip : ClipIndicator {
             width: 22px;
             height: 5px;
             clipping: root.clipping;
@@ -212,13 +221,13 @@ export component ChannelMeter inherits Rectangle {
 // Master meter: stereo segments with a labelled scale between them and a
 // numeric peak readout, for the transport bar or a master strip.
 export component MasterMeter inherits Rectangle {
-    in property <float> left-db: -60;
-    in property <float> right-db: -60;
-    in property <float> held-left-db: -60;
-    in property <float> held-right-db: -60;
+    in property <float> left-db: GainMath.min-db;
+    in property <float> right-db: GainMath.min-db;
+    in property <float> held-left-db: GainMath.min-db;
+    in property <float> held-right-db: GainMath.min-db;
     in property <bool> left-clipping;
     in property <bool> right-clipping;
-    in property <float> minimum-db: -60;
+    in property <float> minimum-db: GainMath.min-db;
     in property <int> segments: 26;
     in property <AudioOrientation> orientation: AudioOrientation.horizontal;
     in property <bool> show-readout: true;

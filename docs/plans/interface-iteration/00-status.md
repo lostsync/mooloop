@@ -1,5 +1,75 @@
 # Interface iteration status
 
+## Between steps — a track's head is bundled with its strip
+
+Not a numbered step: `04-the-keyboard-pass.md` keeps that number and is still
+ahead. Landed on `feat/track-head-strip` (2026-09-14) the way step 03's
+channel sidebar landed inside step 03 -- direct feedback on what had just
+shipped, worked the same day rather than queued behind the next planned step.
+
+A track's rack drew four
+things -- a sparse head face, the pinned channel strip beside it, the track's
+own devices, and the fader -- and the head face had gone nearly empty on
+2026-09-13 once its sends moved to the channel sidebar and its output stage
+moved to the tail. Adam: *"maybe the strip could be bundled with some basic
+track controls like name, maybe ins and outs."* The rack is three rows now:
+head (identity, routing, polarity, then the strip's drive/EQ/comp), inserts,
+fader.
+
+### Where the merge actually happened
+
+The head face (`BusDeviceFace`) and the strip's row (`StripRackRow`) are two
+different shapes for a reason that survives the merge: the head stands inside
+the shared `DeviceFrame` host, which is what gives a bus its own IN meter and
+the leading `+` that inserts the chain's first effect; the strip's row has
+neither, because it can be neither inserted nor removed. Folding the strip's
+content into the *head's* box, rather than the reverse, keeps that meter and
+that `+` rather than losing them -- so `BusDeviceFace` grew a `show-strip`
+flag and, when it is on, draws `StripSections` beside its identity content
+instead of the identity content alone. The identity markup itself moved into
+a small unexported `BusIdentityPanel` so the merged and standalone layouts
+share one copy of it rather than two that can drift.
+
+**Confirmed with Adam before the build**, per two open questions a render
+answered one way and a question the render could not answer:
+
+- Keep the shared host chrome (the IN meter, the leading `+`) rather than
+  drop rails the way the strip's own row does -- losing the meter would have
+  been a real regression, not just tidying.
+- Nothing beyond name, in/out and polarity belongs in the merged row; mute,
+  solo and pan already live on the fader row, and sends live in the channel
+  sidebar.
+
+### The width, and what it reclaims
+
+**3U**, not 2U and not 4U. `MergedHead { units: 3 }`, sketched with the real
+identity column and the real `StripSections { wide: true }` side by side, fit
+the compressor's full column with room to spare; `units: 4` only added slack
+nothing used. That is one unit narrower than the 2U head plus 2U strip it
+replaces -- the same unit the EQ's response plot gave back on 2026-09-11,
+spent this time on content that used to stand in an empty box beside it
+rather than on margin. Adam's standing complaint, quoted in `StripRackRow`'s
+own comment before this step, was *"there's a ton of space between the start
+of the rack area and the first device in a chain."* One box, at 3U, both
+answers it and states in one place why it is not 2U.
+
+### STRIP_PIN stays a live switch
+
+`mooloop_core::mixer::STRIP_PIN` still decides where the strip's processing
+draws, and the rack still holds two mutually exclusive instantiations of it
+guarded by `root.strip-pin-head` -- `HorizontalLayout` places children in
+declaration order, so "at the head" and "after the chain" are still two
+positions in `main.slint`, not one that moves. What changed is only which
+position also carries identity: when the pin is at the head (the shipped
+default, `StripPin::Head`), `BusDeviceFace` draws both and the standalone
+`StripRackRow` before the chain is gone; when the pin is at the tail,
+`BusDeviceFace` goes back to identity alone and `StripRackRow` -- unchanged,
+since it never carried identity to begin with -- draws the processing past
+the chain. Polarity did not move either way: it stays at the head regardless
+of where the pin puts the rest, because it is applied at the top of the
+track's block and everything after it, including a pre-fader send, sees the
+flipped signal.
+
 ## Step 03 — a channel is a thing you named
 
 Landed on `feat/channel-identity` (2026-09-13). A channel has a name and a
@@ -85,14 +155,19 @@ exist. The piano roll's snap division field gets it too, when snap is off.
 
 ### What is not here
 
-- **The mixer and the playlist do not colour anything, and neither does a
-  pattern's colour anywhere.** The step says to show a colour in one place
-  first and let the surfaces adopt it one at a time, each being a place to
-  check it reads at that size. The rack plate is that one place: a 3px bar
-  down its left edge, which holds its width whether or not there is a colour
-  so that colouring a channel does not shift its name sideways. The plate's
-  fill already means "selected", which is why the colour is a bar and not a
-  tint -- a background carrying two meanings says neither clearly.
+- **Adoption finished on 2026-09-13, and it found that the mixer cannot have
+  it.** The step names the rack, the mixer and the playlist as the surfaces
+  that take a colour one at a time. The rack plate wears a channel's as a 3px
+  bar; the playlist wears a pattern's as the same bar on its gutter plate and
+  as the fill of every clip. **The mixer draws tracks, and a track is not a
+  channel** -- there is no channel strip in it for a channel's colour to
+  appear on, which is a fact about the console design rather than work left
+  undone.
+- **A filled shape needed one thing the bar did not**: an ink that can be read
+  on it. `ProjectColor::ink` decides black or white by luminance, and its
+  threshold was set by rendering all eleven swatches under both inks rather
+  than by picking a round number -- 0.55 reads well and puts orange and sky
+  on the wrong side.
 - **A pattern's colour is set from the transport toolbar, not the sidebar.**
   The sidebar is a channel panel, so the chip went beside the pattern's name
   field instead -- the two facts about a pattern in one place. It shares the

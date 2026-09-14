@@ -12,6 +12,21 @@ export global GainMath {
     in property <float> meter-warning-db: -10.0;
     in property <float> meter-hot-db: -3.0;
 
+    // The floor, mirroring mooloop_core::gain::MIN_DB. At or below it a
+    // control is silent and a meter is empty, so it is both the bottom of
+    // every meter scale and the resting value of every meter reading.
+    //
+    // It was spelled out twenty-six times in markup before it lived here --
+    // four times in the two functions below and twenty-two across
+    // `meters.slint` and `controls.slint` -- while the two colour thresholds
+    // beside it were held to their Rust constants by
+    // `gain_slint_agreement.rs`. That test now checks this too.
+    //
+    // `out` rather than `in`: a meter may legitimately declare a different
+    // scale bottom, but it does so by overriding its own `minimum-db`, not by
+    // moving the floor for everybody.
+    out property <float> min-db: -60.0;
+
     // The operating level, mirroring mooloop_core::gain::REFERENCE_PEAK_DBFS.
     // A control that hands a full-scale source its headroom starts here.
     in property <float> reference-peak-dbfs: -12.0;
@@ -32,13 +47,13 @@ export global GainMath {
     out property <[float]> fader-travel: [1.0, 0.75, 0.5, 0.3, 0.15, 0.05, 0.0];
     out property <[float]> fader-db: [6.0, 0.0, -12.0, -24.0, -40.0, -60.0, -99999.0];
 
-    // At or below -60 dB is silence, not residual gain.
+    // At or below the floor is silence, not residual gain.
     public pure function db-to-linear(db: float) -> float {
-        return db <= -60.0 ? 0.0 : pow(10, db / 20);
+        return db <= root.min-db ? 0.0 : pow(10, db / 20);
     }
 
     public pure function linear-to-db(linear: float) -> float {
-        return linear <= 0.0 ? -60.0 : max(20 * log(linear, 10), -60.0);
+        return linear <= 0.0 ? root.min-db : max(20 * log(linear, 10), root.min-db);
     }
 
     public pure function fader-position-to-db(position: float) -> float {

@@ -1,5 +1,12 @@
-// The left channel sidebar: what the selected channel is called, what colour
-// it is, and where its MIDI comes from.
+// The left sidebar: what the selected thing is called, what colour it is, and
+// -- for a channel -- where its MIDI comes from.
+//
+// **It follows the selection the device rack already has** rather than keeping
+// one of its own. `effect_target` is either a channel or a track and decides
+// what the rack below is editing, so a sidebar that reads the same flag can
+// never disagree with it about what "this thing" is. A track and a channel are
+// different enough to draw differently and alike enough to share a panel: both
+// are things you named and coloured.
 //
 // `reference/img/mooloop-1.0-mockup.png` draws this panel with four tabs --
 // CHANNEL, MIDI, PLUGINS, MIXER -- and this is the CHANNEL one. The other
@@ -18,6 +25,10 @@ import { Theme } from "theme.slint";
 import { SectionLabel } from "controls.slint";
 import { MenuField, NameField } from "toolbar.slint";
 import { ColorChoice, ColorChooser } from "color-picker.slint";
+// The same row the mixer strip draws, not a second one. A send has one model
+// and these are two views of it; a row of its own here would be the third
+// spelling of the same four controls.
+import { BusPicker, MixerSendRow, SendRow } from "mixer.slint";
 // Re-exported so `main.slint` has one import for the panel and the struct its
 // model is made of.
 export { ColorChoice }
@@ -35,6 +46,10 @@ export component ChannelSidebar inherits Rectangle {
     // The channel these controls edit. The sidebar edits the selected channel
     // and nothing else: `selected-channel` already exists, is saved with the
     // document, and is what every other surface means by "this channel".
+    // Whether the selection is a track rather than a channel. The panel is the
+    // same panel either way; what changes is the tab's word, the number beside
+    // it, and whether the MIDI rows are there at all.
+    in property <bool> is-track;
     in property <string> channel-name;
     in property <int> channel-number;
     in property <bool> has-color;
@@ -43,7 +58,22 @@ export component ChannelSidebar inherits Rectangle {
     in property <string> color-hex;
     in property <[ColorChoice]> color-choices;
 
+    // A track's sends, and the vocabulary the "send to" picker needs. Empty
+    // and unused for a channel: a channel's output is a route to one track and
+    // a send is a track-to-track edge, which `docs/TERMINOLOGY.md` keeps
+    // apart.
+    in property <[MixerSendRow]> sends;
+    in property <[string]> bus-names;
+    in property <[bool]> send-allowed;
+    in property <int> track-index;
+    in property <bool> is-master;
+
     callback renamed(string);
+    callback send-added(int);
+    callback send-removed(int);
+    callback send-level-changed(int, float);
+    callback send-tap-picked(int, int);
+    callback send-enable-toggled(int);
     // The hex the project should store, or "" for no colour at all. A string
     // rather than a `color` because a colour is what Slint draws and a hex is
     // what the song keeps -- and because Rust is the only thing here that can
@@ -70,7 +100,7 @@ export component ChannelSidebar inherits Rectangle {
                     border-radius: Theme.radius-sm;
                     background: Theme.surface-active;
                     tab-label := Text {
-                        text: "CHANNEL";
+                        text: root.is-track ? "TRACK" : "CHANNEL";
                         color: Theme.text;
                         font-size: 9px;
                         letter-spacing: 0.5px;
@@ -80,7 +110,9 @@ export component ChannelSidebar inherits Rectangle {
                 }
                 Rectangle { horizontal-stretch: 1; }
                 Text {
-                    text: root.channel-number > 0 ? "CH " + root.channel-number : "";
+                    text: root.channel-number <= 0
+                        ? ""
+                        : (root.is-track ? "TRK " : "CH ") + root.channel-number;
                     color: Theme.text-faint;
                     font-size: 9px;
                     vertical-alignment: center;
@@ -99,8 +131,8 @@ export component ChannelSidebar inherits Rectangle {
                 name-field := NameField {
                     width: 100%;
                     text: root.channel-name;
-                    placeholder: "Channel name";
-                    tooltip: "Rename this channel";
+                    placeholder: root.is-track ? "Track name" : "Channel name";
+                    tooltip: root.is-track ? "Rename this track" : "Rename this channel";
                     edited(value) => { root.renamed(value); }
                 }
             }
@@ -116,12 +148,63 @@ export component ChannelSidebar inherits Rectangle {
                 }
             }
 
-            Rectangle { height: 1px; background: Theme.border; opacity: 0.6; }
+            // **Sends live here, and only here.** They were drawn on the
+            // track's device face until 2026-09-13, which put a second editor
+            // for them behind whichever view the bottom pane happened to be
+            // showing. This panel is always to hand, and the mixer strip
+            // keeps its level controls -- riding a send with its meter in
+            // view is a different job from setting one up, which is the
+            // division Adam asked for.
+            //
+            // The master has none: every track reaches it, so a send from it
+            // could only close a loop.
+            if root.is-track && !root.is-master : SidebarField {
+                label: root.sends.length == 0
+                    ? "SENDS"
+                    : root.sends.length + (root.sends.length == 1 ? " SEND" : " SENDS");
+                if root.sends.length == 0 : Text {
+                    text: "Route this track to another and it gains a fader here.";
+                    color: Theme.text-faint;
+                    font-size: 9px;
+                    wrap: word-wrap;
+                }
+                for send[i] in root.sends : SendRow {
+                    send: send;
+                    level-changed(v) => { root.send-level-changed(i, v); }
+                    tap-picked(t) => { root.send-tap-picked(i, t); }
+                    enable-toggled => { root.send-enable-toggled(i); }
+                    removed => { root.send-removed(i); }
+                }
+                // Not a `+ Send` button: `docs/TERMINOLOGY.md` retires that
+                // because it would name a *track* a send. This creates a
+                // route, and the track at the far end becomes an effects
+                // return by being sent to.
+                BusPicker {
+                    bus-names: root.bus-names;
+                    value: root.track-index;
+                    allowed: root.send-allowed;
+                    label: "Send to\u{2026}";
+                    chip-width: 62px;
+                    height: 18px;
+                    tooltip: "Route a copy of this track to another one";
+                    picked(i) => { root.send-added(i); }
+                }
+            }
+
+            if !root.is-track : Rectangle {
+                height: 1px;
+                background: Theme.border;
+                opacity: 0.6;
+            }
 
             // Inert. See the header of this file: the setting is drawn, the
             // configuration is not built, and the rows say which of those two
             // they are by being disabled.
-            SidebarField {
+            // **A track has no MIDI input**, so it does not draw the rows
+            // rather than drawing them disabled. Disabled here would mean
+            // "not configurable yet", which is true of a channel's and would
+            // be a lie about a track's -- there is nothing to configure.
+            if !root.is-track : SidebarField {
                 label: "MIDI";
                 VerticalLayout {
                     spacing: 4px;

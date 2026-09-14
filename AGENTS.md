@@ -60,6 +60,7 @@ that affect the decision at hand.
 | Which plans are live, and what state each is in | `docs/plans/README.md` |
 | Broad existing user surface or known gap | `docs/CURRENT.md` |
 | A small known gap you are about to rediscover | `docs/LOOSE_ENDS.md` |
+| A value stated in both Rust and `.slint`, or a run at the duplication fault | `docs/workflows/rust-slint-boundary/` |
 | UI layout, controls, or interaction | `docs/UI_DESIGN.md` |
 | A new shortcut, menu row, or command surface | `docs/ACTIONS.md` |
 | Modulation sources, routes, or destination policy | `docs/MODULATOR_SYSTEM_SPEC.md` |

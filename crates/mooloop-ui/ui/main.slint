@@ -46,7 +46,7 @@ import { ModulationDeviceFace } from "modulation-device.slint";
 import { ModulationShelf, ModulationShelfMetrics, ModulationSourceRow, ModulationOutletRow, ModulationRouteRow } from "modulation-shelf.slint";
 import { MixerMetrics, MixerPane, MixerSendRow, MixerStripRow, BusPicker } from "mixer.slint";
 export { MixerMetrics }
-import { BusDeviceFace, StripRackRow } from "bus-device.slint";
+import { BusDeviceFace, BusFaderRow, StripRackRow } from "bus-device.slint";
 import { StripMeters, StripRow, StripSpec } from "strip.slint";
 export { StripMeters }
 // Re-exported so Rust can reach them: a global is visible to the generated
@@ -125,6 +125,12 @@ struct ChannelRow {
     // different.
     color: color,
     has-color: bool,
+    // The colour of the *track* this channel feeds, which is a different
+    // fact and gets a different indicator: the bar above is what this
+    // channel was given, this is the group it belongs to. Keeping them
+    // apart is what stops either one having two possible sources.
+    track-color: color,
+    has-track-color: bool,
     muted: bool,
     // Channel gain in dB from unity; the Rust side stores linear.
     volume-db: float,
@@ -133,6 +139,21 @@ struct ChannelRow {
     // Mixer bus this channel feeds; 0 is the master.
     bus: int,
     steps: [StepCell],
+}
+
+// What a pattern is called and what colour it was given, for the surfaces
+// that draw a row or a clip per pattern.
+//
+// `ink` is carried rather than derived in markup: a clip is a filled shape
+// with a label on it, so the label needs a colour that can be read on top of
+// whatever the user picked, and that is a luminance decision `ProjectColor`
+// owns and has a test for. Slint would have to spell the weights a second
+// time.
+struct PatternInfo {
+    name: string,
+    color: color,
+    has-color: bool,
+    ink: color,
 }
 
 // One pattern instance in the song playlist.
@@ -622,17 +643,17 @@ export component MainWindow inherits Window {
     in-out property <int>   bpm;
     in-out property <int>   swing-percent: 50;
     in-out property <int>   beat-in-bar;
-    in-out property <float> meter-l-db: -60;
-    in-out property <float> meter-r-db: -60;
-    in-out property <float> meter-l-held-db: -60;
-    in-out property <float> meter-r-held-db: -60;
+    in-out property <float> meter-l-db: GainMath.min-db;
+    in-out property <float> meter-r-db: GainMath.min-db;
+    in-out property <float> meter-l-held-db: GainMath.min-db;
+    in-out property <float> meter-r-held-db: GainMath.min-db;
     in-out property <bool> meter-l-clipping;
     in-out property <bool> meter-r-clipping;
     // Both latches at once: the light is one lamp over a stereo pair, so
     // clearing it clears what it was reporting.
     callback master-clip-reset();
-    in-out property <float> source-output-left-db: -60;
-    in-out property <float> source-output-right-db: -60;
+    in-out property <float> source-output-left-db: GainMath.min-db;
+    in-out property <float> source-output-right-db: GainMath.min-db;
     in-out property <float> selected-channel-volume-db: 0;
 
     // ---- preferences ----
@@ -788,16 +809,19 @@ export component MainWindow inherits Window {
     // pattern rather than a menu. `pattern-menu-options` cannot serve them:
     // it is decorated with the two-digit index a menu needs and would read
     // "05  Chorus" in a playlist gutter that already numbers its own rows.
-    in-out property <[string]> pattern-names;
+    // One entry per pattern, and one list rather than a name list beside a
+    // colour list: two parallel models are two lengths that can disagree,
+    // which is this codebase's characteristic fault wearing a Slint costume.
+    in-out property <[PatternInfo]> pattern-info;
     callback pattern-renamed(int, string);
 
     // The name to draw for a pattern, or its number when it has none. The
     // fallback lives here rather than at each call site so the playlist, the
     // menu and the toolbar placeholder cannot drift apart.
     pure function pattern-label(index: int) -> string {
-        root.pattern-names[index] == ""
+        root.pattern-info[index].name == ""
             ? "Pattern " + (index + 1)
-            : root.pattern-names[index]
+            : root.pattern-info[index].name
     }
 
     // Editing tool: 0=Select 1=Paint 2=Slice 3=Stretch.
@@ -937,6 +961,13 @@ export component MainWindow inherits Window {
     in property <bool> editing-bus-console;
     in property <bool> editing-bus-polarity;
     in property <bool> editing-bus-solo;
+    // The edited track's colour, in the three shapes a face needs. Same
+    // reason as the channel's: Slint has no `Option`, and the hex is what a
+    // swatch is matched against.
+    in property <bool> editing-bus-has-color;
+    in property <color> editing-bus-color;
+    in property <string> editing-bus-color-hex;
+    callback track-color-chosen(int, string);
     // The strip of the track the rack is following, for the pinned row.
     in property <StripRow> editing-bus-strip;
     // Whether that row draws before the track's own devices or after them.
@@ -946,10 +977,17 @@ export component MainWindow inherits Window {
     in property <bool> strip-pin-head: true;
     in property <bool> editing-bus-can-remove;
     in property <[bool]> editing-bus-allowed;
-    in property <float> editing-bus-left-db: -60;
-    in property <float> editing-bus-right-db: -60;
-    in property <float> editing-bus-input-left-db: -60;
-    in property <float> editing-bus-input-right-db: -60;
+    in property <float> editing-bus-left-db: GainMath.min-db;
+    in property <float> editing-bus-right-db: GainMath.min-db;
+    /// Peak hold and the clip latch for the track being edited, so its fader
+    /// row's meter behaves like its mixer strip's. The pump has had these in
+    /// hand all along -- they come off the same `MeterReading` -- and set
+    /// only the two levels until 2026-09-14.
+    in property <float> editing-bus-held-left-db: GainMath.min-db;
+    in property <float> editing-bus-held-right-db: GainMath.min-db;
+    in property <bool> editing-bus-clipping;
+    in property <float> editing-bus-input-left-db: GainMath.min-db;
+    in property <float> editing-bus-input-right-db: GainMath.min-db;
     // The sends this track has, and which tracks it may gain one to. Exactly
     // the sends that exist: the face draws no empty bays and there is no
     // drawn ceiling on how many there are.
@@ -2605,19 +2643,59 @@ export component MainWindow inherits Window {
                         ChannelSidebar {
                             width: root.channel-sidebar-width;
                             height: parent.height;
-                            channel-name: root.selected-channel-name;
-                            channel-number: root.selected-channel + 1;
-                            has-color: root.selected-channel-has-color;
-                            tint: root.selected-channel-color;
-                            color-hex: root.selected-channel-color-hex;
+                            // **The selection the rack already has.** A track
+                            // is being edited exactly when the rack says so,
+                            // so the panel and the device face below it cannot
+                            // end up describing two different things.
+                            is-track: root.editing-bus;
+                            channel-name: root.editing-bus
+                                ? root.editing-bus-name : root.selected-channel-name;
+                            channel-number: (root.editing-bus
+                                ? root.editing-bus-index : root.selected-channel) + 1;
+                            has-color: root.editing-bus
+                                ? root.editing-bus-has-color : root.selected-channel-has-color;
+                            tint: root.editing-bus
+                                ? root.editing-bus-color : root.selected-channel-color;
+                            color-hex: root.editing-bus
+                                ? root.editing-bus-color-hex : root.selected-channel-color-hex;
                             color-choices: root.color-choices;
-                            // The rename the `DEVICES` toolbar already does.
-                            // A second callback would be a second way to
-                            // rename a channel, and they would drift.
+                            // The renames the rest of the interface already
+                            // does. A second callback for either would be a
+                            // second way to rename the same thing, and they
+                            // would drift.
                             renamed(value) => {
-                                root.channel-renamed(root.selected-channel, value);
+                                if (root.editing-bus) {
+                                    root.track-renamed(root.editing-bus-index, value);
+                                } else {
+                                    root.channel-renamed(root.selected-channel, value);
+                                }
                             }
-                            color-chosen(value) => { root.channel-color-chosen(value); }
+                            color-chosen(value) => {
+                                if (root.editing-bus) {
+                                    root.track-color-chosen(root.editing-bus-index, value);
+                                } else {
+                                    root.channel-color-chosen(value);
+                                }
+                            }
+                            // The sends of whichever track is selected. The
+                            // same model the mixer strip draws from, and the
+                            // same callbacks the face used to raise.
+                            sends: root.editing-bus-sends;
+                            bus-names: root.bus-names;
+                            send-allowed: root.editing-bus-send-allowed;
+                            track-index: root.editing-bus-index;
+                            is-master: root.editing-bus-is-master;
+                            send-added(t) => { root.send-added(root.editing-bus-index, t); }
+                            send-removed(i) => { root.send-removed(root.editing-bus-index, i); }
+                            send-level-changed(i, v) => {
+                                root.send-level-changed(root.editing-bus-index, i, v);
+                            }
+                            send-tap-picked(i, t) => {
+                                root.send-tap-picked(root.editing-bus-index, i, t);
+                            }
+                            send-enable-toggled(i) => {
+                                root.send-enable-toggled(root.editing-bus-index, i);
+                            }
                         }
 
                         // The panel's own right edge, drawn inside the clip so
@@ -2979,7 +3057,22 @@ export component MainWindow inherits Window {
                                             width: 88px;
                                             min-height: 24px;
                                             border-radius: Theme.radius-md;
-                                            background: row.selected ? Theme.surface-active : Theme.surface;
+                                            // **A wash, where the channel's own
+                                            // colour is a bar.** Twelve per cent
+                                            // of the track's colour over
+                                            // whichever base the selection asks
+                                            // for -- enough to group a drum bus
+                                            // at a glance, little enough that the
+                                            // selected plate still reads as
+                                            // selected and the channel's own bar
+                                            // still reads as its own. Chosen by
+                                            // rendering 0, 6, 12 and 20 per cent
+                                            // side by side: at 20 the tint starts
+                                            // arguing with the selection.
+                                            background: row.has-track-color
+                                                ? (row.selected ? Theme.surface-active : Theme.surface)
+                                                    .mix(row.track-color, 0.88)
+                                                : (row.selected ? Theme.surface-active : Theme.surface);
                                             // The plate is what the pointer is holding, so it
                                             // is what says it is being held.
                                             drop-shadow-blur: channel-row.dragging ? 16px : 0px;
@@ -3535,16 +3628,24 @@ export component MainWindow inherits Window {
                                             // outlet and a level is the whole
                                             // device, and a wider face would
                                             // be empty rather than generous.
+                                            // A bus's head is 2U on its own -- a
+                                            // destination and a name -- and 3U
+                                            // when `STRIP_PIN` also pins the
+                                            // strip's drive/EQ/comp here, the
+                                            // same unit the EQ's response plot
+                                            // gave back on 2026-09-11, spent on
+                                            // the merged content instead of
+                                            // margin.
                                             property <int> source-units: root.editing-bus
-                                                ? 2
+                                                ? (root.strip-pin-head ? 3 : 2)
                                                 : root.source-kind == 7 ? 2
                                                 : (root.source-kind == 6 || root.source-kind == 5 ? 4 : 3);
                                             width: DeviceRackMetrics.unit-width * self.source-units
                                                 + DeviceRackMetrics.half-gap
                                                 + DeviceRackMetrics.rail-width * 2;
                                             height: DeviceRackMetrics.face-height;
-                                            input-left-db: root.editing-bus ? root.editing-bus-input-left-db : -60;
-                                            input-right-db: root.editing-bus ? root.editing-bus-input-right-db : -60;
+                                            input-left-db: root.editing-bus ? root.editing-bus-input-left-db : GainMath.min-db;
+                                            input-right-db: root.editing-bus ? root.editing-bus-input-right-db : GainMath.min-db;
                                             output-left-db: root.editing-bus ? root.editing-bus-left-db : root.source-output-left-db;
                                             output-right-db: root.editing-bus ? root.editing-bus-right-db : root.source-output-right-db;
                                             output-trim-enabled: !root.editing-bus;
@@ -3576,36 +3677,40 @@ export component MainWindow inherits Window {
                                                 name: root.editing-bus-name;
                                                 is-master: root.editing-bus-is-master;
                                                 muted: root.editing-bus-muted;
-                                                volume: root.editing-bus-volume;
-                                                pan: root.editing-bus-pan;
                                                 output: root.editing-bus-output;
                                                 index: root.editing-bus-index;
                                                 feed-count: root.editing-bus-feed-count;
                                                 bus-names: root.bus-names;
                                                 allowed: root.editing-bus-allowed;
-                                                left-db: root.editing-bus-left-db;
-                                                right-db: root.editing-bus-right-db;
-                                                volume-changed(v) => { root.bus-volume-changed(root.editing-bus-index, v); }
-                                                pan-changed(v) => { root.bus-pan-changed(root.editing-bus-index, v); }
-                                                mute-toggled => { root.bus-muted(root.editing-bus-index); }
                                                 console: root.editing-bus-console;
                                                 polarity: root.editing-bus-polarity;
                                                 polarity-toggled => { root.bus-polarity-toggled(root.editing-bus-index); }
-                                                solo: root.editing-bus-solo;
-                                                solo-toggled => { root.bus-solo-toggled(root.editing-bus-index); }
                                                 can-remove: root.editing-bus-can-remove;
                                                 output-picked(o) => { root.bus-output-changed(root.editing-bus-index, o); }
                                                 console-toggled => { root.bus-console-toggled(root.editing-bus-index); }
                                                 renamed(v) => { root.track-renamed(root.editing-bus-index, v); }
                                                 removed => { root.track-removed(root.editing-bus-index); }
+                                                // The strip's own drive/EQ/comp, bundled
+                                                // in here exactly when `STRIP_PIN` pins
+                                                // it to the head -- the same guard the
+                                                // tail instance past the chain uses, so
+                                                // the two positions stay mutually
+                                                // exclusive.
+                                                show-strip: root.strip-pin-head;
+                                                units: source-device.source-units;
+                                                strip: root.editing-bus-strip;
+                                                track: root.editing-bus-index;
+                                                moved(id, v) => { root.bus-strip-param(root.editing-bus-index, id, v); }
+                                                switched(id, on) => { root.bus-strip-param(root.editing-bus-index, id, on ? 1 : 0); }
+                                                voicing-picked(voicing) => { root.bus-voicing-picked(root.editing-bus-index, voicing); }
+                                                point-dragged(band, hz, gain) => {
+                                                    root.bus-strip-point-dragged(root.editing-bus-index, band, hz, gain);
+                                                }
+                                                // The *incoming* count stays: how many
+                                                // sends feed this track is a fact about
+                                                // it, where the sends it makes are edited
+                                                // in the channel sidebar.
                                                 send-feed-count: root.editing-bus-send-feed-count;
-                                                sends: root.editing-bus-sends;
-                                                send-allowed: root.editing-bus-send-allowed;
-                                                send-added(t) => { root.send-added(root.editing-bus-index, t); }
-                                                send-removed(i) => { root.send-removed(root.editing-bus-index, i); }
-                                                send-level-changed(i, v) => { root.send-level-changed(root.editing-bus-index, i, v); }
-                                                send-tap-picked(i, t) => { root.send-tap-picked(root.editing-bus-index, i, t); }
-                                                send-enable-toggled(i) => { root.send-enable-toggled(root.editing-bus-index, i); }
                                             }
 
                                             if !root.editing-bus && root.source-kind == 0 : SamplerDeviceFace {
@@ -4068,29 +4173,19 @@ export component MainWindow inherits Window {
 
                                         DeviceJoin { }
 
-
-                                        // The strip's own row, pinned. Two
-                                        // instances and one guard rather
-                                        // than one instance that moves: a
+                                        // The strip's own row, pinned. When
+                                        // `STRIP_PIN` pins it to the head it is
+                                        // bundled straight into `BusDeviceFace`
+                                        // above rather than drawn again here --
+                                        // one box, not two beside each other.
+                                        // The tail position below is the other
+                                        // half of the same guard: a
                                         // `HorizontalLayout` places its
                                         // children in declaration order, so
-                                        // "before the chain" and "after the
-                                        // chain" are two positions in this
-                                        // file. `STRIP_PIN` picks between
-                                        // them, and the engine reads the
-                                        // same constant.
-                                        if root.editing-bus && root.strip-pin-head : StripRackRow {
-                                            strip: root.editing-bus-strip;
-                                            track: root.editing-bus-index;
-                                            name: root.editing-bus-name;
-                                            muted: root.editing-bus-muted;
-                                            moved(id, v) => { root.bus-strip-param(root.editing-bus-index, id, v); }
-                                            switched(id, on) => { root.bus-strip-param(root.editing-bus-index, id, on ? 1 : 0); }
-                                            voicing-picked(voicing) => { root.bus-voicing-picked(root.editing-bus-index, voicing); }
-                                            point-dragged(band, hz, gain) => {
-                                                root.bus-strip-point-dragged(root.editing-bus-index, band, hz, gain);
-                                            }
-                                        }
+                                        // "at the head" and "after the chain"
+                                        // are two positions in this file.
+                                        // `STRIP_PIN` picks between them, and
+                                        // the engine reads the same constant.
                                         for slot[index] in root.effect-slots : cell := Rectangle {
                                             property <length> face-width:
                                                 DeviceRackMetrics.unit-width * slot.units
@@ -4765,9 +4860,44 @@ export component MainWindow inherits Window {
                                             }
                                         }
 
+                                        // **The output stage, last.** The rack
+                                        // now reads in the order the engine
+                                        // runs: the strip at the head, the
+                                        // track's own devices as inserts, the
+                                        // fader at the end. It was drawn first
+                                        // until 2026-09-13 because this face
+                                        // sits in the seat a channel's
+                                        // generator has -- the start of a
+                                        // channel's path, and the wrong end of
+                                        // a track's.
+                                        if root.editing-bus : BusFaderRow {
+                                            name: root.editing-bus-name;
+                                            is-master: root.editing-bus-is-master;
+                                            volume: root.editing-bus-volume;
+                                            pan: root.editing-bus-pan;
+                                            muted: root.editing-bus-muted;
+                                            solo: root.editing-bus-solo;
+                                            left-db: root.editing-bus-left-db;
+                                            right-db: root.editing-bus-right-db;
+                                            held-left-db: root.editing-bus-held-left-db;
+                                            held-right-db: root.editing-bus-held-right-db;
+                                            clipping: root.editing-bus-clipping;
+                                            // The same callback the mixer strip's lamp
+                                            // uses: one latch per track, cleared from
+                                            // whichever face the user happens to click.
+                                            clip-reset => { root.bus-clip-reset(root.editing-bus-index); }
+                                            volume-changed(v) => { root.bus-volume-changed(root.editing-bus-index, v); }
+                                            pan-changed(v) => { root.bus-pan-changed(root.editing-bus-index, v); }
+                                            mute-toggled => { root.bus-muted(root.editing-bus-index); }
+                                            solo-toggled => { root.bus-solo-toggled(root.editing-bus-index); }
+                                        }
+
                                         // The other position the pin can take:
-                                        // after the track's own devices. See the
-                                        // instance before the chain.
+                                        // after the track's own devices, standing
+                                        // alone rather than bundled into
+                                        // `BusDeviceFace` -- the head keeps its
+                                        // identity content either way, so a
+                                        // moved pin only moves the processing.
                                         if root.editing-bus && !root.strip-pin-head : StripRackRow {
                                             strip: root.editing-bus-strip;
                                             track: root.editing-bus-index;
@@ -5785,6 +5915,21 @@ export component MainWindow inherits Window {
                                             border-radius: Theme.radius-md;
                                             background: root.current-pattern == pattern
                                                 ? Theme.surface-active : Theme.surface;
+                                            // The channel rack plate's bar, on
+                                            // the plate that is its opposite
+                                            // number. Same rule and same 3px:
+                                            // this fill already means "current
+                                            // pattern", so the colour is a mark
+                                            // beside it rather than a tint of
+                                            // it.
+                                            if root.pattern-info[pattern].has-color : Rectangle {
+                                                x: 0;
+                                                width: 3px;
+                                                height: parent.height;
+                                                background: root.pattern-info[pattern].color;
+                                                border-top-left-radius: Theme.radius-md;
+                                                border-bottom-left-radius: Theme.radius-md;
+                                            }
                                             Text {
                                                 x: 6px;
                                                 width: parent.width - 12px;
@@ -5873,11 +6018,26 @@ export component MainWindow inherits Window {
                                                     && root.playlist-position-ticks >= clip.start-tick
                                                     && root.playlist-position-ticks < self.clip-end-tick ? 1px : 0px;
                                                 border-color: Theme.text;
-                                                background: Theme.accent;
+                                                // **The clip is filled, so here
+                                                // the colour replaces the fill
+                                                // rather than marking it.** The
+                                                // distinction is what the shape
+                                                // already says: a rack plate's
+                                                // fill means "selected", where a
+                                                // clip's means "a clip is here"
+                                                // -- and a coloured clip still
+                                                // says that. What it must not
+                                                // lose is its label, which is
+                                                // why the ink comes with the
+                                                // colour.
+                                                background: root.pattern-info[pattern].has-color
+                                                    ? root.pattern-info[pattern].color : Theme.accent;
                                                 opacity: root.current-pattern == pattern ? 1 : 0.62;
                                                 Text {
                                                     text: pattern + 1;
-                                                    color: Theme.background;
+                                                    color: root.pattern-info[pattern].has-color
+                                                        ? root.pattern-info[pattern].ink
+                                                        : Theme.background;
                                                     font-size: 9px;
                                                     font-weight: 600;
                                                     horizontal-alignment: center;

@@ -18,6 +18,8 @@ use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString
 use std::cell::RefCell;
 use std::rc::Rc;
 
+mod common;
+
 slint::slint! {
     import { ColorChooser, ColorChoice } from "../ui/color-picker.slint";
 
@@ -77,14 +79,7 @@ fn palette() -> Vec<ColorChoice> {
 }
 
 fn harness() -> (ChooserHarness, Rc<RefCell<Vec<String>>>) {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
     let ui = ChooserHarness::new().unwrap();
     ui.window().set_size(LogicalSize::new(200.0, 120.0));
     ui.set_choices(ModelRc::from(Rc::new(VecModel::from(palette()))));

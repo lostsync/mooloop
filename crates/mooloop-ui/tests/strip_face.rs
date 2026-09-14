@@ -26,20 +26,15 @@ use mooloop_core::strip::{
 };
 use mooloop_core::{ParamCurve, PreampVoicing};
 use mooloop_ui::{install_strip_spec, MainWindow, StripSpec};
-use slint::{ComponentHandle, Model, SharedString};
+use slint::{ComponentHandle, Model};
+
+mod common;
 
 const STRIP_SLINT: &str = include_str!("../ui/strip.slint");
 const DISPLAYS_SLINT: &str = include_str!("../ui/device-displays.slint");
 
 fn headless() -> MainWindow {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
     MainWindow::new().unwrap()
 }
 

@@ -154,7 +154,18 @@ Use contrast and spacing to show hierarchy, not floating cards within cards.
   left edge rather than tinting the plate — a background carrying two
   meanings says neither clearly, and one of the two is always the one being
   read at a glance. The mark holds its width whether or not it has anything
-  to show, so acquiring a colour does not shift the label beside it.
+  to show, so acquiring a colour does not shift the label beside it. The
+  playlist's pattern plate follows it, being the same plate.
+- **Where the fill means only "something is here", the colour takes the
+  fill.** A playlist clip is the case: its background says a clip exists, and
+  a coloured clip still says that, so the colour replaces it outright rather
+  than nibbling 3px off the edge of a shape that may be 4px wide. **A filled
+  shape with a label on it owes that label a readable ink** — black or white
+  by the colour's luminance, decided once in `ProjectColor::ink` where there
+  is a test for it, rather than in markup where the weights would be spelled
+  a second time. The threshold there was set by rendering every swatch with
+  both inks and looking, and the tidier-sounding 0.55 was wrong on two of
+  eleven.
 
 The source editor should feel like one instrument front panel. It should not
 look like several cards dropped into the center of a page.
@@ -197,10 +208,13 @@ alignment, and height contract as effects.
   need the fourth unit to hold three modules of 34 px dials without shrinking
   one; 2U for Aux In, whose whole content is a source, an outlet and a level,
   and which at 3U would be empty rather than generous. A bus's output stage
-  stands in the same position at 2U, and the track's pinned channel-strip row
-  takes 2U beside it -- three until 2026-09-11, when the EQ's response plot
-  moved into the room the input stage was not using and the third unit turned
-  out to have been margin. An effect uses only the units its working
+  stands in the same position, at 2U on its own or 3U bundled with the
+  track's pinned channel strip when `STRIP_PIN` pins it to the head -- the
+  two used to be a 2U box beside a 2U box, one of them mostly empty once the
+  EQ's response plot moved into the room the input stage was not using on
+  2026-09-11 and freed a unit; merged on 2026-09-13, that freed unit is spent
+  on identity and routing sharing the strip's own box instead of standing
+  empty beside it. An effect uses only the units its working
   controls require, declared once in `effect_kind_units`
   (`mooloop-ui/src/lib.rs`) rather than in each face: 1U for filter, drive,
   preamp, bitcrush, limiter, plate, and Buffer; 2U for gate, compressor, EQ, and Mod;
@@ -709,10 +723,29 @@ Two panels flank the work area, and they are deliberately one mechanism: the
   that each allowed itself 400px would leave 200 for the editor, so each
   measures its ceiling against the window *minus its sibling*. That is one
   function, `sidebar-ceiling`, and not a constant.
+- **A panel that is always on screen owns setting things up; the surface you
+  play on keeps the controls you play with.** A track's sends are edited in
+  the sidebar, where there is room for a destination, a tap point and an
+  enable per send with labels; the mixer strip keeps the send levels, because
+  riding one with its meter beside it is a different job. One model, two
+  views, and neither holds a second copy of the rows.
 - **What a panel shows is the selection, not a copy of it.** The channel
   sidebar edits whatever `selected-channel` names and holds no selection of
   its own. It reuses the rename callback the `DEVICES` toolbar already has,
   because a second way to rename a channel is a second thing to drift.
+- **A rack reads in the order the signal runs.** A track's rack is its head
+  (name, routing, polarity, then the strip), its own devices as inserts, and
+  its fader last — because that is what the engine does, and `StripPin` says
+  so in one constant both the block loop and the rack read. The fader was
+  drawn *first* until 2026-09-13, for a structural reason worth remembering:
+  the head slot is the seat a channel's **generator** occupies, so a track's
+  output stage inherited the position of a channel's input. A control's place
+  in a rack is a claim about when it acts.
+- **Where a control acts decides where it is drawn, even when that splits a
+  cluster.** A track's polarity stayed at the head when its fader moved to the
+  tail: polarity is applied at the top of the block, so everything after it —
+  including a pre-fader send — sees the flipped signal. Drawing it beside the
+  fader would have been the same error in the opposite direction.
 - **A control drawn for a setting that does not exist yet is disabled, and
   looks it.** The sidebar's MIDI rows are the standing example: MIDI is
   decoded and routed and configurable nowhere, so the rows say what the panel

@@ -130,6 +130,23 @@ pub struct MixerBus {
     /// [`crate::strip::StripParams`].
     #[serde(default)]
     pub strip: crate::strip::StripParams,
+    /// The colour the user gave this track, or `None` for one nobody has
+    /// coloured.
+    ///
+    /// **Identity, and nothing about what feeds it.** The step that added
+    /// channel colours deferred this one asking what a colour means at a
+    /// summing point; the answer is that it means what a name means -- which
+    /// track this is -- and that a channel routed here is drawn in this
+    /// colour *by a different mark* rather than by having its own colour
+    /// changed. Adam, 2026-09-13: a channel keeps its bar and wears its
+    /// track's colour as a tint of the whole face, so neither indicator ever
+    /// has two sources.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::color::deserialize_lenient"
+    )]
+    pub color: Option<crate::color::ProjectColor>,
 }
 
 impl MixerBus {
@@ -152,6 +169,7 @@ impl MixerBus {
             polarity: false,
             solo: false,
             strip: crate::strip::StripParams::default(),
+            color: None,
         }
     }
 }
@@ -755,6 +773,39 @@ pub fn send_edges(buses: &[BusSetup]) -> Vec<SendEdge> {
         }
     }
     edges
+}
+
+/// Whether this bank's sends can be compensated at all.
+///
+/// **A bank whose routing does not sort has no compensable sends.** It is
+/// running the everything-to-master repair, so the order actually being
+/// walked is not the order a send would have been compiled against, and such
+/// a send would arrive a block late. Dropping them is the same repair
+/// `sanitize_bank` makes on the document, made again on the plan for the
+/// paths that never go through the session.
+///
+/// This lives here because it is a *policy*, and it was written down twice.
+/// `RenderState::install_compensation` had it and `Session::latency_plan` did
+/// not, so the session would have handed the engine a full `SendBank`
+/// compiled against arrival numbers derived from a default order. Unreachable
+/// at the time -- the session's bank is sanitized on load and both
+/// `set_bus_output` and `add_send` refuse cycles -- and the characteristic
+/// fault in its pure form: one copy corrected, one not, nothing able to
+/// notice. Both call sites now read this.
+pub fn sends_are_compensable(buses: &[BusSetup]) -> bool {
+    compile_bus_graph(buses).is_some()
+}
+
+/// The sends [`compile_latency`] may be given for this bank: every one of
+/// them in [`send_edges`] order, or none at all.
+///
+/// See [`sends_are_compensable`] for why "none at all" is a case.
+pub fn compensable_send_edges(buses: &[BusSetup]) -> Vec<SendEdge> {
+    if sends_are_compensable(buses) {
+        send_edges(buses)
+    } else {
+        Vec::new()
+    }
 }
 
 /// Compile the tree's cumulative latency into a per-producer compensation.
@@ -2073,6 +2124,43 @@ mod tests {
         assert_eq!(graph.destination(3), MASTER_BUS);
         assert_eq!(graph.destination(7), MASTER_BUS);
         assert_eq!(graph.render_order()[MAX_BUSES - 1], MASTER_BUS);
+    }
+
+    /// The one policy both compensation call sites read.
+    ///
+    /// A bank that does not sort is running the everything-to-master repair,
+    /// so a send compiled against the order it *would* have had arrives a
+    /// block late. `RenderState::install_compensation` knew that and
+    /// `Session::latency_plan` did not -- two copies of one rule, one of them
+    /// corrected -- so the rule moved here and both now call this.
+    #[test]
+    fn a_bank_that_does_not_sort_has_no_compensable_sends() {
+        let sorts = sending(&[(1, 2), (3, 0)]);
+        assert!(sends_are_compensable(&sorts));
+        assert_eq!(
+            compensable_send_edges(&sorts),
+            send_edges(&sorts),
+            "a bank that sorts keeps every send, in send_edges order"
+        );
+        assert!(
+            !compensable_send_edges(&sorts).is_empty(),
+            "the sorting case proves nothing if it has no sends to keep"
+        );
+
+        // The same sends, on a bank whose routing loops.
+        let mut looped = sorts.clone();
+        looped[3].bus.output = 5;
+        looped[5].bus.output = 3;
+        assert!(!sends_are_compensable(&looped));
+        assert!(
+            compensable_send_edges(&looped).is_empty(),
+            "a bank that does not sort still offered its sends for compensation"
+        );
+        assert_eq!(
+            send_edges(&looped),
+            send_edges(&sorts),
+            "the sends themselves are untouched; it is only the plan that drops them"
+        );
     }
 
     #[test]

@@ -356,6 +356,10 @@ export component NameField inherits Rectangle {
     // edits. Exists so a test can ask the field what it is showing without
     // reading pixels, and so the placeholder condition has one source.
     out property <string> current-text: input.text;
+    /// Whether the caret is in this field, which is also whether Space types
+    /// a space rather than starting the transport. Exists for the same reason
+    /// `current-text` does: so a test can ask, rather than read pixels.
+    out property <bool> editing: input.has-focus;
     callback edited(string);
 
     // Guarded, because re-assigning a `TextInput`'s text moves the cursor. An
@@ -399,6 +403,23 @@ export component NameField inherits Rectangle {
         single-line: true;
         edited => { root.edited(self.text); }
         accepted => { root.edited(self.text); self.clear-focus(); }
+        // **A field needs a way out that is not Enter.** Without one,
+        // clicking into this and then clicking away leaves the caret
+        // here, and while it is here Space types a space instead of
+        // starting the transport -- right for a field somebody is
+        // editing, wrong for one nobody is. The 2026-09-07 focus pass
+        // made every *control* transparent to shortcuts and left text
+        // fields as the remaining case; this is the way out it wanted.
+        //
+        // `reject` for everything else, so the input's own handling of
+        // every other key is untouched.
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                self.clear-focus();
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
     }
     Tooltip { text: @markdown("\{root.tooltip}"); }
 }
@@ -543,6 +564,17 @@ export component TempoField inherits Rectangle {
             accepted => {
                 root.apply(self.text.to-float());
                 root.editing = false;
+            }
+            // Escape leaves the field without applying, which for this one is
+            // a real cancel: the tempo is only committed on `accepted`, so
+            // dropping out of edit mode discards whatever was typed. See
+            // `NameField`'s input above for why a field needs an exit at all.
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    root.editing = false;
+                    return EventResult.accept;
+                }
+                return EventResult.reject;
             }
         }
         ToolbarLabel { text: "BPM"; }

@@ -236,10 +236,31 @@ that had been overtaken -- the console arc was never a step in it and sends
 were still parked in it as future work -- which meant renumbering the steps,
 and so chasing twelve "step 3" pointers across the documentation to the thing
 each one meant, and finding that two of the three pieces of the channel
-identity step had quietly landed with the console pass, and then
-`docs/ARCHITECTURE.md` remade as five small diagrams, after the single
-4500-pixel-wide one turned out to have been patched a line at a time for
-long enough to still show a control thread that has never existed.
+identity step had quietly landed with the console pass, and then the
+`mooloop-ui` test suite's shared `tests/common/`, which retired thirty-eight
+copies of the testing-backend stanza and the piano grid's two copies of its
+own geometry -- and found that the reason two of those copies gave for
+preferring `.ok()` was not what Slint does, and then the meter floor, which
+the note had as twenty-six literals in three files and was fifty in ten,
+checked nowhere while the two colour thresholds beside it were held to their
+Rust constants, and then the modulation shelf's twenty-one ranges and
+forty-two parameter ids, mirrored by hand against five descriptor tables
+nothing outside their own module had ever read, and then the strip band
+whose missing position serde filled with one number for four bands of two
+different lengths, and then the compensation policy that two crates each
+held an opinion about and only one had corrected, and then the clip lamps:
+two that could not light, one that was never bound, and a peak marker pinned
+to the level with the hold in hand, and then the clip latch a removed track
+left behind for whichever track took its index, and then the spectrum
+subscription a deleted device left running for a display nobody was
+drawing, and then the text fields that could only be left with Enter, and
+then `docs/workflows/`, which is those nine passes turned into a procedure
+so the next run does not re-derive where the copies hide, and then
+`docs/ARCHITECTURE.md` remade as five small diagrams, after the
+single 4500-pixel-wide one turned out to have been patched a line at a time
+for long enough to still show a control thread that has never existed, and
+then this sheet itself split from the war stories, because it had been asked
+for as a sign-in sheet and had become a guestbook.
 Longer accounts of most of this are in
 `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
@@ -284,7 +305,11 @@ bug clipped its own controls off the face, and made a sampler's tuning
 live -- it was baked into a voice's playback rate once at trigger and
 never revisited, so retuning a held or looping note (by hand or by
 modulation) silently did nothing until the next note-on. Added an opt-out
-toggle for the old per-trigger behavior, defaulting to live.
+toggle for the old per-trigger behavior, defaulting to live. Bundled a
+track's near-empty head face into its pinned channel strip (interface
+iteration step 04): one 3U row for identity/routing/polarity plus
+drive/EQ/comp instead of two 2U boxes side by side, keeping both
+`STRIP_PIN` positions live.
 
 ## GLM 5.3 Flash (glm-5.3-flash) — opencode
 

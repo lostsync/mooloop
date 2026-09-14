@@ -972,6 +972,17 @@ export component KnobField inherits Rectangle {
                 root.text-committed(self.text);
                 self.clear-focus();
             }
+            // Escape leaves without committing, and the box then re-reads
+            // `display-text` -- so for a numeric entry the exit is also a
+            // cancel. `NameField` in `toolbar.slint` carries the reason a
+            // field needs one.
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    self.clear-focus();
+                    return EventResult.accept;
+                }
+                return EventResult.reject;
+            }
             edited => { }
         }
     }
@@ -1372,9 +1383,9 @@ export component ParameterFader inherits Rectangle {
 }
 
 export component PeakMeter inherits Rectangle {
-    in property <float> level-db: -60;
-    in property <float> held-db: -60;
-    in property <float> minimum-db: -60;
+    in property <float> level-db: GainMath.min-db;
+    in property <float> held-db: GainMath.min-db;
+    in property <float> minimum-db: GainMath.min-db;
     in property <float> warning-db: GainMath.meter-warning-db;
     in property <float> hot-db: GainMath.meter-hot-db;
     in property <bool> clipping;
@@ -1418,10 +1429,10 @@ export component PeakMeter inherits Rectangle {
 }
 
 export component StereoPeakMeter inherits Rectangle {
-    in property <float> left-db: -60;
-    in property <float> right-db: -60;
-    in property <float> held-left-db: -60;
-    in property <float> held-right-db: -60;
+    in property <float> left-db: GainMath.min-db;
+    in property <float> right-db: GainMath.min-db;
+    in property <float> held-left-db: GainMath.min-db;
+    in property <float> held-right-db: GainMath.min-db;
     in property <bool> left-clipping;
     in property <bool> right-clipping;
     min-width: 96px;
@@ -1750,7 +1761,7 @@ export component MiniKnob inherits Rectangle {
 // value readout that says "+3.0 dB" rather than a percentage of a ratio.
 // `value` is dB; the caller converts to linear gain at its boundary.
 export component TrimKnob inherits MiniKnob {
-    minimum: -60;
+    minimum: GainMath.min-db;
     maximum: 12;
     default-value: 0;
     value-text: GainMath.format-db(root.value);
@@ -2030,6 +2041,14 @@ export component KnobStack inherits Rectangle {
                 accepted => {
                     root.text-committed(self.text);
                     self.clear-focus();
+                }
+                // As the entry above.
+                key-pressed(event) => {
+                    if (event.text == Key.Escape) {
+                        self.clear-focus();
+                        return EventResult.accept;
+                    }
+                    return EventResult.reject;
                 }
                 edited => { }
             }

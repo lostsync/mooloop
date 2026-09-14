@@ -754,6 +754,22 @@ fn sync_command_availability(window: &MainWindow, commands: &CommandState) {
     window.set_project_edit_pending(commands.project_edit_pending);
 }
 
+/// How many segments a mixer strip's meter draws, mirroring
+/// `MixerMetrics.meter-segments` in `mixer.slint`.
+///
+/// The throttle below quantizes a dB value into segments and repaints only
+/// when the count changes, so it has to quantize by the same count the meter
+/// draws with. If the markup's count were raised and this were not, the
+/// throttle would swallow a change that moves a visible segment -- which is
+/// the "peak marker one segment behind where the audio put it" failure the
+/// throttle's own call site names. `slint_meter_segment_counts_match_the_throttle`
+/// holds the two together.
+pub const MIXER_STRIP_METER_SEGMENTS: u32 = 14;
+
+/// How many segments a device rail's meter draws, mirroring the `segments: 12`
+/// the rails set in `device-rack.slint`. See [`MIXER_STRIP_METER_SEGMENTS`].
+pub const DEVICE_RAIL_METER_SEGMENTS: u32 = 12;
+
 /// `SegmentedMeter` only changes pixels when its lit-segment count changes.
 /// Keeping the raw dB value in the model is useful at that boundary, but
 /// rewriting it for an in-between ballistics update just invalidates Slint.
@@ -1121,6 +1137,20 @@ fn queue_pattern_clear(
         channel.automation[index].clear();
     }
     queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
+}
+
+/// The colour of the track a channel feeds, which is what that channel's rack
+/// plate is washed with.
+///
+/// A lookup rather than a field on the channel: a track's colour belongs to
+/// the track, and a copy on every channel routed to it would be a copy to keep
+/// in step with every reroute and every recolour. The rack rebuilds its rows
+/// from the session anyway.
+fn feeding_track_color(
+    buses: &[mooloop_core::BusSetup],
+    bus: u8,
+) -> Option<mooloop_core::ProjectColor> {
+    buses.get(bus as usize).and_then(|setup| setup.bus.color)
 }
 
 pub struct AppUi {
@@ -2396,6 +2426,28 @@ struct UiState {
     /// opened rather than held live. Presets change on disk only when this
     /// application writes one, and it rescans then too.
     preset_catalog: Vec<PresetGroup>,
+    /// Raised whenever the effect rack is re-synced, so the pump knows the
+    /// engine's spectrum subscriptions may be pointing at the wrong slots.
+    ///
+    /// A subscription is keyed by `(target, slot)` and every structural rack
+    /// edit renumbers slots, so enabling the analyzer on an EQ in slot 2 and
+    /// then deleting slot 1 used to leave the engine publishing for a stage
+    /// nothing draws while the EQ, now slot 1, drew a flat line behind a lit
+    /// button. The orphan also held one of the sixty-four `SPECTRUM_SLOTS`
+    /// for the rest of the session.
+    ///
+    /// `Cell` because `sync_effects` takes `&self`, and that is the one
+    /// function every rack edit already calls.
+    effect_spectra_stale: std::cell::Cell<bool>,
+    /// Raised when a project has been installed, so the pump knows the track
+    /// its per-bus meter ballistics belong to may have changed underneath
+    /// them.
+    ///
+    /// The ballistics are keyed by index and the pump owns them as `move`d
+    /// locals, so this is the same flag handoff `bus_clip_clear` uses: raised
+    /// here, consumed on the next tick. See [`meter::MeterBallistics::reset`]
+    /// for what an inherited latch looks like.
+    bus_meters_stale: bool,
 }
 
 /// The browser panel's two halves.
@@ -2433,6 +2485,11 @@ impl UiState {
                 name: channel.name.as_str().into(),
                 color: channel_colors::to_slint(channel.color),
                 has_color: channel.color.is_some(),
+                track_color: channel_colors::to_slint(feeding_track_color(
+                    &self.session.buses,
+                    channel.bus,
+                )),
+                has_track_color: feeding_track_color(&self.session.buses, channel.bus).is_some(),
                 muted: channel.muted,
                 volume_db: linear_to_db(channel.volume),
                 pan: channel.pan,
@@ -2491,6 +2548,13 @@ impl UiState {
                 row.name = ch.name.as_str().into();
                 row.color = channel_colors::to_slint(ch.color);
                 row.has_color = ch.color.is_some();
+                // Re-read every refresh rather than stored: this is the
+                // *track's* colour, so it moves when the track is recoloured
+                // or when the channel is routed somewhere else, and neither
+                // of those is an edit to the channel.
+                let track = feeding_track_color(&self.session.buses, ch.bus);
+                row.track_color = channel_colors::to_slint(track);
+                row.has_track_color = track.is_some();
                 self.rows.set_row_data(i, row);
             }
         }
@@ -2559,15 +2623,26 @@ impl UiState {
             })
             .collect();
         window.set_pattern_menu_options(ModelRc::from(Rc::new(VecModel::from(options))));
-        // The undecorated names, for the surfaces that draw a row per pattern
-        // and number it themselves. The playlist gutter drew "Pattern N" from
-        // its own loop index and so was the one place a rename never reached.
-        let names: Vec<slint::SharedString> = self
+        // The undecorated names and colours, for the surfaces that draw a row
+        // or a clip per pattern and number it themselves. The playlist gutter
+        // drew "Pattern N" from its own loop index and so was the one place a
+        // rename never reached.
+        //
+        // The ink is computed here rather than in the markup because the
+        // luminance weights that decide it belong with the colour type that
+        // has a test for them, and a second copy in Slint would be a second
+        // place for the threshold to sit.
+        let info: Vec<PatternInfo> = self
             .session.pattern_meta
             .iter()
-            .map(|meta| meta.name.as_str().into())
+            .map(|meta| PatternInfo {
+                name: meta.name.as_str().into(),
+                color: channel_colors::to_slint(meta.color),
+                has_color: meta.color.is_some(),
+                ink: channel_colors::to_slint(meta.color.map(|color| color.ink())),
+            })
             .collect();
-        window.set_pattern_names(ModelRc::from(Rc::new(VecModel::from(names))));
+        window.set_pattern_info(ModelRc::from(Rc::new(VecModel::from(info))));
         let current = self.session.pattern_meta.get(self.session.current_pattern);
         window.set_current_pattern_name(
             current.map(|meta| meta.name.clone()).unwrap_or_default().into(),
@@ -2957,6 +3032,12 @@ impl UiState {
     }
 
     fn sync_effects(&self) {
+        // Every structural rack edit calls this, which is what makes it the
+        // place to notice that slot numbers may have moved under the engine's
+        // spectrum subscriptions. Idempotent and cheap, so the non-structural
+        // callers raising it too costs nothing -- and a preset can carry an
+        // analyzer flag, so some of them need it anyway.
+        self.effect_spectra_stale.set(true);
         let armed = self.session.modulation_armed_slot.get();
         let selected = self.session.selected_device_slot();
         let rows: Vec<EffectSlotRow> = match self.session.effect_target {
@@ -3620,6 +3701,8 @@ impl UiState {
         let solo_silenced = mooloop_core::mixer::solo_silenced(&self.session.buses);
         MixerStripRow {
             name: setup.bus.name.as_str().into(),
+            color: channel_colors::to_slint(setup.bus.color),
+            has_color: setup.bus.color.is_some(),
             muted: setup.bus.muted,
             volume: setup.bus.volume,
             pan: setup.bus.pan,
@@ -3709,6 +3792,11 @@ impl UiState {
         window.set_editing_bus_console(setup.bus.console);
         window.set_editing_bus_polarity(setup.bus.polarity);
         window.set_editing_bus_solo(setup.bus.solo);
+        window.set_editing_bus_has_color(setup.bus.color.is_some());
+        window.set_editing_bus_color(channel_colors::to_slint(setup.bus.color));
+        window.set_editing_bus_color_hex(
+            setup.bus.color.map(|color| color.to_hex()).unwrap_or_default().into(),
+        );
         window.set_editing_bus_strip(strip_row(&setup.bus.strip));
         window.set_editing_bus_can_remove(self.session.can_remove_track(index));
         window.set_editing_bus_allowed(self.allowed_destinations(index));
@@ -4274,6 +4362,10 @@ impl AppUi {
             name: first.name.as_str().into(),
             color: channel_colors::to_slint(first.color),
             has_color: first.color.is_some(),
+            // A new song's one track is the master, which nobody has
+            // coloured yet; the first refresh fills this in if they do.
+            track_color: Default::default(),
+            has_track_color: false,
             muted: false,
             volume_db: linear_to_db(first.volume),
             pan: first.pan,
@@ -4330,6 +4422,8 @@ impl AppUi {
             browser_rows: browser_row_model,
             browser_tab: BrowserTab::default(),
             preset_catalog: Vec::new(),
+            effect_spectra_stale: std::cell::Cell::new(false),
+            bus_meters_stale: false,
             automation_point_model,
             automation_target_model,
         }));
@@ -6692,6 +6786,11 @@ impl AppUi {
                     name: ch.name.as_str().into(),
                     color: channel_colors::to_slint(ch.color),
                     has_color: ch.color.is_some(),
+                    track_color: channel_colors::to_slint(feeding_track_color(
+                        &st.session.buses,
+                        ch.bus,
+                    )),
+                    has_track_color: feeding_track_color(&st.session.buses, ch.bus).is_some(),
                     muted: false,
                     volume_db: linear_to_db(ch.volume),
                     pan: ch.pan,
@@ -7484,6 +7583,34 @@ impl AppUi {
                     // channel rather than each other.
                     guard.sync_row_flags();
                     guard.refresh_editor(&window);
+                    guard.update_document_title(&window);
+                }
+            });
+        }
+
+        // A track's colour. The same gesture as a channel's, one target over,
+        // with one extra consequence: a channel routed to this track wears
+        // its colour as a wash, so every rack plate has to be redrawn rather
+        // than just the strip that was recoloured.
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_track_color_chosen(move |track, hex| {
+                let mut guard = st.borrow_mut();
+                let color = if hex.trim().is_empty() {
+                    None
+                } else {
+                    match mooloop_core::ProjectColor::from_hex(hex.trim()) {
+                        Some(color) => Some(color),
+                        None => return,
+                    }
+                };
+                if !guard.session.set_track_color(track, color) {
+                    return;
+                }
+                if let Some(window) = weak.upgrade() {
+                    guard.sync_row_flags();
+                    guard.sync_mixer(&window);
                     guard.update_document_title(&window);
                 }
             });
@@ -11611,6 +11738,33 @@ impl AppUi {
                     w.global::<StripMeters>()
                         .set_reduction_db(reduction.as_slice().into());
                 }
+                // The master is always track 0, so its meter is never
+                // reading somebody else's audio and its latch is never
+                // inherited. Every other index can have moved.
+                // Bound before the `if` rather than written into its
+                // condition: a temporary in an `if` condition lives until the
+                // end of the whole statement, so the `RefMut` would still be
+                // held inside the block, and the block below is one edit away
+                // from touching `st` again.
+                // Slot numbers may have moved under the engine's spectrum
+                // subscriptions since the last tick. Cheap and idempotent, so
+                // it rides the same once-a-tick handoff as the meters rather
+                // than being called from each of the nineteen places that
+                // re-sync the rack.
+                let rack_may_have_moved = st.borrow().effect_spectra_stale.replace(false);
+                if rack_may_have_moved {
+                    sync_effect_spectrum_subscriptions(&st.borrow(), &handle);
+                }
+                let bank_may_have_moved = {
+                    let mut state = st.borrow_mut();
+                    std::mem::replace(&mut state.bus_meters_stale, false)
+                };
+                if bank_may_have_moved {
+                    for meters in bus_meters.iter_mut().skip(1) {
+                        meters.0.reset();
+                        meters.1.reset();
+                    }
+                }
                 for (bus, meters) in bus_meters.iter_mut().enumerate() {
                     if bus_clip_clear_in
                         .borrow_mut()
@@ -11634,10 +11788,10 @@ impl AppUi {
                             // peak marker comes to sit one segment behind
                             // where the audio put it.
                             let clipping = left.clipping || right.clipping;
-                            if meter_display_changed(row.left_db, left.level_db, 14)
-                                || meter_display_changed(row.right_db, right.level_db, 14)
-                                || meter_display_changed(row.held_left_db, left.held_db, 14)
-                                || meter_display_changed(row.held_right_db, right.held_db, 14)
+                            if meter_display_changed(row.left_db, left.level_db, MIXER_STRIP_METER_SEGMENTS)
+                                || meter_display_changed(row.right_db, right.level_db, MIXER_STRIP_METER_SEGMENTS)
+                                || meter_display_changed(row.held_left_db, left.held_db, MIXER_STRIP_METER_SEGMENTS)
+                                || meter_display_changed(row.held_right_db, right.held_db, MIXER_STRIP_METER_SEGMENTS)
                                 || row.clipping != clipping
                             {
                                 row.left_db = left.level_db;
@@ -11652,6 +11806,13 @@ impl AppUi {
                     if editing_bus && bus == edited_bus {
                         w.set_editing_bus_left_db(left.level_db);
                         w.set_editing_bus_right_db(right.level_db);
+                        // The hold and the latch come off the same reading and
+                        // were being dropped here, so the fader row's meter
+                        // held nothing and its clip lamp could not light --
+                        // one track, two faces, two behaviours.
+                        w.set_editing_bus_held_left_db(left.held_db);
+                        w.set_editing_bus_held_right_db(right.held_db);
+                        w.set_editing_bus_clipping(left.clipping || right.clipping);
                     }
                 }
                 // Device meters address channels and buses in one space: a
@@ -11692,10 +11853,10 @@ impl AppUi {
                                 let input_right_db = linear_to_db(in_r);
                                 let output_left_db = linear_to_db(out_l);
                                 let output_right_db = linear_to_db(out_r);
-                                let meter_changed = meter_display_changed(row.input_left_db, input_left_db, 12)
-                                    || meter_display_changed(row.input_right_db, input_right_db, 12)
-                                    || meter_display_changed(row.output_left_db, output_left_db, 12)
-                                    || meter_display_changed(row.output_right_db, output_right_db, 12);
+                                let meter_changed = meter_display_changed(row.input_left_db, input_left_db, DEVICE_RAIL_METER_SEGMENTS)
+                                    || meter_display_changed(row.input_right_db, input_right_db, DEVICE_RAIL_METER_SEGMENTS)
+                                    || meter_display_changed(row.output_left_db, output_left_db, DEVICE_RAIL_METER_SEGMENTS)
+                                    || meter_display_changed(row.output_right_db, output_right_db, DEVICE_RAIL_METER_SEGMENTS);
                                 // Non-dynamics stages never publish here, so
                                 // they read the resting pair and need no
                                 // check for what kind of device they hold.
@@ -11976,6 +12137,12 @@ fn install_project_in_ui(
     if !handle.install_project(Arc::new(project.clone())) {
         return false;
     }
+    // A project install is the only thing that can change which track a strip
+    // index names -- a removal shifts every later one down, and an undo of one
+    // shifts them back. The per-bus ballistics are keyed by that index, so
+    // from here they are about a track that may not be the one they were
+    // reading. The pump resets them on its next tick.
+    state.borrow_mut().bus_meters_stale = true;
     for index in 0..MAX_CHANNELS {
         let sample = project
             .channels
@@ -12016,43 +12183,69 @@ fn install_project_in_ui(
     true
 }
 
+/// Tell the engine exactly which stages should be publishing a spectrum.
+///
+/// **It must say `false` as well as `true`, and that is the whole fix.** The
+/// version this replaced walked the devices that *are* analyzers and enabled
+/// or disabled each one, so a stage whose analyzer had moved away -- or been
+/// deleted, or wrapped into a container -- was never visited and kept its
+/// subscription. The engine went on running a Goertzel bank every hop for a
+/// display nobody was drawing, the device that had taken that slot number
+/// drew a flat line behind a lit button, and the orphan held one of the
+/// sixty-four `SPECTRUM_SLOTS` until the project was reloaded.
+///
+/// So this walks *stages*, not devices, and states the answer for each.
+/// Re-stating a subscription that is already correct is a relaxed load and an
+/// early return in `DeviceTelemetry::set_spectrum_enabled`, so the common
+/// case costs nothing and -- importantly -- does not clear the bins, which is
+/// what would make every open analyzer blink on an unrelated device drag.
+///
+/// **One past the end of each chain is enough, and only because of an
+/// invariant.** No stage above a chain's length can be subscribed when this
+/// returns, so the only stage that can be stale next time is the one a single
+/// removal vacates. A project install is the one edit that can shorten a
+/// chain by more than that, and `DeviceTelemetry::clear_spectra` runs there.
 fn sync_effect_spectrum_subscriptions(state: &UiState, handle: &EngineHandle) {
-    for (channel, setup) in state.session.channels.iter().enumerate() {
-        for (slot, effect) in setup.effects.iter().enumerate() {
-            if let Some(eq) = effect.params.eq() {
-                handle.set_effect_spectrum_enabled(
-                    EffectTarget::Channel(channel as u8),
-                    slot as u8,
-                    eq.analyzer_enabled,
-                );
-            }
-            if let Some(preamp) = effect.params.preamp() {
-                handle.set_effect_spectrum_enabled(
-                    EffectTarget::Channel(channel as u8),
-                    slot as u8,
-                    preamp.display_enabled,
-                );
-            }
+    let sync = |target: EffectTarget, effects: &[mooloop_core::EffectSlotState]| {
+        for (slot, enabled) in spectrum_subscription_plan(effects) {
+            handle.set_effect_spectrum_enabled(target, slot, enabled);
         }
+    };
+
+    for (channel, setup) in state.session.channels.iter().enumerate() {
+        sync(EffectTarget::Channel(channel as u8), &setup.effects);
     }
     for (bus, setup) in state.session.buses.iter().enumerate() {
-        for (slot, effect) in setup.effects.iter().enumerate() {
-            if let Some(eq) = effect.params.eq() {
-                handle.set_effect_spectrum_enabled(
-                    EffectTarget::Bus(bus as u8),
-                    slot as u8,
-                    eq.analyzer_enabled,
-                );
-            }
-            if let Some(preamp) = effect.params.preamp() {
-                handle.set_effect_spectrum_enabled(
-                    EffectTarget::Bus(bus as u8),
-                    slot as u8,
-                    preamp.display_enabled,
-                );
-            }
-        }
+        sync(EffectTarget::Bus(bus as u8), &setup.effects);
     }
+}
+
+/// What every stage of one chain should be publishing, the vacated tail
+/// included.
+///
+/// Split out from the call above so the part that decides can be read back:
+/// the whole defect was a walk that only ever said `true`, and the only way
+/// to see that a walk says `false` where it should is to look at what it
+/// says.
+fn spectrum_subscription_plan(
+    effects: &[mooloop_core::EffectSlotState],
+) -> impl Iterator<Item = (u8, bool)> + '_ {
+    /// Whether this slot holds a device that is asking to be analyzed.
+    fn wanted(effect: Option<&mooloop_core::EffectSlotState>) -> bool {
+        let Some(effect) = effect else {
+            return false;
+        };
+        if let Some(eq) = effect.params.eq() {
+            return eq.analyzer_enabled;
+        }
+        if let Some(preamp) = effect.params.preamp() {
+            return preamp.display_enabled;
+        }
+        false
+    }
+
+    let past_the_end = effects.len().min(mooloop_core::MAX_EFFECTS_PER_CHANNEL - 1);
+    (0..=past_the_end).map(move |slot| (slot as u8, wanted(effects.get(slot))))
 }
 
 fn preset_menu_label(preset: &PresetSummary) -> slint::SharedString {
@@ -12780,6 +12973,59 @@ mod preset_browser_tests {
 #[cfg(test)]
 mod tests {
     use mooloop_session::browser::is_playable_sample;
+
+    /// The subscription plan states an answer for the slot past the end of
+    /// the chain, which is the one a removal vacates.
+    ///
+    /// This is the whole of the defect it replaced. The old walk visited the
+    /// devices that *are* analyzers and said `true` or `false` for each, so a
+    /// stage an analyzer had moved off was never mentioned and kept its
+    /// subscription: the engine ran a Goertzel bank every hop for a display
+    /// nobody drew, whatever landed on that slot number drew a flat line
+    /// behind a lit button, and the orphan held one of the sixty-four
+    /// `SPECTRUM_SLOTS` until the project was reloaded.
+    ///
+    /// One past the end is enough only because nothing above a chain's length
+    /// can be subscribed when the sync returns, and a project install -- the
+    /// one edit that can shorten a chain by more than one -- clears the whole
+    /// table first. Both halves of that are asserted here.
+    #[test]
+    fn the_spectrum_plan_speaks_for_the_slot_a_removal_vacates() {
+        use mooloop_core::{EffectKind, EffectSlotState};
+
+        let slot = |kind: EffectKind| EffectSlotState {
+            id: Default::default(),
+            params: kind.default_params(),
+            bypassed: false,
+            wet_dry: 1.0,
+            input_trim: 1.0,
+            output_trim: 1.0,
+        };
+        let mut analyzing = slot(EffectKind::Eq);
+        if let mooloop_core::EffectParams::Eq(eq) = &mut analyzing.params {
+            eq.analyzer_enabled = true;
+        }
+
+        // A delay, then the EQ whose analyzer is on: three answers for a
+        // two-device chain.
+        let chain = vec![slot(EffectKind::Delay), analyzing];
+        let plan: Vec<(u8, bool)> = super::spectrum_subscription_plan(&chain).collect();
+        assert_eq!(
+            plan,
+            vec![(0, false), (1, true), (2, false)],
+            "the plan must speak for slot 2, which is where a removal leaves an orphan"
+        );
+
+        // The EQ is deleted. The plan's job is to say `false` for slot 1,
+        // which is the stage the engine is still publishing into.
+        let shortened = vec![chain[0]];
+        let after: Vec<(u8, bool)> = super::spectrum_subscription_plan(&shortened).collect();
+        assert_eq!(after, vec![(0, false), (1, false)]);
+
+        // An empty chain still answers, because a chain can be emptied.
+        let empty: Vec<(u8, bool)> = super::spectrum_subscription_plan(&[]).collect();
+        assert_eq!(empty, vec![(0, false)]);
+    }
 
     /// The published defaults reach each oscillator's *own* resting value.
     ///

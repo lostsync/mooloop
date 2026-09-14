@@ -8,7 +8,8 @@
 use crate::channel::ChannelState;
 use crate::project::ProjectEdit;
 use mooloop_core::{
-    chain_latency, compile_audio_graph, compile_bus_graph, compile_latency, send_edges,
+    chain_latency, compensable_send_edges, compile_audio_graph, compile_bus_graph,
+    compile_latency, sends_are_compensable,
     CompiledAudioGraph,
     CompiledLatency, DeviceKind, EffectTarget, EngineCommand, OutletDescriptor, PublishesOutlets,
     SliceMap, MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
@@ -234,7 +235,13 @@ impl Session {
             &channel_latency,
             &channel_bus,
             &bus_latency,
-            &send_edges(&self.buses),
+            // Not `send_edges`: a bank that does not sort has no compensable
+            // sends, and the reason is in `mooloop_core::mixer` because the
+            // engine's own `install_compensation` has to agree with it. This
+            // call site spelled `send_edges` and the engine's did not, so on
+            // such a bank the session would have handed over a full
+            // `SendBank` compiled against a default order's arrival numbers.
+            &compensable_send_edges(&self.buses),
         )
     }
 
@@ -245,6 +252,12 @@ impl Session {
     /// the contract, and reading both from one pass is what keeps it true.
     fn send_specs(&self, plan: &CompiledLatency) -> Vec<SendSpec> {
         let mut specs = Vec::new();
+        // The plan has no send entries for such a bank, so building specs
+        // against it would be reading arrival numbers that were never
+        // compiled. Same policy, same place, as the plan above.
+        if !sends_are_compensable(&self.buses) {
+            return specs;
+        }
         for (index, setup) in self.buses.iter().take(MAX_BUSES).enumerate() {
             for send in &setup.sends {
                 let edge = specs.len();
@@ -622,6 +635,50 @@ mod tests {
         assert_eq!(
             (second_beat.bar, second_beat.beat, second_beat.tick),
             (1, 2, 3)
+        );
+    }
+
+    /// The session's compensation plan drops its sends on a bank that does
+    /// not sort, the way the engine's always has.
+    ///
+    /// `RenderState::install_compensation` guards its send half on whether
+    /// the bank sorts, with a reason: a send compiled against an order that is
+    /// not the one being walked arrives a block late. This derivation called
+    /// `send_edges` unconditionally and `send_specs` iterated every bus
+    /// unconditionally, so on such a bank the session would have handed the
+    /// engine a full `SendBank` compiled against a default order's arrival
+    /// numbers.
+    ///
+    /// It was unreachable -- the bank is sanitized on load, and `set_bus_output`
+    /// and `add_send` both refuse cycles -- which is exactly what let it sit
+    /// there: two copies of one policy, one corrected and one not, and nothing
+    /// able to notice. The cycle here is therefore written straight into
+    /// `buses`, past the two edit paths that would refuse it, because that is
+    /// the only way a hand-edited or foreign-build file reaches this code.
+    #[test]
+    fn the_session_drops_its_sends_from_the_plan_when_the_bank_does_not_sort() {
+        use mooloop_core::{AuxSend, BusSetup};
+
+        let mut session = Session::default();
+        while session.buses.len() < 4 {
+            session.buses.push(BusSetup::new(session.buses.len()));
+        }
+        session.buses[1].sends.push(AuxSend::new(2));
+
+        let plan = session.latency_plan();
+        assert_eq!(
+            session.send_specs(&plan).len(),
+            1,
+            "a sorting bank should carry its send into the engine's spec list"
+        );
+
+        session.buses[2].bus.output = 3;
+        session.buses[3].bus.output = 2;
+        let looped = session.latency_plan();
+        assert!(
+            session.send_specs(&looped).is_empty(),
+            "a bank that does not sort handed the engine sends compiled against \
+             an order nothing is walking"
         );
     }
 

@@ -169,6 +169,12 @@ export struct MixerSendRow {
 // already in dB so the strip never has to know the meter's floor.
 export struct MixerStripRow {
     name: string,
+    // The colour the user gave this track, drawn as a mark on its own name
+    // plate. A channel that feeds this track wears the same colour as a wash
+    // instead: a colour a thing owns is a mark on it, a colour it inherits is
+    // a wash through it.
+    color: color,
+    has-color: bool,
     muted: bool,
     volume: float,
     pan: float,
@@ -775,6 +781,18 @@ component MixerStrip inherits Rectangle {
             height: 20px;
             border-radius: Theme.radius-sm;
             background: root.strip.selected ? Theme.accent-active : Theme.surface-raised;
+            // The track's own colour, on the plate that names it -- the same
+            // 3px bar the channel rack plate and the playlist gutter wear, for
+            // the same reason: this plate's fill already says whether the rack
+            // is pointed here.
+            if root.strip.has-color : Rectangle {
+                x: 0;
+                width: 3px;
+                height: parent.height;
+                background: root.strip.color;
+                border-top-left-radius: Theme.radius-sm;
+                border-bottom-left-radius: Theme.radius-sm;
+            }
             Text {
                 text: root.strip.name;
                 // Dimmed while somebody else's solo is silencing this
