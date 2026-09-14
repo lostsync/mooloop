@@ -34,6 +34,7 @@ table of which document to read for which task. Start there, not here.
 | [PRODUCT.md](PRODUCT.md) | Scope, pillars, non-goals, and the decisions firm enough to build against. |
 | [FOCUS.md](FOCUS.md) | The active working sequence and what must not interrupt it. Rewritten when the sequence is exhausted. |
 | [ROADMAP.md](ROADMAP.md) | The whole product ordered by dependency. `FOCUS.md` outranks it on what is next. |
+| [SCOPE.md](SCOPE.md) | Everything left before the feature freeze, sized against the source, with the 1.0 line drawn. Says *what and how big*; the linked document says how. |
 | [VERSIONS.md](VERSIONS.md) | Outcome-based release targets, and which of their milestones are met. |
 | [CAPACITY_POLICY.md](CAPACITY_POLICY.md) | Why user-facing collections do not get small caps, and why a ceiling is not a reservation. |
 | [ENHANCEMENTS.md](ENHANCEMENTS.md) | Adam's standing wish list, in his words, annotated with what has landed. |

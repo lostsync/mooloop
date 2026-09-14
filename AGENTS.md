@@ -57,6 +57,7 @@ that affect the decision at hand.
 | What is being built next, and in what order | `docs/FOCUS.md`, then the matching `docs/plans/<name>/00-status.md` |
 | Product or architecture decision | `docs/PRODUCT.md`, then the relevant architecture/design document |
 | Open-ended priority or scope choice | `docs/FOCUS.md` and `docs/ROADMAP.md` |
+| What is left before the feature freeze, and how big it is | `docs/SCOPE.md` |
 | Which plans are live, and what state each is in | `docs/plans/README.md` |
 | Broad existing user surface or known gap | `docs/CURRENT.md` |
 | A small known gap you are about to rediscover | `docs/LOOSE_ENDS.md` |
