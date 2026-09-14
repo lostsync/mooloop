@@ -2426,6 +2426,19 @@ struct UiState {
     /// opened rather than held live. Presets change on disk only when this
     /// application writes one, and it rescans then too.
     preset_catalog: Vec<PresetGroup>,
+    /// Raised whenever the effect rack is re-synced, so the pump knows the
+    /// engine's spectrum subscriptions may be pointing at the wrong slots.
+    ///
+    /// A subscription is keyed by `(target, slot)` and every structural rack
+    /// edit renumbers slots, so enabling the analyzer on an EQ in slot 2 and
+    /// then deleting slot 1 used to leave the engine publishing for a stage
+    /// nothing draws while the EQ, now slot 1, drew a flat line behind a lit
+    /// button. The orphan also held one of the sixty-four `SPECTRUM_SLOTS`
+    /// for the rest of the session.
+    ///
+    /// `Cell` because `sync_effects` takes `&self`, and that is the one
+    /// function every rack edit already calls.
+    effect_spectra_stale: std::cell::Cell<bool>,
     /// Raised when a project has been installed, so the pump knows the track
     /// its per-bus meter ballistics belong to may have changed underneath
     /// them.
@@ -3019,6 +3032,12 @@ impl UiState {
     }
 
     fn sync_effects(&self) {
+        // Every structural rack edit calls this, which is what makes it the
+        // place to notice that slot numbers may have moved under the engine's
+        // spectrum subscriptions. Idempotent and cheap, so the non-structural
+        // callers raising it too costs nothing -- and a preset can carry an
+        // analyzer flag, so some of them need it anyway.
+        self.effect_spectra_stale.set(true);
         let armed = self.session.modulation_armed_slot.get();
         let selected = self.session.selected_device_slot();
         let rows: Vec<EffectSlotRow> = match self.session.effect_target {
@@ -4403,6 +4422,7 @@ impl AppUi {
             browser_rows: browser_row_model,
             browser_tab: BrowserTab::default(),
             preset_catalog: Vec::new(),
+            effect_spectra_stale: std::cell::Cell::new(false),
             bus_meters_stale: false,
             automation_point_model,
             automation_target_model,
@@ -11726,6 +11746,15 @@ impl AppUi {
                 // end of the whole statement, so the `RefMut` would still be
                 // held inside the block, and the block below is one edit away
                 // from touching `st` again.
+                // Slot numbers may have moved under the engine's spectrum
+                // subscriptions since the last tick. Cheap and idempotent, so
+                // it rides the same once-a-tick handoff as the meters rather
+                // than being called from each of the nineteen places that
+                // re-sync the rack.
+                let rack_may_have_moved = st.borrow().effect_spectra_stale.replace(false);
+                if rack_may_have_moved {
+                    sync_effect_spectrum_subscriptions(&st.borrow(), &handle);
+                }
                 let bank_may_have_moved = {
                     let mut state = st.borrow_mut();
                     std::mem::replace(&mut state.bus_meters_stale, false)
@@ -12154,43 +12183,69 @@ fn install_project_in_ui(
     true
 }
 
+/// Tell the engine exactly which stages should be publishing a spectrum.
+///
+/// **It must say `false` as well as `true`, and that is the whole fix.** The
+/// version this replaced walked the devices that *are* analyzers and enabled
+/// or disabled each one, so a stage whose analyzer had moved away -- or been
+/// deleted, or wrapped into a container -- was never visited and kept its
+/// subscription. The engine went on running a Goertzel bank every hop for a
+/// display nobody was drawing, the device that had taken that slot number
+/// drew a flat line behind a lit button, and the orphan held one of the
+/// sixty-four `SPECTRUM_SLOTS` until the project was reloaded.
+///
+/// So this walks *stages*, not devices, and states the answer for each.
+/// Re-stating a subscription that is already correct is a relaxed load and an
+/// early return in `DeviceTelemetry::set_spectrum_enabled`, so the common
+/// case costs nothing and -- importantly -- does not clear the bins, which is
+/// what would make every open analyzer blink on an unrelated device drag.
+///
+/// **One past the end of each chain is enough, and only because of an
+/// invariant.** No stage above a chain's length can be subscribed when this
+/// returns, so the only stage that can be stale next time is the one a single
+/// removal vacates. A project install is the one edit that can shorten a
+/// chain by more than that, and `DeviceTelemetry::clear_spectra` runs there.
 fn sync_effect_spectrum_subscriptions(state: &UiState, handle: &EngineHandle) {
-    for (channel, setup) in state.session.channels.iter().enumerate() {
-        for (slot, effect) in setup.effects.iter().enumerate() {
-            if let Some(eq) = effect.params.eq() {
-                handle.set_effect_spectrum_enabled(
-                    EffectTarget::Channel(channel as u8),
-                    slot as u8,
-                    eq.analyzer_enabled,
-                );
-            }
-            if let Some(preamp) = effect.params.preamp() {
-                handle.set_effect_spectrum_enabled(
-                    EffectTarget::Channel(channel as u8),
-                    slot as u8,
-                    preamp.display_enabled,
-                );
-            }
+    let sync = |target: EffectTarget, effects: &[mooloop_core::EffectSlotState]| {
+        for (slot, enabled) in spectrum_subscription_plan(effects) {
+            handle.set_effect_spectrum_enabled(target, slot, enabled);
         }
+    };
+
+    for (channel, setup) in state.session.channels.iter().enumerate() {
+        sync(EffectTarget::Channel(channel as u8), &setup.effects);
     }
     for (bus, setup) in state.session.buses.iter().enumerate() {
-        for (slot, effect) in setup.effects.iter().enumerate() {
-            if let Some(eq) = effect.params.eq() {
-                handle.set_effect_spectrum_enabled(
-                    EffectTarget::Bus(bus as u8),
-                    slot as u8,
-                    eq.analyzer_enabled,
-                );
-            }
-            if let Some(preamp) = effect.params.preamp() {
-                handle.set_effect_spectrum_enabled(
-                    EffectTarget::Bus(bus as u8),
-                    slot as u8,
-                    preamp.display_enabled,
-                );
-            }
-        }
+        sync(EffectTarget::Bus(bus as u8), &setup.effects);
     }
+}
+
+/// What every stage of one chain should be publishing, the vacated tail
+/// included.
+///
+/// Split out from the call above so the part that decides can be read back:
+/// the whole defect was a walk that only ever said `true`, and the only way
+/// to see that a walk says `false` where it should is to look at what it
+/// says.
+fn spectrum_subscription_plan(
+    effects: &[mooloop_core::EffectSlotState],
+) -> impl Iterator<Item = (u8, bool)> + '_ {
+    /// Whether this slot holds a device that is asking to be analyzed.
+    fn wanted(effect: Option<&mooloop_core::EffectSlotState>) -> bool {
+        let Some(effect) = effect else {
+            return false;
+        };
+        if let Some(eq) = effect.params.eq() {
+            return eq.analyzer_enabled;
+        }
+        if let Some(preamp) = effect.params.preamp() {
+            return preamp.display_enabled;
+        }
+        false
+    }
+
+    let past_the_end = effects.len().min(mooloop_core::MAX_EFFECTS_PER_CHANNEL - 1);
+    (0..=past_the_end).map(move |slot| (slot as u8, wanted(effects.get(slot))))
 }
 
 fn preset_menu_label(preset: &PresetSummary) -> slint::SharedString {
@@ -12918,6 +12973,59 @@ mod preset_browser_tests {
 #[cfg(test)]
 mod tests {
     use mooloop_session::browser::is_playable_sample;
+
+    /// The subscription plan states an answer for the slot past the end of
+    /// the chain, which is the one a removal vacates.
+    ///
+    /// This is the whole of the defect it replaced. The old walk visited the
+    /// devices that *are* analyzers and said `true` or `false` for each, so a
+    /// stage an analyzer had moved off was never mentioned and kept its
+    /// subscription: the engine ran a Goertzel bank every hop for a display
+    /// nobody drew, whatever landed on that slot number drew a flat line
+    /// behind a lit button, and the orphan held one of the sixty-four
+    /// `SPECTRUM_SLOTS` until the project was reloaded.
+    ///
+    /// One past the end is enough only because nothing above a chain's length
+    /// can be subscribed when the sync returns, and a project install -- the
+    /// one edit that can shorten a chain by more than one -- clears the whole
+    /// table first. Both halves of that are asserted here.
+    #[test]
+    fn the_spectrum_plan_speaks_for_the_slot_a_removal_vacates() {
+        use mooloop_core::{EffectKind, EffectSlotState};
+
+        let slot = |kind: EffectKind| EffectSlotState {
+            id: Default::default(),
+            params: kind.default_params(),
+            bypassed: false,
+            wet_dry: 1.0,
+            input_trim: 1.0,
+            output_trim: 1.0,
+        };
+        let mut analyzing = slot(EffectKind::Eq);
+        if let mooloop_core::EffectParams::Eq(eq) = &mut analyzing.params {
+            eq.analyzer_enabled = true;
+        }
+
+        // A delay, then the EQ whose analyzer is on: three answers for a
+        // two-device chain.
+        let chain = vec![slot(EffectKind::Delay), analyzing];
+        let plan: Vec<(u8, bool)> = super::spectrum_subscription_plan(&chain).collect();
+        assert_eq!(
+            plan,
+            vec![(0, false), (1, true), (2, false)],
+            "the plan must speak for slot 2, which is where a removal leaves an orphan"
+        );
+
+        // The EQ is deleted. The plan's job is to say `false` for slot 1,
+        // which is the stage the engine is still publishing into.
+        let shortened = vec![chain[0]];
+        let after: Vec<(u8, bool)> = super::spectrum_subscription_plan(&shortened).collect();
+        assert_eq!(after, vec![(0, false), (1, false)]);
+
+        // An empty chain still answers, because a chain can be emptied.
+        let empty: Vec<(u8, bool)> = super::spectrum_subscription_plan(&[]).collect();
+        assert_eq!(empty, vec![(0, false)]);
+    }
 
     /// The published defaults reach each oscillator's *own* resting value.
     ///
