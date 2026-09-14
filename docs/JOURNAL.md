@@ -1389,6 +1389,70 @@ the model is flattened and a row carries no pointer to the one containing it.
 Scrolling the keyboard's row into view had to happen in the markup: Rust
 knows the index and only the `ScrollView` knows how many rows fit.
 
+## Sep 14 (the EQ) — the face was never the problem
+
+`eq-v2` step 01, the same day the keyboard pass closed `interface-iteration/`.
+The EQ had six parameters covering seven bands and two pass filters, every one
+of them resolved through `selected_target` — which was itself id 0, therefore
+itself automatable, so a lane on it changed *over time* which band every other
+EQ lane referred to. Nothing prevented that and nothing could make it mean
+anything.
+
+The reason to fix it is not the EQ. mooloop intends to host CLAP, and a CLAP
+plugin hands the host N independent parameters with stable ids and **no
+context** — there is no way to say "the selected band's frequency" to a plugin.
+This was the one native device whose parameter model a host could not have
+expressed, which made it a cheap rehearsal on behaviour already understood.
+
+**63 descriptors now, none of them meaning "the selected target's".** Ids are
+`EQ_BAND_BASE + band * 10 + field`, the layout `strip_band_param` already used;
+a stride of ten for six fields, because appending a field otherwise renumbers
+every band after it.
+
+**The face did not change, and that is the whole finding.** The step file's
+cost estimate reads like a device rewrite, and every line of it was true about
+Rust. What it did not anticipate is that `eq-device.slint` needed no edit and
+neither did `main.slint`. A face showing one band at a time is right, and was
+always right — seven duplicated control sets is not an interface. What was
+wrong was that the *parameter space* was shaped like the face: the DSP had to
+consult a selection before it knew what a Freq event meant. So the selection
+gets resolved one layer earlier, in `EqParams::id_for_selected`, and the face
+goes on being a view.
+
+Two things made that free. The face's control indices were **kept at the
+retired ids** — Freq was id 2, so `modulation-allowed[2]` still draws the Freq
+knob's arc. And the four overlay arrays are *gathered* down to the seven the
+face reads, rather than the markup being taught a strided id layout, which
+would have been this codebase's characteristic fault: a table spelled in Rust
+and again in `.slint`.
+
+**The step file said to bump `FORMAT_VERSION` and it was right about the
+question and wrong about the price.** Its reasoning: an existing lane's
+`ParamAddr` no longer means what it did. True. But `FORMAT_VERSION` is refused
+outright on load — no migration path — so a bump does not retire seven ids, it
+refuses **every document**: every song with no EQ lane in it, and every factory
+preset already on disk behind a seeding marker that can never re-seed. What
+makes the bump unnecessary is a detail the plan asked for in a different
+sentence: the new ids start at 16, so a stale lane on the retired 0..6 lands in
+a *hole* and goes inert rather than moving some unrelated band. Leaving a gap
+under the new base is what buys the alternative, and a test holds the gap open.
+
+Also priced and wrong: the plan says to measure the modulation arrays' growth
+with `block_cost.rs` before assuming it is free. It is free, and no measurement
+was needed — `descriptor_slots` is called from `mooloop-ui` and
+`mooloop-session` only, and neither `mooloop-engine` nor `mooloop-dsp` mentions
+it. The arrays are built when the UI publishes a row.
+
+**And a test found what the model had been hiding.** `slint_face_agreement.rs`
+failed the moment the ids moved, correctly: it pairs a knob to a parameter by
+the overlay index the markup reads, and the EQ's index had stopped being an id.
+Teaching it `EqFaceControl` fixed it — and exposed a live defect. A knob's
+double-click returns to *band 2's* default whatever band is selected, because
+the face's resting values are hardcoded and one `Freq` descriptor used to stand
+for all seven bands at 1 kHz. Band 1 rests at 120 Hz. Equally true before this
+change, and uncheckable then: the per-band table is what made it a question
+anybody could ask.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.

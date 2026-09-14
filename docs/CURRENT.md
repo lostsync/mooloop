@@ -886,7 +886,12 @@ land on its own when it starts to matter:
   can serve -- a division asking for longer reads in amber. It persists the
   division, not just its current ms result. It is joined by a gate,
   compressor, and limiter sharing one detector and gain-computer module; a
-  seven-band parametric EQ with optional bounded spectrum telemetry; a
+  seven-band parametric EQ with optional bounded spectrum telemetry, **whose
+  every band and both pass filters carry their own stable parameter ids** --
+  so an automation lane on band 3's frequency means band 3 forever, whatever
+  the face happens to be showing, and the band selector is a view control
+  rather than an automatable parameter that decided what every other EQ lane
+  meant; a
   feedback-delay-network hall reverb; and one five-mode modulation processor
   (chorus, flange, phaser, ensemble, and ADT) whose Rate carries the same
   sync lamp the delay does, over the same grid, clamped to the 12 Hz its LFO

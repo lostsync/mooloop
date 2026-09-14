@@ -5946,11 +5946,11 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 ..mooloop_core::ModLfoParams::default()
             },
         ));
-        let stepped = ParamAddr::effect(
-            EffectTarget::Channel(0),
-            eq,
-            mooloop_core::EQ_PARAM_TARGET,
-        );
+        // A band's *type*, which is stepped. The EQ's band selector was the
+        // stepped parameter this test used until `eq-v2/01` stopped it being
+        // a parameter at all; what is under test is the policy, not the EQ.
+        let stepped_id = mooloop_core::eq_band_param(0, mooloop_core::EQ_BAND_KIND);
+        let stepped = ParamAddr::effect(EffectTarget::Channel(0), eq, stepped_id);
         assert!(channel
             .setup
             .modulation
@@ -5975,19 +5975,12 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             .iter()
             .any(|event| matches!(
                 event.event,
-                Event::ParamValue {
-                    id: mooloop_core::EQ_PARAM_TARGET,
-                    ..
-                }
+                Event::ParamValue { id, .. } if id == stepped_id
             )));
 
         // And the knob still reaches the device, because the parked route does
         // not count as modulating it.
-        assert!(!render.effect_is_modulated(
-            EffectTarget::Channel(0),
-            0,
-            mooloop_core::EQ_PARAM_TARGET
-        ));
+        assert!(!render.effect_is_modulated(EffectTarget::Channel(0), 0, stepped_id));
     }
 
     #[test]
@@ -7784,7 +7777,10 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             let mut params = kind.default_params();
             match kind {
                 mooloop_core::EffectKind::Eq => {
-                    params.set(mooloop_core::EQ_PARAM_GAIN_DB, 18.0);
+                    params.set(
+                        mooloop_core::eq_band_param(1, mooloop_core::EQ_BAND_GAIN),
+                        18.0,
+                    );
                 }
                 mooloop_core::EffectKind::Modulation => {
                     params.set(mooloop_core::MODULATION_PARAM_MODE, 2.0);

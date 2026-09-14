@@ -279,98 +279,251 @@ impl ParamDescriptor {
 /// EQ rather than spending a bell band on cleanup.
 pub const EQ_MAX_BANDS: usize = 7;
 
-/// `Event::ParamValue` ids for [`EqParams`]. These operate on the selected
-/// EQ target, so the UI needs one stable control set rather than a dump of
-/// seven duplicated controls.
-pub const EQ_PARAM_TARGET: u32 = 0;
-pub const EQ_PARAM_ENABLED: u32 = 1;
-pub const EQ_PARAM_FREQUENCY_HZ: u32 = 2;
-pub const EQ_PARAM_GAIN_DB: u32 = 3;
-pub const EQ_PARAM_Q: u32 = 4;
-/// Bell bands: 0 constant-Q, 1 proportional-Q. Pass filters: slope index.
-/// The selected *pass filter's* slope. Id 5, which used to be "Shape" and
-/// meant two different things: a band's Q profile when a band was selected and
-/// this when a pass filter was. Two enums of different arity behind one id, so
-/// its five declared positions collapsed onto the Q profile's two and read back
-/// as one of them -- an automation lane at half travel wrote a setting and then
-/// reported a different one, with nothing to tell the user what to draw
-/// instead. The Q profile moved to [`EQ_PARAM_Q_PROFILE`] and this kept the
-/// range it already had, so a lane on a pass filter's slope is unchanged.
-pub const EQ_PARAM_PASS_SLOPE: u32 = 5;
-/// The selected *band's* Q profile. Appended rather than renumbered, which is
-/// the rule this table states for itself.
-pub const EQ_PARAM_Q_PROFILE: u32 = 6;
+/// `Event::ParamValue` ids for [`EqParams`].
+///
+/// **Every band and both pass filters address their own fields.** Until
+/// 2026-09-14 there were seven ids and they all meant "the selected target's":
+/// `get` and `set` resolved each one through `selected_target`, which was
+/// itself id 0 and therefore itself automatable, so a lane on it changed --
+/// over time -- which band every other EQ lane referred to. Nothing prevented
+/// that and nothing could make it mean anything.
+///
+/// The reason to fix it is bigger than the EQ. mooloop intends to host CLAP,
+/// and a CLAP plugin hands the host N independent parameters, each with a
+/// stable id and no context; there is no way to say "the selected band's
+/// frequency" to a plugin. This was the one native device whose parameter
+/// model a plugin host could not express -- the channel strip's EQ, DS-01,
+/// ML-P8 and the modulator modules are all already per-band or per-module.
+/// See `docs/plans/eq-v2/01-per-band-parameters.md`.
+///
+/// ## Ids 0..6 are retired, not reused
+///
+/// `Band`, `On`, `Freq`, `Gain`, `Q`, `Pass Slope` and `Q Profile` sat at 0..6
+/// and projects have saved them. The rule this file states about itself --
+/// never renumber a shipped id, append instead -- means they stay spent, and
+/// keeping them as aliases for the selected band would preserve exactly the
+/// incoherence this removes. So the new space **starts at [`EQ_FIRST`]** and
+/// the seven below it address nothing.
+///
+/// That is what makes this change safe to ship without bumping
+/// `FORMAT_VERSION`, and the choice is deliberate. `EqParams`'s persisted
+/// *shape* is unchanged -- same bands, same fields, `selected_target` still
+/// saved -- so a v1 song's EQ loads and sounds exactly as it did. The only
+/// thing that changes meaning is a lane or route addressing an EQ id in 0..6,
+/// and because the new ids start at 16 such a lane lands in a **hole**: `get`
+/// and `set` answer `None` and it is inert. A version bump would instead
+/// refuse the whole document -- every song with no EQ lane in it, and every
+/// factory preset already on disk behind a seeding marker that will never
+/// re-seed. Refusing a hundred working files to retire seven dead ids is the
+/// wrong trade, and leaving a gap under the new base is what buys the
+/// alternative.
+pub const EQ_FIRST: u32 = 16;
 
-static EQ_DESCRIPTORS: [ParamDescriptor; 7] = [
-    ParamDescriptor {
-        id: EQ_PARAM_TARGET,
-        name: "Band",
+/// Id of band 0's first field. A band's fields are contiguous, so a band's
+/// ids are `EQ_BAND_BASE + band * EQ_BAND_STRIDE + field`, the layout
+/// `strip_band_param` already uses.
+pub const EQ_BAND_BASE: u32 = EQ_FIRST;
+/// Ten, not six. The strip took four for four fields and `synth_osc_param`
+/// took ten for five; the oscillator's spare room is the one that has been
+/// wanted, because appending a field to a band otherwise renumbers every
+/// band after it.
+pub const EQ_BAND_STRIDE: u32 = 10;
+pub const EQ_BAND_ON: u32 = 0;
+pub const EQ_BAND_FREQ: u32 = 1;
+pub const EQ_BAND_GAIN: u32 = 2;
+pub const EQ_BAND_Q: u32 = 3;
+pub const EQ_BAND_KIND: u32 = 4;
+pub const EQ_BAND_Q_PROFILE: u32 = 5;
+/// How many of a band's ten slots are spelled. The rest are the spare room.
+pub const EQ_BAND_FIELDS: u32 = 6;
+
+/// Id of the high-pass filter's first field; the low-pass follows a stride
+/// later. Pass filters are not bands -- no gain, and a slope where a band has
+/// a kind -- so they get their own base rather than a ragged band row.
+pub const EQ_PASS_BASE: u32 = EQ_BAND_BASE + EQ_MAX_BANDS as u32 * EQ_BAND_STRIDE;
+pub const EQ_PASS_STRIDE: u32 = 10;
+pub const EQ_PASS_ON: u32 = 0;
+pub const EQ_PASS_FREQ: u32 = 1;
+pub const EQ_PASS_Q: u32 = 2;
+pub const EQ_PASS_SLOPE: u32 = 3;
+pub const EQ_PASS_FIELDS: u32 = 4;
+/// The high-pass is pass 0 and the low-pass is pass 1, matching the order the
+/// face's selector draws them in and the order they run in.
+pub const EQ_HIGH_PASS: usize = 0;
+pub const EQ_LOW_PASS: usize = 1;
+pub const EQ_PASS_COUNT: usize = 2;
+
+/// The id of one field of one band.
+pub const fn eq_band_param(band: usize, field: u32) -> u32 {
+    EQ_BAND_BASE + band as u32 * EQ_BAND_STRIDE + field
+}
+
+/// The id of one field of one pass filter.
+pub const fn eq_pass_param(pass: usize, field: u32) -> u32 {
+    EQ_PASS_BASE + pass as u32 * EQ_PASS_STRIDE + field
+}
+
+/// Which band and which field an id names, or `None` if it is not a band id.
+///
+/// The stride's spare slots answer `None` too: an id inside a band's row but
+/// past its named fields is reserved, not a sixth field nobody wrote yet.
+pub const fn eq_band_of(id: u32) -> Option<(usize, u32)> {
+    if id < EQ_BAND_BASE || id >= EQ_PASS_BASE {
+        return None;
+    }
+    let offset = id - EQ_BAND_BASE;
+    let field = offset % EQ_BAND_STRIDE;
+    if field >= EQ_BAND_FIELDS {
+        return None;
+    }
+    Some(((offset / EQ_BAND_STRIDE) as usize, field))
+}
+
+/// Which pass filter and which field an id names, or `None`.
+pub const fn eq_pass_of(id: u32) -> Option<(usize, u32)> {
+    if id < EQ_PASS_BASE || id >= EQ_PASS_BASE + EQ_PASS_COUNT as u32 * EQ_PASS_STRIDE {
+        return None;
+    }
+    let offset = id - EQ_PASS_BASE;
+    let field = offset % EQ_PASS_STRIDE;
+    if field >= EQ_PASS_FIELDS {
+        return None;
+    }
+    Some(((offset / EQ_PASS_STRIDE) as usize, field))
+}
+
+/// How many parameters the EQ describes: seven bands of six fields and two
+/// pass filters of four.
+pub const EQ_DESCRIPTOR_COUNT: usize =
+    EQ_MAX_BANDS * EQ_BAND_FIELDS as usize + EQ_PASS_COUNT * EQ_PASS_FIELDS as usize;
+
+/// Every descriptor's name, in table order.
+///
+/// **Generated rather than written out, unlike the channel strip's sixteen
+/// band rows**, and the reason the strip gives for longhand -- that a table a
+/// reader cannot see is not a table anybody will check a face against -- is
+/// what decided the shape here rather than against it. Fifty full
+/// `ParamDescriptor` literals is four hundred lines nobody reads; a name and a
+/// default per row, with the shape written once, is a table you can check by
+/// eye. What a reader actually needs to verify is *which name sits at which
+/// id*, and `param_id_freeze_tests` pins all fifty of those explicitly.
+const EQ_BAND_NAMES: [[&str; EQ_BAND_FIELDS as usize]; EQ_MAX_BANDS] = [
+    ["B1 On", "B1 Freq", "B1 Gain", "B1 Q", "B1 Type", "B1 Q Prof"],
+    ["B2 On", "B2 Freq", "B2 Gain", "B2 Q", "B2 Type", "B2 Q Prof"],
+    ["B3 On", "B3 Freq", "B3 Gain", "B3 Q", "B3 Type", "B3 Q Prof"],
+    ["B4 On", "B4 Freq", "B4 Gain", "B4 Q", "B4 Type", "B4 Q Prof"],
+    ["B5 On", "B5 Freq", "B5 Gain", "B5 Q", "B5 Type", "B5 Q Prof"],
+    ["B6 On", "B6 Freq", "B6 Gain", "B6 Q", "B6 Type", "B6 Q Prof"],
+    ["B7 On", "B7 Freq", "B7 Gain", "B7 Q", "B7 Type", "B7 Q Prof"],
+];
+
+const EQ_PASS_NAMES: [[&str; EQ_PASS_FIELDS as usize]; EQ_PASS_COUNT] = [
+    ["HP On", "HP Freq", "HP Q", "HP Slope"],
+    ["LP On", "LP Freq", "LP Q", "LP Slope"],
+];
+
+/// Every band's resting state, in the order the fields are numbered. Three
+/// bands start on -- a low shelf, a bell and a high shelf -- which is the
+/// arrangement `EqParams::default` builds, and these are the same numbers
+/// read off it rather than a second copy of them.
+/// (`descriptor_defaults_match_the_params_defaults` is what holds the two
+/// together, and it checks all fifty.)
+const EQ_BAND_DEFAULTS: [[f32; EQ_BAND_FIELDS as usize]; EQ_MAX_BANDS] = [
+    // on, freq, gain, q, kind, q profile
+    [1.0, 120.0, 0.0, 0.707, 1.0, 0.0],
+    [1.0, 1_000.0, 0.0, 0.707, 0.0, 0.0],
+    [1.0, 8_000.0, 0.0, 0.707, 2.0, 0.0],
+    [0.0, 1_000.0, 0.0, 0.707, 0.0, 0.0],
+    [0.0, 1_000.0, 0.0, 0.707, 0.0, 0.0],
+    [0.0, 1_000.0, 0.0, 0.707, 0.0, 0.0],
+    [0.0, 1_000.0, 0.0, 0.707, 0.0, 0.0],
+];
+
+const EQ_PASS_DEFAULTS: [[f32; EQ_PASS_FIELDS as usize]; EQ_PASS_COUNT] = [
+    // on, freq, q, slope (1 = Db12)
+    [0.0, 30.0, 0.707, 1.0],
+    [0.0, 18_000.0, 0.707, 1.0],
+];
+
+/// One band field's shape, shared by all seven bands. A range written once is
+/// a range that cannot drift between band 3 and band 6.
+const fn eq_band_shape(field: u32) -> (&'static str, f32, f32, ParamCurve) {
+    match field {
+        EQ_BAND_ON => ("", 0.0, 1.0, ParamCurve::Stepped(2)),
+        EQ_BAND_FREQ => ("Hz", 20.0, 20_000.0, ParamCurve::Exponential),
+        EQ_BAND_GAIN => ("dB", -18.0, 18.0, ParamCurve::Linear),
+        EQ_BAND_Q => ("", 0.15, 18.0, ParamCurve::Exponential),
+        // Three positions, not the strip's two: a band here offers bell, low
+        // shelf and high shelf, which is the device for wanting a high shelf
+        // on a low band. `strip_band_shelf` says why the strip refuses that.
+        EQ_BAND_KIND => ("", 0.0, 2.0, ParamCurve::Stepped(3)),
+        _ => ("", 0.0, 1.0, ParamCurve::Stepped(2)),
+    }
+}
+
+const fn eq_pass_shape(field: u32) -> (&'static str, f32, f32, ParamCurve) {
+    match field {
+        EQ_PASS_ON => ("", 0.0, 1.0, ParamCurve::Stepped(2)),
+        EQ_PASS_FREQ => ("Hz", 20.0, 20_000.0, ParamCurve::Exponential),
+        EQ_PASS_Q => ("", 0.15, 18.0, ParamCurve::Exponential),
+        _ => ("", 0.0, 4.0, ParamCurve::Stepped(5)),
+    }
+}
+
+const fn eq_descriptors() -> [ParamDescriptor; EQ_DESCRIPTOR_COUNT] {
+    let blank = ParamDescriptor {
+        id: 0,
+        name: "",
         unit: "",
         min: 0.0,
-        max: 8.0,
-        curve: ParamCurve::Stepped(9),
-        default: 1.0,
-    },
-    ParamDescriptor {
-        id: EQ_PARAM_ENABLED,
-        name: "On",
-        unit: "",
-        min: 0.0,
-        max: 1.0,
-        curve: ParamCurve::Stepped(2),
-        default: 1.0,
-    },
-    ParamDescriptor {
-        id: EQ_PARAM_FREQUENCY_HZ,
-        name: "Freq",
-        unit: "Hz",
-        min: 20.0,
-        max: 20_000.0,
-        curve: ParamCurve::Exponential,
-        default: 1_000.0,
-    },
-    ParamDescriptor {
-        id: EQ_PARAM_GAIN_DB,
-        name: "Gain",
-        unit: "dB",
-        min: -18.0,
-        max: 18.0,
+        max: 0.0,
         curve: ParamCurve::Linear,
         default: 0.0,
-    },
-    ParamDescriptor {
-        id: EQ_PARAM_Q,
-        name: "Q",
-        unit: "",
-        min: 0.15,
-        max: 18.0,
-        curve: ParamCurve::Exponential,
-        default: 0.707,
-    },
-    ParamDescriptor {
-        id: EQ_PARAM_PASS_SLOPE,
-        name: "Pass Slope",
-        unit: "",
-        min: 0.0,
-        max: 4.0,
-        curve: ParamCurve::Stepped(5),
-        // `Db12`, which is what both pass filters start at. It was declared as
-        // 0 while this id was still "Shape", and agreed with `get` only because
-        // a fresh EQ selects a *band*, so the ambiguous getter answered with the
-        // band's Q profile instead of a slope. Splitting the id is what made the
-        // declared default visibly wrong.
-        default: 1.0,
-    },
-    ParamDescriptor {
-        id: EQ_PARAM_Q_PROFILE,
-        name: "Q Profile",
-        unit: "",
-        min: 0.0,
-        max: 1.0,
-        curve: ParamCurve::Stepped(2),
-        default: 0.0,
-    },
-];
+    };
+    let mut out = [blank; EQ_DESCRIPTOR_COUNT];
+    let mut index = 0;
+    let mut band = 0;
+    while band < EQ_MAX_BANDS {
+        let mut field = 0;
+        while field < EQ_BAND_FIELDS as usize {
+            let (unit, min, max, curve) = eq_band_shape(field as u32);
+            out[index] = ParamDescriptor {
+                id: eq_band_param(band, field as u32),
+                name: EQ_BAND_NAMES[band][field],
+                unit,
+                min,
+                max,
+                curve,
+                default: EQ_BAND_DEFAULTS[band][field],
+            };
+            index += 1;
+            field += 1;
+        }
+        band += 1;
+    }
+    let mut pass = 0;
+    while pass < EQ_PASS_COUNT {
+        let mut field = 0;
+        while field < EQ_PASS_FIELDS as usize {
+            let (unit, min, max, curve) = eq_pass_shape(field as u32);
+            out[index] = ParamDescriptor {
+                id: eq_pass_param(pass, field as u32),
+                name: EQ_PASS_NAMES[pass][field],
+                unit,
+                min,
+                max,
+                curve,
+                default: EQ_PASS_DEFAULTS[pass][field],
+            };
+            index += 1;
+            field += 1;
+        }
+        pass += 1;
+    }
+    out
+}
+
+static EQ_DESCRIPTORS: [ParamDescriptor; EQ_DESCRIPTOR_COUNT] = eq_descriptors();
 
 /// A band's response topology. The first and last default bands are shelves;
 /// any active interior band is a peaking filter.
@@ -592,33 +745,32 @@ impl EqParams {
     pub const HIGH_PASS_TARGET: usize = EQ_MAX_BANDS;
     pub const LOW_PASS_TARGET: usize = EQ_MAX_BANDS + 1;
 
-    /// Which band [`crate::EQ_PARAM_Q_PROFILE`] addresses for a selection.
-    ///
-    /// Every one of this device's parameters is "the selected target's", so the
-    /// Q profile has to answer for a selection that is not a band at all. It
-    /// clamps to the last band rather than refusing: a write that lands nowhere
-    /// would make `set` disagree with the `get` beside it, and the precedent
-    /// here is the drum synth, whose per-mode parameters keep their fields and
-    /// are merely inaudible in the wrong mode.
-    pub fn q_profile_band(target: usize) -> usize {
-        target.min(EQ_MAX_BANDS - 1)
+    /// One pass filter by index, high-pass first. Indexed rather than named
+    /// because [`eq_pass_of`] hands back a number, and the face's selector
+    /// draws them in this order too.
+    pub fn pass(&self, index: usize) -> Option<&EqPassFilter> {
+        match index {
+            EQ_HIGH_PASS => Some(&self.high_pass),
+            EQ_LOW_PASS => Some(&self.low_pass),
+            _ => None,
+        }
     }
 
-    /// Which pass filter [`crate::EQ_PARAM_PASS_SLOPE`] addresses, by the same
-    /// reasoning: the high-pass unless the low-pass is the one selected.
+    pub fn pass_mut(&mut self, index: usize) -> Option<&mut EqPassFilter> {
+        match index {
+            EQ_HIGH_PASS => Some(&mut self.high_pass),
+            EQ_LOW_PASS => Some(&mut self.low_pass),
+            _ => None,
+        }
+    }
+
+    /// Which pass filter a *selection* is showing, for the face. The
+    /// high-pass unless the low-pass is the one selected.
     pub fn selected_pass(&self, target: usize) -> &EqPassFilter {
         if target == Self::LOW_PASS_TARGET {
             &self.low_pass
         } else {
             &self.high_pass
-        }
-    }
-
-    pub fn selected_pass_mut(&mut self, target: usize) -> &mut EqPassFilter {
-        if target == Self::LOW_PASS_TARGET {
-            &mut self.low_pass
-        } else {
-            &mut self.high_pass
         }
     }
 
@@ -630,9 +782,124 @@ impl EqParams {
         self.bands.get(self.selected_target()).copied()
     }
 
-    fn set_selected_target(&mut self, value: f32) {
-        self.selected_target = value.round().clamp(0.0, Self::LOW_PASS_TARGET as f32) as u8;
+    /// Which control set the face is showing, and nothing else.
+    ///
+    /// It was id 0 until 2026-09-14 and therefore automatable, which is the
+    /// incoherence this device was rebuilt to remove: a lane on it changed,
+    /// over time, which band every other EQ lane referred to. It is still
+    /// persisted -- reopening an EQ should return to the band you were
+    /// shaping -- and it is no longer reachable by an automation lane,
+    /// because it is no longer a parameter.
+    pub fn set_selected_target(&mut self, target: usize) {
+        self.selected_target = target.min(Self::LOW_PASS_TARGET) as u8;
     }
+
+    /// The ids a face's control writes to for the target it is showing, or
+    /// `None` where that target has no such control -- a pass filter has no
+    /// gain and no Q profile, and a band has no slope.
+    ///
+    /// The face is one control set over a selection and stays that way; what
+    /// changed is that the selection is resolved *here*, to a real per-band
+    /// id, instead of being a parameter the DSP had to consult.
+    pub fn id_for_selected(target: usize, control: EqFaceControl) -> Option<u32> {
+        if target < EQ_MAX_BANDS {
+            let field = match control {
+                EqFaceControl::Enabled => EQ_BAND_ON,
+                EqFaceControl::Frequency => EQ_BAND_FREQ,
+                EqFaceControl::Gain => EQ_BAND_GAIN,
+                EqFaceControl::Q => EQ_BAND_Q,
+                EqFaceControl::QProfile => EQ_BAND_Q_PROFILE,
+                EqFaceControl::PassSlope => return None,
+            };
+            return Some(eq_band_param(target, field));
+        }
+        let pass = if target == Self::LOW_PASS_TARGET {
+            EQ_LOW_PASS
+        } else {
+            EQ_HIGH_PASS
+        };
+        let field = match control {
+            EqFaceControl::Enabled => EQ_PASS_ON,
+            EqFaceControl::Frequency => EQ_PASS_FREQ,
+            EqFaceControl::Q => EQ_PASS_Q,
+            EqFaceControl::PassSlope => EQ_PASS_SLOPE,
+            EqFaceControl::Gain | EqFaceControl::QProfile => return None,
+        };
+        Some(eq_pass_param(pass, field))
+    }
+}
+
+/// A switch as a parameter value. The descriptors declare `Stepped(2)` over
+/// 0..1, so the two sides are exactly 0 and 1 rather than anything rounded.
+const fn bool_to_f32(on: bool) -> f32 {
+    if on {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// The EQ face's control set, which is a *view* of one target rather than a
+/// parameter space.
+///
+/// The face draws one Freq, one Gain, one Q and so on, and a selector saying
+/// which band they are aimed at -- and it should: seven duplicated control
+/// sets is not an interface. This enum is that view's vocabulary, and
+/// [`EqParams::id_for_selected`] is the only place a selection is turned back
+/// into an id. Ordered to match the face's own control indices, which is what
+/// `eq_face_control` in `mooloop-ui` decodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EqFaceControl {
+    Enabled,
+    Frequency,
+    Gain,
+    Q,
+    PassSlope,
+    QProfile,
+}
+
+/// How many control indices the EQ face uses, counting the band selector at
+/// 0. The width of the modulation arrays published for this device.
+pub const EQ_FACE_CONTROLS: usize = 7;
+
+impl EqFaceControl {
+    /// **The face's control indices are the ids this device used to have.**
+    ///
+    /// Deliberately, and it is what let `eq-device.slint` and the rack's
+    /// wiring survive this change untouched: `modulation-allowed[2]` is the
+    /// Freq knob's arc, and Freq was id 2. The face was always a view over a
+    /// selection and still is; only what sits underneath it changed, so the
+    /// view's own numbering had no reason to move.
+    ///
+    /// Index 0 was the band selector. It is not a parameter any more, so it
+    /// is not a control here either -- the caller handles it as what it is,
+    /// a change of which target the face is showing.
+    pub const fn from_face_index(index: u32) -> Option<Self> {
+        match index {
+            1 => Some(EqFaceControl::Enabled),
+            2 => Some(EqFaceControl::Frequency),
+            3 => Some(EqFaceControl::Gain),
+            4 => Some(EqFaceControl::Q),
+            5 => Some(EqFaceControl::PassSlope),
+            6 => Some(EqFaceControl::QProfile),
+            _ => None,
+        }
+    }
+
+    pub const fn face_index(self) -> u32 {
+        match self {
+            EqFaceControl::Enabled => 1,
+            EqFaceControl::Frequency => 2,
+            EqFaceControl::Gain => 3,
+            EqFaceControl::Q => 4,
+            EqFaceControl::PassSlope => 5,
+            EqFaceControl::QProfile => 6,
+        }
+    }
+
+    /// The band selector's index, which is a control the face has and the
+    /// parameter space does not.
+    pub const SELECTOR: u32 = 0;
 }
 
 // --- Filter ----------------------------------------------------------------
@@ -2195,6 +2462,13 @@ impl EffectParams {
         }
     }
 
+    pub fn eq_mut(&mut self) -> Option<&mut EqParams> {
+        match self {
+            Self::Eq(p) => Some(p),
+            _ => None,
+        }
+    }
+
     pub fn modulation(&self) -> Option<&ModulationParams> {
         match self {
             Self::Modulation(p) => Some(p),
@@ -2276,40 +2550,31 @@ impl EffectParams {
     /// id this kind does not have.
     pub fn get(&self, id: u32) -> Option<f32> {
         match self {
-            Self::Eq(p) => match id {
-                EQ_PARAM_TARGET => Some(f32::from(p.selected_target)),
-                EQ_PARAM_ENABLED => Some(
-                    if match p.selected_target() {
-                        0..EQ_MAX_BANDS => p.bands[p.selected_target()].enabled,
-                        EqParams::HIGH_PASS_TARGET => p.high_pass.enabled,
-                        _ => p.low_pass.enabled,
-                    } {
-                        1.0
-                    } else {
-                        0.0
-                    },
-                ),
-                EQ_PARAM_FREQUENCY_HZ => Some(match p.selected_target() {
-                    0..EQ_MAX_BANDS => p.bands[p.selected_target()].frequency_hz,
-                    EqParams::HIGH_PASS_TARGET => p.high_pass.frequency_hz,
-                    _ => p.low_pass.frequency_hz,
-                }),
-                EQ_PARAM_GAIN_DB => Some(if p.selected_target() < EQ_MAX_BANDS {
-                    p.bands[p.selected_target()].gain_db
-                } else {
-                    0.0
-                }),
-                EQ_PARAM_Q => Some(match p.selected_target() {
-                    0..EQ_MAX_BANDS => p.bands[p.selected_target()].q,
-                    EqParams::HIGH_PASS_TARGET => p.high_pass.q,
-                    _ => p.low_pass.q,
-                }),
-                EQ_PARAM_PASS_SLOPE => Some(p.selected_pass(p.selected_target()).slope.to_index() as f32),
-                EQ_PARAM_Q_PROFILE => {
-                    Some(p.bands[EqParams::q_profile_band(p.selected_target())].q_profile.to_index() as f32)
+            // Nothing here reads `selected_target`. That is the whole of
+            // this device's 2026-09-14 change: an id names one field of one
+            // band, so what the face happens to be showing cannot alter what
+            // a lane means.
+            Self::Eq(p) => {
+                if let Some((band, field)) = eq_band_of(id) {
+                    let band = p.bands.get(band)?;
+                    return Some(match field {
+                        EQ_BAND_ON => bool_to_f32(band.enabled),
+                        EQ_BAND_FREQ => band.frequency_hz,
+                        EQ_BAND_GAIN => band.gain_db,
+                        EQ_BAND_Q => band.q,
+                        EQ_BAND_KIND => band.kind.to_index() as f32,
+                        _ => band.q_profile.to_index() as f32,
+                    });
                 }
-                _ => None,
-            },
+                let (pass, field) = eq_pass_of(id)?;
+                let pass = p.pass(pass)?;
+                Some(match field {
+                    EQ_PASS_ON => bool_to_f32(pass.enabled),
+                    EQ_PASS_FREQ => pass.frequency_hz,
+                    EQ_PASS_Q => pass.q,
+                    _ => pass.slope.to_index() as f32,
+                })
+            }
             Self::Modulation(p) => match id {
                 MODULATION_PARAM_MODE => Some(p.mode.to_index() as f32),
                 MODULATION_PARAM_RATE_HZ => Some(p.rate_hz),
@@ -2420,40 +2685,28 @@ impl EffectParams {
         let descriptor = self.kind().descriptor(id)?;
         let value = descriptor.clamp_natural(value);
         match self {
-            Self::Eq(p) => match id {
-                EQ_PARAM_TARGET => p.set_selected_target(value),
-                EQ_PARAM_ENABLED => match p.selected_target() {
-                    0..EQ_MAX_BANDS => p.bands[p.selected_target()].enabled = value >= 0.5,
-                    EqParams::HIGH_PASS_TARGET => p.high_pass.enabled = value >= 0.5,
-                    _ => p.low_pass.enabled = value >= 0.5,
-                },
-                EQ_PARAM_FREQUENCY_HZ => match p.selected_target() {
-                    0..EQ_MAX_BANDS => p.bands[p.selected_target()].frequency_hz = value,
-                    EqParams::HIGH_PASS_TARGET => p.high_pass.frequency_hz = value,
-                    _ => p.low_pass.frequency_hz = value,
-                },
-                EQ_PARAM_GAIN_DB => {
-                    if p.selected_target() < EQ_MAX_BANDS {
-                        p.bands[p.selected_target()].gain_db = value;
+            Self::Eq(p) => {
+                if let Some((band, field)) = eq_band_of(id) {
+                    let band = p.bands.get_mut(band)?;
+                    match field {
+                        EQ_BAND_ON => band.enabled = value >= 0.5,
+                        EQ_BAND_FREQ => band.frequency_hz = value,
+                        EQ_BAND_GAIN => band.gain_db = value,
+                        EQ_BAND_Q => band.q = value,
+                        EQ_BAND_KIND => band.kind = EqBandKind::from_index(value.round() as i32),
+                        _ => band.q_profile = EqQProfile::from_index(value.round() as i32),
+                    }
+                } else {
+                    let (pass, field) = eq_pass_of(id)?;
+                    let pass = p.pass_mut(pass)?;
+                    match field {
+                        EQ_PASS_ON => pass.enabled = value >= 0.5,
+                        EQ_PASS_FREQ => pass.frequency_hz = value,
+                        EQ_PASS_Q => pass.q = value,
+                        _ => pass.slope = EqSlope::from_index(value.round() as i32),
                     }
                 }
-                EQ_PARAM_Q => match p.selected_target() {
-                    0..EQ_MAX_BANDS => p.bands[p.selected_target()].q = value,
-                    EqParams::HIGH_PASS_TARGET => p.high_pass.q = value,
-                    _ => p.low_pass.q = value,
-                },
-                EQ_PARAM_PASS_SLOPE => {
-                    let slope = EqSlope::from_index(value.round() as i32);
-                    let target = p.selected_target();
-                    p.selected_pass_mut(target).slope = slope;
-                }
-                EQ_PARAM_Q_PROFILE => {
-                    let profile = EqQProfile::from_index(value.round() as i32);
-                    let band = EqParams::q_profile_band(p.selected_target());
-                    p.bands[band].q_profile = profile;
-                }
-                _ => return None,
-            },
+            }
             Self::Modulation(p) => match id {
                 MODULATION_PARAM_MODE => p.mode = ModulationMode::from_index(value.round() as i32),
                 MODULATION_PARAM_RATE_HZ => p.rate_hz = value,
@@ -2804,40 +3057,137 @@ mod tests {
         }
     }
 
+    /// The headline of `eq-v2/01`: a lane addresses a band, not a view.
+    ///
+    /// This replaced `changing_eq_target_rederives_every_selected_band_value`,
+    /// which asserted the opposite and was correct about the model it was
+    /// written for -- every EQ parameter used to mean "the selected target's",
+    /// so moving the selection was how you reached band 2.
     #[test]
-    fn changing_eq_target_rederives_every_selected_band_value() {
-        let mut eq = EqParams::default();
-        eq.bands[1] = EqBand {
-            enabled: true,
-            kind: EqBandKind::Bell,
-            frequency_hz: 480.0,
-            gain_db: -8.0,
-            q: 0.4,
-            q_profile: EqQProfile::Constant,
-        };
-        eq.bands[2] = EqBand {
-            enabled: false,
-            kind: EqBandKind::Bell,
-            frequency_hz: 4_800.0,
-            gain_db: 9.0,
-            q: 6.0,
-            q_profile: EqQProfile::Proportional,
-        };
-        let mut params = EffectParams::Eq(eq);
+    fn a_lane_on_a_band_moves_that_band_whatever_the_face_shows() {
+        let mut params = EffectParams::Eq(EqParams::default());
+        for target in 0..=EqParams::LOW_PASS_TARGET {
+            if let EffectParams::Eq(p) = &mut params {
+                p.set_selected_target(target);
+            }
+            params.set(eq_band_param(3, EQ_BAND_FREQ), 480.0);
+            assert_eq!(params.get(eq_band_param(3, EQ_BAND_FREQ)), Some(480.0));
+            // And nothing else moved with it.
+            assert_eq!(params.get(eq_band_param(4, EQ_BAND_FREQ)), Some(1_000.0));
+            if let EffectParams::Eq(p) = &mut params {
+                p.bands[3].frequency_hz = 1_000.0;
+            }
+        }
+    }
 
-        params.set(EQ_PARAM_TARGET, 1.0);
-        assert_eq!(params.get(EQ_PARAM_ENABLED), Some(1.0));
-        assert_eq!(params.get(EQ_PARAM_FREQUENCY_HZ), Some(480.0));
-        assert_eq!(params.get(EQ_PARAM_GAIN_DB), Some(-8.0));
-        assert_eq!(params.get(EQ_PARAM_Q), Some(0.4));
-        assert_eq!(params.get(EQ_PARAM_Q_PROFILE), Some(0.0));
+    /// No parameter's meaning depends on another parameter's value, asserted
+    /// the way the plan asks for it: every id's `get` is unchanged by writing
+    /// the selection.
+    #[test]
+    fn no_eq_parameter_depends_on_the_selection() {
+        let mut params = EffectParams::Eq(EqParams::default());
+        // Something distinct in every field, so an accidental fallback to a
+        // shared default could not pass by coincidence.
+        if let EffectParams::Eq(p) = &mut params {
+            for (index, band) in p.bands.iter_mut().enumerate() {
+                band.enabled = index % 2 == 0;
+                band.frequency_hz = 100.0 * (index as f32 + 1.0);
+                band.gain_db = index as f32 - 3.0;
+                band.q = 0.5 + index as f32;
+                band.kind = EqBandKind::from_index(index as i32 % 3);
+                band.q_profile = EqQProfile::from_index(index as i32 % 2);
+            }
+        }
+        let ids: Vec<u32> = EffectKind::Eq
+            .descriptors()
+            .iter()
+            .map(|descriptor| descriptor.id)
+            .collect();
+        let baseline: Vec<Option<f32>> = ids.iter().map(|id| params.get(*id)).collect();
+        for target in 0..=EqParams::LOW_PASS_TARGET {
+            if let EffectParams::Eq(p) = &mut params {
+                p.set_selected_target(target);
+            }
+            let now: Vec<Option<f32>> = ids.iter().map(|id| params.get(*id)).collect();
+            assert_eq!(now, baseline, "selecting target {target} changed a value");
+        }
+    }
 
-        params.set(EQ_PARAM_TARGET, 2.0);
-        assert_eq!(params.get(EQ_PARAM_ENABLED), Some(0.0));
-        assert_eq!(params.get(EQ_PARAM_FREQUENCY_HZ), Some(4_800.0));
-        assert_eq!(params.get(EQ_PARAM_GAIN_DB), Some(9.0));
-        assert_eq!(params.get(EQ_PARAM_Q), Some(6.0));
-        assert_eq!(params.get(EQ_PARAM_Q_PROFILE), Some(1.0));
+    /// The seven retired ids address a hole, which is what makes shipping
+    /// this without a `FORMAT_VERSION` bump the right call: an old lane goes
+    /// inert instead of moving some unrelated band. If a future append ever
+    /// reaches down into 0..6, this is what says so.
+    #[test]
+    fn the_retired_eq_ids_address_nothing() {
+        let mut params = EffectParams::Eq(EqParams::default());
+        let before = params;
+        for id in 0..EQ_FIRST {
+            assert_eq!(params.get(id), None, "id {id} was retired and answers");
+            assert_eq!(params.set(id, 1.0), None, "id {id} was retired and writes");
+        }
+        assert_eq!(params, before, "a retired id changed the EQ");
+    }
+
+    /// A stride of ten with six fields spelled leaves four slots a band, and
+    /// they have to be holes rather than silent aliases of a real field.
+    #[test]
+    fn a_bands_spare_slots_are_holes() {
+        let params = EffectParams::Eq(EqParams::default());
+        for band in 0..EQ_MAX_BANDS {
+            for field in EQ_BAND_FIELDS..EQ_BAND_STRIDE {
+                let id = eq_band_param(band, field);
+                assert_eq!(eq_band_of(id), None);
+                assert_eq!(params.get(id), None, "band {band} slot {field} answers");
+            }
+        }
+    }
+
+    /// The face is a view over a selection and stays one; this is the only
+    /// place a selection becomes an id, so it is the only place that can get
+    /// it wrong.
+    /// The face's indices are the retired ids, which is what let the markup
+    /// stay untouched. If that ever stops being true, `eq-device.slint`'s
+    /// `modulation-allowed[2]` starts drawing a different knob's arc.
+    #[test]
+    fn a_face_control_index_round_trips_and_matches_the_retired_ids() {
+        for index in 0..EQ_FIRST {
+            match EqFaceControl::from_face_index(index) {
+                Some(control) => assert_eq!(control.face_index(), index),
+                None => assert!(
+                    index == EqFaceControl::SELECTOR || index > 6,
+                    "index {index} was an id and is now no control at all"
+                ),
+            }
+        }
+        assert_eq!(
+            EqFaceControl::from_face_index(2),
+            Some(EqFaceControl::Frequency),
+            "Freq was id 2 and the face still calls it 2"
+        );
+    }
+
+    #[test]
+    fn the_faces_controls_resolve_to_the_selected_target() {
+        assert_eq!(
+            EqParams::id_for_selected(3, EqFaceControl::Frequency),
+            Some(eq_band_param(3, EQ_BAND_FREQ))
+        );
+        assert_eq!(
+            EqParams::id_for_selected(EqParams::LOW_PASS_TARGET, EqFaceControl::Frequency),
+            Some(eq_pass_param(EQ_LOW_PASS, EQ_PASS_FREQ))
+        );
+        // A pass filter has no gain and no Q profile; a band has no slope.
+        // `None` rather than a write that lands nowhere, because a control
+        // the face greys out should not be reachable by a different route.
+        assert_eq!(
+            EqParams::id_for_selected(EqParams::HIGH_PASS_TARGET, EqFaceControl::Gain),
+            None
+        );
+        assert_eq!(
+            EqParams::id_for_selected(EqParams::HIGH_PASS_TARGET, EqFaceControl::QProfile),
+            None
+        );
+        assert_eq!(EqParams::id_for_selected(0, EqFaceControl::PassSlope), None);
     }
 
     #[test]

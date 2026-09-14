@@ -9,8 +9,8 @@ use mooloop_core::{
     insert_effect, insert_into_container, move_effect, move_effect_into_container, remove_effect,
     unwrap_container,
     wrap_in_container,
-    DeviceId, EffectKind, EffectParams, EffectRun, EffectSlotState, ModTimeDivision,
-    EffectTarget, EngineCommand,
+    DeviceId, EffectKind, EffectParams, EffectRun, EffectSlotState, EqFaceControl, EqParams,
+    ModTimeDivision, EffectTarget, EngineCommand,
 };
 
 /// Trim knobs work in dB from unity and stop at the container's headroom; the
@@ -494,10 +494,36 @@ impl Session {
     ) -> Option<EngineCommand> {
         let target = self.effect_target;
         let slot = usize::try_from(slot).ok()?;
-        let param_index = usize::try_from(param_index).ok()?;
+        let param_index = u32::try_from(param_index).ok()?;
         let effect = self.effect_chain_mut()?.get_mut(slot)?;
-        let descriptor = effect.kind().descriptors().get(param_index)?;
-        let id = descriptor.id;
+
+        // The EQ's face is a *view* over one target, so its control indices
+        // are not descriptor positions and never can be: there are fifty
+        // descriptors and seven controls. Everything else addresses its table
+        // by position, as before. See `docs/plans/eq-v2/01-per-band-parameters.md`.
+        let id = if let Some(eq) = effect.params.eq_mut() {
+            if param_index == EqFaceControl::SELECTOR {
+                // Choosing a band is not an edit to the sound. It is saved,
+                // so the document is dirty; it emits no command, because
+                // there is nothing for the engine to do about it. Before
+                // 2026-09-14 this *was* a parameter, went to the engine as
+                // one, and decided what every other EQ event meant.
+                let target = Self::selector_from_normalized(normalized);
+                if eq.selected_target() == target {
+                    return None;
+                }
+                eq.set_selected_target(target);
+                self.mark_dirty();
+                return None;
+            }
+            let control = EqFaceControl::from_face_index(param_index)?;
+            EqParams::id_for_selected(eq.selected_target(), control)?
+        } else {
+            let descriptors = effect.kind().descriptors();
+            descriptors.get(param_index as usize)?.id
+        };
+
+        let descriptor = effect.kind().descriptor(id)?;
         let value = effect.params.set(id, descriptor.from_normalized(normalized))?;
         Some(EngineCommand::SetEffectParam {
             target,
@@ -505,6 +531,17 @@ impl Session {
             id,
             value,
         })
+    }
+
+    /// Which target the EQ face's selector landed on.
+    ///
+    /// The face draws nine segments and sends `index / 8`, which is what the
+    /// retired `Band` descriptor's 0..8 range meant. Decoded here rather than
+    /// through a descriptor, because there is no descriptor any more -- that
+    /// is the point of the change.
+    fn selector_from_normalized(normalized: f32) -> usize {
+        let last = EqParams::LOW_PASS_TARGET;
+        (normalized.clamp(0.0, 1.0) * last as f32).round() as usize
     }
 
     /// Turns a delay's tempo sync on or off.
@@ -829,6 +866,104 @@ mod tests {
         assert!(session.set_effect_param(0, 0, 0.5).is_some());
         assert!(session.set_effect_param(0, 9_999, 0.5).is_none());
         assert!(session.set_effect_param(0, -1, 0.5).is_none());
+    }
+
+    // --- The EQ face is a view (docs/plans/eq-v2/01) ----------------------
+
+    fn eq_session() -> Session {
+        let mut session = Session::default();
+        session.insert_effect_at(EffectKind::Eq, 0);
+        session
+    }
+
+    fn eq_of(session: &Session) -> EqParams {
+        *session
+            .effect_chain()
+            .and_then(|chain| chain.first())
+            .and_then(|effect| effect.params.eq())
+            .expect("slot 0 is an EQ")
+    }
+
+    /// The face sends the same control number it always did, and it now lands
+    /// on the *selected band's* id rather than on a parameter that meant
+    /// whatever the selection said.
+    #[test]
+    fn the_faces_freq_knob_writes_the_selected_bands_frequency() {
+        let mut session = eq_session();
+        // Select band 3 through the same selector the face uses, then move
+        // the one Freq knob.
+        let selector = 3.0 / EqParams::LOW_PASS_TARGET as f32;
+        assert!(
+            session
+                .set_effect_param(0, EqFaceControl::SELECTOR as i32, selector)
+                .is_none(),
+            "choosing a band is not an edit the engine needs to hear about"
+        );
+        let command = session
+            .set_effect_param(0, EqFaceControl::Frequency.face_index() as i32, 0.25)
+            .expect("the Freq knob writes something");
+        let EngineCommand::SetEffectParam { id, .. } = command else {
+            panic!("expected a parameter write");
+        };
+        assert_eq!(
+            id,
+            mooloop_core::eq_band_param(3, mooloop_core::EQ_BAND_FREQ),
+            "the knob addressed band 3 by id, not by selection"
+        );
+        let eq = eq_of(&session);
+        assert_ne!(eq.bands[3].frequency_hz, eq.bands[4].frequency_hz);
+    }
+
+    /// Choosing a band is saved and is not automatable, which is the whole
+    /// of what `selected_target` is allowed to be now.
+    #[test]
+    fn choosing_a_band_is_saved_and_sends_nothing() {
+        let mut session = eq_session();
+        session.dirty = false;
+        let selector = 5.0 / EqParams::LOW_PASS_TARGET as f32;
+        assert!(session
+            .set_effect_param(0, EqFaceControl::SELECTOR as i32, selector)
+            .is_none());
+        assert_eq!(eq_of(&session).selected_target(), 5);
+        assert!(session.dirty, "the selection is persisted, so it is an edit");
+
+        // And selecting what is already selected is not an edit at all.
+        session.dirty = false;
+        assert!(session
+            .set_effect_param(0, EqFaceControl::SELECTOR as i32, selector)
+            .is_none());
+        assert!(!session.dirty);
+
+        assert!(
+            !EffectKind::Eq
+                .descriptors()
+                .iter()
+                .any(|descriptor| descriptor.name == "Band"),
+            "the band selector is not a parameter and cannot be automated"
+        );
+    }
+
+    /// A pass filter has no gain, so the face's Gain knob writes nothing
+    /// while one is selected -- rather than landing on the last band, which
+    /// is what the old model did.
+    #[test]
+    fn a_pass_filters_missing_controls_write_nothing() {
+        let mut session = eq_session();
+        let selector = EqParams::HIGH_PASS_TARGET as f32 / EqParams::LOW_PASS_TARGET as f32;
+        session.set_effect_param(0, EqFaceControl::SELECTOR as i32, selector);
+        let before = eq_of(&session);
+        assert!(session
+            .set_effect_param(0, EqFaceControl::Gain.face_index() as i32, 1.0)
+            .is_none());
+        assert!(session
+            .set_effect_param(0, EqFaceControl::QProfile.face_index() as i32, 1.0)
+            .is_none());
+        assert_eq!(eq_of(&session), before);
+
+        // The slope, which only a pass filter has, does land.
+        assert!(session
+            .set_effect_param(0, EqFaceControl::PassSlope.face_index() as i32, 1.0)
+            .is_some());
     }
 
     // --- Effect presets (docs/plans/preset-system/02) ---------------------

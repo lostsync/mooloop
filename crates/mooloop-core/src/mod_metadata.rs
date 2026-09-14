@@ -383,13 +383,17 @@ mod tests {
     }
 
     /// Continuous parameters accept full-range normalized modulation;
-    /// stepped ones — the EQ's band selector and its on toggle — do not,
-    /// because a stepped destination must opt in with its own rules.
+    /// stepped ones — a band's on switch and its type — do not, because a
+    /// stepped destination must opt in with its own rules. The band
+    /// *selector* used to be the second example here and is no longer a
+    /// parameter at all (`eq-v2/01`), which is a stronger answer than
+    /// refusing modulation on it.
     #[test]
     fn default_destination_policy_follows_the_curve() {
-        let freq = descriptor(EffectKind::Eq, crate::effect::EQ_PARAM_FREQUENCY_HZ);
-        let on = descriptor(EffectKind::Eq, crate::effect::EQ_PARAM_ENABLED);
-        let band = descriptor(EffectKind::Eq, crate::effect::EQ_PARAM_TARGET);
+        use crate::effect::{eq_band_param, EQ_BAND_FREQ, EQ_BAND_KIND, EQ_BAND_ON};
+        let freq = descriptor(EffectKind::Eq, eq_band_param(0, EQ_BAND_FREQ));
+        let on = descriptor(EffectKind::Eq, eq_band_param(0, EQ_BAND_ON));
+        let band = descriptor(EffectKind::Eq, eq_band_param(0, EQ_BAND_KIND));
 
         let freq_dest = ModDestinationDescriptor::for_param(&freq);
         assert!(freq_dest.allowed);
@@ -404,7 +408,10 @@ mod tests {
 
     #[test]
     fn depth_is_clamped_to_the_declared_limit() {
-        let freq = descriptor(EffectKind::Eq, crate::effect::EQ_PARAM_FREQUENCY_HZ);
+        let freq = descriptor(
+            EffectKind::Eq,
+            crate::effect::eq_band_param(0, crate::effect::EQ_BAND_FREQ),
+        );
         let dest = ModDestinationDescriptor {
             depth_limit: (-0.5, 0.25),
             ..ModDestinationDescriptor::for_param(&freq)

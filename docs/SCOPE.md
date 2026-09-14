@@ -347,14 +347,16 @@ already name the fix (**#7**, **#8**/**#9**) and neither is on `FOCUS.md`,
 `ROADMAP.md` or in any plan directory. This is the cheapest-now item on the
 whole board and it gates roughly a third of it.
 
-**`eq-v2` step 01 gates CLAP, and `FOCUS.md` already argues why.** A CLAP
-plugin hands the host N independent parameters with stable ids and no context.
-The EQ is the one native device whose parameter model a host could not
-express: six parameters cover seven bands and two pass filters, resolved
-through an `EQ_PARAM_TARGET` that is **itself automatable** (`effect.rs:285-302`),
-so a lane on it changes which band every other EQ lane refers to. Fixing that
-on a device whose behaviour is already understood is a cheap rehearsal for the
-same problem.
+**`eq-v2` step 01 gated CLAP and landed 2026-09-14.** A CLAP plugin hands the
+host N independent parameters with stable ids and no context. The EQ was the
+one native device whose parameter model a host could not express: six
+parameters covered seven bands and two pass filters, resolved through an
+`EQ_PARAM_TARGET` that was **itself automatable**, so a lane on it changed
+which band every other EQ lane referred to. It is fifty per-band ids now, and
+the rehearsal answered its question -- the model holds, and the face did not
+have to change to carry it, because a face showing one band at a time is a
+*view* and the selection belongs in the view. What it did **not** settle is
+item 1 below, which is the part that is actually about plugins.
 
 **The four things standing between here and CLAP**, all verified:
 

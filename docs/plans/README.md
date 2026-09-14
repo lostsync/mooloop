@@ -26,7 +26,8 @@ because `BUFFER_ENGINE.md`'s insert model is not settled. `device-registry/`,
 piece is exempt: take `device-registry/`'s face host component if a device step
 already has `main.slint` open.
 
-`eq-v2/` was added 2026-09-12 and is **not started**. It came out of fixing one
+`eq-v2/` was added 2026-09-12 and **step 01 landed 2026-09-14; 02 to 04 are
+open, and 04 is optional.** It came out of fixing one
 bug -- the EQ's Shape control was two settings of different arity behind one
 automatable id -- and out of Adam's question about what that implied: mooloop
 intends to host CLAP, a CLAP plugin exposes arbitrary independently automatable
@@ -38,8 +39,12 @@ faults they fix were each confirmed against the source -- the pass filters are
 absent from the response plot while their data is *already being sent* to it, a
 shelf ignores its Q in the DSP, and the plot draws shelves at a fixed exponent.
 Step 04 is the measured character from five reference EQs and is the only step
-that changes how the device sounds. **It is step 2 of the sequence as of
-2026-09-12.**
+that changes how the device sounds. It became **step 1 of the sequence** when
+`interface-iteration/` closed on 2026-09-14, and step 01 landed the same day:
+63 per-band descriptors, no `FORMAT_VERSION` bump (the new ids start at 16, so
+a stale lane on a retired one lands in a hole rather than on a neighbour), and
+**no change to the face at all** -- which is the finding worth carrying into
+plugin work, and `00-status.md` says why.
 
 `pattern-bank-floor/` was added 2026-09-08 and is **not started, and not on
 anyone's list**. It fell out of an audio-dropout investigation whose actual
@@ -50,8 +55,12 @@ is worth a step was a `FOCUS.md` question, and the answer as of 2026-09-12 is
 **not now** -- safely, because the measurements to judge it by are committed
 either way.
 
-Last swept 2026-09-14, when `interface-iteration/` step 04 landed and the
-directory archived. The keyboard pass was supposed to be about coverage --
+Last swept 2026-09-14, twice. `eq-v2/` step 01 gave every EQ band and both
+pass filters their own stable ids -- the one native device whose parameter
+model a CLAP host could not have expressed -- and the thing it proved is that
+a face showing one band at a time was never the problem: resolving the
+selection one layer earlier left the markup untouched. Earlier the same day,
+`interface-iteration/` step 04 landed and the directory archived. The keyboard pass was supposed to be about coverage --
 no stop, nothing device-level, no browser focus -- and 63 actions is that
 coverage. What it found is that **the registry and the keyboard had drifted
 apart and nothing could notice**: `transport.loop-toggle` had been dead since

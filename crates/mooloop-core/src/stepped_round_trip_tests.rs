@@ -20,10 +20,11 @@
 //! partial counts, the phaser's stage count -- for free.
 //!
 //! Params are rebuilt for every descriptor rather than reused across the loop.
-//! Some stepped parameters *select what the next id addresses*: the EQ's
-//! `EQ_PARAM_TARGET` decides whether `EQ_PARAM_Q` means a band's Q or the
-//! high-pass filter's, so a loop that left the target on its last position
-//! would go on to test a different parameter than the one it named.
+//! A stepped parameter that *selects what the next id addresses* would make a
+//! loop leaving it on its last position go on to test a different parameter
+//! than the one it named. The EQ's band selector was exactly that until
+//! `eq-v2/01` stopped it being a parameter; rebuilding is kept because it
+//! costs nothing and the property it defends is about the loop, not the EQ.
 
 use crate::channel::DeviceKind;
 use crate::effect::{EffectKind, ParamCurve, ParamDescriptor};
@@ -32,9 +33,10 @@ use crate::strip::StripParams;
 
 // Nothing is excluded any more. `EQ_PARAM_CHARACTER` was, and it was the one
 // defect this check found: one id decoding to two enums of different arity, so
-// four of its five positions collapsed onto one. It was split into
-// `EQ_PARAM_PASS_SLOPE` and `EQ_PARAM_Q_PROFILE`, each with its own arity, and
-// the exclusion went with it.
+// four of its five positions collapsed onto one. It was split into two ids on
+// 2026-09-12 and the exclusion went with it; `eq-v2/01` then gave the slope
+// and the Q profile to different objects outright, so the shape that made the
+// defect possible is gone rather than avoided.
 
 /// Every position a stepped descriptor declares, in natural units, as the
 /// values a knob at each detent actually produces.
@@ -181,21 +183,25 @@ fn every_strip_stepped_position_reads_back_as_itself() {
 /// toggle; an automation lane is not the face, and a lane at half travel wrote
 /// one setting and reported another, with nothing to say what to draw instead.
 ///
-/// Two ids now, each with its own arity, and this checks the property the old
-/// arrangement could not have: every declared position means a distinct setting
-/// and reads back as itself. `every_effect_stepped_position_reads_back_as_itself`
-/// above covers that generically -- what is pinned here is the *split*, so that
-/// folding them back together fails on purpose.
+/// Splitting it into two ids fixed the symptom on 2026-09-12. `eq-v2/01`
+/// removed the condition that made it possible: a slope and a Q profile are
+/// not two readings of one id any more, they are fields of **different
+/// objects** -- a pass filter has a slope and a band has a Q profile, and
+/// neither has the other. Both arities are still pinned here, because folding
+/// them back together should fail on purpose, and so is the fact that they now
+/// belong to different things.
 #[test]
-fn the_eq_shape_parameters_are_two_ids_with_their_own_arities() {
-    use crate::effect::{EQ_PARAM_PASS_SLOPE, EQ_PARAM_Q_PROFILE, EQ_PARAM_TARGET};
+fn the_eq_shape_parameters_belong_to_different_objects() {
+    use crate::effect::{
+        eq_band_param, eq_pass_param, EQ_BAND_Q_PROFILE, EQ_HIGH_PASS, EQ_LOW_PASS, EQ_PASS_SLOPE,
+    };
 
     let slope = EffectKind::Eq
-        .descriptor(EQ_PARAM_PASS_SLOPE)
-        .expect("the EQ describes the pass slope");
+        .descriptor(eq_pass_param(EQ_HIGH_PASS, EQ_PASS_SLOPE))
+        .expect("the high-pass describes its slope");
     let profile = EffectKind::Eq
-        .descriptor(EQ_PARAM_Q_PROFILE)
-        .expect("the EQ describes the Q profile");
+        .descriptor(eq_band_param(0, EQ_BAND_Q_PROFILE))
+        .expect("a band describes its Q profile");
     assert!(
         matches!(slope.curve, ParamCurve::Stepped(5)),
         "five slopes: Db6, Db12, Db18, Db24, Db36"
@@ -205,28 +211,41 @@ fn the_eq_shape_parameters_are_two_ids_with_their_own_arities() {
         "two profiles: Constant and Proportional"
     );
 
-    // The whole point, on a band: four positions used to mean Proportional and
-    // read back as one. Now there are two positions and both survive.
-    let mut params = EffectKind::Eq.default_params();
-    params.set(EQ_PARAM_TARGET, 0.0);
-    for position in positions(profile) {
-        params.set(EQ_PARAM_Q_PROFILE, position);
-        assert_eq!(
-            params.get(EQ_PARAM_Q_PROFILE),
-            Some(position),
-            "a band's Q profile lost position {position}"
-        );
+    // No band has a slope and no pass filter has a Q profile, so the two
+    // cannot collide again by any route.
+    for band in 0..crate::effect::EQ_MAX_BANDS {
+        assert!(EffectKind::Eq
+            .descriptor(eq_band_param(band, EQ_PASS_SLOPE))
+            .is_none_or(|d| d.name.ends_with("Q")));
     }
 
-    // And on a pass filter the slope keeps all five, which is what it always
-    // had -- the range at this id did not move, only its meaning narrowed.
-    params.set(EQ_PARAM_TARGET, 1.0);
-    for position in positions(slope) {
-        params.set(EQ_PARAM_PASS_SLOPE, position);
-        assert_eq!(
-            params.get(EQ_PARAM_PASS_SLOPE),
-            Some(position),
-            "a pass filter's slope lost position {position}"
-        );
+    // The whole point, on a band: four positions used to mean Proportional and
+    // read back as one. Now there are two positions and both survive -- on
+    // every band, not only whichever one is selected.
+    let mut params = EffectKind::Eq.default_params();
+    for band in 0..crate::effect::EQ_MAX_BANDS {
+        let id = eq_band_param(band, EQ_BAND_Q_PROFILE);
+        for position in positions(profile) {
+            params.set(id, position);
+            assert_eq!(
+                params.get(id),
+                Some(position),
+                "band {band}'s Q profile lost position {position}"
+            );
+        }
+    }
+
+    // And each pass filter keeps all five slopes, which is what this range
+    // always had -- it did not move, only its owner became explicit.
+    for pass in [EQ_HIGH_PASS, EQ_LOW_PASS] {
+        let id = eq_pass_param(pass, EQ_PASS_SLOPE);
+        for position in positions(slope) {
+            params.set(id, position);
+            assert_eq!(
+                params.get(id),
+                Some(position),
+                "pass filter {pass} lost slope position {position}"
+            );
+        }
     }
 }

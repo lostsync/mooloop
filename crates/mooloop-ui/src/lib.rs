@@ -39,7 +39,8 @@ use mooloop_core::{
     snap_bars_to_power_of_two,
     BufferDuration, BufferEvent, BusSetup, ChannelEdit, ENV_MAX_SECONDS, ENV_MIN_SECONDS,
     DeviceKind, DrumMode, DrumSynthParams, EffectKind,
-    EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, FilterModel,
+    EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, EqFaceControl,
+    EqParams, EQ_FACE_CONTROLS, FilterModel,
     GeneratorParams, GlideMode, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor,
     ModPolarity, ModRack, ModRandomTrigger, ModStepTrigger,
@@ -1502,6 +1503,70 @@ fn containers_closing_at(effects: &[EffectSlotState], slot: usize) -> Vec<i32> {
         .collect()
 }
 
+/// The parameter id behind each of the EQ face's controls, for the target it
+/// is currently showing, indexed by the face's own control number.
+///
+/// `None` where the target has no such control: a pass filter has no gain and
+/// no Q profile, and a band has no slope. Index 0 is the band selector, which
+/// is not a parameter at all any more and so is never `Some`.
+///
+/// This is the whole of the EQ's 2026-09-14 change as the interface sees it.
+/// The face did not move -- one Freq knob, one Gain knob, a selector saying
+/// which band they are aimed at, which is the right interface and always was.
+/// What moved is that the selection is resolved *here*, into a real per-band
+/// id, instead of being a parameter the DSP had to consult before it knew what
+/// a Freq event meant.
+fn eq_face_ids(eq: &EqParams) -> [Option<u32>; EQ_FACE_CONTROLS] {
+    let mut ids = [None; EQ_FACE_CONTROLS];
+    let target = eq.selected_target();
+    for index in 0..EQ_FACE_CONTROLS as u32 {
+        if let Some(control) = EqFaceControl::from_face_index(index) {
+            ids[index as usize] = EqParams::id_for_selected(target, control);
+        }
+    }
+    ids
+}
+
+/// Re-index an EQ overlay array from descriptor ids to the face's control
+/// numbers.
+///
+/// Every other face reads `modulation-allowed[<id>]` and the ids are dense
+/// from zero, so the id *is* the index. The EQ's are not: fifty descriptors
+/// spread over a strided space, behind seven controls. Rather than teach the
+/// markup an id layout -- which would be this codebase's characteristic fault,
+/// a table spelled in Rust and again in `.slint` -- the four overlay arrays
+/// are gathered down to the seven the face actually reads, in the order it
+/// reads them.
+///
+/// A control the current target does not have (a pass filter's gain) gathers
+/// the default: no route, no depth, not allowed. The face already greys those
+/// controls, so this agrees with what is drawn.
+fn eq_overlay_view<T: Copy + Default>(ids: &[Option<u32>; EQ_FACE_CONTROLS], full: &[T]) -> Vec<T> {
+    ids.iter()
+        .map(|id| {
+            id.and_then(|id| full.get(id as usize).copied())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// The parameter id a face's control number names, for one effect.
+///
+/// For every kind but the EQ a face already sends the id -- the ids are dense
+/// from zero and the control's index *is* its id, which is why the markup can
+/// write `modulation-allowed[2]` and mean it. The EQ's seven controls are a
+/// view over fifty descriptors, so its number is resolved against the
+/// selection here, in the one place that knows what the face is showing.
+fn effect_face_param_id(effect: &EffectSlotState, control: u32) -> Option<u32> {
+    match effect.params.eq() {
+        Some(eq) => eq_face_ids(eq)
+            .get(control as usize)
+            .copied()
+            .flatten(),
+        None => Some(control),
+    }
+}
+
 fn effect_slot_row(
     slot: &EffectSlotState,
     presets: &[PresetSummary],
@@ -1515,21 +1580,38 @@ fn effect_slot_row(
         .map(preset_menu_label)
         .collect();
     let mut p = [0.0f32; EFFECT_ROW_PARAMS];
-    for (index, descriptor) in kind
-        .descriptors()
-        .iter()
-        .take(EFFECT_ROW_DESCRIPTOR_PARAMS)
-        .enumerate()
-    {
-        if let Some(natural) = slot.params.get(descriptor.id) {
+    if let Some(eq) = slot.params.eq() {
+        // The EQ's face is a view over one target and its controls are
+        // numbered by `EqFaceControl`, not by descriptor position -- there
+        // are fifty descriptors and seven controls. See
+        // `docs/plans/eq-v2/01-per-band-parameters.md`.
+        for (index, id) in eq_face_ids(eq).into_iter().enumerate() {
+            let Some(id) = id else { continue };
+            let (Some(descriptor), Some(natural)) = (kind.descriptor(id), slot.params.get(id))
+            else {
+                continue;
+            };
             p[index] = descriptor.to_normalized(natural);
         }
+        p[EqFaceControl::SELECTOR as usize] =
+            eq.selected_target() as f32 / EqParams::LOW_PASS_TARGET as f32;
+    } else {
+        for (index, descriptor) in kind
+            .descriptors()
+            .iter()
+            .take(EFFECT_ROW_DESCRIPTOR_PARAMS)
+            .enumerate()
+        {
+            if let Some(natural) = slot.params.get(descriptor.id) {
+                p[index] = descriptor.to_normalized(natural);
+            }
+        }
+        debug_assert!(
+            kind.descriptors().len() <= EFFECT_ROW_DESCRIPTOR_PARAMS,
+            "{} has more parameters than EffectSlotRow can carry",
+            kind.label()
+        );
     }
-    debug_assert!(
-        kind.descriptors().len() <= EFFECT_ROW_DESCRIPTOR_PARAMS,
-        "{} has more parameters than EffectSlotRow can carry",
-        kind.label()
-    );
     // The two reserved fields, for the two devices that follow the tempo.
     if let Some(delay) = slot.params.delay() {
         p[8] = if delay.tempo_sync { 1.0 } else { 0.0 };
@@ -1843,12 +1925,16 @@ fn descriptor_defaults(descriptors: &[ParamDescriptor]) -> ModelRc<f32> {
     defaults.as_slice().into()
 }
 
-fn descriptor_policies(descriptors: &[ParamDescriptor]) -> ModelRc<bool> {
+fn descriptor_policy_flags(descriptors: &[ParamDescriptor]) -> Vec<bool> {
     let mut allowed = vec![false; descriptor_slots(descriptors)];
     for descriptor in descriptors {
         allowed[descriptor.id as usize] = ModDestinationDescriptor::for_param(descriptor).allowed;
     }
-    allowed.as_slice().into()
+    allowed
+}
+
+fn descriptor_policies(descriptors: &[ParamDescriptor]) -> ModelRc<bool> {
+    descriptor_policy_flags(descriptors).as_slice().into()
 }
 
 /// How many routes land on each parameter, indexed by descriptor id. Drawn as
@@ -1856,11 +1942,11 @@ fn descriptor_policies(descriptors: &[ParamDescriptor]) -> ModelRc<bool> {
 /// shelf being open. Counted from every route, including ones whose
 /// destination currently refuses modulation: the assignment is still authored
 /// work the user made and can remove.
-fn descriptor_route_counts(
+fn descriptor_route_count_slots(
     rack: &ModRack,
     descriptors: &[ParamDescriptor],
     address: impl Fn(u32) -> ParamAddr,
-) -> ModelRc<i32> {
+) -> Vec<i32> {
     let mut counts = vec![0i32; descriptor_slots(descriptors)];
     for descriptor in descriptors {
         counts[descriptor.id as usize] = rack
@@ -1868,7 +1954,17 @@ fn descriptor_route_counts(
             .filter(|destination| *destination == address(descriptor.id))
             .count() as i32;
     }
-    counts.as_slice().into()
+    counts
+}
+
+fn descriptor_route_counts(
+    rack: &ModRack,
+    descriptors: &[ParamDescriptor],
+    address: impl Fn(u32) -> ParamAddr,
+) -> ModelRc<i32> {
+    descriptor_route_count_slots(rack, descriptors, address)
+        .as_slice()
+        .into()
 }
 
 /// Starts diagnostic logging, honouring the saved preference for whether to
@@ -3261,29 +3357,37 @@ impl UiState {
                                 selected == Some(slot),
                             );
                             let descriptors = effect.kind().descriptors();
-                            row.modulation_depths =
-                                self.destination_depths(armed, descriptors, |param| {
-                                    ParamAddr::effect(
-                                        EffectTarget::Channel(channel),
-                                        effect.id,
-                                        param,
-                                    )
-                                });
-                            row.modulation_allowed = descriptor_policies(descriptors);
-                            row.modulation_offsets = self.destination_offsets(descriptors, |param| {
+                            let address = |param| {
                                 ParamAddr::effect(EffectTarget::Channel(channel), effect.id, param)
-                            });
-                            row.modulation_route_counts = descriptor_route_counts(
-                                &state.modulation,
-                                descriptors,
-                                |param| {
-                                    ParamAddr::effect(
-                                        EffectTarget::Channel(channel),
-                                        effect.id,
-                                        param,
-                                    )
-                                },
-                            );
+                            };
+                            let depths =
+                                self.session.destination_depths(armed, descriptors, address);
+                            let allowed = descriptor_policy_flags(descriptors);
+                            let offsets = self.session.destination_offsets(descriptors, address);
+                            let counts =
+                                descriptor_route_count_slots(&state.modulation, descriptors, address);
+                            // The EQ's seven controls are a view over fifty
+                            // descriptors, so its overlays are gathered down
+                            // to what the face reads.
+                            match effect.params.eq() {
+                                Some(eq) => {
+                                    let ids = eq_face_ids(eq);
+                                    row.modulation_depths =
+                                        eq_overlay_view(&ids, &depths).as_slice().into();
+                                    row.modulation_allowed =
+                                        eq_overlay_view(&ids, &allowed).as_slice().into();
+                                    row.modulation_offsets =
+                                        eq_overlay_view(&ids, &offsets).as_slice().into();
+                                    row.modulation_route_counts =
+                                        eq_overlay_view(&ids, &counts).as_slice().into();
+                                }
+                                None => {
+                                    row.modulation_depths = depths.as_slice().into();
+                                    row.modulation_allowed = allowed.as_slice().into();
+                                    row.modulation_offsets = offsets.as_slice().into();
+                                    row.modulation_route_counts = counts.as_slice().into();
+                                }
+                            }
                             row
                         })
                         .collect()
@@ -3409,10 +3513,15 @@ impl UiState {
             let Some(mut row) = self.effect_slot_model.row_data(slot) else {
                 continue;
             };
-            row.modulation_offsets =
-                self.destination_offsets(effect.kind().descriptors(), |param| {
+            let offsets = self
+                .session
+                .destination_offsets(effect.kind().descriptors(), |param| {
                     ParamAddr::effect(scope, effect.id, param)
                 });
+            row.modulation_offsets = match effect.params.eq() {
+                Some(eq) => eq_overlay_view(&eq_face_ids(eq), &offsets).as_slice().into(),
+                None => offsets.as_slice().into(),
+            };
             self.effect_slot_model.set_row_data(slot, row);
         }
     }
@@ -8329,7 +8438,10 @@ impl AppUi {
                         .session.channels
                         .get(state.session.selected)
                         .and_then(|channel| channel.effects.get(slot))
-                        .and_then(|effect| effect.kind().descriptor(param))
+                        .and_then(|effect| {
+                            let id = effect_face_param_id(effect, param)?;
+                            effect.kind().descriptor(id)
+                        })
                         .is_some();
                 if valid {
                     state.begin_modulation_edit(&window);
@@ -8353,17 +8465,11 @@ impl AppUi {
                         .get(state.session.selected)
                         .and_then(|channel| channel.effects.get(slot))
                         .and_then(|effect| {
-                            effect
-                                .kind()
-                                .descriptor(param)
-                                .map(|descriptor| (effect.id, descriptor))
+                            let id = effect_face_param_id(effect, param)?;
+                            effect.kind().descriptor(id).map(|_| (effect.id, id))
                         })
-                        .map(|(device, descriptor)| {
-                            ParamAddr::effect(
-                                EffectTarget::Channel(channel),
-                                device,
-                                descriptor.id,
-                            )
+                        .map(|(device, id)| {
+                            ParamAddr::effect(EffectTarget::Channel(channel), device, id)
                         }),
                     _ => None,
                 };

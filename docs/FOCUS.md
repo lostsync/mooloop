@@ -108,18 +108,26 @@ each individually automatable, and no context; there is no way to say "the
 selected band's frequency" to a plugin. The EQ is built around exactly that
 idea — six parameters cover seven bands and two pass filters, resolved through
 `selected_target` — so **it is the one native device whose parameter model a
-plugin host could not express.** `EQ_PARAM_TARGET` is itself automatable, and
-a lane on it changes which band every other EQ lane refers to. And the
+plugin host could not express.** `EQ_PARAM_TARGET` was itself automatable, and
+a lane on it changed which band every other EQ lane referred to. And the
 codebase already does it the other way four times: the strip's EQ, DS-01,
 ML-P8 and the modulator modules are all per-band or per-module.
 
-So **step 01 is the only step the argument forces**, and it is worth doing
-before any plugin work rather than after: it is a small instance of the same
-instance-scoped-parameters problem, on a device whose behaviour is already
-understood, which makes it a cheap way to find out whether the model holds.
-Note what it does *not* settle — `EffectKind::descriptors()` is a table per
+**Step 01 was the only step the argument forced, and it landed 2026-09-14.**
+63 descriptors where there were seven, none of them meaning "the selected
+target's". It was a cheap rehearsal for the same instance-scoped-parameters
+problem, on a device whose behaviour was already understood, and the answer it
+gave is worth carrying into plugin work: **the face did not have to change.**
+A face showing one band at a time is right and always was; what was wrong was
+that the *parameter space* was shaped like the face. Resolving the selection
+one layer earlier — `EqParams::id_for_selected`, one branch in
+`Session::set_effect_param` — left `eq-device.slint` and `main.slint`
+untouched.
+
+Note what it did *not* settle — `EffectKind::descriptors()` is a table per
 *kind*, and a plugin's parameters belong to an instance. That crossing is real
-and is not this plan.
+and is not this plan; it is `SCOPE.md` §"the four things standing between here
+and CLAP", item 1.
 
 Steps 02 and 03 are an EQ that is merely better, and each fault in them was
 confirmed against the source rather than reported from use: the pass filters
@@ -129,9 +137,10 @@ exists, and the plot draws shelves at a fixed exponent. Step 04 is the
 measured character from five reference EQs, is optional, and is the only step
 that changes how the device sounds when nobody asked it to.
 
-Done when: every EQ band and pass filter has its own stable ids, a lane on a
-band means one band forever, and `eq-v2/00-status.md` says which of 02 to 04
-were taken.
+Done when: ~~every EQ band and pass filter has its own stable ids, a lane on a
+band means one band forever~~ (2026-09-14), and `eq-v2/00-status.md` says which
+of 02 to 04 were taken. Steps 02 to 04 are what is left of this step, and 04 is
+optional.
 
 ### 2. Turn Buffer into a composition workflow
 

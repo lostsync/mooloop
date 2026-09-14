@@ -24,6 +24,27 @@ a wish belongs in `ENHANCEMENTS.md`; a described behaviour gap belongs in
 
 ## Wrong-looking UI over correct behaviour
 
+**Double-clicking an EQ knob returns to band 2's default, whatever band is
+selected.** The face is one control set over a selection and its resting
+values are hardcoded -- `default-value: 0.566` is 1 kHz, which is what band 2
+opens at. Band 1 is a low shelf resting at 120 Hz and band 3 a high shelf at
+8 kHz, so on either of those a double-click travels to a number that band was
+never at. Equally true before `eq-v2/01`, and invisible then, because one
+`Freq` descriptor stood for all seven bands and declared 1 kHz; the per-band
+table is what made it checkable, and `slint_face_agreement.rs`'s
+`face_param_id` states it where somebody will meet it. The fix is a per-row
+defaults array on `EffectSlotRow`, which is a face-contract change and so
+belongs to a later `eq-v2` step rather than to the one that exposed it. Found
+2026-09-14.
+
+**The automation destination menu now offers fifty rows for one EQ.** That is
+what per-band addressing means and it is not a defect -- "EQ 1 / B3 Freq" is
+the thing a lane should be able to name, and the channel strip has contributed
+twenty-eight rows since 2026-09-11 without anyone minding. It does make the
+menu long enough that finding a destination by scrolling stops being pleasant,
+which is an argument for filtering it, not for fewer ids. Recorded so the next
+person to open that popup knows it was foreseen. Found 2026-09-14.
+
 **Saving with embedded assets repoints the sampler's prev/next-sample arrows
 into the song's own bundle.** The app writes the resolved paths back into the
 live session after a save, and `selected_sample_target` lists

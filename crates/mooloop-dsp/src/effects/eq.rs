@@ -286,19 +286,15 @@ mod tests {
         params.bands[0].gain_db = 18.0;
         params.bands[0].frequency_hz = 500.0;
 
-        // Select band 0, then switch it off half way through.
+        // Switch band 0 off half way through. Two events until `eq-v2/01`:
+        // one to *select* band 0 and one to switch "the selected band" off.
+        // A band's On switch is its own id now, so the selection is not part
+        // of the message and this is one event.
         let mut events = EventList::empty();
-        events.push(crate::event::TimedEvent {
-            offset: 0,
-            event: Event::ParamValue {
-                id: mooloop_core::EQ_PARAM_TARGET,
-                value: 0.0,
-            },
-        });
         events.push(crate::event::TimedEvent {
             offset: (frames / 2) as u32,
             event: Event::ParamValue {
-                id: mooloop_core::EQ_PARAM_ENABLED,
+                id: mooloop_core::eq_band_param(0, mooloop_core::EQ_BAND_ON),
                 value: 0.0,
             },
         });

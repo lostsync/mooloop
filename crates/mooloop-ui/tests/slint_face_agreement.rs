@@ -17,7 +17,7 @@
 //! it found: five faces declaring `0 .. 2` linear, or `0 .. 1` and a
 //! five-second display, against one table saying 1 ms to 8 s in ratio.
 
-use mooloop_core::{DeviceKind, EffectKind, ParamCurve, ParamDescriptor};
+use mooloop_core::{DeviceKind, EffectKind, EqFaceControl, EqParams, ParamCurve, ParamDescriptor};
 use mooloop_core::{
     BITCRUSH_PARAM_DOWNSAMPLE, COMP_PARAM_ATTACK_MS, COMP_PARAM_RATIO, COMP_PARAM_RELEASE_MS,
     DELAY_PARAM_TIME_MS, DRIVE_PARAM_DRIVE, GATE_PARAM_ATTACK_MS, GATE_PARAM_RELEASE_MS,
@@ -594,6 +594,33 @@ fn optional_number(text: &str, key: &str) -> Option<f32> {
     rest[..end].parse().ok()
 }
 
+/// The descriptor a face's overlay index names.
+///
+/// For every kind but one the index *is* the id: the ids are dense from zero
+/// and `modulation-allowed[2]` is parameter 2. The EQ is the exception since
+/// `eq-v2/01` -- its seven controls are a view over fifty descriptors, so an
+/// index is an `EqFaceControl` and the id depends on which target the face is
+/// showing.
+///
+/// Resolved here against **the target a fresh EQ opens on**, which is the
+/// selection every one of that face's hardcoded resting values was written
+/// for. That is also this arrangement's live limit and it is worth stating
+/// where somebody will meet it: a knob's double-click returns to *band 2's*
+/// default whatever band is selected, so on band 1 -- a low shelf resting at
+/// 120 Hz, not 1 kHz -- it returns to the wrong number. That was equally true
+/// before this change, hidden by one descriptor standing for seven bands;
+/// fixing it means publishing a per-row defaults array, which is a face
+/// contract change and belongs to a later `eq-v2` step.
+fn face_param_id(kind: EffectKind, index: u32) -> u32 {
+    if kind != EffectKind::Eq {
+        return index;
+    }
+    let opening = EqParams::default().selected_target();
+    EqFaceControl::from_face_index(index)
+        .and_then(|control| EqParams::id_for_selected(opening, control))
+        .unwrap_or(index)
+}
+
 /// The descriptor id a knob's modulation overlay addresses, from any of the
 /// four arrays it indexes.
 fn indexed_param(block: &str) -> Option<u32> {
@@ -632,7 +659,7 @@ fn every_effect_face_knob_agrees_with_its_table() {
             let Some(param) = knob.param else {
                 continue;
             };
-            let Some(descriptor) = kind.descriptor(param) else {
+            let Some(descriptor) = kind.descriptor(face_param_id(kind, param)) else {
                 panic!(
                     "{file}:{}: a knob routes modulation to parameter {param}, which \
                      {kind:?} does not describe",
