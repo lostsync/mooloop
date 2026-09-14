@@ -1,13 +1,19 @@
 # Scope
 
 Status: the remaining set, drawn 2026-09-14, at Adam's request for *"some kind
-of an accounting of what is actually left to be done."*
+of an accounting of what is actually left to be done."* Scope answers from Adam
+the same day: **0.2.0 is the line**, CLAP is in, and the sampler needs key
+zones.
 
 Every other planning document here answers a narrower question, and answers it
 well. None of them answers this one, because the finish line was never drawn:
 `VERSIONS.md` says outright that **"`1.0` has no target yet."** This document
 draws it, sizes what stands between here and there, and sorts everything
 recorded anywhere into *in* or *out*.
+
+**The line is 0.2.0, not 1.0** — Adam's call, and the honest number. See §9 for
+what that does to the existing version ladder, which needs renumbering before
+any of this ships.
 
 **What this document is not.** It does not order the work — `FOCUS.md` still
 decides what is next, and two documents claiming that job is the failure mode
@@ -23,9 +29,9 @@ writing and are listed at the end.
 
 ---
 
-## 1. What 1.0 means
+## 1. What 0.2.0 means
 
-> **mooloop is 1.0 when sound can get *in*, the program can be driven without
+> **mooloop is 0.2.0 when sound can get *in*, the program can be driven without
 > the mouse, and its devices are ones you would choose rather than tolerate.**
 
 That is the honest reading of Adam's thirteen. Today mooloop can build a song
@@ -34,16 +40,22 @@ all of which is done. What it cannot do is accept audio or a controller,
 capture a performance, or be operated from the keyboard. Those are not polish;
 they are the difference between an instrument and a demo of one.
 
-The fourth thing 1.0 has to settle is not a feature: **whether Buffer stays.**
-See §7.
+The fourth thing 0.2.0 has to settle is not a feature: **whether Buffer stays.**
+See §7. Because the line is 0.2 rather than 1.0, that decision now falls
+*inside* the release rather than after it — the old ladder gave it 0.3.0 all to
+itself.
 
 ---
 
-## 2. Adam's thirteen, sized
+## 2. The list, sized
+
+Adam's thirteen, plus a fourteenth he added on 2026-09-14 (key zones).
 
 Grouped by *kind of work*, not by the order they were listed. The grouping is
 the point: these are four different activities and scheduling them as one list
-is what makes the set feel endless.
+is what makes the set feel endless. Two items — 13 and 14 — outgrew a table
+cell once Adam said what he actually wanted from them, and have their own
+sections at the end.
 
 ### Tier A — last mile. The thing exists; finish it.
 
@@ -69,20 +81,128 @@ is what makes the set feel endless.
 | 4 | **Audio routing** | **This is the most finished area in the codebase.** A topologically compiled bus graph with cycle refusal (`compile_bus_graph`, Kahn's, `mixer.rs:552`); sends that route a copy of a track to another track with per-edge latency compensation (`AuxSend` `mixer.rs:211`, `compile_latency` `:834`); and typed audio edges with device outlets, refusals-as-values and compiled ordering (`compile_audio_graph` `mixer.rs:1113`, `core/src/outlet.rs`, `AudioTapBank` `render.rs:53`). ML-P8 publishes 7 audio taps; DS-01 and Aux In publish too. **What is genuinely missing is sidechain** — a dependency edge that schedules a producer without summing it — plus mid-chain send taps (`SendTap` has two positions, both post-chain, `mixer.rs:177-201`) and `OutletTap::Output`, which is declared and then refused as `TapIsLate`. Read `plans/archive/typed-audio-edges/` before building any of it. |
 | 4b | **MIDI routing** | Separate item, and it is Tier B: there is **no MIDI graph at all**. One input port, decoded once, routed by a single `AtomicU8`. |
 | 6 | **Resampling** | The offline render engine is done and reusable: `OfflineRenderer::render` (`offline.rs:104`), WAV via hound and MP3 via mp3lame. Critically, **`render_blocks` (`offline.rs:176`) already takes an arbitrary `FnMut(&[f32], &[f32])` sink** — so "render to a sample" is that closure filling a `Vec` and building `SampleData` (`dsp/src/sampler.rs:65-69`), installed through the existing `EngineHandle::load_sample` (`engine/lib.rs:580`). What is missing is only a **scope smaller than the master bus** (`offline.rs:186/195` reads `state.master()` and nothing else), and `RenderState` already has a full solo model to build one from (`install_solo`, `render.rs:3072`). Small. |
-| 13 | **Master bus comp** | **It already exists, twice.** Master is bus 0 and is an ordinary `BusStrip` (`render.rs:1864-1912`) carrying (a) a full 256-slot insert chain — so a `Compressor` or `Limiter` device can be dropped on master today via `EffectTarget::Bus(0)` — and (b) a channel strip whose compressor has threshold, ratio, attack, release, knee, **parallel mix** and makeup, with programme-dependent release (`strip.rs:66-79`), pinned ahead of the rack (`StripPin::Head`, `mixer.rs:65-71`). **What is actually missing is a master *output* stage**: `OutputStage` is gain/pan/mute only (`render.rs:1794-1822`), and nothing bounds a sample in the live path — the console's `sin`/`asin` ceiling is off on master by construction (`render.rs:3093-3096`). So the real item is a **safety limiter and a decision about lookahead**, not a compressor. |
+| 13 | **Master bus comp** | Promoted out of this tier on 2026-09-14 — Adam wants it to be its own thing, with its own laws. **See §2.1.** |
 
 ### Tier D — taste, not engineering. These need Adam's ears, not a plan.
 
 | # | Item | Where it stands |
 | --- | --- | --- |
 | 11 | **Reverb** | Nothing is owed. It is an eight-line FDN with a normalized Hadamard matrix, four Schroeder input diffusers, prime-tuned lines, per-line in-loop damping solved for a target RT60, independent incommensurate line modulation, two orthogonal output taps and a mid/side width control. Zero TODOs in the file. Its documented limits are all deliberate: the input is **mono-summed** before the network, so the stereo image is synthetic; damping compounds per trip; the low cut is on the input and not in the loop. The one fragile thing is `OUTPUT_REFERENCE = 0.188` (`reverb.rs:122-129`) — a *measured* constant that will drift if the network is ever retuned, held only by one gain-structure test. **Reverb is the only Tier-D item with no reference measurements**, so this is a pure character call or a new measurement run. |
-| 12 | **EQ** | Has a written plan (`plans/eq-v2/`) and **nothing has landed**. It is the weakest device in the tree and its faults are verified, not reported: a **shelf silently ignores its Q** (`eq.rs:88-89` calls `shelf()` where `Biquad::shelf_slope` exists, is tested, and is what the strip uses); the **pass filters never draw** because the producer writes 7 bands × 5 floats then appends HP and LP at 4 each (`lib.rs:1346-1366`) while the consumer reads `index * 5 + field` (`device-displays.slint:410`), with nothing checking the two agree; the **plot draws shelves at a fixed 1.6 exponent** ignoring Q; clicking a band shows the previous band's values for a frame; and the proportional-Q law is reimplemented locally (`eq.rs:79-82`) instead of using the shared `eq_effective_q`. Its **parameter model is also the CLAP blocker in miniature** — see §6. |
+| 12 | **EQ** | Has a written plan (`plans/eq-v2/`) and **nothing has landed**. It is the weakest device in the tree and its faults are verified, not reported: a **shelf silently ignores its Q** (`eq.rs:88-89` calls `shelf()` where `Biquad::shelf_slope` exists, is tested, and is what the strip uses); the **pass filters never draw** because the producer writes 7 bands × 5 floats then appends HP and LP at 4 each (`lib.rs:1346-1366`) while the consumer reads `index * 5 + field` (`device-displays.slint:410`), with nothing checking the two agree; the **plot draws shelves at a fixed 1.6 exponent** ignoring Q; clicking a band shows the previous band's values for a frame; and the proportional-Q law is reimplemented locally (`eq.rs:79-82`) instead of using the shared `eq_effective_q`. Its **parameter model is also the CLAP blocker in miniature** — see §5. |
 
-Both 12 and 13 have their **measurements already**. `REFERENCE_MEASUREMENTS.md`'s protocol was run on 2026-09-10 across 25 plugins and `spikes/preamp-measure/RESULTS.md` has sections on EQ and compressors. Two findings bear directly on these rows: an EQ's nonlinearity belongs *inside* the filter network rather than after it (the Massive Passive makes 36 dB more third harmonic than any post-EQ shaper can reach), and compressor programme dependence is the opto/FET signature — opto and FET units hold 2.4–3.6× more gain reduction 500 ms after a long note, where VCA and digital units are within 1%. If the strip compressor is meant to feel like an 1176 or an LA-2A, that ratio is the thing to build.
+Item 12 has its **measurements already**. `REFERENCE_MEASUREMENTS.md`'s
+protocol was run on 2026-09-10 across 25 plugins and
+`spikes/preamp-measure/RESULTS.md` §3 covers EQ: an EQ's nonlinearity belongs
+*inside* the filter network rather than after it, because the Massive Passive
+makes 36 dB more third harmonic than any post-EQ shaper can reach.
+
+### 2.1 Item 13 — the master bus compressor
+
+Adam, 2026-09-14: *"we've created a really good feeling console mix
+experience… I'm totally cool with us using the master strip to house the bus
+comp — that's only natural — but it needs to be more prominently displayed in
+the rack, with a nice meter, and it should be running its own algos, aimed at
+like SSL, 2500, and idk Massive Passive or something. Turning it on should
+feel special. We have the measurements to do it (and to show that they're not
+the same as the channel comps)."*
+
+**The measurements do not merely permit this — they make the case.** The
+cleanest split in the entire reference run falls exactly on the axis that
+separates a bus compressor from a channel one:
+
+| Unit | Element | Programme dependence | Detector | Note |
+| --- | --- | --- | --- | --- |
+| UAD LA-2A | opto | **3.6×** | peak | the channel character |
+| Waves CLA-3A | opto | **2.4×** | peak | the channel character |
+| UAD 1176LN | FET | **2.5×** | peak | two-stage attack: t63 2.0 ms, t90 514 ms |
+| UAD SSL G bus | VCA | **1.0×** | peak | attack 0.31–21.4 ms, release 77 ms–3.4 s (Auto) |
+| Waves API-2500 | VCA | 1.0× | **RMS** | attack **floors at 3.8 ms**; its two fastest markings are fiction |
+| UAD dbx 160 | VCA | 1.0× | **RMS** | "over easy" knee — shallowest onset of the nine |
+
+Read the programme-dependence column. **Opto and FET units hold 2.4–3.6× more
+gain reduction at 500 ms after a long note; every VCA unit is at 1.0×, with no
+programme dependence at all.** That is precisely Adam's *"show that they're not
+the same as the channel comps"*, and it is a difference of **law**, not of
+values — which is the console plan's standing rule (*a voicing selects laws,
+never values*) landing exactly where it was designed to.
+
+So the master comp's voicings are distinguished by **detector shape and timing
+law**, the two things the run resolves best:
+
+- **SSL G bus** — peak VCA, no programme dependence, fast available attack, a
+  marked-vs-measured release ratio of about 3×, and an Auto mode measuring
+  3.4 s. Third-harmonic-dominant (−34.8 dB h3 at 60 Hz).
+- **API-2500** — RMS VCA. Its character is that it *ignores peaks*: 8.3 dB of
+  reduction on a tone against 4.4 dB on same-peak bursts. The **3.8 ms attack
+  floor is the unit**, not a limitation to model around.
+- **A third.** Massive Passive is an **EQ** (RESULTS §3) and cannot voice a
+  compressor — so this row needs a different answer. The two measured
+  candidates that are genuinely a third law rather than a third set of
+  numbers: **Fairchild 670** (vari-mu; positions 5 and 6 are two-stage, attack
+  getting *faster* again while release stays long) or **dbx 160** (true RMS,
+  completely recovered by 100 ms where an LA-2A is still down 1.2 dB at a
+  second). Fairchild is the more distinctive of the two beside SSL and API.
+  **Adam's call.**
+
+**What has to be built**, over what exists (`strip.rs:758-798` `process_comp`,
+one implementation shared by every track, with a voicing-driven ratio bend and
+a programme-dependent release):
+
+1. **Its own laws.** A master voicing selects detector shape (peak vs RMS), the
+   timing law including a floor where the reference has one, the knee, and
+   crucially **no programme dependence** — the opposite of what the channel
+   strip's comp does. This is a separate law table, not new values in the
+   existing one.
+2. **A real meter.** Today gain reduction is a 9 px lamp on
+   `StripSectionHead` scaled to 12 dB (`strip.slint:661-669`), plus a 72 px
+   `DynamicsCurveDisplay` that only appears in wide mode. That was the right
+   call for a channel — *"a scope would have told you the same and costs 9px
+   instead of 80"* — and it is the wrong one for the master.
+3. **Prominence in the rack.** Master is currently drawn as just another
+   `BusStrip`, identical to every other track.
+4. **"Turning it on should feel special."** A taste requirement, and the one
+   part that needs a listening pass rather than a spec.
+
+**Note it is not the same item as the master safety limiter.** `OutputStage` is
+gain/pan/mute only (`render.rs:1794-1822`) and nothing bounds the live signal —
+the console's `sin`/`asin` ceiling is forced off on master by construction
+(`render.rs:3093-3096`). A bus compressor is a musical device; a safety limiter
+is engineering. Both are in for 0.2; they are separate rows.
+
+### 2.2 Item 14 — sampler key zones
+
+Added 2026-09-14. Adam: *"sampler v2… a lot of that is done. I would say we
+should at least get key zones, if not layers."*
+
+He is right that a lot is done — stretch, slicing and the commit path shipped
+in 0.1.2. **Key zones are not**, and this one is structural rather than a last
+mile. The sampler holds exactly **one** `SampleData` plus a `root_note`
+(`dsp/src/sampler.rs:65-69`), and pitch is one subtraction from it
+(`sampler.rs:668-669`). There is no zone, layer, or mapping concept anywhere in
+`mooloop-core` or `mooloop-dsp`.
+
+What a zone set crosses:
+
+- `SamplerParams` and `ChannelSource::Sampler` grow a mapped set where there is
+  now a single handle.
+- `PROJECT_FORMAT.md`'s defaulted-field rule applies — a v1 song has one
+  sample and must keep loading as a single full-range zone.
+- `EngineHandle::load_sample(channel, Arc<SampleData>)` (`engine/lib.rs:580`)
+  becomes a set install, and the structural-reclaim path has to return N
+  buffers rather than one.
+- `CAPACITY_POLICY.md` applies: no small cap on a user-facing collection.
+- Some editor is required even at the minimum. **#17** is the full mapping
+  workspace and stays out; zones need only a key-range editor.
+
+**Velocity layers are the "if not layers" half** — the same structure with a
+second axis, and they should be designed for now and built only if 0.2 has
+room. GitHub **#16** covers both; take its key-range half.
+
+Everything else in the Sampler v2 tree stays post-0.2 (§4).
 
 ---
 
-## 3. Required for 1.0, but not on Adam's list
+## 3. Required for 0.2.0, but not on Adam's list
 
 These are not additions to the scope. They are already-recorded work that his
 thirteen sit downstream of, or that the definition in §1 forces.
@@ -105,7 +225,7 @@ thirteen sit downstream of, or that the definition in §1 forces.
   bounds the live signal.
 - **The Buffer's tempo-change bug** (§7). This one is a defect, not a
   decision, and it is real.
-- **74 loose ends** in `LOOSE_ENDS.md`, across 12 groups. Not all are 1.0
+- **74 loose ends** in `LOOSE_ENDS.md`, across 12 groups. Not all are 0.2
   blockers; the ones that are get picked per polish pass rather than enumerated
   here.
 
@@ -113,15 +233,17 @@ thirteen sit downstream of, or that the definition in §1 forces.
 
 ## 4. The freeze line
 
-### In for 1.0
+### In for 0.2.0
 
 All thirteen, with three amendments that the sizing above forces:
 
 - **Item 5 splits.** MIDI recording is in; audio recording follows audio input
   and is in only if item 3 lands early.
-- **Item 13 is re-aimed.** A master compressor exists; what ships is a master
-  **output stage with a safety limiter** and a lookahead decision.
+- **Item 13 grows.** It is no longer "a compressor exists" — it is a master bus
+  compressor with its own laws, its own meter and its own presence (§2.1),
+  *plus* a separate master **safety limiter** and a lookahead decision.
 - **Item 11 is a listening session**, booked like one — not a plan directory.
+- **Item 14 joins**: sampler key zones (§2.2), Adam's addition on 2026-09-14.
 
 Plus, from §3: the keyboard pass, the 0.1.4 release, the plan filing, and the
 Buffer tempo bug.
@@ -131,7 +253,9 @@ Buffer tempo bug.
 - **The Sampler v2 tree** — 13 GitHub issues (#13–#18, #20, #31, #33–#38).
   The single largest block of recorded work in the project, and Adam's
   thirteen does not mention it. `FOCUS.md` already says not to treat it as the
-  default pick. **Post-1.0**, except where a defect blocks something in §2.
+  default pick. **Post-0.2**, except for **#16's key-range half** (§2.2),
+  which Adam pulled in on 2026-09-14, and except where a defect blocks
+  something in §2.
 - **Everything in `ROADMAP.md`'s "Later, Not Scheduled"** that item 2 does not
   pull in: MIDI output is now *in* (item 2), but controller mapping beyond it,
   multiple time signatures and tempo maps, stem and bus export, groove
@@ -142,7 +266,7 @@ Buffer tempo bug.
   recorded reason and a recorded unpark condition. Note that `theming/` gets
   *cheaper to defer and more expensive to do*, and that its real argument is
   accessibility: the working type size is 7–11px and is not adjustable. That
-  reason does not expire, so it is out for 1.0 and should not stay out
+  reason does not expire, so it is out for 0.2 and should not stay out
   forever.
 - **Windows and macOS as release targets** (#23, #24, #25). macOS builds and
   runs for development; packaging and signing are out. `PRODUCT.md` is
@@ -174,11 +298,19 @@ Not a schedule. Only the constraints that actually exist.
 
    item 3 audio input ──► item 6 resampling (only for capture-to-sample;
                                  render-to-sample needs nothing)
+
+   RESULTS.md §4 (already measured) ──► item 13 master bus comp
+   PROJECT_FORMAT defaulted-field rule ──► item 14 key zones
 ```
 
 Everything else is independent and can be handed to a parallel session:
 item 4's sidechain, item 6's render-to-sample, item 11, item 12's steps 02–04,
-item 13, the release, the plan filing.
+**item 13, item 14**, the release, the plan filing.
+
+Items 13 and 14 are worth naming as parallel work specifically: neither waits
+on the backend boundary or the keyboard pass, both have their inputs already
+(measurements for 13, a defaulted-field precedent for 14), and both are the
+kind of self-contained device work that ends in something you can listen to.
 
 ### The two gates, in detail
 
@@ -233,19 +365,23 @@ re-park work that has just been asked for:
 
 | Document | Said | Now |
 | --- | --- | --- |
-| `PRODUCT.md` non-goals | "A plugin host before its own instrument and sequencing model is coherent" | Item 9 is in for 1.0. The instrument model *is* coherent; the parameter model is what is not, and §5 makes that the gate. |
+| `PRODUCT.md` non-goals | "A plugin host before its own instrument and sequencing model is coherent" | Item 9 is in for 0.2 — Adam, 2026-09-14: *"I do think CLAP is important."* The instrument model *is* coherent; the parameter model is what is not, and §5 makes that the gate. |
 | `FOCUS.md` "deliberately not now" | Plugin hosting deferred | In, behind `eq-v2` step 01. |
 | `FOCUS.md` on MIDI | *"build the setting, let it stay inert"* | Item 2 lights those rows up. |
 | `ROADMAP.md` "Later, Not Scheduled" | MIDI output, MIDI recording, controller mapping | Output and recording are in; general controller mapping stays out. |
 
 ---
 
-## 7. The one question that changes what 1.0 is
+## 7. The one question that changes what 0.2.0 is
 
 Adam's item 10 is *"do something with the buffer device/idea or just remove
 it."* That is the first time deletion has been on the table for the feature
 `PRODUCT.md` calls **"the proposed differentiator"** and that `VERSIONS.md`
 gives an entire release (0.3.0) to deciding.
+
+**Setting the line at 0.2 pulls this forward.** The old ladder let the Buffer
+question wait for its own release; it now has to be answered inside the one
+being frozen, because item 10 is on the list that defines it.
 
 **This document deliberately does not sort it.** With Buffer, mooloop is a
 retained-audio instrument; without it, it is a very good groovebox. The answer
@@ -330,9 +466,39 @@ in nine days.
 
 ---
 
+## 9. What 0.2.0 does to the version ladder
+
+Setting the line at 0.2 collides with the numbering `VERSIONS.md` already has,
+and the collision has to be resolved before anything ships. Recorded here as a
+consequence, not a decision:
+
+- **`0.2.0` is already defined** as *"Automation that is audible"*, and its
+  milestones read **Done / Done / Partly** — that content shipped across 0.1.2
+  and 0.1.3. The name is spent.
+- **167 commits sit unreleased** on `main` past `v0.1.3` (§3). They are a
+  release in their own right: the console pass, the channel strip, sends, solo
+  in place, the left sidebar, colours, and three days of correctness work.
+- **`0.3.0` is defined** as *"Decide the retained-audio thesis"* — which §7
+  just pulled inside 0.2.
+
+The arrangement that fits, and the one this document assumes:
+
+| Version | Content |
+| --- | --- |
+| **0.1.4** | The 167 unreleased commits. Absorbs the old 0.2.0 automation milestones, which are already met. |
+| **0.2.0** | The freeze target: Adam's thirteen, plus key zones, the keyboard pass, and the Buffer answer. |
+| ~~0.3.0~~ | Superseded. Whatever Buffer becomes is part of 0.2, or it is gone. |
+
+This is the one structural claim in this document that is a proposal rather
+than a reading of the source. **If Adam would rather keep 0.2.0 meaning what it
+means today and call the freeze 0.3.0, only the numbers in this file change —
+not a single row of scope.**
+
+---
+
 ## Maintaining this
 
 Rewrite it when the freeze line moves, not when an item lands — a row going
 green belongs in the owning plan's `00-status.md`. When every row in §4's "in"
 list is closed, this document has done its job and should be replaced by a
-`1.0` section in `VERSIONS.md`.
+`0.2.0` section in `VERSIONS.md`.
