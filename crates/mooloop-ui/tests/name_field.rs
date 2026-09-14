@@ -37,6 +37,8 @@ slint::slint! {
         in-out property <string> name;
         // What the box is showing, which is the whole question.
         out property <string> shown: field.current-text;
+        // Whether the caret is still in the box.
+        out property <bool> editing: field.editing;
         callback edited(string);
 
         field := NameField {
@@ -140,4 +142,130 @@ fn the_application_still_owns_the_name_after_somebody_types() {
     ui.set_name(SharedString::from("Closed Hat"));
     settle(&ui);
     assert_eq!(ui.get_shown(), "Closed Hat");
+}
+
+
+/// Escape takes the caret out of a rename field.
+///
+/// Until 2026-09-14 the only way out was Enter. Click into one of these, then
+/// click somewhere that is not a control, and the caret stayed -- and while it
+/// is there Space types a space instead of starting the transport, which is
+/// right for a field somebody is editing and wrong for one nobody is. The
+/// 2026-09-07 focus pass made every *control* transparent to shortcuts and
+/// left text fields as the remaining case; what they needed was an exit, not
+/// a change to what they consume.
+///
+/// The typed text deliberately survives. A `NameField` reports every
+/// keystroke through `edited` and the application has already taken them, so
+/// there is nothing here to cancel -- Escape is an exit, not an undo.
+#[test]
+fn escape_takes_the_caret_out_of_a_rename_field() {
+    common::install_testing_backend();
+
+    let ui = NameFieldHarness::new().unwrap();
+    ui.window().set_size(LogicalSize::new(300.0, 80.0));
+    ui.set_name("Kick".into());
+    settle(&ui);
+
+    type_into(&ui, "!");
+    settle(&ui);
+    assert!(ui.get_editing(), "the click did not put the caret in the field");
+    assert_eq!(ui.get_shown(), "Kick!");
+
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: slint::platform::Key::Escape.into(),
+    });
+    ui.window().dispatch_event(WindowEvent::KeyReleased {
+        text: slint::platform::Key::Escape.into(),
+    });
+    settle(&ui);
+
+    assert!(
+        !ui.get_editing(),
+        "Escape left the caret in the field, so Space would still type a space"
+    );
+    assert_eq!(
+        ui.get_shown(),
+        "Kick!",
+        "Escape is a way out, not an undo: the application already has these keystrokes"
+    );
+}
+
+/// Every editable text field in the interface handles Escape.
+///
+/// The test above proves the exit works on `NameField`; this one is why the
+/// other three got it too. A field with no way out is not a broken widget --
+/// it looks and behaves correctly right up until somebody clicks away and
+/// then presses Space -- so the failure is invisible in every rendered frame
+/// and in every test that does not think to try leaving.
+///
+/// A `read-only` input is excluded and is not a field: it is a selectable
+/// label, which is what `save-error-dialog.slint` and the Developer page's
+/// log path use so a path or a reason can be lifted out by hand. The mockup
+/// tool's two are excluded for the reason its catalogue is excluded from the
+/// meter check -- they are specimens, behind the `mockup` feature, and not
+/// part of the shipped interface.
+#[test]
+fn every_editable_text_field_has_a_way_out() {
+    let mut checked = 0usize;
+    for entry in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/ui"))
+        .expect("mooloop-ui/ui is unreadable")
+    {
+        let path = entry.expect("unreadable directory entry").path();
+        if path.extension().is_none_or(|kind| kind != "slint") {
+            continue;
+        }
+        let file = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if file.starts_with("mockup") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("unreadable .slint file");
+
+        let mut from = 0usize;
+        while let Some(found) = source[from..].find("TextInput {") {
+            let start = from + found;
+            let open = source[start..].find('{').expect("the brace just matched") + start;
+            let mut depth = 0i32;
+            let mut end = open;
+            for (offset, byte) in source.as_bytes()[open..].iter().enumerate() {
+                match byte {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = open + offset;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            from = end;
+            let block = &source[open..=end];
+            let line = source[..start].matches('\n').count() + 1;
+            if block.contains("read-only: true") {
+                continue;
+            }
+            checked += 1;
+            assert!(
+                block.contains("Key.Escape"),
+                "{file}:{line}: an editable text field with no Escape handler traps the \
+                 caret, and Space then types a space instead of starting the transport:\
+                 \n{block}"
+            );
+        }
+    }
+
+    // Four today: the rename field, the tempo entry, and the knob's two
+    // numeric entries. A walk that stops matching finds none and would
+    // otherwise pass.
+    assert!(
+        checked >= 4,
+        "only {checked} editable text fields were found; the walk has stopped matching \
+         the markup it is meant to read"
+    );
 }

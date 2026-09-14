@@ -972,6 +972,17 @@ export component KnobField inherits Rectangle {
                 root.text-committed(self.text);
                 self.clear-focus();
             }
+            // Escape leaves without committing, and the box then re-reads
+            // `display-text` -- so for a numeric entry the exit is also a
+            // cancel. `NameField` in `toolbar.slint` carries the reason a
+            // field needs one.
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    self.clear-focus();
+                    return EventResult.accept;
+                }
+                return EventResult.reject;
+            }
             edited => { }
         }
     }
@@ -2030,6 +2041,14 @@ export component KnobStack inherits Rectangle {
                 accepted => {
                     root.text-committed(self.text);
                     self.clear-focus();
+                }
+                // As the entry above.
+                key-pressed(event) => {
+                    if (event.text == Key.Escape) {
+                        self.clear-focus();
+                        return EventResult.accept;
+                    }
+                    return EventResult.reject;
                 }
                 edited => { }
             }
