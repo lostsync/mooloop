@@ -11,9 +11,8 @@ well. None of them answers this one, because the finish line was never drawn:
 draws it, sizes what stands between here and there, and sorts everything
 recorded anywhere into *in* or *out*.
 
-**The line is 0.2.0, not 1.0** — Adam's call, and the honest number. See §9 for
-what that does to the existing version ladder, which needs renumbering before
-any of this ships.
+**The line is 0.2.0, not 1.0** — Adam's call, and the honest number. §9 records
+how releases actually get cut here, and what the nearer **0.1.4** carries.
 
 **What this document is not.** It does not order the work — `FOCUS.md` still
 decides what is next, and two documents claiming that job is the failure mode
@@ -68,7 +67,7 @@ sections at the end.
 
 | # | Item | Where it stands | Size |
 | --- | --- | --- | --- |
-| 2 | **MIDI I/O** | **In works**: one hardcoded JACK port (`jack_driver.rs:28`) auto-connecting every hardware source, midir on macOS, decoding NoteOn/NoteOff/CC/PitchBend (`midi.rs:89`) and playing the selected channel through `keyboard_channel` (`render.rs:2615`). **Out does not exist** — `jack_driver.rs:185-201` registers `out_l`, `out_r`, `midi_in` and nothing else. No MIDI clock (`0xF8` is explicitly dropped, `midi.rs:122`). No port selection, no settings persistence, no learn. The one controller-mapping system in the tree, `BufferMidiMap`, is **dead code**: `set_buffer_midi_map` (`engine/lib.rs:747`) has no caller in the workspace. | Medium, **after the boundary** (§6). Issue #9. |
+| 2 | **MIDI I/O** | **In works**: one hardcoded JACK port (`jack_driver.rs:28`) auto-connecting every hardware source, midir on macOS, decoding NoteOn/NoteOff/CC/PitchBend (`midi.rs:89`) and playing the selected channel through `keyboard_channel` (`render.rs:2615`). **Out does not exist** — `jack_driver.rs:185-201` registers `out_l`, `out_r`, `midi_in` and nothing else. No MIDI clock (`0xF8` is explicitly dropped, `midi.rs:122`). No port selection, no settings persistence, no learn. The one controller-mapping system in the tree, `BufferMidiMap`, is **dead code**: `set_buffer_midi_map` (`engine/lib.rs:747`) has no caller in the workspace. | **Splits across two releases** (§9). The *configurable* half — port selection, channel filter, persistence, and lighting up the sidebar's inert MIDI rows — is 0.1.4. **MIDI output is 0.2.0.** Both want the boundary first (§5). Issue #9. |
 | 3 | **Audio input** | Nothing. JACK registers no input port; `build_input_stream` appears nowhere; `Executor::process` (`executor.rs:118`) has no input parameter. `ARCHITECTURE_REVIEW.md` confirms: *"No capture path and no media pool."* | Medium. The shape to copy already exists: `AuxIn` (`core/src/aux_in.rs`, `dsp/src/aux_in.rs`) is "a level and a copy", and `AudioTapBank` (`render.rs:53`) already hands a consumer channel a buffer someone else filled. A hardware input is one more pre-filled buffer in that bank and needs no ordering, having no producer. Issues #7, #22. |
 | 5 | **Audio + MIDI recording** | Nothing. `EngineCommand` has no `Record` (`core/src/bridge.rs:42-68`); live keys reach the block's event list and are never written back to a pattern. | **Split it.** MIDI capture is cheap and needs no driver change — `press_key`/`release_key` (`render.rs:4212/4228`) already know note, velocity, block offset and channel, and the event ring back to the UI already exists (`executor.rs:46` → `session/engine.rs:477` → `NoteEvent` through `ProjectEdit`). Audio capture is gated on item 3. |
 | 8 | **Full-size browser** | Does not exist. The view set is closed at five (`PaneViews`, `main.slint:393-405`). | **Small, and the cheapest win on the list.** A sixth `PaneViews` entry, one `ViewSlot`/`PaneToolbar` block, a `view.pane-browser` action, a `VIEW_COUNT` bump (`settings.rs:498`) and a settings migration. The `BrowserRow` model and row rendering transfer unchanged; what a full-size view adds is column layout, selection and search — which item 7 wants anyway. Machinery: `ViewSlot` (`main.slint:443`), `PaneToolbar` (`:462`), `PaneTabs` (`:485`), `slot-rect` (`:2797`), `LayoutSettings` (`settings.rs:463-496`); tests at `tests/panes.rs`, `pane_drag.rs`, `dock_resize.rs`. |
@@ -126,8 +125,9 @@ the same as the channel comps"*, and it is a difference of **law**, not of
 values — which is the console plan's standing rule (*a voicing selects laws,
 never values*) landing exactly where it was designed to.
 
-So the master comp's voicings are distinguished by **detector shape and timing
-law**, the two things the run resolves best:
+So the master comp's three voicings are distinguished by **detector shape and
+timing law**, the two things the run resolves best — and all three are
+measured:
 
 - **SSL G bus** — peak VCA, no programme dependence, fast available attack, a
   marked-vs-measured release ratio of about 3×, and an Auto mode measuring
@@ -135,14 +135,33 @@ law**, the two things the run resolves best:
 - **API-2500** — RMS VCA. Its character is that it *ignores peaks*: 8.3 dB of
   reduction on a tone against 4.4 dB on same-peak bursts. The **3.8 ms attack
   floor is the unit**, not a limitation to model around.
-- **A third.** Massive Passive is an **EQ** (RESULTS §3) and cannot voice a
-  compressor — so this row needs a different answer. The two measured
-  candidates that are genuinely a third law rather than a third set of
-  numbers: **Fairchild 670** (vari-mu; positions 5 and 6 are two-stage, attack
-  getting *faster* again while release stays long) or **dbx 160** (true RMS,
-  completely recovered by 100 ms where an LA-2A is still down 1.2 dB at a
-  second). Fairchild is the more distinctive of the two beside SSL and API.
-  **Adam's call.**
+- **Vari-mu — the UAD Fairchild 670.** Settled 2026-09-14: Adam meant vari-mu,
+  not Massive Passive (which is an EQ, RESULTS §3, and cannot voice a
+  compressor). It is measured, and it is a third *law* rather than a third set
+  of numbers — it has **no separate attack and release at all**, only six
+  coupled time-constant positions, measuring at about a third of their
+  published values:
+
+  | position | attack t63 | release t63 | published |
+  | --- | --- | --- | --- |
+  | 1 | 1.52 ms | 104 ms | 0.3 s |
+  | 2 | 1.94 ms | 306 ms | 0.8 s |
+  | 3 | 3.54 ms | 909 ms | 2 s |
+  | 4 | 7.10 ms | 1793 ms | 5 s |
+  | 5 | 3.52 ms | 1760 ms | 10 s |
+  | 6 | 1.56 ms | 1426 ms | 25 s |
+
+  **Positions 5 and 6 are the programme-dependent ones, and the table shows
+  it**: the attack gets *faster* again while the release stays long, which is
+  the two-stage behaviour those positions exist for. Detector reads peak
+  (10.4 dB on a tone, 9.8 on same-peak bursts).
+
+  This has a design consequence the other two do not: a vari-mu voicing
+  sensibly presents **six positions rather than two knobs**, so the master
+  comp's control surface is not fixed across its voicings. That is a face
+  question to settle early, and it is exactly the kind of thing the console
+  plan's rule protects — a voicing selecting *laws* can legitimately change
+  which controls mean anything, as long as no control lies about its range.
 
 **What has to be built**, over what exists (`strip.rs:758-798` `process_comp`,
 one implementation shared by every track, with a voicing-driven ratio bend and
@@ -211,11 +230,11 @@ thirteen sit downstream of, or that the definition in §1 forces.
   of the only plan in the active sequence, and **items 1, 7 and 8 all depend
   on it.** `ROADMAP.md`'s account of the focus defect is stale; the real
   remaining defects are listed in §8.
-- **Cut the release that already exists.** `v0.1.3` was tagged 2026-09-08 and
-  `main` is **167 commits** past it. The whole console pass, the channel
-  strip, sends, solo in place, the left sidebar, channel and pattern colours
-  and three days of correctness work are unreleased and have no `VERSIONS.md`
-  entry.
+- **Ship 0.1.4 first.** `v0.1.3` was tagged 2026-09-08 and `main` is **167
+  commits** past it — the whole console pass, the channel strip, sends, solo
+  in place, the left sidebar, colours and three days of correctness work.
+  Adam has since defined what 0.1.4 carries beyond that backlog: the mixer at
+  a stopping point, the macOS menubar, and configurable MIDI input. **§9.**
 - **File the finished plans.** `plans/README.md` lists `pane-layout/`,
   `ui-consistency-pass/`, `mono-synth-v2/`, `session-layer-extraction/`,
   `preset-system/` and `coreaudio-driver/` as done or done-but-for-a-
@@ -245,8 +264,11 @@ All thirteen, with three amendments that the sizing above forces:
 - **Item 11 is a listening session**, booked like one — not a plan directory.
 - **Item 14 joins**: sampler key zones (§2.2), Adam's addition on 2026-09-14.
 
-Plus, from §3: the keyboard pass, the 0.1.4 release, the plan filing, and the
-Buffer tempo bug.
+Plus, from §3: the keyboard pass, the plan filing, and the Buffer tempo bug.
+
+**Minus whatever 0.1.4 absorbs** (§9): configurable MIDI input, the macOS
+menubar, and the mixer's stopping point come off this list by shipping
+earlier, not by leaving scope.
 
 ### Out, explicitly
 
@@ -466,33 +488,61 @@ in nine days.
 
 ---
 
-## 9. What 0.2.0 does to the version ladder
+## 9. Releases
 
-Setting the line at 0.2 collides with the numbering `VERSIONS.md` already has,
-and the collision has to be resolved before anything ships. Recorded here as a
-consequence, not a decision:
+**How releases actually happen here**, stated by Adam on 2026-09-14 and
+recorded because this document was briefly built on the opposite assumption:
 
-- **`0.2.0` is already defined** as *"Automation that is audible"*, and its
-  milestones read **Done / Done / Partly** — that content shipped across 0.1.2
-  and 0.1.3. The name is spent.
-- **167 commits sit unreleased** on `main` past `v0.1.3` (§3). They are a
-  release in their own right: the console pass, the channel strip, sends, solo
-  in place, the left sidebar, colours, and three days of correctness work.
-- **`0.3.0` is defined** as *"Decide the retained-audio thesis"* — which §7
-  just pulled inside 0.2.
+> *"I don't really care at all about what `VERSIONS.md` says. I've never read
+> it. I've been releasing when it felt like enough changes had accumulated to
+> justify a release, basically."*
 
-The arrangement that fits, and the one this document assumes:
+So `VERSIONS.md` is a **record kept after the fact**, not a plan anyone works
+to. It should be updated to describe what shipped; it should not be consulted
+to decide what ships, and no scope decision in this document depends on its
+numbering. An earlier draft of this section proposed an elaborate renumbering
+to resolve a collision between the existing `0.2.0`/`0.3.0` milestones and the
+freeze. That collision is not real, because nothing was driving off those
+milestones.
 
-| Version | Content |
+### 0.1.4 — the open threads, tied down
+
+Set by Adam, 2026-09-14. This is **not** the freeze; it is the release that
+closes what is currently in flight, and it is close.
+
+| Thread | State |
 | --- | --- |
-| **0.1.4** | The 167 unreleased commits. Absorbs the old 0.2.0 automation milestones, which are already met. |
-| **0.2.0** | The freeze target: Adam's thirteen, plus key zones, the keyboard pass, and the Buffer answer. |
-| ~~0.3.0~~ | Superseded. Whatever Buffer becomes is part of 0.2, or it is gone. |
+| **The mixer section at a good stopping point** | *"almost"* — the console pass closed 2026-09-11 and was played the same day. The studio listening pass is the outstanding piece (`FOCUS.md`, "waiting on Adam"). |
+| **A little more macOS support — the menubar** | See below. New, and not previously recorded anywhere. |
+| **MIDI input** | See below. |
 
-This is the one structural claim in this document that is a proposal rather
-than a reading of the source. **If Adam would rather keep 0.2.0 meaning what it
-means today and call the freeze 0.3.0, only the numbers in this file change —
-not a single row of scope.**
+**The macOS menubar.** mooloop draws its own in-window menu bar
+(`ui/menubar.slint`), which is right on Linux and wrong on macOS, where the
+menu belongs in the system bar at the top of the screen. There is **no native
+menu integration anywhere in the tree** — no `NSMenu`, no platform branch, no
+mention in `plans/coreaudio-driver/`. The Slint menu components are
+deliberately generic and know nothing about which actions exist, and the action
+registry (`actions.rs`) already separates an action's identity from its
+surface — so the menu structure is nameable independently of how it is drawn,
+which is what a native bar needs. Sizing this is a first step, not a given.
+
+**"MIDI input"**, read in context, means the **configurable** half rather than
+the decode path. Input already works: a keyboard plays the selected channel
+under both JACK and Core MIDI. What does not exist is any way to *choose*
+anything about it — no port selection, no channel filter, no persistence, and
+the sidebar's MIDI IN/OUT/CH rows are drawn inert on purpose (§2 item 1).
+Lighting those rows up is the item. **MIDI output stays in 0.2.0** (§2 item 2).
+
+One decision this forces: port selection is per-driver, and `driver.rs` is not
+a trait (§5). Doing MIDI input configuration for 0.1.4 means either writing it
+twice — once for JACK, once for Core MIDI — or taking issue **#9** first.
+Given that macOS support is in the same release, #9 first looks like the
+cheaper order, but it is a judgement call about how much 0.1.4 should carry.
+
+### 0.2.0 — the freeze
+
+Everything in §4's "in" list that 0.1.4 does not absorb. The version number is
+Adam's to pick when it gets there; nothing here depends on it.
 
 ---
 
