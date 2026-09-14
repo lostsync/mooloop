@@ -112,24 +112,33 @@ ends.
 
 ## Wired but unreachable
 
-**Spectrum subscriptions are keyed by slot index and nothing re-keys them
-when the chain changes.** `set_effect_spectrum_enabled` is called from the FFT
-toggle (by the slot index at that moment) and from
-`sync_effect_spectrum_subscriptions`, which runs only inside a project
-install. Effect insert, removal, reorder and wrap do not go through one. So:
-turn the FFT on for an EQ in slot 2, delete the device in slot 1, and the
-analyzer draws a flat line behind a lit button until it is toggled twice or
-the project reloaded. The orphaned stage keeps its pool entry, so enough
-add/enable/remove cycles exhaust `SPECTRUM_SLOTS` and every later analyzer
-silently draws zeros; and if a later device lands on that stage, the engine
-runs a full Goertzel bank every hop for a display nobody is drawing. Not small
-because the fix is a decision about where the subscription lives: re-sync
-after every structural rack edit (cheapest, an O(channels x slots) walk on
-every device drag, still keyed on a position); permute `spectrum_enabled`
-alongside `MoveEffect`/`RemoveEffect` in the engine; or key the subscription
-by the device's durable id, which cannot drift and is the largest change. Same
-shape as the modulator-reorder entry above -- a permutation mirrored by index
-rather than by identity. Found 2026-09-13.
+**Spectrum subscriptions are still keyed by slot index; they are now
+re-stated after every rack edit.** The orphan is gone. The walk that syncs
+them said `true` or `false` for each device that *is* an analyzer, so a stage
+an analyzer had moved off was never mentioned and kept its subscription --
+the engine ran a Goertzel bank every hop for a display nobody drew, whatever
+took that slot number drew a flat line behind a lit button, and the orphan
+held one of the sixty-four `SPECTRUM_SLOTS` until the project was reloaded.
+It now walks *stages* and states the answer for each, one past the end of the
+chain, and `UiState::sync_effects` -- the one function every rack edit already
+calls -- raises a flag the pump consumes on its next tick.
+
+Two things about the fix worth knowing before touching it. **One past the end
+is only enough because of an invariant**: nothing above a chain's length can
+be subscribed when the sync returns, and a project install, the one edit that
+shortens a chain by more than one, calls `DeviceTelemetry::clear_spectra`
+first. And it deliberately does *not* clear before re-stating, because
+re-stating a correct subscription is an early return in
+`set_spectrum_enabled` while a clear zeroes the bins -- which would make every
+open analyzer in the program blink on an unrelated device drag.
+
+What is unchanged is the keying, which was the third and largest of the
+options the entry named: a subscription is still `(target, slot)` rather than
+the device's durable id. Nothing drifts now, because nothing outlives the
+tick that renumbered it, but an id-keyed subscription would not need the
+re-sync at all. `spectrum_subscription_plan` has a test; the flag and the
+pump's consumption of it do not, and could not without driving the
+application. Found 2026-09-13, fixed 2026-09-14.
 
 **A generator's internal route amounts are a working automation destination
 no picker can reach.** The engine resolves `ParamOwner::SourceRoute` lanes per
