@@ -911,7 +911,8 @@ land on its own when it starts to matter:
   had no delay compensation, so lookahead latency would have shifted a
   channel against its neighbours -- expired on 2026-09-05 when the mixer
   became latency compensated, and whether the limiter should now take
-  lookahead is an open decision rather than a settled no. Each kind publishes a static `ParamDescriptor` table
+  lookahead is an open decision rather than a settled no.
+- Each kind publishes a static `ParamDescriptor` table
   (range, curve, unit, default) in `mooloop-core`, which is the single source
   of truth for normalization and clamping; `Event::ParamValue` carries natural
   units so nodes never handle curves. `EffectSlotState.params` is a tagged

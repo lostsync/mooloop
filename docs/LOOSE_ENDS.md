@@ -1044,29 +1044,20 @@ the reason to do it is sharing those tests, not the line count.
 
 ## Numbers nothing is watching
 
-**`gain::MIN_DB` is spelled twenty-six times in markup and the test that
-checks its two siblings does not check it.**
-`slint_meter_thresholds_match_the_rust_constants` holds `meter-warning-db`,
-`meter-hot-db` and `reference-peak-dbfs` to their Rust constants. It does not
-hold the meter *floor*, because `GainMath` has no property for it:
-`gain.slint` spells `-60.0` inline inside `db-to-linear`/`linear-to-db`, and
-`meters.slint` and `controls.slint` spell `-60` twenty-two more times across
-`minimum-db` defaults and resting values. The Rust side is clean -- everything
-goes through `METER_FLOOR_DB`. So this is the characteristic question
-answering *no* for the floor of every meter in the application while answering
-*yes* for the two colour thresholds beside it, and the `declares()` helper the
-test would need already exists. Not a one-liner because the four `minimum-db`
-properties are scale *declarations* (legitimately overridable per meter) and
-the rest are resting *values*, so one shared `GainMath.min-db` has to be
-threaded through both kinds across three files.
+**Two spellings of the meter floor are kept as literals on purpose, and the
+reason is a guard that wants them that way.** The floor moved into
+`GainMath.min-db` on 2026-09-13 and fifty literal `-60`s across ten `.slint`
+files became references to it. `device-displays.slint`'s `threshold-min-db`
+and `floor-db` did not, because `strip_face.rs` holds them to
+`gain::MIN_DB` by *parsing the number out of the declaration* -- so replacing
+the number with a property reference takes the guard off rather than improves
+it. `no_face_spells_the_floor_for_itself` skips that one file and says why.
 
-Two smaller instances worth folding into that pass: the Rust repaint throttle
-passes a segment count of 14 for the mixer strip and 12 for the device rails,
-mirroring `MixerMetrics.meter-segments: 14` and `segments: 12` in the markup.
-They agree today; if the markup's count is raised, the throttle would suppress
-repaints that change a visible segment -- which is exactly the "peak marker one
-segment behind where the audio put it" failure its own comment names. Found
-2026-09-13.
+Fixing it properly means teaching `strip_face.rs` to resolve
+`GainMath.min-db` instead of reading a literal, which is a second parser for
+one file's two lines. Left as a note rather than done, because the copy is
+currently the safer of the two arrangements: it is the only one anything
+checks.
 
 **The modulation shelf spells twenty-one ranges by hand and nothing checks
 any of them.** `modulation-shelf.slint:1208-1658` declares
@@ -1075,7 +1066,7 @@ Random and Math modules. All twenty-one were compared against `LFO_`,
 `ENVELOPE_`, `STEP_`, `RANDOM_` and `MATH_DESCRIPTORS` on 2026-09-13 and every
 one agrees -- including the non-obvious `QUANT 0..16` (a 17-position selector)
 and `LENGTH 1..16`. So this is drift risk rather than present drift, the same
-shape as the eight device faces above. It is *not* reachable by extending
+shape the device faces below were in. It is *not* reachable by extending
 `slint_face_agreement.rs`'s list: that test works from a list of device faces
 and the shelf is not a device face, so covering it is a new check rather than
 a longer list.
@@ -1121,29 +1112,21 @@ decision about whether one day's files still have to open. Found 2026-09-12;
 the load-time range check added the same day would have caught this class of
 thing, and now does for everything else on the strip.
 
-**Two device faces spell a number the descriptor table already states, and
-`slint_face_agreement.rs` reads neither.** `scripts/dupe-audit
-unchecked-face` lists them. The count was eight faces and twenty-three
-numbers when the check was written on 2026-09-12; it is two faces and three
-numbers now, because the test's parser became block-based -- which is what
-the entry here said had to come first -- and its list then grew to take
-`modulation-device`, `device-oscillator`, `eq-device`, `filter-device`,
-`buffer-device` and `container-device`. DS-01 is still absent and still
+**One device face still spells a number the descriptor table already
+states.** `scripts/dupe-audit unchecked-face` names it. The count was eight
+faces and twenty-three numbers when the check was written on 2026-09-12; it is
+`bus-device.slint` and two numbers now. The test's parser became block-based
+-- which is what the entry here said had to come first -- and its list then
+grew to take `modulation-device`, `device-oscillator`, `eq-device`,
+`filter-device`, `buffer-device` and `container-device`. `aux-in-device`
+followed on 2026-09-13, and needed a test of its own rather than a longer
+list, because Aux In is not an `EffectKind`. DS-01 is still absent and still
 correctly so: its paged face reads the table at run time
 (`default-value: root.defaults[root.param]`), which is a copy of nothing.
-What is left is not the same shape twice.
 
-**`aux-in-device.slint:115` is the one worth doing**, and it is a one-line
-addition to the test's list. Its Level knob rests at a literal `0.3552344`,
-which is `gain::reference_level_gain()` evaluated by hand -- the third
-spelling of that number. The Rust side already learned this lesson:
-`aux_in.rs:199` carries the same literal and `aux_in.rs:319` pins it to the
-function, so the copy in the markup is the only one held to nothing. It is a
-`ParameterKnob`, so `face_knobs` can see it as it stands.
-
-**`bus-device.slint` needs the parser widened first, and may not be worth
-it.** Its two numbers are a `MiniKnob`'s pan range (`-1..1`, resting at `0`)
-and a `MixerFader`'s `default-value: 1.0`, whose `maximum` already reads
+What is left needs the parser widened first, and may not be worth it.
+`bus-device`'s two numbers are a `MiniKnob`'s pan range (`-1..1`, resting at
+`0`) and a `MixerFader`'s `default-value: 1.0`, whose `maximum` already reads
 `GainMath.fader-db[0]` rather than spelling one. `face_knobs` walks
 `ParameterKnob` blocks and nothing else, so neither is reachable -- and
 neither is descriptor-backed, so there is no table entry for a widened parser
@@ -1166,11 +1149,6 @@ nothing downstream of it is being checked at all.
 **The README hero screenshot predates effects.** `mooloop-screenshot.png`,
 captioned "channel rack and Mono Synth" — accurate, but no longer showing the
 most interesting part of the app. A fresh one can be rendered headlessly.
-
-**`CURRENT.md` has two bullets spliced into one line.** At line 554 the
-limiter-lookahead sentence runs straight into "Each kind publishes a static
-`ParamDescriptor` table", which belongs to a separate bullet that lost its
-list marker in the 2026-09-05 edit.
 
 **Six dB readouts still round for themselves.** `GainMath.format-db` now
 covers every readout that is a *gain*, but six sites spell their own number
