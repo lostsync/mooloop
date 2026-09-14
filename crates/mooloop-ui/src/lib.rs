@@ -1123,6 +1123,20 @@ fn queue_pattern_clear(
     queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
 }
 
+/// The colour of the track a channel feeds, which is what that channel's rack
+/// plate is washed with.
+///
+/// A lookup rather than a field on the channel: a track's colour belongs to
+/// the track, and a copy on every channel routed to it would be a copy to keep
+/// in step with every reroute and every recolour. The rack rebuilds its rows
+/// from the session anyway.
+fn feeding_track_color(
+    buses: &[mooloop_core::BusSetup],
+    bus: u8,
+) -> Option<mooloop_core::ProjectColor> {
+    buses.get(bus as usize).and_then(|setup| setup.bus.color)
+}
+
 pub struct AppUi {
     window: MainWindow,
     _pump: Timer,
@@ -2433,6 +2447,11 @@ impl UiState {
                 name: channel.name.as_str().into(),
                 color: channel_colors::to_slint(channel.color),
                 has_color: channel.color.is_some(),
+                track_color: channel_colors::to_slint(feeding_track_color(
+                    &self.session.buses,
+                    channel.bus,
+                )),
+                has_track_color: feeding_track_color(&self.session.buses, channel.bus).is_some(),
                 muted: channel.muted,
                 volume_db: linear_to_db(channel.volume),
                 pan: channel.pan,
@@ -2491,6 +2510,13 @@ impl UiState {
                 row.name = ch.name.as_str().into();
                 row.color = channel_colors::to_slint(ch.color);
                 row.has_color = ch.color.is_some();
+                // Re-read every refresh rather than stored: this is the
+                // *track's* colour, so it moves when the track is recoloured
+                // or when the channel is routed somewhere else, and neither
+                // of those is an edit to the channel.
+                let track = feeding_track_color(&self.session.buses, ch.bus);
+                row.track_color = channel_colors::to_slint(track);
+                row.has_track_color = track.is_some();
                 self.rows.set_row_data(i, row);
             }
         }
@@ -3631,6 +3657,8 @@ impl UiState {
         let solo_silenced = mooloop_core::mixer::solo_silenced(&self.session.buses);
         MixerStripRow {
             name: setup.bus.name.as_str().into(),
+            color: channel_colors::to_slint(setup.bus.color),
+            has_color: setup.bus.color.is_some(),
             muted: setup.bus.muted,
             volume: setup.bus.volume,
             pan: setup.bus.pan,
@@ -3720,6 +3748,11 @@ impl UiState {
         window.set_editing_bus_console(setup.bus.console);
         window.set_editing_bus_polarity(setup.bus.polarity);
         window.set_editing_bus_solo(setup.bus.solo);
+        window.set_editing_bus_has_color(setup.bus.color.is_some());
+        window.set_editing_bus_color(channel_colors::to_slint(setup.bus.color));
+        window.set_editing_bus_color_hex(
+            setup.bus.color.map(|color| color.to_hex()).unwrap_or_default().into(),
+        );
         window.set_editing_bus_strip(strip_row(&setup.bus.strip));
         window.set_editing_bus_can_remove(self.session.can_remove_track(index));
         window.set_editing_bus_allowed(self.allowed_destinations(index));
@@ -4285,6 +4318,10 @@ impl AppUi {
             name: first.name.as_str().into(),
             color: channel_colors::to_slint(first.color),
             has_color: first.color.is_some(),
+            // A new song's one track is the master, which nobody has
+            // coloured yet; the first refresh fills this in if they do.
+            track_color: Default::default(),
+            has_track_color: false,
             muted: false,
             volume_db: linear_to_db(first.volume),
             pan: first.pan,
@@ -6703,6 +6740,11 @@ impl AppUi {
                     name: ch.name.as_str().into(),
                     color: channel_colors::to_slint(ch.color),
                     has_color: ch.color.is_some(),
+                    track_color: channel_colors::to_slint(feeding_track_color(
+                        &st.session.buses,
+                        ch.bus,
+                    )),
+                    has_track_color: feeding_track_color(&st.session.buses, ch.bus).is_some(),
                     muted: false,
                     volume_db: linear_to_db(ch.volume),
                     pan: ch.pan,
@@ -7495,6 +7537,34 @@ impl AppUi {
                     // channel rather than each other.
                     guard.sync_row_flags();
                     guard.refresh_editor(&window);
+                    guard.update_document_title(&window);
+                }
+            });
+        }
+
+        // A track's colour. The same gesture as a channel's, one target over,
+        // with one extra consequence: a channel routed to this track wears
+        // its colour as a wash, so every rack plate has to be redrawn rather
+        // than just the strip that was recoloured.
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_track_color_chosen(move |track, hex| {
+                let mut guard = st.borrow_mut();
+                let color = if hex.trim().is_empty() {
+                    None
+                } else {
+                    match mooloop_core::ProjectColor::from_hex(hex.trim()) {
+                        Some(color) => Some(color),
+                        None => return,
+                    }
+                };
+                if !guard.session.set_track_color(track, color) {
+                    return;
+                }
+                if let Some(window) = weak.upgrade() {
+                    guard.sync_row_flags();
+                    guard.sync_mixer(&window);
                     guard.update_document_title(&window);
                 }
             });

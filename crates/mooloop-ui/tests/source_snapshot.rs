@@ -27,6 +27,8 @@ fn rack_rows() -> ModelRc<ChannelRow> {
             name: SharedString::from(name),
             color: Default::default(),
             has_color: false,
+            track_color: Default::default(),
+            has_track_color: false,
             muted: false,
             volume_db: -1.9382, // linear 0.8 in dB
             pan: 0.0,

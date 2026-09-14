@@ -130,6 +130,23 @@ pub struct MixerBus {
     /// [`crate::strip::StripParams`].
     #[serde(default)]
     pub strip: crate::strip::StripParams,
+    /// The colour the user gave this track, or `None` for one nobody has
+    /// coloured.
+    ///
+    /// **Identity, and nothing about what feeds it.** The step that added
+    /// channel colours deferred this one asking what a colour means at a
+    /// summing point; the answer is that it means what a name means -- which
+    /// track this is -- and that a channel routed here is drawn in this
+    /// colour *by a different mark* rather than by having its own colour
+    /// changed. Adam, 2026-09-13: a channel keeps its bar and wears its
+    /// track's colour as a tint of the whole face, so neither indicator ever
+    /// has two sources.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::color::deserialize_lenient"
+    )]
+    pub color: Option<crate::color::ProjectColor>,
 }
 
 impl MixerBus {
@@ -152,6 +169,7 @@ impl MixerBus {
             polarity: false,
             solo: false,
             strip: crate::strip::StripParams::default(),
+            color: None,
         }
     }
 }

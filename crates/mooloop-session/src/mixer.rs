@@ -3,7 +3,8 @@
 use crate::session::Session;
 use mooloop_core::{
     compile_bus_graph, is_legal_send, sanitize_route, would_create_cycle, AuxSend, BusSetup,
-    EffectParams, EffectTarget, EngineCommand, SendTap, StripParams, MAX_BUSES, MAX_LINEAR_GAIN,
+    EffectParams, EffectTarget, EngineCommand, ProjectColor, SendTap, StripParams, MAX_BUSES,
+    MAX_LINEAR_GAIN,
 };
 
 /// A send is addressed by its track and its position in that track's own run,
@@ -261,6 +262,27 @@ impl Session {
             index: send as u8,
             tap,
         })
+    }
+
+    /// Gives a track a colour, or takes its colour away with `None`.
+    ///
+    /// The track counterpart of `set_channel_color`, and deliberately the same
+    /// shape: refuses nothing, reports whether anything changed, and travels
+    /// as document state rather than as an engine command -- a colour is not
+    /// in the render graph.
+    pub fn set_track_color(&mut self, bus: i32, color: Option<ProjectColor>) -> bool {
+        let Ok(index) = usize::try_from(bus) else {
+            return false;
+        };
+        let Some(setup) = self.buses.get_mut(index) else {
+            return false;
+        };
+        if setup.bus.color == color {
+            return false;
+        }
+        setup.bus.color = color;
+        self.mark_dirty();
+        true
     }
 
     /// Flips a track's solo.
@@ -596,5 +618,32 @@ mod tests {
             session.set_eq_analyzer(1, true),
             Some((EffectTarget::Bus(1), 1))
         );
+    }
+
+    /// A track takes a colour and gives it back, and choosing the one it
+    /// already has is not an edit -- the same contract `set_channel_color`
+    /// has, because they are the same gesture on two kinds of thing.
+    ///
+    /// What a track's colour deliberately does *not* do is touch the channels
+    /// feeding it: they are washed with it where they are drawn, and nothing
+    /// is copied onto them, so rerouting a channel changes what it looks like
+    /// without any edit to the channel at all.
+    #[test]
+    fn a_track_takes_a_colour_and_keeps_its_channels_out_of_it() {
+        let mut session = Session::default();
+        let red = ProjectColor::new(0xEF, 0x44, 0x44);
+        session.add_track().expect("the bank was full");
+
+        assert!(session.set_track_color(1, Some(red)));
+        assert_eq!(session.buses[1].bus.color, Some(red));
+        assert!(!session.set_track_color(1, Some(red)), "re-choosing is an edit");
+
+        // The master, and every channel, are untouched by it.
+        assert_eq!(session.buses[0].bus.color, None);
+        assert!(session.channels.iter().all(|channel| channel.color.is_none()));
+
+        assert!(session.set_track_color(1, None), "clearing was refused");
+        assert_eq!(session.buses[1].bus.color, None);
+        assert!(!session.set_track_color(99, Some(red)), "a missing track was coloured");
     }
 }

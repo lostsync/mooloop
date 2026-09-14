@@ -67,6 +67,8 @@ fn channels() -> ModelRc<ChannelRow> {
         // channel nobody has coloured is the ordinary case.
         color: Default::default(),
         has_color: false,
+        track_color: Default::default(),
+        has_track_color: false,
         muted: false,
         volume_db: -1.9382,
         pan: 0.0,

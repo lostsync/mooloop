@@ -18,8 +18,13 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   nested in layouts, which is what lets a view be drawn anywhere off one
   instance.
 - **A channel sidebar flanks the work area on the left**, as of 2026-09-13.
-  It holds the selected channel's name, its colour and three inert MIDI rows,
-  and it is hidden until the status bar's leftmost chip opens it. It resizes
+  It holds the selected **channel or track**'s name and colour -- following
+  the same selection the device rack does, so the two cannot describe
+  different things -- plus three inert MIDI rows for a channel. A track draws
+  no MIDI rows at all rather than disabled ones: disabled means "not
+  configurable yet", which is true of a channel's and would be a lie about a
+  track, which has no MIDI input to configure. It is hidden until the status
+  bar's leftmost chip opens it. It resizes
   by its right edge between 180 and 400px, remembers its width, and edits
   whatever channel is selected rather than holding a selection of its own.
   The `reference/img/mooloop-1.0-mockup.png` panel also draws PLUGINS and
@@ -1243,16 +1248,18 @@ land on its own when it starts to matter:
   under every scheme. **A pattern takes one on the same terms**, from a colour
   chip beside its name field in the transport toolbar, which opens the same
   swatches in a popup.
-- **A colour is drawn wherever the thing it names is drawn.** A channel's
-  colour is a 3px bar down the left edge of its rack plate; a pattern's is the
-  same bar on its playlist gutter plate, and the fill of every clip that plays
-  it. The difference is what the shape already says: a plate's background
+- **A colour is drawn wherever the thing it names is drawn, and a colour a
+  thing *inherits* is drawn differently from one it owns.** A colour something
+  owns is a 3px bar down the left edge of its plate: a channel's on its rack
+  plate, a pattern's on its playlist gutter plate, a track's on its mixer
+  strip. A colour it inherits is a wash through the whole face: a channel
+  routed to a coloured track is tinted 12% with that track's colour, leaving
+  its own bar free to mean its own colour. Neither indicator ever has two
+  sources. A pattern's colour is also the fill of every clip that plays it. The difference is what the shape already says: a plate's background
   means "selected", so a colour beside it is a mark, while a clip's background
   only means "a clip is here" and a coloured clip still says that. A clip's
   number is drawn in black or white by the colour's luminance, so a label is
-  readable on every colour that can be picked. **The mixer colours nothing,
-  and cannot**: it draws tracks, and a track is not a channel -- there is no
-  channel strip in the mixer for a channel's colour to appear on.
+  readable on every colour that can be picked.
 - One automation lane is visible at a time. Its picker reaches the selected
   channel's generator and every parameter of every effect on that channel and
   on every bus, but several lanes cannot be shown at once, the velocity lane

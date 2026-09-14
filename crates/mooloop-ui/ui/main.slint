@@ -125,6 +125,12 @@ struct ChannelRow {
     // different.
     color: color,
     has-color: bool,
+    // The colour of the *track* this channel feeds, which is a different
+    // fact and gets a different indicator: the bar above is what this
+    // channel was given, this is the group it belongs to. Keeping them
+    // apart is what stops either one having two possible sources.
+    track-color: color,
+    has-track-color: bool,
     muted: bool,
     // Channel gain in dB from unity; the Rust side stores linear.
     volume-db: float,
@@ -955,6 +961,13 @@ export component MainWindow inherits Window {
     in property <bool> editing-bus-console;
     in property <bool> editing-bus-polarity;
     in property <bool> editing-bus-solo;
+    // The edited track's colour, in the three shapes a face needs. Same
+    // reason as the channel's: Slint has no `Option`, and the hex is what a
+    // swatch is matched against.
+    in property <bool> editing-bus-has-color;
+    in property <color> editing-bus-color;
+    in property <string> editing-bus-color-hex;
+    callback track-color-chosen(int, string);
     // The strip of the track the rack is following, for the pinned row.
     in property <StripRow> editing-bus-strip;
     // Whether that row draws before the track's own devices or after them.
@@ -2623,19 +2636,40 @@ export component MainWindow inherits Window {
                         ChannelSidebar {
                             width: root.channel-sidebar-width;
                             height: parent.height;
-                            channel-name: root.selected-channel-name;
-                            channel-number: root.selected-channel + 1;
-                            has-color: root.selected-channel-has-color;
-                            tint: root.selected-channel-color;
-                            color-hex: root.selected-channel-color-hex;
+                            // **The selection the rack already has.** A track
+                            // is being edited exactly when the rack says so,
+                            // so the panel and the device face below it cannot
+                            // end up describing two different things.
+                            is-track: root.editing-bus;
+                            channel-name: root.editing-bus
+                                ? root.editing-bus-name : root.selected-channel-name;
+                            channel-number: (root.editing-bus
+                                ? root.editing-bus-index : root.selected-channel) + 1;
+                            has-color: root.editing-bus
+                                ? root.editing-bus-has-color : root.selected-channel-has-color;
+                            tint: root.editing-bus
+                                ? root.editing-bus-color : root.selected-channel-color;
+                            color-hex: root.editing-bus
+                                ? root.editing-bus-color-hex : root.selected-channel-color-hex;
                             color-choices: root.color-choices;
-                            // The rename the `DEVICES` toolbar already does.
-                            // A second callback would be a second way to
-                            // rename a channel, and they would drift.
+                            // The renames the rest of the interface already
+                            // does. A second callback for either would be a
+                            // second way to rename the same thing, and they
+                            // would drift.
                             renamed(value) => {
-                                root.channel-renamed(root.selected-channel, value);
+                                if (root.editing-bus) {
+                                    root.track-renamed(root.editing-bus-index, value);
+                                } else {
+                                    root.channel-renamed(root.selected-channel, value);
+                                }
                             }
-                            color-chosen(value) => { root.channel-color-chosen(value); }
+                            color-chosen(value) => {
+                                if (root.editing-bus) {
+                                    root.track-color-chosen(root.editing-bus-index, value);
+                                } else {
+                                    root.channel-color-chosen(value);
+                                }
+                            }
                         }
 
                         // The panel's own right edge, drawn inside the clip so
@@ -2997,7 +3031,22 @@ export component MainWindow inherits Window {
                                             width: 88px;
                                             min-height: 24px;
                                             border-radius: Theme.radius-md;
-                                            background: row.selected ? Theme.surface-active : Theme.surface;
+                                            // **A wash, where the channel's own
+                                            // colour is a bar.** Twelve per cent
+                                            // of the track's colour over
+                                            // whichever base the selection asks
+                                            // for -- enough to group a drum bus
+                                            // at a glance, little enough that the
+                                            // selected plate still reads as
+                                            // selected and the channel's own bar
+                                            // still reads as its own. Chosen by
+                                            // rendering 0, 6, 12 and 20 per cent
+                                            // side by side: at 20 the tint starts
+                                            // arguing with the selection.
+                                            background: row.has-track-color
+                                                ? (row.selected ? Theme.surface-active : Theme.surface)
+                                                    .mix(row.track-color, 0.88)
+                                                : (row.selected ? Theme.surface-active : Theme.surface);
                                             // The plate is what the pointer is holding, so it
                                             // is what says it is being held.
                                             drop-shadow-blur: channel-row.dragging ? 16px : 0px;

@@ -27,6 +27,8 @@ fn rack_rows() -> ModelRc<ChannelRow> {
             name: SharedString::from(name),
             color: Default::default(),
             has_color: false,
+            track_color: Default::default(),
+            has_track_color: false,
             muted: false,
             volume_db: -1.9382, // linear 0.8 in dB
             pan: 0.0,
@@ -68,6 +70,10 @@ fn strips(selected: usize) -> Rc<VecModel<MixerStripRow>> {
                 } else {
                     format!("Bus {index}")
                 }),
+                // Uncoloured: these harnesses are about the strip's controls,
+                // and a track nobody has coloured is the ordinary case.
+                color: Default::default(),
+                has_color: false,
                 muted: false,
                 volume: 1.0,
                 pan: 0.0,
