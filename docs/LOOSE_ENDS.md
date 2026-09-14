@@ -256,16 +256,24 @@ a design question.
 
 ## Focus
 
-**A text field is left with Enter, and by nothing else.** The toolbar's search
-and rename fields and the knob/fader numeric entries all call `clear-focus()`
-on `accepted` (`toolbar.slint:395`, `controls.slint:959`,
-`controls.slint:2005`; the three line numbers this entry carried were all
-stale by 2026-09-10) and have no Escape handler, so clicking into one and
-then clicking away leaves the caret in it. While it is there, Space types a
-space instead of starting the transport — which is correct for a field being
-edited and wrong for a field nobody is editing. The 2026-09-07 focus fix made
-every *control* transparent to shortcuts; text fields are the remaining case,
-and they need a way out rather than a change to what they consume.
+**A text field is left with Enter or Escape, and clicking away still leaves
+the caret in it.** Escape is the exit, added 2026-09-14: the rename field, the
+tempo entry and the knob's two numeric entries all take it, and
+`every_editable_text_field_has_a_way_out` fails the next field that does not.
+For the tempo and the numeric entries it is also a cancel, because those
+commit only on `accepted`; for a rename it is not, because `NameField`
+reports every keystroke as it happens and the application already has them.
+
+What is unchanged is the click. Slint has no click-outside for a focused
+input, so leaving one by clicking on something that is not a control still
+leaves the caret where it was, and Space still types a space until Escape or
+Tab. Closing that means a focus-owning surface above the whole work area,
+which is a change to what takes focus rather than a handler on a field.
+
+A `read-only` `TextInput` is not a field and has no exit: that is the
+selectable label `save-error-dialog.slint` and the Developer page's log path
+use so a reason or a path can be lifted out by hand. They sit in dialogs,
+where the transport is not reachable anyway.
 
 **A name is renamed where its subject is edited, and nowhere nearer to it.**
 A channel is renamed on the `DEVICES` toolbar and a track on its own device
