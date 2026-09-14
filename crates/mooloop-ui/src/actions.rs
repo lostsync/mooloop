@@ -100,6 +100,7 @@ macro_rules! action {
 pub(crate) static ACTIONS: &[ActionSpec] = &[
     action!("transport.play-pause", "Play/Pause", "Transport", "space"),
     action!("transport.loop-toggle", "Toggle Loop", "Transport", "l"),
+    action!("file.new", "New Song", "File", ctrl + "n"),
     action!("file.open", "Open Song", "File", ctrl + "o"),
     action!("file.save", "Save Song", "File", ctrl + "s"),
     action!("file.save-as", "Save Song As", "File", ctrl + shift + "s"),

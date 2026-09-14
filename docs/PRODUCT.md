@@ -182,8 +182,11 @@ Mooloop is not trying to be:
 
 These are firm enough to build against:
 
-- Native Linux is the primary platform.
-- Rust, Slint, and JACK/PipeWire remain the implementation stack.
+- Native Linux is the primary platform. macOS builds and runs through Core
+  Audio so the instrument can be developed on a Mac; it is not a release
+  target.
+- Rust, Slint, and JACK/PipeWire (Core Audio on macOS) remain the
+  implementation stack.
 - Internal musical time uses PPQ ticks. The first UI assumes 4/4, but stored
   note placement is not limited to one sixteenth-note slot.
 - The minimum serious placement resolution is 64th notes. The PPQ value of 96
@@ -237,9 +240,9 @@ Still open:
   modify working audio?
 - How much live performance behavior matters relative to composition and
   export?
-- When should MIDI input and output enter the roadmap? A decoded JACK port
-  exists and reaches nothing, which is the current answer by default rather
-  than by decision.
+- How far should MIDI go past a keyboard playing the selected channel? Adam
+  asked for exactly that on 2026-09-13 and it is in; recording, controller
+  mapping, input choice and MIDI output are still undecided.
 
 ## Decision Precedence
 

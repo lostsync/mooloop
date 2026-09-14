@@ -558,7 +558,7 @@ shape rather than "something changed"; or rule that a clip latch belongs to
 the strip position rather than the track. Found 2026-09-13.
 
 **The master is metered twice, through two transports, with two clip
-latches.** `graph.rs` pushes `EngineEvent::Metering` onto the bounded event
+latches.** `executor.rs` pushes `EngineEvent::Metering` onto the bounded event
 ring every block and `render.rs` publishes the same numbers into `BusMeters`
 cell 0. The transport bar reads the event; the mixer's master strip reads the
 cell. The event push is `let _ = evt_tx.push(..)`, so under ring pressure the

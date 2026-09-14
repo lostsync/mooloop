@@ -234,7 +234,7 @@ would have been a second implementation of that contract. `show-dial` joins
   splitter"*.
 - **`ListRow`**, **`TitledPanel`**, **`EmptyState`**, **`TabBar`** — each
   recurs, none is factored. `EmptyState` in particular is inconsistent:
-  `audio-preferences.slint:74` and `main.slint:3896` phrase and style the
+  `audio-preferences.slint:86` and `main.slint:3896` phrase and style the
   same idea differently, and most surfaces that can be empty say nothing.
 
 ## 12. bug — the mono and poly LFO glyphs ignore their own selector

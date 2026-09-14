@@ -1,4 +1,4 @@
-//! Headless engine self-test. Exercises the full JACK path (process callback,
+//! Headless engine self-test. Exercises the full driver path (audio callback,
 //! command/event queues, transport, sequencer, sampler) without any GUI.
 //!
 //! Usage: `cargo run --bin engine-selftest`

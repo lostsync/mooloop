@@ -68,7 +68,7 @@ It currently does not:
 
 Some basic application workflows are also still unfinished. Undo/redo, menus, shortcuts, and clipboard handling exist but do not reach everywhere; keyboard navigation, crash recovery, autosave, and responsive layout all have rough edges.
 
-Linux with JACK or PipeWire/JACK is the supported platform.
+Linux with JACK or PipeWire/JACK is the supported platform. macOS builds and runs through Core Audio, for development; there are no macOS packages.
 
 ## Get It
 
@@ -116,6 +116,18 @@ cargo run --release -p mooloop-app --bin mooloop -j 2
 ```
 
 Release mode is the normal baseline for audio use.
+
+On macOS the engine plays through Core Audio, so there is no JACK to install and no `mold` to find. The Xcode command-line tools and Rust are enough; `rust-toolchain.toml` fetches the toolchain on the first build:
+
+```sh
+xcode-select --install
+brew install rustup
+export PATH="$(brew --prefix rustup)/bin:$PATH"
+
+cargo run --release -p mooloop-app --bin mooloop
+```
+
+Preferences > Audio lists the system default and every output device. MIDI input is not wired on macOS yet.
 
 For a shared Cargo cache across worktrees:
 

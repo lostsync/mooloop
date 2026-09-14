@@ -40,11 +40,11 @@ prepared RenderPlan + RenderState
       |
       | bounded swap at a block boundary
       v
-realtime Executor -> JACK / offline sink
+realtime Executor -> driver (JACK / Core Audio) / offline sink
 ```
 
 The same prepared state and executor serve realtime and offline rendering.
-JACK is an I/O adapter, not the owner of musical semantics.
+The driver is an I/O adapter, not the owner of musical semantics.
 
 ## Control Plane
 

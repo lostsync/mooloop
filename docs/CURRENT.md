@@ -333,10 +333,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   schemes, user schemes that can be saved and removed, and roundness and
   contrast scalars that retune the whole UI. All of it previews live and
   persists on Apply or OK. Shared audio controls, tooltips, and master
-  peak-meter ballistics. A fresh install requests a 256-frame JACK buffer by
-  default (Preferences > Audio picks from 64/128/256/512/1024/2048); a saved
+  peak-meter ballistics. A fresh install requests a 256-frame buffer by
+  default (Preferences > Audio picks from 64/128/256/512/1024/2048) --
+  server-wide under JACK, the output device's own under Core Audio; a saved
   config that already has a buffer size choice keeps it, and the engine
-  falls back to the server's current buffer size with a printed warning if
+  falls back to the driver's current buffer size with a printed warning if
   the request is rejected. Sluggish input latency is a buffer-size symptom
   to check here before assuming a DSP bottleneck. The Shortcuts page lists
   every action in the registry (`ACTIONS.md`), grouped by category, each
@@ -395,14 +396,22 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   no audio behind it yet.
 - There is no metronome. The toolbar deliberately does not offer a click-track
   toggle, since nothing in the DSP graph produces one yet.
-- MIDI input is wired but reaches nothing. The engine registers a JACK
-  `midi_in` port and decodes a bounded number of messages per block into
-  `mooloop_core::midi` types, and `RenderState` will apply a
+- A MIDI keyboard plays the selected channel, on every MIDI channel, whether
+  or not the transport is running. Under JACK the engine's `midi_in` port is
+  connected to every physical MIDI source at startup and to each one that
+  registers later; under Core Audio every Core MIDI source is listened to
+  through `midir`, and a keyboard plugged in later is picked up within a
+  second. JACK notes keep their frame offsets; Core MIDI notes act at the top
+  of the next block. A key comes up on the channel it went down on, so moving
+  the selection while holding one does not strand a note. Only note-on and
+  note-off play: velocity is passed through, and CC, pitch bend, sustain, and
+  program change do nothing on a channel. Notes are not recorded. A
   `BufferMidiMap` — note and CC mappings onto one Buffer insert's gestures —
-  if one is installed. Nothing installs one: `EngineHandle::set_buffer_midi_map`
-  has no caller outside its own tests, so decoded messages are dropped. There
-  is no note input, no learn, no mapping editor, and no controls on the MIDI
-  preferences page.
+  takes the notes it maps ahead of the keyboard, but nothing installs one:
+  `EngineHandle::set_buffer_midi_map` has no caller outside its own tests.
+  There is no MIDI device list, input choice, learn, or mapping editor, and the
+  MIDI preferences page has no controls; which inputs are listened to is in
+  the log.
 
 ## Current Audio Path
 
@@ -427,14 +436,24 @@ selected source (sampler / drum synth / DS-01 / v1 mono / ML-M1 / ML-P8 / poly /
                                             master effect chain -> gain/pan
                                                            |
                                                            v
-                                                       JACK outputs
+                                  driver output (JACK ports or a Core Audio device)
 ```
 
 The engine preallocates channel strips, pattern storage, event lists, and audio
-buses. A JACK-independent render state owns transport, scheduling, instruments,
-effects, mixing, and metering. The JACK adapter drains fixed-size commands into
-that state and publishes position and master peak events; offline export drives
-the same render path without JACK ports.
+buses. A driver-independent render state owns transport, scheduling,
+instruments, effects, mixing, and metering. One executor drains fixed-size
+commands into that state and publishes position and master peak events, and a
+driver adapter hands it buffers: JACK on Linux, Core Audio through cpal on
+macOS, chosen at compile time. Offline export drives the same render path with
+no driver at all.
+
+Core Audio has no port graph, so an output target there names a device and two
+of its channels. The system default follows whatever the system output is; a
+named device that disappears hands playback to the system default, and with
+auto-reconnect on, playback returns to the device when it comes back. A new
+device or buffer size reopens the stream without rebuilding the engine. The
+engine keeps the sample rate the system output had when it started and asks
+later devices for the same one.
 
 Channels render in a compiled order rather than in index order, so a producer
 runs before any channel subscribed to one of its audio outlets and the samples
@@ -462,7 +481,7 @@ directory scanning occur off the audio thread. A decoded sample is published
 through an `ArcSwapOption` slot.
 
 Project installation prepares a complete `RenderState`, including effect
-construction and sequencer import, on the control thread. The JACK callback
+construction and sequencer import, on the control thread. The audio callback
 receives that state through the ordered command stream, swaps one box at a
 block boundary, and returns the displaced state through the reclaim ring for
 control-thread destruction. Parameter commands cannot cross that generation
@@ -594,6 +613,11 @@ land on its own when it starts to matter:
   when the device wearing it goes: changing the channel's source, loading a
   channel preset over it, or opening a song or kit, which replaces the whole
   rack.
+- File > New Song (Ctrl+N) starts a fresh starter song, asking first when the
+  current one has unsaved changes, as Open Song does. Every file and
+  confirmation dialog is a separate program: `zenity` on Linux, and on macOS
+  the system's own panels through `osascript`. A dialog program that will not
+  start is logged, since to its caller it looks exactly like a cancel.
 - Missing samples are recoverable by loading a replacement audio file, but
   there is no dedicated path-search/relink dialog, autosave, or crash recovery
   yet.
@@ -1183,8 +1207,8 @@ land on its own when it starts to matter:
   re-renders the decoded source off-thread under a stored spec, and the
   Buffer insert's rolling ring. Neither writes a channel's own output back
   into a project asset: there is still no capture-to-sample gesture.
-- The render graph is independent of JACK and supports finite offline passes.
-  WAV uses the active JACK sample rate; MP3 renders at 48 kHz through an
+- The render graph is independent of the audio driver and supports finite
+  offline passes. WAV uses the engine's sample rate; MP3 renders at 48 kHz through an
   in-process LAME encoder. Stem/bus export and realtime-vs-offline null testing
   are not implemented.
 - Replaced sample lifetimes need a deliberate deferred-reclamation design so

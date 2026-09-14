@@ -82,8 +82,8 @@ use mooloop_session::channel::{
 };
 use mooloop_session::command::{cycle_pane, CommandState, Pane};
 use mooloop_session::dialogs::{
-    confirm_via_zenity, pick_bundle_via_zenity, pick_export_via_zenity, pick_sample_via_zenity,
-    pick_save_via_zenity, pick_song_via_zenity,
+    confirm_dialog, pick_bundle_dialog, pick_export_dialog, pick_sample_dialog,
+    pick_save_dialog, pick_song_dialog,
 };
 use mooloop_session::document::{
     log_asset_warnings, log_repairs, quarantine_song, repair_suffix, resolve_document,
@@ -133,9 +133,52 @@ use std::sync::Arc;
 const PUMP_INTERVAL_MS: u64 = 8;
 const INITIAL_BPM: i32 = 120;
 
-/// Fixed JACK buffer size choices offered by the segmented control on the
-/// Audio preferences page. Index-addressed to match `SegmentedControl`.
-const JACK_BUFFER_SIZES: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
+/// Fixed buffer size choices offered by the segmented control on the Audio
+/// preferences page. Index-addressed to match `SegmentedControl`.
+const BUFFER_SIZES: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
+
+/// What the Audio preferences page says that depends on the driver this build
+/// was compiled with. Spelled here, once, so the markup names no driver.
+struct DriverCopy {
+    name: &'static str,
+    note: &'static str,
+    targets_empty: &'static str,
+    buffer_note: &'static str,
+    auto_reconnect_hint: &'static str,
+    sample_rate_source: &'static str,
+}
+
+#[cfg(not(target_os = "macos"))]
+const DRIVER_COPY: DriverCopy = DriverCopy {
+    name: "JACK",
+    note: "ALSA support is planned.",
+    targets_empty: "No connectable JACK inputs found.",
+    buffer_note: "Changes the buffer for every JACK client on this machine.",
+    auto_reconnect_hint: "Reconnects to the output above when it reappears on the JACK graph — for example after unplugging and replugging a device.",
+    sample_rate_source: "set by the JACK server",
+};
+
+#[cfg(target_os = "macos")]
+const DRIVER_COPY: DriverCopy = DriverCopy {
+    name: "Core Audio",
+    note: "",
+    targets_empty: "No audio output devices found.",
+    buffer_note: "Changes the buffer of the device mooloop plays through, and nothing else.",
+    auto_reconnect_hint: "Returns to the output above when its device comes back — for example after unplugging and replugging it. Until then mooloop plays through the system default.",
+    sample_rate_source: "the system output's rate when mooloop started",
+};
+
+impl DriverCopy {
+    fn to_slint(&self) -> AudioDriverCopy {
+        AudioDriverCopy {
+            name: self.name.into(),
+            note: self.note.into(),
+            targets_empty: self.targets_empty.into(),
+            buffer_note: self.buffer_note.into(),
+            auto_reconnect_hint: self.auto_reconnect_hint.into(),
+        }
+    }
+}
 const DRUM_PREVIEW_BINS: usize = 144;
 
 /// Bins in DS-01's rendered hit. Wider than v1's because its scope is wider:
@@ -399,15 +442,16 @@ fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
     motion.set_speed(settings::motion_speed_index(&appearance.motion_speed));
     motion.set_easing(settings::motion_easing_index(&appearance.motion_easing));
     window.set_preferences_error("".into());
+    window.set_preferences_audio_driver(DRIVER_COPY.to_slint());
     let buffer_index = settings
         .audio
-        .jack
+        .active()
         .buffer_size
-        .and_then(|frames| JACK_BUFFER_SIZES.iter().position(|&f| f == frames))
+        .and_then(|frames| BUFFER_SIZES.iter().position(|&f| f == frames))
         .map(|i| i as i32)
         .unwrap_or(-1);
     window.set_preferences_audio_buffer_size_index(buffer_index);
-    window.set_preferences_audio_auto_reconnect(settings.audio.jack.auto_reconnect);
+    window.set_preferences_audio_auto_reconnect(settings.audio.active().auto_reconnect);
     window.set_preferences_audio_error("".into());
 }
 
@@ -502,10 +546,10 @@ fn sync_shortcut_rows(window: &MainWindow, table: &actions::ShortcutTable) {
     )))));
 }
 
-/// Re-read live JACK driver status and connectable output targets, and push
-/// them onto the window. Called from the pump, which is the only place that
-/// holds `EngineHandle`; a non-realtime JACK graph query, not something to
-/// run every tick.
+/// Re-read live driver status and connectable output targets, and push them
+/// onto the window. Called from the pump, which is the only place that holds
+/// `EngineHandle`; a non-realtime driver query, not something to run every
+/// tick.
 fn sync_audio_status(handle: &EngineHandle, window: &MainWindow) {
     let status = handle.driver_status();
     let rows: Vec<OutputTargetRow> = handle
@@ -523,14 +567,14 @@ fn sync_audio_status(handle: &EngineHandle, window: &MainWindow) {
         })
         .collect();
     window.set_preferences_audio_output_targets(ModelRc::from(Rc::new(VecModel::from(rows))));
-    let buffer_index = JACK_BUFFER_SIZES
+    let buffer_index = BUFFER_SIZES
         .iter()
         .position(|&f| f == status.buffer_size)
         .map(|i| i as i32)
         .unwrap_or(-1);
     window.set_preferences_audio_buffer_size_index(buffer_index);
     window.set_preferences_audio_sample_rate_text(
-        format!("{} Hz — set by the JACK server", status.sample_rate).into(),
+        format!("{} Hz — {}", status.sample_rate, DRIVER_COPY.sample_rate_source).into(),
     );
 }
 
@@ -4313,10 +4357,10 @@ impl AppUi {
             let st = state.clone();
             window.on_quit_requested(move || {
                 // Same guard as Open Song: unsaved work must be confirmed
-                // away, and the zenity round-trip must not block the UI.
+                // away, and the dialog round-trip must not block the UI.
                 let dirty = st.borrow().session.dirty;
                 std::thread::spawn(move || {
-                    if dirty && !confirm_via_zenity("Discard unsaved song changes and quit?") {
+                    if dirty && !confirm_dialog("Discard unsaved song changes and quit?") {
                         return;
                     }
                     let _ = slint::invoke_from_event_loop(|| {
@@ -4337,7 +4381,7 @@ impl AppUi {
                 }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    if dirty && !confirm_via_zenity("Discard unsaved song changes?") {
+                    if dirty && !confirm_dialog("Discard unsaved song changes?") {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
                     }
@@ -4360,11 +4404,11 @@ impl AppUi {
                 }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    if dirty && !confirm_via_zenity("Discard unsaved song changes?") {
+                    if dirty && !confirm_dialog("Discard unsaved song changes?") {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
                     }
-                    let Some(path) = pick_song_via_zenity("Open mooloop song") else {
+                    let Some(path) = pick_song_dialog("Open mooloop song") else {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
                     };
@@ -4410,7 +4454,7 @@ impl AppUi {
                 let tx = tx.clone();
                 std::thread::spawn(move || {
                     let path = current
-                        .or_else(|| pick_save_via_zenity("Save mooloop song", "Untitled.mooloop"));
+                        .or_else(|| pick_save_dialog("Save mooloop song", "Untitled.mooloop"));
                     let Some(path) = path else {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
@@ -4510,7 +4554,7 @@ impl AppUi {
                 let tx = tx.clone();
                 std::thread::spawn(move || {
                     let Some(path) =
-                        pick_save_via_zenity("Save mooloop kit", "Untitled.mooloop-kit")
+                        pick_save_dialog("Save mooloop kit", "Untitled.mooloop-kit")
                     else {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
@@ -4548,7 +4592,7 @@ impl AppUi {
                 let tx = tx.clone();
                 std::thread::spawn(move || {
                     let Some(path) =
-                        pick_save_via_zenity("Save mooloop channel", "Untitled.mooloop-channel")
+                        pick_save_dialog("Save mooloop channel", "Untitled.mooloop-channel")
                     else {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
@@ -4580,7 +4624,7 @@ impl AppUi {
                 }
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    let Some(path) = pick_bundle_via_zenity(title) else {
+                    let Some(path) = pick_bundle_dialog(title) else {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
                     };
@@ -4757,7 +4801,7 @@ impl AppUi {
                 // on every confirm. Note the collision can also come from
                 // sanitising: "My Delay" and "My/Delay" are both `My_Delay`.
                 if path.exists()
-                    && !confirm_via_zenity(&format!(
+                    && !confirm_dialog(&format!(
                         "A preset called \"{file_stem}\" already exists here. Replace it?"
                     ))
                 {
@@ -4837,7 +4881,7 @@ impl AppUi {
                 window.set_status_message("Rendering audio...".into());
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    let Some(path) = pick_export_via_zenity(request.extension()) else {
+                    let Some(path) = pick_export_dialog(request.extension()) else {
                         let _ = tx.send(DocumentResult::Cancelled);
                         return;
                     };
@@ -4866,7 +4910,7 @@ impl AppUi {
         {
             let st = state.clone();
             window.window().on_close_requested(move || {
-                if st.borrow().session.dirty && !confirm_via_zenity("Quit without saving this song?") {
+                if st.borrow().session.dirty && !confirm_dialog("Quit without saving this song?") {
                     CloseRequestResponse::KeepWindowShown
                 } else {
                     CloseRequestResponse::HideWindow
@@ -4949,6 +4993,7 @@ impl AppUi {
                     "transport.loop-toggle" => window.invoke_playlist_loop_enabled_changed(
                         !window.get_playlist_loop_enabled(),
                     ),
+                    "file.new" => window.invoke_new_song(),
                     "file.open" => window.invoke_open_song(),
                     "file.save" => window.invoke_save_song(),
                     "file.save-as" => window.invoke_save_song_as(),
@@ -5425,7 +5470,7 @@ impl AppUi {
         {
             let tx = audio_tx.clone();
             window.on_preferences_audio_select_buffer_size(move |index| {
-                if let Some(&frames) = JACK_BUFFER_SIZES.get(index as usize) {
+                if let Some(&frames) = BUFFER_SIZES.get(index as usize) {
                     tx.send(AudioAction::SelectBufferSize(frames));
                 }
             });
@@ -10435,7 +10480,7 @@ impl AppUi {
 
         // --- Sample browser: locations persist in settings.toml and the
         //     tree re-flattens on every change. The folder picker runs on a
-        //     worker thread like every other zenity call, handing the picked
+        //     worker thread like every other dialog call, handing the picked
         //     path to the pump, which applies it on the UI thread. ---
         let (browser_pick_tx, browser_pick_rx) = std::sync::mpsc::channel::<PathBuf>();
         let (browser_info_tx, browser_info_rx) =
@@ -10463,7 +10508,7 @@ impl AppUi {
             window.on_browser_add_location(move || {
                 let tx = browser_pick_tx.clone();
                 std::thread::spawn(move || {
-                    if let Some(path) = pick_bundle_via_zenity("Add sample folder") {
+                    if let Some(path) = pick_bundle_dialog("Add sample folder") {
                         let _ = tx.send(path);
                     }
                 });
@@ -10607,7 +10652,7 @@ impl AppUi {
             });
         }
 
-        // --- Sample loading via zenity + Symphonia (selected channel) ---
+        // --- Sample loading via a file dialog + Symphonia (selected channel) ---
         // The dialog + decode run on a worker thread so the UI stays
         // responsive (a blocking dialog makes the OS mark the app frozen and
         // offer to kill it). Results come back through `load_rx` and are
@@ -10646,7 +10691,7 @@ impl AppUi {
                 let tx = load_tx.clone();
                 log_debug!("ui", "loading sample for channel {channel}");
                 std::thread::spawn(move || {
-                    let result = pick_sample_via_zenity().map(|path| load_sample_at_path(&path));
+                    let result = pick_sample_dialog().map(|path| load_sample_at_path(&path));
                     let _ = tx.send(LoadResult {
                         channel,
                         source_revision,
@@ -10960,7 +11005,7 @@ impl AppUi {
                                             },
                                         );
                                     if dropping_notes
-                                        && !confirm_via_zenity(
+                                        && !confirm_dialog(
                                             "This kit removes channels containing notes. Continue?",
                                         )
                                     {
@@ -11325,8 +11370,8 @@ impl AppUi {
                                     {
                                         Ok(()) => {
                                             let mut settings = ui_settings_for_pump.borrow_mut();
-                                            settings.audio.jack.output_port_l = Some(port_l);
-                                            settings.audio.jack.output_port_r = Some(port_r);
+                                            settings.audio.active_mut().output_port_l = Some(port_l);
+                                            settings.audio.active_mut().output_port_r = Some(port_r);
                                             if let Err(error) = settings.save() {
                                                 window.set_preferences_audio_error(
                                                     format!("Could not save settings: {error}")
@@ -11347,7 +11392,7 @@ impl AppUi {
                                     match handle.set_buffer_size(frames) {
                                         Ok(()) => {
                                             let mut settings = ui_settings_for_pump.borrow_mut();
-                                            settings.audio.jack.buffer_size = Some(frames);
+                                            settings.audio.active_mut().buffer_size = Some(frames);
                                             if let Err(error) = settings.save() {
                                                 window.set_preferences_audio_error(
                                                     format!("Could not save settings: {error}")
@@ -11367,7 +11412,7 @@ impl AppUi {
                                 AudioAction::SetAutoReconnect(enabled) => {
                                     handle.set_auto_reconnect(enabled);
                                     let mut settings = ui_settings_for_pump.borrow_mut();
-                                    settings.audio.jack.auto_reconnect = enabled;
+                                    settings.audio.active_mut().auto_reconnect = enabled;
                                     if let Err(error) = settings.save() {
                                         window.set_preferences_audio_error(
                                             format!("Could not save settings: {error}").into(),
@@ -11545,6 +11590,11 @@ impl AppUi {
                 let editing_bus = w.get_editing_bus();
                 let edited_bus = w.get_editing_bus_index().max(0) as usize;
                 let selected_channel = st.borrow().session.selected;
+                // A MIDI keyboard plays the channel the editor is on. Set
+                // every tick rather than on each selection change, because the
+                // selection moves from clicks, keys, loads, deletes and undo,
+                // and an atomic store is cheaper than finding all of them.
+                handle.set_keyboard_channel(u8::try_from(selected_channel).ok());
                 // The strips' gain-reduction lamps, as one model rather than
                 // a field on every row: this is the only thing about a strip
                 // that moves at frame rate, and both faces index the same

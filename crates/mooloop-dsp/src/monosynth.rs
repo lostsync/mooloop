@@ -79,6 +79,11 @@ pub struct MonoSynth {
     /// Free running unless the LFO is set to retrigger, so it keeps its phase
     /// across notes and across silence.
     lfo: Lfo,
+    /// Whether the last block ran with the transport playing. A stop releases
+    /// what was sounding when it happened, once, rather than on every stopped
+    /// block: a note played while stopped -- a MIDI keyboard, an audition --
+    /// has to last until its own note-off.
+    was_playing: bool,
 }
 
 impl MonoSynth {
@@ -93,6 +98,7 @@ impl MonoSynth {
             sample_rate,
             voice,
             lfo: Lfo::new(),
+            was_playing: false,
         }
     }
 
@@ -313,9 +319,10 @@ impl AudioNode for MonoSynth {
     ) {
         let frames = ctx.frames.min(bus.capacity());
 
-        if !ctx.playing {
+        if self.was_playing && !ctx.playing {
             self.release_all();
         }
+        self.was_playing = ctx.playing;
 
         // Split the block at event offsets: render, apply event, repeat.
         let mut pos = 0usize;
@@ -780,5 +787,30 @@ mod tests {
         stopped.playing = false;
         synth.process(&stopped, &mut bus, &EventList::empty(), None);
         assert!(synth.voice.env.is_releasing());
+    }
+
+    /// A note played with the transport already stopped -- a MIDI keyboard,
+    /// an audition -- is held until its own note-off. Releasing on every
+    /// stopped block cut it to a blip.
+    #[test]
+    fn a_note_played_while_stopped_is_held() {
+        let sr = 48_000;
+        let mut synth = make_synth(sr, MonoSynthParams::default());
+        let mut bus = StereoBus::with_capacity(64);
+        let mut stopped = ctx(64, sr);
+        stopped.playing = false;
+        synth.process(&stopped, &mut bus, &EventList::empty(), None);
+
+        let mut events = EventList::empty();
+        events.push(note_on(0, 0, 60));
+        synth.process(&stopped, &mut bus, &events, None);
+        for _ in 0..8 {
+            synth.process(&stopped, &mut bus, &EventList::empty(), None);
+        }
+        assert!(
+            !synth.voice.env.is_releasing(),
+            "the stopped transport let go of the key"
+        );
+        assert!(bus.l[..64].iter().any(|sample| sample.abs() > 1.0e-4));
     }
 }

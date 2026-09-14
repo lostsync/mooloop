@@ -1,29 +1,29 @@
 //! Types describing the configured audio driver and its live status.
 //!
-//! Only JACK exists today, so these stay JACK-shaped rather than sitting
-//! behind a generic driver trait (see `docs/FOCUS.md` on not building
-//! generality nothing uses yet). A second driver would extract a trait from
-//! this one concrete shape mechanically.
+//! JACK and Core Audio share these, and they stay pair-shaped rather than
+//! sitting behind a generic driver trait: an output target is two
+//! destinations under both drivers -- JACK port names, or `<device>#<channel>`
+//! addresses on one Core Audio device -- and the platform picks the driver at
+//! compile time, so there is nothing for a trait to dispatch.
 
 /// Requested audio configuration, applied when the engine opens its client.
 #[derive(Debug, Clone, Default)]
 pub struct AudioConfig {
-    /// Requested JACK buffer size in frames. `None` leaves the server's
-    /// current buffer size alone. JACK buffer size is server-wide: this
-    /// changes it for every client connected to the server, not only
-    /// mooloop.
+    /// Requested buffer size in frames. `None` leaves the driver's current
+    /// buffer size alone. Under JACK the buffer is server-wide: this changes
+    /// it for every client connected to the server, not only mooloop.
     pub buffer_size: Option<u32>,
-    /// Destination port pair `out_l`/`out_r` auto-connect to on startup.
-    /// `None` uses the system playback default.
+    /// Destination pair the master output plays through: JACK port names, or
+    /// Core Audio `<device>#<channel>` addresses. `None` uses the system
+    /// playback default.
     pub output_target: Option<(String, String)>,
-    /// Whether to retry connecting `output_target` when the JACK port graph
-    /// changes and the target is currently unconnected (e.g. a hot-plugged
-    /// device re-registers its ports).
+    /// Whether to return to `output_target` when it disappears and comes
+    /// back -- under JACK, when a hot-plugged device re-registers its ports.
     pub auto_reconnect: bool,
 }
 
-/// One JACK client discovered as a possible output destination, found by
-/// grouping that client's input ports.
+/// One destination the driver offers: a JACK client, by its first two input
+/// ports, or a Core Audio device, by its first two channels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputTarget {
     pub client: String,

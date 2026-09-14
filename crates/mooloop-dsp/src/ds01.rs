@@ -1305,6 +1305,11 @@ pub struct Ds01 {
     /// the publication cadence rather than by a length in samples. That is
     /// also why publishing is the thing that clears it.
     triggered: bool,
+    /// Whether the last block ran with the transport playing. A stop chokes
+    /// what was ringing when it happened, once, rather than on every stopped
+    /// block: a hit played while stopped -- a MIDI pad, an audition -- has to
+    /// ring out.
+    was_playing: bool,
 }
 
 impl Ds01 {
@@ -1323,6 +1328,7 @@ impl Ds01 {
             voice_continuous: [Continuous::new(&params); DS01_VOICES],
             focus: 0,
             triggered: false,
+            was_playing: false,
         }
     }
 
@@ -1778,9 +1784,10 @@ impl Ds01 {
     ) {
         let frames = ctx.frames.min(bus.capacity());
 
-        if !ctx.playing {
+        if self.was_playing && !ctx.playing {
             self.choke();
         }
+        self.was_playing = ctx.playing;
 
         // Split the block at event offsets: render, apply event, repeat. The
         // events arrive sorted, and parameter events precede note-ons at the
@@ -3387,9 +3394,11 @@ mod tests {
         );
     }
 
-    /// A transport stop chokes on every stopped block, and a choke longer
-    /// than one block used to restart its fade each time — so the voice never
-    /// freed and the device never took its silent path again.
+    /// A transport stop used to choke on every stopped block, and a choke
+    /// longer than one block restarted its fade each time — so the voice never
+    /// freed and the device never took its silent path again. The stop now
+    /// chokes once, and a long choke still has to finish across the blocks
+    /// after it.
     #[test]
     fn a_repeated_choke_frees_the_voice() {
         let params = Ds01Params {
@@ -3415,6 +3424,33 @@ mod tests {
         assert!(
             node.voices.iter().all(|voice| !voice.active),
             "a 400 ms choke never finished across 200 blocks"
+        );
+    }
+
+    /// A hit played with the transport already stopped -- a MIDI pad, an
+    /// audition -- rings out. Choking on every stopped block cut it to a click.
+    #[test]
+    fn a_hit_played_while_stopped_rings_out() {
+        let params = Ds01Params {
+            amp: Ds01EnvParams::one_shot(4.0),
+            ..Ds01Params::default()
+        };
+        let mut node = Ds01::new(params, SR);
+        let mut stopped = ctx(256);
+        stopped.playing = false;
+        let mut bus = StereoBus::with_capacity(256);
+        node.process(&stopped, &mut bus, &EventList::empty(), None);
+
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60, 127));
+        node.process(&stopped, &mut bus, &events, None);
+        for _ in 0..40 {
+            bus.clear(256);
+            node.process(&stopped, &mut bus, &EventList::empty(), None);
+        }
+        assert!(
+            node.voices.iter().any(|voice| voice.active),
+            "the stopped transport choked a hit it never saw playing"
         );
     }
 

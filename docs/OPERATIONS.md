@@ -45,7 +45,8 @@ cargo check --workspace --all-targets -j 2
 # Build the application in the development profile.
 cargo build -p mooloop-app -j 2
 
-# Run the application (requires JACK or PipeWire's JACK layer).
+# Run the application. On Linux this needs JACK or PipeWire's JACK layer;
+# on macOS it plays through Core Audio.
 cargo run -p mooloop-app --bin mooloop -j 2
 
 # Optimized build, suitable for a local performance or packaging check.
@@ -66,6 +67,33 @@ cargo test -p mooloop-dsp -j 2
 cargo test -p mooloop-engine -j 2
 cargo test -p mooloop-ui -j 2
 ```
+
+## Developing On macOS
+
+The workspace builds and runs on a Mac, where the engine plays through Core
+Audio instead of JACK (`docs/plans/coreaudio-driver/`). The Xcode command-line
+tools and `rustup` are all it needs -- Homebrew's `rustup` is keg-only, so put
+`$(brew --prefix rustup)/bin` on `PATH` -- and `mold` is not used.
+
+MIDI input comes from Core MIDI with nothing to set up: mooloop listens to
+every source and logs each one as `listening to the MIDI input "<name>"`. If a
+keyboard plays nothing, that log line is the first thing to look for, and Audio
+MIDI Setup's MIDI Studio window shows whether macOS sees the device at all.
+
+The JACK adapter does not compile on a Mac, so an edit to it, or to anything
+else behind `cfg(not(target_os = "macos"))`, goes unchecked there.
+`scripts/linux-check` checks the Linux build from the Mac instead:
+
+```sh
+scripts/linux-check                     # cargo check -p mooloop-engine --all-targets
+scripts/linux-check clippy -p mooloop-engine --all-targets -- -D warnings
+```
+
+It needs `rustup target add x86_64-unknown-linux-gnu` and `brew install zig`.
+`scripts/cargo-capped` finds no memory cgroup on macOS and runs Cargo uncapped,
+so builds stay one at a time there too. `scripts/antibox` works from a Mac that
+can reach the box, but what it builds are Linux binaries: build locally to run
+the application.
 
 ## All Tests And Release Verification
 

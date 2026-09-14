@@ -24,7 +24,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     log_info!("audio", "engine started at {} Hz", handle.sample_rate());
     let app = mooloop_ui::AppUi::new(handle)?;
     // `engine` stays alive on the stack for the duration of the event loop and
-    // is dropped (deactivating JACK) when `run` returns.
+    // is dropped (stopping the audio driver) when `run` returns.
     let _ = &engine;
     app.run()?;
     Ok(())

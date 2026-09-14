@@ -92,6 +92,11 @@ pub struct PolySynth {
     /// Free running unless the LFO is set to retrigger, so it keeps its phase
     /// across the gaps between notes.
     lfo: Lfo,
+    /// Whether the last block ran with the transport playing. A stop releases
+    /// what was sounding when it happened, once, rather than on every stopped
+    /// block: a note played while stopped -- a MIDI keyboard, an audition --
+    /// has to last until its own note-off.
+    was_playing: bool,
 }
 
 impl PolySynth {
@@ -109,6 +114,7 @@ impl PolySynth {
             voices,
             next_age: 1,
             lfo: Lfo::new(),
+            was_playing: false,
         };
         synth.apply_params_to_voices(polyphony);
         synth
@@ -392,9 +398,10 @@ impl AudioNode for PolySynth {
     ) {
         let frames = ctx.frames.min(bus.capacity());
 
-        if !ctx.playing {
+        if self.was_playing && !ctx.playing {
             self.release_all();
         }
+        self.was_playing = ctx.playing;
 
         let mut pos = 0usize;
         for ev in events_in.iter() {
@@ -635,5 +642,32 @@ mod tests {
             .voices
             .iter()
             .all(|v| !v.active || v.env.is_releasing()));
+    }
+
+    /// A note played with the transport already stopped -- a MIDI keyboard,
+    /// an audition -- is held until its own note-off. Releasing on every
+    /// stopped block cut it to a blip.
+    #[test]
+    fn a_note_played_while_stopped_is_held() {
+        let sr = 48_000;
+        let mut synth = make_synth(sr, PolySynthParams::default());
+        let mut bus = StereoBus::with_capacity(64);
+        let mut stopped = ctx(64, sr);
+        stopped.playing = false;
+        synth.process(&stopped, &mut bus, &EventList::empty(), None);
+
+        let mut events = EventList::empty();
+        events.push(note_on(0, 0, 60));
+        synth.process(&stopped, &mut bus, &events, None);
+        for _ in 0..8 {
+            synth.process(&stopped, &mut bus, &EventList::empty(), None);
+        }
+        assert!(
+            synth
+                .voices
+                .iter()
+                .any(|v| v.active && !v.env.is_releasing()),
+            "the stopped transport let go of the key"
+        );
     }
 }

@@ -1,8 +1,8 @@
 import { ComboBox, HorizontalBox, LineEdit, ScrollView, VerticalBox } from "std-widgets.slint";
 import { Theme, Motion } from "theme.slint";
 import { AudioOrientation, IconButton, ParameterFader, SectionLabel, SegmentedControl, ToggleButton, ToolButton } from "controls.slint";
-import { JackControlSurface, OutputTargetRow } from "audio-preferences.slint";
-export { OutputTargetRow }
+import { AudioDriverCopy, DriverControlSurface, OutputTargetRow } from "audio-preferences.slint";
+export { AudioDriverCopy, OutputTargetRow }
 
 // One selectable palette in Preferences > Appearance. `tint` fields carry the
 // parsed seed colors because Slint cannot turn a hex string into a color --
@@ -644,6 +644,7 @@ export component PreferencesDialog inherits Rectangle {
     in property <string> audio-sample-rate-text;
     in property <bool> audio-auto-reconnect;
     in property <string> audio-error;
+    in property <AudioDriverCopy> audio-driver;
     in property <[ShortcutRow]> shortcut-rows;
     in-out property <string> shortcut-capturing-id;
     in property <[GestureRow]> gesture-rows;
@@ -771,8 +772,8 @@ export component PreferencesDialog inherits Rectangle {
                                 HorizontalBox {
                                     spacing: 8px;
                                     padding: 0px;
-                                    SegmentedControl { width: 96px; options: ["JACK"]; selected-index: 0; }
-                                    Text { text: "ALSA support is planned."; color: Theme.text-faint; font-size: 10px; vertical-alignment: center; }
+                                    SegmentedControl { width: 96px; options: [root.audio-driver.name]; selected-index: 0; }
+                                    Text { text: root.audio-driver.note; color: Theme.text-faint; font-size: 10px; vertical-alignment: center; }
                                     Rectangle { horizontal-stretch: 1; }
                                 }
                                 HorizontalBox {
@@ -788,12 +789,13 @@ export component PreferencesDialog inherits Rectangle {
                                     Rectangle { horizontal-stretch: 1; }
                                     ToolButton { text: "None"; enabled: false; }
                                 }
-                                JackControlSurface {
+                                DriverControlSurface {
                                     output-targets: root.audio-output-targets;
                                     buffer-size-index: root.audio-buffer-size-index;
                                     sample-rate-text: root.audio-sample-rate-text;
                                     auto-reconnect: root.audio-auto-reconnect;
                                     error: root.audio-error;
+                                    driver: root.audio-driver;
                                     refresh-targets => { root.audio-refresh-targets(); }
                                     select-output(client, port-l, port-r) => { root.audio-select-output(client, port-l, port-r); }
                                     select-buffer-size(i) => { root.audio-select-buffer-size(i); }

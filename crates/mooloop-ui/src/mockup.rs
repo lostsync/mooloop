@@ -26,8 +26,8 @@ const AUDIT_IGNORE_SUFFIXES: &[&str] = &["Dialog", "DeviceFace", "DragHarness"];
 const AUDIT_IGNORE: &[&str] = &[
     "AppearancePage",
     "DeviceRackConcepts",
+    "DriverControlSurface",
     "GestureRowView",
-    "JackControlSurface",
     "MainWindow",
     "MockupCanvas",
     "MockupSpecimen",

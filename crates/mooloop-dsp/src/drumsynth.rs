@@ -119,6 +119,11 @@ pub struct DrumSynth {
     sample_rate: u32,
     voices: [DrumVoice; MAX_DRUM_VOICES as usize],
     next_age: u64,
+    /// Whether the last block ran with the transport playing. A stop chokes
+    /// what was ringing when it happened, once, rather than on every stopped
+    /// block: a hit played while stopped -- a MIDI pad, an audition -- has to
+    /// ring out.
+    was_playing: bool,
 }
 
 impl DrumSynth {
@@ -130,6 +135,7 @@ impl DrumSynth {
             sample_rate,
             voices,
             next_age: 1,
+            was_playing: false,
         }
     }
 
@@ -420,9 +426,10 @@ impl AudioNode for DrumSynth {
     ) {
         let frames = ctx.frames.min(bus.capacity());
 
-        if !ctx.playing {
+        if self.was_playing && !ctx.playing {
             self.choke();
         }
+        self.was_playing = ctx.playing;
 
         // Split the block at event offsets: render, apply event, repeat.
         let mut pos = 0usize;
@@ -734,6 +741,30 @@ mod tests {
         let mut bus = StereoBus::with_capacity(4096);
         synth.process(&ctx(4096, sr), &mut bus, &EventList::empty(), None);
         assert!(synth.voices.iter().all(|voice| !voice.active));
+    }
+
+    /// A hit played with the transport already stopped -- a MIDI pad, an
+    /// audition -- rings out. Choking on every stopped block cut it to a click:
+    /// the 5 ms choke fade is shorter than the nine blocks this looks across.
+    #[test]
+    fn a_hit_played_while_stopped_rings_out() {
+        let sr = 48_000;
+        let mut synth = make_synth(sr, DrumSynthParams::default());
+        let mut bus = StereoBus::with_capacity(64);
+        let mut stopped = ctx(64, sr);
+        stopped.playing = false;
+        synth.process(&stopped, &mut bus, &EventList::empty(), None);
+
+        let mut events = EventList::empty();
+        events.push(note_on(0, 60));
+        synth.process(&stopped, &mut bus, &events, None);
+        for _ in 0..8 {
+            synth.process(&stopped, &mut bus, &EventList::empty(), None);
+        }
+        assert!(
+            synth.voices.iter().any(|voice| voice.active),
+            "the stopped transport choked a hit it never saw playing"
+        );
     }
 
     #[test]
