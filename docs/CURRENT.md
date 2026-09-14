@@ -48,11 +48,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   everything back where it was. The zoomed tab takes the full accent rather
   than the muted active fill, and the status bar says how to get out.
 - **A track's rack reads in signal order**, as of 2026-09-13: its head (name,
-  routing, polarity), its channel strip, its own devices as inserts, and its
-  fader last. The fader used to be drawn first, inside the head face, because
-  that face sits where a channel's *generator* sits -- the start of a
-  channel's path and the wrong end of a track's. Nothing sounded different;
-  the rack simply showed a stage before the stages that precede it.
+  routing, polarity, then its channel strip's drive/EQ/comp, bundled into one
+  row rather than two beside each other since 2026-09-14), its own devices as
+  inserts, and its fader last. The fader used to be drawn first, inside the
+  head face, because that face sits where a channel's *generator* sits -- the
+  start of a channel's path and the wrong end of a track's. Nothing sounded
+  different; the rack simply showed a stage before the stages that precede it.
 - **The bottom pane resizes for any view that does not declare its own
   height**, which is every view except `DEVICES` — a device face is a fixed
   268px and does not stretch. The playlist became resizable on 2026-09-08;

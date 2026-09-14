@@ -208,10 +208,13 @@ alignment, and height contract as effects.
   need the fourth unit to hold three modules of 34 px dials without shrinking
   one; 2U for Aux In, whose whole content is a source, an outlet and a level,
   and which at 3U would be empty rather than generous. A bus's output stage
-  stands in the same position at 2U, and the track's pinned channel-strip row
-  takes 2U beside it -- three until 2026-09-11, when the EQ's response plot
-  moved into the room the input stage was not using and the third unit turned
-  out to have been margin. An effect uses only the units its working
+  stands in the same position, at 2U on its own or 3U bundled with the
+  track's pinned channel strip when `STRIP_PIN` pins it to the head -- the
+  two used to be a 2U box beside a 2U box, one of them mostly empty once the
+  EQ's response plot moved into the room the input stage was not using on
+  2026-09-11 and freed a unit; merged on 2026-09-13, that freed unit is spent
+  on identity and routing sharing the strip's own box instead of standing
+  empty beside it. An effect uses only the units its working
   controls require, declared once in `effect_kind_units`
   (`mooloop-ui/src/lib.rs`) rather than in each face: 1U for filter, drive,
   preamp, bitcrush, limiter, plate, and Buffer; 2U for gate, compressor, EQ, and Mod;

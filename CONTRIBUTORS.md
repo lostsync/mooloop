@@ -294,8 +294,8 @@ Alphabetical by model name, then by harness.
 
 ### Claude Sonnet 5 — Claude Code
 - First seen: 2026-08-21
-- Last seen: 2026-09-08
-- Sessions: 19
+- Last seen: 2026-09-14
+- Sessions: 20
 - Notes: Rounded out the UI mockup tool's palette with the remaining real
   controls (meters, mute/solo, trim knob, device chassis), fixed its
   selection tab and click-vs-drag handling, and wired a launcher into
@@ -335,7 +335,11 @@ Alphabetical by model name, then by harness.
   live -- it was baked into a voice's playback rate once at trigger and
   never revisited, so retuning a held or looping note (by hand or by
   modulation) silently did nothing until the next note-on. Added an opt-out
-  toggle for the old per-trigger behavior, defaulting to live.
+  toggle for the old per-trigger behavior, defaulting to live. Bundled a
+  track's near-empty head face into its pinned channel strip (interface
+  iteration step 04): one 3U row for identity/routing/polarity plus
+  drive/EQ/comp instead of two 2U boxes side by side, keeping both
+  `STRIP_PIN` positions live.
 
 ### GLM 5.3 Flash (glm-5.3-flash) — opencode
 - First seen: 2026-08-23

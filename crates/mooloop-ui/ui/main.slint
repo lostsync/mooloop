@@ -3628,8 +3628,16 @@ export component MainWindow inherits Window {
                                             // outlet and a level is the whole
                                             // device, and a wider face would
                                             // be empty rather than generous.
+                                            // A bus's head is 2U on its own -- a
+                                            // destination and a name -- and 3U
+                                            // when `STRIP_PIN` also pins the
+                                            // strip's drive/EQ/comp here, the
+                                            // same unit the EQ's response plot
+                                            // gave back on 2026-09-11, spent on
+                                            // the merged content instead of
+                                            // margin.
                                             property <int> source-units: root.editing-bus
-                                                ? 2
+                                                ? (root.strip-pin-head ? 3 : 2)
                                                 : root.source-kind == 7 ? 2
                                                 : (root.source-kind == 6 || root.source-kind == 5 ? 4 : 3);
                                             width: DeviceRackMetrics.unit-width * self.source-units
@@ -3682,6 +3690,22 @@ export component MainWindow inherits Window {
                                                 console-toggled => { root.bus-console-toggled(root.editing-bus-index); }
                                                 renamed(v) => { root.track-renamed(root.editing-bus-index, v); }
                                                 removed => { root.track-removed(root.editing-bus-index); }
+                                                // The strip's own drive/EQ/comp, bundled
+                                                // in here exactly when `STRIP_PIN` pins
+                                                // it to the head -- the same guard the
+                                                // tail instance past the chain uses, so
+                                                // the two positions stay mutually
+                                                // exclusive.
+                                                show-strip: root.strip-pin-head;
+                                                units: source-device.source-units;
+                                                strip: root.editing-bus-strip;
+                                                track: root.editing-bus-index;
+                                                moved(id, v) => { root.bus-strip-param(root.editing-bus-index, id, v); }
+                                                switched(id, on) => { root.bus-strip-param(root.editing-bus-index, id, on ? 1 : 0); }
+                                                voicing-picked(voicing) => { root.bus-voicing-picked(root.editing-bus-index, voicing); }
+                                                point-dragged(band, hz, gain) => {
+                                                    root.bus-strip-point-dragged(root.editing-bus-index, band, hz, gain);
+                                                }
                                                 // The *incoming* count stays: how many
                                                 // sends feed this track is a fact about
                                                 // it, where the sends it makes are edited
@@ -4149,29 +4173,19 @@ export component MainWindow inherits Window {
 
                                         DeviceJoin { }
 
-
-                                        // The strip's own row, pinned. Two
-                                        // instances and one guard rather
-                                        // than one instance that moves: a
+                                        // The strip's own row, pinned. When
+                                        // `STRIP_PIN` pins it to the head it is
+                                        // bundled straight into `BusDeviceFace`
+                                        // above rather than drawn again here --
+                                        // one box, not two beside each other.
+                                        // The tail position below is the other
+                                        // half of the same guard: a
                                         // `HorizontalLayout` places its
                                         // children in declaration order, so
-                                        // "before the chain" and "after the
-                                        // chain" are two positions in this
-                                        // file. `STRIP_PIN` picks between
-                                        // them, and the engine reads the
-                                        // same constant.
-                                        if root.editing-bus && root.strip-pin-head : StripRackRow {
-                                            strip: root.editing-bus-strip;
-                                            track: root.editing-bus-index;
-                                            name: root.editing-bus-name;
-                                            muted: root.editing-bus-muted;
-                                            moved(id, v) => { root.bus-strip-param(root.editing-bus-index, id, v); }
-                                            switched(id, on) => { root.bus-strip-param(root.editing-bus-index, id, on ? 1 : 0); }
-                                            voicing-picked(voicing) => { root.bus-voicing-picked(root.editing-bus-index, voicing); }
-                                            point-dragged(band, hz, gain) => {
-                                                root.bus-strip-point-dragged(root.editing-bus-index, band, hz, gain);
-                                            }
-                                        }
+                                        // "at the head" and "after the chain"
+                                        // are two positions in this file.
+                                        // `STRIP_PIN` picks between them, and
+                                        // the engine reads the same constant.
                                         for slot[index] in root.effect-slots : cell := Rectangle {
                                             property <length> face-width:
                                                 DeviceRackMetrics.unit-width * slot.units
@@ -4879,8 +4893,11 @@ export component MainWindow inherits Window {
                                         }
 
                                         // The other position the pin can take:
-                                        // after the track's own devices. See the
-                                        // instance before the chain.
+                                        // after the track's own devices, standing
+                                        // alone rather than bundled into
+                                        // `BusDeviceFace` -- the head keeps its
+                                        // identity content either way, so a
+                                        // moved pin only moves the processing.
                                         if root.editing-bus && !root.strip-pin-head : StripRackRow {
                                             strip: root.editing-bus-strip;
                                             track: root.editing-bus-index;

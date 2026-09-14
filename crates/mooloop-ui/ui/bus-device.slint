@@ -77,9 +77,171 @@ export component StripRackRow inherits Rectangle {
     }
 }
 
+// The identity content a bus's head carries whichever way it is drawn:
+// routing, polarity, destination and name. Factored out of `BusDeviceFace` so
+// the merged (`show-strip`) and standalone layouts below share one copy
+// rather than two that can drift.
+component BusIdentityPanel inherits Rectangle {
+    in property <string> name;
+    in property <bool> is-master;
+    in property <int> feed-count;
+    in property <int> send-feed-count;
+    in property <[string]> bus-names;
+    in property <[bool]> allowed;
+    in property <int> output;
+    in property <bool> console;
+    in property <bool> polarity;
+    in property <bool> can-remove: true;
+    callback renamed(string);
+    callback removed();
+    callback output-picked(int);
+    callback console-toggled();
+    callback polarity-toggled();
+
+    background: Theme.panel;
+    border-radius: Theme.radius-sm;
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: 6px;
+            height: 18px;
+            SectionLabel {
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                text: "ROUTING";
+            }
+            // Polarity stays at the head while the fader moved to
+            // the tail, and the difference is not cosmetic: it is
+            // applied at the **top** of the track's block, so
+            // everything after it sees the flipped signal --
+            // including a pre-fader send. It is an input control
+            // and this is the input end.
+            ToolButton {
+                text: "\u{00f8}";
+                tooltip: root.polarity ? "Inverted" : "Normal";
+                hint: "Invert this track's polarity. It acts on the way in, so "
+                    + "everything after it -- including a pre-fader send -- is flipped.";
+                active: root.polarity;
+                min-width: 20px;
+                max-width: 20px;
+                min-height: 18px;
+                max-height: 18px;
+                clicked => { root.polarity-toggled(); }
+            }
+        }
+        Text {
+            text: (root.feed-count == 0 && root.send-feed-count == 0)
+                    ? "Nothing feeds this track yet"
+                : root.feed-count == 0
+                    ? (root.send-feed-count == 1
+                        ? "1 send feeds this track" : root.send-feed-count + " sends feed this track")
+                : root.send-feed-count == 0
+                    ? (root.feed-count == 1
+                        ? "1 channel feeds this track" : root.feed-count + " channels feed this track")
+                : root.feed-count + (root.feed-count == 1 ? " channel and " : " channels and ")
+                    + root.send-feed-count + (root.send-feed-count == 1 ? " send" : " sends")
+                    + " feed this track";
+            color: (root.feed-count == 0 && root.send-feed-count == 0)
+                ? Theme.text-faint : Theme.text-muted;
+            font-size: 9px;
+            wrap: word-wrap;
+        }
+        // The master is the end of the chain, so it offers no
+        // destination rather than a disabled-looking one.
+        if !root.is-master : HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            // "Output", not "Sends to": a send is a specific
+            // thing now and this is not one. A track's output is
+            // where all of it goes; a send is a copy of some of
+            // it, and the two must not wear one word.
+            Text {
+                text: "Output";
+                color: Theme.text-muted;
+                font-size: 9px;
+                vertical-alignment: center;
+            }
+            BusPicker {
+                bus-names: root.bus-names;
+                value: root.output;
+                allowed: root.allowed;
+                tooltip: "Track this one's output feeds";
+                picked(i) => { root.output-picked(i); }
+            }
+            Text {
+                text: root.bus-names[root.output];
+                color: Theme.text;
+                font-size: 9px;
+                vertical-alignment: center;
+            }
+            // The same control the mixer strip carries, in the
+            // same place relative to the destination: how this
+            // bus reaches the next one belongs beside which one
+            // that is.
+            ConsoleButton {
+                on: root.console;
+                tooltip: "Analog sum";
+                hint: "Sum this bus into its destination through the analog summing "
+                    + "curve, together with everything else feeding it that has this on.";
+                toggled(v) => { root.console-toggled(); }
+            }
+            Text {
+                text: root.console ? "analog sum" : "linear";
+                color: root.console ? Theme.accent : Theme.text-faint;
+                font-size: 9px;
+                vertical-alignment: center;
+            }
+        }
+        // Rename and remove live here rather than on the mixer
+        // strip: this is where a track's chain is edited, there is
+        // room for a field, and the strip stays compact. The name
+        // has always saved and loaded and nothing could set it --
+        // the gap `LOOSE_ENDS.md` had been carrying.
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            Text {
+                text: "Name";
+                color: Theme.text-muted;
+                font-size: 9px;
+                vertical-alignment: center;
+            }
+            NameField {
+                text: root.name;
+                placeholder: "Track";
+                tooltip: "Rename this track";
+                edited(value) => { root.renamed(value); }
+            }
+            if !root.is-master : ToolButton {
+                text: "Remove";
+                tooltip: "Remove this track";
+                hint: "Remove this track. Anything routed to it falls back to the master.";
+                enabled: root.can-remove;
+                clicked => { root.removed(); }
+            }
+        }
+        if root.is-master : Text {
+            text: "Feeds the audio outputs";
+            color: Theme.text-muted;
+            font-size: 9px;
+        }
+        if root.is-master : Rectangle { vertical-stretch: 1; }
+    }
+}
+
 // The head of a bus's device chain, standing where a channel's source face
 // stands. A bus has no generator, so what occupies that position is the thing
-// a bus actually is: an output stage and a destination.
+// a bus actually is: an output stage and a destination -- and, when
+// `STRIP_PIN` pins the strip to the head, the strip's own drive/EQ/comp too.
+//
+// Adam, on the head face once the strip's processing had a row of its own
+// beside it: *"maybe the strip could be bundled with some basic track
+// controls like name, maybe ins and outs."* The two used to be a 2U box that
+// said little next to a 2U box that said a lot; `show-strip` folds them into
+// one, at the width `units` states -- 3U, the same unit the EQ's response
+// plot gave back on 2026-09-11, spent here on content instead of margin.
 export component BusDeviceFace inherits Rectangle {
     in property <string> name;
     in property <bool> is-master;
@@ -102,11 +264,28 @@ export component BusDeviceFace inherits Rectangle {
     // Which tracks this one may send to. The same mask the output picker
     // uses, because a send and an output are legal under the same rule.
     in property <[bool]> send-allowed;
+    // Whether this head also carries the strip's own drive/EQ/comp --
+    // `root.strip-pin-head` in `main.slint`, read from the same
+    // `mooloop_core::mixer::STRIP_PIN` the engine's block loop reads. When
+    // off, the strip draws in its own row past the chain instead, and this
+    // face goes back to identity alone.
+    in property <bool> show-strip: false;
+    in property <StripRow> strip;
+    /// Which track this is, for the lamps `StripMeters` publishes.
+    in property <int> track: -1;
+    // The rack unit count this face is standing in, purely for the header's
+    // own label: `main.slint` is what actually sizes the frame, and it must
+    // agree with what it draws here or the label lies.
+    in property <int> units: 2;
     callback renamed(string);
     callback removed();
     callback output-picked(int);
     callback console-toggled();
     callback polarity-toggled();
+    callback moved(int, float);
+    callback switched(int, bool);
+    callback voicing-picked(int);
+    callback point-dragged(int, float, float);
 
     VerticalLayout {
         padding: 8px;
@@ -117,151 +296,68 @@ export component BusDeviceFace inherits Rectangle {
             spacing: 8px;
             vertical-stretch: 1;
 
-            VerticalLayout {
-                horizontal-stretch: 1;
+            // Fixed rather than sharing the strip's slack: the identity
+            // column's widest row (Name, or Output with a long bus name)
+            // sets what it needs, and the strip's three sections want the
+            // rest -- the same "measure the row, don't split what's left"
+            // rule `UI_DESIGN.md` states for the strip's own drive/EQ/comp.
+            if root.show-strip : VerticalLayout {
+                width: 190px;
                 spacing: 6px;
-
-            Rectangle {
-                background: Theme.panel;
-                border-radius: Theme.radius-sm;
-                horizontal-stretch: 1;
-                // Takes the whole face now. It used to give its slack to the
-                // sends area below, and with the sends in the sidebar there
-                // is nothing under it -- a panel that kept its old
-                // `vertical-stretch: 0` left the bottom half of this face as
-                // empty bordered space, which `UI_DESIGN.md` calls a defect
-                // rather than a style.
-                vertical-stretch: 1;
-                VerticalLayout {
-                    padding: 6px;
-                    spacing: 4px;
-                    HorizontalLayout {
-                        spacing: 6px;
-                        height: 18px;
-                        SectionLabel {
-                            horizontal-stretch: 1;
-                            vertical-alignment: center;
-                            text: "ROUTING";
-                        }
-                        // Polarity stays at the head while the fader moved to
-                        // the tail, and the difference is not cosmetic: it is
-                        // applied at the **top** of the track's block, so
-                        // everything after it sees the flipped signal --
-                        // including a pre-fader send. It is an input control
-                        // and this is the input end.
-                        ToolButton {
-                            text: "\u{00f8}";
-                            tooltip: root.polarity ? "Inverted" : "Normal";
-                            hint: "Invert this track's polarity. It acts on the way in, so "
-                                + "everything after it -- including a pre-fader send -- is flipped.";
-                            active: root.polarity;
-                            min-width: 20px;
-                            max-width: 20px;
-                            min-height: 18px;
-                            max-height: 18px;
-                            clicked => { root.polarity-toggled(); }
-                        }
-                    }
-                    Text {
-                        text: (root.feed-count == 0 && root.send-feed-count == 0)
-                                ? "Nothing feeds this track yet"
-                            : root.feed-count == 0
-                                ? (root.send-feed-count == 1
-                                    ? "1 send feeds this track" : root.send-feed-count + " sends feed this track")
-                            : root.send-feed-count == 0
-                                ? (root.feed-count == 1
-                                    ? "1 channel feeds this track" : root.feed-count + " channels feed this track")
-                            : root.feed-count + (root.feed-count == 1 ? " channel and " : " channels and ")
-                                + root.send-feed-count + (root.send-feed-count == 1 ? " send" : " sends")
-                                + " feed this track";
-                        color: (root.feed-count == 0 && root.send-feed-count == 0)
-                            ? Theme.text-faint : Theme.text-muted;
-                        font-size: 9px;
-                        wrap: word-wrap;
-                    }
-                    // The master is the end of the chain, so it offers no
-                    // destination rather than a disabled-looking one.
-                    if !root.is-master : HorizontalLayout {
-                        spacing: 6px;
-                        alignment: start;
-                        // "Output", not "Sends to": a send is a specific
-                        // thing now and this is not one. A track's output is
-                        // where all of it goes; a send is a copy of some of
-                        // it, and the two must not wear one word.
-                        Text {
-                            text: "Output";
-                            color: Theme.text-muted;
-                            font-size: 9px;
-                            vertical-alignment: center;
-                        }
-                        BusPicker {
-                            bus-names: root.bus-names;
-                            value: root.output;
-                            allowed: root.allowed;
-                            tooltip: "Track this one's output feeds";
-                            picked(i) => { root.output-picked(i); }
-                        }
-                        Text {
-                            text: root.bus-names[root.output];
-                            color: Theme.text;
-                            font-size: 9px;
-                            vertical-alignment: center;
-                        }
-                        // The same control the mixer strip carries, in the
-                        // same place relative to the destination: how this
-                        // bus reaches the next one belongs beside which one
-                        // that is.
-                        ConsoleButton {
-                            on: root.console;
-                            tooltip: "Analog sum";
-                            hint: "Sum this bus into its destination through the analog summing "
-                                + "curve, together with everything else feeding it that has this on.";
-                            toggled(v) => { root.console-toggled(); }
-                        }
-                        Text {
-                            text: root.console ? "analog sum" : "linear";
-                            color: root.console ? Theme.accent : Theme.text-faint;
-                            font-size: 9px;
-                            vertical-alignment: center;
-                        }
-                    }
-                    // Rename and remove live here rather than on the mixer
-                    // strip: this is where a track's chain is edited, there is
-                    // room for a field, and the strip stays compact. The name
-                    // has always saved and loaded and nothing could set it --
-                    // the gap `LOOSE_ENDS.md` had been carrying.
-                    HorizontalLayout {
-                        spacing: 6px;
-                        alignment: start;
-                        Text {
-                            text: "Name";
-                            color: Theme.text-muted;
-                            font-size: 9px;
-                            vertical-alignment: center;
-                        }
-                        NameField {
-                            text: root.name;
-                            placeholder: "Track";
-                            tooltip: "Rename this track";
-                            edited(value) => { root.renamed(value); }
-                        }
-                        if !root.is-master : ToolButton {
-                            text: "Remove";
-                            tooltip: "Remove this track";
-                            hint: "Remove this track. Anything routed to it falls back to the master.";
-                            enabled: root.can-remove;
-                            clicked => { root.removed(); }
-                        }
-                    }
-                    if root.is-master : Text {
-                        text: "Feeds the audio outputs";
-                        color: Theme.text-muted;
-                        font-size: 9px;
-                    }
-                    if root.is-master : Rectangle { vertical-stretch: 1; }
+                BusIdentityPanel {
+                    vertical-stretch: 1;
+                    name: root.name;
+                    is-master: root.is-master;
+                    feed-count: root.feed-count;
+                    send-feed-count: root.send-feed-count;
+                    bus-names: root.bus-names;
+                    allowed: root.allowed;
+                    output: root.output;
+                    console: root.console;
+                    polarity: root.polarity;
+                    can-remove: root.can-remove;
+                    renamed(v) => { root.renamed(v); }
+                    removed => { root.removed(); }
+                    output-picked(i) => { root.output-picked(i); }
+                    console-toggled => { root.console-toggled(); }
+                    polarity-toggled => { root.polarity-toggled(); }
                 }
             }
+            // Takes the whole face when the strip is not here. It used to
+            // give its slack to the sends area below, and with the sends in
+            // the sidebar there is nothing under it -- a panel that kept its
+            // old `vertical-stretch: 0` left the bottom half of this face as
+            // empty bordered space, which `UI_DESIGN.md` calls a defect
+            // rather than a style.
+            if !root.show-strip : BusIdentityPanel {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                name: root.name;
+                is-master: root.is-master;
+                feed-count: root.feed-count;
+                send-feed-count: root.send-feed-count;
+                bus-names: root.bus-names;
+                allowed: root.allowed;
+                output: root.output;
+                console: root.console;
+                polarity: root.polarity;
+                can-remove: root.can-remove;
+                renamed(v) => { root.renamed(v); }
+                removed => { root.removed(); }
+                output-picked(i) => { root.output-picked(i); }
+                console-toggled => { root.console-toggled(); }
+                polarity-toggled => { root.polarity-toggled(); }
+            }
 
+            if root.show-strip : StripSections {
+                horizontal-stretch: 1;
+                wide: true;
+                strip: root.strip;
+                track: root.track;
+                moved(id, value) => { root.moved(id, value); }
+                switched(id, on) => { root.switched(id, on); }
+                voicing-picked(index) => { root.voicing-picked(index); }
+                point-dragged(band, hz, gain) => { root.point-dragged(band, hz, gain); }
             }
         }
     }
@@ -271,7 +367,7 @@ export component BusDeviceFace inherits Rectangle {
         y: 0px;
         width: parent.width;
         name: root.name;
-        kind: "BUS / 2U";
+        kind: "BUS / " + root.units + "U";
         role: "BUS";
         device-color: root.is-master ? Theme.warning : Theme.accent;
         enabled: !root.muted;
