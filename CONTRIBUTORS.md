@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-13
-- Sessions: 122
+- Sessions: 123
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -286,7 +286,9 @@ Alphabetical by model name, then by harness.
   to the level with the hold in hand, and then the clip latch a removed track
   left behind for whichever track took its index, and then the spectrum
   subscription a deleted device left running for a display nobody was
-  drawing, and then the text fields that could only be left with Enter.
+  drawing, and then the text fields that could only be left with Enter, and
+  then `docs/workflows/`, which is those nine passes turned into a procedure
+  so the next run does not re-derive where the copies hide.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

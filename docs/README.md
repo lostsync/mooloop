@@ -59,6 +59,11 @@ table of which document to read for which task. Start there, not here.
   landed; work the files in order. Completed directories move to
   [plans/archive/](plans/archive/). [plans/README.md](plans/README.md) is the
   one place that says which state every plan is in.
+- [workflows/](workflows/) — procedures that are run *again*, where a plan is
+  work that lands once. Each carries a record of what its runs found, because a
+  workflow's failure mode is looking for something that has stopped being the
+  shape of the problem. [workflows/README.md](workflows/README.md) says when to
+  write one.
 - [reference/](reference/) — outside material worth keeping whole, read but not
   written here. [ANATOMY_OF_A_DAW.md](reference/ANATOMY_OF_A_DAW.md) is what
   `ARCHITECTURE_REVIEW.md` grades against.
