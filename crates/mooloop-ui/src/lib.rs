@@ -2426,6 +2426,15 @@ struct UiState {
     /// opened rather than held live. Presets change on disk only when this
     /// application writes one, and it rescans then too.
     preset_catalog: Vec<PresetGroup>,
+    /// Raised when a project has been installed, so the pump knows the track
+    /// its per-bus meter ballistics belong to may have changed underneath
+    /// them.
+    ///
+    /// The ballistics are keyed by index and the pump owns them as `move`d
+    /// locals, so this is the same flag handoff `bus_clip_clear` uses: raised
+    /// here, consumed on the next tick. See [`meter::MeterBallistics::reset`]
+    /// for what an inherited latch looks like.
+    bus_meters_stale: bool,
 }
 
 /// The browser panel's two halves.
@@ -4394,6 +4403,7 @@ impl AppUi {
             browser_rows: browser_row_model,
             browser_tab: BrowserTab::default(),
             preset_catalog: Vec::new(),
+            bus_meters_stale: false,
             automation_point_model,
             automation_target_model,
         }));
@@ -11708,6 +11718,24 @@ impl AppUi {
                     w.global::<StripMeters>()
                         .set_reduction_db(reduction.as_slice().into());
                 }
+                // The master is always track 0, so its meter is never
+                // reading somebody else's audio and its latch is never
+                // inherited. Every other index can have moved.
+                // Bound before the `if` rather than written into its
+                // condition: a temporary in an `if` condition lives until the
+                // end of the whole statement, so the `RefMut` would still be
+                // held inside the block, and the block below is one edit away
+                // from touching `st` again.
+                let bank_may_have_moved = {
+                    let mut state = st.borrow_mut();
+                    std::mem::replace(&mut state.bus_meters_stale, false)
+                };
+                if bank_may_have_moved {
+                    for meters in bus_meters.iter_mut().skip(1) {
+                        meters.0.reset();
+                        meters.1.reset();
+                    }
+                }
                 for (bus, meters) in bus_meters.iter_mut().enumerate() {
                     if bus_clip_clear_in
                         .borrow_mut()
@@ -12080,6 +12108,12 @@ fn install_project_in_ui(
     if !handle.install_project(Arc::new(project.clone())) {
         return false;
     }
+    // A project install is the only thing that can change which track a strip
+    // index names -- a removal shifts every later one down, and an undo of one
+    // shifts them back. The per-bus ballistics are keyed by that index, so
+    // from here they are about a track that may not be the one they were
+    // reading. The pump resets them on its next tick.
+    state.borrow_mut().bus_meters_stale = true;
     for index in 0..MAX_CHANNELS {
         let sample = project
             .channels
