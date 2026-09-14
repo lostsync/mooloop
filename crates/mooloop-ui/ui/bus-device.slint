@@ -95,8 +95,6 @@ export component BusDeviceFace inherits Rectangle {
     in property <int> send-feed-count;
     in property <[string]> bus-names;
     in property <[bool]> allowed;
-    in property <float> left-db: GainMath.min-db;
-    in property <float> right-db: GainMath.min-db;
     in property <bool> console;
     in property <bool> polarity;
     in property <bool> solo;
@@ -304,6 +302,15 @@ export component BusFaderRow inherits Rectangle {
     in property <bool> solo;
     in property <float> left-db: GainMath.min-db;
     in property <float> right-db: GainMath.min-db;
+    /// Peak hold and the clip latch, from the same `MeterReading` the mixer
+    /// strip reads. They were absent until 2026-09-14, so this row drew a
+    /// clip lamp that could not light and a peak marker pinned to the level
+    /// -- one track with two faces whose meters behaved differently, with the
+    /// data in hand and thrown away.
+    in property <float> held-left-db: GainMath.min-db;
+    in property <float> held-right-db: GainMath.min-db;
+    in property <bool> clipping;
+    callback clip-reset();
     callback volume-changed(float);
     callback pan-changed(float);
     callback mute-toggled();
@@ -360,8 +367,10 @@ export component BusFaderRow inherits Rectangle {
                 segments: 16;
                 left-db: root.left-db;
                 right-db: root.right-db;
-                held-left-db: root.left-db;
-                held-right-db: root.right-db;
+                held-left-db: root.held-left-db;
+                held-right-db: root.held-right-db;
+                clipping: root.clipping;
+                clip-reset => { root.clip-reset(); }
             }
             MixerFader {
                 width: 30px;

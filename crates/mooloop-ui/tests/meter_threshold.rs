@@ -121,3 +121,96 @@ fn warning_and_hot_colours_transition_at_the_standard_thresholds() {
         "-2.5 dBFS must light red (hot starts at -3)"
     );
 }
+
+/// Every `ChannelMeter` in the interface either has a clip latch behind it or
+/// says it has not.
+///
+/// `ChannelMeter` draws a `ClipIndicator` whose lamp comes from `clipping` and
+/// whose click goes to `clip-reset`. A caller that binds neither gets two
+/// faint red bars that cannot light and do nothing when pressed -- the
+/// "convincing but inert control" the device rack's own rule names, shipped on
+/// three instantiations at once: the rack's IN and OUT rails, which meter a
+/// chain and have no latch, and a track's fader row, which has one and was not
+/// wired to it.
+///
+/// So a meter must do one of two things, and both are deliberate acts:
+/// bind `clipping`, or set `show-clip: false`. The failure this catches is the
+/// one that happened -- somebody adds a meter, does not think about the lamp,
+/// and the default draws one anyway.
+///
+/// Read out of the markup rather than off a render, because a lamp that cannot
+/// light looks exactly like a lamp that is not lit.
+#[test]
+fn no_channel_meter_draws_a_clip_lamp_it_cannot_light() {
+    let mut checked = 0usize;
+    for entry in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/ui"))
+        .expect("mooloop-ui/ui is unreadable")
+    {
+        let path = entry.expect("unreadable directory entry").path();
+        if path.extension().is_none_or(|kind| kind != "slint") {
+            continue;
+        }
+        let file = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        // `meters.slint` declares the component; it does not instantiate one.
+        //
+        // `mockup-catalog.slint` is a gallery of specimens and every control
+        // in it is inert on purpose -- it exists to show what a widget looks
+        // like, and it is behind the `mockup` feature, so it is not part of
+        // the shipped interface at all. It is excluded by name rather than by
+        // a pattern, because "inert on purpose" is a claim about one file and
+        // not a category a later file should be able to join by accident.
+        if file == "meters.slint" || file == "mockup-catalog.slint" {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("unreadable .slint file");
+
+        let mut from = 0usize;
+        while let Some(found) = source[from..].find("ChannelMeter {") {
+            let start = from + found;
+            let open = source[start..].find('{').expect("the brace just matched") + start;
+            let mut depth = 0i32;
+            let mut end = open;
+            for (offset, byte) in source.as_bytes()[open..].iter().enumerate() {
+                match byte {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = open + offset;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            from = end;
+            let block = &source[open..=end];
+            let line = source[..start].matches('\n').count() + 1;
+            checked += 1;
+            assert!(
+                block.contains("clipping:") || block.contains("show-clip: false"),
+                "{file}:{line}: a ChannelMeter that neither binds `clipping` nor sets \
+                 `show-clip: false` draws a clip lamp nothing can light:\n{block}"
+            );
+            if block.contains("clipping:") {
+                assert!(
+                    block.contains("clip-reset"),
+                    "{file}:{line}: this ChannelMeter's lamp can light and cannot be \
+                     cleared, which is worse than not drawing one:\n{block}"
+                );
+            }
+        }
+    }
+
+    // Four today: the mixer strip, the two rack rails, a track's fader row.
+    // A parser that stops matching finds none and would otherwise pass.
+    assert!(
+        checked >= 4,
+        "only {checked} ChannelMeter instantiations were found; the walk has stopped \
+         matching the markup it is meant to read"
+    );
+}

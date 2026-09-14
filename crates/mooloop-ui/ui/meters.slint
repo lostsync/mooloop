@@ -177,6 +177,15 @@ export component ChannelMeter inherits Rectangle {
     in property <float> held-right-db: GainMath.min-db;
     in property <bool> clipping;
     in property <int> segments: 18;
+    /// Whether to draw the clip lamp at all.
+    ///
+    /// **A meter whose owner has no clip state must turn this off.** The lamp
+    /// is drawn from `clipping` and cleared by `clip-reset`, so a caller that
+    /// binds neither gets two faint red bars that cannot light and do nothing
+    /// when clicked -- the "convincing but inert control" the device rack's
+    /// own rule names. The rack's IN and OUT rails were exactly that until
+    /// 2026-09-14: they meter a chain, and a chain has no clip latch.
+    in property <bool> show-clip: true;
     callback clip-reset();
 
     width: 22px;
@@ -184,7 +193,7 @@ export component ChannelMeter inherits Rectangle {
 
     VerticalLayout {
         spacing: 2px;
-        ClipIndicator {
+        if root.show-clip : ClipIndicator {
             width: 22px;
             height: 5px;
             clipping: root.clipping;

@@ -979,6 +979,13 @@ export component MainWindow inherits Window {
     in property <[bool]> editing-bus-allowed;
     in property <float> editing-bus-left-db: GainMath.min-db;
     in property <float> editing-bus-right-db: GainMath.min-db;
+    /// Peak hold and the clip latch for the track being edited, so its fader
+    /// row's meter behaves like its mixer strip's. The pump has had these in
+    /// hand all along -- they come off the same `MeterReading` -- and set
+    /// only the two levels until 2026-09-14.
+    in property <float> editing-bus-held-left-db: GainMath.min-db;
+    in property <float> editing-bus-held-right-db: GainMath.min-db;
+    in property <bool> editing-bus-clipping;
     in property <float> editing-bus-input-left-db: GainMath.min-db;
     in property <float> editing-bus-input-right-db: GainMath.min-db;
     // The sends this track has, and which tracks it may gain one to. Exactly
@@ -3667,8 +3674,6 @@ export component MainWindow inherits Window {
                                                 feed-count: root.editing-bus-feed-count;
                                                 bus-names: root.bus-names;
                                                 allowed: root.editing-bus-allowed;
-                                                left-db: root.editing-bus-left-db;
-                                                right-db: root.editing-bus-right-db;
                                                 console: root.editing-bus-console;
                                                 polarity: root.editing-bus-polarity;
                                                 polarity-toggled => { root.bus-polarity-toggled(root.editing-bus-index); }
@@ -4860,6 +4865,13 @@ export component MainWindow inherits Window {
                                             solo: root.editing-bus-solo;
                                             left-db: root.editing-bus-left-db;
                                             right-db: root.editing-bus-right-db;
+                                            held-left-db: root.editing-bus-held-left-db;
+                                            held-right-db: root.editing-bus-held-right-db;
+                                            clipping: root.editing-bus-clipping;
+                                            // The same callback the mixer strip's lamp
+                                            // uses: one latch per track, cleared from
+                                            // whichever face the user happens to click.
+                                            clip-reset => { root.bus-clip-reset(root.editing-bus-index); }
                                             volume-changed(v) => { root.bus-volume-changed(root.editing-bus-index, v); }
                                             pan-changed(v) => { root.bus-pan-changed(root.editing-bus-index, v); }
                                             mute-toggled => { root.bus-muted(root.editing-bus-index); }

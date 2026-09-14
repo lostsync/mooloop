@@ -11749,6 +11749,13 @@ impl AppUi {
                     if editing_bus && bus == edited_bus {
                         w.set_editing_bus_left_db(left.level_db);
                         w.set_editing_bus_right_db(right.level_db);
+                        // The hold and the latch come off the same reading and
+                        // were being dropped here, so the fader row's meter
+                        // held nothing and its clip lamp could not light --
+                        // one track, two faces, two behaviours.
+                        w.set_editing_bus_held_left_db(left.held_db);
+                        w.set_editing_bus_held_right_db(right.held_db);
+                        w.set_editing_bus_clipping(left.clipping || right.clipping);
                     }
                 }
                 // Device meters address channels and buses in one space: a
