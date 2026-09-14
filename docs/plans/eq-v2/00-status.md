@@ -65,6 +65,33 @@ static per id. It is the same shape as everything else in this plan -- a
 parameter model that cannot express a condition -- and it is recorded in
 `LOOSE_ENDS.md` rather than bodged.
 
+## A regression step 01 shipped, and what found it
+
+Fixed on `fix/eq-selection-refresh` (2026-09-14), hours after step 01 merged.
+
+**Clicking a band did nothing visible.** The selector highlight stayed put and
+all six knobs went on showing the band you had just left, until some unrelated
+edit republished the row.
+
+`set_effect_param` returned `Option<EngineCommand>`, and step 01 made the band
+selector return `None` -- correctly, because the engine has no opinion about
+which control set a face is showing. The caller read `None` as "nothing
+happened" and skipped `refresh_effect_row`. Two different facts collapsed into
+one absence: *this write was refused* and *this write moved something the
+engine does not need to hear about*.
+
+It is now `EffectParamWrite`, three outcomes rather than two, and the enum
+exists to make the third one impossible to drop by reflex.
+
+**What found it was step 02's own notes.** That step lists, as a fault to
+investigate, "clicking a point selects a band and the controls lag it --
+confirm the sequence under `scripts/mooloop-mcp` before designing anything, if
+it is a publish-ordering bug it is a much smaller fix than a redesign". Reading
+that against the code step 01 had just landed turned a *lag* into an absolute:
+not late, never. Which is the useful shape of that note — a plan file
+describing a symptom precisely enough that the next change to the same path
+can be checked against it.
+
 ## Step 01 — per-band parameters
 
 Landed on `feat/eq-per-band-parameters` (2026-09-14). Every band and both pass

@@ -82,6 +82,7 @@ use mooloop_session::channel::{
     apply_sample_references, copied_channel_name, ChannelClipboard, ChannelState,
 };
 use mooloop_session::command::{cycle_pane, CommandState, Pane};
+use mooloop_session::effects::EffectParamWrite;
 use mooloop_session::dialogs::{
     confirm_dialog, pick_bundle_dialog, pick_export_dialog, pick_sample_dialog,
     pick_save_dialog, pick_song_dialog,
@@ -9010,11 +9011,20 @@ impl AppUi {
             // and the DSP use.
             window.on_effect_param_changed(move |slot, param_index, normalized| {
                 let mut st = st.borrow_mut();
-                let Some(command) = st.session.set_effect_param(slot, param_index, normalized) else {
+                // Republish on anything that moved, not only on anything the
+                // engine has to hear about. Choosing an EQ band is the case
+                // that separates the two: it emits no command, and skipping
+                // the republish leaves the selector highlight and all six
+                // knobs on the band you just left.
+                let EffectParamWrite::Applied(command) =
+                    st.session.set_effect_param(slot, param_index, normalized)
+                else {
                     return;
                 };
                 st.refresh_effect_row(slot as usize);
-                let _ = tx.send(command);
+                if let Some(command) = command {
+                    let _ = tx.send(command);
+                }
             });
         }
 

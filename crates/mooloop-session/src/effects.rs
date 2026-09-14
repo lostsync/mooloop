@@ -13,6 +13,40 @@ use mooloop_core::{
     ModTimeDivision, EffectTarget, EngineCommand,
 };
 
+/// What a write to a device parameter did.
+///
+/// Three outcomes, not two, and the third is the reason this is an enum. Most
+/// writes move a value and produce a command for the engine. A write the kind
+/// does not have is refused and nothing should happen. And **choosing an EQ
+/// band moves something the engine has no opinion about**: which control set
+/// the face is showing. That is a real edit -- it is persisted, and the row
+/// has to be republished or the selector highlight and all six knobs stay on
+/// the band you just left -- and it emits no command.
+///
+/// Collapsing it into `Option<EngineCommand>` is what a caller would do by
+/// reflex, and it silently loses that case: `eq-v2/01` shipped on 2026-09-14
+/// doing exactly that, which made a band click do nothing visible at all.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EffectParamWrite {
+    /// No such parameter, or the value it already had.
+    Refused,
+    /// The value moved. Republish the row; send the command if there is one.
+    Applied(Option<EngineCommand>),
+}
+
+impl EffectParamWrite {
+    pub fn command(self) -> Option<EngineCommand> {
+        match self {
+            EffectParamWrite::Applied(command) => command,
+            EffectParamWrite::Refused => None,
+        }
+    }
+
+    pub fn applied(&self) -> bool {
+        matches!(self, EffectParamWrite::Applied(_))
+    }
+}
+
 /// Trim knobs work in dB from unity and stop at the container's headroom; the
 /// project and the wire carry linear gain.
 const MAX_TRIM_DB: f32 = 12.0;
@@ -491,7 +525,19 @@ impl Session {
         slot: i32,
         param_index: i32,
         normalized: f32,
-    ) -> Option<EngineCommand> {
+    ) -> EffectParamWrite {
+        let Some(write) = self.try_set_effect_param(slot, param_index, normalized) else {
+            return EffectParamWrite::Refused;
+        };
+        write
+    }
+
+    fn try_set_effect_param(
+        &mut self,
+        slot: i32,
+        param_index: i32,
+        normalized: f32,
+    ) -> Option<EffectParamWrite> {
         let target = self.effect_target;
         let slot = usize::try_from(slot).ok()?;
         let param_index = u32::try_from(param_index).ok()?;
@@ -508,13 +554,18 @@ impl Session {
                 // there is nothing for the engine to do about it. Before
                 // 2026-09-14 this *was* a parameter, went to the engine as
                 // one, and decided what every other EQ event meant.
+                //
+                // `Applied` with no command, not `Refused`: the whole of what
+                // choosing a band does is change what the face shows, so a
+                // caller that skipped the republish would leave the selector
+                // highlight and all six knobs on the band you just left.
                 let target = Self::selector_from_normalized(normalized);
                 if eq.selected_target() == target {
-                    return None;
+                    return Some(EffectParamWrite::Refused);
                 }
                 eq.set_selected_target(target);
                 self.mark_dirty();
-                return None;
+                return Some(EffectParamWrite::Applied(None));
             }
             let control = EqFaceControl::from_face_index(param_index)?;
             EqParams::id_for_selected(eq.selected_target(), control)?
@@ -525,12 +576,14 @@ impl Session {
 
         let descriptor = effect.kind().descriptor(id)?;
         let value = effect.params.set(id, descriptor.from_normalized(normalized))?;
-        Some(EngineCommand::SetEffectParam {
-            target,
-            slot: slot as u8,
-            id,
-            value,
-        })
+        Some(EffectParamWrite::Applied(Some(
+            EngineCommand::SetEffectParam {
+                target,
+                slot: slot as u8,
+                id,
+                value,
+            },
+        )))
     }
 
     /// Which target the EQ face's selector landed on.
@@ -863,9 +916,9 @@ mod tests {
         let mut session = Session::default();
         session.insert_effect_at(EffectKind::Delay, 0);
 
-        assert!(session.set_effect_param(0, 0, 0.5).is_some());
-        assert!(session.set_effect_param(0, 9_999, 0.5).is_none());
-        assert!(session.set_effect_param(0, -1, 0.5).is_none());
+        assert!(session.set_effect_param(0, 0, 0.5).applied());
+        assert!(!session.set_effect_param(0, 9_999, 0.5).applied());
+        assert!(!session.set_effect_param(0, -1, 0.5).applied());
     }
 
     // --- The EQ face is a view (docs/plans/eq-v2/01) ----------------------
@@ -893,14 +946,14 @@ mod tests {
         // Select band 3 through the same selector the face uses, then move
         // the one Freq knob.
         let selector = 3.0 / EqParams::LOW_PASS_TARGET as f32;
-        assert!(
-            session
-                .set_effect_param(0, EqFaceControl::SELECTOR as i32, selector)
-                .is_none(),
-            "choosing a band is not an edit the engine needs to hear about"
+        assert_eq!(
+            session.set_effect_param(0, EqFaceControl::SELECTOR as i32, selector),
+            EffectParamWrite::Applied(None),
+            "choosing a band changes what the face shows and tells the engine nothing"
         );
         let command = session
             .set_effect_param(0, EqFaceControl::Frequency.face_index() as i32, 0.25)
+            .command()
             .expect("the Freq knob writes something");
         let EngineCommand::SetEffectParam { id, .. } = command else {
             panic!("expected a parameter write");
@@ -921,17 +974,19 @@ mod tests {
         let mut session = eq_session();
         session.dirty = false;
         let selector = 5.0 / EqParams::LOW_PASS_TARGET as f32;
+        // `Applied`, with no command: the row has to be republished or the
+        // face keeps drawing the band you just left.
         assert!(session
             .set_effect_param(0, EqFaceControl::SELECTOR as i32, selector)
-            .is_none());
+            .applied());
         assert_eq!(eq_of(&session).selected_target(), 5);
         assert!(session.dirty, "the selection is persisted, so it is an edit");
 
         // And selecting what is already selected is not an edit at all.
         session.dirty = false;
-        assert!(session
+        assert!(!session
             .set_effect_param(0, EqFaceControl::SELECTOR as i32, selector)
-            .is_none());
+            .applied());
         assert!(!session.dirty);
 
         assert!(
@@ -952,18 +1007,18 @@ mod tests {
         let selector = EqParams::HIGH_PASS_TARGET as f32 / EqParams::LOW_PASS_TARGET as f32;
         session.set_effect_param(0, EqFaceControl::SELECTOR as i32, selector);
         let before = eq_of(&session);
-        assert!(session
+        assert!(!session
             .set_effect_param(0, EqFaceControl::Gain.face_index() as i32, 1.0)
-            .is_none());
-        assert!(session
+            .applied());
+        assert!(!session
             .set_effect_param(0, EqFaceControl::QProfile.face_index() as i32, 1.0)
-            .is_none());
+            .applied());
         assert_eq!(eq_of(&session), before);
 
         // The slope, which only a pass filter has, does land.
         assert!(session
             .set_effect_param(0, EqFaceControl::PassSlope.face_index() as i32, 1.0)
-            .is_some());
+            .applied());
     }
 
     // --- Effect presets (docs/plans/preset-system/02) ---------------------
@@ -1291,7 +1346,7 @@ mod tests {
         let mut session = Session::default();
         session.insert_effect_at(EffectKind::Delay, 0).expect("room");
         // Any parameter will do; what matters is that the copy carries it.
-        session.set_effect_param(0, 1, 0.75).expect("slot 0 is a delay");
+        assert!(session.set_effect_param(0, 1, 0.75).applied(), "slot 0 is a delay");
         let original = session.channels[0].effects[0];
 
         let run = session.copy_device(0).expect("slot 0 is occupied");
