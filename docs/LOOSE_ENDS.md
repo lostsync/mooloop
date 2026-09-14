@@ -1059,26 +1059,23 @@ one file's two lines. Left as a note rather than done, because the copy is
 currently the safer of the two arrangements: it is the only one anything
 checks.
 
-**The modulation shelf spells twenty-one ranges by hand and nothing checks
-any of them.** `modulation-shelf.slint:1208-1658` declares
-`minimum`/`maximum`/`default-value`/`free-*` for the LFO, Envelope, Step,
-Random and Math modules. All twenty-one were compared against `LFO_`,
-`ENVELOPE_`, `STEP_`, `RANDOM_` and `MATH_DESCRIPTORS` on 2026-09-13 and every
-one agrees -- including the non-obvious `QUANT 0..16` (a 17-position selector)
-and `LENGTH 1..16`. So this is drift risk rather than present drift, the same
-shape the device faces below were in. It is *not* reachable by extending
-`slint_face_agreement.rs`'s list: that test works from a list of device faces
-and the shelf is not a device face, so covering it is a new check rather than
-a longer list.
+**Nothing outside `modulation.rs` read the five modulator descriptor tables
+until 2026-09-14.** `LFO_`, `ENVELOPE_`, `STEP_`, `RANDOM_` and
+`MATH_DESCRIPTORS` are all `pub`, all exported from `mooloop-core`'s root, and
+`grep` found no reader anywhere else -- so the shelf's twenty-one ranges and
+forty-two parameter ids were mirrored by hand against tables the program never
+consulted. `shelf_agreement.rs` is their first reader and now holds all three
+mirrors: the ids, the ranges, and the two scales.
 
-One curiosity for whoever writes it. The shelf draws the LFO and Random RATE
-knobs with `ValueScale.logarithmic` while `LFO_PARAM_RATE_HZ` and
-`RANDOM_PARAM_RATE_HZ` declare `ParamCurve::Linear`. Nothing reads those
-curves on the modulator path today -- the shelf sends natural values straight
-to `ModulatorParams::set`, and modulator parameters are neither automation nor
-modulation destinations -- so it is inert, and a naive agreement test would
-trip over it on the first run. The correct resolution is to fix the Rust
-curve, not the markup.
+What that had cost was one real disagreement, found the day the check was
+written. The LFO's and the Random module's Rate knobs are drawn
+`ValueScale.logarithmic` and their descriptors said `ParamCurve::Linear` --
+the same law from the two ends, disagreeing. Fixed to `Exponential`, and the
+check reproduces it against the tree as it stood the day before.
+
+The remaining question is whether the shelf should read these tables rather
+than be checked against them, as DS-01's face reads its defaults at run time.
+That is a bigger change than a test, and the test is what was missing.
 
 **`default_band_position()` returns the middle position for two of the four
 strip EQ bands and one step low for the other two, and no test reads it.**
