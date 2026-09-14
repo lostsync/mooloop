@@ -72,6 +72,37 @@ keyed by absolute path, so worktrees do not fight over one cache and two of
 them may build remotely at the same time. Cargo's job cap is lifted to the
 remote core count.
 
+### Do not edit while a remote build is running
+
+**A remote build that finishes *after* you edit a file will make the next run
+ignore that edit.** `antibox` rsyncs with timestamps preserved, and Cargo
+decides freshness by comparing a source's mtime against its build artifacts.
+Edit at 20:55, let a build that started at 20:50 finish at 21:02, and the
+remote now holds artifacts newer than your edited sources: the next run
+rebuilds nothing that matters. For a `.slint` edit the build *script* is the
+thing skipped, so `ui/main.slint` is silently the old one while your Rust is
+the new one.
+
+It presents as a compile error that makes no sense. On 2026-09-13 a struct
+added to `main.slint` and used from `lib.rs` came back as `cannot find type
+`PatternInfo` in this scope`, with the Slint build script's warnings visible
+in the log -- **replayed from cache, which is what makes the log look like it
+ran**. The same tree checked locally generated the struct and its setter
+correctly. Twenty minutes went on hypotheses about Slint's struct export rules,
+none of which were the answer.
+
+So: **do not start a background remote build and then keep editing.** If you
+have, `touch` what you changed before the next run, which is enough to move the
+mtimes past the artifacts:
+
+```sh
+touch crates/mooloop-ui/ui/*.slint crates/mooloop-ui/src/*.rs
+```
+
+`scripts/antibox --clean` also fixes it and costs a cold build. Prefer the
+touch. The habit that avoids it entirely is to launch a remote run when you
+have *stopped* editing -- which is also when its result means something.
+
 ### Which cache a run gets
 
 sccache and incremental compilation cannot both be on -- `rustc` will not hand

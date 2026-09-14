@@ -85,14 +85,19 @@ exist. The piano roll's snap division field gets it too, when snap is off.
 
 ### What is not here
 
-- **The mixer and the playlist do not colour anything, and neither does a
-  pattern's colour anywhere.** The step says to show a colour in one place
-  first and let the surfaces adopt it one at a time, each being a place to
-  check it reads at that size. The rack plate is that one place: a 3px bar
-  down its left edge, which holds its width whether or not there is a colour
-  so that colouring a channel does not shift its name sideways. The plate's
-  fill already means "selected", which is why the colour is a bar and not a
-  tint -- a background carrying two meanings says neither clearly.
+- **Adoption finished on 2026-09-13, and it found that the mixer cannot have
+  it.** The step names the rack, the mixer and the playlist as the surfaces
+  that take a colour one at a time. The rack plate wears a channel's as a 3px
+  bar; the playlist wears a pattern's as the same bar on its gutter plate and
+  as the fill of every clip. **The mixer draws tracks, and a track is not a
+  channel** -- there is no channel strip in it for a channel's colour to
+  appear on, which is a fact about the console design rather than work left
+  undone.
+- **A filled shape needed one thing the bar did not**: an ink that can be read
+  on it. `ProjectColor::ink` decides black or white by luminance, and its
+  threshold was set by rendering all eleven swatches under both inks rather
+  than by picking a round number -- 0.55 reads well and puts orange and sky
+  on the wrong side.
 - **A pattern's colour is set from the transport toolbar, not the sidebar.**
   The sidebar is a channel panel, so the chip went beside the pattern's name
   field instead -- the two facts about a pattern in one place. It shares the

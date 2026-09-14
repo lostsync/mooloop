@@ -2559,15 +2559,26 @@ impl UiState {
             })
             .collect();
         window.set_pattern_menu_options(ModelRc::from(Rc::new(VecModel::from(options))));
-        // The undecorated names, for the surfaces that draw a row per pattern
-        // and number it themselves. The playlist gutter drew "Pattern N" from
-        // its own loop index and so was the one place a rename never reached.
-        let names: Vec<slint::SharedString> = self
+        // The undecorated names and colours, for the surfaces that draw a row
+        // or a clip per pattern and number it themselves. The playlist gutter
+        // drew "Pattern N" from its own loop index and so was the one place a
+        // rename never reached.
+        //
+        // The ink is computed here rather than in the markup because the
+        // luminance weights that decide it belong with the colour type that
+        // has a test for them, and a second copy in Slint would be a second
+        // place for the threshold to sit.
+        let info: Vec<PatternInfo> = self
             .session.pattern_meta
             .iter()
-            .map(|meta| meta.name.as_str().into())
+            .map(|meta| PatternInfo {
+                name: meta.name.as_str().into(),
+                color: channel_colors::to_slint(meta.color),
+                has_color: meta.color.is_some(),
+                ink: channel_colors::to_slint(meta.color.map(|color| color.ink())),
+            })
             .collect();
-        window.set_pattern_names(ModelRc::from(Rc::new(VecModel::from(names))));
+        window.set_pattern_info(ModelRc::from(Rc::new(VecModel::from(info))));
         let current = self.session.pattern_meta.get(self.session.current_pattern);
         window.set_current_pattern_name(
             current.map(|meta| meta.name.clone()).unwrap_or_default().into(),

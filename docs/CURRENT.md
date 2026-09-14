@@ -1242,11 +1242,17 @@ land on its own when it starts to matter:
   rather than an index into the theme's palette, so a song looks the same
   under every scheme. **A pattern takes one on the same terms**, from a colour
   chip beside its name field in the transport toolbar, which opens the same
-  swatches in a popup. **A channel's colour draws as a 3px bar down the left
-  edge of its rack plate**, which is the one surface that adopts it so far --
-  a bar rather than a tinted plate, because the plate's fill already says
-  whether the channel is selected. The mixer and the playlist do not colour
-  anything yet, and a pattern's colour is stored but drawn nowhere.
+  swatches in a popup.
+- **A colour is drawn wherever the thing it names is drawn.** A channel's
+  colour is a 3px bar down the left edge of its rack plate; a pattern's is the
+  same bar on its playlist gutter plate, and the fill of every clip that plays
+  it. The difference is what the shape already says: a plate's background
+  means "selected", so a colour beside it is a mark, while a clip's background
+  only means "a clip is here" and a coloured clip still says that. A clip's
+  number is drawn in black or white by the colour's luminance, so a label is
+  readable on every colour that can be picked. **The mixer colours nothing,
+  and cannot**: it draws tracks, and a track is not a channel -- there is no
+  channel strip in the mixer for a channel's colour to appear on.
 - One automation lane is visible at a time. Its picker reaches the selected
   channel's generator and every parameter of every effect on that channel and
   on every bus, but several lanes cannot be shown at once, the velocity lane

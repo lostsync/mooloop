@@ -1,4 +1,4 @@
-use mooloop_ui::{view, ChannelRow, MainWindow, PlaylistClip, StepCell};
+use mooloop_ui::{view, ChannelRow, MainWindow, PatternInfo, PlaylistClip, StepCell};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
 use std::cell::Cell;
@@ -23,7 +23,10 @@ fn render_playlist_snapshot() {
             renderer_name: Some(SharedString::from("software")),
         },
     )))
-    .expect("initialize headless renderer");
+    // `.ok()` rather than `.expect`: the platform is per *process* and this
+    // file holds more than one test, so whichever runs second finds it
+    // already installed. That is success, not failure.
+    .ok();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
@@ -339,4 +342,84 @@ fn render_playlist_snapshot() {
         "the export dialog must alter the rendered surface"
     );
     write_snapshot(&export_snapshot, "MOOLOOP_EXPORT_SNAPSHOT");
+}
+
+/// **A pattern's colour reaches the clips that play it.**
+///
+/// Probed as a pixel rather than as a property, because the thing that can go
+/// wrong is not the model: it is a clip drawn with the accent it always had
+/// while the colour sits in a field nothing reads. The probe is the same
+/// coordinate the snapshot test above measures a clip at.
+#[test]
+fn a_coloured_pattern_paints_its_own_clips() {
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
+        i_slint_backend_testing::TestingBackendOptions {
+            mock_time: true,
+            threading: false,
+            renderer_name: Some(SharedString::from("software")),
+        },
+    )))
+    .ok();
+
+    const AMBER: [u8; 3] = [0xEA, 0xB3, 0x08];
+    // What `ProjectColor::ink` answers for amber, whose luminance is 0.699.
+    const DARK_INK: [u8; 3] = [0x18, 0x18, 0x1B];
+
+    let ui = MainWindow::new().unwrap();
+    ui.window().set_size(LogicalSize::new(960.0, 760.0));
+    ui.set_song_mode(true);
+    ui.invoke_show_view(view::PLAYLIST);
+    ui.set_pattern_count(1);
+    ui.set_current_pattern(0);
+    ui.set_playlist_bars(64);
+    ui.set_playlist_song_length_ticks(1152);
+    ui.set_pattern_info(ModelRc::from(Rc::new(VecModel::from(vec![PatternInfo {
+        name: SharedString::from("Chorus"),
+        color: slint::Color::from_rgb_u8(AMBER[0], AMBER[1], AMBER[2]),
+        has_color: true,
+        ink: slint::Color::from_rgb_u8(DARK_INK[0], DARK_INK[1], DARK_INK[2]),
+    }]))));
+    ui.set_playlist_clips(ModelRc::from(Rc::new(VecModel::from(vec![PlaylistClip {
+        pattern: 0,
+        start_tick: 0,
+        length_steps: 32,
+    }]))));
+
+    let snapshot = ui.window().take_snapshot().unwrap();
+    write_snapshot(&snapshot, "MOOLOOP_PLAYLIST_COLOUR_SNAPSHOT");
+    let pixel = |x: usize, y: usize| {
+        let offset = (y * snapshot.width() as usize + x) * 4;
+        snapshot.as_bytes()[offset..offset + 3].to_vec()
+    };
+
+    // The canvas sits 8px in from the window's left edge, so the gutter
+    // plate's own `x: 8px` puts its colour bar at window x 16..=18 and its
+    // body from 19. Measured off this snapshot rather than derived: the
+    // inset is the work area's, and a number derived from the markup would
+    // agree with the markup by construction and check nothing.
+    const BAR_X: usize = 17;
+    const PLATE_BODY_X: usize = 30;
+    // The vertical middle of the first pattern row. Its top edge is where a
+    // radius eats the corner, which is not where to ask what colour a plate
+    // is.
+    const ROW_Y: usize = 432;
+
+    assert_eq!(
+        pixel(120, 426),
+        AMBER.to_vec(),
+        "the clip was not painted with its pattern's colour"
+    );
+    // And the gutter plate beside it wears the colour as a 3px bar rather
+    // than as a fill, which is the rule the channel rack plate follows: the
+    // plate's own fill already means "this is the current pattern".
+    assert_eq!(
+        pixel(BAR_X, ROW_Y),
+        AMBER.to_vec(),
+        "the gutter plate has no colour bar"
+    );
+    assert_ne!(
+        pixel(PLATE_BODY_X, ROW_Y),
+        AMBER.to_vec(),
+        "the colour filled the gutter plate instead of marking it"
+    );
 }

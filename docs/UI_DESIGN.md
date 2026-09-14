@@ -154,7 +154,18 @@ Use contrast and spacing to show hierarchy, not floating cards within cards.
   left edge rather than tinting the plate — a background carrying two
   meanings says neither clearly, and one of the two is always the one being
   read at a glance. The mark holds its width whether or not it has anything
-  to show, so acquiring a colour does not shift the label beside it.
+  to show, so acquiring a colour does not shift the label beside it. The
+  playlist's pattern plate follows it, being the same plate.
+- **Where the fill means only "something is here", the colour takes the
+  fill.** A playlist clip is the case: its background says a clip exists, and
+  a coloured clip still says that, so the colour replaces it outright rather
+  than nibbling 3px off the edge of a shape that may be 4px wide. **A filled
+  shape with a label on it owes that label a readable ink** — black or white
+  by the colour's luminance, decided once in `ProjectColor::ink` where there
+  is a test for it, rather than in markup where the weights would be spelled
+  a second time. The threshold there was set by rendering every swatch with
+  both inks and looking, and the tidier-sounding 0.55 was wrong on two of
+  eleven.
 
 The source editor should feel like one instrument front panel. It should not
 look like several cards dropped into the center of a page.
