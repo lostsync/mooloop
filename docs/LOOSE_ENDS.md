@@ -836,31 +836,31 @@ embedded references only; refuse a symlink under `samples/` outright; or
 accept it and correct `PROJECT_FORMAT.md` to say the check is lexical. Found
 2026-09-13.
 
-**The compensation plan is derived twice, in two crates, and the copies have
-already diverged.** `RenderState::install_compensation` guards the send half
-on whether the bank sorts -- `let sorts = compile_bus_graph(..).is_some()`,
-with a comment giving the reason: a send compiled against an order that is not
-the one being walked would arrive a block late, so a bank running the
-everything-to-master repair gets no sends either. `Session::latency_plan`
-calls `send_edges` unconditionally and `send_specs` iterates every bus
-unconditionally, so on a bank that does not sort the session would hand the
-engine a full `SendBank` compiled against arrival numbers derived from a
-default order.
+**The compensation plan is still derived twice, in two crates, but the
+policy in it is not.** The divergence the row here described is fixed: the
+send half's guard -- a bank whose routing does not sort has no compensable
+sends, because a send compiled against an order that is not the one being
+walked arrives a block late -- was in `RenderState::install_compensation` and
+not in `Session::latency_plan`, so the session would have handed over a full
+`SendBank` compiled against a default order's arrival numbers. It is now
+`mixer::sends_are_compensable` and `mixer::compensable_send_edges`, which both
+call sites read, and `mooloop-core` and `mooloop-session` each have a test on
+it.
 
-Unreachable today, because the session's bank is sanitized on load and both
-`set_bus_output` and `add_send` refuse cycles. It is the characteristic fault
-in its pure form: two copies of one policy, one corrected and one not, with
-nothing able to notice. `an_offline_render_compiles_the_same_compensation_as_a
-_live_one` looks like the test that holds them together and does not -- both
-sides of that comparison go through `install_compensation`, and the session's
-derivation is never compared against anything. The same shape one size down
-holds for `Session::console_plan` against `RenderState::install_console`.
-Options: extract the shared derivation into `mooloop-core` so both call sites
-become three lines, which removes the copy permanently; or add a test that
-renders one `Project` through both and asserts the plans match, which is
-cheaper and is at least a test that reads both copies; or, minimum, port the
-`sorts` guard across so the two agree today, which does not stop the next
-divergence. Found 2026-09-13.
+What is left is the *shape*: both sides still walk their own channels and
+buses to build `channel_latency`, `channel_bus` and `bus_latency` before
+calling `compile_latency`. They cannot share that walk as it stands, because
+the engine reads `ProjectChannel.setup` and the session reads its own channel
+type -- the arithmetic is identical and the iteration is not. Extracting it
+means a shared input type or a trait, which is a bigger change than the one
+the drift called for. The same shape one size down still holds for
+`Session::console_plan` against `RenderState::install_console`, where nothing
+has diverged and nothing is checked.
+
+`an_offline_render_compiles_the_same_compensation_as_a_live_one` still does
+not read the session's derivation -- both sides of that comparison go through
+`install_compensation` -- so the two new tests are what hold the policy, not
+that one. Found 2026-09-13, half-fixed 2026-09-14.
 
 **Load silently deletes authored modulation the spec says to keep as an
 orphan, and the mechanism built for keeping it is unreachable.**
