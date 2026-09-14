@@ -304,10 +304,19 @@ before any of them existed still loads:
   and 7 for the two mid ones -- and the hertz it is worth is the *voicing's*,
   from `StripEqTable`. The format therefore survives a voicing being retuned,
   and a band's hertz can differ between Moo and Iron without either manifest
-  or face lying. It carries `#[serde(default)]` returning the middle position,
-  so a manifest written against the earlier `frequency_hz` field loads with
-  the band centred rather than at zero; nothing shipped with the old field, so
-  no reader converts one.
+  or face lying. A manifest written against the earlier `frequency_hz` field
+  loads with each band centred rather than at zero; nothing shipped with the
+  old field, so no reader converts one.
+
+  **The default for a missing `position` is per band, and it has to be.** The
+  middle of a five-position outer band is 2 and the middle of a seven-position
+  mid band is 3, so there is no one number a `#[serde(default)]` on the field
+  could return -- it has no array index. It returned `2` until 2026-09-14,
+  which meant the two mid bands opened one step low and this paragraph was
+  describing something the code did not do. `bands` now decodes through a wire
+  type whose `position` is optional and filled from `DEFAULT_POSITIONS[i]`.
+  Nothing else about a band became optional: `kind`, `gain_db` and `q` each
+  still refuse to load when absent.
 
   A band stores its `kind` as the full `EqBandKind` (`bell`, `low_shelf`,
   `high_shelf`) although the face offers each band only two of the three: the

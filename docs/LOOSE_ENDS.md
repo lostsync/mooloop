@@ -1077,38 +1077,6 @@ The remaining question is whether the shelf should read these tables rather
 than be checked against them, as DS-01's face reads its defaults at run time.
 That is a bigger change than a test, and the test is what was missing.
 
-**`default_band_position()` returns the middle position for two of the four
-strip EQ bands and one step low for the other two, and no test reads it.**
-`mooloop-core/src/strip.rs:147` returns a bare `2`. `STRIP_BAND_POSITIONS` is
-`[5, 7, 7, 5]`, so the middle of a seven-position mid band is 3 --
-`DEFAULT_POSITIONS` says `[2, 3, 3, 2]` and the four descriptors read it. Four
-things state what the middle is; the one serde reaches is wrong for the two
-mids, and its own doc comment and `PROJECT_FORMAT.md` both claim the band
-"loads centred". `grep -rn default_band_position crates/` returns two hits:
-the attribute and the definition. This is `AGENTS.md`'s question -- *does
-anything read the copy the test checks?* -- answering no, and it is the same
-shape as item 6 in that list.
-
-It bites exactly one class of file: a song saved on 2026-09-11, the day
-`StripBand` carried `frequency_hz` instead of `position`, which is the only
-reason the default exists. `kind`, `gain_db` and `q` have no default, so such a
-band decodes with those and takes `2` for its position -- under `MOO_EQ` band 1
-opens at 2 kHz where the file meant 3 kHz, while the face and the descriptor's
-double-click-to-default both say 3.
-
-Why it is not a one-character fix: serde's `default = "fn"` gets no array
-index, so no single `u8` is right and changing `2` to `3` just moves the error
-to the outer bands. Three options. Decode `bands` through a wire type with
-`position: Option<u8>` filled from `DEFAULT_POSITIONS[i]` (~25 lines, contained
-to `strip.rs`, makes the code match both claims) -- this is the fix if that
-day's files are still meant to open. Or accept `2` and correct the function's
-comment and `PROJECT_FORMAT.md`, which writes drift down as intent. Or drop
-the `#[serde(default)]` and the doc paragraph together, so a band without a
-position fails to load like its three siblings -- cleanest format, but it is a
-decision about whether one day's files still have to open. Found 2026-09-12;
-the load-time range check added the same day would have caught this class of
-thing, and now does for everything else on the strip.
-
 **One device face still spells a number the descriptor table already
 states.** `scripts/dupe-audit unchecked-face` names it. The count was eight
 faces and twenty-three numbers when the check was written on 2026-09-12; it is
