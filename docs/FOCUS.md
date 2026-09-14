@@ -114,7 +114,7 @@ codebase already does it the other way four times: the strip's EQ, DS-01,
 ML-P8 and the modulator modules are all per-band or per-module.
 
 **Step 01 was the only step the argument forced, and it landed 2026-09-14.**
-63 descriptors where there were seven, none of them meaning "the selected
+50 descriptors where there were seven, none of them meaning "the selected
 target's". It was a cheap rehearsal for the same instance-scoped-parameters
 problem, on a device whose behaviour was already understood, and the answer it
 gave is worth carrying into plugin work: **the face did not have to change.**

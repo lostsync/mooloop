@@ -1404,7 +1404,7 @@ context** — there is no way to say "the selected band's frequency" to a plugin
 This was the one native device whose parameter model a host could not have
 expressed, which made it a cheap rehearsal on behaviour already understood.
 
-**63 descriptors now, none of them meaning "the selected target's".** Ids are
+**50 descriptors now, none of them meaning "the selected target's".** Ids are
 `EQ_BAND_BASE + band * 10 + field`, the layout `strip_band_param` already used;
 a stride of ten for six fields, because appending a field otherwise renumbers
 every band after it.

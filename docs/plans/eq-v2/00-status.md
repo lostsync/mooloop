@@ -3,7 +3,7 @@
 ## Step 01 — per-band parameters
 
 Landed on `feat/eq-per-band-parameters` (2026-09-14). Every band and both pass
-filters carry their own stable ids: **63 descriptors where there were seven**,
+filters carry their own stable ids: **50 descriptors where there were seven**,
 and not one of them means "the selected target's". `selected_target` is what it
 always was -- which control set the face is showing -- and it is no longer
 reachable by an automation lane.
@@ -67,7 +67,7 @@ measure `descriptor_slots` growth with `block_cost.rs` before assuming it is
 free. It is free, and no measurement was needed to say so: `descriptor_slots`
 is called from `mooloop-ui` and `mooloop-session` only. Neither
 `mooloop-engine` nor `mooloop-dsp` mentions it. The arrays are built when the
-UI publishes a row, at UI rates, over at most 63 descriptors.
+UI publishes a row, at UI rates, over fifty descriptors.
 
 Two costs are real and neither is audio:
 
@@ -87,6 +87,22 @@ either. So the names and the per-band defaults are two small arrays, the shape
 of a field is written once, and a `const fn` builds the static. What a reader
 needs to verify is *which name sits at which id*, and `param_id_freeze_tests`
 pins all fifty of those explicitly.
+
+### A correction, and the joke it is at this file's expense
+
+The first version of this status, the commit message beside it and four other
+documents said **63** descriptors. There are fifty: seven bands of six fields
+and two pass filters of four. 63 was the *action registry's* count, from the
+step that landed earlier the same day, carried over by hand.
+
+Which is precisely the failure `ACTIONS.md` records about itself twice, and
+which the keyboard pass answered with a test that reads the sentence -- written
+hours before this was typed. The number is right in the code
+(`EQ_DESCRIPTOR_COUNT` is the arithmetic, not a literal) and was right in three
+of the places prose stated it; what went wrong is the one place a human
+recalled it instead of deriving it. Left written down rather than quietly
+corrected, because "counting is what went wrong both times" has now happened a
+third time, in a different file, on the same day it was written down.
 
 ### One thing a test found that the plan did not name
 

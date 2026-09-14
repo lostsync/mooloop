@@ -41,7 +41,7 @@ shelf ignores its Q in the DSP, and the plot draws shelves at a fixed exponent.
 Step 04 is the measured character from five reference EQs and is the only step
 that changes how the device sounds. It became **step 1 of the sequence** when
 `interface-iteration/` closed on 2026-09-14, and step 01 landed the same day:
-63 per-band descriptors, no `FORMAT_VERSION` bump (the new ids start at 16, so
+50 per-band descriptors, no `FORMAT_VERSION` bump (the new ids start at 16, so
 a stale lane on a retired one lands in a hole rather than on a neighbour), and
 **no change to the face at all** -- which is the finding worth carrying into
 plugin work, and `00-status.md` says why.
