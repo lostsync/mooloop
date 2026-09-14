@@ -65,6 +65,34 @@ static per id. It is the same shape as everything else in this plan -- a
 parameter model that cannot express a condition -- and it is recorded in
 `LOOSE_ENDS.md` rather than bodged.
 
+## Where step 02 stands, without being started
+
+Nothing of step 02 is built. Three things about it changed on 2026-09-14 and
+are written into the step file itself, so the next person does not re-derive
+them:
+
+- **One of its three faults is already closed.** The controls no longer lag a
+  point click; see the regression section below, which that note is what found.
+- **"Let the display read values by id" cannot be done literally.**
+  `EqResponseDisplay` is shared with the channel strip -- deliberately, since
+  2026-09-11, so there is not a second answer to what a bell of a given Q looks
+  like -- and the two callers have different id spaces. The shape that survives
+  is giving the *pass filters their own property* rather than appending them
+  after the bands in one array with two strides, which is what the fault is
+  really about; the band half stays as it is and wants a test rather than a
+  table.
+- **The step says a shelf's drawn curve should "match what the DSP runs".**
+  It cannot, in the form the plot uses: the DSP is an RBJ biquad and the plot
+  is a rational approximation, for the bell as well as the shelf, and always
+  has been. `strip_face.rs` holds the strip's plot to its *descriptors*, not
+  its coefficients. Either the step evaluates the real magnitude response in
+  Slint or it states the weaker standard plainly. That is a decision for
+  whoever takes it.
+
+Step 03 also left it something to draw: a shelf has a real slope now, and the
+display's fixed `1.6` exponent turns out to be `2S` at `S = 0.8`, so following
+the knob has an anchor rather than needing a new approximation.
+
 ## A regression step 01 shipped, and what found it
 
 Fixed on `fix/eq-selection-refresh` (2026-09-14), hours after step 01 merged.
