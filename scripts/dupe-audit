@@ -267,11 +267,16 @@ def unchecked_face():
     descriptor-backed at all has nowhere else for its number to live. What the
     list is for is the other kind.
 
-    **It also reports what the guard cannot reach.** The agreement test finds a
-    knob by looking for one line carrying both the property binding and
-    `default-value:`. A face written with those on separate lines cannot be
-    added to it without changing the parser, and nothing else says so, so the
-    detail below names that shape where it appears.
+    **It also reports what the guard cannot reach.** The agreement test walks
+    `ParameterKnob` blocks and nothing else, so a number stated by a
+    `MiniKnob`, a `MixerFader` or any other widget cannot be added to it
+    without widening `face_knobs`. Nothing else says so, so the detail below
+    names that shape where it appears. (Until 2026-09-13 this said the test
+    could only reach a knob whose binding and `default-value:` shared one
+    line, which was true of the line-based parser it was written against and
+    stopped being true when that parser became block-based -- the sort of
+    staleness a lead message can carry for a long time unnoticed, because a
+    lead is read as a hint rather than a claim.)
     """
     agreement = ROOT / "crates/mooloop-ui/tests/slint_face_agreement.rs"
     if not agreement.exists():
@@ -290,26 +295,34 @@ def unchecked_face():
     }
 
     literal = re.compile(r"default-value:\s*(-?[0-9][0-9_.]*)\s*;")
-    binding = re.compile(r"root\.([a-z0-9-]+);")
+    # The widget a literal sits inside: the nearest `Name {` above it. This is
+    # what decides reachability, because `face_knobs` walks `ParameterKnob`
+    # blocks and ignores every other widget.
+    opener = re.compile(r"^\s*([A-Z][A-Za-z0-9]*)\s*\{")
 
     hits = []
     for path in slint_sources():
         if "device" not in path.name or path.name in NOT_A_FACE or path.name in covered:
             continue
         lines = path.read_text().splitlines()
-        spelled = [
-            (index, match.group(1), binding.search(line) is not None)
-            for index, line in enumerate(lines, start=1)
-            if (match := literal.search(line))
-        ]
+        spelled = []
+        for index, line in enumerate(lines, start=1):
+            match = literal.search(line)
+            if not match:
+                continue
+            widget = next(
+                (m.group(1) for above in reversed(lines[:index]) if (m := opener.match(above))),
+                "?",
+            )
+            spelled.append((index, match.group(1), widget))
         if not spelled:
             continue
-        reachable = sum(1 for _, _, same_line in spelled if same_line)
+        unreachable = sorted({w for _, _, w in spelled if w != "ParameterKnob"})
         detail = f"{len(spelled)} range(s) spelled in markup that no test reads back"
-        if reachable < len(spelled):
+        if unreachable:
             detail += (
-                f"; {len(spelled) - reachable} of them declare the binding on a separate"
-                " line, which the agreement test's one-line parser cannot reach as it stands"
+                f"; stated by {', '.join(unreachable)} rather than ParameterKnob, which"
+                " the agreement test's block walk cannot reach as it stands"
             )
         hits.append((f"{rel(path)}:{spelled[0][0]}", detail))
     return sorted(hits, key=lambda hit: -int(hit[1].split()[0]))
