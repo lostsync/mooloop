@@ -754,6 +754,22 @@ fn sync_command_availability(window: &MainWindow, commands: &CommandState) {
     window.set_project_edit_pending(commands.project_edit_pending);
 }
 
+/// How many segments a mixer strip's meter draws, mirroring
+/// `MixerMetrics.meter-segments` in `mixer.slint`.
+///
+/// The throttle below quantizes a dB value into segments and repaints only
+/// when the count changes, so it has to quantize by the same count the meter
+/// draws with. If the markup's count were raised and this were not, the
+/// throttle would swallow a change that moves a visible segment -- which is
+/// the "peak marker one segment behind where the audio put it" failure the
+/// throttle's own call site names. `slint_meter_segment_counts_match_the_throttle`
+/// holds the two together.
+pub const MIXER_STRIP_METER_SEGMENTS: u32 = 14;
+
+/// How many segments a device rail's meter draws, mirroring the `segments: 12`
+/// the rails set in `device-rack.slint`. See [`MIXER_STRIP_METER_SEGMENTS`].
+pub const DEVICE_RAIL_METER_SEGMENTS: u32 = 12;
+
 /// `SegmentedMeter` only changes pixels when its lit-segment count changes.
 /// Keeping the raw dB value in the model is useful at that boundary, but
 /// rewriting it for an in-between ballistics update just invalidates Slint.
@@ -11715,10 +11731,10 @@ impl AppUi {
                             // peak marker comes to sit one segment behind
                             // where the audio put it.
                             let clipping = left.clipping || right.clipping;
-                            if meter_display_changed(row.left_db, left.level_db, 14)
-                                || meter_display_changed(row.right_db, right.level_db, 14)
-                                || meter_display_changed(row.held_left_db, left.held_db, 14)
-                                || meter_display_changed(row.held_right_db, right.held_db, 14)
+                            if meter_display_changed(row.left_db, left.level_db, MIXER_STRIP_METER_SEGMENTS)
+                                || meter_display_changed(row.right_db, right.level_db, MIXER_STRIP_METER_SEGMENTS)
+                                || meter_display_changed(row.held_left_db, left.held_db, MIXER_STRIP_METER_SEGMENTS)
+                                || meter_display_changed(row.held_right_db, right.held_db, MIXER_STRIP_METER_SEGMENTS)
                                 || row.clipping != clipping
                             {
                                 row.left_db = left.level_db;
@@ -11773,10 +11789,10 @@ impl AppUi {
                                 let input_right_db = linear_to_db(in_r);
                                 let output_left_db = linear_to_db(out_l);
                                 let output_right_db = linear_to_db(out_r);
-                                let meter_changed = meter_display_changed(row.input_left_db, input_left_db, 12)
-                                    || meter_display_changed(row.input_right_db, input_right_db, 12)
-                                    || meter_display_changed(row.output_left_db, output_left_db, 12)
-                                    || meter_display_changed(row.output_right_db, output_right_db, 12);
+                                let meter_changed = meter_display_changed(row.input_left_db, input_left_db, DEVICE_RAIL_METER_SEGMENTS)
+                                    || meter_display_changed(row.input_right_db, input_right_db, DEVICE_RAIL_METER_SEGMENTS)
+                                    || meter_display_changed(row.output_left_db, output_left_db, DEVICE_RAIL_METER_SEGMENTS)
+                                    || meter_display_changed(row.output_right_db, output_right_db, DEVICE_RAIL_METER_SEGMENTS);
                                 // Non-dynamics stages never publish here, so
                                 // they read the resting pair and need no
                                 // check for what kind of device they hold.

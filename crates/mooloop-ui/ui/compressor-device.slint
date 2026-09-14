@@ -16,7 +16,7 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
     in-out property <float> release;   // normalized 0..1 (5..2000 ms)
     in-out property <float> knee;      // normalized 0..1 (0..24 dB)
     in-out property <float> makeup;    // normalized 0..1 (0..24 dB)
-    in property <float> detector-db: -60;
+    in property <float> detector-db: GainMath.min-db;
     in property <float> gain-reduction-db: 0;
     callback threshold-changed(float);
     callback ratio-changed(float);

@@ -643,17 +643,17 @@ export component MainWindow inherits Window {
     in-out property <int>   bpm;
     in-out property <int>   swing-percent: 50;
     in-out property <int>   beat-in-bar;
-    in-out property <float> meter-l-db: -60;
-    in-out property <float> meter-r-db: -60;
-    in-out property <float> meter-l-held-db: -60;
-    in-out property <float> meter-r-held-db: -60;
+    in-out property <float> meter-l-db: GainMath.min-db;
+    in-out property <float> meter-r-db: GainMath.min-db;
+    in-out property <float> meter-l-held-db: GainMath.min-db;
+    in-out property <float> meter-r-held-db: GainMath.min-db;
     in-out property <bool> meter-l-clipping;
     in-out property <bool> meter-r-clipping;
     // Both latches at once: the light is one lamp over a stereo pair, so
     // clearing it clears what it was reporting.
     callback master-clip-reset();
-    in-out property <float> source-output-left-db: -60;
-    in-out property <float> source-output-right-db: -60;
+    in-out property <float> source-output-left-db: GainMath.min-db;
+    in-out property <float> source-output-right-db: GainMath.min-db;
     in-out property <float> selected-channel-volume-db: 0;
 
     // ---- preferences ----
@@ -977,10 +977,10 @@ export component MainWindow inherits Window {
     in property <bool> strip-pin-head: true;
     in property <bool> editing-bus-can-remove;
     in property <[bool]> editing-bus-allowed;
-    in property <float> editing-bus-left-db: -60;
-    in property <float> editing-bus-right-db: -60;
-    in property <float> editing-bus-input-left-db: -60;
-    in property <float> editing-bus-input-right-db: -60;
+    in property <float> editing-bus-left-db: GainMath.min-db;
+    in property <float> editing-bus-right-db: GainMath.min-db;
+    in property <float> editing-bus-input-left-db: GainMath.min-db;
+    in property <float> editing-bus-input-right-db: GainMath.min-db;
     // The sends this track has, and which tracks it may gain one to. Exactly
     // the sends that exist: the face draws no empty bays and there is no
     // drawn ceiling on how many there are.
@@ -3629,8 +3629,8 @@ export component MainWindow inherits Window {
                                                 + DeviceRackMetrics.half-gap
                                                 + DeviceRackMetrics.rail-width * 2;
                                             height: DeviceRackMetrics.face-height;
-                                            input-left-db: root.editing-bus ? root.editing-bus-input-left-db : -60;
-                                            input-right-db: root.editing-bus ? root.editing-bus-input-right-db : -60;
+                                            input-left-db: root.editing-bus ? root.editing-bus-input-left-db : GainMath.min-db;
+                                            input-right-db: root.editing-bus ? root.editing-bus-input-right-db : GainMath.min-db;
                                             output-left-db: root.editing-bus ? root.editing-bus-left-db : root.source-output-left-db;
                                             output-right-db: root.editing-bus ? root.editing-bus-right-db : root.source-output-right-db;
                                             output-trim-enabled: !root.editing-bus;

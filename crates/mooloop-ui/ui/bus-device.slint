@@ -95,8 +95,8 @@ export component BusDeviceFace inherits Rectangle {
     in property <int> send-feed-count;
     in property <[string]> bus-names;
     in property <[bool]> allowed;
-    in property <float> left-db: -60;
-    in property <float> right-db: -60;
+    in property <float> left-db: GainMath.min-db;
+    in property <float> right-db: GainMath.min-db;
     in property <bool> console;
     in property <bool> polarity;
     in property <bool> solo;
@@ -302,8 +302,8 @@ export component BusFaderRow inherits Rectangle {
     in property <float> pan;
     in property <bool> muted;
     in property <bool> solo;
-    in property <float> left-db: -60;
-    in property <float> right-db: -60;
+    in property <float> left-db: GainMath.min-db;
+    in property <float> right-db: GainMath.min-db;
     callback volume-changed(float);
     callback pan-changed(float);
     callback mute-toggled();

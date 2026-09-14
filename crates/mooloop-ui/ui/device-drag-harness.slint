@@ -1,4 +1,5 @@
 import { EqDeviceFace } from "eq-device.slint";
+import { GainMath } from "gain.slint";
 import { FilterDeviceFace } from "filter-device.slint";
 import { CompressorDeviceFace } from "compressor-device.slint";
 import { Ds01Contour, Ds01DeviceFace } from "ds01-device.slint";
@@ -85,7 +86,7 @@ export component CompressorDeviceDragHarness inherits Window {
     in-out property <float> release;
     in-out property <float> knee;
     in-out property <float> makeup;
-    in property <float> detector-db: -60;
+    in property <float> detector-db: GainMath.min-db;
     in property <float> gain-reduction-db: 0;
     callback threshold-changed(float);
 

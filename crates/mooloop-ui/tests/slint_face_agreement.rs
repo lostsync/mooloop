@@ -46,6 +46,7 @@ const FILTER_SLINT: &str = include_str!("../ui/filter-device.slint");
 const MODULATION_SLINT: &str = include_str!("../ui/modulation-device.slint");
 const BUFFER_SLINT: &str = include_str!("../ui/buffer-device.slint");
 const CONTAINER_SLINT: &str = include_str!("../ui/container-device.slint");
+const AUX_IN_SLINT: &str = include_str!("../ui/aux-in-device.slint");
 
 /// The face's declaration for one knob: its bounds, its resting value, and
 /// whether it is drawn in ratio.
@@ -740,4 +741,67 @@ fn every_unrouted_face_knob_agrees_with_its_table() {
             knob.default
         );
     }
+}
+
+/// Aux In's face, which is outside both passes above because Aux In is not an
+/// `EffectKind`: it has its own `aux_in::DESCRIPTORS` and its own
+/// `aux_in::descriptor`, so there is nothing for `EFFECT_FACES` to name it
+/// with.
+///
+/// Its Level knob was the last face literal `scripts/dupe-audit
+/// unchecked-face` reported that anything could be done about, and it is the
+/// third spelling of one number. `aux_in.rs` says so itself, at length, above
+/// the literal it holds: that default is `gain::reference_level_gain()`
+/// written out because a const struct cannot call a function, and it is held
+/// to the real thing by a chain of two tests. The markup's copy was held to
+/// nothing at all.
+///
+/// The maximum is the same shape one level along. The face writes
+/// `GainMath.db-to-linear(12.0)` where the table says `MAX_LINEAR_GAIN`, so
+/// the two agree only as long as that `12.0` is `gain::MAX_DB` -- which is
+/// what this checks, rather than evaluating the conversion twice.
+#[test]
+fn the_aux_in_face_agrees_with_its_table() {
+    let descriptor = mooloop_core::aux_in::descriptor(mooloop_core::aux_in::PARAM_LEVEL)
+        .expect("aux_in has no descriptor for PARAM_LEVEL");
+    let knob = face_knobs(AUX_IN_SLINT)
+        .into_iter()
+        .find(|knob| knob.property.as_deref() == Some("level"))
+        .expect("aux-in-device.slint no longer declares a knob bound to level");
+
+    assert_eq!(
+        knob.minimum,
+        Some(descriptor.min),
+        "aux-in-device.slint:{}: face min against the table's {}",
+        knob.line,
+        descriptor.min
+    );
+    assert!(
+        (knob.default - descriptor.default).abs() < 1e-6,
+        "aux-in-device.slint:{}: the face rests at {}, the table at {} -- and the \
+         table's is `gain::reference_level_gain()`, so this is that number a third \
+         time.",
+        knob.line,
+        knob.default,
+        descriptor.default
+    );
+
+    // `maximum` is an expression, so `face_knobs` reads no number from it.
+    let top = AUX_IN_SLINT
+        .lines()
+        .find(|line| line.contains("maximum: GainMath.db-to-linear("))
+        .unwrap_or_else(|| {
+            panic!("aux-in-device.slint's Level knob stopped topping out at a dB value")
+        });
+    let stated: f32 = top
+        .split_once("db-to-linear(")
+        .and_then(|(_, rest)| rest.split(')').next())
+        .and_then(|number| number.trim().parse().ok())
+        .unwrap_or_else(|| panic!("not a plain dB literal: {top}"));
+    assert!(
+        (stated - mooloop_core::gain::MAX_DB).abs() < 1e-4,
+        "aux-in-device.slint tops the Level knob at {stated} dB where gain::MAX_DB \
+         is {}, so the face and `MAX_LINEAR_GAIN` in the table no longer meet",
+        mooloop_core::gain::MAX_DB
+    );
 }

@@ -147,12 +147,13 @@ fn trim_knob_reads_through_the_shared_formatter() {
 
 #[test]
 fn slint_meter_thresholds_match_the_rust_constants() {
-    use mooloop_core::gain::{METER_HOT_DB, METER_WARNING_DB, REFERENCE_PEAK_DBFS};
+    use mooloop_core::gain::{METER_HOT_DB, METER_WARNING_DB, MIN_DB, REFERENCE_PEAK_DBFS};
 
     for (name, expected) in [
         ("meter-warning-db", METER_WARNING_DB),
         ("meter-hot-db", METER_HOT_DB),
         ("reference-peak-dbfs", REFERENCE_PEAK_DBFS),
+        ("min-db", MIN_DB),
     ] {
         let line = GAIN_SLINT
             .lines()
@@ -166,6 +167,144 @@ fn slint_meter_thresholds_match_the_rust_constants() {
         assert!(
             (value - expected).abs() < 1e-4,
             "{name}: slint {value} vs rust {expected}"
+        );
+    }
+}
+
+/// The floor is checked above, which is only half of it: a property nothing
+/// reads is a list nothing reads, and that is exactly the fault the taper
+/// check was written to stop making.
+///
+/// `GainMath.min-db` was added on 2026-09-13 to replace fifty literal `-60`s
+/// across ten files -- three inside `gain.slint`'s own converters and
+/// forty-seven across nine others, as `minimum-db` scale bottoms and as the
+/// resting value of every meter reading. This asserts the number did not come
+/// back: a `<float>` property whose name ends `-db` and whose whole binding is
+/// the literal `-60` is a copy of the floor that the check above cannot see.
+///
+/// **It sweeps every face, not the two files the floor was first found in.**
+/// `LOOSE_ENDS.md` named `meters.slint` and `controls.slint` and counted
+/// twenty-two; `device-rack.slint`, `bus-device.slint`, `main.slint`,
+/// `gate-device.slint`, `limiter-device.slint`, `compressor-device.slint` and
+/// `device-drag-harness.slint` held twenty-six more. The first version of this
+/// check swept only the two files the note named, and would have passed while
+/// most of the copies were still there.
+#[test]
+fn no_face_spells_the_floor_for_itself() {
+    let converters = GAIN_SLINT
+        .lines()
+        .filter(|line| line.contains("return") && line.contains("min-db"))
+        .count();
+    assert_eq!(
+        converters, 2,
+        "db-to-linear and linear-to-db stopped reading GainMath.min-db"
+    );
+
+    // The two the sweep deliberately leaves alone, both for the same reason:
+    // something already reads them, and reading them is what it does.
+    //
+    // `device-displays.slint`'s `threshold-min-db` and `floor-db` are held to
+    // `METER_FLOOR_DB` by `strip_face.rs`, which finds them by parsing the
+    // literal out of the declaration -- so replacing the literal with a
+    // property reference would take that guard off rather than improve it.
+    //
+    // A binding that is an *expression* rather than a literal is not a copy of
+    // the floor at all. `compressor-device.slint`'s
+    // `threshold-db: -60 + root.threshold * 60` is the compressor's threshold
+    // range being denormalized, which mirrors the descriptor table and is
+    // checked as a range by `every_effect_linear_readout_agrees_with_its_table`
+    // in `slint_face_agreement.rs`. Requiring the whole binding to be `-60;`
+    // excludes it without naming it.
+    const READ_BY_STRIP_FACE: &str = "device-displays.slint";
+
+    let mut swept = 0usize;
+    for entry in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/ui"))
+        .expect("mooloop-ui/ui is unreadable")
+    {
+        let path = entry.expect("unreadable directory entry").path();
+        if path.extension().is_none_or(|kind| kind != "slint") {
+            continue;
+        }
+        let file = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if file == READ_BY_STRIP_FACE {
+            continue;
+        }
+        swept += 1;
+        let source = std::fs::read_to_string(&path).expect("unreadable .slint file");
+        for (number, line) in source.lines().enumerate() {
+            let Some((_, rest)) = line.split_once("property <float> ") else {
+                continue;
+            };
+            let Some((name, binding)) = rest.split_once(':') else {
+                continue;
+            };
+            assert!(
+                !(name.trim().ends_with("-db") && binding.trim() == "-60;"),
+                "{file}:{} spells the floor instead of reading GainMath.min-db: {line}",
+                number + 1
+            );
+        }
+    }
+
+    // The sweep reads the directory, so a rename cannot quietly empty it.
+    assert!(
+        swept > 20,
+        "only {swept} .slint files were swept; the walk has stopped finding them"
+    );
+}
+
+/// The repaint throttle quantizes a meter's dB into segments and repaints only
+/// when the count changes, so it has to use the count the meter draws with.
+/// The two numbers live on opposite sides of the boundary -- `mixer.slint` and
+/// `device-rack.slint` draw them, `lib.rs` throttles by them -- and nothing
+/// joined them until this test.
+///
+/// The failure it prevents is not a crash: the throttle would simply swallow a
+/// change that moves a visible segment, which is the "peak marker one segment
+/// behind where the audio put it" the throttle's own call site warns about.
+#[test]
+fn slint_meter_segment_counts_match_the_throttle() {
+    /// Every literal segment count `key` introduces. A binding that is not a
+    /// literal -- `segments: MixerMetrics.meter-segments;` -- is the markup
+    /// reading the count from somewhere rather than stating it, and is not a
+    /// copy for this test to hold. Anything else that fails to parse is, so
+    /// it panics rather than being skipped: a silent skip is how a check
+    /// stops checking.
+    fn counts(source: &str, key: &str) -> Vec<u32> {
+        source
+            .lines()
+            .filter_map(|line| line.split_once(key).map(|(_, rest)| (line, rest)))
+            .filter_map(|(line, rest)| {
+                let stated = rest.trim().trim_end_matches(';');
+                if stated.starts_with(|c: char| c.is_ascii_digit()) {
+                    Some(stated.parse().unwrap_or_else(|_| {
+                        panic!("segment count is not a plain integer: {line}")
+                    }))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    let mixer = counts(include_str!("../ui/mixer.slint"), "meter-segments:");
+    assert_eq!(
+        mixer,
+        vec![mooloop_ui::MIXER_STRIP_METER_SEGMENTS],
+        "mixer.slint's MixerMetrics.meter-segments against MIXER_STRIP_METER_SEGMENTS"
+    );
+
+    let rails = counts(include_str!("../ui/device-rack.slint"), "segments:");
+    assert!(!rails.is_empty(), "device-rack.slint states no segment count");
+    for drawn in &rails {
+        assert_eq!(
+            *drawn,
+            mooloop_ui::DEVICE_RAIL_METER_SEGMENTS,
+            "device-rack.slint's segments against DEVICE_RAIL_METER_SEGMENTS"
         );
     }
 }

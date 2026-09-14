@@ -1,5 +1,6 @@
 import { HorizontalBox } from "std-widgets.slint";
 import { StatusHint, Theme } from "theme.slint";
+import { GainMath } from "gain.slint";
 import { IconButton, MiniKnob, ToolButton, TrimKnob } from "controls.slint";
 import { ChannelMeter } from "meters.slint";
 
@@ -207,8 +208,8 @@ export component DeviceOutputRail inherits Rectangle {
     in property <int> container-children: 0;
     in property <bool> output-trim-enabled: false;
     in-out property <float> output-trim: 0;
-    in property <float> output-left-db: -60;
-    in property <float> output-right-db: -60;
+    in property <float> output-left-db: GainMath.min-db;
+    in property <float> output-right-db: GainMath.min-db;
     // A container's chrome is one colour, and it is not the colour of the
     // devices it holds: the rails at both ends and the space around the run
     // read as the box, and the faces read as what is in it.
@@ -299,10 +300,10 @@ export component DeviceFrame inherits Rectangle {
     // These are the currently edited chain endpoint's live bus readings. The
     // engine publishes a held peak per bus, so the frame never invents a
     // per-effect reading it cannot measure yet.
-    in property <float> input-left-db: -60;
-    in property <float> input-right-db: -60;
-    in property <float> output-left-db: -60;
-    in property <float> output-right-db: -60;
+    in property <float> input-left-db: GainMath.min-db;
+    in property <float> input-right-db: GainMath.min-db;
+    in property <float> output-left-db: GainMath.min-db;
+    in property <float> output-right-db: GainMath.min-db;
     // Whether this frame draws its own output rail against its own face. A
     // container's does not: it is drawn past the last device in the run, so
     // the box encloses what it holds rather than sitting beside it.
