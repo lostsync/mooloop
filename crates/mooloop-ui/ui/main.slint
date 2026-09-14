@@ -46,7 +46,7 @@ import { ModulationDeviceFace } from "modulation-device.slint";
 import { ModulationShelf, ModulationShelfMetrics, ModulationSourceRow, ModulationOutletRow, ModulationRouteRow } from "modulation-shelf.slint";
 import { MixerMetrics, MixerPane, MixerSendRow, MixerStripRow, BusPicker } from "mixer.slint";
 export { MixerMetrics }
-import { BusDeviceFace, StripRackRow } from "bus-device.slint";
+import { BusDeviceFace, BusFaderRow, StripRackRow } from "bus-device.slint";
 import { StripMeters, StripRow, StripSpec } from "strip.slint";
 export { StripMeters }
 // Re-exported so Rust can reach them: a global is visible to the generated
@@ -2670,6 +2670,25 @@ export component MainWindow inherits Window {
                                     root.channel-color-chosen(value);
                                 }
                             }
+                            // The sends of whichever track is selected. The
+                            // same model the mixer strip draws from, and the
+                            // same callbacks the face used to raise.
+                            sends: root.editing-bus-sends;
+                            bus-names: root.bus-names;
+                            send-allowed: root.editing-bus-send-allowed;
+                            track-index: root.editing-bus-index;
+                            is-master: root.editing-bus-is-master;
+                            send-added(t) => { root.send-added(root.editing-bus-index, t); }
+                            send-removed(i) => { root.send-removed(root.editing-bus-index, i); }
+                            send-level-changed(i, v) => {
+                                root.send-level-changed(root.editing-bus-index, i, v);
+                            }
+                            send-tap-picked(i, t) => {
+                                root.send-tap-picked(root.editing-bus-index, i, t);
+                            }
+                            send-enable-toggled(i) => {
+                                root.send-enable-toggled(root.editing-bus-index, i);
+                            }
                         }
 
                         // The panel's own right edge, drawn inside the clip so
@@ -3643,8 +3662,6 @@ export component MainWindow inherits Window {
                                                 name: root.editing-bus-name;
                                                 is-master: root.editing-bus-is-master;
                                                 muted: root.editing-bus-muted;
-                                                volume: root.editing-bus-volume;
-                                                pan: root.editing-bus-pan;
                                                 output: root.editing-bus-output;
                                                 index: root.editing-bus-index;
                                                 feed-count: root.editing-bus-feed-count;
@@ -3652,27 +3669,19 @@ export component MainWindow inherits Window {
                                                 allowed: root.editing-bus-allowed;
                                                 left-db: root.editing-bus-left-db;
                                                 right-db: root.editing-bus-right-db;
-                                                volume-changed(v) => { root.bus-volume-changed(root.editing-bus-index, v); }
-                                                pan-changed(v) => { root.bus-pan-changed(root.editing-bus-index, v); }
-                                                mute-toggled => { root.bus-muted(root.editing-bus-index); }
                                                 console: root.editing-bus-console;
                                                 polarity: root.editing-bus-polarity;
                                                 polarity-toggled => { root.bus-polarity-toggled(root.editing-bus-index); }
-                                                solo: root.editing-bus-solo;
-                                                solo-toggled => { root.bus-solo-toggled(root.editing-bus-index); }
                                                 can-remove: root.editing-bus-can-remove;
                                                 output-picked(o) => { root.bus-output-changed(root.editing-bus-index, o); }
                                                 console-toggled => { root.bus-console-toggled(root.editing-bus-index); }
                                                 renamed(v) => { root.track-renamed(root.editing-bus-index, v); }
                                                 removed => { root.track-removed(root.editing-bus-index); }
+                                                // The *incoming* count stays: how many
+                                                // sends feed this track is a fact about
+                                                // it, where the sends it makes are edited
+                                                // in the channel sidebar.
                                                 send-feed-count: root.editing-bus-send-feed-count;
-                                                sends: root.editing-bus-sends;
-                                                send-allowed: root.editing-bus-send-allowed;
-                                                send-added(t) => { root.send-added(root.editing-bus-index, t); }
-                                                send-removed(i) => { root.send-removed(root.editing-bus-index, i); }
-                                                send-level-changed(i, v) => { root.send-level-changed(root.editing-bus-index, i, v); }
-                                                send-tap-picked(i, t) => { root.send-tap-picked(root.editing-bus-index, i, t); }
-                                                send-enable-toggled(i) => { root.send-enable-toggled(root.editing-bus-index, i); }
                                             }
 
                                             if !root.editing-bus && root.source-kind == 0 : SamplerDeviceFace {
@@ -4830,6 +4839,31 @@ export component MainWindow inherits Window {
                                                 x: cell.shift + cell.frame-width + cell.tail-width;
                                                 y: 0px;
                                             }
+                                        }
+
+                                        // **The output stage, last.** The rack
+                                        // now reads in the order the engine
+                                        // runs: the strip at the head, the
+                                        // track's own devices as inserts, the
+                                        // fader at the end. It was drawn first
+                                        // until 2026-09-13 because this face
+                                        // sits in the seat a channel's
+                                        // generator has -- the start of a
+                                        // channel's path, and the wrong end of
+                                        // a track's.
+                                        if root.editing-bus : BusFaderRow {
+                                            name: root.editing-bus-name;
+                                            is-master: root.editing-bus-is-master;
+                                            volume: root.editing-bus-volume;
+                                            pan: root.editing-bus-pan;
+                                            muted: root.editing-bus-muted;
+                                            solo: root.editing-bus-solo;
+                                            left-db: root.editing-bus-left-db;
+                                            right-db: root.editing-bus-right-db;
+                                            volume-changed(v) => { root.bus-volume-changed(root.editing-bus-index, v); }
+                                            pan-changed(v) => { root.bus-pan-changed(root.editing-bus-index, v); }
+                                            mute-toggled => { root.bus-muted(root.editing-bus-index); }
+                                            solo-toggled => { root.bus-solo-toggled(root.editing-bus-index); }
                                         }
 
                                         // The other position the pin can take:

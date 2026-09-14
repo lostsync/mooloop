@@ -5,7 +5,10 @@ import { NameField } from "toolbar.slint";
 import { GainMath } from "gain.slint";
 import { ChannelMeter } from "meters.slint";
 import { DeviceHeader, DeviceRackMetrics } from "device-rack.slint";
-import { BusPicker, MixerSendRow, SendRow } from "mixer.slint";
+// `send-feed-count` below is the *incoming* count, which is why this
+// face still knows the word: the sends it once edited are the
+// outgoing ones, and they live in the channel sidebar now.
+import { BusPicker } from "mixer.slint";
 import { StripRow, StripSections } from "strip.slint";
 
 // The track's channel strip as a row in its own device rack.
@@ -98,24 +101,14 @@ export component BusDeviceFace inherits Rectangle {
     in property <bool> polarity;
     in property <bool> solo;
     in property <bool> can-remove: true;
-    in property <[MixerSendRow]> sends;
     // Which tracks this one may send to. The same mask the output picker
     // uses, because a send and an output are legal under the same rule.
     in property <[bool]> send-allowed;
-    callback send-added(int);
-    callback send-removed(int);
-    callback send-level-changed(int, float);
-    callback send-tap-picked(int, int);
-    callback send-enable-toggled(int);
     callback renamed(string);
     callback removed();
-    callback volume-changed(float);
-    callback pan-changed(float);
-    callback mute-toggled();
     callback output-picked(int);
     callback console-toggled();
     callback polarity-toggled();
-    callback solo-toggled();
 
     VerticalLayout {
         padding: 8px;
@@ -126,47 +119,38 @@ export component BusDeviceFace inherits Rectangle {
             spacing: 8px;
             vertical-stretch: 1;
 
-            // **One panel, not two.** The output stage and the four small
-            // controls beside a fader were `OUTPUT` and `STRIP`, 116px and
-            // 92px, and the second was a 22px knob and a row of buttons in a
-            // box with room for four times that. Folding it in gives the
-            // hundred pixels to the routing and sends column, which is the
-            // part of this face that was actually short of width. The
-            // vertical order is the mixer strip's own -- pan over solo,
-            // mute, polarity -- so the two faces read the same way round.
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 6px;
+
             Rectangle {
-                width: 116px;
                 background: Theme.panel;
                 border-radius: Theme.radius-sm;
+                horizontal-stretch: 1;
+                // Takes the whole face now. It used to give its slack to the
+                // sends area below, and with the sends in the sidebar there
+                // is nothing under it -- a panel that kept its old
+                // `vertical-stretch: 0` left the bottom half of this face as
+                // empty bordered space, which `UI_DESIGN.md` calls a defect
+                // rather than a style.
+                vertical-stretch: 1;
                 VerticalLayout {
                     padding: 6px;
                     spacing: 4px;
-                    SectionLabel { text: "OUTPUT"; }
                     HorizontalLayout {
-                        alignment: center;
-                        spacing: 4px;
-                        MiniKnob {
-                            label: "Pan";
-                            value: root.pan;
-                            minimum: -1;
-                            maximum: 1;
-                            default-value: 0;
-                            bipolar: true;
-                            value-text: abs(root.pan) < 0.01 ? "Center"
-                                : root.pan < 0 ? "L " + round(abs(root.pan) * 100)
-                                : "R " + round(root.pan * 100);
-                            changed(v) => { root.pan-changed(v); }
+                        spacing: 6px;
+                        height: 18px;
+                        SectionLabel {
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                            text: "ROUTING";
                         }
-                        MuteButton {
-                            muted: root.muted;
-                            clicked => { root.mute-toggled(); }
-                        }
-                        // Both of these are on the mixer strip too, in this
-                        // same order: no control belongs to only one face.
-                        if !root.is-master : SoloButton {
-                            soloed: root.solo;
-                            clicked => { root.solo-toggled(); }
-                        }
+                        // Polarity stays at the head while the fader moved to
+                        // the tail, and the difference is not cosmetic: it is
+                        // applied at the **top** of the track's block, so
+                        // everything after it sees the flipped signal --
+                        // including a pre-fader send. It is an input control
+                        // and this is the input end.
                         ToolButton {
                             text: "\u{00f8}";
                             tooltip: root.polarity ? "Inverted" : "Normal";
@@ -180,46 +164,6 @@ export component BusDeviceFace inherits Rectangle {
                             clicked => { root.polarity-toggled(); }
                         }
                     }
-                    HorizontalLayout {
-                        spacing: 6px;
-                        vertical-stretch: 1;
-                        alignment: center;
-                        ChannelMeter {
-                            width: 22px;
-                            segments: 16;
-                            left-db: root.left-db;
-                            right-db: root.right-db;
-                            held-left-db: root.left-db;
-                            held-right-db: root.right-db;
-                        }
-                        MixerFader {
-                            width: 30px;
-                            value: root.volume;
-                            maximum: GainMath.db-to-linear(GainMath.fader-db[0]);
-                            default-value: 1.0;
-                            tooltip: root.name + " level";
-                            value-text: GainMath.format-db(GainMath.linear-to-db(root.volume));
-                            changed(v) => { root.volume-changed(v); }
-                        }
-                    }
-                }
-            }
-
-            VerticalLayout {
-                horizontal-stretch: 1;
-                spacing: 6px;
-
-            Rectangle {
-                background: Theme.panel;
-                border-radius: Theme.radius-sm;
-                horizontal-stretch: 1;
-                // The master has no sends area under it, so it keeps the
-                // slack; every other track gives it to the rows.
-                vertical-stretch: root.is-master ? 1 : 0;
-                VerticalLayout {
-                    padding: 6px;
-                    spacing: 4px;
-                    SectionLabel { text: "ROUTING"; }
                     Text {
                         text: (root.feed-count == 0 && root.send-feed-count == 0)
                                 ? "Nothing feeds this track yet"
@@ -320,79 +264,6 @@ export component BusDeviceFace inherits Rectangle {
                 }
             }
 
-            // The sends area. It draws the sends that exist and no more:
-            // there is no fixed number of bars, and when they outgrow the
-            // room it scrolls rather than the strip growing or the faders
-            // shrinking. Adam, 2026-09-09: *"i drew 4 sends bc that's how
-            // many fit in my drawing... we're not limiting to 4."*
-            //
-            // The master has none, because every track reaches it and so a
-            // send from it could only close a loop.
-            if !root.is-master : Rectangle {
-                background: Theme.panel;
-                border-radius: Theme.radius-sm;
-                vertical-stretch: 1;
-                VerticalLayout {
-                    padding: 6px;
-                    spacing: 4px;
-                    // The label and the add affordance share a row, because
-                    // the row it would have had below the list is a row the
-                    // list wants: this face is two rack units tall and the
-                    // sends area is what is left of it.
-                    HorizontalLayout {
-                        spacing: 6px;
-                        height: 18px;
-                        SectionLabel {
-                            horizontal-stretch: 1;
-                            vertical-alignment: center;
-                            text: root.sends.length == 0
-                                ? "SENDS"
-                                : root.sends.length + (root.sends.length == 1 ? " SEND" : " SENDS");
-                        }
-                        // Not a `+ Send` button. `docs/TERMINOLOGY.md`
-                        // retires that because it would create a *track*
-                        // called a send; this creates a **route**, and the
-                        // track at the far end becomes an effects return by
-                        // being sent to.
-                        BusPicker {
-                            bus-names: root.bus-names;
-                            value: root.index;
-                            allowed: root.send-allowed;
-                            label: "Send to\u{2026}";
-                            chip-width: 62px;
-                            height: 18px;
-                            tooltip: "Route a copy of this track to another one";
-                            picked(i) => { root.send-added(i); }
-                        }
-                    }
-                    if root.sends.length == 0 : Text {
-                        text: "Route this track to another and it gains a fader here.";
-                        color: Theme.text-faint;
-                        font-size: 9px;
-                        wrap: word-wrap;
-                        vertical-stretch: 1;
-                    }
-                    // Viewport height from the rows rather than a constant,
-                    // for the reason the mixer's own scroll derives its
-                    // width: a hardcoded one is exactly what left the device
-                    // rack unscrollable.
-                    if root.sends.length > 0 : ScrollView {
-                        vertical-stretch: 1;
-                        viewport-width: self.visible-width;
-                        viewport-height: max(self.visible-height, root.sends.length * 41px);
-                        VerticalLayout {
-                            spacing: 1px;
-                            for send[i] in root.sends : SendRow {
-                                send: send;
-                                level-changed(v) => { root.send-level-changed(i, v); }
-                                tap-picked(t) => { root.send-tap-picked(i, t); }
-                                enable-toggled => { root.send-enable-toggled(i); }
-                                removed => { root.send-removed(i); }
-                            }
-                        }
-                    }
-                }
-            }
             }
         }
     }
@@ -404,6 +275,113 @@ export component BusDeviceFace inherits Rectangle {
         name: root.name;
         kind: "BUS / 2U";
         role: "BUS";
+        device-color: root.is-master ? Theme.warning : Theme.accent;
+        enabled: !root.muted;
+    }
+}
+
+/// A track's output stage, as the **last** row of its rack.
+///
+/// **This used to be drawn first, and the engine has always run it last.**
+/// `StripPin`'s own doc states the order -- `pre -> eq -> comp -> devices ->
+/// fader` -- and the fader sat in the head face because that face occupies the
+/// seat a channel's *generator* has, which is the start of a channel's signal
+/// path and the wrong place for a track's output. Adam, 2026-09-13: *"why is
+/// the fader at the beginning? it seems like the fx should be inserts between
+/// the strip section and the fader section so the fader would be at the end."*
+/// Nothing sounded wrong; the picture was.
+///
+/// Polarity deliberately stays behind on the head face. It is applied at the
+/// **top** of the track's block -- everything downstream sees the flipped
+/// signal, including a pre-fader send -- so it is an input control and drawing
+/// it here would make the same mistake in the other direction.
+export component BusFaderRow inherits Rectangle {
+    in property <string> name;
+    in property <bool> is-master;
+    in property <float> volume: 1.0;
+    in property <float> pan;
+    in property <bool> muted;
+    in property <bool> solo;
+    in property <float> left-db: -60;
+    in property <float> right-db: -60;
+    callback volume-changed(float);
+    callback pan-changed(float);
+    callback mute-toggled();
+    callback solo-toggled();
+
+    // One unit, where the strip beside it takes two: this is a fader, a pan
+    // and three buttons, and the rack is short of width at the head already.
+    width: DeviceRackMetrics.unit-width;
+    height: DeviceRackMetrics.face-height;
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.border;
+    border-radius: Theme.radius-md;
+
+    VerticalLayout {
+        x: 8px;
+        y: DeviceRackMetrics.header-height + 8px;
+        width: parent.width - 16px;
+        height: parent.height - DeviceRackMetrics.header-height - 16px;
+        spacing: 4px;
+
+        // The vertical order is the mixer strip's own -- pan over solo, mute
+        // -- so the two faces read the same way round.
+        HorizontalLayout {
+            alignment: center;
+            spacing: 4px;
+            MiniKnob {
+                label: "Pan";
+                value: root.pan;
+                minimum: -1;
+                maximum: 1;
+                default-value: 0;
+                bipolar: true;
+                value-text: abs(root.pan) < 0.01 ? "Center"
+                    : root.pan < 0 ? "L " + round(abs(root.pan) * 100)
+                    : "R " + round(root.pan * 100);
+                changed(v) => { root.pan-changed(v); }
+            }
+            MuteButton {
+                muted: root.muted;
+                clicked => { root.mute-toggled(); }
+            }
+            if !root.is-master : SoloButton {
+                soloed: root.solo;
+                clicked => { root.solo-toggled(); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            vertical-stretch: 1;
+            alignment: center;
+            ChannelMeter {
+                width: 22px;
+                segments: 16;
+                left-db: root.left-db;
+                right-db: root.right-db;
+                held-left-db: root.left-db;
+                held-right-db: root.right-db;
+            }
+            MixerFader {
+                width: 30px;
+                value: root.volume;
+                maximum: GainMath.db-to-linear(GainMath.fader-db[0]);
+                default-value: 1.0;
+                tooltip: root.name + " level";
+                value-text: GainMath.format-db(GainMath.linear-to-db(root.volume));
+                changed(v) => { root.volume-changed(v); }
+            }
+        }
+    }
+
+    DeviceHeader {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        name: "Fader";
+        kind: "OUT / 1U";
+        role: "OUT";
         device-color: root.is-master ? Theme.warning : Theme.accent;
         enabled: !root.muted;
     }

@@ -24,7 +24,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   no MIDI rows at all rather than disabled ones: disabled means "not
   configurable yet", which is true of a channel's and would be a lie about a
   track, which has no MIDI input to configure. It is hidden until the status
-  bar's leftmost chip opens it. It resizes
+  bar's leftmost chip opens it. For a track it also holds that track's
+  **sends**: one row each with destination, level, pre/post tap, enable and
+  remove, plus a picker that routes a copy to another track. They were an area
+  of the track's device face until 2026-09-13, and moving them put the editor
+  somewhere always to hand rather than behind whichever view the bottom pane
+  was showing; the mixer strip keeps its send levels for riding them live. It resizes
   by its right edge between 180 and 400px, remembers its width, and edits
   whatever channel is selected rather than holding a selection of its own.
   The `reference/img/mooloop-1.0-mockup.png` panel also draws PLUGINS and
@@ -42,6 +47,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   `Ctrl+Shift+\` do the same. Zoom never moves a view, so leaving it puts
   everything back where it was. The zoomed tab takes the full accent rather
   than the muted active fill, and the status bar says how to get out.
+- **A track's rack reads in signal order**, as of 2026-09-13: its head (name,
+  routing, polarity), its channel strip, its own devices as inserts, and its
+  fader last. The fader used to be drawn first, inside the head face, because
+  that face sits where a channel's *generator* sits -- the start of a
+  channel's path and the wrong end of a track's. Nothing sounded different;
+  the rack simply showed a stage before the stages that precede it.
 - **The bottom pane resizes for any view that does not declare its own
   height**, which is every view except `DEVICES` — a device face is a fixed
   268px and does not stretch. The playlist became resizable on 2026-09-08;

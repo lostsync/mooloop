@@ -720,10 +720,29 @@ Two panels flank the work area, and they are deliberately one mechanism: the
   that each allowed itself 400px would leave 200 for the editor, so each
   measures its ceiling against the window *minus its sibling*. That is one
   function, `sidebar-ceiling`, and not a constant.
+- **A panel that is always on screen owns setting things up; the surface you
+  play on keeps the controls you play with.** A track's sends are edited in
+  the sidebar, where there is room for a destination, a tap point and an
+  enable per send with labels; the mixer strip keeps the send levels, because
+  riding one with its meter beside it is a different job. One model, two
+  views, and neither holds a second copy of the rows.
 - **What a panel shows is the selection, not a copy of it.** The channel
   sidebar edits whatever `selected-channel` names and holds no selection of
   its own. It reuses the rename callback the `DEVICES` toolbar already has,
   because a second way to rename a channel is a second thing to drift.
+- **A rack reads in the order the signal runs.** A track's rack is its head
+  (name, routing, polarity, then the strip), its own devices as inserts, and
+  its fader last — because that is what the engine does, and `StripPin` says
+  so in one constant both the block loop and the rack read. The fader was
+  drawn *first* until 2026-09-13, for a structural reason worth remembering:
+  the head slot is the seat a channel's **generator** occupies, so a track's
+  output stage inherited the position of a channel's input. A control's place
+  in a rack is a claim about when it acts.
+- **Where a control acts decides where it is drawn, even when that splits a
+  cluster.** A track's polarity stayed at the head when its fader moved to the
+  tail: polarity is applied at the top of the block, so everything after it —
+  including a pre-fader send — sees the flipped signal. Drawing it beside the
+  fader would have been the same error in the opposite direction.
 - **A control drawn for a setting that does not exist yet is disabled, and
   looks it.** The sidebar's MIDI rows are the standing example: MIDI is
   decoded and routed and configurable nowhere, so the rows say what the panel
