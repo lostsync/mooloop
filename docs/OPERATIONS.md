@@ -216,8 +216,9 @@ Nothing here may be called from the audio thread; see
 
 ## Commit, Merge, And Tidy Up
 
-Commit small, buildable changes from the task worktree. Update your entry in
-`CONTRIBUTORS.md` before each commit.
+Commit small, buildable changes from the task worktree. Update your row in
+`CONTRIBUTORS.md` before each commit — `Last seen` and `Sessions`, and nothing
+else unless `Known for` has stopped being true.
 
 ```sh
 git status --short --branch
