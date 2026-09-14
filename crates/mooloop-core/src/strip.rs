@@ -133,20 +133,56 @@ pub struct StripBand {
     /// voicing. The hertz arrives on hover, from the voicing that is
     /// running.
     ///
-    /// Defaulted, because it replaced a `frequency_hz` that songs saved on
-    /// 2026-09-11 may hold: serde ignores the old field and such a band
-    /// opens at the middle of its own range. See `docs/PROJECT_FORMAT.md`.
-    #[serde(default = "default_band_position")]
+    /// Defaulted, because it replaced a `frequency_hz` that a song saved on
+    /// 2026-09-11 may hold: serde ignores the old field and such a band opens
+    /// at the middle of its own range. The default is *not* on this field --
+    /// it cannot be, because the middle differs per band -- it is in
+    /// [`StripParams`]'s `bands`, which fills it from the band's own index.
+    /// See `docs/PROJECT_FORMAT.md`.
     pub position: u8,
     pub gain_db: f32,
     pub q: f32,
 }
 
-/// The middle position, which is every band's default whatever the voicing
-/// -- so switching a voicing moves what a position is worth and never which
-/// position a band is on.
-fn default_band_position() -> u8 {
-    2
+/// `bands`, with a band that states no `position` opening on the middle of
+/// *its own* set rather than on one number chosen for all four.
+///
+/// This exists because `#[serde(default = "fn")]` gets no array index. The
+/// field default it replaced returned a bare `2`, which is the middle of the
+/// five-position outer bands and one step low for the seven-position mids --
+/// so under `MOO_EQ` a band 1 that meant 3 kHz opened at 2 kHz, against a
+/// face and a `double-click to default` that both said 3, and against
+/// `PROJECT_FORMAT.md`'s own claim that such a band "loads with the band
+/// centred". Four things stated what the middle was and the one serde reached
+/// was the only one that was wrong.
+///
+/// The wire type is deliberately no more forgiving than the struct: `kind`,
+/// `gain_db` and `q` have no default here either, so a band missing one of
+/// them still fails to load. Only `position` is optional, and only because
+/// one day's files may predate it. An unknown field -- `frequency_hz` -- is
+/// ignored, which is serde's default and the whole migration.
+fn bands_with_their_own_middles<'de, D>(
+    deserializer: D,
+) -> Result<[StripBand; STRIP_EQ_BANDS], D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    struct Wire {
+        kind: EqBandKind,
+        position: Option<u8>,
+        gain_db: f32,
+        q: f32,
+    }
+
+    use serde::Deserialize as _;
+    let wire = <[Wire; STRIP_EQ_BANDS]>::deserialize(deserializer)?;
+    Ok(std::array::from_fn(|index| StripBand {
+        kind: wire[index].kind,
+        position: wire[index].position.unwrap_or(DEFAULT_POSITIONS[index]),
+        gain_db: wire[index].gain_db,
+        q: wire[index].q,
+    }))
 }
 
 /// The four sections, as a track persists them.
@@ -169,6 +205,7 @@ pub struct StripParams {
     /// -12 dBFS operating level, so 0 dB is where a voicing measures true.
     pub drive_db: f32,
     pub eq_in: bool,
+    #[serde(deserialize_with = "bands_with_their_own_middles")]
     pub bands: [StripBand; STRIP_EQ_BANDS],
     pub comp_in: bool,
     pub threshold_db: f32,
@@ -827,6 +864,77 @@ mod tests {
             } else {
                 assert!((effective - params.bands[1].q).abs() < 1e-6, "{voicing:?}");
             }
+        }
+    }
+
+    /// Every field of a strip as TOML, which is how a project stores one.
+    ///
+    /// Built by serializing the default rather than written out by hand: a
+    /// hand-written manifest is a second copy of the struct's field list, and
+    /// the first version of the test below was exactly that and failed on a
+    /// field it had not heard of.
+    fn default_manifest() -> String {
+        toml::to_string(&StripParams::default()).expect("a default strip does not serialize")
+    }
+
+    /// A strip written on 2026-09-11, the one day `StripBand` carried
+    /// `frequency_hz` instead of `position`, opens with every band on the
+    /// middle of its *own* set.
+    ///
+    /// This is the case the wire type exists for, and it is the case that was
+    /// wrong: `#[serde(default = "fn")]` gets no array index, so the field
+    /// default had to name one number for four bands. It named `2`, which is
+    /// right for the two five-position outer bands and one step low for the
+    /// two seven-position mids -- so a band 1 that meant 3 kHz under `MOO_EQ`
+    /// opened at 2 kHz, while the face and the descriptor's
+    /// double-click-to-default both said 3.
+    ///
+    /// `frequency_hz` is put back rather than merely dropped, because
+    /// ignoring it is the other half of what makes such a file open at all.
+    #[test]
+    fn a_band_saved_before_positions_existed_opens_on_its_own_middle() {
+        let manifest = default_manifest().replace("position = ", "frequency_hz = ");
+        assert!(
+            !manifest.contains("position ="),
+            "the manifest still states a position, so this proves nothing"
+        );
+
+        let loaded: StripParams =
+            toml::from_str(&manifest).expect("a 2026-09-11 strip no longer loads at all");
+        let positions: Vec<u8> = loaded.bands.iter().map(|band| band.position).collect();
+        assert_eq!(
+            positions,
+            DEFAULT_POSITIONS.to_vec(),
+            "each band should open on the middle of its own set, not on one number for all four"
+        );
+        assert_eq!(
+            loaded.bands,
+            StripParams::default().bands,
+            "a band stating only what 2026-09-11 could state should be the default band"
+        );
+    }
+
+    /// The wire type is not a general loosening. `position` is optional
+    /// because one day's files predate it; its three siblings are not, and a
+    /// band missing one of them still fails to load rather than inventing it.
+    #[test]
+    fn a_band_missing_anything_but_its_position_still_refuses_to_load() {
+        for missing in ["kind = ", "gain_db = ", "q = "] {
+            let manifest = default_manifest();
+            let at = manifest
+                .find("[[bands]]")
+                .expect("a default strip no longer writes its bands as a table array");
+            let (head, bands) = manifest.split_at(at);
+            let cut: String = bands
+                .lines()
+                .filter(|line| !line.trim_start().starts_with(missing))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_ne!(cut, bands, "`{missing}` was not in the manifest to remove");
+            assert!(
+                toml::from_str::<StripParams>(&format!("{head}{cut}")).is_err(),
+                "a band with no `{missing}` loaded anyway"
+            );
         }
     }
 }

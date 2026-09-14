@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-13
-- Sessions: 116
+- Sessions: 117
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -278,7 +278,9 @@ Alphabetical by model name, then by harness.
   checked nowhere while the two colour thresholds beside it were held to their
   Rust constants, and then the modulation shelf's twenty-one ranges and
   forty-two parameter ids, mirrored by hand against five descriptor tables
-  nothing outside their own module had ever read.
+  nothing outside their own module had ever read, and then the strip band
+  whose missing position serde filled with one number for four bands of two
+  different lengths.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 
