@@ -141,7 +141,7 @@ paper.
 
 - Build the layout in `scripts/slint-sketch` first. `cargo build -p
   mooloop-ui` is about four minutes for any edit; the sketch type-checks in
-  about 0.05 s and screenshots in about 0.2 s. See `docs/AGENT_OPERATIONS.md`.
+  about 0.05 s and screenshots in about 0.2 s. See `docs/OPERATIONS.md`.
 - The face is indexed by descriptor id — arrays in, `(id, normalized)` out —
   so a page is a list of parameter ids rather than ninety-two properties.
   **A control's value is therefore a binding onto a model row, and Slint drops

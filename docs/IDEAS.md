@@ -28,7 +28,7 @@ BAR.BEAT   +TICKS   VALUE     SHAPE
 
 `+TICKS` is the useful second X value. It makes the row readable and editable on a musical grid while allowing any position the engine can represent. Crucially, it should be derived from and round-trip to absolute ticks; it should not become a second timing system. Changing the visible row resolution then cannot move events.
 
-For values, use the target parameter’s natural units, as already intended by [MODULATION_PLAN.md](MODULATION_PLAN.md): Hz, dB, buffer offset, window length, rate, etc., rather than a generic 0–1 column. The table becomes a very good manual-writing interface:
+For values, use the target parameter’s natural units, as already intended by [MODULATION.md](MODULATION.md): Hz, dB, buffer offset, window length, rate, etc., rather than a generic 0–1 column. The table becomes a very good manual-writing interface:
 
 ```text
 01.01  +00  follow       hold
@@ -116,3 +116,65 @@ editors that nearly agree.
 
 Recorded while writing `docs/plans/archive/console/`, which is the mixer half of the
 same morning list and which deliberately does not touch the playlist.
+
+---
+
+## Node-based patching in the device rack
+
+Folded in from `IDEAS.md` on 2026-09-14, which was a 108-line document
+whose own status line said *"not scheduled, and not a plan"* — which is this
+file's job. Recorded direction, 2026-08-31. Nothing depends on it.
+
+**Why it is here at all.** Adam likes how node-based systems look and work and
+wants the option kept open. It was not arrived at by discovering a need. That
+is a legitimate reason for a personal instrument, and it is exactly why it is a
+direction rather than a plan: a want that has not met a workflow should not
+reorder a roadmap.
+
+**The corollary matters more than the idea.** Liking how node editing *looks*
+is not the same as needing the graph architecture *underneath* it. Visible
+connections and signal you can watch move are largely UI properties; the
+expensive part is typed edges, buffer ownership, cycle policy and delay
+compensation. A device that could merely *display* its internal signal flow,
+read-only, would test the appetite at a fraction of the cost.
+
+**The shape, and how it is not The Grid.** Bitwig's Grid is a blank canvas that
+*replaces* the instrument. Here the devices would stay opinionated finished
+instruments — externals — and the patching would happen *around* them in the
+ordinary rack: note objects before a synth, control objects into a knob, audio
+objects between devices. Same primitives as a modular environment, opposite
+default: the Grid starts empty, this starts as a working instrument you unfold.
+That is not a new position — `PRODUCT.md` already rules out Max/MSP-scale
+patching as the ordinary workflow.
+
+**Three domains, three very different prices** — the most useful thing the
+original document had:
+
+| Domain | Example | Cost |
+| --- | --- | --- |
+| Note / event | alternate velocities 64/127 before a synth | **cheap** — serial, in order, no latency, needs nothing new |
+| Control | a modulator through user math into a knob | **medium** — sources, destination policy and rates exist; needs assemblable math objects |
+| Audio | split, detune, mix back — a hand-built chorus | **expensive** — typed edges, buffer ownership, cycle policy, delay compensation |
+
+The audio row is the catch, and that example is a parallel path.
+
+**If it is ever proven, prove it in the note domain first.** A velocity
+alternator needs no new graph shape, no compensation and no buffer ownership,
+and it exercises the whole model end to end: an object in the rack with a
+declared note-in/note-out boundary, saved as a fragment, dropped on an existing
+channel. If that feels good the direction is real; if it feels like ceremony,
+that was learned for the price of one small device.
+
+**A declared boundary is what makes fragments saveable.** Without one a
+fragment can only be stored as a whole channel, because nothing knows where
+else it may legally go. With one, the browser question answers itself: an
+insert point *is* a known boundary, so the browser offers only fragments whose
+signature fits. That is the same problem the ML-M1 factory bank hit one level
+down (`plans/preset-system/00-status.md`).
+
+**Deliberately undecided**: whether a node view is a separate editor, a rack
+row expansion or a whole-channel view; whether users author objects or only
+wire shipped ones; whether the graph is rewireable at runtime or compiled per
+edit; and any visual design. None of it needs answering to keep the option
+open. What keeps it open is the three habits in
+`COMPOSABLE_DEVICE_UNITS.md`, which are worth following regardless.

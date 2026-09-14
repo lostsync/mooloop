@@ -4,7 +4,7 @@
 //! retained-audio buffer device in `docs/BUFFER_ENGINE.md` needs the same
 //! thing — a bounded ring, fractional reads, and clean discontinuities when a
 //! head moves — so it is built once here and both use it. See
-//! `docs/MODULATION_PLAN.md` ("The delay line is shared with the buffer
+//! `docs/MODULATION.md` ("The delay line is shared with the buffer
 //! device").
 //!
 //! ## Realtime contract

@@ -7,7 +7,7 @@
 //! values in **natural units** (Hz, bits, linear gain). The non-realtime side
 //! converts from normalized knob positions through the descriptor tables in
 //! `mooloop_core::effect`; nodes never see a curve. See
-//! `docs/MODULATION_PLAN.md` for why the split falls there.
+//! `docs/MODULATION.md` for why the split falls there.
 
 mod bitcrush;
 mod preamp;

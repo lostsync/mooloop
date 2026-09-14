@@ -23,7 +23,7 @@ your own row below.
 - If your pair has no row, add one, alphabetical by model name then harness.
 - **`Known for` is one short phrase, and the cell is the whole budget.**
   Anything longer goes in the commit message, or in
-  [docs/AGENT_NOTES.md](docs/AGENT_NOTES.md) if it is worth keeping.
+  [docs/JOURNAL.md](docs/JOURNAL.md) if it is worth keeping.
 - `Sessions` is a rough count, not an audit. Increment it once per distinct
   work session you can recall being part of, and don't stress over precision.
 
@@ -54,8 +54,10 @@ neighbours. By 2026-09-14 one pair's notes ran to 206 lines — 70% of the file
 roughly what every pair here writes except GPT-5 on Codex. Nothing was wrong
 with any one entry. There was simply no point at which the file got smaller.
 
-So the prose moved to [docs/AGENT_NOTES.md](docs/AGENT_NOTES.md), which is
-allowed to be long because nobody has to read it to find out who worked here,
-and the roster became a table, because a cell is a budget a paragraph cannot
-quietly exceed. If you find yourself wanting more room in `Known for`, that
-want is correct and `AGENT_NOTES.md` is where it goes.
+So the prose moved out and the roster became a table, because a cell is a
+budget a paragraph cannot quietly exceed. The overflow file it moved to,
+`docs/AGENT_NOTES.md`, was itself deleted on 2026-09-14 in the documentation
+trim: 393 lines of what each pair said it did, which nobody read and which was
+not authoritative about the code. If you find yourself wanting more room in
+`Known for`, that want is correct, and the commit message is where it goes —
+`docs/JOURNAL.md` if it is a story worth keeping.

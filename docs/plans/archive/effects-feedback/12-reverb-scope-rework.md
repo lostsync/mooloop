@@ -103,7 +103,7 @@ Read directly from `reverb-device.slint`:
    its appearance preference (reuse that pattern rather than building a
    second one-off appearance toggle mechanism).
 5. Explicitly drop IR-file loading from this device's scope per Adam's
-   direction — note in the device or in `docs/ROADMAP.md`/`docs/FOCUS.md`
+   direction — note in the device or in `docs/archive/ROADMAP.md`/`docs/FOCUS.md`
    (whichever already tracks deferred work) that a dedicated IR loader is
    the intended future path, so it isn't re-flagged as a bug later.
 

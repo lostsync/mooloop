@@ -139,7 +139,7 @@ written, when DS-01's step 09 closed, when `FOCUS.md` was rewritten around the
 debt those two instruments left, when ML-P8's step 07 listening pass closed,
 and when `latency-compensation/` finished and archived.
 
-`docs/ARCHITECTURE_REVIEW.md` is where the two newest plans came from, and it
+`docs/archive/ARCHITECTURE_REVIEW.md` is where the two newest plans came from, and it
 is worth reading before either.
 
 ## Active

@@ -61,4 +61,4 @@ a toolkit migration and here they are already free.
 ## Verification
 
 `cargo check -p mooloop-session` then a full `cargo build`, on the build box per
-`docs/AGENT_OPERATIONS.md`. No UI snapshot needed — nothing drawable changed.
+`docs/OPERATIONS.md`. No UI snapshot needed — nothing drawable changed.

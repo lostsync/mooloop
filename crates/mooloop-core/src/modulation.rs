@@ -1,6 +1,6 @@
 //! Parameter addressing and the modulator rack.
 //!
-//! `docs/MODULATION_PLAN.md` is the approved design; this implements it.
+//! `docs/MODULATION.md` is the approved design; this implements it.
 //! Two ideas carry the whole thing:
 //!
 //! - A parameter is named by a [`ParamAddr`], not by a bespoke command per
@@ -59,7 +59,7 @@ pub enum ParamOwner {
 ///
 /// `scope` carries the channel or bus from the day this type exists, so
 /// enabling cross-channel modulation later is a routing change rather than a
-/// retyping of every engine command (`MODULATION_PLAN.md`).
+/// retyping of every engine command (`MODULATION.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ParamAddr {
     pub scope: EffectTarget,
@@ -107,7 +107,7 @@ impl ParamAddr {
 /// The strip's own parameters. The strip is addressed like any device, so its
 /// controls need stable descriptor ids too -- that is what lets a source
 /// target a fader without the mixer growing a modulation special case
-/// (`MODULATOR_SYSTEM_SPEC.md`, "Destinations and destination metadata").
+/// (`MODULATION.md`, "Destinations and destination metadata").
 pub const STRIP_PARAM_VOLUME: u32 = 0;
 pub const STRIP_PARAM_PAN: u32 = 1;
 
@@ -2511,7 +2511,7 @@ retrigger = true
     /// so nothing is aimed at whatever happens to sit at that index.
     ///
     /// The comment here used to say the rack *keeps* it as an inspectable
-    /// orphan, which is what `MODULATOR_SYSTEM_SPEC.md` promises and is not
+    /// orphan, which is what `MODULATION.md` promises and is not
     /// what the code does -- the assertions below have always said so. The
     /// divergence is real and is recorded in `docs/LOOSE_ENDS.md`; this test
     /// now describes the behaviour it actually checks, so that reading it

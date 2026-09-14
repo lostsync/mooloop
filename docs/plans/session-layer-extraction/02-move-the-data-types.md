@@ -63,5 +63,5 @@ loses the only verification this plan has.
 ## Verification
 
 Full build plus a manual pass over document open, save, and undo — the three
-paths these types are load-bearing for. `docs/AGENT_OPERATIONS.md` for how to
+paths these types are load-bearing for. `docs/OPERATIONS.md` for how to
 run the app.

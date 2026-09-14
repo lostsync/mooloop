@@ -166,7 +166,7 @@ Step 02 states where this is enforced and tests it directly.
 
 ## Modulation ownership
 
-The split follows `MODULATOR_SYSTEM_SPEC.md` and the ML-P8 precedent.
+The split follows `MODULATION.md` and the ML-P8 precedent.
 
 **The channel rack owns** reusable channel-level sources and every route that
 crosses a device boundary. DS-01 publishes a complete descriptor table, so any

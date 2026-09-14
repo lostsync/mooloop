@@ -55,12 +55,12 @@ device outlets as grid citizens.
 Adam pulled this in explicitly on 2026-08-31: the modulation
 rack becomes the power plant of the app — a grid of small modules, each a
 discrete control-signal device, pluggable across the app the way the mod rack
-already gestures at. `NODE_MODEL.md` records the wider conversation; this
+already gestures at. `IDEAS.md` records the wider conversation; this
 plan is the part of it that is now scheduled.
 
 This supersedes the "More modulation taxonomy for its own sake" deferral in
 `FOCUS.md` for exactly the steps written here, and no further. The spec
-(`MODULATOR_SYSTEM_SPEC.md`) remains authoritative for the routing model;
+(`MODULATION.md`) remains authoritative for the routing model;
 nothing here replaces `ParamAddr`, routes, destination policy, or the
 32-frame control contract.
 

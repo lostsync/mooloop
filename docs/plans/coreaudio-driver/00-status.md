@@ -8,7 +8,7 @@ drivers rather than only arriving on the Mac.
 
 ## What prompted it
 
-Mooloop is Linux-first and says so, and `ROADMAP.md` parks platform support
+Mooloop is Linux-first and says so, and `docs/archive/ROADMAP.md` parks platform support
 beyond Linux. What changed is not the product's platform but Adam's desk: a
 second machine he would like to work on. That is a narrower goal than "a macOS
 release", and the plan is sized to it -- build, run, hear it, change it -- with

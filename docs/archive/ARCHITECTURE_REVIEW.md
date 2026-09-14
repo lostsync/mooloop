@@ -1,6 +1,14 @@
 # Architecture Review
 
-Status: review of the implementation against an external reference, 2026-09-02.
+> **Archived 2026-09-14. Do not use as a contract.** A point-in-time review,
+> and every action in its own summary table is now closed: graph-wide latency
+> compensation landed 2026-09-05 (`plans/archive/latency-compensation/`), the
+> session layer was extracted 2026-09-03 (`plans/session-layer-extraction/`),
+> and the three "no" recommendations were taken as no. Kept for its verdict,
+> which is still the answer if the question is ever reopened: the engine is
+> **barely** divergent from the reference and is **not** worth rebuilding.
+>
+> Status: review of the implementation against an external reference, 2026-09-02.
 
 Measures Mooloop against `docs/reference/ANATOMY_OF_A_DAW.md`, a reference
 architecture for DAW subsystems that ends with a section written about this

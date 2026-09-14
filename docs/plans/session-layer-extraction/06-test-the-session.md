@@ -45,7 +45,7 @@ cheap to cover.
 
 **Do not test projection.** The `sync_*` functions push plain data into models;
 asserting they do is testing Slint. UI appearance is covered by snapshots, per
-`docs/AGENT_OPERATIONS.md`.
+`docs/OPERATIONS.md`.
 
 **Do not test the engine from here.** It has its own tests, including
 `gain_structure_tests.rs` and the sequencer's drift coverage. A session test

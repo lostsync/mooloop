@@ -6,7 +6,7 @@ version was written 2026-09-05 and amended 2026-09-07 and 2026-09-08; it was
 replaced rather than amended again, because the mixer it described was not the
 mixer that exists and the work it parked included a feature that shipped.
 
-`ROADMAP.md` orders the whole product by dependency. This document is narrower:
+`archive/ROADMAP.md` orders the whole product by dependency. This document is narrower:
 it names the active sequence and the work that should not interrupt it. Rewrite
 it when that sequence is exhausted. Two failure modes to keep it out of: do not
 let it become a second roadmap, and **do not let it accumulate the archaeology
@@ -34,7 +34,7 @@ single arc in them was never a step here at all.
   decodes is invisible. Every track carries a channel strip — an input stage,
   four EQ bands, a compressor and polarity, all out by default, under one
   strip-wide voicing. Solo is **in place**, not the monitor tap
-  `MIXER_PLAN.md` had specified since the mixer's first pass. Adam played it
+  `archive/MIXER_PLAN.md` had specified since the mixer's first pass. Adam played it
   on 2026-09-11: *"three distinct and musical characters"* on headphones, with
   the studio still to come.
 
@@ -267,7 +267,7 @@ top of this document doing its job:
 **The modulation rack's move, and whether its modulator is a tracker.** The
 shelf is a relocation and a layout; the tracker is a genuine design question
 that `IDEAS.md` has held longer than this document has existed. Settle whether
-they are one design or two before planning either. `MODULATOR_SYSTEM_SPEC.md`
+they are one design or two before planning either. `MODULATION.md`
 holds the contracts a move must not break.
 
 **More effect kinds or a broad effect-polish pass.** Thirteen effects now, a

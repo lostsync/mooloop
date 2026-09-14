@@ -6,7 +6,7 @@ plugins say about the part neither of them does yet.
 
 ## The argument: our devices should reach automation the way a plugin will
 
-`ARCHITECTURE_REVIEW.md` records that `AudioNode` "is already shaped to take
+`docs/archive/ARCHITECTURE_REVIEW.md` records that `AudioNode` "is already shaped to take
 CLAP one-to-one", and `PRODUCT.md` lists plugin hosting as a non-goal *before*
 the instrument model is coherent -- deferred, not refused. A CLAP plugin hands
 the host N independent parameters, each with a stable id, each individually

@@ -155,7 +155,7 @@ filter panel will later need Model and Poly's will need Mode, so leave a slot
   it moves to PERF in step 03, so leaving it where it is for now is fine.
 
 Verify with the software-rendered UI snapshot for both device faces per
-`docs/AGENT_OPERATIONS.md`.
+`docs/OPERATIONS.md`.
 
 ## Done when
 

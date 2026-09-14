@@ -12,7 +12,7 @@ Re-render any of them without building the UI crate:
 scripts/slint-sketch --shot docs/plans/drum-synth-v2/mockups/concept-columns.slint
 ```
 
-`docs/AGENT_OPERATIONS.md` says sketches belong in `$TMPDIR` rather than in the
+`docs/OPERATIONS.md` says sketches belong in `$TMPDIR` rather than in the
 repository, and it is right about working sketches. These are checked in on
 purpose because they are the argument for a layout decision rather than notes
 from making one, and two of the three are the reasons the third was chosen.

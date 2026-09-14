@@ -2,7 +2,7 @@
 //!
 //! Deliberately **not** oversampled, unlike `drive`. The aliasing produced by
 //! decimating without a band-limiting filter is the effect, not a defect —
-//! see `docs/MODULATION_PLAN.md` ("Anti-aliasing policy").
+//! see `docs/MODULATION.md` ("Anti-aliasing policy").
 
 use mooloop_core::{
     BitcrushParams, BitcrushStyle, BITCRUSH_PARAM_BITS, BITCRUSH_PARAM_DOWNSAMPLE,

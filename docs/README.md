@@ -13,7 +13,7 @@ table of which document to read for which task. Start there, not here.
 
 | Document | Job |
 | --- | --- |
-| [CURRENT.md](CURRENT.md) | The implemented surface and its known gaps. The one to update when behaviour changes. |
+| [CURRENT.md](CURRENT.md) | What the application actually does, and where each behaviour stops. The one to update when behaviour changes. `SCOPE.md` is the list of what is missing. |
 | [TERMINOLOGY.md](TERMINOLOGY.md) | Channel, track, bus, send — which word means what, and why channel and track are not one word. Settled by Adam; read before naming anything in the mixer. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Crates, components, and the data crossing between them, in five small diagrams. |
 | [PROJECT_FORMAT.md](PROJECT_FORMAT.md) | The on-disk song, kit, and channel documents, and what each defaulted field is for. |
@@ -23,9 +23,7 @@ table of which document to read for which task. Start there, not here.
 | [ACTIONS.md](ACTIONS.md) | The action registry: how a shortcut, menu row, or future console command is added. |
 | [WIDGET_INVENTORY.md](WIDGET_INVENTORY.md) | UI patterns duplicated in `.slint` with no component behind them. Read before writing a new widget. |
 | [JOURNAL.md](JOURNAL.md) | The narrative: what was built, what broke, and what it taught. |
-| [AGENT_NOTES.md](AGENT_NOTES.md) | What each model+harness pair says it did, at length. `../CONTRIBUTORS.md` is the roster; this is the overflow, and it is not authoritative about the code. |
 | [LOOSE_ENDS.md](LOOSE_ENDS.md) | Small verified gaps that were deliberate stopping points. Delete a row when it is fixed. |
-| [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md) | The engine graded against an external reference architecture, and where the one real gap is. |
 
 ## What it is for
 
@@ -33,27 +31,21 @@ table of which document to read for which task. Start there, not here.
 | --- | --- |
 | [PRODUCT.md](PRODUCT.md) | Scope, pillars, non-goals, and the decisions firm enough to build against. |
 | [FOCUS.md](FOCUS.md) | The active working sequence and what must not interrupt it. Rewritten when the sequence is exhausted. |
-| [ROADMAP.md](ROADMAP.md) | The whole product ordered by dependency. `FOCUS.md` outranks it on what is next. |
-| [SCOPE.md](SCOPE.md) | Everything left before the feature freeze, sized against the source, with the 1.0 line drawn. Says *what and how big*; the linked document says how. |
-| [VERSIONS.md](VERSIONS.md) | Outcome-based release targets, and which of their milestones are met. |
+| [SCOPE.md](SCOPE.md) | Everything left before the feature freeze, sized against the source, with the 0.2.0 line drawn. Says *what and how big*; the linked document says how. |
 | [CAPACITY_POLICY.md](CAPACITY_POLICY.md) | Why user-facing collections do not get small caps, and why a ceiling is not a reservation. |
 | [ENHANCEMENTS.md](ENHANCEMENTS.md) | Adam's standing wish list, in his words, annotated with what has landed. |
-| [IDEAS.md](IDEAS.md) | Loose notes and design conversation. Nothing scheduled. |
+| [IDEAS.md](IDEAS.md) | Loose notes, design conversation, and recorded directions — the automation/modulator tracker fork, and node-based patching. Nothing scheduled. |
 
 ## How to build it
 
 | Document | Job |
 | --- | --- |
 | [AUDIO_ARCHITECTURE.md](AUDIO_ARCHITECTURE.md) | The boundary between editable musical state and audio execution: control plane, graph compiler, executor, time, latency. |
-| [MODULATION_PLAN.md](MODULATION_PLAN.md) | The approved parameter and modulation design. Descriptors, `ParamAddr`, base-plus-offset, control rate. |
-| [MODULATOR_SYSTEM_SPEC.md](MODULATOR_SYSTEM_SPEC.md) | The implementation spec that expands it: source metadata, destination policy, the shelf, the assign gesture. |
+| [MODULATION.md](MODULATION.md) | Parameters and modulation, end to end: descriptors, `ParamAddr`, ownership, base-plus-offset, control rate, destination policy, and the assign gesture. |
 | [BUFFER_ENGINE.md](BUFFER_ENGINE.md) | The retained-audio thesis, what shipped against it, and the product test still outstanding. |
-| [MIXER_PLAN.md](MIXER_PLAN.md) | The signal-slot mixer that replaces the fixed master-plus-16-bus bank. Not built. |
 | [COMPOSABLE_DEVICE_UNITS.md](COMPOSABLE_DEVICE_UNITS.md) | How a reusable DSP unit presents itself. Mostly a target; its three load-bearing habits are not. |
 | [UI_DESIGN.md](UI_DESIGN.md) | The interface composition language, the rack layout contract, and the acceptance checklist. |
-| [NODE_MODEL.md](NODE_MODEL.md) | A recorded direction for node-based patching. Explicitly not a plan and not scheduled. |
-| [OPERATIONS.md](OPERATIONS.md) | Worktrees, Cargo, the integration suite, releases, and cleaning up. |
-| [AGENT_OPERATIONS.md](AGENT_OPERATIONS.md) | The agent-specific half: memory limits, the remote build box, headless rendering, the live app. |
+| [OPERATIONS.md](OPERATIONS.md) | Cargo, git, the remote build box, headless UI checks, the live application, releases, and cleaning up. |
 
 ## Directories
 
@@ -68,6 +60,6 @@ table of which document to read for which task. Start there, not here.
   write one.
 - [reference/](reference/) — outside material worth keeping whole, read but not
   written here. [ANATOMY_OF_A_DAW.md](reference/ANATOMY_OF_A_DAW.md) is what
-  `ARCHITECTURE_REVIEW.md` grades against.
+  `archive/ARCHITECTURE_REVIEW.md` grades against.
 - [archive/](archive/) — documents fully consumed by the work they described.
   Kept for the reasoning, not as contracts.

@@ -1,8 +1,15 @@
 # Mixer and Signal-Slot Design
 
-Status: proposed v0.1 design, August 2026. Not started; nothing in it has
-been built, and `CURRENT.md` describes the fixed master-plus-16-bus bank that
-exists instead.
+> **Archived 2026-09-14. Do not use as a contract.** The status line this
+> replaced said *"Not started; nothing in it has been built"* — which stopped
+> being true on 2026-09-11, when `plans/archive/console/` built the mixer this
+> document describes and went further: the mixer is a list of tracks somebody
+> made, a track routes a copy of itself to another track, and any summing point
+> can glue what feeds it. The claim survived three days and eighteen inbound
+> references. **Read `docs/plans/archive/console/00-status.md` and
+> `THE-STRIP.md` beside it** for the mixer that exists; `CURRENT.md` describes
+> the behaviour. This file is kept for the reasoning behind the signal-slot
+> idea, which the console pass adopted and renamed.
 
 This document defines the mixer, groups, auxiliary sends, and routing model
 Mooloop is growing toward. It is the product and architecture target for this

@@ -548,7 +548,17 @@ boundary.
   oscillator levels, cutoff, and drive are one-pole smoothed over 5 ms so
   neither a retrigger nor a knob turn steps the waveform.
 
-## Important Limitations
+## Behaviour, And Where It Stops
+
+> **This section is mislabelled and is being split.** It was called "Important
+> Limitations", and `### Mixing, Routing, And Effects` below it runs to 588
+> lines that are mostly *features* — "the mixer is a list of tracks", "sends",
+> "a channel strip on every track". A reader looking for what does not work has
+> to read what does, first. Renamed 2026-09-14 so the heading stops lying; the
+> content split is a separate pass, because deciding which of ~700 entries is a
+> gap and which is a description means reading all of them, not their headings.
+> Until then, treat this as *behaviour plus its edges*, and `SCOPE.md` as the
+> list of what is actually missing.
 
 ### Event And Voice Model
 
@@ -1031,7 +1041,7 @@ land on its own when it starts to matter:
   three-oscillator synths reserve ten parameter ids per oscillator, starting
   at 100; ML-P8's, DS-01's and the v1 drum synth's ids are each their own
   namespace starting at zero, because none of them is that voice with a
-  different count. `docs/MODULATION_PLAN.md` records the approved design;
+  different count. `docs/MODULATION.md` records the approved design;
   build order is in
   `docs/plans/buffer-implementation/02-control-and-modulation.md`.
 - The **v1** drum synth was the last one without a table, and the argument

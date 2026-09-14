@@ -1,6 +1,6 @@
 //! Source and destination metadata for the modulator system.
 //!
-//! `docs/MODULATOR_SYSTEM_SPEC.md` extends the existing `ParamAddr` /
+//! `docs/MODULATION.md` extends the existing `ParamAddr` /
 //! `ModRack` foundation with two declarations:
 //!
 //! - A **source** publishes what it produces — shape, update rate, latency,
@@ -19,7 +19,7 @@ use crate::modulation::{ModPolarity, ModRack, ModulatorParams};
 /// The durable identity of one modulation source, stable within its owning
 /// channel across rack reorders and runtime-slot reassignment. Runtime
 /// addressing stays on the bounded local slot; this is the persisted and
-/// route-level vocabulary (`MODULATOR_SYSTEM_SPEC.md`, "Sources and source
+/// route-level vocabulary (`MODULATION.md`, "Sources and source
 /// metadata").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ModSourceId(pub u32);

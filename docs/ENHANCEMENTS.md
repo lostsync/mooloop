@@ -141,7 +141,7 @@ i want to move and redesign the modulation rack. i have an image somewhere, a mo
   right-hand panel with PATTERN/CONTROL/PLAYBACK/MAPPING tabs, and draws the
   modulator itself as a *tracker* — which is the same shape as the automation
   idea already sitting in `IDEAS.md`. Whether those are one design or two is
-  the first thing to settle. `MODULATOR_SYSTEM_SPEC.md` holds the contracts a
+  the first thing to settle. `MODULATION.md` holds the contracts a
   move must not break.
 
 i want to make a sidebar on the left that lets you change channel settings like name, track color, input channel, etc. its also illustrated in the mockup

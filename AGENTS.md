@@ -30,8 +30,7 @@ Before every task, run `git status --short --branch`.
 - Before every commit, update your model+harness row in `CONTRIBUTORS.md`.
   It is a roster and it is a table: bump `Last seen` and `Sessions`, and leave
   `Known for` alone unless it has stopped being true. Detail belongs in the
-  commit message, in `docs/JOURNAL.md` for a narrative, or in
-  `docs/AGENT_NOTES.md` if it is about you rather than about the code.
+  commit message, or in `docs/JOURNAL.md` if it is a narrative worth keeping.
 - Finish with a clean worktree, proportional verification, and a fast-forward
   merge to `main`. Do not merge, force-push, reset, or delete a worktree with
   uncommitted or unmerged work without Adam's explicit confirmation.
@@ -56,7 +55,7 @@ that affect the decision at hand.
 | --- | --- |
 | What is being built next, and in what order | `docs/FOCUS.md`, then the matching `docs/plans/<name>/00-status.md` |
 | Product or architecture decision | `docs/PRODUCT.md`, then the relevant architecture/design document |
-| Open-ended priority or scope choice | `docs/FOCUS.md` and `docs/ROADMAP.md` |
+| Open-ended priority or scope choice | `docs/FOCUS.md` and `docs/SCOPE.md` |
 | What is left before the feature freeze, and how big it is | `docs/SCOPE.md` |
 | Which plans are live, and what state each is in | `docs/plans/README.md` |
 | Broad existing user surface or known gap | `docs/CURRENT.md` |
@@ -64,7 +63,7 @@ that affect the decision at hand.
 | A value stated in both Rust and `.slint`, or a run at the duplication fault | `docs/workflows/rust-slint-boundary/` |
 | UI layout, controls, or interaction | `docs/UI_DESIGN.md` |
 | A new shortcut, menu row, or command surface | `docs/ACTIONS.md` |
-| Modulation sources, routes, or destination policy | `docs/MODULATOR_SYSTEM_SPEC.md` |
+| Modulation sources, routes, or destination policy | `docs/MODULATION.md` |
 | Retained-audio buffer work | `docs/BUFFER_ENGINE.md` |
 | Audio-engine contract work | `docs/AUDIO_ARCHITECTURE.md` |
 | Extracting or publishing a reusable DSP unit | `docs/COMPOSABLE_DEVICE_UNITS.md` |
@@ -199,7 +198,7 @@ the matching release URL instead of relying on latest-version knowledge.
 To see what the real interface does rather than what the source implies, run
 `scripts/mooloop-mcp`: it starts the application with Slint's embedded MCP
 server, whose tools read the live element tree and click, type, drag, and
-screenshot it. `docs/AGENT_OPERATIONS.md` has the details.
+screenshot it. `docs/OPERATIONS.md` has the details.
 
 Do not reach for `cargo build` to find out whether a `.slint` edit is valid or
 what it looks like. `scripts/slint-sketch` type-checks a scratch `.slint`
@@ -217,12 +216,12 @@ than one that needs live data, that is the check-and-look loop, at roughly a
 hundredth of a `mooloop-ui` build. Found 2026-09-08, restructuring the work
 area. It needs `slint-viewer` installed locally; it
 is deliberately not a workspace dependency, and the build never refers to it.
-See `docs/AGENT_OPERATIONS.md`.
+See `docs/OPERATIONS.md`.
 
 ## Verification and operations
 
 Do not run Cargo commands concurrently. Read
-[docs/AGENT_OPERATIONS.md](docs/AGENT_OPERATIONS.md) before running Cargo, UI
+[docs/OPERATIONS.md](docs/OPERATIONS.md) before running Cargo, UI
 snapshots, or the live application; it contains this machine's memory limits
 and rendering procedures.
 

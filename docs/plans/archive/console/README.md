@@ -7,7 +7,7 @@ Four items on that list -- reorder channels, group channels, make the mixer
 work like a console, proper sends and returns -- are **one design with a
 character layer on top**, not four features. This directory is that design.
 
-`docs/MIXER_PLAN.md` (August, never started) already argued the fixed
+`docs/archive/MIXER_PLAN.md` (August, never started) already argued the fixed
 seventeen-bus bank should go, and proposed one *signal slot* primitive where
 track / bus / group / return are roles rather than species. What it never had
 was a **policy** for when a strip comes into existence. It offered `+ Track`,
@@ -25,7 +25,7 @@ Adam's policy closes it:
 bottom, and `docs/TERMINOLOGY.md`: grouping is routing several tracks to one
 track, and it takes nothing away.
 
-That is the missing half of `MIXER_PLAN.md`, and this plan is what follows
+That is the missing half of `docs/archive/MIXER_PLAN.md`, and this plan is what follows
 from it. On top of it sits the part that is actually about sound: a per-strip
 channel strip device, preamp modelling later, and Airwindows-style **console
 summing**. Everything here is **out by default and free while it is out**.
@@ -57,7 +57,7 @@ an ordinary track; and a track can be all three at once. Adam: *"if you set it
 up as a send, it is a send. if it is a bus, it is a bus. i dont really want to
 have to make an fx/aux channel specifically. it just isn't needed."*
 
-So `MIXER_PLAN.md`'s `+ Track` / `+ Bus` / `+ Send` is retired outright, and
+So `docs/archive/MIXER_PLAN.md`'s `+ Track` / `+ Bus` / `+ Send` is retired outright, and
 so is the *signal slot* name — the unification was right and the word for it
 is **track**.
 
@@ -133,7 +133,7 @@ depends on, and rediscovering them is the expensive part.
   outgoing edge.
 - **There is no gain smoothing at strip level at all.** `OutputStage` stamps
   raw gain per block, or per 32-frame control tick when modulated.
-  `MIXER_PLAN.md` requires send levels to be smoothed -- that is a gap to
+  `docs/archive/MIXER_PLAN.md` requires send levels to be smoothed -- that is a gap to
   fill, not an addition. `mooloop-dsp/src/smooth.rs::Smoothed` exists. Step 05
   put it on the *send* rather than on `OutputStage`, because a send level is
   per-edge state; the fader's own zipper is still there.
@@ -215,7 +215,7 @@ in its lower-right corner; the track's pinned row in the device rack; and the
 full-format console when the mixer pane is zoomed. The ruling, the arithmetic
 behind 92px, and the two ideas it retires are in
 [`THE-STRIP.md`](THE-STRIP.md); `docs/UI_DESIGN.md` carries the rules that
-fall out of it, and `docs/MIXER_PLAN.md`'s *Mixer interface* section was
+fall out of it, and `docs/archive/MIXER_PLAN.md`'s *Mixer interface* section was
 rewritten around them.
 
 ## What the first draft of this file said, and why it was wrong

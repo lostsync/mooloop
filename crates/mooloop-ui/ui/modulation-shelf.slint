@@ -4,7 +4,7 @@ import { Divisions, LedIndicator, MiniKnob, SelectorBank, SyncMiniKnob, ToggleBu
 
 // The channel-owned source collection. `slot` is today's bounded runtime
 // locator; the UI deliberately presents only occupied entries, never four
-// permanent empty bays (docs/MODULATOR_SYSTEM_SPEC.md).
+// permanent empty bays (docs/MODULATION.md).
 export struct ModulationSourceRow {
     slot: int,
     name: string,
@@ -39,7 +39,7 @@ export struct ModulationSourceRow {
 // and its number is a device-interface id rather than a position, so the chip
 // shows its name and never a slot. `slot` is where it sits in the same flat
 // control address space a module occupies, which is what lets one selection
-// and one assignment gesture serve both (docs/MODULATOR_SYSTEM_SPEC.md).
+// and one assignment gesture serve both (docs/MODULATION.md).
 export struct ModulationOutletRow {
     slot: int,
     name: string,
@@ -664,7 +664,7 @@ export component ModulationShelf inherits Rectangle {
     in property <float> selected-envelope-preview-decay;
     in property <float> selected-envelope-preview-release;
     // Capacity is an engine protocol boundary, not a UI layout constant
-    // (docs/MODULATOR_SYSTEM_SPEC.md), so Rust reports it. The slot names the
+    // (docs/MODULATION.md), so Rust reports it. The slot names the
     // math jack picks from come from the same place, so growing the rack
     // stays a protocol edit rather than a UI one.
     in property <int> max-sources: 0;

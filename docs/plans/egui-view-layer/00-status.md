@@ -1,7 +1,7 @@
 # egui view layer — plan status
 
 Not started, and **not yet decided**. Written 2026-09-02, out of
-`docs/ARCHITECTURE_REVIEW.md`.
+`docs/archive/ARCHITECTURE_REVIEW.md`.
 
 This plan exists so the decision can be made against real numbers rather than a
 mood. It is deliberately shorter than
@@ -101,7 +101,7 @@ the real application already costs the full build today, and any change touching
 ## The case against
 
 **Sunk work.** 20,451 lines of `.slint` across 43 files gets thrown away,
-including the appearance system, the mockup catalog that `docs/ROADMAP.md` names
+including the appearance system, the mockup catalog that `docs/archive/ROADMAP.md` names
 as the interaction contract, and the theming in `settings.rs`.
 
 **Losing the sketch loop.** As above: `slint-sketch` stays faster than any Rust

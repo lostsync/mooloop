@@ -2,7 +2,7 @@
 
 Three new kinds, chosen because each proves a different thing the grid
 needs, and all three live in the control domain — the domain
-`NODE_MODEL.md` prices as "medium: assemblable math objects and little
+`IDEAS.md` prices as "medium: assemblable math objects and little
 else". Every one is bounded, allocation-free, `Copy`, ticked on the
 existing 32-frame subdivision, and reaches destinations only through
 ordinary routes.
@@ -54,7 +54,7 @@ so a route never sees an out-of-convention value.
 - Polyphonic RNG — needs per-voice modulation context that only ML-P8's
   native system has; a channel-rack source is post-reduction by design.
 - Note filter / note-domain objects — cheapest domain per
-  `NODE_MODEL.md`, but they sit in the note path before generators, not
+  `IDEAS.md`, but they sit in the note path before generators, not
   in the modulator rack; that is its own small plan when taken.
 - Envelope follower, sidechain, FFT anything — outlet-contract and
   audio-graph work, sequenced behind the control table.

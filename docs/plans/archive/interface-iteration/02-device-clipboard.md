@@ -61,7 +61,7 @@ rack surface to reach them.
   `channel.copy` / `channel.paste`.
 
 All four are undoable, because every other rack edit already is: "effect
-add/move/remove became undoable" is recorded in `docs/AGENT_NOTES.md` against
+add/move/remove became undoable" is recorded in `docs/AGENT_NOTES.md` (deleted 2026-09-14; see git) against
 the structural-addressing work.
 
 ## What crosses a channel boundary, and what does not

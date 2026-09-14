@@ -22,7 +22,7 @@
 //!   modulation route pointed at a reverb knob was silently inert even though
 //!   the destination metadata declared it legal. Here every parameter is an
 //!   ordinary `Event::ParamValue` applied at its sample offset, which is all
-//!   `docs/MODULATION_PLAN.md` ever asked an effect to do.
+//!   `docs/MODULATION.md` ever asked an effect to do.
 //! - **Sound.** A finite image-source model plus a filtered noise tail is
 //!   geometrically defensible and static: nothing in it moves, so the tail
 //!   rings rather than blooms. The delay lines here are slowly and

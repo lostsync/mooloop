@@ -307,7 +307,7 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
     action!("channel.clone", "Clone Channel", "Channel", ctrl + "d"),
     action!("channel.mute", "Mute Channel", "Channel", ctrl + "m"),
     // Solo landed on a *track* on 2026-09-11 -- `BusSetup::solo`, in place
-    // rather than the monitor tap `MIXER_PLAN.md` had specified -- so these
+    // rather than the monitor tap `archive/MIXER_PLAN.md` had specified -- so these
     // bind the track's. A channel still has no solo of its own, and an
     // action named for one would be an action bound to nothing.
     scoped_action!(

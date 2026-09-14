@@ -136,7 +136,7 @@ half of it. Three things it took:
   passes it through. This was got backwards on the first pass -- a `Gate`
   route was defaulted to `Unipolar`, which sat it half a depth *above* the
   base at idle and gave it half the swing -- and corrected the same day. The
-  two conventions are now written down in `MODULATOR_SYSTEM_SPEC.md`, which is
+  two conventions are now written down in `MODULATION.md`, which is
   where the trap belongs: they share one address space and disagree about
   rest.
 - **An outlet does not move, and a reorder must not disturb it.** Selection and

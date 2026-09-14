@@ -4,7 +4,7 @@
 //!
 //! Effects are chainable units that run after a channel's generator; see
 //! `docs/archive/EFFECTS_PLAN.md` for the plumbing and
-//! `docs/MODULATION_PLAN.md` for why descriptors exist and what the parameter
+//! `docs/MODULATION.md` for why descriptors exist and what the parameter
 //! model is going to become.
 
 /// Effect kind. The tag for [`EffectParams`], mirroring how `ChannelSource`
@@ -1768,7 +1768,7 @@ impl Default for ModulationParams {
 /// These start at 8 because ids 0..=7 are **retired**: they belonged to the
 /// generated-room convolution reverb this device replaced (shape, material,
 /// width/depth/height in metres, decay, and a capture point). A shipped id
-/// may never change meaning — see `docs/MODULATION_PLAN.md` — so a saved
+/// may never change meaning — see `docs/MODULATION.md` — so a saved
 /// route or automation lane aimed at the old "Mic X" resolves to no
 /// descriptor and stays inert, instead of silently becoming Diffusion.
 pub const REVERB_PARAM_SIZE: u32 = 8;

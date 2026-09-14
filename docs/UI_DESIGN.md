@@ -553,7 +553,7 @@ and stays where it is.
 ## Mixer Strips
 
 The mixer is a row of fixed-format strips that scroll rather than compress.
-`docs/MIXER_PLAN.md` owns what a strip contains; these are the rules that
+`docs/archive/MIXER_PLAN.md` owns what a strip contains; these are the rules that
 decide its shape. Settled 2026-09-10.
 
 - **A mixer strip is 92 px wide, from one named metric.** Not 62, and not a

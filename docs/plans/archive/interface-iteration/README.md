@@ -71,7 +71,7 @@ says is wrong with it.
 
 - **Whether the modulation rack moves, and whether its modulator becomes a
   tracker.** `FOCUS.md` held both and now parks them together, `IDEAS.md` has held the tracker
-  idea longer, and `MODULATOR_SYSTEM_SPEC.md` holds the contracts a move must
+  idea longer, and `MODULATION.md` holds the contracts a move must
   not break. It is deliberately not a step here: it is the one piece of the
   mockup that is a genuine design question rather than a relocation, and
   Adam's own note says the first thing to settle is whether the tracker and

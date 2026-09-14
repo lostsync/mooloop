@@ -102,5 +102,5 @@ whether the split is real. Do it last in this step.
 ## Verification
 
 Full build and a UI snapshot of each affected pane, per
-`docs/AGENT_OPERATIONS.md`. This step can change what is drawn if a projection
+`docs/OPERATIONS.md`. This step can change what is drawn if a projection
 is missed, so the snapshots are the point rather than a formality.

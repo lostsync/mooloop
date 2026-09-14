@@ -178,7 +178,7 @@ picked rather than fitted.
 
 **Solo.** `LOOSE_ENDS.md` has been carrying it: `SoloButton` exists in
 `controls.slint` with a `soloed` property and `mooloop-core` has no solo state
-whatever. `MIXER_PLAN.md` specifies the intended behaviour and it is not a
+whatever. `docs/archive/MIXER_PLAN.md` specifies the intended behaviour and it is not a
 routing change — an AFL-style monitor tap. Now that it is drawn on the strip
 it needs a step of its own; it is the largest of the unbuilt things here,
 because a monitor tap is a second output path rather than a control.

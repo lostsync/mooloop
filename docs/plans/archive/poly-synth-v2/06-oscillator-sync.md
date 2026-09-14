@@ -33,7 +33,7 @@ facts.
 
 Control outlets enter the prepared per-channel control table. Cross-device
 consumers see the documented one-block latency from
-`MODULATOR_SYSTEM_SPEC.md`; ML-P8's own native routes read their sources
+`MODULATION.md`; ML-P8's own native routes read their sources
 directly with no such delay. Publication is never sampled from display
 telemetry.
 

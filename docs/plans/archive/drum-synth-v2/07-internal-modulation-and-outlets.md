@@ -73,7 +73,7 @@ matrix row is for putting velocity somewhere else.
 
 ## Published outlets
 
-Under `COMPOSABLE_DEVICE_UNITS.md` and `MODULATOR_SYSTEM_SPEC.md`, and with
+Under `COMPOSABLE_DEVICE_UNITS.md` and `MODULATION.md`, and with
 ML-P8's vocabulary:
 
 **Control outlets** — `Amp Envelope`, `Mod Envelope`, `Velocity`, `Note`,

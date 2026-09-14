@@ -297,7 +297,7 @@ plan.
 Named here so none of it is discovered as an absence.
 
 - **Solo.** Drawn on the mockup, and a monitor tap rather than a control:
-  `mooloop-core` has no solo state at all and `MIXER_PLAN.md` specifies an
+  `mooloop-core` has no solo state at all and `docs/archive/MIXER_PLAN.md` specifies an
   AFL-style second output path. It is the largest unbuilt thing on the
   mockup and it is its own step. A dead solo button is not drawn.
 - **The zoomed console.** Above.

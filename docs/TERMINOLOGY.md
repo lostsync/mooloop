@@ -36,7 +36,7 @@ reaper's in that there are just...tracks. if you set it up as a send, it is a
 send. if it is a bus, it is a bus. i dont really want to have to make an
 fx/aux channel specifically. it just isn't needed."*
 
-This retires `MIXER_PLAN.md`'s three creation buttons and the *signal slot*
+This retires `archive/MIXER_PLAN.md`'s three creation buttons and the *signal slot*
 name it proposed for the unified thing. The unification was right; the word
 for it is **track**.
 

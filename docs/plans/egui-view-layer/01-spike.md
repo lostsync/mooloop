@@ -67,7 +67,7 @@ Either of:
 measured, and it goes the other way. See `00-status.md`.
 
 A no here is a good outcome, not a wasted week. It converts a standing "should
-we switch" question into a recorded answer, and `docs/ARCHITECTURE_REVIEW.md`
+we switch" question into a recorded answer, and `docs/archive/ARCHITECTURE_REVIEW.md`
 already establishes that nothing else in the project is waiting on it.
 
 ## What would make this a yes

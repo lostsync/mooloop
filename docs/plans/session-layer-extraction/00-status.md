@@ -2,7 +2,7 @@
 
 All six steps done, 2026-09-03, with two recorded departures (steps 04 and
 05 below). Written 2026-09-02, out of
-`docs/ARCHITECTURE_REVIEW.md`.
+`docs/archive/ARCHITECTURE_REVIEW.md`.
 
 `crates/mooloop-session` is 23 modules and 87 tests. `crates/mooloop-ui/src/lib.rs`
 is down from 14,157 lines to 9,797, and `UiState::new` from 8,008 to 6,281.
@@ -89,7 +89,7 @@ and projection; the tests that become possible.
 - **Changing any behaviour.** A step that fixes a bug it uncovers should record
   the bug and fix it separately. Refactors that also change behaviour cannot be
   verified by "it does the same thing."
-- **Redesigning the undo model.** Snapshots stay. `docs/ARCHITECTURE_REVIEW.md`
+- **Redesigning the undo model.** Snapshots stay. `docs/archive/ARCHITECTURE_REVIEW.md`
   explains why the reference's command-log argument does not bite at this scale.
 - **Touching the engine, the DSP crates, or the project format.** They are on
   the correct side of the boundary already.

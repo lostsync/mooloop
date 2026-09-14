@@ -1,6 +1,14 @@
 # Roadmap
 
-Status: dependency-ordered working plan, September 2026.
+> **Archived 2026-09-14. Do not use as a contract.** Superseded by
+> `docs/SCOPE.md`, which draws the line for the freeze, and `docs/FOCUS.md`,
+> which orders the next steps. Phases 1–4 were largely built, its account of
+> the focus defect was stale for a week (`SCOPE.md` §8), and its "Later, Not
+> Scheduled" list now lives in `SCOPE.md` §4. Kept for the dependency argument
+> — *why* effects came before synths and the interface shell came last — which
+> is reasoning no other document carries.
+>
+> Status: dependency-ordered working plan, September 2026.
 
 Phase accuracy swept 2026-09-05. `docs/FOCUS.md` names the active sequence;
 this document only orders the whole product by dependency.

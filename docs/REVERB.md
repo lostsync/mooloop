@@ -44,7 +44,7 @@ optimized, for three reasons:
   change; the response has to be regenerated and re-partitioned off-thread and
   swapped in whole. The node ignored `events_in` outright, so a modulation
   route aimed at a reverb knob was silently inert even though the destination
-  metadata declared it legal. `docs/MODULATION_PLAN.md` requires "no effect
+  metadata declared it legal. `docs/MODULATION.md` requires "no effect
   changes to support modulation, ever" — the convolution player was the one
   device that could not honour it.
 - **It sounded static.** A finite image-source set plus a filtered noise tail

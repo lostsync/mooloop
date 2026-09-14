@@ -3,7 +3,7 @@
 //! A modulator produces a signed `-1..1` value and no audio. Evaluation is
 //! on a fixed subdivision of the block rather than once per block or per
 //! sample: once per block stair-steps audibly on a fast LFO, and per sample
-//! buys nothing at these rates (`docs/MODULATION_PLAN.md`).
+//! buys nothing at these rates (`docs/MODULATION.md`).
 
 use mooloop_core::{
     ModEnvelopeParams, ModLfoParams, ModLfoWaveform, ModMathOp, ModMathParams, ModRandomParams,

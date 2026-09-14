@@ -173,7 +173,7 @@ The first Buffer spike does not require modulation outlets. Once its read-head
 behavior is musically proven, it may publish named, normalized channel control
 signals such as playhead position, distance from the write head, window phase,
 amplitude, transient state, or slice state. These are inputs to the
-channel-owned modulation rack described in `MODULATION_PLAN.md`, not
+channel-owned modulation rack described in `MODULATION.md`, not
 device-local LFOs and not values sampled back out of the display.
 
 Every outlet must declare its signal semantics, control rate, and latency; a

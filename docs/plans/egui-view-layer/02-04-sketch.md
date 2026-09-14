@@ -15,7 +15,7 @@ egui gives containers, text and a painter. It does not give a synth's controls.
 Before any pane is migrated, build the small set everything else is made of:
 
 - **Knob**, with the project's existing drag semantics: draggable from the label
-  as well as the body (`docs/ROADMAP.md`), fine-drag modifier, double-click to
+  as well as the body (`docs/archive/ROADMAP.md`), fine-drag modifier, double-click to
   default, and value-only tooltips per the standing convention — explanatory
   text goes to the status bar, not the tooltip.
 - **Meter**, fed from `Session::tick`'s report, with the existing segment
@@ -68,6 +68,6 @@ so the packaging should follow the toolkit change without hand-editing — worth
 confirming rather than assuming.
 
 The mockup tool (`mockup.rs`, `mockup.slint`, `mockup-catalog.slint`) is a
-casualty to decide about explicitly. `docs/ROADMAP.md` names its catalog as the
+casualty to decide about explicitly. `docs/archive/ROADMAP.md` names its catalog as the
 interaction contract, so either it is rebuilt on the egui vocabulary in step 02
 or the contract moves somewhere else. Do not let it fall off the edge silently.

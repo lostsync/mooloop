@@ -1,39 +1,31 @@
-# Mooloop Modulator System
+# Modulation and parameters
 
-Status: implementation specification, August 2026; module inventory and
-capacity notes updated September 2026. This expands the approved
-decisions in [MODULATION_PLAN.md](MODULATION_PLAN.md). It formalizes the
-source/outlet metadata and the rack interaction while retaining the existing
-parameter and realtime contracts.
+Status: the approved design and its implementation contract, August–September
+2026. Built: five module kinds, eight modules and sixteen routes per channel,
+durable route identity, direct assignment on ordinary controls.
 
-Delivery steps 1 through 3 of the order at the end of this document have
-landed: `docs/plans/archive/modulator-modules/` built the module grid and five
-module kinds, and `docs/plans/archive/modulator-capacity/` made capacity a
-constant with a measured price. Steps 4 and 5 — device outlets, then typed
-auxiliary edges — landed on 2026-09-05, in `docs/plans/archive/poly-synth-v2/`,
-`docs/plans/archive/drum-synth-v2/` and
-`docs/plans/archive/typed-audio-edges/`: a route can name a generator's
-published control outlet, and an `Aux In` channel can read a published *audio*
-outlet in the same block. A control outlet still crosses a device boundary
-with one declared block of latency; an audio one does not, and cannot, because
-a block-sized delay is a delay whose length is the host's buffer size.
+> Merged 2026-09-14 from `MODULATION.md` (the approved design) and
+> `MODULATION.md` (the spec that expanded it). The split made sense
+> while the thing was being designed and stopped making sense once it was
+> built — two documents for one subject is two places to look and two places
+> to drift. Dropped in the merge, as history rather than contract: the effect
+> build order, every item of which was struck through as done; the spec's
+> framing and "retain the existing foundation" sections; and its numbered
+> delivery list, which had gone stale (outlets landed 2026-09-05). All of it
+> is in git, and `JOURNAL.md` carries the narrative.
 
-## Purpose
+`AUDIO_ARCHITECTURE.md` owns preparation, execution and realtime lifecycle.
+This document owns descriptors, addressing, ownership, and the resolution rule.
 
-Mooloop modulation is a **channel-owned control-signal system**. It makes a
-channel one playable instrument: an LFO can move a synth cutoff, a delay
-feedback control, and the channel strip without becoming a feature of any one
-of those devices.
 
-The normal workflow should be immediate: select a source, touch an ordinary
-control, and set the amount by direct manipulation. Its representation must
-still be explicit enough to admit device outlets, Buffer signals, and a future
-zoomed-out graph view without replacing the engine or creating a second routing
-language.
+## What this document decides
 
-This is not a proposal to turn Mooloop into Max/MSP or to clone Bitwig. The
-useful lesson is a coherent model for arbitrary signals and destinations.
-Mooloop's normal presentation remains the ordered device rack.
+The filter shipped as a complete vertical slice, which proved the effect
+plumbing. Before adding ten more effects we need to settle how parameters are
+addressed, modulated, and automated — otherwise every new effect hardcodes its
+own ranges and the modulation system becomes a per-effect special case.
+
+These decisions are made. Implement them; don't re-litigate them.
 
 ## Decisions
 
@@ -70,54 +62,50 @@ CHANNEL (ownership)
 - The data is graph-capable, but the product is not graph-first. Patch cords
   and a full graph editor are deferred.
 
-## Existing foundation: retain it
+## Parameter descriptors
 
-The repository already has the critical engine boundary. This specification
-extends it; it does not replace it.
+Every addressable device kind and strip publishes a static table of
+`ParamDescriptor`:
 
-| Surface | Contract retained |
-| --- | --- |
-| `ParamAddr` | Stable destination address: scope, owner, and a per-kind never-renumbered descriptor ID. It already models sources, effect slots, modulator slots, and strips. |
-| `ParamDescriptor` | Single source of truth for natural range, curve, default, and normalized conversion. Events carry natural values; routes operate in normalized destination space. |
-| `ModRack` | Persisted per-channel module slots and routes. Realtime storage is `MAX_MODULATORS_PER_CHANNEL` (8) slots and `MAX_MOD_ROUTES_PER_CHANNEL` (16) route rows. Both are compile-time constants; raising the first is one edit with a linear, measured cost. |
-| `ModRoute` | Durable `ModSourceId`, its resolved runtime slot, destination, signed full-range depth, and polarity. Reassigning the same source/destination retunes instead of duplicating it. An unresolvable source parks the route's slot out of range, where it contributes nothing. |
-| Renderer | Sources tick at `CONTROL_RATE_FRAMES = 32`; offsets are summed, clamped, converted through the descriptor, then sent as ordinary timed `Event::ParamValue` events. |
-| Base state | The renderer/chain retains the knob base separately from a device's last resolved value. A lane supplies the base when active; modulation is added after it. |
-| DSP | `AudioNode::process` has an in-place stereo bus and timed events. Effects already split at parameter-event offsets; they need no modulation-specific branch. |
+```rust
+pub struct ParamDescriptor {
+    pub id: u32,            // stable, per-kind, never renumbered
+    pub name: &'static str,
+    pub unit: &'static str,
+    pub min: f32,
+    pub max: f32,
+    pub curve: ParamCurve,  // Linear | Exponential | Stepped(n)
+    pub default: f32,
+}
+```
 
-**Five module kinds are implemented today** (updated 2026-09-02; the spec was
-written when there were two). Each is a descriptor table plus a tick, so the
-grid speaks one `param-changed` verb rather than a callback per control:
+This is the single source of truth for a parameter's range and its
+normalized (0..1) <-> natural (Hz, dB, bits) mapping. Automation lanes,
+modulation depth, knob glue, and preset validation all read it. A range
+written a second time anywhere else is a bug.
 
-- **LFO** — bipolar `-1..1`, with sine, triangle, saw, square, and
-  sample-and-hold random waves, free or tempo-synced rate, and fade-in.
-- **Envelope** — unipolar ADSR, binding its gate inlet to the scheduled Note
-  On/Off stream of an explicitly selected piano-roll channel. That note stream
-  is the first adapter for a future typed generator `Gate` outlet; envelope
-  destinations already use ordinary routes.
-- **Step** — a division-only clocked sequence.
-- **Random** — a promotion of the LFO's hidden sample-and-hold, which kept the
-  LFO's three-id tempo-syncable rate rather than the division-only clock the
-  plan described, because dropping the free rate would be a regression for
-  anything migrating off the waveform.
-- **Math** — combines a lower slot with an operand. It needed no ordering
-  machinery: `outputs` already holds last tick's value everywhere the
-  evaluation pass has not reached, so a module reading a lower slot sees this
-  tick and one reading itself or higher sees the previous, with self-reference
-  bounded by the module's own output clamp rather than by a cycle check. Its
-  `input_slot` is the one slot reference a user never sees, so `move_module`
-  remaps it through the reorder permutation.
+`id` values are stable and per-kind. They are persisted indirectly (automation
+lanes will reference them) so they must never be renumbered once shipped —
+append new ids, retire old ones by leaving gaps.
 
-This implemented local LFO is a channel-rack source. It does not prohibit a
-future instrument from owning a different LFO as part of its saved synthesis
-topology. Once such an instrument publishes that signal, the outlet is a
-channel source for cross-device routing under the timing contract below; the
-instrument's own per-voice routes remain internal and do not take a one-block
-trip through the channel control table.
+Events on the wire carry **natural** units, not normalized ones. Effects stay
+ignorant of curves; the engine converts. This keeps `Event::ParamValue`
+readable in tests and means a descriptor change can't silently reinterpret an
+effect's internal state.
 
-Do not replace `ParamAddr`, descriptor IDs, natural-unit events, or the
-timed-event path. They are the seam shared by knobs, automation, and
-modulation.
+### Stable destinations: `ParamAddr`
+
+`ParamAddr` is the stable destination address used by automation and
+modulation. It combines a channel-or-bus scope, an owning surface (source,
+effect slot, modulator slot, or strip), and that owner's stable descriptor id.
+It is persisted and must never be retyped merely because a new routing surface
+is added.
+
+This is deliberately a destination address, not a claim that every parameter
+is already a legal modulation target. Descriptors declare range and curve;
+destination metadata declares whether modulation is meaningful and how its
+control signal is interpreted. A source, effect, Buffer, or strip should not
+need to know which LFOs or other signals are currently connected to it.
 
 ## Ownership and data model
 
@@ -256,6 +244,104 @@ A bipolar route swings source `-1..1` about the base. A unipolar route maps
 that output to `0..1`, making the base the floor. Signed depth inverts either
 form without inventing another source. Clamp only after all offsets sum.
 
+## Modulation architecture
+
+### Modulator rack
+
+Each channel owns one modulation rack and routing matrix. Neither belongs to
+an individual source or insert. A device supplies parameters and may publish
+named control outlets; the channel owns the source collection that can use
+those outlets and the routes that terminate in devices or the strip.
+
+This governs reusable channel sources and every route that crosses a device
+boundary. It does not strip an authored instrument of endemic modulation. A
+polysynth may own per-voice envelopes, velocity/key/gate relationships,
+audio-rate oscillator routing, and a device-specific LFO with saved internal
+routes. Those cannot in general be reproduced after the channel has reduced a
+chord to one control value. Selected internal signals become channel sources
+only by being published through the typed outlet contract below.
+
+The realtime implementation may use a fixed, bounded array (currently eight
+module slots and sixteen routes per channel) because it makes the callback
+predictable. That is an engine protocol boundary, not the product abstraction:
+the UI presents a collection of existing sources plus an add action, never a
+fixed row of permanent empty bays. Increasing capacity or admitting a new
+source type must not change the persisted route vocabulary or the ordinary
+interaction.
+
+Per-channel, not project-global. It matches the rack UI and keeps a channel a
+self-contained instrument. Project-global modulators can be added later as a
+distinct source kind; nothing here blocks them.
+
+A source is something that produces a normalized bounded control signal over
+time, conventionally `-1..1` before route transformation. The first source was
+an LFO; LFO, envelope, step, random, and math modules ship now. The taxonomy
+is intentionally broader still: macros, note-derived values, named device
+outlets, and eventually external control or audio-derived signals can all
+participate if they declare their timing and value semantics. Do not make a
+type or UI that assumes a modulator is only a little waveform generator.
+
+### Mod matrix
+
+Each explicit route is `(source_ref, ParamAddr, transform)`, where the
+transform includes depth, polarity, and any later bounded shaping or offset.
+Source references are stable source or outlet identities, not merely a
+hard-coded slot number. Source metadata declares its label, signal shape
+(bipolar, unipolar, gate, or stepped), control rate, and latency; destination
+metadata declares that the parameter is legal to modulate.
+
+The engine evaluates sources before their destinations at the declared control
+rate, resolves the routes, and emits `Event::ParamValue` into the
+destination's existing event path. The conceptual path is:
+
+```text
+source -> normalized control signal -> route transform -> ParamAddr
+```
+
+**No effect changes to support modulation. Ever.** Effects already split their
+block at `ParamValue` offsets. That contract is the whole design; keep it.
+
+### Base value plus offset
+
+The engine owns the parameter table: the **base** value per destination (what
+the knob sets) and the sum of active **modulation offsets**. It emits the
+resolved value.
+
+Effects store only resolved values. Do not let the matrix write absolute
+values directly — the user's knob and the LFO would fight, and turning a
+modulated knob would snap it back. The UI needs both numbers anyway to draw a
+knob with a modulation arc.
+
+### Control rate, not audio rate
+
+Modulation is evaluated on a fixed subdivision of the block (32 or 64 frames),
+not once per block and not per sample. Once per block stair-steps audibly on
+fast LFOs; per sample is a cost we don't need.
+
+This means no audio-rate FM of a filter cutoff **through a channel route**.
+That is a deliberate limit. Stepped, sequenced modulation is stylistically
+correct for the music this instrument targets, and cross-device audio-rate
+modulation is a much larger engine change that can come later if it earns its
+way in. Fixed or authored audio-rate paths inside one prepared DSP device are
+not routed by this matrix and are not prohibited by it.
+
+### Rack semantics, graph-capable model
+
+The ordered device rack remains the normal presentation and audio workflow.
+The modulation model is graph-capable only in the useful, narrow sense that
+cross-device sources, destinations, routes, timing, and latency are explicit
+data. Authored device-local modulation also has persisted, inspectable source
+and destination identities, but may execute inside a voice where channel-rate
+routing cannot preserve its semantics. A future zoomed-out graph view can
+visualize published boundaries and the channel routes alongside the audio
+chain; it must not introduce a parallel cross-device modulation engine or
+redefine the rack model.
+
+Do not build that graph editor in this pass. Routine modulation is a
+source-selection and direct-manipulation interaction, not a matrix or a field
+of patch cords. A full matrix may later serve inspection and expert editing,
+but it is not the ordinary workflow.
+
 ## Timing and realtime contract
 
 Control sources run at the existing 32-frame subdivision. The final tick of a
@@ -315,6 +401,98 @@ true sidechain requires prepared typed auxiliary edges/process buffers and
 graph latency compensation. Do not retain a borrowed source bus inside an
 effect. A control-rate envelope follower exposed as an outlet is the correct
 first audio-derived-control form.
+
+## Note-triggered effects
+
+Effect slots currently receive only their own private parameter events
+(`render.rs` — "generators never see effect events", and the reverse). Keep
+that isolation for parameter events, but **give effect slots access to the
+channel's note stream as a separate input**.
+
+This is what makes the rack an instrument rather than a chain of processors:
+an LFO that resets phase on note-on, a delay that flushes on a note, a
+step-sequenced modulator that advances per note, a stutter fired from a rack
+step. The sample-accurate note pipe already reaches every channel; it stops
+one node short.
+
+## Inter-device and inter-channel data
+
+**Within a channel:** the mod matrix covers it. Effects may expose outlet
+signals (a compressor's gain reduction, an envelope follower's output, a
+gate's open state) as modulator sources. The dynamics effects already compute
+exactly these internally; exposing them is a matter of publishing the value,
+not of new DSP.
+
+### Generator outlets
+
+Generators also publish named, channel-rate outlets. This is how note-derived
+data reaches an effect without pretending a shared channel effect can own
+per-voice state: a generator reduces its voices to one musical control signal,
+then a downstream effect consumes ordinary CV. A sampler or synth may, for
+example, assign velocity to an outlet; the channel adds a `DeviceIn` source,
+chooses that named outlet, and supplies trim and smoothing for routes to any
+legal destination.
+
+An outlet address is `(channel, outlet index)` plus its user-facing name.
+The first reduction is last-note; a later explicit outlet mode can add highest
+or loudest note without changing routing. `DeviceIn` is a sibling of `Lfo`,
+not telemetry: its smoothing is part of its musical contract, because an
+unsmoothed velocity step can click a filter cutoff.
+
+Generators publish outlets into a per-channel table. Consumers read the table
+on the following block, with exactly one block of declared latency. That makes
+offline and realtime behavior identical and leaves graph order irrelevant; do
+not add a same-block exception. These outlets remain distinct from the display
+telemetry bank below, which is observation-only and has no audio timing
+contract.
+
+Buffer outlets follow the same rule if and when the Buffer earns them. Useful
+candidates include normalized playhead position, distance from the write head,
+window or loop phase, amplitude, transient state, and slice state. They are
+musical control signals only when declared with a rate and latency; the UI
+must never infer them by sampling a waveform display or telemetry snapshot.
+
+**Across channels: deferred, by decision.** Not in this pass. `ParamAddr`
+already carries a channel-or-bus scope, so enabling cross-channel control
+later is a routing-policy change rather than a retyping of every engine
+command.
+
+**True audio sidechain: still deferred.** The mixer supplied the first
+compiled audio graph, but not the complete sidechain contract. A sidechain is
+a dependency edge in addition to ordinary audio routing: the source must be
+scheduled before the consumer even though its signal is not summed into that
+consumer's main input. `compile_bus_graph` currently models only each bus's one
+audio destination, and `AudioNode::process` currently accepts only one in-place
+stereo bus. Extend both through the process-buffer and typed-edge design in
+`AUDIO_ARCHITECTURE.md`; do not retain a borrowed source bus inside an effect.
+
+Latency compensation is also required and is not hypothetical. `AudioNode`
+now reports integer latency, and the drive effect declares 15 frames for its
+complete 2x oversampling path (both 32-tap FIR stages, including the retained
+polyphase offset). Its internal dry path is aligned, but the graph does not yet
+delay neighbouring shorter paths at a sum. **Build preallocated graph
+compensation before parallel sends or true sidechain.**
+
+Control-rate ducking still does not need any of this: publish modulator
+outputs into a per-channel table read on the *following* block. One block of
+latency, deterministic, identical offline and realtime, and it makes graph
+order irrelevant. That remains the cheaper and more musical first move.
+
+### Display telemetry is observation, not a route
+
+Device displays may need a continuously changing view of their input or
+output: spectrum, waveform, gain reduction, a buffer read head, and similar
+information. These publish a fixed, bounded semantic vector into the engine's
+device-stage telemetry bank. The UI reads only the newest snapshot through
+atomics; it does not receive PCM or replay audio analysis itself.
+
+Display telemetry is deliberately not a modulation outlet. It has no timing
+guarantee beyond "latest available", cannot write parameters, and must not be
+used by audio nodes as an input. When a device exposes a musical control
+signal, it belongs in the modulator/matrix path above, where the engine can
+give it a declared rate, latency, and destination semantics. This preserves a
+single display path that any device can use without preempting the future
+typed control graph.
 
 ## User experience
 
@@ -401,6 +579,43 @@ and direct assignment remain the routine workflow; a future matrix/graph may
 draw and edit the identical typed inlet and destination edges when a larger
 patch benefits from it. It may not create parallel routes, implicit
 modulation, or a new audio-rack model.
+
+## Modulation UI
+
+The channel has one collapsed-by-default modulation shelf beneath its device
+rack. It lists the channel's existing source chips and an add-source action;
+it is not a page inside Mono, Poly, Buffer, or an effect. The common device
+frame exposes the shelf where users are already reading signal order.
+
+Every device header shows a compact `MOD n` summary for the number of routes
+that terminate in that device, with optional source pills when that is clearer
+than a count. Activating the summary opens an inspector filtered to that
+device; it does not move or duplicate the modulation sources. The inspector
+is destination-first, for example `LFO 1 -> Cutoff +28%`, and is where a route
+can be reviewed or removed without opening a general matrix.
+
+Selecting a source chip arms it. Every legal ordinary control becomes visibly
+assignable; dragging that control establishes or adjusts the selected source's
+route depth. The control retains its base value. A modulation marker or
+overlay shows the resulting excursion, and a parameter inspector can list its
+base value and all incoming routes. Deselecting the source returns ordinary
+control manipulation to normal.
+
+There are no patch cords in this workflow. Inlets and outlets are explicit in
+the model, but their routine presentation is source selection, destination
+markers, overlays, and inspectors. The future matrix/graph view is an expert
+view of the same routes, not a prerequisite for using them.
+
+## Anti-aliasing policy
+
+Distortion and saturation are **2x oversampled**. A waveshaper run at base
+rate folds its harmonics back down as inharmonic fizz, which is the difference
+between a usable saturator and a bad one.
+
+Bitcrush is **deliberately not oversampled**. Its aliasing is the effect.
+
+State this per-effect in the DSP module docs so the choice reads as
+intentional rather than inconsistent.
 
 ## Scope boundaries and delivery order
 

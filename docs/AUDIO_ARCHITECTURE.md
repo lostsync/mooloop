@@ -12,7 +12,7 @@ and a narrow realtime surface that remains pleasant to extend.
 This document owns the boundary between editable musical state and audio
 execution.
 
-`ARCHITECTURE_REVIEW.md` grades the implementation against an external
+`archive/ARCHITECTURE_REVIEW.md` grades the implementation against an external
 reference and agrees with this document almost everywhere. Its one finding
 against the engine was that migration step 5 below — graph-wide latency
 compensation — was the next infrastructure step and cheaper then than it would

@@ -1,13 +1,16 @@
-# Building Mooloop: Cargo And Git
+# Operations
 
-This is the short version of how we operate the repository. `AGENTS.md` is the
-workflow contract these commands serve; `docs/AGENT_OPERATIONS.md` covers what
-is specific to running them from an agent — the remote build box, headless
-rendering, and the live application.
+Building, running, testing, and releasing mooloop, and everything specific to
+doing it from an agent on Adam's machine.
 
-The machine is usually short on memory while linking, not CPU: run Cargo
-commands one at a time, and use `-j 2` for whole-workspace work. The committed
-default is `-j 3` for smaller commands; do not turn it up.
+`AGENTS.md` is the workflow contract these commands serve — worktrees, the
+verification ladder, and when to climb it. This file is the mechanics.
+
+> Merged 2026-09-14 from `OPERATIONS.md` and `OPERATIONS.md`. The split
+> was "ordinary" versus "agent-specific", and it did not survive contact with
+> the fact that **every reader of this file is an agent**. One home, so a
+> Cargo question has one answer rather than two that have to be compared.
+
 
 ## Start A Piece Of Work
 
@@ -68,32 +71,197 @@ cargo test -p mooloop-engine -j 2
 cargo test -p mooloop-ui -j 2
 ```
 
-## Developing On macOS
+## Cargo limits
 
-The workspace builds and runs on a Mac, where the engine plays through Core
-Audio instead of JACK (`docs/plans/coreaudio-driver/`). The Xcode command-line
-tools and `rustup` are all it needs -- Homebrew's `rustup` is keg-only, so put
-`$(brew --prefix rustup)/bin` on `PATH` -- and `mold` is not used.
+Never run Cargo build, test, or Clippy commands concurrently on this machine.
+Memory is the constraint; `nice` does not solve that. Keep the workspace
+development profile's capped debug information intact.
 
-MIDI input comes from Core MIDI with nothing to set up: mooloop listens to
-every source and logs each one as `listening to the MIDI input "<name>"`. If a
-keyboard plays nothing, that log line is the first thing to look for, and Audio
-MIDI Setup's MIDI Studio window shows whether macOS sees the device at all.
-
-The JACK adapter does not compile on a Mac, so an edit to it, or to anything
-else behind `cfg(not(target_os = "macos"))`, goes unchecked there.
-`scripts/linux-check` checks the Linux build from the Mac instead:
+Run Cargo through `scripts/cargo-capped`, which puts the run in a
+memory-bounded cgroup:
 
 ```sh
-scripts/linux-check                     # cargo check -p mooloop-engine --all-targets
-scripts/linux-check clippy -p mooloop-engine --all-targets -- -D warnings
+scripts/cargo-capped check -p mooloop-ui
+scripts/cargo-capped clippy -p mooloop-ui --all-targets
+scripts/cargo-capped test -p mooloop-ui -j 2
 ```
 
-It needs `rustup target add x86_64-unknown-linux-gnu` and `brew install zig`.
-`scripts/cargo-capped` finds no memory cgroup on macOS and runs Cargo uncapped,
-so builds stay one at a time there too. `scripts/antibox` works from a Mac that
-can reach the box, but what it builds are Linux binaries: build locally to run
-the application.
+It costs nothing in speed -- a measured `mooloop-ui` check runs 41s either way
+-- and it is the only thing that keeps a heavy run from freezing the desktop
+instead of just failing. Prefix `MOOLOOP_CAP_STATS=1` to print peak memory.
+
+Two distinct memory problems live here, and the fix for one does not help the
+other:
+
+- **Linking**, which is what makes `cargo test` expensive: seven `mooloop-ui`
+  test binaries link at once. That is what `.cargo/config.toml`'s job cap,
+  `mold`, and the dev debug-info cap address. Cap jobs and prefer one relevant
+  test target, as above.
+- **Checking**, which never links, so none of the above applies to it. A
+  `mooloop-ui` check peaks at 3.4 GB after an edit and 5.2 GB cold, in a
+  *single* rustc process handling the one huge module `build.rs` generates
+  from `ui/main.slint`. Job count cannot subdivide one process, so lowering
+  `jobs` does not help; only the cgroup bound does.
+
+`.cargo/config.toml` limits default Cargo jobs to three. Do not raise the
+limit. When several worktrees need a shared cache, use the machine-local
+`CARGO_TARGET_DIR` described in the README.
+
+Do not set `CARGO_INCREMENTAL=0` to save memory. It is the obvious guess and
+it is measurably wrong here: on the same `.slint` edit it cost 4.58 GB and
+2m01s, against 3.42 GB and 41s with incremental left on.
+
+For scale on where that single module comes from: `slint_build` expands
+`ui/main.slint` into roughly 39 MB and 395,000 lines of Rust, so `mooloop-ui`
+compiles about 412,000 lines of which 96% are generated. Nothing here can be
+tuned below that; `docs/plans/egui-view-layer/00-status.md` measures what the
+figures look like without it.
+
+## Remote builds and tests
+
+The laptop's Cargo limits exist because of its memory. `scripts/antibox` sends
+the work to the build box instead, where those limits do not apply: it rsyncs
+the current working tree (uncommitted edits included, gitignored paths
+excluded), runs the command there, streams the output back, and exits with the
+remote status. Prefer it for anything heavier than a single small crate, and
+especially for `--workspace` runs and `mooloop-ui`.
+
+```sh
+scripts/antibox                             # cargo test --workspace
+scripts/antibox cargo test -p mooloop-ui
+scripts/antibox cargo clippy --workspace --all-targets
+```
+
+Each local checkout gets its own remote directory and Cargo target directory,
+keyed by absolute path, so worktrees do not fight over one cache and two of
+them may build remotely at the same time. Cargo's job cap is lifted to the
+remote core count.
+
+### Do not edit while a remote build is running
+
+**A remote build that finishes *after* you edit a file will make the next run
+ignore that edit.** `antibox` rsyncs with timestamps preserved, and Cargo
+decides freshness by comparing a source's mtime against its build artifacts.
+Edit at 20:55, let a build that started at 20:50 finish at 21:02, and the
+remote now holds artifacts newer than your edited sources: the next run
+rebuilds nothing that matters. For a `.slint` edit the build *script* is the
+thing skipped, so `ui/main.slint` is silently the old one while your Rust is
+the new one.
+
+It presents as a compile error that makes no sense. On 2026-09-13 a struct
+added to `main.slint` and used from `lib.rs` came back as `cannot find type
+`PatternInfo` in this scope`, with the Slint build script's warnings visible
+in the log -- **replayed from cache, which is what makes the log look like it
+ran**. The same tree checked locally generated the struct and its setter
+correctly. Twenty minutes went on hypotheses about Slint's struct export rules,
+none of which were the answer.
+
+So: **do not start a background remote build and then keep editing.** If you
+have, `touch` what you changed before the next run, which is enough to move the
+mtimes past the artifacts:
+
+```sh
+touch crates/mooloop-ui/ui/*.slint crates/mooloop-ui/src/*.rs
+```
+
+`scripts/antibox --clean` also fixes it and costs a cold build. Prefer the
+touch. The habit that avoids it entirely is to launch a remote run when you
+have *stopped* editing -- which is also when its result means something.
+
+### Which cache a run gets
+
+sccache and incremental compilation cannot both be on -- `rustc` will not hand
+sccache an incremental compilation unit -- so `antibox` picks one per run from
+the profile. Measured on the box after a one-line edit in `mooloop-session`:
+
+| Command | sccache | incremental |
+| --- | --- | --- |
+| `cargo test -p mooloop-session` | 31 s | **18 s** |
+| `cargo test --workspace --exclude mooloop-ui` | 141 s | **43 s** |
+| `cargo test --workspace` | 332 s | **118 s** |
+| `cargo build --release -p mooloop-app` | **522 s** | 672 s |
+
+Dev-profile `check`, `test` and `clippy` therefore get incremental
+compilation, and release builds get sccache. `--incremental` and
+`--no-incremental`, or `$MOOLOOP_INCREMENTAL=1|0`, override that.
+
+Dependencies are shared across checkouts by sccache rather than by a shared
+target directory. sccache caches individual `rustc` invocations under a hash
+of their inputs, so a checkout whose sources differ gets a cache miss and a
+recompile -- never another checkout's artifact. A shared `CARGO_TARGET_DIR`
+was tried and reverted for exactly that reason: two checkouts of this
+workspace share package names and versions, and the second linked against the
+first's stale `mooloop-core`, failing on code that was correct on disk. Use
+`--no-sccache` or `$MOOLOOP_NO_SCCACHE=1` to bypass the wrapper, and
+`$MOOLOOP_SCCACHE_SIZE` to change the 40G cap.
+
+Pull artifacts back with `--pull`, which is how remote UI snapshots work:
+
+```sh
+scripts/antibox --pull /tmp/window.ppm \
+  env SLINT_BACKEND=winit-software MOOLOOP_PLAYLIST_SNAPSHOT=/tmp/window.ppm \
+  cargo test -p mooloop-ui --test playlist_snapshot
+```
+
+`--clean` discards the remote checkout and its target cache but keeps the
+sccache dependency cache; `$MOOLOOP_REMOTE_TARGET` moves the target directory
+elsewhere. `--host` and
+`$MOOLOOP_REMOTE_HOST` point at a different ssh host. Anything needing JACK, a
+real audio device, or the live compositor still belongs on this machine.
+
+For a runnable build of the current tree, `--release-bin` compiles the
+`mooloop` binary with `--release` on the box, strips it, and copies it to
+`./bin/mooloop-test`:
+
+```sh
+scripts/antibox --release-bin
+scripts/antibox --release-bin /tmp/mooloop-candidate   # somewhere else
+```
+
+`--dev-bin` does the same on the dev profile, to `./bin/mooloop-dev`. The
+workspace's dev profile is tuned to be playable (`opt-level = 1` workspace
+wide) and rebuilds in a fraction of release's time, so it is the one to reach
+for while iterating; keep `--release-bin` for judging performance.
+
+Both strip the binary, so it has no backtrace symbols; that is the right
+default for listening and the wrong one for diagnosing a crash, which is what
+`--keep-symbols` is for.
+
+`scripts/mooloop-run` wraps the whole cycle into one command -- build on the
+box, copy the binary down, run it here against JACK -- and falls back to a
+capped local build if the box is unreachable:
+
+```sh
+scripts/mooloop-run              # dev profile
+scripts/mooloop-run --release
+scripts/mooloop-run --local      # never touch the box
+```
+
+### Keeping the box from filling up
+
+Remote directories are keyed by the absolute path of the local checkout, and
+every worktree ever built used to leave 10-20 GB behind forever; the box hit
+436 GB and blocked every remote command. Each run now records the checkout it
+came from, and `scripts/antibox --prune` deletes the caches whose checkout no
+longer exists. A run that finds the box above 90% full says so and points at
+it.
+
+**That warning does not look like compiler output, and it is easy to grep
+past.** It is one line beginning `antibox: warning --`, printed before the
+build starts; the failure it predicts arrives minutes later as
+`error: failed to write ... No space left on device`, which reads like a
+compiler error and is not one. An agent checking a backgrounded run with
+`grep -E '^error|^test result'` -- the habit the verification ladder above
+encourages -- sees the consequence and not the cause. Read the first lines of a
+remote run's log, not only the compiler-shaped ones.
+
+**One task per worktree means one remote cache per worktree.** A session that
+works through several tasks in a row, as `AGENTS.md` requires, leaves a
+`mooloop-ui` target behind for each branch it has finished with, and they are
+20-25 GB each. On 2026-09-12 six of them filled the box mid-run and `--prune`
+freed 153 GB. `--prune` only reclaims a cache once its *local* worktree is
+gone, so the moment to run it is just after `git worktree remove`, not when a
+build fails.
 
 ## All Tests And Release Verification
 
@@ -121,6 +289,232 @@ the mixer, the modulation shelf, the preferences pages, before/after pairs
 either side of a drag. Each is a test that always asserts and writes its image
 only when its environment variable is set. List them with
 `rg -o 'MOOLOOP_[A-Z_]+_SNAPSHOT' crates/mooloop-ui/tests | sort -u`.
+
+## Software-rendered UI checks
+
+Prefer headless software rendering: it is deterministic, does not need a
+window, and works while the screen is locked. Slint's default GPU backend does
+not support `take_snapshot`.
+
+Sketch and check individual widgets with `scripts/slint-sketch`, which drives
+`slint-viewer` over the real `crates/mooloop-ui/ui` sources and never compiles
+the crate:
+
+```sh
+scripts/slint-sketch sketch.slint            # type-check, ~0.05s
+scripts/slint-sketch --shot sketch.slint     # render a PNG, ~0.2s, prints its path
+scripts/slint-sketch --shot - <<'SKETCH'     # or straight from stdin
+import { Theme } from "theme.slint";
+import { ParameterKnob } from "controls.slint";
+export component Probe inherits Window {
+    width: 200px; height: 140px;
+    background: Theme.background;
+    ParameterKnob { label: "CUTOFF"; value: 0.62; value-text: "62%"; }
+}
+SKETCH
+```
+
+`cargo build -p mooloop-ui` costs about four minutes whether the edit was a new
+device face or a 2px nudge, because rustc recompiles the whole generated module
+either way. That prices out the look-and-adjust loop visual work depends on, so
+do the adjusting here and build once at the end.
+
+Its limits are worth knowing before you trust a render. Anything driven by a
+Rust model -- the piano grid, mixer strips, the device rack's contents -- draws
+empty, because only the `.slint` side exists; a device face renders its chrome
+and controls but not its curve. It is for spacing, colour, proportion and
+typography, not for interaction or live data.
+
+Screenshots are properly headless: the viewer installs its own software backend,
+so no display, compositor or `agent` workspace is involved and it works while
+the screen is locked. Sketches and their PNGs land in `$TMPDIR`, outside the
+repo -- keep them there, they are working notes rather than artefacts.
+
+### Capturing the real widgets
+
+Sketching stops where a Rust model starts. For anything model-driven, the
+`mooloop-ui` test suite already builds the real window and can be asked to
+write its snapshot to disk. Every one of these follows the same shape — the
+test always runs and asserts; setting an environment variable additionally
+writes the PPM it rendered:
+
+```sh
+MOOLOOP_PLAYLIST_SNAPSHOT=/tmp/window.ppm \
+  cargo test -p mooloop-ui --test playlist_snapshot
+```
+
+There are around fifty of these across twenty test files, one per state
+somebody wanted to look at — every source face and its pages, the mixer, the
+modulation shelf and each module kind, the preferences pages, the effect rack
+scrolled and unscrolled, before/after shots either side of a drag. Find the
+one you want rather than adding another:
+
+```sh
+rg -o 'MOOLOOP_[A-Z_]+_SNAPSHOT' crates/mooloop-ui/tests | sort -u
+```
+
+The variable name says which test file to run; `rg -l <VARIABLE>
+crates/mooloop-ui/tests` gets you there. Add a new one only when no existing
+state shows what you changed, and follow the surrounding convention: assert
+something, and write the image as a side effect.
+
+Convert an image for inspection:
+
+```sh
+magick /tmp/whatever.ppm /tmp/whatever.png
+```
+
+## Live application
+
+Use the dedicated headless Hyprland output named `agent`, never Adam's active
+workspace:
+
+```sh
+hyprctl dispatch exec '[workspace name:agent] <command>'
+grim -o agent /tmp/whatever.png
+hyprctl clients -j | jq '.[] | select(.workspace.name=="agent")'
+hyprctl dispatch closewindow address:<addr>
+```
+
+Keep `name:agent`; a bare workspace name is misparsed. Do not add `silent`:
+the headless output must switch to its workspace to composite the window. If a
+mapped window yields only wallpaper, the lock screen is engaged; use software
+rendering rather than debugging the compositor. Recreate a genuinely missing
+output with `hyprctl output create headless agent`.
+
+`ydotool` input goes to the focused window. Keep live interaction brief and do
+not leave the agent window focused.
+
+## Driving the live application over MCP
+
+`scripts/mooloop-mcp` runs the application with Slint's embedded MCP server
+switched on, which publishes the running UI as MCP tools: `list_windows`,
+`get_element_tree`, `find_elements_by_id`, `get_element_properties`,
+`query_element_descendants`, `set_element_value`, `click_element`,
+`drag_element`, `dispatch_key_event`, `invoke_accessibility_action`,
+`take_screenshot`, and event recording.
+
+The tools are `i-slint-backend-testing`'s `ElementHandle` API over HTTP --
+the same introspection the UI tests in `crates/mooloop-ui/tests` drive
+in-process, which is why `first_click.rs` explains that the search half of it
+needs debug info and clicks fixed coordinates instead.
+
+This is the only view of the interface with the real Rust models behind it.
+`scripts/slint-sketch` draws widgets with nothing in them, and the snapshot
+tests render one frame of one window; here the engine is running, a click
+lands on the same code path Adam's click lands on, and the next screenshot
+shows what it did.
+
+```sh
+scripts/mooloop-mcp              # build on the box, start headless, print the endpoint
+scripts/mooloop-mcp --status
+scripts/mooloop-mcp --stop
+scripts/mooloop-mcp --window     # a real window on the `agent` output instead
+```
+
+It is headless by default for the reasons software rendering is preferred
+above -- no compositor, works while the screen is locked -- and because a
+windowed run on a machine with no display cannot screenshot at all. JACK is
+not optional either way: the engine starts before the UI and takes the process
+down with it if it fails, so a port that never answers usually means the log
+the script names, not the server.
+
+`.mcp.json` registers the endpoint for Claude Code, so the tools appear in a
+session started while the application is up; the entry is dead the rest of the
+time, which is the cost of having it checked in. Any client can call the
+endpoint directly, and `curl` is the reliable way to drive it from a script:
+
+```sh
+curl -s -X POST http://127.0.0.1:9010/mcp -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+       "params":{"name":"list_windows","arguments":{}}}'
+```
+
+The two handle kinds are the thing to get right, since they have the same
+`{index, generation}` shape and are not interchangeable. `list_windows`
+returns a window handle; `get_window_properties` on it returns
+`rootElementHandle`; `get_element_tree` takes that *element* handle and walks
+down from it, a thousand elements at a time. The elements come back with the
+`.slint` ids and accessible labels -- `MainWindow::menu-bar`,
+`ToolButton::tap`, "Show the step grid or the mixer: Mixer" -- and absolute
+positions that line up with the screenshot, so finding the control you mean is
+a search over the tree rather than a guess at coordinates.
+
+`click_element` is a real pointer event, and the pointer stays where it left
+it: the next screenshot may show a hover tooltip the application is right to
+be drawing.
+
+**It does not reach inside a `PopupWindow`.** A `PickerChip` or a `BusPicker`
+opens on click and its rows appear in the element tree with correct absolute
+positions, so clicking one looks like it should work — and does nothing. The
+popup closes and the value is unchanged, which is indistinguishable from a
+callback that never fired, and it is an easy half hour to spend concluding
+that a shipped widget is broken. It is not: `BusPicker` is the control test,
+because it reports its choice *before* closing and fails here identically.
+Verify a picker some other way — a snapshot test that sets the model directly,
+or a unit test of the handler's session half — and use the live application
+for the things it is uniquely good at, which is everything outside a popup. The engine connects to JACK on startup and usually reports one
+xrun while doing so, which is the connection, not a fault in what you are
+testing.
+
+Two switches gate the server, and both are off in anything released. The
+`mcp` feature on `mooloop-app` compiles it in and makes `crates/mooloop-ui`'s
+`build.rs` emit element debug info, without which every tool that names an
+element fails at runtime. `$SLINT_MCP_PORT` starts it; unset, the code is
+inert. It binds `127.0.0.1`, validates that the request origin is local, and
+has no authentication -- it is a development tool, and the packaging never
+turns the feature on.
+
+Expect the feature flip to cost a full rebuild of the generated Slint module
+in either direction -- 13m05s on the box for a cold release build with it on
+-- which is why the script builds there by default and keeps its binary at
+`bin/mooloop-mcp` rather than in `target/`.
+
+## Developing On macOS
+
+The workspace builds and runs on a Mac, where the engine plays through Core
+Audio instead of JACK (`docs/plans/coreaudio-driver/`). The Xcode command-line
+tools and `rustup` are all it needs -- Homebrew's `rustup` is keg-only, so put
+`$(brew --prefix rustup)/bin` on `PATH` -- and `mold` is not used.
+
+MIDI input comes from Core MIDI with nothing to set up: mooloop listens to
+every source and logs each one as `listening to the MIDI input "<name>"`. If a
+keyboard plays nothing, that log line is the first thing to look for, and Audio
+MIDI Setup's MIDI Studio window shows whether macOS sees the device at all.
+
+The JACK adapter does not compile on a Mac, so an edit to it, or to anything
+else behind `cfg(not(target_os = "macos"))`, goes unchecked there.
+`scripts/linux-check` checks the Linux build from the Mac instead:
+
+```sh
+scripts/linux-check                     # cargo check -p mooloop-engine --all-targets
+scripts/linux-check clippy -p mooloop-engine --all-targets -- -D warnings
+```
+
+It needs `rustup target add x86_64-unknown-linux-gnu` and `brew install zig`.
+`scripts/cargo-capped` finds no memory cgroup on macOS and runs Cargo uncapped,
+so builds stay one at a time there too. `scripts/antibox` works from a Mac that
+can reach the box, but what it builds are Linux binaries: build locally to run
+the application.
+
+## Measuring what a block costs
+
+`crates/mooloop-engine/src/block_cost.rs` prints nanoseconds per
+`process_block` against the block's own real-time budget, across four buffer
+sizes and four channel counts, with the channels playing and idle. It is two
+`#[ignore]`d tests rather than a benchmark harness, so it needs asking for:
+
+```sh
+scripts/antibox cargo test -p mooloop-engine --release block_cost \
+  -- --ignored --nocapture --test-threads=1
+```
+
+`--release` because a debug build measures the wrong program, and
+`--test-threads=1` because the two tests otherwise contend and inflate each
+other by a third. Run it before and after anything on the block path. The
+figures in the `Sep 5 (last)` entry of `docs/JOURNAL.md` are what it said on
+the build box, and are the comparison to beat rather than to reproduce -- the
+laptop's numbers are its own.
 
 ## Diagnostic Log
 
@@ -324,3 +718,9 @@ git clean -fdX
 
 The first command is the dry run. The second removes ignored files, including
 unwanted `target/` output, but leaves untracked non-ignored files alone.
+
+## Hook activation
+
+`AGENTS.md` requires `git config core.hooksPath .githooks` once per clone; the
+setting is shared by that repository's linked worktrees. Verify it with
+`git config --get core.hooksPath`.

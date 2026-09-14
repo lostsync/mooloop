@@ -84,7 +84,7 @@ When typed audio edges are implemented, add a third fixture in which muted Osc
 - Verify callback cost at the supported sample rates with eight active voices,
   the measured internal-route safety boundary, filter feedback, and outlet
   publication. No Cargo or live-audio procedure bypasses
-  `docs/AGENT_OPERATIONS.md`.
+  `docs/OPERATIONS.md`.
 - Transport stop and choke release envelopes and clear feedback/chorus tails
   according to their documented behavior.
 - The original Poly device and old projects remain unchanged beside ML-P8.

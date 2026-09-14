@@ -11,7 +11,7 @@ name = "mooloop"
 path = "src/main.rs"
 
 [features]
-# Forwarded to `mooloop-ui`; see its manifest and `docs/AGENT_OPERATIONS.md`.
+# Forwarded to `mooloop-ui`; see its manifest and `docs/OPERATIONS.md`.
 mcp = ["mooloop-ui/mcp"]
 
 [dependencies]

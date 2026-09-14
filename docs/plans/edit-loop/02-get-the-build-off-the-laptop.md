@@ -28,7 +28,7 @@ a full swap is not a thing to keep doing.
 
 `scripts/antibox --release-bin` compiles `mooloop` with `--release` on the
 box, strips it, and copies it to `./bin/mooloop-test`.
-`docs/AGENT_OPERATIONS.md` documents it. It may already be the answer, in
+`docs/OPERATIONS.md` documents it. It may already be the answer, in
 which case this step is confirming that and making it the default rather
 than a thing to remember.
 

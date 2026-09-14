@@ -263,7 +263,7 @@ just not reachable from the app.
 **There is no way to hear a track before its own fader.** Solo is in place
 as of 2026-09-11, which silences the others rather than opening a monitor
 path, so a soloed track is still heard through its fader, its pan and its
-analog-sum switch. `MIXER_PLAN.md` records the AFL tap as later work and
+analog-sum switch. `archive/MIXER_PLAN.md` records the AFL tap as later work and
 names what it needs: the tap points that pre-fader sends also want.
 
 **A channel cannot be soloed, only its track.** `MixerBus.solo` is per track,
@@ -308,7 +308,7 @@ blocked by this; it is one more click than a user coming from FL will expect
 
 ## Edits that do not undo
 
-**Removing a track does the silent orphan repair `MIXER_PLAN.md` says must
+**Removing a track does the silent orphan repair `archive/MIXER_PLAN.md` says must
 not happen interactively.** The plan is explicit: deleting a non-master slot
 "is an explicit structural operation", the confirmation "names them and offers
 an explicit replacement destination (Master by default)", and **"There is no
@@ -631,7 +631,7 @@ with it -- then twenty-four lines later the meter alone re-reads
 `strip.output.muted`. So under a solo, a silenced track's strip meter, its
 peak hold and its clip latch all report a signal nobody can hear, while the
 comment directly above that line says the meter shows "what is heard rather
-than what is running" and `MIXER_PLAN.md` says the strip shows **audible**
+than what is running" and `archive/MIXER_PLAN.md` says the strip shows **audible**
 post-fader output.
 
 There is a real argument on the other side, which is why this is a note rather
@@ -653,7 +653,7 @@ exists and is settable in memory, so the field promises more than the engine
 delivers. Not a silent bug any more — but a 3/4 project is not a thing.
 
 **`position_ticks` is an accumulator, not derived from `frames_played`**
-(`mooloop-engine/src/transport.rs:24`). `ARCHITECTURE_REVIEW.md`'s action
+(`mooloop-engine/src/transport.rs:24`). `archive/ARCHITECTURE_REVIEW.md`'s action
 table calls this out and says to fix it *with* the tempo map, not before.
 Recorded so the deferral stays deliberate.
 
@@ -907,7 +907,7 @@ index is past `MAX_MODULATORS_PER_CHANNEL` (`modulation.rs:1510`), a route
 whose source id names no surviving slot (`:1543`) -- which is exactly what a
 capacity truncation produces -- a route whose `to_local_slot` fails (`:1536`),
 and every route past `MAX_MOD_ROUTES_PER_CHANNEL`, because `apply_route`'s
-`None` is discarded into `let _` (`:1548`). `MODULATOR_SYSTEM_SPEC.md` says
+`None` is discarded into `let _` (`:1548`). `MODULATION.md` says
 the opposite: "project persistence retains it as an inspectable orphan rather
 than silently deleting authored work." The truncation itself is the accepted
 design -- `AGENTS.md` records both constants as engine constants rather than

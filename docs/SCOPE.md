@@ -7,7 +7,9 @@ zones.
 
 Every other planning document here answers a narrower question, and answers it
 well. None of them answers this one, because the finish line was never drawn:
-`VERSIONS.md` says outright that **"`1.0` has no target yet."** This document
+`VERSIONS.md` said outright that **"`1.0` has no target yet"** — it has since
+been deleted as part of the 2026-09-14 documentation trim, having never been
+read by the one person it described releases for. This document
 draws it, sizes what stands between here and there, and sorts everything
 recorded anywhere into *in* or *out*.
 
@@ -68,7 +70,7 @@ sections at the end.
 | # | Item | Where it stands | Size |
 | --- | --- | --- | --- |
 | 2 | **MIDI I/O** | **In works**: one hardcoded JACK port (`jack_driver.rs:28`) auto-connecting every hardware source, midir on macOS, decoding NoteOn/NoteOff/CC/PitchBend (`midi.rs:89`) and playing the selected channel through `keyboard_channel` (`render.rs:2615`). **Out does not exist** — `jack_driver.rs:185-201` registers `out_l`, `out_r`, `midi_in` and nothing else. No MIDI clock (`0xF8` is explicitly dropped, `midi.rs:122`). No port selection, no settings persistence, no learn. The one controller-mapping system in the tree, `BufferMidiMap`, is **dead code**: `set_buffer_midi_map` (`engine/lib.rs:747`) has no caller in the workspace. | **Splits across two releases** (§9). The *configurable* half — port selection, channel filter, persistence, and lighting up the sidebar's inert MIDI rows — is 0.1.4. **MIDI output is 0.2.0.** Both want the boundary first (§5). Issue #9. |
-| 3 | **Audio input** | Nothing. JACK registers no input port; `build_input_stream` appears nowhere; `Executor::process` (`executor.rs:118`) has no input parameter. `ARCHITECTURE_REVIEW.md` confirms: *"No capture path and no media pool."* | Medium. The shape to copy already exists: `AuxIn` (`core/src/aux_in.rs`, `dsp/src/aux_in.rs`) is "a level and a copy", and `AudioTapBank` (`render.rs:53`) already hands a consumer channel a buffer someone else filled. A hardware input is one more pre-filled buffer in that bank and needs no ordering, having no producer. Issues #7, #22. |
+| 3 | **Audio input** | Nothing. JACK registers no input port; `build_input_stream` appears nowhere; `Executor::process` (`executor.rs:118`) has no input parameter. `archive/ARCHITECTURE_REVIEW.md` confirms: *"No capture path and no media pool."* | Medium. The shape to copy already exists: `AuxIn` (`core/src/aux_in.rs`, `dsp/src/aux_in.rs`) is "a level and a copy", and `AudioTapBank` (`render.rs:53`) already hands a consumer channel a buffer someone else filled. A hardware input is one more pre-filled buffer in that bank and needs no ordering, having no producer. Issues #7, #22. |
 | 5 | **Audio + MIDI recording** | Nothing. `EngineCommand` has no `Record` (`core/src/bridge.rs:42-68`); live keys reach the block's event list and are never written back to a pattern. | **Split it.** MIDI capture is cheap and needs no driver change — `press_key`/`release_key` (`render.rs:4212/4228`) already know note, velocity, block offset and channel, and the event ring back to the UI already exists (`executor.rs:46` → `session/engine.rs:477` → `NoteEvent` through `ProjectEdit`). Audio capture is gated on item 3. |
 | 8 | **Full-size browser** | Does not exist. The view set is closed at five (`PaneViews`, `main.slint:393-405`). | **Small, and the cheapest win on the list.** A sixth `PaneViews` entry, one `ViewSlot`/`PaneToolbar` block, a `view.pane-browser` action, a `VIEW_COUNT` bump (`settings.rs:498`) and a settings migration. The `BrowserRow` model and row rendering transfer unchanged; what a full-size view adds is column layout, selection and search — which item 7 wants anyway. Machinery: `ViewSlot` (`main.slint:443`), `PaneToolbar` (`:462`), `PaneTabs` (`:485`), `slot-rect` (`:2797`), `LayoutSettings` (`settings.rs:463-496`); tests at `tests/panes.rs`, `pane_drag.rs`, `dock_resize.rs`. |
 | 9 | **CLAP effects + instruments** | Zero code. No dependency, no scaffolding, no scanner. Only intent in prose (`node.rs:3-7`). | **The largest item on the list by a wide margin**, and four concrete blockers sit in front of it — see §6. Issues #10, #26–30. |
@@ -230,7 +232,7 @@ thirteen sit downstream of, or that the definition in §1 forces.
   (`plans/archive/interface-iteration/` step 04), which closed and archived
   that plan. Items 1, 7 and 8 depended on it and are unblocked: the focus
   model they needed is `Surface` in `actions.rs`, and the browser tree is
-  navigable without the mouse. `ROADMAP.md`'s account of the focus defect is
+  navigable without the mouse. `archive/ROADMAP.md`'s account of the focus defect is
   still stale; the real remaining defects are listed in §8.
 - **Ship 0.1.4 first.** `v0.1.3` was tagged 2026-09-08 and `main` is **167
   commits** past it — the whole console pass, the channel strip, sends, solo
@@ -280,7 +282,7 @@ earlier, not by leaving scope.
   default pick. **Post-0.2**, except for **#16's key-range half** (§2.2),
   which Adam pulled in on 2026-09-14, and except where a defect blocks
   something in §2.
-- **Everything in `ROADMAP.md`'s "Later, Not Scheduled"** that item 2 does not
+- **Everything in `archive/ROADMAP.md`'s "Later, Not Scheduled"** that item 2 does not
   pull in: MIDI output is now *in* (item 2), but controller mapping beyond it,
   multiple time signatures and tempo maps, stem and bus export, groove
   extraction, the text/algebraic pattern view and the node-based patcher are
@@ -344,7 +346,7 @@ kind of self-contained device work that ends in something you can listen to.
 Core Audio are chosen by `cfg`. So every I/O extension must be written twice,
 once per driver, or that decision is revisited first. Two GitHub issues
 already name the fix (**#7**, **#8**/**#9**) and neither is on `FOCUS.md`,
-`ROADMAP.md` or in any plan directory. This is the cheapest-now item on the
+`archive/ROADMAP.md` or in any plan directory. This is the cheapest-now item on the
 whole board and it gates roughly a third of it.
 
 **`eq-v2` step 01 gated CLAP and landed 2026-09-14.** A CLAP plugin hands the
@@ -394,7 +396,7 @@ re-park work that has just been asked for:
 | `PRODUCT.md` non-goals | "A plugin host before its own instrument and sequencing model is coherent" | Item 9 is in for 0.2 — Adam, 2026-09-14: *"I do think CLAP is important."* The instrument model *is* coherent; the parameter model is what is not, and §5 makes that the gate. |
 | `FOCUS.md` "deliberately not now" | Plugin hosting deferred | In, behind `eq-v2` step 01. |
 | `FOCUS.md` on MIDI | *"build the setting, let it stay inert"* | Item 2 lights those rows up. |
-| `ROADMAP.md` "Later, Not Scheduled" | MIDI output, MIDI recording, controller mapping | Output and recording are in; general controller mapping stays out. |
+| `archive/ROADMAP.md` "Later, Not Scheduled" | MIDI output, MIDI recording, controller mapping | Output and recording are in; general controller mapping stays out. |
 
 ---
 
@@ -402,8 +404,8 @@ re-park work that has just been asked for:
 
 Adam's item 10 is *"do something with the buffer device/idea or just remove
 it."* That is the first time deletion has been on the table for the feature
-`PRODUCT.md` calls **"the proposed differentiator"** and that `VERSIONS.md`
-gives an entire release (0.3.0) to deciding.
+`PRODUCT.md` calls **"the proposed differentiator"** and that the old version
+ladder gave an entire release (0.3.0) to deciding.
 
 **Setting the line at 0.2 pulls this forward.** The old ladder let the Buffer
 question wait for its own release; it now has to be answered inside the one
@@ -446,8 +448,8 @@ Each verified against source. They are listed because the project's own named
 fault is *a claim the source no longer supported*, and six of them accumulated
 in nine days.
 
-1. ~~**`ROADMAP.md:20-26` is wrong about the focus defect.**~~ **Corrected in
-   `ROADMAP.md` on 2026-09-14.** It had said the window has a single root
+1. ~~**`archive/ROADMAP.md:20-26` is wrong about the focus defect.**~~ **Corrected in
+   `archive/ROADMAP.md` on 2026-09-14.** It had said the window has a single root
    `FocusScope` that eats keys, so shortcuts need a click on the background
    first. Fixed 2026-09-07: the scope surrounds the UI, control scopes reject
    keys they do not own, `ToolButton` deliberately rejects Space, and
@@ -468,7 +470,7 @@ in nine days.
 5. **`plans/buffer-implementation/00-status.md` does not exist**, where every
    other plan directory has one — so the one plan whose thesis is undecided is
    also the one with no status.
-6. **The real keyboard defects are not the one `ROADMAP.md` names**, and they
+6. **The real keyboard defects are not the one `archive/ROADMAP.md` names**, and they
    are worth recording because step 04 owns them:
    - **Bare unmodified letters never reach the dispatcher.** The decode ladder
      (`main.slint:2096-2237`) handles Space, arrows, named keys, `Ctrl`+letter
@@ -501,13 +503,12 @@ recorded because this document was briefly built on the opposite assumption:
 > it. I've been releasing when it felt like enough changes had accumulated to
 > justify a release, basically."*
 
-So `VERSIONS.md` is a **record kept after the fact**, not a plan anyone works
-to. It should be updated to describe what shipped; it should not be consulted
-to decide what ships, and no scope decision in this document depends on its
-numbering. An earlier draft of this section proposed an elaborate renumbering
-to resolve a collision between the existing `0.2.0`/`0.3.0` milestones and the
-freeze. That collision is not real, because nothing was driving off those
-milestones.
+`VERSIONS.md` was **deleted on 2026-09-14** on the strength of that. It was a
+record kept after the fact that nobody consulted, and `JOURNAL.md` already
+carries the narrative while `CURRENT.md` carries the facts. An earlier draft of
+this section proposed an elaborate renumbering to resolve a collision between
+its `0.2.0`/`0.3.0` milestones and the freeze. The collision was never real,
+because nothing was driving off those milestones.
 
 ### 0.1.4 — the open threads, tied down
 
@@ -554,5 +555,5 @@ Adam's to pick when it gets there; nothing here depends on it.
 
 Rewrite it when the freeze line moves, not when an item lands — a row going
 green belongs in the owning plan's `00-status.md`. When every row in §4's "in"
-list is closed, this document has done its job and should be replaced by a
-`0.2.0` section in `VERSIONS.md`.
+list is closed, this document has done its job, and what shipped belongs in
+`JOURNAL.md` — written after the fact, which is how releases are recorded here.

@@ -7,7 +7,7 @@ of five to seven patches. What building it taught is under "What the run
 found" below. Adam ran it on 2026-09-04 and confirmed it works, after the
 second pass recorded at the foot of this file; the branch landed on `main`.
 
-Queued on its own merits, independent of `docs/NODE_MODEL.md`.
+Queued on its own merits, independent of `docs/IDEAS.md`.
 
 ## The decision — Adam, 2026-09-04
 
@@ -195,7 +195,7 @@ a bare source", and both are wrong for the common case. The candidates:
   asked for. Cannot express a patch that depends on modulation.
 - **Device plus its modulation** — the ML-M1 bank's actual shape.
 - **Rack fragment** — an ordered run of rack rows with a declared boundary,
-  droppable anywhere the boundary fits. The `NODE_MODEL.md` shape, and a
+  droppable anywhere the boundary fits. The `IDEAS.md` shape, and a
   superset of the other two.
 
 The third subsumes the others and is the only one that survives the node

@@ -1,7 +1,7 @@
 # Task: Control and Modulation — picking up from Stage 1
 
 `01-the-whole-thing.md` is done. This document is the handoff for what comes
-next. It is **not** a new design: `docs/MODULATION_PLAN.md` is the approved
+next. It is **not** a new design: `docs/MODULATION.md` is the approved
 design and `docs/FOCUS.md`'s Buffer step is the work order. Read both. This file
 records what already landed, the one amendment that plan needs, and the
 order to build in.
@@ -46,7 +46,7 @@ it), STUT (latching, 1/16 window, eight repeats). Collisions show on the face.
 *(Superseded: step 1 landed in `9323f7e`, and step 4's automation half landed
 after it. See the build order below.)*
 
-## Amendment to MODULATION_PLAN.md: generator outlets
+## Amendment to MODULATION.md: generator outlets
 
 The approved plan covers **effects** exposing outlet signals (a compressor's
 gain reduction, a gate's open state) as modulator sources. It does not cover
@@ -79,7 +79,7 @@ What this requires:
   deterministic, identical offline and realtime, and graph order stops
   mattering. Do not try to make outlets same-block.
 
-Fold this into `MODULATION_PLAN.md` proper rather than leaving it here.
+Fold this into `MODULATION.md` proper rather than leaving it here.
 
 ## Build order
 
@@ -214,7 +214,7 @@ proves the general path, not before.
   read by an audio node as input. A musical control signal belongs in the
   modulator path where it gets a declared rate and latency.
 - **The modulator rack is inline, not boxed nodes.** This deviates from
-  MODULATION_PLAN.md, which suggested reusing the effect chain's
+  MODULATION.md, which suggested reusing the effect chain's
   install/reclaim plumbing. No modulator kind allocates, so that machinery
   buys nothing and would put a `Box` drop on the path of every rack edit.
   Reverse it if a future modulator kind needs heap state.

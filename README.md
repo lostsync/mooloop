@@ -148,9 +148,9 @@ The documentation is split between what exists now and what the project is inten
 - [Application architecture](docs/ARCHITECTURE.md) — crates, components, and data flow.
 - [Audio architecture](docs/AUDIO_ARCHITECTURE.md) — realtime engine, control plane, timing, and latency.
 - [Project format](docs/PROJECT_FORMAT.md) — project files and asset bundles.
-- [Modulation spec](docs/MODULATOR_SYSTEM_SPEC.md) — the modulation rack's sources, routes, and destination policy.
+- [Modulation spec](docs/MODULATION.md) — the modulation rack's sources, routes, and destination policy.
 - [Retained-audio buffer](docs/BUFFER_ENGINE.md) — the buffer device's thesis, and what shipped against it.
-- [Focus](docs/FOCUS.md) — the active work sequence; [Roadmap](docs/ROADMAP.md) orders the rest by dependency.
+- [Focus](docs/FOCUS.md) — the active work sequence; [Scope](docs/SCOPE.md) is everything left before the feature freeze.
 
 ## Where It's Going
 

@@ -4,7 +4,7 @@
 //! maps, and `ModDestinationDescriptor` says whether modulation may reach it.
 //! This module is the other direction — the named signals a device offers to
 //! the rest of the program, per `COMPOSABLE_DEVICE_UNITS.md` ("Inlets and
-//! outlets are designed, not inferred") and `MODULATOR_SYSTEM_SPEC.md`'s
+//! outlets are designed, not inferred") and `MODULATION.md`'s
 //! source table, where `Generator outlet` and `Device outlet` have been listed
 //! as planned since the spec was written.
 //!
@@ -143,7 +143,7 @@ impl OutletDescriptor {
     /// A control outlet: one value per block, read one block later.
     ///
     /// The latency is not a property of any one device. It is the rule from
-    /// `MODULATOR_SYSTEM_SPEC.md` that makes realtime and offline renders
+    /// `MODULATION.md` that makes realtime and offline renders
     /// identical and stops graph order deciding what a route hears, so every
     /// control outlet declares it and a consumer never has to ask which
     /// devices are the punctual ones.

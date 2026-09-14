@@ -51,7 +51,7 @@ This is the step that needs the box.
 
 - `cargo check -p mooloop-ui` after the single crossing — **backgrounded**.
 - The relevant UI snapshot for the rack row, software-rendered, per
-  `docs/AGENT_OPERATIONS.md`.
+  `docs/OPERATIONS.md`.
 - Rung 4 once, before committing.
 
 Background every one of them and keep working; the harness notifies on exit.

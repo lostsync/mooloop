@@ -182,7 +182,7 @@ the decision has a before to point at.
 
 - The current channel and effect bridges use complete `u8` address spaces:
   256 of each. These are transitional bridge-format boundaries, not UI policy
-  caps. `MIXER_PLAN.md` replaces positional channel/bus addressing with stable
+  caps. `archive/MIXER_PLAN.md` replaces positional channel/bus addressing with stable
   signal-slot identities and a per-project prepared render plan, removing the
   fixed mixer-bank model rather than normalizing it as permanent.
 - Pattern IDs likewise use a complete `u8` address space (256 patterns).

@@ -112,7 +112,7 @@ pub struct MixerBus {
     ///
     /// **Solo in place**, Adam's 2026-09-11 ruling: soloing silences the
     /// other tracks rather than tapping this one to a separate monitor
-    /// output. `docs/MIXER_PLAN.md` specifies the AFL tap and it is still
+    /// output. `docs/archive/MIXER_PLAN.md` specifies the AFL tap and it is still
     /// the better end state; this is the one the button on the strip means
     /// to anyone who clicks it, and it needs no second output path.
     ///

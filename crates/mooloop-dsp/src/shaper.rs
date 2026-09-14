@@ -9,7 +9,7 @@
 //! through [`Oversampler2x`].
 //!
 //! Bitcrush deliberately does *not* oversample: its aliasing is the effect.
-//! See `docs/MODULATION_PLAN.md` ("Anti-aliasing policy").
+//! See `docs/MODULATION.md` ("Anti-aliasing policy").
 
 use mooloop_core::DriveCurve;
 

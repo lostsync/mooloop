@@ -179,7 +179,7 @@ Everything the outlet half needs already exists: `OutletDescriptor`,
 
 ## Acceptance
 
-`MIXER_PLAN.md`'s, with the return removed and the alignment case sharpened:
+`docs/archive/MIXER_PLAN.md`'s, with the return removed and the alignment case sharpened:
 
 - post-fader sends from two strips following their faders;
 - one switched to pre-fader, with the documented different result;

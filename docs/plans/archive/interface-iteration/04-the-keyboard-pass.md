@@ -92,7 +92,7 @@ an action here should gain its hint at the same time.
 ## Do not
 
 - **Do not add a *channel* solo action.** Track solo exists and should be
-  bound; a channel's does not. `MIXER_PLAN.md`'s AFL-style monitor tap was not
+  bound; a channel's does not. `docs/archive/MIXER_PLAN.md`'s AFL-style monitor tap was not
   what got built either -- Adam chose solo in place, which needs no second
   output path -- and it is still its own change.
 - **Do not raise `MAX_MOD_ROUTES_PER_CHANNEL` or any other ceiling** because a

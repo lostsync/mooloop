@@ -593,7 +593,7 @@ Named here rather than left to be discovered.
   recorded for sends, with the same fix -- unifying the two paths -- and the
   same reason for not doing it here.
 - **Solo**, which is a monitor tap rather than a control and is the largest
-  unbuilt thing on the mockup. `LOOSE_ENDS.md` carries it and `MIXER_PLAN.md`
+  unbuilt thing on the mockup. `LOOSE_ENDS.md` carries it and `docs/archive/MIXER_PLAN.md`
   specifies it. A dead solo button is not drawn.
 
 ### The review pass, 2026-09-11
@@ -730,7 +730,7 @@ because not one of them needed a plan: the parameter set moved by two fields
 and everything else was drawing.
 
 **Solo, which this plan closed without.** Built as **solo in place**, which
-is a narrowing of what `MIXER_PLAN.md` specified. The status doc above listed
+is a narrowing of what `docs/archive/MIXER_PLAN.md` specified. The status doc above listed
 solo as "the largest unbuilt thing on the mockup" precisely because an
 AFL-style monitor tap is a second output path rather than a control; in place
 needs no second path at all, because the silence happens where mute already

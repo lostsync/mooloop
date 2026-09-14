@@ -12,7 +12,7 @@ Re-render it without building the UI crate:
 scripts/slint-sketch --shot docs/plans/poly-synth-v2/mockups/concept-pages.slint
 ```
 
-`docs/AGENT_OPERATIONS.md` says sketches belong in `$TMPDIR` rather than in the
+`docs/OPERATIONS.md` says sketches belong in `$TMPDIR` rather than in the
 repository, and it is right about working sketches. This one is checked in
 because it is the argument for a layout decision rather than notes from making
 one.

@@ -6164,7 +6164,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     /// what makes the *timing* legible: the block the note lands in must show
     /// the cutoff still at its base, and the block after it must show the
     /// gate. That one-block gap is not a scheduling accident to be tolerated
-    /// — it is the declared contract from `MODULATOR_SYSTEM_SPEC.md`, and it
+    /// — it is the declared contract from `MODULATION.md`, and it
     /// is what makes an offline render agree with a live take.
     #[test]
     fn a_generator_outlet_drives_another_device_one_block_later() {
