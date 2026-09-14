@@ -12,7 +12,8 @@ use mooloop_core::{
     ModRack, MonoSynthParams, MlM1Params, MlP8Params, ParamAddr, ParamOwner, PolySynthParams,
     Project,
     SamplerParams, SendTap, SliceMap,
-    chain_latency, clamp_bus, compile_latency, send_edges, DEFAULT_STEPS, MAX_CONTAINER_DEPTH, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
+    chain_latency, clamp_bus, compensable_send_edges, compile_latency,
+    sends_are_compensable, DEFAULT_STEPS, MAX_CONTAINER_DEPTH, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
     MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS, STRIP_PARAM_VOLUME,
 };
 use mooloop_core::mixer::{StripPin, STRIP_PIN};
@@ -3135,18 +3136,11 @@ impl RenderState {
         for (index, bus) in project.buses.iter().take(MAX_BUSES).enumerate() {
             bus_latency[index] = chain_latency(&bus.effects);
         }
-        // A bank whose routing does not sort is running the
-        // everything-to-master repair, and a send compiled against an order
-        // that is not the one being walked would arrive a block late. So it
-        // has no sends here either, which is the repair `sanitize_bank` makes
-        // on the document -- made again on the plan, for the offline path
-        // that builds its own state and never goes through the session.
-        let sorts = compile_bus_graph(&project.buses).is_some();
-        let edges = if sorts {
-            send_edges(&project.buses)
-        } else {
-            Vec::new()
-        };
+        // Why a non-sorting bank has no sends is written once, in
+        // `mooloop_core::mixer`, because `Session::latency_plan` has to make
+        // the same decision and for a while did not.
+        let sorts = sends_are_compensable(&project.buses);
+        let edges = compensable_send_edges(&project.buses);
         let plan = compile_latency(
             &self.bus_graph,
             &channel_latency,
@@ -7402,7 +7396,12 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     /// sends that ride on it, as one value.
     fn install_track_graph(render: &mut RenderState, buses: &[mooloop_core::BusSetup]) {
         let graph = compile_bus_graph(buses).expect("test graph should be acyclic");
-        let edges = send_edges(buses);
+        //  rather than , because that is
+        // what the pump calls. Equivalent here -- the line above already
+        // requires the bank to sort -- but a helper that says it installs
+        // things the way the pump does should go through what the pump goes
+        // through.
+        let edges = compensable_send_edges(buses);
         let mut bus_latency = [0u32; MAX_BUSES];
         for (index, setup) in buses.iter().take(MAX_BUSES).enumerate() {
             bus_latency[index] = chain_latency(&setup.effects);

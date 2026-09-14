@@ -162,9 +162,10 @@ pub use effect::{
     REVERB_PARAM_PREDELAY_MS, REVERB_PARAM_SIZE, REVERB_PARAM_WIDTH,
 };
 pub use mixer::{
-    chain_latency, run_latency, clamp_bus, compile_audio_graph, compile_bus_graph, compile_latency,
+    chain_latency, run_latency, clamp_bus, compensable_send_edges, compile_audio_graph,
+    compile_bus_graph, compile_latency,
     compile_render_order, default_buses, default_render_order, is_legal_route, is_legal_send,
-    sanitize_bank, sanitize_route, send_edges,
+    sanitize_bank, sanitize_route, send_edges, sends_are_compensable,
     would_create_cycle, AudioEdge, AudioOrder, AuxSend, BusSetup, CompiledAudioGraph, CompiledBusGraph,
     CompiledLatency, EdgeRefusal, EffectTarget, MixerBus, RenderOrder, SendEdge, SendTap,
     INSERT_BUSES, MASTER_BUS, MAX_BUSES,
