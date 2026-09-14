@@ -7,6 +7,8 @@ use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 
+mod common;
+
 fn write_snapshot(snapshot: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, variable: &str) {
     if let Ok(path) = std::env::var(variable) {
         let mut ppm = format!("P6\n{} {}\n255\n", snapshot.width(), snapshot.height()).into_bytes();
@@ -90,14 +92,7 @@ slint::slint! {
 
 #[test]
 fn render_preferences_shortcuts_snapshots() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .expect("initialize headless renderer");
+    common::install_testing_backend();
 
     // The dialog page, at the size it actually renders at.
     let ui = MainWindow::new().unwrap();

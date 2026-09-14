@@ -14,7 +14,9 @@
 
 use mooloop_ui::{view, MainWindow};
 use slint::platform::{PointerEventButton, WindowEvent};
-use slint::{ComponentHandle, LogicalPosition, LogicalSize, SharedString};
+use slint::{ComponentHandle, LogicalPosition, LogicalSize};
+
+mod common;
 
 const TAB_PITCH: f32 = 66.0;
 const FIRST_TAB_CENTRE_X: f32 = 47.0;
@@ -31,14 +33,7 @@ fn tab(index: usize, row: f32) -> (f32, f32) {
 }
 
 fn harness() -> MainWindow {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui

@@ -18,52 +18,18 @@ use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc, VecMo
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Piano roll grid geometry in logical pixels, derived empirically from a
-/// software render of the 960x760 window on the Notes page. These move if the
-/// editor's left gutter or the toolbar above it is resized.
-///
-/// `GRID_TOP_Y` moved up 34px on 2026-09-08, when the dock's two stacked
-/// toolbars -- a 30px slot header and a 34px per-page row -- became the one
-/// 30px row every view now carries. The grid's *top* is what moved: the
-/// horizontal scrollbar and the velocity lane are anchored to the dock's
-/// bottom edge, which did not move, so their constants are unchanged. Both
-/// were re-measured off software renders of the old and new layouts rather
-/// than adjusted by arithmetic.
-const GRID_ORIGIN_X: f32 = 54.0;
-const GRID_TOP_Y: f32 = 349.0;
-const ROW_HEIGHT: f32 = 8.0;
-const STEP_WIDTH: f32 = 32.0;
-/// The engine's own value rather than a copy of it.
-///
-/// This is what makes the coordinate helpers below able to see a drift
-/// instead of sharing it. `piano-grid.slint` spells the same number as a
-/// bare `24` in fifteen places; if the table ever moves and the markup does
-/// not, the positions computed here stop matching where the grid draws and
-/// these tests fail -- which is the whole job. Held as its own `const 24`,
-/// they would have gone on passing while the roll drew every note in the
-/// wrong place.
-const TICKS_PER_STEP: i32 = mooloop_core::TICKS_PER_STEP as i32;
-const HIGH_NOTE: i32 = 84;
-const H_SCROLLBAR_Y: f32 = 649.0;
-const V_SCROLLBAR_X: f32 = 946.0;
+mod common;
 
-fn note_centre_y(midi_note: i32) -> f32 {
-    GRID_TOP_Y + (HIGH_NOTE - midi_note) as f32 * ROW_HEIGHT + ROW_HEIGHT / 2.0
-}
-
-fn tick_x(tick: i32) -> f32 {
-    GRID_ORIGIN_X + tick as f32 * STEP_WIDTH / TICKS_PER_STEP as f32
-}
+/// The grid geometry and coordinate helpers these tests measure against.
+/// `common::piano_grid` carries the account of where the numbers come from
+/// and why `TICKS_PER_STEP` is the engine's rather than a copy of it.
+use crate::common::piano_grid::{
+    note_centre_y, tick_x, GRID_ORIGIN_X, GRID_TOP_Y, H_SCROLLBAR_Y, STEP_WIDTH, TICKS_PER_STEP,
+    V_SCROLLBAR_X,
+};
 
 fn harness(notes: Vec<NoteCell>) -> MainWindow {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(slint::SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
     let ui = MainWindow::new().unwrap();
     // `run` resolves these from the user's settings; without them every
     // gesture role is unbound and no modifier does anything.

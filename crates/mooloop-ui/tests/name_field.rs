@@ -23,6 +23,8 @@ use slint::{ComponentHandle, LogicalPosition, LogicalSize, SharedString};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+mod common;
+
 slint::slint! {
     import { NameField } from "../ui/toolbar.slint";
 
@@ -86,14 +88,7 @@ fn type_into(ui: &NameFieldHarness, text: &str) {
 
 #[test]
 fn the_application_still_owns_the_name_after_somebody_types() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .expect("initialize headless renderer");
+    common::install_testing_backend();
 
     let ui = NameFieldHarness::new().unwrap();
     ui.window().set_size(LogicalSize::new(300.0, 80.0));

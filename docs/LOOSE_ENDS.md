@@ -1050,13 +1050,6 @@ They are all `#[cfg(test)]` modules inside `mooloop-engine/src`, so unlike
 the `mooloop-ui` integration tests they can share a plain module without any
 `tests/common/` arrangement. The cheapest of the duplication items here.
 
-**The Slint testing backend is set up eighteen times.** Fifteen
-`mooloop-ui/tests/*.rs` files spell out the same
-`TestingBackend::new(TestingBackendOptions { mock_time, threading,
-renderer_name: "software" })`, `source_snapshot.rs` eleven times on its own.
-This is the same shape as the piano-roll grid constants below, wants the same
-`tests/common/` module, and would be worth doing in the same pass.
-
 ## Numbers nothing is watching
 
 **`gain::MIN_DB` is spelled twenty-six times in markup and the test that
@@ -1173,19 +1166,6 @@ from the one the test makes. Covering both idioms means the test grows a second
 comparison, not just a longer list.
 
 ## Housekeeping
-
-**The piano roll's grid geometry is a constant in two test files and nothing
-holds them together.** `piano_drag.rs:32` and `piano_tools.rs:16` each declare
-`GRID_ORIGIN_X` / `GRID_TOP_Y` / `ROW_HEIGHT` / `STEP_WIDTH` / `HIGH_NOTE`,
-measured off a software render of the 960x760 window, and `piano_tools.rs`
-says "matching `piano_drag.rs`" in a comment that nothing enforces. Both moved
-on 2026-09-08 when the dock's two toolbars merged; fixing the first and
-running the suite reported the second as nineteen fresh failures, which is how
-the copy was found. The cost is one wasted five-minute remote run per toolbar
-change, so it is small — but it is exactly the shape `slint_face_agreement.rs`
-exists to prevent for faces, and a shared `tests/common/` module or one
-element-derived origin would end it. `rack_tools.rs:28` has a third
-`GRID_ORIGIN_X` for the step grid; that one is genuinely a different grid.
 
 **`mooloop-ui` had never been linted, and two things had ridden in on that.**
 Fixed 2026-09-07, recorded because the *shape* of it will recur: `cargo

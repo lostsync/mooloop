@@ -32,6 +32,8 @@ use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 
+mod common;
+
 /// Four rack units of `DeviceRackMetrics` minus the two rails, by
 /// `face-height` minus the device header. The same size the rack gives it.
 const FACE_WIDTH: f32 = 884.0;
@@ -50,14 +52,7 @@ const BODY_PAGE: i32 = 3;
 const DIAL_SIZE: u32 = 34;
 
 fn init_software_backend() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
 }
 
 /// The per-id arrays the face reads, built the same way `refresh_ds01` builds

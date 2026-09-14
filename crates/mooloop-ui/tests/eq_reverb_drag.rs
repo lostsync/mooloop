@@ -23,6 +23,8 @@ use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+mod common;
+
 /// The EQ fits two rack units.
 const EQ_FACE_WIDTH: f32 = 220.0 * 2.0 + 4.0;
 const DYNAMICS_FACE_WIDTH: f32 = EQ_FACE_WIDTH;
@@ -33,14 +35,7 @@ const HEADER_HEIGHT: f32 = 28.0;
 /// that implements `take_snapshot`, so the drag tests can also compare
 /// rendered pixels before and after a drag.
 fn init_software_backend() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(slint::SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
 }
 
 /// Write the snapshot to a PPM file when `variable` names a path, for

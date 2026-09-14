@@ -7,6 +7,8 @@
 use slint::ComponentHandle;
 use slint::LogicalSize;
 
+mod common;
+
 slint::slint! {
     import { Theme } from "../ui/theme.slint";
     import { AudioOrientation } from "../ui/controls.slint";
@@ -55,14 +57,7 @@ slint::slint! {
 
 /// Initialize the software renderer, the only backend with `take_snapshot`.
 fn init_software_backend() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(slint::SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
 }
 
 /// Pixels within a small distance of the theme's meter colours

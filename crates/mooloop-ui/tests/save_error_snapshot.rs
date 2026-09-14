@@ -1,16 +1,11 @@
 use mooloop_ui::MainWindow;
-use slint::{ComponentHandle, LogicalSize, SharedString};
+use slint::{ComponentHandle, LogicalSize};
+
+mod common;
 
 #[test]
 fn save_error_dialog_renders_the_complete_reason() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .expect("initialize headless renderer");
+    common::install_testing_backend();
 
     // The real shape of a blocked save: the plain-language summary the user
     // acts on, then the machine-readable report the copy button also picks up.

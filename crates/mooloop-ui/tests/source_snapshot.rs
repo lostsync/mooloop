@@ -9,6 +9,8 @@ use slint::platform::WindowEvent;
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 
+mod common;
+
 fn write_snapshot(snapshot: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, variable: &str) {
     if let Ok(path) = std::env::var(variable) {
         let mut ppm = format!("P6\n{} {}\n255\n", snapshot.width(), snapshot.height()).into_bytes();
@@ -56,14 +58,7 @@ fn set_drum_preview(ui: &MainWindow, params: DrumSynthParams) {
 
 #[test]
 fn render_drum_and_mono_source_editors() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .expect("initialize headless renderer");
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
@@ -140,14 +135,7 @@ fn render_drum_and_mono_source_editors() {
 
 #[test]
 fn render_mlm1_source_editor() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
@@ -222,14 +210,7 @@ fn render_mlm1_source_editor() {
 
 #[test]
 fn render_sampler_source_editor() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .expect("initialize headless renderer");
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
@@ -666,14 +647,7 @@ fn effect_slot(kind: EffectKind) -> EffectSlotRow {
 
 #[test]
 fn render_effect_header_comparison() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .expect("initialize headless renderer");
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(3800.0, 760.0));
@@ -719,14 +693,7 @@ fn render_effect_header_comparison() {
 /// test (`shot.width() > 0`) let a container render as an empty frame.
 #[test]
 fn a_container_draws_its_run_and_its_nesting() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .expect("initialize headless renderer");
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
@@ -798,14 +765,7 @@ fn a_container_draws_its_run_and_its_nesting() {
 /// visible width.
 #[test]
 fn effect_rack_scrolls_horizontally_to_reach_a_long_chain() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .expect("initialize headless renderer");
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
@@ -847,14 +807,7 @@ fn effect_rack_scrolls_horizontally_to_reach_a_long_chain() {
 
 #[test]
 fn render_poly_source_editor() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .expect("initialize headless renderer");
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
@@ -900,14 +853,7 @@ fn render_poly_source_editor() {
 /// fully-zoomed-out shot above cannot show.
 #[test]
 fn render_sampler_zoomed_markers() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .expect("initialize headless renderer");
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
@@ -951,14 +897,7 @@ fn render_sampler_zoomed_markers() {
 /// only separate once the view is windowed.
 #[test]
 fn render_sampler_slice_markers() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .expect("initialize headless renderer");
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
@@ -1006,14 +945,7 @@ fn render_sampler_slice_markers() {
 /// than silently re-baked.
 #[test]
 fn render_sampler_committed_stretch() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .expect("initialize headless renderer");
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
@@ -1045,14 +977,7 @@ fn render_sampler_committed_stretch() {
 /// in (`docs/plans/archive/modulator-capacity/01-capacity-is-a-constant.md`).
 #[test]
 fn the_module_grid_scales_with_capacity_alone() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .expect("initialize headless renderer");
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(1440.0, 900.0));
@@ -1102,14 +1027,7 @@ fn the_module_grid_scales_with_capacity_alone() {
 /// five per-voice sources reach through.
 #[test]
 fn render_mlp8_modulation_page() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
@@ -1228,14 +1146,7 @@ fn render_mlp8_modulation_page() {
 
 #[test]
 fn render_mlp8_source_editor() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
@@ -1386,14 +1297,7 @@ fn render_mlp8_source_editor() {
 /// range this instrument is meant to reach.
 #[test]
 fn render_the_ds01_face() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(1280.0, 760.0));
@@ -1466,14 +1370,7 @@ fn render_the_ds01_face() {
 /// the whole reason `compile_audio_graph` keeps a refusal inspectable.
 #[test]
 fn render_aux_in_source_editor() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));

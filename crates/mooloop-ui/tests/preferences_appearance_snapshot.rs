@@ -10,6 +10,8 @@ use slint::{
 };
 use std::rc::Rc;
 
+mod common;
+
 slint::slint! {
     import { AppearancePage, AppearanceSchemeRow } from "../ui/appearance-dialog.slint";
 
@@ -82,14 +84,7 @@ const FIXTURE: [(&str, u32, u32, u32, bool); 7] = [
 
 #[test]
 fn render_preferences_appearance_snapshot() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .expect("initialize headless renderer");
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(800.0, 600.0));

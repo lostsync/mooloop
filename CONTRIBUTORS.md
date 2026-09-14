@@ -68,7 +68,7 @@ Alphabetical by model name, then by harness.
 ### Claude Opus 5 — Claude Code
 - First seen: 2026-08-21
 - Last seen: 2026-09-13
-- Sessions: 113
+- Sessions: 114
 - Notes: Parameter descriptors and the modulation design; seven of the
   effects; the mixer bus graph; clip automation end to end; the Appearance
   rebuild on three colour seeds; the gain audit and its plan; the ML-M1,
@@ -269,7 +269,11 @@ Alphabetical by model name, then by harness.
   were still parked in it as future work -- which meant renumbering the steps,
   and so chasing twelve "step 3" pointers across the documentation to the thing
   each one meant, and finding that two of the three pieces of the channel
-  identity step had quietly landed with the console pass.
+  identity step had quietly landed with the console pass, and then the
+  `mooloop-ui` test suite's shared `tests/common/`, which retired thirty-eight
+  copies of the testing-backend stanza and the piano grid's two copies of its
+  own geometry -- and found that the reason two of those copies gave for
+  preferring `.ok()` was not what Slint does.
   Longer accounts of most of this are in
   `docs/JOURNAL.md` and the commit messages, which is where they belong.
 

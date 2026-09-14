@@ -13,21 +13,15 @@
 //! > in the pane.
 
 use mooloop_ui::{view, MainWindow};
-use slint::SharedString;
+
+mod common;
 
 const MAIN: i32 = 0;
 const SPLIT: i32 = 1;
 const BOTTOM: i32 = 2;
 
 fn harness() -> MainWindow {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
     MainWindow::new().unwrap()
 }
 

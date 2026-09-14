@@ -20,7 +20,9 @@
 
 use mooloop_ui::{view, MainWindow};
 use slint::platform::{PointerEventButton, WindowEvent};
-use slint::{ComponentHandle, LogicalPosition, LogicalSize, SharedString};
+use slint::{ComponentHandle, LogicalPosition, LogicalSize};
+
+mod common;
 
 // Dock geometry in the 960x760 window, measured with the grip probe: the
 // splitter's 1px line sits at y=317 with the dock's top edge directly below,
@@ -31,14 +33,7 @@ const GRIP_Y: f32 = DOCK_TOP_Y - 3.0;
 const NEUTRAL_Y: f32 = 400.0;
 
 fn harness() -> MainWindow {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui.invoke_show_view(view::NOTES);

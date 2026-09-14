@@ -4,6 +4,8 @@ use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString
 use std::cell::Cell;
 use std::rc::Rc;
 
+mod common;
+
 fn write_snapshot(snapshot: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, variable: &str) {
     if let Ok(path) = std::env::var(variable) {
         let mut ppm = format!("P6\n{} {}\n255\n", snapshot.width(), snapshot.height()).into_bytes();
@@ -16,17 +18,7 @@ fn write_snapshot(snapshot: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, variab
 
 #[test]
 fn render_playlist_snapshot() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    // `.ok()` rather than `.expect`: the platform is per *process* and this
-    // file holds more than one test, so whichever runs second finds it
-    // already installed. That is success, not failure.
-    .ok();
+    common::install_testing_backend();
 
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
@@ -354,14 +346,7 @@ fn render_playlist_snapshot() {
 /// coordinate the snapshot test above measures a clip at.
 #[test]
 fn a_coloured_pattern_paints_its_own_clips() {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
 
     const AMBER: [u8; 3] = [0xEA, 0xB3, 0x08];
     // What `ProjectColor::ink` answers for amber, whose luminance is 0.699.

@@ -11,30 +11,11 @@ use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc, VecMo
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Grid geometry in logical pixels, matching `piano_drag.rs`. These move if
-/// the editor's left gutter or the toolbar above it is resized.
-///
-/// `GRID_TOP_Y` moved up 34px on 2026-09-08 with the dock's toolbar merge;
-/// `piano_drag.rs` carries the full account. **Two files hold this number and
-/// nothing holds them together** -- fixing one and running the suite reports
-/// the other as nineteen fresh failures, which is how this copy was found.
-const GRID_ORIGIN_X: f32 = 54.0;
-const GRID_TOP_Y: f32 = 349.0;
-const ROW_HEIGHT: f32 = 8.0;
-const STEP_WIDTH: f32 = 32.0;
-/// The engine's own value rather than a copy of it.
-///
-/// This is what makes the coordinate helpers below able to see a drift
-/// instead of sharing it. `piano-grid.slint` spells the same number as a
-/// bare `24` in fifteen places; if the table ever moves and the markup does
-/// not, the positions computed here stop matching where the grid draws and
-/// these tests fail -- which is the whole job. Held as its own `const 24`,
-/// they would have gone on passing while the roll drew every note in the
-/// wrong place.
-const TICKS_PER_STEP: i32 = mooloop_core::TICKS_PER_STEP as i32;
-/// The roll's default snap, 1/16, which at 96 PPQ is one step.
-const SNAP_TICKS: i32 = 24;
-const HIGH_NOTE: i32 = 84;
+mod common;
+
+/// The same grid geometry `piano_drag.rs` measures against, now held in
+/// one place rather than two. `common::piano_grid` carries the account.
+use crate::common::piano_grid::{note_centre_y, tick_x, SNAP_TICKS, STEP_WIDTH, TICKS_PER_STEP};
 
 const TOOL_SELECT: i32 = 0;
 const TOOL_DRAW: i32 = 1;
@@ -42,23 +23,8 @@ const TOOL_PAINT: i32 = 2;
 const TOOL_SLICE: i32 = 3;
 const TOOL_ERASE: i32 = 4;
 
-fn note_centre_y(midi_note: i32) -> f32 {
-    GRID_TOP_Y + (HIGH_NOTE - midi_note) as f32 * ROW_HEIGHT + ROW_HEIGHT / 2.0
-}
-
-fn tick_x(tick: i32) -> f32 {
-    GRID_ORIGIN_X + tick as f32 * STEP_WIDTH / TICKS_PER_STEP as f32
-}
-
 fn harness(tool: i32, notes: Vec<NoteCell>) -> MainWindow {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(slint::SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
     let ui = MainWindow::new().unwrap();
     ui.set_piano_gestures(default_piano_gestures());
     ui.window().set_size(LogicalSize::new(960.0, 760.0));

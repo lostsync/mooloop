@@ -8,19 +8,14 @@
 use mooloop_ui::{BrowserRow, MainWindow};
 use slint::{
     platform::{PointerEventButton, WindowEvent},
-    ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc, SharedString, VecModel,
+    ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc, VecModel,
 };
 use std::rc::Rc;
 
+mod common;
+
 fn harness() -> MainWindow {
-    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(
-        i_slint_backend_testing::TestingBackendOptions {
-            mock_time: true,
-            threading: false,
-            renderer_name: Some(SharedString::from("software")),
-        },
-    )))
-    .ok();
+    common::install_testing_backend();
     let ui = MainWindow::new().unwrap();
     ui.window().set_size(LogicalSize::new(960.0, 760.0));
     ui
