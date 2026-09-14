@@ -25,8 +25,12 @@ Smart grid on piano roll tied to zoom level?
 
 Big one: Select multiple notes and drag, Edit (c/c/p) via keyboard shortcut or menu. If we could do keyboard based selection somehow that would be cool, like using the arrow keys or vim keys or something -- honestly being able to navigate this whole app by keyboard should be getting a lot more attention.
   DONE, mouse half: marquee select, and a selection that moves, resizes, and
-  scales as one object. Still open: cut/copy/paste of notes, and keyboard
-  selection and navigation.
+  scales as one object. DONE 2026-09-14, the clipboard half: Ctrl+C/X/V mean
+  the notes when the roll has a selection, the selected device when the rack
+  is where you are, and the channel otherwise -- one action resolved against
+  the focused surface, because a chord can only ever resolve to one action id.
+  **Still open: keyboard *selection*.** The arrow keys move a selection and
+  cannot build one, which is the half that would want the vim-key idea.
 
 Standard piano roll pointer tools? Select/normal, draw mode, slice/heal (heal with modifier i think?)
   DONE: Select, Draw, Paint, Slice, Erase on keys 1-5, with heal/join as
@@ -36,7 +40,11 @@ Axis-constrained note drag (lock to time-only or pitch-only) is the one
 standard gesture deliberately left out. Every conventional binding for it is
 Alt, which is the chord you flagged as WM-hostile, and shipping it bound to
 nothing would be a dark feature. The gesture registry in `gestures.rs` is
-where it goes once there is a key worth giving it.
+where it goes once there is a key worth giving it. The keyboard pass
+(2026-09-14) was the moment to revisit it and did not produce one: it built a
+focus model and an action scope, and changed nothing about the *modifier*
+vocabulary, so this stays out on the same terms rather than being bound to
+something worse.
 
 Tooltip audit:
 
@@ -64,9 +72,15 @@ I feel like we probably should have paid more attention to this from the beginni
 
 At this point, minimally, we just need to add the ability to configure some common keyboard commands in the prefs page.
   DONE: `docs/ACTIONS.md` is the contract, `mooloop-ui/src/actions.rs` is the
-  registry, and Preferences > Shortcuts rebinds all 39 of them. The console
-  and MCP surfaces this paragraph wants are still hypothetical, but they now
-  have one seam to hang off rather than needing their own wiring.
+  registry, and Preferences > Shortcuts rebinds all 63 of them -- 39 when this
+  was first answered, and the keyboard pass on 2026-09-14 is the rest:
+  transport stop and return-to-start, the rack's verbs, channel mute, track
+  mute and solo, and the browser. It also carries a Context column, because a
+  chord that only acts somewhere has to say where. The console and MCP
+  surfaces this paragraph wants are still hypothetical, but they now have one
+  seam to hang off rather than needing their own wiring -- and the focus model
+  a console would need to know *what* an action is aimed at now exists as
+  `Surface`.
 
 GUI focus issues:
 
@@ -131,7 +145,7 @@ i want to move and redesign the modulation rack. i have an image somewhere, a mo
   move must not break.
 
 i want to make a sidebar on the left that lets you change channel settings like name, track color, input channel, etc. its also illustrated in the mockup
-  IN THE SEQUENCE (`docs/plans/interface-iteration/` step 03, which builds the
+  IN THE SEQUENCE (`docs/plans/archive/interface-iteration/` step 03, which builds the
   *content* of this sidebar and leaves the sidebar itself for later). Track
   colour does not exist anywhere
   today — not as a field, not in the project format — so this one adds
@@ -141,17 +155,21 @@ i want to make a sidebar on the left that lets you change channel settings like 
   the sidebar pull MIDI configuration forward.
 
 we need keyboard nav in the sample browser panel
-  IN THE SEQUENCE (`docs/plans/interface-iteration/` step 04, the keyboard
-  pass, which is the largest single piece in it). Downstream of the focus fix
-  above: a
-  tree that cannot hold focus predictably cannot be navigated either.
+  LANDED 2026-09-14, as `docs/plans/archive/interface-iteration/` step 04.
+  Ctrl+B reveals the sidebar and takes the keys; Up/Down move the highlighted
+  row, Right opens a closed folder or steps into it, Left closes one or climbs
+  to its parent, Enter does what clicking the row does, and Ctrl+Enter loads a
+  sample or preset into the selected channel. The tree deliberately has **no
+  `FocusScope` of its own** -- a nested scope swallows the pointer press that
+  would focus it, which would have made every row a two-click row. The root
+  scope already hears every key; what was missing was somewhere to aim them.
 
 i think i want that panel to also be able to browse and load presets
-  LANDED 2026-09-07, as `docs/plans/interface-iteration/` step 01. The browser
+  LANDED 2026-09-07, as `docs/plans/archive/interface-iteration/` step 01. The browser
   sidebar has a PRESETS tab over one row model, and an effect preset loaded
   from it *appends* a device rather than replacing one -- which is the better
-  gesture and is why an effect preset is always loadable. What it does not have
-  is keyboard navigation, which is step 04's.
+  gesture and is why an effect preset is always loadable. Keyboard navigation,
+  which it did not have, arrived with step 04 on 2026-09-14.
 
 i want to do a text label -> icon pass at some point
   DELIBERATELY NOT YET. Wanted, but it is polish over a shell that is still

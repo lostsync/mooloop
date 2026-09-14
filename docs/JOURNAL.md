@@ -1303,6 +1303,92 @@ sag, hysteresis, a fitted tilt — and each is a row of a table and a pair of
 ears. `console/` and `adopt-shared-biquad-in-eq/`, which it absorbed, are in
 `archive/`.
 
+## Sep 14 — the shortcut that had never once fired
+
+The keyboard pass was the last step of `interface-iteration/`, and Adam had
+asked for it in stronger terms than anything else on his list: *"honestly
+being able to navigate this whole app by keyboard should be getting a lot
+more attention."* The step file framed it as coverage — 47 actions, transport
+was two of them, nothing device-level, the browser tree unreachable — plus one
+decision to make, which was what `Ctrl+C` should mean now that three
+clipboards want it.
+
+The coverage was the easy half. 63 actions now: stop and return-to-start,
+bypass/remove/wrap/save-preset and stepping the selection along the chain,
+channel mute, track mute and solo, and the browser.
+
+**The registry and the keyboard had drifted apart, and nothing could
+notice.** `transport.loop-toggle` shipped on 2026-09-07 bound to a bare `L`.
+`main.slint`'s root ladder decoded named keys, then Ctrl+letter sentinels,
+then a generic Ctrl branch, and then forwarded exactly six keys unmodified —
+the digits 1 to 6, for the roll's pointer tools — and rejected everything
+else. An `L` reached that final `reject`. The registry held the action, the
+prefpane drew its row, `ShortcutTable` resolved the chord, the suite was
+green, and **no L had ever fired it**. Seven days.
+
+Two more of the same shape underneath it. The Shortcuts *recorder* refused an
+unmodified key outright, so the bare-L and bare-digit defaults could not be
+rebound to anything that worked either — Reset followed by Record could not
+put back what the registry shipped with. And both ladders forwarded a space
+press with all four modifier flags hardcoded `false`, which made Shift+Space
+and Space one chord; `transport.stop` could not have been bound to it
+whatever the registry said.
+
+The lesson is `AGENTS.md`'s own, one file over. Every test asked the registry
+what it held. None asked the markup what it could deliver, and the markup is
+the half that has to agree. `actions.rs`'s `decoding` module reads both
+`.slint` files now: one test fails if a registry default is a chord the root
+ladder cannot produce, another fails if the two ladders name different keys.
+They scrape rather than mirror a table, because a mirrored table would have
+been the third copy of the thing that had already drifted twice. A third
+test scrapes `lib.rs` for every action id, because the dispatcher's match
+ends in `_ => return false` and an unhandled id is the same failure one layer
+up.
+
+And a third instance, found while writing the entry rather than the code:
+`ACTIONS.md` states how many actions the registry holds, confesses in the same
+sentence to having said 46 where the table held 45, and had been corrected to
+47 on 2026-09-12 — by which time the table held 49. Two corrections, both made
+by counting. The third fix reads the sentence out of the Markdown and compares
+it with `ACTIONS.len()`.
+
+**What `Ctrl+C` means, and why it could not be three actions.** A chord
+resolves to one action id — `ShortcutTable` is a `HashMap<KeyChord, &str>`
+and cannot be anything else — so the answer is one action that asks what has
+focus. `ActionSpec` grew a `Scope`; `Surface` is what a `Scope::Focused`
+action points at; Preferences draws the scope in a Context column, blank for
+the global majority so the column marks exceptions rather than restating the
+rule sixty-three times.
+
+The fallback is the channel list, not a fifth state meaning "nothing": these
+chords meant the channel unconditionally before there was a second clipboard,
+so a surface nobody has clicked behaves the way it did then, and nothing
+anybody relied on changed shape. The roll still wins whenever it is on screen
+with a selection, ahead of the last click, because a user who has just
+dragged a marquee is not thinking about the browser row they opened first.
+And the ids did not change — `edit.copy-channel` is labelled "Copy" now — for
+`ACTIONS.md`'s own reason: rebindings are stored against the id.
+
+Taking the four arrow keys into the same mechanism meant **deleting a branch
+from the root FocusScope**. Up and Down picked a channel there, guarded by a
+hand-written *unless the roll has a selection*. That guard could only ever
+know about two answers. The browser is a third, and it could not have been
+one without leaving the markup.
+
+**The browser does not get a FocusScope, and that is the finding.** The step
+file's diagnosis was that the tree "has no `FocusScope` of its own and so
+cannot be reached by a key at all" — true in the first half, and the second
+does not follow. A FocusScope without focus swallows the pointer press that
+would focus it, which is the two-clicks-per-control bug of Aug 18 that
+`tests/first_click.rs` has pinned ever since; nesting one in the browser
+would have made every row a two-click row. The root scope already hears every
+key. What the browser was missing was somewhere for them to be *aimed*.
+
+Left climbs to a parent by walking back to the first shallower row, because
+the model is flattened and a row carries no pointer to the one containing it.
+Scrolling the keyboard's row into view had to happen in the markup: Rust
+knows the index and only the `ScrollView` knows how many rows fit.
+
 ## Patterns worth noticing
 
 **Hardcoded constants drift; derived ones don't.** The 758px viewport, the 220px pattern strip with 190px of hole, the fixed 5px note edge zone that ate a minimum-width note, the forwarded-command threshold of 29 that had overcounted the baseline, the piano roll's C2–C6 range hardcoded as a bare `49` in half a dozen places. Every one was correct on the day it was written; a stale range check in the save validator (checking volume against `0.0..=1.0` after the trim ceiling moved to +12dB) is the same failure one layer over, in validation instead of layout.
@@ -1374,6 +1460,6 @@ Refreshed 2026-09-02, with the September documentation audit's threads merged in
 - The tooltip audit is unfinished: the status bar exists and about forty sites feed it, but deciding per control which half of the rule it falls under has not happened, and the sampler face is not plumbed in at all.
 - The v1 mono synth cannot be deleted until its channels have somewhere to land, which is the poly mono/legato toggle in `docs/plans/poly-v1-mono-mode/`. Until then the picker lists both mono synths.
 - ~~Keyboard focus is unreliable and it eats shortcuts, spacebar included.~~ Fixed 2026-09-07, and this bullet is a good example of the failure it describes: the explanation here was wrong. The root `FocusScope` was a sibling of the UI rather than its ancestor, so keys never bubbled to it at all; the focusable things inside it were mostly innocent. Text fields are the one remaining case, and they are in `LOOSE_ENDS.md` — a caret parked in one still eats Space, because there is no way to leave a field except Enter.
-- Keyboard navigation exists in the piano roll and nowhere else. The browser tree cannot be reached or driven from the keyboard, and the roll's arrow keys move a selection without being able to build one.
+- ~~Keyboard navigation exists in the piano roll and nowhere else.~~ Closed 2026-09-14: the browser tree is navigable (Ctrl+B, then the arrows, Enter and Ctrl+Enter), and the clipboard chords resolve against the focused panel. What is left of this thread is that **the roll's arrow keys move a selection without being able to build one** — keyboard *selection* has never existed and is `ENHANCEMENTS.md`'s, not a plan's.
 - Channels have no colour — no field in the UI, the session model, or the project format — which is the one genuinely new persisted thing the planned channel sidebar needs.
 - The modulation shelf is about to move. `UI_DESIGN.md`'s shelf section describes a location under review, and the 1.0 mockup draws the modulator as a tracker, which is the same notation `IDEAS.md` proposed for automation events. Whether those are one editor or two is unanswered.

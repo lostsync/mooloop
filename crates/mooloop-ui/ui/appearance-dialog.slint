@@ -115,6 +115,12 @@ export struct ShortcutRow {
     label: string,
     category: string,
     chord: string,
+    // Where the chord applies, from `actions.rs`'s `Scope::label`, and empty
+    // for an action that fires anywhere. Filled in Rust so the page never
+    // has to know which actions are contextual -- and drawn at all because
+    // a chord that does nothing where you pressed it is otherwise
+    // indistinguishable from a chord that is broken.
+    context: string,
     is-default: bool,
     is-first-in-category: bool,
 }
@@ -201,6 +207,15 @@ export component ShortcutRowView inherits Rectangle {
             vertical-alignment: center;
             horizontal-stretch: 1;
         }
+        Text {
+            text: root.entry.context;
+            color: Theme.text-faint;
+            font-size: 9px;
+            width: 96px;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            overflow: elide;
+        }
         ToolButton {
             text: root.capturing ? "Cancel" : "Record";
             clicked => {
@@ -239,7 +254,7 @@ export component ShortcutRowView inherits Rectangle {
                 root.capture-cancelled();
                 accept
             } else if (event.text == " ") {
-                root.key-captured("space", false, false, false, false);
+                root.key-captured("space", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
                 accept
             } else if (event.text == Key.LeftArrow) {
                 root.key-captured("left", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
@@ -358,11 +373,16 @@ export component ShortcutRowView inherits Rectangle {
             } else if (event.text == "\u{1a}") {
                 root.key-captured("z", true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
                 accept
-            } else if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
+            // Everything else, including an unmodified key. This required
+            // a modifier until 2026-09-14, which made a shipped default
+            // unrecordable: `transport.loop-toggle` is a bare L and the
+            // roll's tools are bare digits, so Reset followed by Record
+            // could not put back what the registry had. `actions.rs`'s
+            // `the_recorder_decodes_what_the_dispatcher_does` now fails if
+            // this ladder and `main.slint`'s drift apart again.
+            } else {
                 root.key-captured(event.text.to-lowercase(), event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta);
                 accept
-            } else {
-                reject
             }
         }
     }
@@ -847,9 +867,12 @@ export component PreferencesDialog inherits Rectangle {
                                 ToolButton { text: "Reset All"; clicked => { root.shortcut-reset-all(); } }
                             }
                             Text {
-                                text: "Click Record, then press the key combination to assign.";
+                                text: "Click Record, then press the key combination to assign. "
+                                    + "A chord with a context on the right only acts there; "
+                                    + "\"Focused panel\" means it asks what you last clicked.";
                                 color: Theme.text-muted;
                                 font-size: 10px;
+                                wrap: word-wrap;
                             }
                             ScrollView {
                                 vertical-stretch: 1;

@@ -16,8 +16,10 @@ chosen at compile time, and stops short of packaging or a macOS release. Every
 step has landed; the macOS CI job is the one thing that has not yet run.
 
 **`FOCUS.md` was rewritten on 2026-09-12 and it decided five of the entries
-below.** The sequence is: finish `interface-iteration/` (steps 03 and 04), then
-`eq-v2/`, then Buffer -- whose *shape* that step has to raise before building,
+below.** The sequence it set was: finish `interface-iteration/` (steps 03 and
+04), then `eq-v2/`, then Buffer. The first of those closed on 2026-09-14 and
+archived, so the live sequence is `eq-v2/`, then Buffer -- whose *shape* that
+step has to raise before building,
 because `BUFFER_ENGINE.md`'s insert model is not settled. `device-registry/`,
 `theming/`, `pattern-bank-floor/` and `egui-view-layer/` are all parked under
 "deliberately not now", each with its reason and with what would unpark it. One
@@ -48,13 +50,24 @@ is worth a step was a `FOCUS.md` question, and the answer as of 2026-09-12 is
 **not now** -- safely, because the measurements to judge it by are committed
 either way.
 
-Last swept 2026-09-13, when `interface-iteration/` step 03 landed: a channel
+Last swept 2026-09-14, when `interface-iteration/` step 04 landed and the
+directory archived. The keyboard pass was supposed to be about coverage --
+no stop, nothing device-level, no browser focus -- and 63 actions is that
+coverage. What it found is that **the registry and the keyboard had drifted
+apart and nothing could notice**: `transport.loop-toggle` had been dead since
+it shipped on 2026-09-07, bound to a bare L that no branch of `main.slint`'s
+key ladder forwarded, with the registry, the prefpane and the whole suite
+green over it. Two tests read the markup now rather than the registry. The
+decision the step existed to make -- what `Ctrl+C` means -- is that a chord
+resolves to one action id and therefore cannot mean three things: it is one
+action carrying a `Scope`, resolved against the focused panel, falling back
+to the channel because that is what it meant before there was a second
+clipboard. Before that, 2026-09-13, when `interface-iteration/` step 03 landed: a channel
 has a name and a colour, a pattern has both, and a colour is content the song
 owns rather than an index into a palette -- so a song looks the same under
 every theme. The step that only meant to add a colour found that **a pattern's
 name had never been persisted**, which is the shape `FOCUS.md` names as the
-class of this month's work: a claim the source no longer supported. Only step
-04, the keyboard pass, is left before the directory archives. Before that,
+class of this month's work: a claim the source no longer supported. Before that,
 2026-09-11, when `console/` finished and moved to `archive/`: step
 03 put a channel strip on every track -- an input stage, four EQ bands, a
 compressor and a polarity switch, all out by default, under one strip-wide
@@ -130,7 +143,6 @@ is worth reading before either.
 | `session-layer-extraction/` | **Done, 2026-09-03.** Lifted `mooloop-session` -- the model, the edits, undo, and engine command emission -- out of `mooloop-ui/src/lib.rs`, which is down from 14,157 lines to 9,797. `cargo test -p mooloop-session` is 87 tests in under a second, and is the first coverage the edit logic has ever had. Two departures are recorded in `00-status.md`: `UiState::new` is still long (callback *registration*, no longer decisions), and the pump's meter polling stayed in the view on purpose. |
 | `edit-loop/` | **Steps 01 and 02 landed, 03 closed unstarted, 04 waiting on one measurement.** Six of every ten working hours went on `cargo`. `scripts/antibox` now picks incremental compilation for dev builds and sccache for release builds (64% off `cargo test --workspace`), `AGENTS.md` carries a verification ladder, the mockup tool is behind a Cargo feature, and `scripts/mooloop-run` is one command from edit to running application. Splitting device faces was measured and rejected: 79% of face commits also edit `main.slint`. What is left is `main.slint` itself, which no Slint arrangement reaches -- read `04-decide.md` before `egui-view-layer/`. |
 | `egui-view-layer/` | **Written, not decided; argument 4 tested and upheld; `edit-loop/` now points at it.** `edit-loop/04-decide.md` fixed the Rust half of the loop and found the UI half unreachable from inside Slint, which is the argument this plan was waiting for; one post-change `scripts/loop-profile` run closes it. No longer blocked: `session-layer-extraction/` is done, so a view layer would inherit a session rather than reproduce one. Still gated on step 01's spike. `00-status.md` states the case both ways. Compile cost was assumed to be the argument against and measured as an argument for: `build.rs` expands `ui/main.slint` into a single 39 MB Rust module, which is where the four minutes and the 3.4 GB go. What is left to decide is frame time and interaction feel. |
-| `interface-iteration/` | **Steps 01-03 landed; 04 is the only one left.** What `FOCUS.md`'s interface step became when Adam decided against building the 1.0 mockup as one push; it is step 1 of the sequence as of 2026-09-12. The browser sidebar has a PRESETS tab. Its `00-status.md` records two places the plan was wrong: there is no "selected rack row" for an effect preset to land on, so the browser *appends* a device instead -- which is the better gesture and is why an effect preset is always loadable -- and category is not worth a tree level, because sixty-six of ninety-nine shipped presets are categorised "Factory". Step 02 built the selected-device concept step 01 found missing, as a `DeviceId` rather than a slot -- the first thing in the tree to spend `containers/` step 01. Step 03 (2026-09-13) put a left channel sidebar in -- name, colour, inert MIDI rows -- and found two bugs the step file did not know about: **a pattern's name had never been saved at all**, because `rename_pattern` wrote to a session field the project format had no room for, and renaming one did not mark the document dirty. |
 | `ui-consistency-pass/` | **All six steps landed 2026-09-08; ready to archive once Adam has played it.** Not a feature plan: it is the audit Adam's standing list asked for, and every finding is a control that disagreed with the table it is drawn against. Its `README.md` records the method so the sweep can be re-run. Three things came out of it that outlive the fixes: `slint_face_agreement.rs` now holds every envelope stage to its descriptor (the drum synth had been the only device with such a test), `StatusHint` gives any control at any depth a line in the status bar without a property threaded through its device face, and the toolbar rules in `UI_DESIGN.md` -- a switcher leads the toolbar it decides, a pane's setting lives in that pane's header once, and a button per member of a growing set does not survive the set growing. |
 | `containers/` | **Steps 01-05 landed 2026-09-06/07; 06 is Adam's call and builds nothing.** A container is a device that holds a run of devices: it wraps, nests four deep, blends its whole run against the signal that went in, bypasses as a unit, and saves as one preset. Its `README.md` answers the brief's four source questions and records three places `reference/CONTAINERS.md` was wrong -- the largest being that per-device wet/dry already existed, so the gap was wet/dry across a *run*. Step 01 gave rack devices durable `DeviceId`s and deleted `SlotRemap` outright. **One thing is blocked rather than done:** a container preset cannot carry the modulation that drives it, because a route's source lives in the channel's rack, and fixing that means deciding whether a modulator can live in a container -- which the brief reserves. 06 prices layers and defers them. |
 
@@ -154,6 +166,16 @@ writing steps would presume the answer.
 `archive/` holds finished plans with their status audits intact. Each is worth
 reading before reopening the area it covers, because several record *why* a
 tempting change was rejected:
+
+`interface-iteration/` (all four, closed 2026-09-14) is the newest: a browser
+that browses presets, a device clipboard keyed by identity rather than slot, a
+channel that has a name and a colour, and the keyboard pass. Read its
+`00-status.md` before touching the action registry or either key-decoding
+ladder -- it records that a registry entry and a key that can reach it are two
+different claims, and that the one action Adam had asked for most loudly had
+shipped bound to a key nothing forwarded. Step 01's finding that there was no
+"selected rack row" for a preset to land on, and step 03's that a pattern's
+name had never been persisted, are both in there too.
 
 `console/` (all six, closed 2026-09-11 and **played the same day** -- *"three distinct and musical characters"* on headphones, with the studio still to come) is the newest and the widest: four
 items from one morning's list -- reorder channels, group them, make the mixer

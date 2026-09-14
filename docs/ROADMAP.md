@@ -18,11 +18,13 @@ use while deeper models change underneath it.
 Scope:
 
 - Resolve remaining single-click, focus, selection, zoom, scrolling, and
-  narrow-window issues. The focus half is the one still open and it is
-  confirmed rather than suspected as of 2026-09-05: the window has a single
-  root `FocusScope`, so anything focusable inside it eats the key before the
-  action dispatcher runs, and shortcuts — spacebar included — need a click on
-  a background area first. This is a dependability defect, not a polish item.
+  narrow-window issues. **The focus half closed on 2026-09-07 and this bullet
+  had its cause wrong**, which `SCOPE.md` §8 flagged and is worth keeping
+  rather than deleting: the root `FocusScope` was a *sibling* of the layout
+  holding the UI rather than its ancestor, so keys never bubbled to it at all
+  and the focusable things inside it were mostly innocent. It surrounds the
+  UI now, with `focus-on-click: false`, and `tests/first_click.rs` pins it.
+  A text field is the one case left, in `LOOSE_ENDS.md`.
 - Bring the piano roll closer to normal DAW behavior. Done: keyboard/header
   scroll sync, single-click selection without accidental note creation,
   double-click note insertion, double-click-drag length entry, independent
@@ -32,10 +34,12 @@ Scope:
   Remaining: keyboard-driven selection and navigation — the arrow keys move
   a selection, they do not build one.
 - Establish consistent right-click removal and keyboard navigation. Right-click
-  removal is consistent. Keyboard navigation is not: the piano roll's arrow
-  keys move a selection without building one, and the sample browser's tree
-  cannot be driven from the keyboard at all. Both sit downstream of the focus
-  defect above.
+  removal is consistent. Keyboard navigation landed 2026-09-14: the browser
+  tree is reachable and drivable (Ctrl+B, then the arrows, Enter and
+  Ctrl+Enter), and the clipboard chords and arrow keys resolve against the
+  focused panel rather than meaning one thing everywhere. What is left is the
+  piano roll's arrow keys moving a selection without building one, which is
+  keyboard *selection* and has never existed.
 - Make labeled knobs draggable from their labels as well as from the knob body.
 - Finish sampler voice controls that do not require the new event model.
 - Audit drum synth time ranges and parameter scaling; defaults and useful
@@ -290,8 +294,9 @@ Scope:
   assign gesture and destination policy in `MODULATOR_SYSTEM_SPEC.md`. Settle
   first whether its tracker notation and the automation-event tracker in
   `IDEAS.md` are one design or two.
-- Keyboard navigation in the browser, and preset browsing beside samples.
-  `docs/plans/preset-system/` decided the unit; both instrument banks ship.
+- ~~Keyboard navigation in the browser, and preset browsing beside samples.~~
+  Both landed: preset browsing 2026-09-07, browser keyboard navigation
+  2026-09-14, in `docs/plans/archive/interface-iteration/` steps 01 and 04.
 - A text-label-to-icon pass, and colour scheme support built out from the
   existing three-seed Appearance model. Both come after the panes stop moving,
   and the colour work has a design question to answer first — whether a named
@@ -300,9 +305,11 @@ Scope:
 
 Exit criteria:
 
-- No shortcut requires clicking somewhere neutral first.
-- A channel's identity is set and saved in one place.
-- The browser and the modulation panel are both fully keyboard-drivable.
+- ~~No shortcut requires clicking somewhere neutral first.~~ Met 2026-09-07.
+- ~~A channel's identity is set and saved in one place.~~ Met 2026-09-13.
+- The browser and the modulation panel are both fully keyboard-drivable. The
+  browser is, as of 2026-09-14; the modulation panel is still waiting on its
+  own move.
 - Panes moved without losing an existing gesture.
 
 ## Later, Not Scheduled

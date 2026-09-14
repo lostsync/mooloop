@@ -1329,6 +1329,21 @@ export component MainWindow inherits Window {
     // thread; toggling expands or collapses that folder in place. Clicking
     // a sample row fills the info pane and, with autoplay armed, plays it.
     in-out property <[BrowserRow]> browser-rows;
+    // Which panel a contextual action resolves against: one of the names in
+    // `actions.rs`'s `Surface`, held as a string so neither side spells an
+    // index. Written from Rust whenever a click says where the user is, and
+    // read back by the dispatcher for `Scope::Focused` actions.
+    // `actions.rs`'s `focused_surface_names_match_the_markup` holds the four
+    // names together.
+    in-out property <string> focused-surface: "channels";
+    // Which row the keyboard is on, or -1 for none. The browser has no
+    // `FocusScope` of its own and deliberately does not get one: a nested
+    // scope swallows the pointer press that focuses it, which is the
+    // two-clicks-per-control bug the root scope's comment and
+    // `tests/first_click.rs` are both about. The root scope already hears
+    // every key; what the browser was missing was somewhere for them to be
+    // *aimed*, which is this plus `focused-surface`.
+    in-out property <int> browser-focus-index: -1;
     callback browser-add-location();
     callback browser-row-toggled(string);
     callback browser-location-removed(string);
@@ -2098,19 +2113,18 @@ export component MainWindow inherits Window {
                 // The Shortcuts prefpane owns key capture for (re)binding
                 // while it's open; no global action should fire underneath it.
                 reject
-            // Up/Down pick a channel, unless the piano roll has a selection
-            // to transpose -- an editor with something selected is where the
-            // arrow keys are expected to act.
-            } else if (event.text == Key.UpArrow && !event.modifiers.control
-                    && !(root.showing-notes && root.has-note-selection)) {
-                root.channel-selected(max(0, root.selected-channel - 1));
-                accept
-            } else if (event.text == Key.DownArrow && !event.modifiers.control
-                    && !(root.showing-notes && root.has-note-selection)) {
-                root.channel-selected(min(root.channels.length - 1, root.selected-channel + 1));
-                accept
+            // Up and Down used to pick a channel here, guarded by a
+            // hand-written "unless the roll has a selection". That branch
+            // could only ever know about two answers; the browser is a
+            // third, so all four arrows go to the dispatcher now and
+            // `Scope::Focused` decides. See `actions.rs`.
+            //
+            // Space carries its real modifiers. It did not until
+            // 2026-09-14, when it was forwarded with all four flags
+            // hardcoded `false` -- which made Shift+Space and Space one
+            // chord and left `transport.stop` unbindable.
             } else if (event.text == " ") {
-                root.shortcut-key("space", false, false, false, false) ? accept : reject
+                root.shortcut-key("space", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
             } else if (event.text == Key.LeftArrow) {
                 root.shortcut-key("left", event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
             } else if (event.text == Key.RightArrow) {
@@ -2224,16 +2238,21 @@ export component MainWindow inherits Window {
                 // reported reliably via `event.modifiers.control` on this
                 // backend, so no sentinel decoding is needed for them.
                 root.shortcut-key(event.text.to-lowercase(), true, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
-            // Unmodified digits, for the piano roll's tool selector. Safe to
-            // forward unconditionally: a focused text field consumes the key
-            // before this scope ever sees it, and the dispatcher rejects the
-            // action unless the roll is the current page, which lets the
-            // keypress fall through to whatever else wants it.
-            } else if (event.text == "1" || event.text == "2" || event.text == "3"
-                    || event.text == "4" || event.text == "5" || event.text == "6") {
-                root.shortcut-key(event.text, false, false, event.modifiers.alt, event.modifiers.meta) ? accept : reject
+            // Everything else, unmodified, lowercased. This was a list of
+            // six digits until 2026-09-14 and the list was the bug:
+            // `transport.loop-toggle` had shipped on a bare L since
+            // 2026-09-07, the Shortcuts page drew it, the recorder in
+            // `appearance-dialog.slint` could capture it -- and no L ever
+            // reached the dispatcher, because no branch here forwarded a
+            // bare letter. `actions.rs`'s `decoding` module now fails if
+            // any registry default is a chord this ladder cannot produce.
+            //
+            // Safe to forward unconditionally, for the reason the digits
+            // already were: a focused text field consumes the key before
+            // this scope sees it, and an unbound chord resolves to nothing
+            // and falls through to whatever else wants it.
             } else {
-                reject
+                root.shortcut-key(event.text.to-lowercase(), false, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) ? accept : reject
             }
         }
 
@@ -6348,6 +6367,7 @@ export component MainWindow inherits Window {
                                     browser-tab-touch := TouchArea {
                                         mouse-cursor: pointer;
                                         clicked => {
+                                            root.focused-surface = "browser";
                                             root.browser-tab = i;
                                             root.browser-tab-changed(i);
                                         }
@@ -6424,16 +6444,48 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                         }
 
-                        ScrollView {
+                        browser-scroll := ScrollView {
                             vertical-stretch: 1;
-                            viewport-height: root.browser-rows.length * 20px;
+                            viewport-height: root.browser-rows.length * ROW;
+
+                            property <length> ROW: 20px;
+                            // Keep the keyboard's row on screen. A local
+                            // alias plus `changed` is how movement in a root
+                            // property is observed from inside the element
+                            // that can read its own viewport -- Rust knows
+                            // the index but not how many rows fit.
+                            property <int> focused: root.browser-focus-index;
+                            changed focused => {
+                                if (self.focused >= 0) {
+                                    if (self.focused * self.ROW < -self.viewport-y) {
+                                        self.viewport-y = -self.focused * self.ROW;
+                                    } else if ((self.focused + 1) * self.ROW
+                                            > -self.viewport-y + self.visible-height) {
+                                        self.viewport-y = self.visible-height
+                                            - (self.focused + 1) * self.ROW;
+                                    }
+                                }
+                            }
 
                             VerticalLayout {
                                 spacing: 0px;
                                 for row[index] in root.browser-rows : Rectangle {
-                                    height: 20px;
-                                    background: browser-row-touch.has-hover
-                                        ? Theme.surface-active : transparent;
+                                    height: browser-scroll.ROW;
+                                    // The keyboard's row reads as selected
+                                    // even when the pointer is elsewhere;
+                                    // hover still lights whatever is under
+                                    // the pointer, so the two are legible
+                                    // apart.
+                                    background: index == root.browser-focus-index
+                                        ? Theme.surface-active
+                                        : browser-row-touch.has-hover
+                                            ? Theme.surface-active : transparent;
+                                    if index == root.browser-focus-index : Rectangle {
+                                        x: 0;
+                                        width: 2px;
+                                        height: 100%;
+                                        background: Theme.accent;
+                                    }
                                     HorizontalLayout {
                                         padding-left: 8px + row.depth * 12px;
                                         padding-right: 6px;
@@ -6476,6 +6528,12 @@ export component MainWindow inherits Window {
                                     browser-row-touch := TouchArea {
                                         mouse-cursor: pointer;
                                         clicked => {
+                                            // A click is also where the
+                                            // keyboard now is, so the arrows
+                                            // carry on from the row that was
+                                            // just pressed.
+                                            root.focused-surface = "browser";
+                                            root.browser-focus-index = index;
                                             if (row.kind == 0 || row.kind == 2) {
                                                 root.browser-row-toggled(row.path);
                                             } else if (row.kind == 1) {

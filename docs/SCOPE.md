@@ -226,10 +226,12 @@ Everything else in the Sampler v2 tree stays post-0.2 (§4).
 These are not additions to the scope. They are already-recorded work that his
 thirteen sit downstream of, or that the definition in §1 forces.
 
-- **The keyboard pass** (`plans/interface-iteration/` step 04) — the last step
-  of the only plan in the active sequence, and **items 1, 7 and 8 all depend
-  on it.** `ROADMAP.md`'s account of the focus defect is stale; the real
-  remaining defects are listed in §8.
+- ~~**The keyboard pass**~~ — **landed 2026-09-14**
+  (`plans/archive/interface-iteration/` step 04), which closed and archived
+  that plan. Items 1, 7 and 8 depended on it and are unblocked: the focus
+  model they needed is `Surface` in `actions.rs`, and the browser tree is
+  navigable without the mouse. `ROADMAP.md`'s account of the focus defect is
+  still stale; the real remaining defects are listed in §8.
 - **Ship 0.1.4 first.** `v0.1.3` was tagged 2026-09-08 and `main` is **167
   commits** past it — the whole console pass, the channel strip, sends, solo
   in place, the left sidebar, colours and three days of correctness work.
@@ -312,7 +314,7 @@ Not a schedule. Only the constraints that actually exist.
    │  (AudioBackend)        ├──► item 3  audio input ──► item 5b audio recording
    └─ #9 MidiBackend ───────┘
 
-   keyboard pass (interface-iteration 04) ──┬──► item 1  sidebar (last mile)
+   keyboard pass (landed 2026-09-14) ───────┬──► item 1  sidebar (last mile)
                                             ├──► item 7  browser sidebars
                                             └──► item 8  full-size browser
 
@@ -442,12 +444,12 @@ Each verified against source. They are listed because the project's own named
 fault is *a claim the source no longer supported*, and six of them accumulated
 in nine days.
 
-1. **`ROADMAP.md:20-26` is wrong about the focus defect.** It says the window
-   has a single root `FocusScope` that eats keys, so shortcuts need a click on
-   the background first. **Fixed 2026-09-07**: the scope now surrounds the UI
-   (`main.slint:2087-2088`), control scopes reject keys they do not own,
-   `ToolButton` deliberately rejects Space, and `tests/first_click.rs` pins all
-   of it. `FOCUS.md` and `interface-iteration/04` both already say so.
+1. ~~**`ROADMAP.md:20-26` is wrong about the focus defect.**~~ **Corrected in
+   `ROADMAP.md` on 2026-09-14.** It had said the window has a single root
+   `FocusScope` that eats keys, so shortcuts need a click on the background
+   first. Fixed 2026-09-07: the scope surrounds the UI, control scopes reject
+   keys they do not own, `ToolButton` deliberately rejects Space, and
+   `tests/first_click.rs` pins all of it.
 2. **`BUFFER_ENGINE.md:40-41`** claims the Buffer is built on the shared
    `mooloop_dsp::delayline` primitive "rather than a private ring." It is not
    — `buffer_device.rs:87-88` is two private `Vec<f32>`s with its own indexing

@@ -360,7 +360,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   every action in the registry (`ACTIONS.md`), grouped by category, each
   reassignable by clicking Record and pressing a key combination; rebinding
   and Reset/Reset All persist immediately, independent of the dialog's
-  Apply/OK.
+  Apply/OK. A **Context column** beside each chord says where it applies —
+  blank for the global majority, so the column marks the exceptions rather
+  than restating the rule sixty-three times, and "Focused panel" means the
+  chord asks what was clicked last. The recorder accepts an unmodified key;
+  it refused one until 2026-09-14, which had made the shipped bare-L and
+  bare-digit defaults impossible to put back after a Reset.
 - A traditional menu bar above the toolbar (`menubar.slint`): File, Edit,
   Pattern, Channel, View, and Help. Menus are declared where their window
   callbacks are in scope, so an item is one `MenuRow` line and a new action is
@@ -370,9 +375,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   Every enabled shortcut shown on a menu row is one entry in the action
   registry (`ACTIONS.md`, `mooloop-ui/src/actions.rs`), which a single
   keyboard dispatcher in `main.slint` resolves and reassigns from the
-  Shortcuts preferences page — 44 actions across transport, file, edit, note
-  editing and pointer tools, pane switching and piano-roll zoom, channel, and
-  pattern operations. The File
+  Shortcuts preferences page — 63 actions across transport, file, edit,
+  arrow-key navigation, note pointer tools, pane switching and piano-roll
+  zoom, channel, track, device, browser, and pattern operations. The File
   menu covers song, kit, and selected-channel save/load, the sample-embed
   toggle, export, and quit; Ctrl+O / Ctrl+S / Ctrl+Shift+S / Ctrl+E / Ctrl+Q
   mirror it by default. Help has an About dialog with the crate version.
@@ -1259,10 +1264,27 @@ land on its own when it starts to matter:
   so clicking any of them left a caret that re-fired that button instead of
   starting the transport. Space is the transport; Enter activates a focused
   button.
-- Keyboard navigation exists in the piano roll and nowhere else. The arrow
-  keys move an existing note selection but cannot build one, and the browser
-  tree — either tab of it — cannot be reached or driven from the keyboard at
-  all. `docs/plans/interface-iteration/04-the-keyboard-pass.md` owns this.
+- **A contextual chord resolves against the focused surface.** Ctrl+C/X/V
+  mean the notes on the roll, the selected device in the rack, and the
+  channel everywhere else — the fallback they meant unconditionally before
+  there was a second clipboard. The four arrow keys are the same mechanism:
+  nudge or transpose on the roll, walk the tree in the browser, pick a
+  channel otherwise. Which surface is focused is the roll whenever it is on
+  screen with a selection, and otherwise wherever the last click landed;
+  there is no Escape-to-nowhere, because selecting a channel is the way back.
+  Preferences > Shortcuts says which chords are contextual.
+- **The browser tree is reachable and drivable from the keyboard.** Ctrl+B
+  reveals the sidebar and aims the keys at it; Up/Down move a highlighted
+  row, Right opens a closed folder or steps into it, Left closes an open one
+  or climbs to its parent, Enter does what clicking the row does, and
+  Ctrl+Enter loads a sample or preset into the selected channel. It has no
+  `FocusScope` of its own and deliberately does not get one — a nested scope
+  swallows the pointer press that focuses it, which is the
+  two-clicks-per-control bug `tests/first_click.rs` exists for. The root
+  scope already hears every key; what was missing was somewhere to aim them.
+- Keyboard note *selection* still does not exist: the arrow keys move an
+  existing selection but cannot build one, which stays open in
+  `ENHANCEMENTS.md`.
 - **A channel takes a colour from the channel sidebar**, either from its
   eleven swatches or by typing any `#RRGGBB` into the field beside them, and
   the colour survives save and reload. It is stored as a colour the song owns

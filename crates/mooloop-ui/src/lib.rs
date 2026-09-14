@@ -475,6 +475,15 @@ fn shortcut_rows(table: &actions::ShortcutTable) -> Vec<ShortcutRow> {
                     .map(|chord| chord.to_string())
                     .unwrap_or_default()
                     .into(),
+                // Empty for a global action rather than the word
+                // "Anywhere" on thirty-odd rows: the column exists to mark
+                // the exceptions, and a value on every row would stop
+                // marking anything.
+                context: if spec.scope == actions::Scope::Anywhere {
+                    Default::default()
+                } else {
+                    spec.scope.label().into()
+                },
                 is_default: table.is_default(spec.id),
                 is_first_in_category,
             }
@@ -852,8 +861,195 @@ fn length_text(ticks: u32) -> String {
     }
 }
 
+/// Which panel a `Scope::Focused` action resolves against.
+///
+/// The roll wins whenever it is on screen with something selected, ahead of
+/// whatever was clicked last. That is the rule the clipboard chords have
+/// shipped with since 2026-09-07, and it is still the right one: a user who
+/// has just dragged a marquee is not thinking about the browser row they
+/// opened before it. Everything else is the stored surface, which falls
+/// back to the channel list -- what these chords meant before there was a
+/// second clipboard to mean.
+fn focused_surface(window: &MainWindow) -> actions::Surface {
+    if notes_have_focus(window) {
+        return actions::Surface::Notes;
+    }
+    actions::Surface::from_name(window.get_focused_surface().as_str())
+}
+
+/// Records where the user just clicked, so the next contextual chord knows.
+fn set_focused_surface(window: &MainWindow, surface: actions::Surface) {
+    window.set_focused_surface(surface.name().into());
+}
+
 fn notes_have_focus(window: &MainWindow) -> bool {
     window.get_showing_notes() && window.get_has_note_selection()
+}
+
+/// A browser row's kind, as `BrowserRow.kind` spells it. One model serves
+/// both tabs (`build_browser_rows`, `build_preset_rows`), so the keyboard
+/// asks the same questions the row's own `TouchArea` does -- a preset (3)
+/// needs no constant, because it is what a row that is not one of these is.
+const BROWSER_FOLDER: i32 = 0;
+const BROWSER_SAMPLE: i32 = 1;
+const BROWSER_GROUP: i32 = 2;
+
+fn browser_row_at(st: &Rc<RefCell<UiState>>, index: i32) -> Option<BrowserRow> {
+    let index = usize::try_from(index).ok()?;
+    st.borrow().browser_rows.row_data(index)
+}
+
+fn browser_row_count(st: &Rc<RefCell<UiState>>) -> i32 {
+    st.borrow().browser_rows.row_count() as i32
+}
+
+fn browser_row_expands(row: &BrowserRow) -> bool {
+    row.kind == BROWSER_FOLDER || row.kind == BROWSER_GROUP
+}
+
+/// Where the keyboard's row lands when it moves by `delta`, or `None` if it
+/// does not move. Pure, and separate from the window for that reason: the
+/// enter-from-either-end rule and the clamp are the whole of the behaviour
+/// and neither needs a rendered tree to be checked.
+///
+/// An unset focus (`current < 0`) enters from whichever end the key came
+/// from, so the first Down after Ctrl+B lands on the first row rather than
+/// the second.
+fn browser_focus_step(count: i32, current: i32, delta: i32) -> Option<i32> {
+    if count <= 0 {
+        return None;
+    }
+    let next = if current < 0 {
+        if delta > 0 {
+            0
+        } else {
+            count - 1
+        }
+    } else {
+        (current + delta).clamp(0, count - 1)
+    };
+    (next != current).then_some(next)
+}
+
+/// The row containing the one at `index`: the nearest earlier row that is
+/// shallower. The model is flattened, so a row carries no pointer to its
+/// parent and this is the only way to ask.
+fn browser_parent_of(depths: &[i32], index: usize) -> Option<usize> {
+    let depth = *depths.get(index)?;
+    (0..index).rev().find(|candidate| depths[*candidate] < depth)
+}
+
+fn browser_move_focus(st: &Rc<RefCell<UiState>>, window: &MainWindow, delta: i32) -> bool {
+    let Some(next) = browser_focus_step(
+        browser_row_count(st),
+        window.get_browser_focus_index(),
+        delta,
+    ) else {
+        return false;
+    };
+    window.set_browser_focus_index(next);
+    true
+}
+
+/// Collapsing a folder takes rows away underneath the keyboard, so the row
+/// it is on can end up past the end of a shorter tree. Called after every
+/// toggle rather than guarded for at every read.
+fn browser_clamp_focus(st: &Rc<RefCell<UiState>>, window: &MainWindow) {
+    let count = browser_row_count(st);
+    let current = window.get_browser_focus_index();
+    if current >= count {
+        window.set_browser_focus_index((count - 1).max(-1));
+    }
+}
+
+/// Right: open a closed folder, otherwise step into it. Left: close an open
+/// one, otherwise climb to its parent -- found by walking back to the first
+/// shallower row, because the model is flattened and a row does not carry a
+/// pointer to the one that contains it.
+fn browser_step_horizontally(
+    st: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    forward: bool,
+) -> bool {
+    let index = window.get_browser_focus_index();
+    let Some(row) = browser_row_at(st, index) else {
+        return browser_move_focus(st, window, if forward { 1 } else { -1 });
+    };
+    if browser_row_expands(&row) && row.expanded != forward {
+        window.invoke_browser_row_toggled(row.path.clone());
+        browser_clamp_focus(st, window);
+        return true;
+    }
+    if forward {
+        return browser_move_focus(st, window, 1);
+    }
+    let depths: Vec<i32> = st
+        .borrow()
+        .browser_rows
+        .iter()
+        .map(|row| row.depth)
+        .collect();
+    match browser_parent_of(&depths, index.max(0) as usize) {
+        Some(parent) => {
+            window.set_browser_focus_index(parent as i32);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Enter. The same three answers the row's own click gives, so a row does
+/// not mean one thing to the pointer and another to the keyboard.
+fn browser_activate_focused(st: &Rc<RefCell<UiState>>, window: &MainWindow) -> bool {
+    let Some(row) = browser_row_at(st, window.get_browser_focus_index()) else {
+        return false;
+    };
+    if browser_row_expands(&row) {
+        window.invoke_browser_row_toggled(row.path.clone());
+        browser_clamp_focus(st, window);
+    } else if row.kind == BROWSER_SAMPLE {
+        window.invoke_browser_row_previewed(row.path.clone());
+    } else if row.loadable {
+        window.invoke_browser_preset_loaded(row.path.clone());
+    } else {
+        return false;
+    }
+    true
+}
+
+/// Ctrl+Enter: the load the sample row's context menu offers, and the only
+/// thing a preset row can do, so the chord is never dead on a leaf.
+fn browser_load_focused(st: &Rc<RefCell<UiState>>, window: &MainWindow) -> bool {
+    let Some(row) = browser_row_at(st, window.get_browser_focus_index()) else {
+        return false;
+    };
+    if row.kind == BROWSER_SAMPLE {
+        window.invoke_browser_sample_loaded(row.path.clone());
+    } else if !browser_row_expands(&row) && row.loadable {
+        window.invoke_browser_preset_loaded(row.path.clone());
+    } else {
+        return false;
+    }
+    true
+}
+
+/// Ctrl+B. Reveals the panel as well as aiming the keys at it: a shortcut
+/// that silently targets a collapsed sidebar is indistinguishable from one
+/// that does nothing.
+fn browser_take_focus(st: &Rc<RefCell<UiState>>, window: &MainWindow) {
+    window.set_sidebar_visible(true);
+    set_focused_surface(window, actions::Surface::Browser);
+    if window.get_browser_focus_index() < 0 && browser_row_count(st) > 0 {
+        window.set_browser_focus_index(0);
+    }
+}
+
+/// The rack device a `Scope::Rack` action acts on.
+fn selected_device_slot(st: &Rc<RefCell<UiState>>) -> Option<i32> {
+    st.borrow()
+        .session
+        .selected_device_slot()
+        .and_then(|slot| i32::try_from(slot).ok())
 }
 
 fn record_project_history(
@@ -5072,6 +5268,7 @@ impl AppUi {
         {
             let table = shortcut_table.clone();
             let commands = command_state.clone();
+            let st = state.clone();
             let weak = window.as_weak();
             window.on_shortcut_key(move |key, ctrl, shift, alt, meta| {
                 let Some(window) = weak.upgrade() else {
@@ -5082,8 +5279,19 @@ impl AppUi {
                     return false;
                 };
                 let channel = window.get_selected_channel();
+                // Where a `Scope::Focused` action points. Read once, before
+                // any arm runs: an arm that changes the selection would
+                // otherwise be answering a question its own effect moved.
+                let surface = focused_surface(&window);
                 match action_id {
                     "transport.play-pause" => window.invoke_toggle_play(),
+                    // Stop already rewinds -- `on_stop_clicked` zeroes the
+                    // position as well as sending `EngineCommand::Stop` --
+                    // so return-to-start is the half of it that leaves the
+                    // transport running, and it is the playhead drag's own
+                    // callback with the tick it clamps to.
+                    "transport.stop" => window.invoke_stop_clicked(),
+                    "transport.return-to-start" => window.invoke_playlist_seek(0),
                     "transport.loop-toggle" => window.invoke_playlist_loop_enabled_changed(
                         !window.get_playlist_loop_enabled(),
                     ),
@@ -5095,60 +5303,166 @@ impl AppUi {
                     "file.quit" => window.invoke_quit_requested(),
                     "edit.undo" => window.invoke_edit_command_requested(0, channel),
                     "edit.redo" => window.invoke_edit_command_requested(1, channel),
-                    // On the roll, with notes selected, the clipboard verbs
-                    // mean the notes. Anywhere else they still mean the
-                    // channel, which is what they have always meant.
-                    "edit.cut-channel" => {
-                        if notes_have_focus(&window) {
-                            window.invoke_piano_notes_copied(true);
-                        } else {
-                            window.invoke_edit_command_requested(2, channel);
+                    // The three clipboards, resolved against the focused
+                    // surface (`docs/ACTIONS.md`): notes on the roll, the
+                    // selected device in the rack, the channel everywhere
+                    // else -- which is the fallback these chords have always
+                    // been, so nothing a user relied on changed shape.
+                    // A rack surface with nothing selected falls through to
+                    // the channel rather than doing nothing, because "the
+                    // rack is where I clicked last" and "I have a device
+                    // picked out" are different claims.
+                    "edit.cut-channel" => match surface {
+                        actions::Surface::Notes => window.invoke_piano_notes_copied(true),
+                        actions::Surface::Rack if selected_device_slot(&st).is_some() => {
+                            window.invoke_device_clipboard_action(1)
                         }
-                    }
-                    "edit.copy-channel" => {
-                        if notes_have_focus(&window) {
-                            window.invoke_piano_notes_copied(false);
-                        } else {
-                            window.invoke_edit_command_requested(3, channel);
+                        _ => window.invoke_edit_command_requested(2, channel),
+                    },
+                    "edit.copy-channel" => match surface {
+                        actions::Surface::Notes => window.invoke_piano_notes_copied(false),
+                        actions::Surface::Rack if selected_device_slot(&st).is_some() => {
+                            window.invoke_device_clipboard_action(0)
                         }
-                    }
+                        _ => window.invoke_edit_command_requested(3, channel),
+                    },
                     "edit.paste-channel" => {
                         // Paste does not need a selection -- it needs
-                        // something on the note clipboard.
-                        if window.get_showing_notes()
-                            && !commands.borrow().note_clipboard.is_empty()
-                        {
-                            window.invoke_piano_notes_pasted();
-                        } else {
-                            window.invoke_edit_command_requested(4, channel);
+                        // something on the clipboard it is about to use, so
+                        // each arm asks about its own.
+                        let has_notes = window.get_showing_notes()
+                            && !commands.borrow().note_clipboard.is_empty();
+                        let has_device = commands.borrow().device_clipboard.is_some();
+                        match surface {
+                            actions::Surface::Rack if has_device => {
+                                window.invoke_device_clipboard_action(2)
+                            }
+                            _ if has_notes => window.invoke_piano_notes_pasted(),
+                            _ => window.invoke_edit_command_requested(4, channel),
                         }
                     }
+                    // The four arrows. Left/Right nudge on the roll and
+                    // walk the tree in the browser; Up/Down transpose,
+                    // change the browser's row, or -- the fallback, and what
+                    // `main.slint` used to do in markup -- pick a channel.
                     "notes.nudge-earlier" | "notes.nudge-later" => {
-                        if !notes_have_focus(&window) {
-                            return false;
+                        let forward = action_id == "notes.nudge-later";
+                        match surface {
+                            actions::Surface::Notes => {
+                                let step = if window.get_piano_snap_enabled() {
+                                    window.get_piano_snap_ticks().max(1)
+                                } else {
+                                    1
+                                };
+                                let sign = if forward { 1 } else { -1 };
+                                window.invoke_piano_notes_nudged(sign * step, 0);
+                            }
+                            actions::Surface::Browser => {
+                                if !browser_step_horizontally(&st, &window, forward) {
+                                    return false;
+                                }
+                            }
+                            _ => return false,
                         }
-                        let step = if window.get_piano_snap_enabled() {
-                            window.get_piano_snap_ticks().max(1)
-                        } else {
-                            1
-                        };
-                        let sign = if action_id == "notes.nudge-earlier" { -1 } else { 1 };
-                        window.invoke_piano_notes_nudged(sign * step, 0);
                     }
                     "notes.nudge-up" | "notes.nudge-down" => {
-                        if !notes_have_focus(&window) {
-                            return false;
+                        let delta = if action_id == "notes.nudge-up" { -1 } else { 1 };
+                        match surface {
+                            actions::Surface::Notes => {
+                                window.invoke_piano_notes_nudged(0, -delta);
+                            }
+                            actions::Surface::Browser => {
+                                if !browser_move_focus(&st, &window, delta) {
+                                    return false;
+                                }
+                            }
+                            _ => {
+                                let last = window.get_channels().row_count() as i32 - 1;
+                                let next =
+                                    (window.get_selected_channel() + delta).clamp(0, last.max(0));
+                                window.invoke_channel_selected(next);
+                            }
                         }
-                        let sign = if action_id == "notes.nudge-up" { 1 } else { -1 };
-                        window.invoke_piano_notes_nudged(0, sign);
                     }
+                    // The device clipboard's own unambiguous chords. Bare
+                    // Ctrl+C reaches the same three verbs when the rack is
+                    // the focused surface; these reach them from anywhere,
+                    // which is what makes them worth keeping.
                     "device.copy" => window.invoke_device_clipboard_action(0),
                     "device.cut" => window.invoke_device_clipboard_action(1),
                     "device.paste" => window.invoke_device_clipboard_action(2),
                     "device.duplicate" => window.invoke_device_clipboard_action(3),
+                    // The rest of the rack's row of rail buttons, aimed at
+                    // the selected device. Every one of them is the callback
+                    // that button already invokes, so the keyboard and the
+                    // rail cannot disagree about what a verb does.
+                    "device.bypass" | "device.remove" | "device.wrap" | "device.save-preset" => {
+                        let Some(slot) = selected_device_slot(&st) else {
+                            return false;
+                        };
+                        match action_id {
+                            "device.bypass" => window.invoke_effect_bypass_toggled(slot),
+                            "device.remove" => window.invoke_remove_effect_clicked(slot),
+                            "device.wrap" => window.invoke_wrap_effect_clicked(slot),
+                            _ => window.invoke_save_effect_preset_requested(slot),
+                        }
+                    }
+                    // Walking the chain. With nothing selected these take
+                    // the first or last device, which is how the rack is
+                    // reached from the keyboard at all -- so they are not
+                    // `Scope::Rack`, unlike everything above.
+                    "device.next" | "device.prev" => {
+                        let count = window.get_effect_slots().row_count() as i32;
+                        if count == 0 {
+                            return false;
+                        }
+                        let delta = if action_id == "device.next" { 1 } else { -1 };
+                        let next = match selected_device_slot(&st) {
+                            Some(slot) => (slot + delta).clamp(0, count - 1),
+                            None if delta > 0 => 0,
+                            None => count - 1,
+                        };
+                        // `device-selected` clears the selection when it is
+                        // handed the slot already selected, which is the
+                        // click-again-to-deselect gesture; a step that did
+                        // not move must not trip it.
+                        if selected_device_slot(&st) == Some(next) {
+                            return false;
+                        }
+                        set_focused_surface(&window, actions::Surface::Rack);
+                        window.invoke_device_selected(next);
+                    }
+                    "browser.focus" => browser_take_focus(&st, &window),
+                    "browser.activate" => {
+                        if !browser_activate_focused(&st, &window) {
+                            return false;
+                        }
+                    }
+                    "browser.load" => {
+                        if !browser_load_focused(&st, &window) {
+                            return false;
+                        }
+                    }
                     "channel.clone" => window.invoke_edit_command_requested(5, channel),
                     "channel.remove" => window.invoke_edit_command_requested(6, channel),
                     "channel.add" => window.invoke_add_channel_clicked(0),
+                    "channel.mute" => window.invoke_channel_muted(channel),
+                    // Solo is a *track's*, in place, since 2026-09-11; a
+                    // channel has none to bind. The track is the one the
+                    // rack is editing, which is the one a mixer click put
+                    // there -- so with a channel open these do nothing and
+                    // say so by falling through.
+                    "track.solo" | "track.mute" => {
+                        if !window.get_editing_bus() {
+                            return false;
+                        }
+                        let bus = window.get_editing_bus_index();
+                        if action_id == "track.solo" {
+                            window.invoke_bus_solo_toggled(bus);
+                        } else {
+                            window.invoke_bus_muted(bus);
+                        }
+                    }
                     "pattern.add" => window.invoke_add_pattern_clicked(),
                     "pattern.clone" => window.invoke_pattern_clone_requested(),
                     "pattern.remove" => window.invoke_pattern_remove_requested(),
@@ -5172,8 +5486,23 @@ impl AppUi {
                         window.set_pattern_length(next);
                         window.invoke_pattern_length_changed(next);
                     }
-                    "edit.select-all" => window.invoke_select_all_requested(),
-                    "edit.delete-note" => window.invoke_delete_selected_notes_requested(),
+                    // Guarded by what the matching menu row is enabled by:
+                    // keyboard and menu are two surfaces over one action and
+                    // must not disagree about where it applies. Select All's
+                    // row additionally greys with no notes on screen, which
+                    // is a no-op rather than a second condition.
+                    "edit.select-all" => {
+                        if !window.get_showing_notes() {
+                            return false;
+                        }
+                        window.invoke_select_all_requested();
+                    }
+                    "edit.delete-note" => {
+                        if !window.get_has_note_selection() {
+                            return false;
+                        }
+                        window.invoke_delete_selected_notes_requested();
+                    }
                     // Bare digits, and only while the roll is on screen: a
                     // number key means something else on every other page,
                     // and an unconditional binding would be a trap there.
@@ -6671,6 +7000,11 @@ impl AppUi {
                 };
                 if let Some(w) = weak.upgrade() {
                     w.set_selected_channel(ch as i32);
+                    // Picking a channel is what aims the contextual chords
+                    // back at the channel list. There is no Escape-to-
+                    // nowhere: the fallback surface is one a user reaches by
+                    // doing the ordinary thing.
+                    set_focused_surface(&w, actions::Surface::Channels);
                     let guard = st.borrow();
                     guard.sync_row_flags();
                     guard.sync_mixer_selection();
@@ -8109,6 +8443,7 @@ impl AppUi {
                 let selected = st.session.select_source(want);
                 st.sync_effects();
                 window.set_source_selected(selected);
+                set_focused_surface(&window, actions::Surface::Rack);
                 window.set_status_message(if selected {
                     "Instrument selected".into()
                 } else {
@@ -8122,6 +8457,7 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_device_selected(move |slot| {
                 let Some(window) = weak.upgrade() else { return };
+                set_focused_surface(&window, actions::Surface::Rack);
                 let mut st = st.borrow_mut();
                 let slot = usize::try_from(slot).ok();
                 // Clicking the selected device again clears it, so there is a
@@ -12850,6 +13186,51 @@ fn refresh_browser(st: &UiState) {
         &st.session.browser_locations,
         &st.session.browser_expanded,
     ));
+}
+
+/// The browser's keyboard walk, in the part of it that is arithmetic.
+///
+/// Step 01 shipped the tree with "no keyboard navigation" written into its
+/// own status file; this is the half that can be checked without a rendered
+/// tree, which is most of the rules worth stating.
+#[cfg(test)]
+mod browser_keyboard_tests {
+    use super::*;
+
+    #[test]
+    fn an_unset_focus_enters_from_the_end_the_key_came_from() {
+        assert_eq!(browser_focus_step(5, -1, 1), Some(0));
+        assert_eq!(browser_focus_step(5, -1, -1), Some(4));
+    }
+
+    #[test]
+    fn the_walk_clamps_instead_of_wrapping() {
+        // Wrapping would put Down at the bottom of a list back at the top,
+        // which is how a key held down loses the row a user was reading.
+        assert_eq!(browser_focus_step(3, 2, 1), None);
+        assert_eq!(browser_focus_step(3, 0, -1), None);
+        assert_eq!(browser_focus_step(3, 1, 1), Some(2));
+    }
+
+    #[test]
+    fn an_empty_tree_answers_nothing() {
+        assert_eq!(browser_focus_step(0, -1, 1), None);
+        assert_eq!(browser_focus_step(0, 0, -1), None);
+    }
+
+    /// Left on a leaf climbs to the folder holding it, which in a flattened
+    /// model means the nearest earlier row that is shallower -- not the
+    /// previous row, and not the previous row at depth zero.
+    #[test]
+    fn the_parent_is_the_nearest_earlier_shallower_row() {
+        let depths = [0, 1, 2, 2, 1, 0];
+        assert_eq!(browser_parent_of(&depths, 3), Some(1));
+        assert_eq!(browser_parent_of(&depths, 2), Some(1));
+        assert_eq!(browser_parent_of(&depths, 4), Some(0));
+        assert_eq!(browser_parent_of(&depths, 0), None);
+        assert_eq!(browser_parent_of(&depths, 5), None);
+        assert_eq!(browser_parent_of(&depths, 9), None);
+    }
 }
 
 #[cfg(test)]

@@ -43,11 +43,27 @@ fn click_at(window: &slint::Window, p: (f32, f32)) {
 
 fn sample_rows() -> Vec<MainShortcutRow> {
     vec![
+        // A contextual row, first rather than in registry order, so the page
+        // snapshot covers the Context column at all -- it is blank on every
+        // global action, which is most of them. First because the page's row
+        // list stretches its children to fill the height, so with a handful
+        // of sample rows only the leading few land above the fold; the real
+        // page has sixty-three and no slack to distribute.
+        MainShortcutRow {
+            id: SharedString::from("edit.copy-channel"),
+            label: SharedString::from("Copy"),
+            category: SharedString::from("Edit"),
+            chord: SharedString::from("Ctrl+C"),
+            context: SharedString::from("Focused panel"),
+            is_default: true,
+            is_first_in_category: true,
+        },
         MainShortcutRow {
             id: SharedString::from("transport.play-pause"),
             label: SharedString::from("Play/Pause"),
             category: SharedString::from("Transport"),
             chord: SharedString::from("Space"),
+            context: SharedString::from(""),
             is_default: true,
             is_first_in_category: true,
         },
@@ -56,6 +72,7 @@ fn sample_rows() -> Vec<MainShortcutRow> {
             label: SharedString::from("Next Pane"),
             category: SharedString::from("View"),
             chord: SharedString::from("Ctrl+Right"),
+            context: SharedString::from(""),
             is_default: true,
             is_first_in_category: true,
         },
@@ -64,6 +81,7 @@ fn sample_rows() -> Vec<MainShortcutRow> {
             label: SharedString::from("Clone Channel"),
             category: SharedString::from("Channel"),
             chord: SharedString::from("Ctrl+Alt+D"),
+            context: SharedString::from(""),
             is_default: false,
             is_first_in_category: true,
         },
@@ -72,6 +90,7 @@ fn sample_rows() -> Vec<MainShortcutRow> {
             label: SharedString::from("Remove Pattern"),
             category: SharedString::from("Pattern"),
             chord: SharedString::from(""),
+            context: SharedString::from(""),
             is_default: false,
             is_first_in_category: true,
         },
@@ -116,6 +135,7 @@ fn render_preferences_shortcuts_snapshots() {
         label: SharedString::from("Remove Pattern"),
         category: SharedString::from("Pattern"),
         chord: SharedString::from(""),
+        context: SharedString::from(""),
         is_default: false,
         is_first_in_category: false,
     });
@@ -129,6 +149,7 @@ fn render_preferences_shortcuts_snapshots() {
         label: SharedString::from("Clone Channel"),
         category: SharedString::from("Channel"),
         chord: SharedString::from("Ctrl+D"),
+        context: SharedString::from(""),
         is_default: true,
         is_first_in_category: false,
     });

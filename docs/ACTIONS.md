@@ -43,45 +43,108 @@ the command layer, and applies equally to any future console/MCP command.
 ## What's registered today
 
 `actions.rs`'s `ACTIONS` table is the source of truth; read it rather than
-this document for the current list — and mean it: on 2026-09-08 this sentence
-said 46 where the table held 45, and had done for long enough that nobody
-knew when it drifted. It holds 47 in eight categories as of that date: Transport (play/pause on Space and the song loop on L),
-File, Edit, Notes (arrow-key nudge and
-transpose, the five pointer tools on keys 1-5, and the snap toggle on 6),
-View (revealing a view, splitting the top pane on Ctrl+\\, zooming a pane to
-the window on Ctrl+Shift+\\, and piano-roll zoom), Channel, Pattern (including
-lengthening and shortening the pattern by a beat, on Ctrl+Shift+= and
-Ctrl+Shift+-), and Device
-(copy, cut, paste and duplicate the selected rack device, on
-Ctrl+Shift+C/X/V/D). That is what
-`docs/archive/SHORTCUTS.md` asked for, plus the shortcuts that already
-existed before this registry (Ctrl+O/S/Z/etc.), migrated in so the
-Preferences > Shortcuts page is a complete, reassignable list rather than a
-partial one. One entry, `pattern.clear`, is registered with no default chord:
-every nearby Pattern action already claims a Ctrl+modifier combination, and
-it is still listed so it can be bound.
+this document for the current list. **It holds 63 actions in 11 categories**
+as of 2026-09-14, and a test in `actions.rs` reads that sentence and fails if
+either number stops being true.
 
-### Why the Device actions are not on the bare chords
+This sentence has been wrong twice. On 2026-09-08 it said 46 where the table
+held 45; it was corrected to 47 on 2026-09-12, and the table held 49 by then.
+Both corrections were made by counting, and counting is what went wrong both
+times — which is why the third fix is a test rather than a fourth count.
 
-`Ctrl+C`/`X`/`V` are `edit.copy-channel` and friends, unconditionally,
-whatever has focus. The obviously-right binding for a device clipboard is the
-same three chords resolved against what is selected -- and that needs the
-dispatcher to know what has focus, which is a thing it does not know.
+The categories are:
+Transport (play/pause on Space, stop on Shift+Space, return-to-start on Home,
+and the song loop on L), File, Edit (undo/redo, the three contextual clipboard
+verbs, select-all and delete), Navigation (the four arrow keys — transpose
+lives there now, because the same key picks a channel or walks the browser
+tree when the roll is not where you are), Notes (the five pointer tools on
+keys 1-5 and the snap toggle on 6), View (revealing a view, splitting the top pane on Ctrl+\\,
+zooming a pane to the window on Ctrl+Shift+\\, and piano-roll zoom), Channel
+(add, remove, clone, mute), Track (solo on Ctrl+Shift+M and mute on
+Ctrl+Alt+M, both aimed at the track the rack is editing), Device (the
+clipboard's four on Ctrl+Shift+C/X/V/D, plus bypass, remove, wrap in a
+container, save a preset, and stepping the selection along the chain),
+Browser (focus it on Ctrl+B, then Enter and Ctrl+Enter), and Pattern
+(including lengthening and shortening the pattern by a beat, on
+Ctrl+Shift+= and Ctrl+Shift+-). One entry, `pattern.clear`, is registered
+with no default chord: every nearby Pattern action already claims a
+Ctrl+modifier combination, and it is still listed so it can be bound.
 
-There are three clipboards now (channel, notes, and as of 2026-09-07 devices)
-and one set of chords, so a context-sensitive `Ctrl+V` is really two changes:
-**one clipboard**, tagged by what it holds, and **a focus model** that says
-which pane a keypress belongs to.
-`docs/plans/interface-iteration/04-the-keyboard-pass.md` owns the second and
-names the first. Until both land, the Device actions ship on their own chords,
-which work today and can be rebound to the bare ones the day they are free --
-the registry makes that a preferences change rather than a code change, which
-is the point of it.
+## Scope: where a chord applies
+
+A chord resolves to exactly one action id. `ShortcutTable` is a
+`HashMap<KeyChord, &'static str>` and cannot be anything else, so "Ctrl+C
+means three different things" is **one action that asks what has focus**,
+not three actions sharing a chord.
+
+Every `ActionSpec` therefore carries a `Scope`, and Preferences > Shortcuts
+draws it in a Context column beside the chord — blank for the global
+majority, so the column marks the exceptions rather than restating the rule
+sixty-three times. The scopes:
+
+| Scope | Column reads | Means |
+| --- | --- | --- |
+| `Anywhere` | *(blank)* | Fires wherever focus is. The default. |
+| `Focused` | Focused panel | Resolves against `Surface`, below. |
+| `Notes` | Piano roll | Only while the roll is the visible editor. |
+| `Rack` | Selected device | Only with a device selected. |
+| `Track` | Edited track | Only while the rack is editing a track. |
+| `Browser` | Browser | Only while the browser holds the keyboard. |
+
+A scope is documentation *and* a promise: an arm that ignores its own scope
+is a bug, and the keyboard is held to the same condition the matching menu
+row is enabled by — Select All Notes is live only on the roll in both.
+
+### The focused surface
+
+`Surface` (`actions.rs`) is which panel a `Scope::Focused` action points at:
+`Channels`, `Notes`, `Rack`, `Browser`. It crosses into `main.slint` as the
+string property `focused-surface` rather than an index, so neither side
+spells a number; `focused_surface_names_match_the_markup` holds the two
+spellings together.
+
+Two rules decide it, and the order matters:
+
+1. **The roll wins whenever it is on screen with something selected.** That
+   is the rule the clipboard chords have shipped with since 2026-09-07, and
+   a user who has just dragged a marquee is not thinking about the browser
+   row they opened before it.
+2. **Otherwise it is where the last click was**, written from Rust in the
+   handlers a click already round-trips through — `channel-selected`,
+   `device-selected`, `source-select-toggled` — and from the markup for the
+   browser's own rows and tabs.
+
+`Channels` is the fallback, not a fifth state meaning "nothing". Before this
+existed the clipboard chords meant the channel unconditionally, so a surface
+nobody has clicked behaves the way it did then, and **nothing a user relied
+on changed shape**. There is deliberately no Escape-to-nowhere: the way back
+to the fallback is selecting a channel, which is the ordinary thing.
+
+Seven actions are `Focused`: `edit.cut-channel`, `edit.copy-channel`,
+`edit.paste-channel` (ids unchanged, per the rule above — what they *mean* is
+the focused panel's clipboard), and the four `notes.nudge-*` arrows, which
+nudge on the roll, walk the tree in the browser, and pick a channel
+otherwise.
+
+### Why the Device actions keep their own chords
+
+They were on Ctrl+Shift+C/X/V/D because the dispatcher did not know what had
+focus. It does now, and the bare chords reach the same three verbs in the
+rack — but the explicit four are kept rather than retired, because reaching
+the rack's clipboard *from the roll* is worth four bindings, and anyone who
+disagrees can clear them from Preferences without a code change. The
+one-clipboard question `docs/plans/archive/interface-iteration/02-device-clipboard.md`
+raised is still open and is still not this: three tagged clipboards behind
+one focus model is the part that had to exist first.
 
 ## How a new action is added
 
 1. Add one `ActionSpec` entry to `actions.rs`: id, label, category, and a
-   default `KeyChord` (or `None` if it shouldn't ship with a default binding).
+   default `KeyChord` (or `None` if it shouldn't ship with a default
+   binding). Use `action!` if it fires anywhere and `scoped_action!` if it
+   does not; `Anywhere` is the macro default, so **forgetting the scope is
+   the silent failure**, and `every_contextual_action_declares_its_scope`
+   pins the set that must not be global.
 2. Add one match arm in `lib.rs`'s `on_shortcut_key` dispatcher, calling
    whatever already performs that operation — usually an existing
    `window.invoke_*()` for a callback a menu row already calls. If the
@@ -119,6 +182,29 @@ that letter rather than as plain text with a modifier flag — see the
 comments at both call sites before touching either. Adding a new
 Ctrl+letter *action* never requires touching that decode branch; only a
 genuinely new *key* (one not already decoded) would.
+
+**Two ladders written by hand and checked against nothing is how a shipped
+action stayed dead for a week.** `transport.loop-toggle` landed on a bare L
+on 2026-09-07. The registry held it, the prefpane drew it, `ShortcutTable`
+resolved it — and no L ever arrived, because the root ladder forwarded six
+digits and nothing else unmodified, and the recorder refused an unmodified
+key outright, so it could not even be rebound to something that worked. Every
+test was green throughout, because every test asked the registry what it held
+rather than asking the markup what it could deliver.
+
+Both ladders end in a catch-all now, and `actions.rs`'s `decoding` module
+asks the markup: `every_default_chord_reaches_the_dispatcher` fails if a
+registry default is a chord `main.slint` cannot produce, and
+`the_recorder_decodes_what_the_dispatcher_does` fails if the two ladders name
+different keys. They scrape the real `.slint` files rather than mirroring a
+table here, because a mirrored table would be the third copy of the thing
+that already drifted twice. Escape is the one asymmetry, and it is a
+decision: it cancels a capture, so the recorder can never hand it back as a
+chord, and the test asserts nothing in the registry binds it.
+
+Ctrl+H, Ctrl+I and Ctrl+J are unreachable, whatever the registry says: their
+control codes are Backspace, Tab and Return, and those branches take them
+first. `CTRL_UNREACHABLE` is that sentence in a form that can fail.
 
 No F-keys are used for default bindings, by product decision
 (`docs/archive/SHORTCUTS.md`).

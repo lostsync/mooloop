@@ -5,7 +5,7 @@
 //! why this is an RGB triple rather than an index into the palette
 //! `Appearance` derives -- an index would make a song look different under a
 //! different scheme, and would quietly commit the palette to having a fixed
-//! number of slots. `docs/plans/interface-iteration/03-channel-identity.md`
+//! number of slots. `docs/plans/archive/interface-iteration/03-channel-identity.md`
 //! states the rule; `ENHANCEMENTS.md` holds the palette question it must not
 //! settle.
 

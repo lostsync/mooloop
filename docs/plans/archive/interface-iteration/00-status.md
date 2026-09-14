@@ -1,5 +1,164 @@
 # Interface iteration status
 
+## Step 04 — the keyboard reaches the rest of the application
+
+Landed on `feat/keyboard-pass` (2026-09-14). The registry is 63 actions in
+eleven categories, `Ctrl+C` resolves against the focused panel, the browser
+tree is navigable without the mouse, and Preferences > Shortcuts says which
+chords are contextual. **All four steps have landed; the directory archives
+with this one.**
+
+### The thing to carry forward: a registry is not a keyboard
+
+The step's own list of gaps was about coverage -- no stop, nothing
+device-level, no browser focus. What the doing found is that **the registry
+and the keyboard had drifted apart and nothing could notice**, twice, in the
+same shape `FOCUS.md` names as this month's class: a claim the source no
+longer supported.
+
+- **`transport.loop-toggle` had been dead since it shipped on 2026-09-07.**
+  It defaults to a bare `L`. `main.slint`'s root ladder forwarded exactly six
+  keys unmodified -- the digits 1-6, for the roll's tools -- so an `L`
+  reached the final `reject` and no action ever fired. The registry held it,
+  the prefpane drew it, `ShortcutTable` resolved it, and the suite was green,
+  because every test asked the registry what it held rather than asking the
+  markup what it could deliver.
+- **The Shortcuts recorder refused unmodified keys outright**, so the bare-L
+  and bare-digit defaults could not be rebound to anything either: Reset
+  followed by Record could not put back what the registry shipped with.
+- **Space was forwarded with all four modifier flags hardcoded `false`**, in
+  both ladders. Shift+Space and Space were one chord, which is why
+  `transport.stop` could not have been bound before this step whatever the
+  registry said.
+
+Both ladders end in a catch-all now, and `actions.rs`'s `decoding` module
+reads the real `.slint` files: `every_default_chord_reaches_the_dispatcher`
+fails if a registry default is a chord the markup cannot produce, and
+`the_recorder_decodes_what_the_dispatcher_does` fails if the two ladders name
+different keys. They scrape rather than mirror, because a mirrored table
+would be the third copy of the thing that had already drifted twice. Escape
+is the one asymmetry and it is a decision -- it cancels a capture, so the
+recorder can never hand it back -- and the test asserts nothing binds it.
+
+Ctrl+H/I/J stay unreachable whatever the registry says: their control codes
+*are* Backspace, Tab and Return. `CTRL_UNREACHABLE` is that sentence in a
+form that can fail.
+
+**Both were validated against the defect, per `AGENTS.md`'s rule that a check
+of this kind is otherwise decoration.** Reverting `main.slint`'s catch-all to
+the digits-only ladder makes `every_default_chord_reaches_the_dispatcher` fail
+with *"transport.loop-toggle defaults to L, which main.slint's key ladder
+never produces"*. That run also found a gap in the sibling check:
+`the_recorder_decodes_what_the_dispatcher_does` **passed** under the same
+mutation, because the two ladders still named identical keys and only their
+catch-alls differed. It compares the catch-alls now.
+
+**A third instance turned up while writing this up.** `ACTIONS.md` states how
+many actions there are, confesses in the same sentence to having said 46 where
+the table held 45, and was corrected to 47 on 2026-09-12 — by which time the
+table held 49. Two corrections, both made by counting, and counting is what
+went wrong both times. The third fix is
+`the_registry_count_in_actions_md_is_the_registry_count`, which reads the
+sentence out of the Markdown and compares it with `ACTIONS.len()`. A sibling,
+`a_category_is_one_run_of_the_table`, catches the thing that would make a
+recount *look* right: `shortcut_rows` marks a section boundary by comparing
+each entry with the one before it, so a category split across two runs would
+draw two headings with the same name and report nothing.
+
+### What `Ctrl+C` means, which is the decision the step existed to make
+
+A chord resolves to exactly one action id -- `ShortcutTable` is a
+`HashMap<KeyChord, &str>` and cannot be anything else -- so three meanings is
+**one action that asks what has focus**, not three actions sharing a chord.
+`ActionSpec` grew a `Scope`, `Surface` is what a `Scope::Focused` action
+points at, and the prefpane draws the scope in a Context column.
+
+Three things about it that are decisions rather than mechanism:
+
+- **The fallback is the channel list, not "nothing".** Before this the
+  clipboard chords meant the channel unconditionally, so a surface nobody has
+  clicked behaves the way it did then and nothing a user relied on changed
+  shape. There is deliberately no Escape-to-nowhere either: the way back is
+  selecting a channel, which is the ordinary thing.
+- **The roll wins whenever it is on screen with a selection**, ahead of the
+  last click. That is the rule the chords have shipped with since 2026-09-07
+  and it is still right: a user who has just dragged a marquee is not
+  thinking about the browser row they opened before it.
+- **The ids did not change.** `edit.copy-channel` is labelled "Copy" and
+  means the focused panel's clipboard; `notes.nudge-up` is labelled "Move Up"
+  and picks a channel when the roll is not where you are. A user's
+  rebindings are stored against the id, so renaming one silently drops them
+  -- which is `ACTIONS.md`'s own rule, applied rather than restated.
+
+The four arrow keys are the same mechanism, and taking them meant **deleting
+a branch from `main.slint`'s root FocusScope**: Up and Down picked a channel
+there, guarded by a hand-written "unless the roll has a selection". That
+guard could only ever know about two answers. The browser could not have been
+a third without leaving the markup.
+
+### The browser does not get a FocusScope
+
+The step file's diagnosis was that the tree "has no `FocusScope` of its own
+and so cannot be reached by a key at all". The first half is true and the
+second does not follow, and giving it one would have been a regression:
+**a FocusScope without focus swallows the pointer press that would focus
+it**, which is the two-clicks-per-control bug the root scope's own comment
+and `tests/first_click.rs` are both about. Nesting one inside the browser
+would have made every row a two-click row.
+
+The root scope already hears every key. What the browser was missing was
+somewhere for them to be *aimed*, which is `focused-surface` plus one
+`browser-focus-index`. Ctrl+B reveals the sidebar and takes the keys; Up and
+Down move the highlighted row, Right opens a closed folder or steps into it,
+Left closes an open one or climbs to its parent, Enter does what clicking the
+row does, and Ctrl+Enter is the row's context-menu load.
+
+Three smaller findings in it:
+
+- **Left climbs by walking back to the first shallower row.** The model is
+  flattened, so a row carries no pointer to its parent and there is no other
+  way to ask. `browser_parent_of` is pure for that reason and is tested on a
+  depth list rather than a rendered tree.
+- **Scrolling the keyboard's row into view has to happen in the markup.**
+  Rust knows the index; only the `ScrollView` knows how many rows fit. A
+  local property aliasing `browser-focus-index` plus a `changed` callback is
+  how movement in a root property is observed from inside the element that
+  can answer.
+- **A collapse takes rows away underneath the keyboard**, so the focus is
+  clamped after every toggle rather than bounds-checked at every read.
+
+### `focused-surface` is a string
+
+Four names crossing into the markup, not four indices -- so neither side
+spells a number, which is the boundary rule `docs/workflows/rust-slint-boundary/`
+exists for. `focused_surface_names_match_the_markup` fails if the markup ever
+assigns a name no `Surface` answers to, and if its default stops being
+`Surface::default()`.
+
+### What is not here
+
+- **No channel solo.** Solo is a *track's*, in place, since 2026-09-11;
+  `track.solo` and `track.mute` bind that, aimed at the track the rack is
+  editing. Inventing a channel solo would have been the step adding
+  capability, which is the plan's own line.
+- **No record action.** There is no recording to bind, and the step's last
+  clause is that no action in the registry is bound to a feature that does
+  not exist.
+- **No axis-constrained note drag.** The step said to revisit it only if a
+  rebindable *modifier* vocabulary came out of this. One did not -- the
+  gesture registry already existed and this changed nothing in it -- so it
+  stays out, per `ENHANCEMENTS.md`.
+- **Keyboard note selection still does not exist.** The arrows move a
+  selection and cannot build one. It is `ENHANCEMENTS.md`'s, not this step's.
+- **The menu bar still calls its own callbacks rather than action ids.** Safe,
+  because they are the same callbacks, and `ACTIONS.md` still defers the
+  callable-by-id lookup until a console asks for it. What this step did add
+  is the guard that keyboard and menu agree on *when* an action applies:
+  Select All Notes is live only on the roll in both, and Delete only with a
+  selection, because the shortcut arms now carry the condition the menu row
+  is enabled by.
+
+
 ## Between steps — a track's head is bundled with its strip
 
 Not a numbered step: `04-the-keyboard-pass.md` keeps that number and is still

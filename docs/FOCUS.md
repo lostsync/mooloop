@@ -1,9 +1,10 @@
 # Focus
 
-Status: active working sequence, rewritten 2026-09-12. The previous version was
-written 2026-09-05 and amended 2026-09-07 and 2026-09-08; it is being replaced
-rather than amended again, because the mixer it describes is not the mixer that
-exists and the work it parks includes a feature that shipped.
+Status: active working sequence, rewritten 2026-09-12, amended 2026-09-14 when
+`interface-iteration/` closed and its step left the sequence. The previous
+version was written 2026-09-05 and amended 2026-09-07 and 2026-09-08; it was
+replaced rather than amended again, because the mixer it described was not the
+mixer that exists and the work it parked included a feature that shipped.
 
 `ROADMAP.md` orders the whole product by dependency. This document is narrower:
 it names the active sequence and the work that should not interrupt it. Rewrite
@@ -51,9 +52,19 @@ single arc in them was never a step here at all.
   asked for, and every finding was a control saying something the engine was
   not doing. Its `README.md` records the method, so the sweep can be re-run
   rather than re-invented.
-- **`interface-iteration/` steps 01 and 02 landed 2026-09-07.** The browser
-  has a PRESETS tab, and a device — or a whole container — can be copied, cut,
-  pasted and duplicated by identity rather than by slot.
+- **`interface-iteration/` closed 2026-09-14 and archived.** Four steps: a
+  browser that browses presets, a device clipboard keyed by identity rather
+  than slot, a channel that has a name and a colour, and the keyboard pass.
+  Two things in it outlive the plan. **`Ctrl+C` asks what has focus** — a
+  chord resolves to one action id and cannot do otherwise, so three meanings
+  is one action with a `Scope`, and the fallback is the channel list because
+  that is what these chords meant before there was a second clipboard.
+  And **a registry is not a keyboard**: `transport.loop-toggle` had been
+  dead since it shipped, on a bare L no branch of `main.slint`'s key ladder
+  forwarded, with the registry, the prefpane and the whole suite green over
+  it. `actions.rs`'s `decoding` module reads the markup now. Read
+  `docs/plans/archive/interface-iteration/00-status.md` before touching the
+  action registry or either key-decoding ladder.
 - **Three days of correctness work, 2026-09-10 to 2026-09-12, that are not a
   plan and are worth knowing as a class.** Faces held to their descriptors by
   index rather than by order, the 441 persisted parameter ids frozen where
@@ -74,71 +85,18 @@ type, graph abstraction, effect, or routing primitive is not progress by
 itself. Each step below must end in something that can be played, heard, saved,
 reopened, and rendered through the ordinary UI.
 
-Steps 1 and 2 are interface and parameter-model work, and they get a sibling
-rule: **an interface change is judged by whether something that already exists
-becomes easier to reach, not by how much new surface it adds.** A pane that
-shows what a menu already showed is not progress either.
+Step 1 is parameter-model work before it is a device, and any interface work
+that turns up beside it gets a sibling rule, kept here because it outlived the
+plan it came from: **an interface change is judged by whether something that
+already exists becomes easier to reach, not by how much new surface it adds.**
+A pane that shows what a menu already showed is not progress either.
 
 ## The sequence
 
 Set by Adam on 2026-09-12: finish the interface iteration, then the EQ, then
-Buffer.
+Buffer. The first of those closed on 2026-09-14, so the EQ is the live step.
 
-### 1. Finish `docs/plans/interface-iteration/` — step 04
-
-The plan is four independent steps, each ending in something usable, in an
-order that can be rearranged. Three are in. Its rule is this document's
-interface rule applied: every step exposes a mechanism that is **already
-built** and currently reachable only from a menu, a rail button, or not at all.
-If a step starts wanting engine capability, it has left the plan.
-
-**Step 03 closed on 2026-09-13**, and what it found is worth carrying rather
-than the work it did. A channel and a pattern each take a colour, stored as a
-colour the song owns rather than an index into the palette, so the palette
-question in `ENHANCEMENTS.md` stays open and a song looks the same under every
-theme. The controls live in a **left channel sidebar** — Adam asked for it that
-day, which overrode the step file's instruction not to build one — and it is
-the browser sidebar's mirror, with the MIDI rows drawn inert as this document
-required. `reset_channel_source` no longer eats a name the user typed.
-
-The two things the step did not know about are the ones to remember. **A
-pattern's name had never been saved**: `rename_pattern` wrote to a session
-field the project format had no room for, so every reopened song renumbered its
-patterns, silently, since patterns became renamable on 2026-09-07 — and
-renaming one did not mark the document dirty either, which was harmless only
-for as long as the name was going to be discarded anyway. Both are the class
-this document already names: a claim the source no longer supported. Neither
-was findable by looking at the feature; they turned up because a *colour* had
-to persist beside the name.
-
-What is left of the colour work is adoption, and it is deliberately unfinished:
-the rack plate draws a channel's colour and nothing else does. The mixer and
-the playlist take their turn one at a time, each being a place to check the
-colour reads at that size, and a pattern's colour is stored but drawn nowhere.
-
-**Step 04 — the keyboard reaches the rest of the application.** Adam has asked
-for this in stronger terms than anything else on his list, and the foundation
-is in: `ACTIONS.md` is the contract, `actions.rs` is the registry, Preferences
-rebinds every entry, and since 2026-09-07 a shortcut fires from wherever focus
-happens to be. What is missing is coverage — the registry is 47 actions and
-transport is two of them, nothing is device-level, and the browser tree has no
-`FocusScope` of its own and so cannot be reached by a key at all — and one
-decision: **what `Ctrl+C` means** once a channel, a device and a note clipboard
-all want it. The smallest correct answer is an
-action that resolves against the focused surface with a defined fallback, and
-it should be designed so a console could later invoke an action by id without a
-keypress.
-
-**One instruction in step 04 has gone stale and should be read in its altered
-form.** It says "do not add a solo action; there is no solo". There is now:
-solo landed 2026-09-11, on a **track**. Bind that. Solo on a *channel* rather
-than its track is still unbuilt, and inventing it here would be the step
-adding capability.
-
-Done when: step 04 lands, `interface-iteration/00-status.md` records four
-landed steps, and the directory moves to `archive/`.
-
-### 2. `docs/plans/eq-v2/` — the parameter model first, the EQ second
+### 1. `docs/plans/eq-v2/` — the parameter model first, the EQ second
 
 Written 2026-09-12, nothing landed. It came out of fixing one bug — the EQ's
 Shape control was two settings of different arity behind one automatable id —
@@ -175,7 +133,7 @@ Done when: every EQ band and pass filter has its own stable ids, a lane on a
 band means one band forever, and `eq-v2/00-status.md` says which of 02 to 04
 were taken.
 
-### 3. Turn Buffer into a composition workflow
+### 2. Turn Buffer into a composition workflow
 
 Still the honest product test, and still last, because its value is a workflow
 judgement better made against finished instruments and an interface that can
@@ -324,7 +282,7 @@ dependency edge that schedules a producer without summing it in. Read
 `docs/plans/archive/typed-audio-edges/` before building it.
 
 **Plugin hosting itself** (#10, #26–#30). Deferred rather than refused, and
-`PRODUCT.md` says why: not before the instrument model is coherent. Step 2
+`PRODUCT.md` says why: not before the instrument model is coherent. Step 1
 above is the part of it worth doing early, and the only part.
 
 **A curated factory bank.** Every device that ships presets ships them to
@@ -339,8 +297,8 @@ not interrupt this sequence unless one becomes necessary to preserve its work.
 
 **Metronome, MIDI configuration, and the graph editor.** None is required to
 prove the active workflows. MIDI in particular is decoded and routed and
-configurable nowhere, and step 1's channel identity work draws rows for it:
-build the setting, let it stay inert.
+configurable nowhere, and the channel sidebar draws rows for it as of
+2026-09-13: build the setting, let them stay inert.
 
 ## Working discipline
 
@@ -359,7 +317,6 @@ worktrees, commits, and verification.
 **Listening is a step, not a formality.** The last recorded passes are DS-01
 and its kit on 2026-09-04, ML-P8 and its bank on 2026-09-05, the ML-M1 with
 its patches, and the channel strip's three voicings on headphones on
-2026-09-11. Two of the three steps above change what can be *done* to a sound
-rather than how it sounds, and a moving patch is the only proof they worked;
-`eq-v2`'s step 04 is the one that changes a sound outright and needs a pass of
-its own.
+2026-09-11. Both steps above change what can be *done* to a sound rather than
+how it sounds, and a moving patch is the only proof they worked; `eq-v2`'s
+step 04 is the one that changes a sound outright and needs a pass of its own.
