@@ -1048,7 +1048,13 @@ land on its own when it starts to matter:
   than a layout assumption, and the grid scrolls to whatever it is set to.
   Routes carry durable `ModSourceId`s, so reordering the grid moves a module
   without changing what any route means, and `MoveModulator` remaps the Math
-  module's `input_slot` across the same permutation. Arming a module's Assign
+  module's `input_slot` across the same permutation. **A reorder also moves
+  each module's running state**: an LFO keeps its phase, its smoothing and its
+  fade position, an envelope keeps its stage and level, and a Random module
+  keeps its sequence. Before 2026-09-14 a drag rebuilt every moved module, so
+  an envelope dragged to the front dropped a held note's contour to zero
+  mid-sustain, and two LFOs dragged past each other swapped params without
+  swapping phase and both jumped. Arming a module's Assign
   switch makes legal controls assignable; dragging one sets route depth while
   the control keeps its base value. Removing a route restores the
   destination's base, on generator parameters as well as effect ones. The

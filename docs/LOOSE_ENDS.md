@@ -840,30 +840,28 @@ deletes. Whoever decides this should also decide the departed-producer versus
 departed-device inconsistency above, which is the same question at a
 different site. Found 2026-09-13.
 
-**Reordering the modulator grid restarts or cross-wires every moved module's
-running state.** `EngineCommand::MoveModulator` goes through
-`edit_modulation` (`render.rs:3168`), whose only mirror into the DSP rack is a
-params diff *by slot number*. A reorder is a permutation, so every moved
-position reads as "the params changed" and gets `set_slot`, which knows about
-a slot being reconfigured and not about a module having moved. Different kinds
-swap and both are rebuilt from scratch: an envelope dragged to the front
-restarts at level 0 stage `Idle`, so a held note's contour drops to zero
-mid-sustain and will not re-arm until the next Note On; a Random module is
-reseeded, changing the sequence that is supposed to be identical between
-realtime and offline. Same kinds **cross-wire**: two LFOs dragged past each
-other keep their own phase, smoothing state and fade position and take the
-other's params, so both jump and nothing shows why. The session layer's own
-comment (`session/modulation.rs:120`) claims "both racks run the same
-permutation", which is true of the data and not of the running state. Not a
-small fix because `edit_modulation` is deliberately generic over
-`FnOnce(&mut ModRack)` and cannot tell a reorder from any other edit -- the
-diff is what makes narrow commands cheap. Options: give `ModulatorRack` a
-`move_slot(from, to)` that permutes `slots` and `outputs` together and give
-`MoveModulator` its own handler ahead of the diff, which then correctly finds
-nothing changed; or key the DSP rack by `ModSourceId` rather than by slot,
-which removes the class; or accept the restart and say so in the spec -- but
-the same-kind cross-wiring is not defensible under any reading. Found
-2026-09-13.
+**Reordering the modulator grid used to restart or cross-wire every moved
+module's running state.** Fixed 2026-09-14 by the first of the three options
+this entry named: `ModRack::move_module_mapped` returns the permutation it
+applied, `ModulatorRack::permute` carries each module's running state through
+it, and `MoveModulator` has its own handler ahead of the params diff.
+
+Two things about the fix worth knowing before touching it. The permutation is
+**not enough on its own**: `retarget` may rewrite a Math module's
+`input_slot`, which lives in its params, so the handler still runs a params
+pass afterwards -- against the *permuted* previous params, which is what keeps
+it to the Math modules. A `MathSource` is its params and rebuilds for nothing,
+where rebuilding an LFO is the whole defect. And `permute` clears before it
+writes, so a slot the permutation does not name is emptied rather than left
+holding a module that has moved away; an in-place swap would lose that
+silently, which is why there is a test for it.
+
+The option **not** taken was keying the DSP rack by `ModSourceId` rather than
+by slot, which removes the class rather than this instance of it. The diff by
+slot number is what makes every other narrow command cheap, and a reorder is
+the one edit that owes it a permutation instead -- but a second edit that a
+diff cannot see would be the argument for the bigger change. Found
+2026-09-13, fixed 2026-09-14.
 
 **A unipolar route from a *fading-in* LFO rises from half the module's depth
 rather than from the floor.** The steady-state half of this was fixed

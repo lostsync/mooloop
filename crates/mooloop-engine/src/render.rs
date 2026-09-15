@@ -3275,6 +3275,61 @@ impl RenderState {
     ///
     /// `edit` reports whether it changed anything, so a command that names a
     /// slot or a route this rack does not hold costs a comparison and stops.
+    /// Reorder one channel's modulator grid, carrying every module's running
+    /// state to its new slot.
+    ///
+    /// Its own handler rather than an `edit_modulation` closure, because
+    /// `edit_modulation` mirrors an edit as a **params diff by slot number**
+    /// and a reorder is exactly what that cannot see: every moved position
+    /// reads as "the params changed". Different kinds swapped were rebuilt
+    /// from scratch -- an envelope dragged to the front restarted at level 0
+    /// stage `Idle`, dropping a held note's contour to zero mid-sustain, and a
+    /// Random module was reseeded, so a realtime take and an offline render of
+    /// the same song stopped matching. Same kinds **cross-wired**, because
+    /// `set_slot` retunes in place: two LFOs dragged past each other kept
+    /// their own phase, smoothing and fade position and took the other's
+    /// params, so both jumped and nothing said why.
+    ///
+    /// The diff is what makes every *other* narrow command cheap, so it stays;
+    /// this is the one edit that owes it a permutation instead.
+    ///
+    /// The params pass afterwards is not belt and braces. `retarget` may
+    /// rewrite a Math module's `input_slot`, which lives in its params, so the
+    /// permuted runtime can be holding a module whose params moved underneath
+    /// it. Comparing against the *permuted* previous params is what makes that
+    /// the only thing it touches -- a `MathSource` is its params and rebuilds
+    /// for nothing, where rebuilding an LFO is the defect above.
+    fn move_modulator(&mut self, channel: usize, from: usize, to: usize) {
+        let Some(saved) = self.modulation.get_mut(channel) else {
+            return;
+        };
+        let before = saved.slots;
+        let Some(remap) = saved.move_module_mapped(from, to) else {
+            return;
+        };
+        let after = saved.slots;
+        let Some(runtime) = self.modulators.get_mut(channel) else {
+            return;
+        };
+        runtime.permute(&remap);
+
+        // What the runtime now holds: the old params, in their new places.
+        let mut carried = [None; MAX_MODULATORS_PER_CHANNEL];
+        for (old, new) in remap.iter().enumerate() {
+            let new = *new as usize;
+            if new < MAX_MODULATORS_PER_CHANNEL {
+                carried[new] = before[old].map(|entry| entry.params);
+            }
+        }
+        for (slot, carried) in carried.into_iter().enumerate() {
+            let params = after[slot].map(|entry| entry.params);
+            if carried == params {
+                continue;
+            }
+            runtime.set_slot(slot, params);
+        }
+    }
+
     fn edit_modulation(&mut self, channel: usize, edit: impl FnOnce(&mut ModRack) -> bool) {
         let Some(saved) = self.modulation.get_mut(channel) else {
             return;
@@ -4154,10 +4209,9 @@ impl RenderState {
             EngineCommand::ClearModulator { channel, slot } => {
                 self.edit_modulation(channel as usize, |rack| rack.clear(slot as usize))
             }
-            EngineCommand::MoveModulator { channel, from, to } => self
-                .edit_modulation(channel as usize, |rack| {
-                    rack.move_module(from as usize, to as usize)
-                }),
+            EngineCommand::MoveModulator { channel, from, to } => {
+                self.move_modulator(channel as usize, from as usize, to as usize)
+            }
             // A route names its source by durable id, so one that arrives
             // before (or after) the module it names is refused rather than
             // aimed at whatever else occupies that slot.
@@ -7058,6 +7112,74 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             .internal_routes()
             .expect("ML-P8 has internal routes")
             .is_empty());
+    }
+
+    /// **A reorder moves each module's running state with it**, which it did
+    /// not until 2026-09-14.
+    ///
+    /// `edit_modulation` mirrors a rack edit into the DSP rack as a params
+    /// diff by slot number, and a reorder is exactly the edit a diff by slot
+    /// number cannot see. Two LFOs dragged past each other cross-wired: each
+    /// kept its own phase, smoothing and fade position and took the *other's*
+    /// params, because `set_slot` retunes in place. Both jumped and nothing
+    /// said why. Different kinds swapped were worse in a different direction
+    /// -- both rebuilt from scratch, so an envelope restarted at level 0
+    /// mid-sustain and a Random module was reseeded, which also broke the
+    /// promise that an offline render matches a realtime take.
+    ///
+    /// Driven through `apply_command` rather than through the rack directly,
+    /// because the defect was in the mirroring and not in either rack.
+    #[test]
+    fn reordering_the_grid_carries_each_modules_running_state() {
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        for (slot, rate, phase) in [(0u8, 1.0f32, 0.0f32), (1, 7.0, 0.25)] {
+            render.apply_command(EngineCommand::InstallModulator {
+                channel: 0,
+                slot,
+                source: mooloop_core::ModSourceId(u32::from(slot)),
+                params: mooloop_core::ModulatorParams::Lfo(mooloop_core::ModLfoParams {
+                    rate_hz: rate,
+                    phase,
+                    ..mooloop_core::ModLfoParams::default()
+                }),
+            });
+        }
+        render.play();
+        for _ in 0..8 {
+            render.process_block(256);
+        }
+
+        let before = *render.modulators[0].outputs();
+        assert!(
+            (before[0] - before[1]).abs() > 0.05,
+            "the two LFOs were indistinguishable to begin with: {before:?}"
+        );
+
+        render.apply_command(EngineCommand::MoveModulator {
+            channel: 0,
+            from: 0,
+            to: 1,
+        });
+
+        let after = *render.modulators[0].outputs();
+        assert_eq!(
+            (after[0], after[1]),
+            (before[1], before[0]),
+            "the swap rebuilt or cross-wired the modules rather than moving them"
+        );
+        // The control rack agrees about which is which, so a route that
+        // followed the move reads the module it named.
+        let rates: Vec<f32> = render.modulation[0]
+            .slots
+            .iter()
+            .flatten()
+            .map(|slot| match slot.params {
+                mooloop_core::ModulatorParams::Lfo(lfo) => lfo.rate_hz,
+                _ => f32::NAN,
+            })
+            .collect();
+        assert_eq!(rates, vec![7.0, 1.0], "the control rack did not permute");
     }
 
     /// A generator that has no internal routes ignores the commands entirely

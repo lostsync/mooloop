@@ -1738,13 +1738,33 @@ impl ModRack {
     /// rewrites it through the permutation. A slot reference that the user
     /// never sees must not be the thing that breaks when the grid is tidied.
     pub fn move_module(&mut self, from: usize, to: usize) -> bool {
+        self.move_module_mapped(from, to).is_some()
+    }
+
+    /// The same reorder, returning **the permutation it applied**: old slot
+    /// to new, with [`UNRESOLVED_SLOT`] for a slot that held nothing.
+    ///
+    /// The engine needs the permutation and not just the fact of the move.
+    /// `edit_modulation` mirrors a rack edit into the DSP rack as a params
+    /// diff *by slot number*, and a reorder is exactly the edit a diff by slot
+    /// number cannot see: every moved position reads as "the params changed"
+    /// and is rebuilt from scratch. An envelope dragged to the front restarted
+    /// at level 0 stage `Idle`, dropping a held note's contour to zero
+    /// mid-sustain; a Random module was reseeded, so a realtime take and an
+    /// offline render of the same song stopped matching. And two LFOs dragged
+    /// past each other **cross-wired**: each kept its own phase, smoothing
+    /// state and fade position and took the other's params, so both jumped and
+    /// nothing on screen said why.
+    pub fn move_module_mapped(
+        &mut self,
+        from: usize,
+        to: usize,
+    ) -> Option<[u8; MAX_MODULATORS_PER_CHANNEL]> {
         let order: Vec<usize> = self.occupied().map(|(slot, _)| slot).collect();
-        let Some(position) = order.iter().position(|slot| *slot == from) else {
-            return false;
-        };
+        let position = order.iter().position(|slot| *slot == from)?;
         let target = to.min(order.len().saturating_sub(1));
         if target == position {
-            return false;
+            return None;
         }
         let mut order = order;
         let moved = order.remove(position);
@@ -1758,7 +1778,7 @@ impl ModRack {
             remap[old_slot] = index as u8;
         }
         self.retarget(&remap);
-        true
+        Some(remap)
     }
 
     const fn identity_map() -> [u8; MAX_MODULATORS_PER_CHANNEL] {
