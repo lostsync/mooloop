@@ -733,7 +733,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{channel_address, parse_channel, MidiBytes, Route};
+    use super::{channel_address, parse_channel, MidiBytes, MidiPortId, Route};
 
     /// A channel message crosses whole; system exclusive, which Core MIDI
     /// hands over in one piece, and an empty packet do not cross at all.
