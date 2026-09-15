@@ -13,9 +13,10 @@
 //! shared.
 
 use mooloop_core::{
-    ChannelMidiInput, ControlBinding, ControlLearn, ControlOutcome, ControlTarget, EffectSlotState,
-    EffectTarget, EngineCommand, MidiInputRoute, MidiKind, MidiMessage, MidiPortInfo, NoteEvent,
-    ParamAddr, ParamDescriptor, ParamOwner, TransportControl, STRIP_PARAM_PAN, STRIP_PARAM_VOLUME,
+    ChannelMidiInput, ControlBinding, ControlLearn, ControlMode, ControlOutcome, ControlTarget,
+    EffectSlotState, EffectTarget, EngineCommand, MidiInputRoute, MidiKind, MidiMessage,
+    MidiPortInfo, NoteEvent, ParamAddr, ParamDescriptor, ParamOwner, Takeover, TransportControl,
+    STRIP_PARAM_PAN, STRIP_PARAM_VOLUME,
 };
 
 use crate::roll::NoteEdit;
@@ -37,6 +38,30 @@ pub struct ControlEffects {
     /// Whether the document changed. A transport gesture does not dirty a
     /// document; a parameter move and a new binding both do.
     pub edits: bool,
+}
+
+/// One binding as a mapping list draws it: what it listens to, what it moves,
+/// and the two things about it that are worth switching from a list.
+///
+/// A view rather than a reference into the map, because every field here is
+/// *resolved* -- a target's name comes from the project, and whether a port is
+/// missing comes from the ports that exist right now. Handing the interface a
+/// `&ControlBinding` would mean resolving both again on the other side of the
+/// boundary, in a layer that has neither.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ControlBindingView {
+    /// Position in the map, and the handle every mutation takes.
+    pub index: usize,
+    pub source: String,
+    pub target: String,
+    pub mode: String,
+    /// The takeover this binding runs, or `None` for a mode that has none.
+    pub takeover: Option<Takeover>,
+    pub inverted: bool,
+    /// The named port is not plugged in, so this binding is inert this run.
+    pub unresolved: bool,
+    /// A transport gesture rather than a parameter.
+    pub transport: bool,
 }
 
 impl ControlEffects {
@@ -219,6 +244,15 @@ impl Session {
                     if let Some(command) = self.set_param_normalized(address, value) {
                         effects.commands.push(command);
                     }
+                    // Where the parameter actually ended up, which is not
+                    // always what was asked for: a stepped parameter
+                    // quantizes. That read-back is what lets this binding
+                    // notice later that something else has moved the
+                    // parameter off it (`PickupState::wrote`), so a knob that
+                    // has taken over stops dragging the value back from
+                    // wherever the mouse just put it.
+                    let observed = self.param_normalized(address).unwrap_or(value);
+                    self.control_state.wrote(index, observed);
                     effects.moved.push(address);
                     effects.edits = true;
                 }
@@ -231,6 +265,135 @@ impl Session {
     /// Begin a learn gesture: the next control touched binds to `target`.
     pub fn begin_control_learn(&mut self, target: ControlTarget, bind_port: bool) {
         self.control_learn = Some(ControlLearn { target, bind_port });
+    }
+
+    /// What a binding's target is called, for a mapping list.
+    ///
+    /// Resolved against the project every time it is asked rather than stored
+    /// beside the binding: a channel gets renamed and a device gets moved, and
+    /// a cached name would then be a second copy of a fact the project already
+    /// holds. A target that names nothing here says so -- a binding onto a
+    /// device that has been deleted is inert, not a mistake, and hiding it
+    /// would leave a knob that does nothing with nothing on screen to explain
+    /// it.
+    pub fn control_target_label(&self, target: &ControlTarget) -> String {
+        let address = match target {
+            ControlTarget::Transport(gesture) => {
+                return format!("Transport \u{b7} {}", gesture.label())
+            }
+            ControlTarget::Param(address) => *address,
+        };
+        let Some(descriptor) = self.param_descriptor(address) else {
+            return "Unavailable parameter".to_owned();
+        };
+        let scope = match address.scope {
+            EffectTarget::Channel(channel) => self
+                .channels
+                .get(usize::from(channel))
+                .map(|state| state.name.clone()),
+            EffectTarget::Bus(bus) => self
+                .buses
+                .get(usize::from(bus))
+                .map(|setup| setup.bus.name.clone()),
+        };
+        // `param_descriptor` has already answered for this address, so a scope
+        // that resolves to nothing here cannot happen -- but naming the owner
+        // is worth more than a panic would be.
+        let scope = scope.unwrap_or_else(|| "?".to_owned());
+        let owner = match address.owner {
+            ParamOwner::Source => match address.scope {
+                EffectTarget::Channel(channel) => self
+                    .channels
+                    .get(usize::from(channel))
+                    .map(|state| state.kind.label().to_owned())
+                    .unwrap_or_else(|| "?".to_owned()),
+                EffectTarget::Bus(_) => "?".to_owned(),
+            },
+            ParamOwner::Effect { device } => self
+                .chain_for(address.scope)
+                .and_then(|chain| {
+                    let slot = mooloop_core::device_slot(chain, device)?;
+                    Some(format!("{} {}", chain.get(slot)?.kind().label(), slot + 1))
+                })
+                .unwrap_or_else(|| "?".to_owned()),
+            ParamOwner::Strip => "Strip".to_owned(),
+            ParamOwner::Modulator { .. } | ParamOwner::SourceRoute { .. } => "?".to_owned(),
+        };
+        format!("{scope} \u{b7} {owner} \u{b7} {}", descriptor.name)
+    }
+
+    /// Every binding as a mapping list draws it, in map order.
+    ///
+    /// The index each row carries is its position in the map, which is the
+    /// handle every mutation below takes. That makes the list and the
+    /// mutations agree by construction, and it is why removal re-reads the
+    /// list rather than shifting an index the caller is holding.
+    pub fn control_binding_views(&self, ports: &[MidiPortInfo]) -> Vec<ControlBindingView> {
+        let unresolved = self.control_map.unresolved(ports);
+        self.control_map
+            .bindings
+            .iter()
+            .enumerate()
+            .map(|(index, binding)| ControlBindingView {
+                index,
+                source: binding.source.detail_label(),
+                target: self.control_target_label(&binding.target),
+                mode: binding.mode.label().to_owned(),
+                takeover: binding.mode.takeover(),
+                inverted: binding.inverted(),
+                unresolved: unresolved.contains(&index),
+                transport: matches!(binding.target, ControlTarget::Transport(_)),
+            })
+            .collect()
+    }
+
+    /// One binding's target, by its position in the map. What "relearn this
+    /// row" needs.
+    pub fn control_binding_target(&self, index: usize) -> Option<ControlTarget> {
+        self.control_map.bindings.get(index).map(|b| b.target)
+    }
+
+    /// Drop one binding by its position in the map.
+    pub fn remove_control_binding(&mut self, index: usize, ports: &[MidiPortInfo]) -> bool {
+        if index >= self.control_map.bindings.len() {
+            return false;
+        }
+        self.control_map.bindings.remove(index);
+        self.resolve_control_map(ports);
+        true
+    }
+
+    /// Switch one absolute binding between pickup and jump. Silently does
+    /// nothing for a binding with no takeover to switch, which is what the
+    /// editor draws: the switch is not offered on a row that has none.
+    pub fn set_control_binding_takeover(&mut self, index: usize, takeover: Takeover) -> bool {
+        let Some(binding) = self.control_map.bindings.get_mut(index) else {
+            return false;
+        };
+        let ControlMode::Absolute { takeover: current } = &mut binding.mode else {
+            return false;
+        };
+        if *current == takeover {
+            return false;
+        }
+        *current = takeover;
+        // The control has to catch the parameter again: the rule it is caught
+        // under has just changed underneath it.
+        self.release_control_pickup();
+        true
+    }
+
+    /// Point one binding's range forwards or backwards.
+    pub fn set_control_binding_inverted(&mut self, index: usize, inverted: bool) -> bool {
+        let Some(binding) = self.control_map.bindings.get_mut(index) else {
+            return false;
+        };
+        if binding.inverted() == inverted {
+            return false;
+        }
+        binding.set_inverted(inverted);
+        self.release_control_pickup();
+        true
     }
 
     pub fn cancel_control_learn(&mut self) {
@@ -497,10 +660,11 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use mooloop_core::{
         ControlMode, ControlSource, DeviceId, EffectTarget, MidiChannelFilter, MidiInputSource,
-        MidiKind, MidiPortFilter, MidiPortId, MidiRouteSource, Takeover, SYSTEM_CHANNEL,
-        TICKS_PER_STEP,
+        MidiKind, MidiPortFilter, MidiPortId, MidiRouteSource, ParamCurve, Takeover,
+        SYSTEM_CHANNEL, TICKS_PER_STEP,
     };
 
     fn ports() -> Vec<MidiPortInfo> {
@@ -891,5 +1055,221 @@ mod tests {
         let missing = ParamAddr::strip(EffectTarget::Channel(200), STRIP_PARAM_VOLUME);
         assert_eq!(session.param_normalized(missing), None);
         assert_eq!(session.set_param_normalized(missing, 1.0), None);
+    }
+
+    /// A knob that has taken over stops taking over the moment the on-screen
+    /// control is moved -- which is the whole of what pickup is for, and the
+    /// half of it that a caught binding used to skip. Without this, a fader
+    /// that had caught the value pulled it straight back to the fader's own
+    /// position on its next message, undoing the mouse.
+    #[test]
+    fn an_on_screen_move_takes_a_caught_control_off_the_parameter() {
+        let mut session = Session::default();
+        session.control_map.bind(ControlBinding::new(
+            ControlSource::Cc {
+                port: MidiPortFilter::Any,
+                channel: MidiChannelFilter::Omni,
+                controller: 7,
+            },
+            ControlTarget::Param(VOLUME),
+        ));
+        session.resolve_control_map(&ports());
+
+        // Catch the value: the fader sweeps past wherever the parameter is.
+        session.apply_control_input(&cc(7, 0), &ports(), false);
+        session.apply_control_input(&cc(7, 127), &ports(), false);
+        assert_eq!(session.param_normalized(VOLUME), Some(1.0));
+        // Caught: a small move now follows the fader.
+        session.apply_control_input(&cc(7, 100), &ports(), false);
+        let followed = session.param_normalized(VOLUME).expect("volume exists");
+        assert!(followed < 1.0 && followed > 0.5, "followed to {followed}");
+
+        // The mouse moves the same parameter somewhere else.
+        session.set_param_normalized(VOLUME, 0.1);
+        assert_eq!(session.param_normalized(VOLUME), Some(0.1));
+
+        // The fader's next message must not snatch it back.
+        let effects = session.apply_control_input(&cc(7, 101), &ports(), false);
+        assert!(
+            effects.moved.is_empty(),
+            "a released control has to catch the value again"
+        );
+        assert_eq!(session.param_normalized(VOLUME), Some(0.1));
+
+        // And it catches again on the way past.
+        session.apply_control_input(&cc(7, 0), &ports(), false);
+        assert_eq!(session.param_normalized(VOLUME), Some(0.0));
+    }
+
+    /// Following a control does not release it. The read-back is compared
+    /// with what the parameter took, not with what was asked for, so a
+    /// stepped parameter's quantization does not read as somebody else's
+    /// edit -- which would have made pickup re-arm on every message and
+    /// nothing follow anything.
+    #[test]
+    fn a_quantized_parameter_does_not_release_its_own_control() {
+        let mut session = Session::default();
+        // A parameter with a handful of positions, so that every write
+        // quantizes and the value read back is not the value asked for.
+        let stepped = session.channels[0]
+            .generator_params()
+            .kind()
+            .descriptors()
+            .iter()
+            .find(|descriptor| matches!(descriptor.curve, ParamCurve::Stepped(n) if n > 4))
+            .map(|descriptor| ParamAddr {
+                scope: EffectTarget::Channel(0),
+                owner: ParamOwner::Source,
+                param: descriptor.id,
+            })
+            .expect("the default generator has a stepped parameter");
+        // The premise the rest of this test rests on: asking for a position
+        // between two detents does not land on it.
+        session.set_param_normalized(stepped, 0.787);
+        assert_ne!(session.param_normalized(stepped), Some(0.787));
+        session.control_map.bind(ControlBinding::new(
+            ControlSource::Cc {
+                port: MidiPortFilter::Any,
+                channel: MidiChannelFilter::Omni,
+                controller: 7,
+            },
+            ControlTarget::Param(stepped),
+        ));
+        session.resolve_control_map(&ports());
+
+        session.apply_control_input(&cc(7, 0), &ports(), false);
+        session.apply_control_input(&cc(7, 127), &ports(), false);
+        // Caught. Now walk it down message by message; every one must land.
+        for value in [110u8, 100, 90, 80] {
+            let effects = session.apply_control_input(&cc(7, value), &ports(), false);
+            assert!(
+                !effects.moved.is_empty(),
+                "a caught control stayed caught at {value}"
+            );
+        }
+    }
+
+    /// A mapping list names its targets from the project, so renaming a
+    /// channel renames the row -- which is the whole reason the label is
+    /// resolved rather than stored.
+    #[test]
+    fn a_binding_row_names_its_target_from_the_project() {
+        let mut session = Session::default();
+        session.channels[0].name = "Bass".to_owned();
+        session.control_map.bind(ControlBinding::new(
+            ControlSource::Cc {
+                port: MidiPortFilter::Named("Launchkey MK3".to_owned()),
+                channel: MidiChannelFilter::One(2),
+                controller: 7,
+            },
+            ControlTarget::Param(VOLUME),
+        ));
+        let mut pad = ControlBinding::new(
+            ControlSource::Note {
+                port: MidiPortFilter::Any,
+                channel: MidiChannelFilter::Omni,
+                note: 36,
+            },
+            ControlTarget::Transport(TransportControl::PlayPause),
+        );
+        // What a learn gesture makes of a pad, written out here because this
+        // one was not learned.
+        pad.mode = ControlMode::Toggle;
+        session.control_map.bind(pad);
+        session.resolve_control_map(&ports());
+
+        let rows = session.control_binding_views(&ports());
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].source, "CC 7 \u{b7} ch 3 \u{b7} Launchkey MK3");
+        assert_eq!(rows[0].target, "Bass \u{b7} Strip \u{b7} Volume");
+        assert_eq!(rows[0].mode, "Absolute, pickup");
+        assert_eq!(rows[0].takeover, Some(Takeover::Pickup));
+        assert!(!rows[0].transport);
+        assert!(!rows[0].unresolved);
+        assert_eq!(rows[1].source, "Note 36 \u{b7} omni \u{b7} any port");
+        assert_eq!(rows[1].target, "Transport \u{b7} Play/Pause");
+        assert_eq!(rows[1].mode, "Toggle");
+        // A toggle has no takeover, so the editor offers no switch for one.
+        assert_eq!(rows[1].takeover, None);
+        assert!(rows[1].transport);
+
+        session.channels[0].name = "Sub".to_owned();
+        assert_eq!(
+            session.control_binding_views(&ports())[0].target,
+            "Sub \u{b7} Strip \u{b7} Volume"
+        );
+    }
+
+    /// A binding onto a device that has left says so rather than vanishing,
+    /// and a binding whose keyboard is unplugged is marked rather than
+    /// dropped.
+    #[test]
+    fn a_binding_row_reports_what_it_cannot_reach() {
+        let mut session = Session::default();
+        session.control_map.bind(ControlBinding::new(
+            ControlSource::Cc {
+                port: MidiPortFilter::Named("Faderfox".to_owned()),
+                channel: MidiChannelFilter::Omni,
+                controller: 1,
+            },
+            ControlTarget::Param(ParamAddr::effect(
+                EffectTarget::Channel(0),
+                DeviceId(99),
+                0,
+            )),
+        ));
+        session.resolve_control_map(&ports());
+
+        let rows = session.control_binding_views(&ports());
+        assert_eq!(rows[0].target, "Unavailable parameter");
+        assert!(rows[0].unresolved, "Faderfox is not plugged in");
+    }
+
+    /// The editor's three mutations are by map position, and each one leaves
+    /// the map and the resolved state agreeing.
+    #[test]
+    fn the_editor_edits_a_binding_by_its_position() {
+        let mut session = Session::default();
+        session.control_map.bind(ControlBinding::new(
+            ControlSource::Cc {
+                port: MidiPortFilter::Any,
+                channel: MidiChannelFilter::Omni,
+                controller: 7,
+            },
+            ControlTarget::Param(VOLUME),
+        ));
+        session.resolve_control_map(&ports());
+
+        assert_eq!(
+            session.control_binding_target(0),
+            Some(ControlTarget::Param(VOLUME))
+        );
+        assert_eq!(session.control_binding_target(1), None);
+
+        assert!(session.set_control_binding_takeover(0, Takeover::Jump));
+        assert!(
+            !session.set_control_binding_takeover(0, Takeover::Jump),
+            "setting a takeover it already has changes nothing"
+        );
+        assert_eq!(
+            session.control_binding_views(&ports())[0].mode,
+            "Absolute, jump"
+        );
+
+        assert!(session.set_control_binding_inverted(0, true));
+        assert!(session.control_binding_views(&ports())[0].inverted);
+        // Inversion is the range's ends, and a knob at the top now asks for
+        // the bottom of the parameter.
+        let effects = session.apply_control_input(&cc(7, 127), &ports(), false);
+        assert_eq!(session.param_normalized(VOLUME), Some(0.0));
+        assert!(effects.edits);
+
+        assert!(session.remove_control_binding(0, &ports()));
+        assert!(session.control_map.bindings.is_empty());
+        assert!(!session.remove_control_binding(0, &ports()));
+        // The resolved state was rebuilt with the map, so a message that used
+        // to move the fader now moves nothing.
+        let effects = session.apply_control_input(&cc(7, 0), &ports(), false);
+        assert!(effects.is_empty());
     }
 }

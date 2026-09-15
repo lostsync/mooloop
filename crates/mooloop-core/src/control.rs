@@ -99,13 +99,16 @@ fn channels_overlap(a: MidiChannelFilter, b: MidiChannelFilter) -> bool {
 }
 
 impl ControlSource {
-    fn port(&self) -> &MidiPortFilter {
+    /// Which port this source listens to. Public because the mapping editor
+    /// asks the same question the resolver does, and a second reading of the
+    /// variants is a second place for a new one to be forgotten.
+    pub fn port(&self) -> &MidiPortFilter {
         match self {
             Self::Cc { port, .. } | Self::Note { port, .. } | Self::PitchBend { port, .. } => port,
         }
     }
 
-    fn midi_channel(&self) -> MidiChannelFilter {
+    pub fn midi_channel(&self) -> MidiChannelFilter {
         match self {
             Self::Cc { channel, .. }
             | Self::Note { channel, .. }
@@ -170,6 +173,27 @@ impl ControlSource {
             Self::Note { note, .. } => format!("Note {note}"),
             Self::PitchBend { .. } => "Bend".to_owned(),
         }
+    }
+
+    /// The same control with its two filters spelled out, for a mapping list
+    /// where two rows can otherwise read identically: "CC 74 · ch 3 ·
+    /// Launchkey MK3".
+    ///
+    /// Both filters are always shown, including when they are the permissive
+    /// default. A row that said only "CC 74" would leave a reader unable to
+    /// tell a binding that listens to one keyboard from one that listens to
+    /// every keyboard, and that difference is exactly what `bind_port`
+    /// decides.
+    pub fn detail_label(&self) -> String {
+        let channel = match self.midi_channel() {
+            MidiChannelFilter::Omni => "omni".to_owned(),
+            filter => format!("ch {}", filter.label()),
+        };
+        let port = match self.port() {
+            MidiPortFilter::Any => "any port".to_owned(),
+            MidiPortFilter::Named(name) => name.clone(),
+        };
+        format!("{} · {channel} · {port}", self.label())
     }
 }
 
@@ -288,6 +312,34 @@ impl Default for ControlMode {
     }
 }
 
+impl ControlMode {
+    /// How this mode reads in a mapping list. Takeover is folded in rather
+    /// than given a column of its own: it is the only thing an absolute
+    /// binding has to say about itself, and it means nothing for the other
+    /// three.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Absolute {
+                takeover: Takeover::Pickup,
+            } => "Absolute, pickup",
+            Self::Absolute {
+                takeover: Takeover::Jump,
+            } => "Absolute, jump",
+            Self::Relative { .. } => "Relative",
+            Self::Toggle => "Toggle",
+            Self::Momentary => "Momentary",
+        }
+    }
+
+    /// The takeover this mode runs, for a mode that has one.
+    pub fn takeover(self) -> Option<Takeover> {
+        match self {
+            Self::Absolute { takeover } => Some(takeover),
+            _ => None,
+        }
+    }
+}
+
 /// One mapping: a control, what it moves, and how its movement is read.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ControlBinding {
@@ -325,6 +377,23 @@ impl ControlBinding {
         }
     }
 
+    /// Whether the bound range runs backwards, which is how a fader is made
+    /// to close a filter as it rises. There is no mode for it: the range's
+    /// ends carry it, and this is the question the editor asks of them.
+    pub fn inverted(&self) -> bool {
+        self.min > self.max
+    }
+
+    /// Point the range one way or the other, keeping whatever span it covers.
+    /// An editor's invert switch is this, rather than a write of 1 and 0: a
+    /// binding narrowed to a third of a knob's travel should stay narrowed.
+    pub fn set_inverted(&mut self, inverted: bool) {
+        if self.inverted() == inverted {
+            return;
+        }
+        std::mem::swap(&mut self.min, &mut self.max);
+    }
+
     /// Map a normalized control position onto this binding's range.
     fn scale(&self, position: f32) -> f32 {
         (self.min + (self.max - self.min) * position.clamp(0.0, 1.0)).clamp(0.0, 1.0)
@@ -346,7 +415,7 @@ pub enum ControlOutcome {
 /// document and this is the state of one performance. Reset when a project
 /// loads or a target's value is changed from anywhere else, which is what
 /// makes pickup re-arm rather than fire on a stale comparison.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct PickupState {
     /// Which side of the parameter the control was last seen on, or `None`
     /// before it has been seen at all.
@@ -354,6 +423,9 @@ pub struct PickupState {
     /// Once the control has caught the parameter it stays caught, until
     /// something else moves the parameter.
     caught: bool,
+    /// Where this binding left the parameter, as the parameter itself then
+    /// read — see [`Self::wrote`].
+    left_at: Option<f32>,
 }
 
 impl PickupState {
@@ -362,7 +434,38 @@ impl PickupState {
     pub fn release(&mut self) {
         *self = Self::default();
     }
+
+    /// Record where the parameter ended up after this binding moved it.
+    ///
+    /// **This is what lets a caught control notice that something else has
+    /// taken the parameter off it**, without every on-screen control, preset
+    /// recall and undo step having to remember to say so. A caught binding
+    /// otherwise writes freely forever: a knob that had taken over pulled the
+    /// parameter back to its own position on the next message it sent,
+    /// undoing whatever the mouse had just done.
+    ///
+    /// The value recorded is the one the parameter *reads back* rather than
+    /// the one that was asked for, because a stepped parameter quantizes and
+    /// a clamped one clips. Comparing against the request would then see a
+    /// difference on every message and release a control that nothing had
+    /// touched.
+    pub fn wrote(&mut self, observed: f32) {
+        self.left_at = Some(observed);
+    }
+
+    /// Whether the parameter has moved since this binding last wrote it.
+    /// `None` for a binding that has not written one, which cannot have been
+    /// overtaken.
+    fn overtaken(&self, current: f32) -> bool {
+        self.left_at
+            .is_some_and(|left| (left - current).abs() > PICKUP_MOVED_EPSILON)
+    }
 }
+
+/// How far a parameter has to move from where a binding left it before the
+/// binding counts as overtaken. A round trip through one descriptor is exact,
+/// so this only has to clear the noise of one float comparison.
+const PICKUP_MOVED_EPSILON: f32 = 1e-6;
 
 /// Resolve one message against one binding.
 ///
@@ -422,7 +525,14 @@ pub fn apply(
                 Takeover::Jump => Some(ControlOutcome::Set(wanted)),
                 Takeover::Pickup => {
                     if pickup.caught {
-                        return Some(ControlOutcome::Set(wanted));
+                        // Still caught only while the parameter is where this
+                        // binding left it. Anything else moving it -- the
+                        // on-screen knob, undo, a preset, another binding --
+                        // hands the catching back to the control.
+                        if !pickup.overtaken(current) {
+                            return Some(ControlOutcome::Set(wanted));
+                        }
+                        pickup.release();
                     }
                     // Equality counts as caught, so a control already sitting
                     // exactly on the value takes over on its first message
@@ -547,6 +657,15 @@ impl ControlMapState {
             }
         }
         outcomes
+    }
+
+    /// Tell one binding where the parameter ended up after its outcome was
+    /// applied. The caller does this because only the caller can read the
+    /// value back: see [`PickupState::wrote`] for why it matters.
+    pub fn wrote(&mut self, index: usize, observed: f32) {
+        if let Some(state) = self.pickup.get_mut(index) {
+            state.wrote(observed);
+        }
     }
 
     /// Which bindings would hear this message at all, whatever they would do
@@ -688,6 +807,37 @@ mod tests {
                 name: "Faderfox".to_owned(),
             },
         ]
+    }
+
+    /// Inverting a binding points its range the other way and keeps the span
+    /// it covers, so a knob mapped to a third of a parameter stays mapped to
+    /// a third of it.
+    #[test]
+    fn inverting_a_binding_keeps_the_span_it_covers() {
+        let mut binding = ControlBinding::new(
+            ControlSource::Cc {
+                port: MidiPortFilter::Any,
+                channel: MidiChannelFilter::Omni,
+                controller: 7,
+            },
+            ControlTarget::Transport(TransportControl::Play),
+        );
+        binding.min = 0.2;
+        binding.max = 0.5;
+        assert!(!binding.inverted());
+
+        binding.set_inverted(true);
+        assert!(binding.inverted());
+        assert_eq!((binding.min, binding.max), (0.5, 0.2));
+        assert_eq!(binding.scale(0.0), 0.5);
+        assert!((binding.scale(1.0) - 0.2).abs() < 1e-6);
+
+        // Asking for what it already is changes nothing rather than swapping
+        // the ends back.
+        binding.set_inverted(true);
+        assert_eq!((binding.min, binding.max), (0.5, 0.2));
+        binding.set_inverted(false);
+        assert_eq!((binding.min, binding.max), (0.2, 0.5));
     }
 
     fn cc(port: u16, channel: u8, controller: u8, value: u8) -> MidiMessage {
