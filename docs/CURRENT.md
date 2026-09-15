@@ -252,8 +252,16 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   poly synth faces share the same rack chrome and preserve their dimensions at
   narrow widths through horizontal scrolling. Sampler controls are divided
   into Sample, Voice, and Tone pages; the v1 mono controls into Osc,
-  Amp/Filter, and Mod pages; and poly controls add a VOICE page for polyphony
-  and stereo spread. The ML-M1 is a distinct mono filter/performance instrument:
+  Amp/Filter, and Mod pages; and poly controls add a VOICE page for polyphony,
+  stereo spread and **mono mode**. Mono mode is not `Voices = 1`: a pool of one
+  voice steals from itself, so releasing the newer of two held notes leaves it
+  on the note that is no longer down. Mono mode gives the voice a held-note
+  stack, a note priority of Last, Low or High, and a Retrig/Legato switch over
+  whether an overlapping note restarts the envelope -- and a release falls back
+  to whatever is still held as a pitch change rather than as a new note, in
+  either switch position, which is what makes a trill work. `Voices` greys out
+  while it is on. Overlapping notes glide and a note landing on a release tail
+  jumps; that is one fixed rule rather than a second glide control. The ML-M1 is a distinct mono filter/performance instrument:
   Osc, Amp/Filter, and Perf pages expose separate amplitude and filter ADSRs,
   three low-pass filter characters, pre-filter drive, keytracking, a held-note
   priority stack, legato/retrigger and glide modes, and velocity Accent. The

@@ -9516,7 +9516,16 @@ mod footprint {
         // flag in every generator, so a stop releases once at the transition
         // instead of on every stopped block. DS-01's fits its padding, which
         // is why its assertion above did not move; the others round up.
-        assert_eq!(size_of::<ChannelStrip>(), 41_960);
+        // The v1 poly's mono mode added 264, and **none of it is the three new
+        // parameters** -- a bool and two one-byte enums land in padding. It is
+        // the held-note stack: sixteen entries of an id, a note and a
+        // velocity, the same `HeldNotes` the ML-M1 already carries, and a
+        // fixed array because it is touched from `process()`. That is the
+        // price of the v1 poly being a monosynth rather than a pool of one
+        // voice, and it is worth paying twice over, because it is the only
+        // thing keeping `DeviceKind::MonoSynth` alive and that deletion takes
+        // a whole generator's state back out of this struct.
+        assert_eq!(size_of::<ChannelStrip>(), 42_224);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -9541,7 +9550,7 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 60_400);
+        assert_eq!(per_live, 60_664);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -9593,7 +9602,10 @@ mod footprint {
         // Releasing on the transport's stop edge rather than on every stopped
         // block added 24 bytes a live channel, the generators' `was_playing`
         // flags: 384 bytes across sixteen.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_430);
+        // The v1 poly's mono mode added 264 a live channel and nothing to the
+        // reserved figure -- a held-note stack is per sounding voice, not per
+        // addressable channel -- so four KiB across sixteen.
+        assert_eq!((fixed + per_live * 16) / 1024, 1_434);
     }
 
 }

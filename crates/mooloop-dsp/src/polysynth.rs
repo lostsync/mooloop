@@ -7,13 +7,14 @@ use crate::bus::{pan_gains, StereoBus};
 use crate::env::Adsr;
 use crate::event::{Event, EventList};
 use crate::filter::{apply_drive, Svf};
+use crate::heldnotes::{HeldNote, HeldNotes};
 use crate::lfo::Lfo;
 use crate::node::{AudioNode, ProcessContext};
 use crate::osc::Osc;
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
 use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
-use mooloop_core::{PolySynthParams, MAX_POLY_VOICES};
+use mooloop_core::{EnvTrigger, PolySynthParams, MAX_POLY_VOICES};
 
 /// The voice's absolute output reference, set so one oscillator at its 0 dB
 /// top (which the default patch runs at) peaks within a dB of
@@ -97,11 +98,17 @@ pub struct PolySynth {
     /// block: a note played while stopped -- a MIDI keyboard, an audition --
     /// has to last until its own note-off.
     was_playing: bool,
+    /// What is under the player's fingers, in mono mode.
+    ///
+    /// Empty and untouched while `mono_mode` is off, and the module it comes
+    /// from was built outside any one instrument for exactly this: the ML-M1
+    /// needed it first and its own header says the poly synth would want the
+    /// same thing "the moment it grows a mono mode".
+    held: HeldNotes,
 }
 
 impl PolySynth {
     pub fn new(params: PolySynthParams, sample_rate: u32) -> Self {
-        let polyphony = params.polyphony.clamp(1, MAX_POLY_VOICES);
         let mut voices = std::array::from_fn(|_| PolyVoice::new(sample_rate));
         for voice in &mut voices {
             voice
@@ -115,16 +122,23 @@ impl PolySynth {
             next_age: 1,
             lfo: Lfo::new(),
             was_playing: false,
+            held: HeldNotes::new(),
         };
-        synth.apply_params_to_voices(polyphony);
+        synth.apply_params_to_voices(synth.voice_limit() as u8);
         synth
     }
 
     /// Replace the parameter set. Called from the RT command drain.
     pub fn set_params(&mut self, params: PolySynthParams) {
-        let polyphony = params.polyphony.clamp(1, MAX_POLY_VOICES);
+        // Leaving or entering mono mode drops whatever the stack was holding.
+        // It is only read in mono mode, so an entry that survived the trip out
+        // and back would be a note nobody is holding deciding the pitch of the
+        // next one.
+        if params.mono_mode != self.params.mono_mode {
+            self.held.clear();
+        }
         self.params = params;
-        self.apply_params_to_voices(polyphony);
+        self.apply_params_to_voices(self.voice_limit() as u8);
     }
 
     /// Apply one descriptor-addressed parameter, leaving the rest alone.
@@ -159,7 +173,8 @@ impl PolySynth {
     /// Immediately invalidate every voice and return every oscillator and
     /// filter to its initial state.
     pub fn reset(&mut self) {
-        let polyphony = self.params.polyphony.clamp(1, MAX_POLY_VOICES);
+        let polyphony = self.voice_limit() as u8;
+        self.held.clear();
         for voice in &mut self.voices {
             *voice = PolyVoice::new(self.sample_rate);
             voice.env.configure(
@@ -182,7 +197,19 @@ impl PolySynth {
         self.release_all();
     }
 
+    /// How many voice slots are in play.
+    ///
+    /// **Mono mode goes through here rather than beside it.** Everything that
+    /// needs to know how wide the synth is asks this one function --
+    /// `apply_params_to_voices` deactivates the slots past it, `select_voice`
+    /// and `any_active` only look inside it, and `render_range` hands it to
+    /// `voice_pan`, which already returns centre at one. So mono mode centres
+    /// the pan and retires the other fifteen voices without a second rule
+    /// being written anywhere.
     fn voice_limit(&self) -> usize {
+        if self.params.mono_mode {
+            return 1;
+        }
         self.params.polyphony.clamp(1, MAX_POLY_VOICES) as usize
     }
 
@@ -204,6 +231,10 @@ impl PolySynth {
     }
 
     fn note_on(&mut self, event_id: u64, note: u8, velocity: u8) {
+        if self.params.mono_mode {
+            self.mono_note_on(event_id, note, velocity);
+            return;
+        }
         let was_any_active = self.any_active();
         let index = self.select_voice();
         let velocity_amp = f32::from(velocity) / 127.0;
@@ -237,7 +268,105 @@ impl PolySynth {
         }
     }
 
+    /// One voice, a held-note stack, and the fallback rule.
+    ///
+    /// Deliberately a separate path rather than a flag threaded through
+    /// `note_on`: the poly path is the calibrated one and it should stay
+    /// legible. The rules are the ML-M1's, settled in
+    /// `mono-synth-v2/03-the-held-note-stack.md`, and they are not
+    /// re-litigated here -- above all that **a fallback is a pitch change and
+    /// never a retrigger**, which is what makes a trill work.
+    fn mono_note_on(&mut self, event_id: u64, note: u8, velocity: u8) {
+        let was_overlapping = !self.held.is_empty();
+        let was_any_active = self.any_active();
+        self.held.push(HeldNote {
+            event_id,
+            note,
+            velocity,
+        });
+
+        // Under `Low` or `High` a note can be pressed and still lose to
+        // something already down. Then nothing happens at all: it is on the
+        // stack, and releasing the winner will fall back to it.
+        let Some(winner) = self.held.winner(self.params.note_priority) else {
+            return;
+        };
+        if winner.event_id != event_id {
+            return;
+        }
+
+        let velocity_amp = f32::from(velocity) / 127.0;
+        let retrigger = !was_overlapping || self.params.env_trigger == EnvTrigger::Retrig;
+        // Overlapping notes glide; a note landing on a release tail jumps.
+        // That is the ML-M1's `GlideMode::Legato`, which is its default, and
+        // it is the only glide rule this device has: the scope boundary in
+        // `poly-v1-mono-mode/00-status.md` keeps ML-M1 identity out of here,
+        // and a second glide mode is identity rather than competence.
+        let glide = was_overlapping && self.params.glide > MIN_GLIDE_S;
+        let params = self.params;
+        let voice = &mut self.voices[0];
+        let was_sounding = voice.active;
+
+        voice.event_id = event_id;
+        voice.note = note;
+        voice.target_freq = note_to_freq(note);
+        voice.active = true;
+        if !was_sounding {
+            // Fresh start: no glide from silence, clean filter and phases.
+            voice.current_freq = voice.target_freq;
+            voice.filter.reset();
+            for osc in &mut voice.oscs {
+                osc.reset();
+            }
+            voice.snap_to(&params, velocity_amp);
+        } else if !glide {
+            voice.current_freq = voice.target_freq;
+        }
+        voice.velocity_amp.set_target(velocity_amp);
+        if retrigger || !was_sounding {
+            voice.env.note_on();
+        }
+
+        if self.params.lfo.retrigger && !was_any_active {
+            self.lfo.retrigger();
+        }
+    }
+
+    /// Move the sounding mono voice to a different note without touching its
+    /// envelope. The whole of what a fallback is.
+    fn mono_retarget(&mut self, winner: HeldNote) {
+        let glide = self.params.glide > MIN_GLIDE_S;
+        let voice = &mut self.voices[0];
+        voice.event_id = winner.event_id;
+        voice.note = winner.note;
+        voice.target_freq = note_to_freq(winner.note);
+        if !glide {
+            voice.current_freq = voice.target_freq;
+        }
+        // While the voice is still sounding the new velocity has to slide in:
+        // stepping the gain mid-note is as audible as stepping the envelope.
+        voice
+            .velocity_amp
+            .set_target(f32::from(winner.velocity) / 127.0);
+    }
+
     fn note_off(&mut self, event_id: u64) {
+        if self.params.mono_mode {
+            // A `NoteOff` for something not held is stale by definition.
+            // Bailing here is what keeps it from releasing a newer note.
+            if !self.held.remove(event_id) || !self.voices[0].active {
+                return;
+            }
+            match self.held.winner(self.params.note_priority) {
+                Some(winner) => {
+                    if winner.event_id != self.voices[0].event_id {
+                        self.mono_retarget(winner);
+                    }
+                }
+                None => self.voices[0].env.release(),
+            }
+            return;
+        }
         for voice in self
             .voices
             .iter_mut()
@@ -247,7 +376,11 @@ impl PolySynth {
         }
     }
 
+    /// Transport stop and choke. The stack has to go with the voices: a held
+    /// entry left behind would resurrect the voice on the next `NoteOff`
+    /// fallback, long after the transport said stop.
     fn release_all(&mut self) {
+        self.held.clear();
         for voice in &mut self.voices {
             if voice.active && !voice.env.is_releasing() {
                 voice.env.release_with(STOP_RELEASE_S);
@@ -427,6 +560,7 @@ impl AudioNode for PolySynth {
 mod tests {
     use super::*;
     use crate::event::TimedEvent;
+    use mooloop_core::NotePriority;
 
     fn make_synth(sr: u32, params: PolySynthParams) -> PolySynth {
         PolySynth::new(params, sr)
@@ -452,6 +586,246 @@ mod tests {
                 velocity: 127,
             },
         }
+    }
+
+    fn note_off(offset: u32, id: u64, note: u8) -> TimedEvent {
+        TimedEvent {
+            offset,
+            event: Event::NoteOff { id, note },
+        }
+    }
+
+    const SUSTAIN: f32 = 0.4;
+
+    /// A mono-mode synth that settles at a partial sustain, which is what
+    /// makes a retrigger observable at all.
+    ///
+    /// `Adsr::note_on` deliberately does not reset the level -- it attacks
+    /// from wherever the envelope already is, so a retrigger over a sounding
+    /// voice does not click. So a restart is not a dip to zero; it is a
+    /// *climb back to the peak* from sustain, and these tests measure that
+    /// climb. The same argument, and the same numbers, as the ML-M1's.
+    fn mono(edit: impl FnOnce(&mut PolySynthParams)) -> PolySynth {
+        let mut params = PolySynthParams {
+            mono_mode: true,
+            attack: 0.005,
+            decay: 0.01,
+            sustain: SUSTAIN,
+            release: 0.5,
+            ..Default::default()
+        };
+        edit(&mut params);
+        PolySynth::new(params, 48_000)
+    }
+
+    /// Feed the events one sample at a time and report the highest level the
+    /// envelope reaches after `from`. Above sustain means it restarted.
+    fn envelope_peak(synth: &mut PolySynth, events: &EventList, frames: usize, from: usize) -> f32 {
+        let mut bus = StereoBus::with_capacity(frames);
+        let mut peak = 0.0_f32;
+        for offset in 0..frames {
+            let mut slice = EventList::empty();
+            for ev in events.iter() {
+                if ev.offset as usize == offset {
+                    slice.push(TimedEvent {
+                        offset: 0,
+                        event: ev.event,
+                    });
+                }
+            }
+            synth.process(&ctx(1, 48_000), &mut bus, &slice, None);
+            if offset >= from {
+                peak = peak.max(synth.voices[0].env.level());
+            }
+        }
+        peak
+    }
+
+    /// **The test that matters most**, and the reason the three new fields
+    /// default the way they do: a project saved before mono mode existed must
+    /// render exactly as it did.
+    ///
+    /// Bit-identical, not close. The two mode fields are set to their *other*
+    /// values here, so what is being asserted is not that the defaults happen
+    /// to be inert but that nothing outside `mono_mode` can reach the poly
+    /// path at all.
+    #[test]
+    fn nothing_the_mono_fields_say_matters_while_mono_mode_is_off() {
+        let sr = 48_000;
+        let render = |params: PolySynthParams| {
+            let mut synth = make_synth(sr, params);
+            let mut bus = StereoBus::with_capacity(8_192);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 1, 60));
+            events.push(note_on(64, 2, 64));
+            events.push(note_on(128, 3, 67));
+            events.push(note_off(2_000, 2, 64));
+            synth.process(&ctx(8_192, sr), &mut bus, &events, None);
+            (bus.l[..8_192].to_vec(), bus.r[..8_192].to_vec())
+        };
+
+        let (left, right) = render(PolySynthParams::default());
+        let (other_left, other_right) = render(PolySynthParams {
+            env_trigger: EnvTrigger::Legato,
+            note_priority: NotePriority::High,
+            ..Default::default()
+        });
+        assert_eq!(left, other_left, "the left channel moved");
+        assert_eq!(right, other_right, "the right channel moved");
+        assert!(
+            left.iter().any(|s| s.abs() > 0.01),
+            "the comparison ran on silence"
+        );
+    }
+
+    /// Mono mode is one voice, and it is centred whatever Spread says --
+    /// because it goes through `voice_limit`, which `voice_pan` already
+    /// answers centre for.
+    #[test]
+    fn mono_mode_plays_one_centred_voice() {
+        let sr = 48_000;
+        let mut synth = make_synth(
+            sr,
+            PolySynthParams {
+                mono_mode: true,
+                attack: 0.0001,
+                sustain: 1.0,
+                polyphony: 8,
+                spread: 1.0,
+                ..Default::default()
+            },
+        );
+        let mut bus = StereoBus::with_capacity(4_096);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        events.push(note_on(0, 2, 64));
+        events.push(note_on(0, 3, 67));
+        synth.process(&ctx(4_096, sr), &mut bus, &events, None);
+
+        assert_eq!(synth.voices.iter().filter(|v| v.active).count(), 1);
+        assert_eq!(bus.l[..4_096], bus.r[..4_096], "a mono voice was panned");
+    }
+
+    #[test]
+    fn legato_changes_pitch_without_restarting_the_envelope() {
+        let mut synth = mono(|p| p.env_trigger = EnvTrigger::Legato);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        events.push(note_on(2_000, 2, 67));
+
+        let peak = envelope_peak(&mut synth, &events, 4_000, 2_000);
+        assert!(
+            peak <= SUSTAIN + 1.0e-3,
+            "legato restarted the envelope (peak {peak})"
+        );
+        assert!((synth.voices[0].target_freq - note_to_freq(67)).abs() < 0.01);
+    }
+
+    #[test]
+    fn retrig_restarts_the_envelope_on_an_overlapping_note() {
+        let mut synth = mono(|p| p.env_trigger = EnvTrigger::Retrig);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        events.push(note_on(2_000, 2, 67));
+
+        let peak = envelope_peak(&mut synth, &events, 4_000, 2_000);
+        assert!(
+            peak > 0.95,
+            "retrig did not restart the envelope (peak {peak})"
+        );
+    }
+
+    /// **A fallback is a pitch change and never a retrigger**, in *either*
+    /// trigger mode. That is what makes a trill work, and it is the rule the
+    /// ML-M1 settled; this is the same rule on the other synth.
+    ///
+    /// Both directions, because they fail differently: releasing the newer
+    /// note is the one a voice pool gets wrong by staying put, and releasing
+    /// the older one is the one it gets wrong by falling back at all.
+    #[test]
+    fn releasing_either_note_of_two_falls_back_without_restarting() {
+        for trigger in [EnvTrigger::Retrig, EnvTrigger::Legato] {
+            for (released, expected) in [(2_u64, 60_u8), (1, 67)] {
+                let mut synth = mono(|p| p.env_trigger = trigger);
+                let mut events = EventList::empty();
+                events.push(note_on(0, 1, 60));
+                events.push(note_on(1_000, 2, 67));
+                events.push(note_off(2_000, released, if released == 2 { 67 } else { 60 }));
+
+                let peak = envelope_peak(&mut synth, &events, 4_000, 2_000);
+                assert!(
+                    peak <= SUSTAIN + 1.0e-3,
+                    "{trigger:?} restarted the envelope on fallback (peak {peak})"
+                );
+                assert!(
+                    (synth.voices[0].target_freq - note_to_freq(expected)).abs() < 0.01,
+                    "{trigger:?} releasing {released} left the voice on the wrong note"
+                );
+            }
+        }
+    }
+
+    /// The same three-note gesture under `Last`, `Low` and `High` picks three
+    /// different winners. A pool of one voice can only ever answer `Last`.
+    #[test]
+    fn note_priority_picks_three_different_winners() {
+        for (priority, expected) in [
+            (NotePriority::Last, 62_u8),
+            (NotePriority::Low, 55),
+            (NotePriority::High, 67),
+        ] {
+            let mut synth = mono(|p| p.note_priority = priority);
+            let mut events = EventList::empty();
+            events.push(note_on(0, 1, 67));
+            events.push(note_on(500, 2, 55));
+            events.push(note_on(1_000, 3, 62));
+
+            envelope_peak(&mut synth, &events, 2_000, 2_000);
+            assert!(
+                (synth.voices[0].target_freq - note_to_freq(expected)).abs() < 0.01,
+                "{priority:?} did not settle on note {expected}"
+            );
+        }
+    }
+
+    /// A held entry that survived a stop would resurrect the voice on the
+    /// next `NoteOff` fallback, long after the transport said stop -- and,
+    /// worse, steal the next note's pitch.
+    #[test]
+    fn a_transport_stop_clears_the_held_notes() {
+        let sr = 48_000;
+        let mut synth = mono(|_| {});
+        let mut bus = StereoBus::with_capacity(1_024);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        events.push(note_on(100, 2, 67));
+        synth.process(&ctx(1_024, sr), &mut bus, &events, None);
+        assert!(!synth.held.is_empty());
+
+        let stopped = ProcessContext {
+            playing: false,
+            ..ctx(1_024, sr)
+        };
+        synth.process(&stopped, &mut bus, &EventList::empty(), None);
+        assert!(synth.held.is_empty(), "a held note survived the stop");
+    }
+
+    /// Leaving mono mode and coming back must not find the stack as it was
+    /// left: those notes are not under anybody's fingers any more.
+    #[test]
+    fn leaving_mono_mode_drops_what_was_held() {
+        let sr = 48_000;
+        let mut synth = mono(|_| {});
+        let mut bus = StereoBus::with_capacity(512);
+        let mut events = EventList::empty();
+        events.push(note_on(0, 1, 60));
+        synth.process(&ctx(512, sr), &mut bus, &events, None);
+        assert!(!synth.held.is_empty());
+
+        let mut params = synth.params;
+        params.mono_mode = false;
+        synth.set_params(params);
+        assert!(synth.held.is_empty());
     }
 
     #[test]

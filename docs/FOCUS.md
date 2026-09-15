@@ -234,9 +234,14 @@ work instead of folding it into the current branch.
   in #13 names four. Sizing the pool to `polyphony` is not free: it arrives on
   the audio thread, so voices above the old size would silently stop
   stretching when it was raised.
-- **`poly-v1-mono-mode/` is one step and unblocks a deletion.** It is the only
-  thing keeping `DeviceKind::MonoSynth` alive, and that deletion is what lets
-  `MlM1` take the plain name. The held-note stack it needs already exists.
+- ~~**`poly-v1-mono-mode/` is one step and unblocks a deletion.**~~ **Taken
+  2026-09-15.** The v1 poly has a mono mode -- a held-note stack, a note
+  priority, and a Retrig/Legato switch, on the three ids reserved for it -- so
+  `DeviceKind::MonoSynth` is deletable and `MlM1` can take the plain name. The
+  migration itself is the next branch and is deliberately not that one, and it
+  wants a listen before it opens: the acceptance clause the step file ends on
+  is that a v1 mono patch reproduces closely enough for the migration to be
+  mechanical, and that has been argued rather than played.
 - **`from_index` answers out-of-range input two different ways**, depending on
   which enum is asked: the `ALL`-table convention clamps to the nearest end,
   the hand-written `match` convention falls through to variant 0. The input is

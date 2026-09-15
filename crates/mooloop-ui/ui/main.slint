@@ -2063,6 +2063,8 @@ export component MainWindow inherits Window {
     in-out property <float> poly-lfo-amp;
     in-out property <int> poly-polyphony: 8;
     in-out property <float> poly-spread;
+    in-out property <bool> poly-mono-mode;
+    in-out property <int> poly-env-trigger; in-out property <int> poly-note-priority;
     callback poly-osc1-wave-changed(int); callback poly-osc1-semitones-changed(float); callback poly-osc1-cents-changed(float); callback poly-osc1-level-changed(float); callback poly-osc1-pulse-width-changed(float);
     callback poly-osc2-wave-changed(int); callback poly-osc2-semitones-changed(float); callback poly-osc2-cents-changed(float); callback poly-osc2-level-changed(float); callback poly-osc2-pulse-width-changed(float);
     callback poly-osc3-wave-changed(int); callback poly-osc3-semitones-changed(float); callback poly-osc3-cents-changed(float); callback poly-osc3-level-changed(float); callback poly-osc3-pulse-width-changed(float);
@@ -2071,6 +2073,8 @@ export component MainWindow inherits Window {
     callback poly-lfo-wave-changed(int); callback poly-lfo-rate-changed(float); callback poly-lfo-retrigger-changed(bool);
     callback poly-lfo-pitch-changed(float); callback poly-lfo-filter-changed(float); callback poly-lfo-pulse-width-changed(float); callback poly-lfo-amp-changed(float);
     callback poly-polyphony-changed(int); callback poly-spread-changed(float);
+    callback poly-mono-mode-changed(bool);
+    callback poly-env-trigger-changed(int); callback poly-note-priority-changed(int);
 
     // ---- transport callbacks ----
     callback new-song();
@@ -3982,6 +3986,8 @@ export component MainWindow inherits Window {
                                                 lfo-wave <=> root.poly-lfo-wave; lfo-rate <=> root.poly-lfo-rate; lfo-retrigger <=> root.poly-lfo-retrigger;
                                                 lfo-pitch <=> root.poly-lfo-pitch; lfo-filter <=> root.poly-lfo-filter; lfo-pulse-width <=> root.poly-lfo-pulse-width; lfo-amp <=> root.poly-lfo-amp;
                                                 polyphony <=> root.poly-polyphony; spread <=> root.poly-spread;
+                                                mono-mode <=> root.poly-mono-mode;
+                                                env-trigger <=> root.poly-env-trigger; note-priority <=> root.poly-note-priority;
                                                 osc1-wave-changed(v) => { root.poly-osc1-wave-changed(v); } osc1-semitones-changed(v) => { root.poly-osc1-semitones-changed(v); } osc1-cents-changed(v) => { root.poly-osc1-cents-changed(v); } osc1-level-changed(v) => { root.poly-osc1-level-changed(v); } osc1-pulse-width-changed(v) => { root.poly-osc1-pulse-width-changed(v); }
                                                 osc2-wave-changed(v) => { root.poly-osc2-wave-changed(v); } osc2-semitones-changed(v) => { root.poly-osc2-semitones-changed(v); } osc2-cents-changed(v) => { root.poly-osc2-cents-changed(v); } osc2-level-changed(v) => { root.poly-osc2-level-changed(v); } osc2-pulse-width-changed(v) => { root.poly-osc2-pulse-width-changed(v); }
                                                 osc3-wave-changed(v) => { root.poly-osc3-wave-changed(v); } osc3-semitones-changed(v) => { root.poly-osc3-semitones-changed(v); } osc3-cents-changed(v) => { root.poly-osc3-cents-changed(v); } osc3-level-changed(v) => { root.poly-osc3-level-changed(v); } osc3-pulse-width-changed(v) => { root.poly-osc3-pulse-width-changed(v); }
@@ -3993,6 +3999,8 @@ export component MainWindow inherits Window {
                                                 lfo-wave-changed(v) => { root.poly-lfo-wave-changed(v); } lfo-rate-changed(v) => { root.poly-lfo-rate-changed(v); } lfo-retrigger-changed(v) => { root.poly-lfo-retrigger-changed(v); }
                                                 lfo-pitch-changed(v) => { root.poly-lfo-pitch-changed(v); } lfo-filter-changed(v) => { root.poly-lfo-filter-changed(v); } lfo-pulse-width-changed(v) => { root.poly-lfo-pulse-width-changed(v); } lfo-amp-changed(v) => { root.poly-lfo-amp-changed(v); }
                                                 polyphony-changed(v) => { root.poly-polyphony-changed(v); } spread-changed(v) => { root.poly-spread-changed(v); }
+                                                mono-mode-changed(v) => { root.poly-mono-mode-changed(v); }
+                                                env-trigger-changed(v) => { root.poly-env-trigger-changed(v); } note-priority-changed(v) => { root.poly-note-priority-changed(v); }
                                             }
 
                                             if !root.editing-bus && root.source-kind == 4 : MlM1DeviceFace {

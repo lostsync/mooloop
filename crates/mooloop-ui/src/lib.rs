@@ -4691,6 +4691,9 @@ impl UiState {
         window.set_poly_lfo_amp(poly.lfo.to_amp);
         window.set_poly_polyphony(poly.polyphony.clamp(1, MAX_POLY_VOICES) as i32);
         window.set_poly_spread(poly.spread);
+        window.set_poly_mono_mode(poly.mono_mode);
+        window.set_poly_env_trigger(poly.env_trigger.to_index());
+        window.set_poly_note_priority(poly.note_priority.to_index());
         window.set_sample_name(ch.sample_name.as_str().into());
         window.set_sample_description(ch.sample_description.as_str().into());
         window.set_sample_duration(ch.sample_duration);
@@ -11278,6 +11281,48 @@ impl AppUi {
                 let channel_index = st.session.selected;
                 let channel = &mut st.session.channels[channel_index];
                 channel.poly_params.lfo.retrigger = value;
+                let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
+                    channel: channel_index as u8,
+                    params: channel.poly_params,
+                });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_poly_mono_mode_changed(move |value| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
+                channel.poly_params.mono_mode = value;
+                let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
+                    channel: channel_index as u8,
+                    params: channel.poly_params,
+                });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_poly_env_trigger_changed(move |value| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
+                channel.poly_params.env_trigger = EnvTrigger::from_index(value);
+                let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
+                    channel: channel_index as u8,
+                    params: channel.poly_params,
+                });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_poly_note_priority_changed(move |value| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
+                channel.poly_params.note_priority = NotePriority::from_index(value);
                 let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
                     channel: channel_index as u8,
                     params: channel.poly_params,

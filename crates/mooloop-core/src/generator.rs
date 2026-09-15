@@ -406,8 +406,25 @@ pub const SYNTH_PARAM_LFO_TO_AMP: u32 = 14;
 pub const SYNTH_PARAM_POLYPHONY: u32 = 15;
 pub const SYNTH_PARAM_SPREAD: u32 = 16;
 
-// 17-19 are deliberately unused, so the v1 synths keep room to grow without
-// reaching into the ML-M1 block below.
+// 17-19 were reserved so the v1 synths could grow without reaching into the
+// ML-M1 block below. `poly-v1-mono-mode/` spent all three, on the mono mode
+// that lets the v1 mono synth be deleted.
+
+/// Poly only. Collapse to one voice with monosynth note behaviour: a held-note
+/// stack, a fallback that is a pitch change rather than a retrigger, and a
+/// note priority.
+pub const SYNTH_PARAM_POLY_MONO_MODE: u32 = 17;
+/// Poly only, and only while [`SYNTH_PARAM_POLY_MONO_MODE`] is on. Carries
+/// [`crate::EnvTrigger`].
+///
+/// A separate constant from the ML-M1's [`SYNTH_PARAM_ENV_TRIGGER`] even
+/// though it carries the same enum and means the same thing, because ids are
+/// per-device and the ML-M1 block has to stay clear of the v1 synths. The
+/// naming is meant to make the parallel obvious.
+pub const SYNTH_PARAM_POLY_ENV_TRIGGER: u32 = 18;
+/// Poly only, and only in mono mode. Carries [`crate::NotePriority`], the
+/// ML-M1's [`SYNTH_PARAM_NOTE_PRIORITY`] under a v1 id.
+pub const SYNTH_PARAM_POLY_NOTE_PRIORITY: u32 = 19;
 
 /// The ML-M1's own ids, starting clear of everything above.
 pub const SYNTH_PARAM_FILTER_ATTACK: u32 = 20;
@@ -624,8 +641,18 @@ const fn concat_mlm1(
     out
 }
 
-static POLY_DESCRIPTORS: [ParamDescriptor; 32] = {
-    let mut out = [SHARED_SYNTH_DESCRIPTORS[0]; 32];
+/// The v1 poly's table: the mono synth's thirty, then the five that are its
+/// own.
+///
+/// The last three arrived with `poly-v1-mono-mode/` and are **appended rather
+/// than interleaved**, because a table's order is its wire order and every id
+/// in it is already in saved projects.
+///
+/// All three rest at the value that reproduces the device as it was: mono mode
+/// off, and — for when it is switched on — the retrigger-every-note behaviour
+/// the v1 poly has always had, under last-note priority.
+static POLY_DESCRIPTORS: [ParamDescriptor; 35] = {
+    let mut out = [SHARED_SYNTH_DESCRIPTORS[0]; 35];
     let mono = MONO_DESCRIPTORS;
     let mut i = 0;
     while i < 30 {
@@ -642,6 +669,9 @@ static POLY_DESCRIPTORS: [ParamDescriptor; 32] = {
         default: 8.0,
     };
     out[31] = unit(SYNTH_PARAM_SPREAD, "Spread", 0.0);
+    out[32] = stepped(SYNTH_PARAM_POLY_MONO_MODE, "Mono", 2, 0.0);
+    out[33] = stepped(SYNTH_PARAM_POLY_ENV_TRIGGER, "Env trig", 2, 0.0);
+    out[34] = stepped(SYNTH_PARAM_POLY_NOTE_PRIORITY, "Priority", 3, 0.0);
     out
 };
 
@@ -986,6 +1016,9 @@ impl GeneratorParams {
                     SYNTH_PARAM_DRIVE => p.drive,
                     SYNTH_PARAM_POLYPHONY => f32::from(p.polyphony),
                     SYNTH_PARAM_SPREAD => p.spread,
+                    SYNTH_PARAM_POLY_MONO_MODE => f32::from(p.mono_mode),
+                    SYNTH_PARAM_POLY_ENV_TRIGGER => p.env_trigger.to_index() as f32,
+                    SYNTH_PARAM_POLY_NOTE_PRIORITY => p.note_priority.to_index() as f32,
                     _ => return None,
                 })
             }
@@ -1153,6 +1186,13 @@ impl GeneratorParams {
                         SYNTH_PARAM_DRIVE => p.drive = value,
                         SYNTH_PARAM_POLYPHONY => p.polyphony = value.round() as u8,
                         SYNTH_PARAM_SPREAD => p.spread = value,
+                        SYNTH_PARAM_POLY_MONO_MODE => p.mono_mode = value >= 0.5,
+                        SYNTH_PARAM_POLY_ENV_TRIGGER => {
+                            p.env_trigger = EnvTrigger::from_index(value.round() as i32)
+                        }
+                        SYNTH_PARAM_POLY_NOTE_PRIORITY => {
+                            p.note_priority = NotePriority::from_index(value.round() as i32)
+                        }
                         _ => return None,
                     }
                 }
