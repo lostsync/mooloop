@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img src="mooloop-screenshot.png" alt="Mooloop's channel rack and Mono Synth" width="900">
+  <img src="mooloop-screenshot.png" alt="Mooloop: the channel rack, ML-P8 and the modulation shelf" width="900">
 </p>
 
 Mooloop is a Linux-native, pattern-based groove sequencer and instrument. It has a channel rack, piano roll, playlist, mixer, automation, effects, sample playback, and a few small synths. It runs through JACK or PipeWire's JACK layer and is written in Rust with a Slint interface.

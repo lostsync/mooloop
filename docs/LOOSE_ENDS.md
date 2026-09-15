@@ -5,10 +5,21 @@ place so they stop living in chat scrollback. The file and line named is where
 to start.
 
 Everything here as of **2026-09-06** was re-verified against the tree that
-day. Entries added since carry their own date, and entries older than that
-sweep have not been checked against the tree since it — the spike list below
-was still claiming thirty-nine unpushed commits on `main` a day after `main`
-was pushed, which is what this paragraph is now careful about.
+day, and a second pass on **2026-09-14** re-read about a third of the file --
+enough to find five entries that had stopped being true. Entries added since
+carry their own date, and entries older than the sweep that covered them have
+not been checked against the tree since — the spike list below was still
+claiming thirty-nine unpushed commits on `main` a day after `main` was pushed,
+which is what this paragraph is now careful about.
+
+**An entry goes stale two ways and only one of them is loud.** Three of the
+five on 2026-09-14 had been fixed by work that never came back to delete the
+row: the preamp grew the per-band display that the entry beside it had
+*designed*, `Project` grew `pattern_meta`, and `BUFFER_ENGINE.md` grew the
+caveat the entry said it lacked. The other two were never about the tree at
+all -- a screenshot that had been retaken and a branch list that had moved --
+and those are the ones a reader has no way to doubt. So: **check the claim
+before you act on it, and delete the row in the commit that makes it false.**
 
 This is not a roadmap and not a bug list. Everything here was a deliberate
 stopping point rather than an oversight, and none of it blocks the sequence in
@@ -80,27 +91,6 @@ too-long name, a permission, a full disk. The error dialog opens and the rack
 row goes on showing the name of a preset that was never written. The fix is to
 move both calls into the `SavedPreset` arm, which means carrying the name on
 that variant. Found 2026-09-13.
-
-**The preamp face has no transfer-curve display, where Drive's has one.**
-`preamp-device.slint` leaves the panel Drive fills with
-`DriveTransferDisplay` empty. Drawing this stage's curve needs the
-coefficients `HarmonicShaper::new` solves for, and reaching them means
-widening `EffectSlotRow` in `main.slint` -- which is what the EQ, the
-dynamics trio and the Buffer already do for `eq-spectrum-data`,
-`gain-reduction-db` and `buffer-collisions`, so the path exists and is
-ordinary. The alternative, computing them in markup from the voicing index,
-would spell `harmonics.rs`'s profile numbers a second time, which is the
-duplication `AGENTS.md` names as this codebase's characteristic fault.
-
-**A transfer curve is probably the wrong display for it anyway.** Adam,
-2026-09-10: the interesting question is *where on the spectrum* the stage is
-distorting, which a curve cannot show and which is the whole point of the
-tilt -- obvious on a kick, nearly clean on a hat. `SpectrumAnalyzer` already
-produces exactly the right thing (48 log bands, a Goertzel bank rather than
-an FFT, published once a hop and only while a display subscribes), and this
-device is unusual in having both the dry and the wet signal in hand at the
-same sample. Two analyzers and a per-band difference would make the tilt
-visible on the same axis `colour_harmonics_vs_freq.csv` plots.
 
 **The oscillator Level knob works in dB; its descriptor is linear 0–1.**
 `device-oscillator.slint:95` drives the knob through `GainMath.linear-to-db`,
@@ -411,24 +401,6 @@ which `CURRENT.md` now at least describes honestly; or make undo refuse to
 run over unrecorded state, which needs a "changed since the last entry"
 marker `record` has no way to set today. Found 2026-09-13.
 
-**Pattern names are wiped by every project edit and never reach disk.**
-`replace_project` does `self.pattern_names = vec![String::new(); ...]`
-(`session.rs:1146`), and every `ProjectEdit` runs through it -- so naming
-three patterns "Verse", "Chorus", "Bridge" and then adding a channel, cloning
-a pattern, or pressing Ctrl+Z blanks all three. `pattern_names` appears
-nowhere in `mooloop-core`, `mooloop-project` or `PROJECT_FORMAT.md`, so they
-do not survive a save either. `CURRENT.md` documents naming a pattern as a
-peer of naming a channel or a track, with a paragraph on why a pattern may be
-blank where the others may not, and says nothing about the name being
-transient. Not small because a name has to survive `replace_project`: either
-carry it in `Project` -- a persisted field, a migration, and length
-validation in `integrity.rs`, which is also the only option that makes
-`CURRENT.md` true and fixes persistence -- or keep it session-side and give
-`ProjectEdit` a pattern-edit field beside `channel_edit`, since
-`queue_pattern_clone` and `queue_pattern_remove` insert and remove pattern
-indices in a cloned `Project` that the session's name vector knows nothing
-about. Found 2026-09-13.
-
 **Two preset producers mutate the live session before queueing, so a refused
 install leaves the document and the engine disagreeing.**
 `on_effect_preset_selected` (`lib.rs:8076`) and `append_effect_preset`
@@ -704,11 +676,6 @@ the engine can compensate for it, not before." The mixer became latency
 compensated on 2026-09-05, so the condition is met. `CURRENT.md` already
 records this as an open decision rather than a settled no; the source comment
 does not.
-
-**`BUFFER_ENGINE.md` still specifies Buffer as an ordinary insert** "at the
-useful point in a chain" (lines 12, 45, 66). Adam has since said that framing
-is partly wrong — the device belongs at the end of a rack with its own lane.
-Nothing in the repository captures the rethink; the doc reads as settled.
 
 ---
 
@@ -1155,10 +1122,6 @@ test. **A disabled test does not fail; it stops existing**, and `dead_code`
 was the only thing that could have said so. When clippy is red anywhere,
 nothing downstream of it is being checked at all.
 
-**The README hero screenshot predates effects.** `mooloop-screenshot.png`,
-captioned "channel rack and Mono Synth" — accurate, but no longer showing the
-most interesting part of the app. A fresh one can be rendered headlessly.
-
 **Six dB readouts still round for themselves.** `GainMath.format-db` now
 covers every readout that is a *gain*, but six sites spell their own number
 because they are not gains and the shared formatter's signed, `-inf`-floored
@@ -1217,10 +1180,11 @@ finding that three had "no slack anywhere". Correcting the source formula
 widens every three-unit source face by 4px and every four-unit one by 8px,
 against faces that were sized by eye and signed off. Found 2026-09-10.
 
-**Three unmerged spikes.** `spike/egui-view-layer` (3 commits),
-`spike/slint-split-build` (5) and `spike/pattern-bank-cost` (1) are answers
-rather than candidates — none is waiting to land. Adam's call whether any
-goes anywhere.
+**Four unmerged spikes**, re-counted 2026-09-14. `spike/slint-split-build`
+(5 commits), `spike/egui-view-layer` (3), `spike/pattern-bank-cost` (1) and
+`spike/song-from-scratch` (1) are answers rather than candidates — none is
+waiting to land. Adam's call whether any goes anywhere. A fifth,
+`spike/measure-charts`, is fully merged and its branch can be deleted.
 
 There is also `claude/device-identity-rack-addressing-99yt4o` on the remote,
 one commit that is not in `origin/main` and has no local branch. Nobody has
