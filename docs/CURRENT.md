@@ -870,7 +870,12 @@ land on its own when it starts to matter:
   they meter a chain, and a chain has no latch to light or to clear. A track's
   fader row does have one -- the same latch its mixer strip shows, cleared
   from whichever of the two the user clicks -- and shows peak hold from the
-  same reading. Until 2026-09-14 the rails drew a lamp that could not light
+  same reading. **The master's toolbar meter is the same latch again**: it
+  reads bus 0 through the mixer strip's own ballistics, so either lamp clears
+  both and neither can disagree with the other. Before 2026-09-14 it read a
+  separate per-block engine event instead, which is a bounded ring the audio
+  thread drops from under pressure -- the always-visible meter was the lossy
+  one. Until 2026-09-14 the rails drew a lamp that could not light
   and the fader row drew one that was never bound, while its peak marker was
   pinned to the level.
 - Channels retain the historical constant-power pan law, so existing project

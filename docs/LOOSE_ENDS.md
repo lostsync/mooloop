@@ -555,18 +555,27 @@ reason and invisible anyway -- they wash out in under two seconds.
 could not without driving the application. Found 2026-09-13, fixed
 2026-09-14.
 
-**The master is metered twice, through two transports, with two clip
-latches.** `executor.rs` pushes `EngineEvent::Metering` onto the bounded event
-ring every block and `render.rs` publishes the same numbers into `BusMeters`
-cell 0. The transport bar reads the event; the mixer's master strip reads the
-cell. The event push is `let _ = evt_tx.push(..)`, so under ring pressure the
-**always-visible toolbar meter** is the lossy one while the atomic cell cannot
-drop a block -- the two meters for one signal can disagree. And there are two
-independent clip latches for the master: clicking the toolbar's does not clear
-the mixer strip's, or the reverse. Options: drop `EngineEvent::Metering` and
-read bus 0 for both, which unifies the latch for free and removes a per-block
-ring push; or keep both and share one `MeterBallistics` pair. Found
-2026-09-13.
+**`EngineEvent::Metering` is a per-block ring push that only
+`engine-selftest` reads.** The master used to be metered *twice*, through two
+transports and with two clip latches: `executor.rs` pushes the event every
+block and `render.rs` publishes the same two numbers into `BusMeters` cell 0,
+the toolbar read the event and the mixer's master strip read the cell. The
+event push is `let _ = evt_tx.push(..)`, so under ring pressure the
+always-visible meter was the lossy one while the atomic cell cannot drop a
+block, and clicking one clip lamp did not clear the other.
+
+Fixed 2026-09-14 by the second of the two options this entry named: both faces
+read bus 0 through one `MeterBallistics` pair, so the latch is shared and the
+toolbar is no longer the lossy reader. The first option -- dropping the event
+outright -- was **not** taken because `engine-selftest` is built on counting
+it, and it is the only thing that reports whether the *callback* produced
+audio: a held cell says the loudest it ever was, which cannot tell silence
+from a callback that never ran.
+
+So what is left is a per-block push on the audio thread serving one
+diagnostic. Cheap, and worth knowing it is not free: dropping it means giving
+`engine-selftest` another way to ask the same question, not deleting a
+duplicate. Found 2026-09-13, unified 2026-09-14.
 
 **A muted channel that something taps meters silent while its audio flows.**
 There are two mute paths for a channel. The one where nobody taps it skips the

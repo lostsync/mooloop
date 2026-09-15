@@ -11361,9 +11361,17 @@ impl AppUi {
         let stats_in = stats.clone();
         let master_clip_clear_in = master_clip_clear.clone();
         let bus_clip_clear_in = bus_clip_clear.clone();
-        let mut left_meter = MeterBallistics::default();
-        let mut right_meter = MeterBallistics::default();
         // One pair per bus, so a strip's decay is its own rather than shared.
+        //
+        // **Including the toolbar's.** The master used to be metered twice,
+        // through two transports and with two clip latches: `executor.rs`
+        // pushes `EngineEvent::Metering` every block and `render.rs` publishes
+        // the same two numbers into `BusMeters` cell 0, the toolbar read the
+        // event and the mixer's master strip read the cell. The event push is
+        // `let _ = evt_tx.push(..)`, so under ring pressure the
+        // *always-visible* meter was the lossy one while the atomic cell
+        // cannot drop a block -- and clicking one clip lamp did not clear the
+        // other. Both read bus 0 through this pair now.
         let mut bus_meters: Vec<(MeterBallistics, MeterBallistics)> =
             (0..MAX_BUSES).map(|_| Default::default()).collect();
         let mut last_meter_update = std::time::Instant::now();
@@ -12111,8 +12119,6 @@ impl AppUi {
                 }
                 let Some(w) = weak.upgrade() else { return };
                 let mut saw_nonzero = false;
-                let mut block_peak_l = 0.0f32;
-                let mut block_peak_r = 0.0f32;
                 for ev in handle.drain() {
                     match ev {
                         EngineEvent::Position {
@@ -12131,13 +12137,14 @@ impl AppUi {
                             w.set_position_beat(position.beat);
                             w.set_position_tick(position.tick);
                         }
-                        EngineEvent::Metering { peak_l, peak_r } => {
-                            block_peak_l = block_peak_l.max(peak_l.max(0.0));
-                            block_peak_r = block_peak_r.max(peak_r.max(0.0));
-                            if peak_l > 0.0 || peak_r > 0.0 {
-                                saw_nonzero = true;
-                            }
-                        }
+                        // The master's level comes off `BusMeters` cell 0
+                        // below, beside the mixer strip's, so this carries
+                        // nothing the interface draws any more. The event
+                        // stays because `engine-selftest` is built on
+                        // counting it: it reports whether the *callback*
+                        // produced audio, where a held cell only says the
+                        // loudest it ever was.
+                        EngineEvent::Metering { .. } => {}
                         EngineEvent::Xrun { count } => {
                             // Read off the event queue on the UI thread. The
                             // audio thread only ever pushes the count; it
@@ -12197,19 +12204,6 @@ impl AppUi {
                     }
                     xruns_this_window = 0;
                 }
-                if master_clip_clear_in.replace(false) {
-                    left_meter.clear_clip();
-                    right_meter.clear_clip();
-                }
-                let left = left_meter.update(block_peak_l, elapsed);
-                let right = right_meter.update(block_peak_r, elapsed);
-                w.set_meter_l_db(left.level_db);
-                w.set_meter_r_db(right.level_db);
-                w.set_meter_l_held_db(left.held_db);
-                w.set_meter_r_held_db(right.held_db);
-                w.set_meter_l_clipping(left.clipping);
-                w.set_meter_r_clipping(right.clipping);
-
                 // Bus peaks come from the shared atomic array, not the event
                 // ring. Always drain them, even while the mixer is hidden, so
                 // a strip does not open showing a peak from minutes ago; only
@@ -12267,19 +12261,35 @@ impl AppUi {
                         meters.1.reset();
                     }
                 }
+                let master_clip_cleared = master_clip_clear_in.replace(false);
                 for (bus, meters) in bus_meters.iter_mut().enumerate() {
-                    if bus_clip_clear_in
+                    let strip_clip_cleared = bus_clip_clear_in
                         .borrow_mut()
                         .get_mut(bus)
                         .map(|flag| std::mem::replace(flag, false))
-                        .unwrap_or(false)
-                    {
+                        .unwrap_or(false);
+                    // The master has two lamps on two faces and one latch
+                    // behind them now, so either click clears it. That is the
+                    // half of being metered twice a user could actually see.
+                    let is_master = bus == MASTER_BUS as usize;
+                    if strip_clip_cleared || (is_master && master_clip_cleared) {
                         meters.0.clear_clip();
                         meters.1.clear_clip();
                     }
                     let (peak_l, peak_r) = handle.take_bus_peak(bus);
                     let left = meters.0.update(peak_l, elapsed);
                     let right = meters.1.update(peak_r, elapsed);
+                    if is_master {
+                        w.set_meter_l_db(left.level_db);
+                        w.set_meter_r_db(right.level_db);
+                        w.set_meter_l_held_db(left.held_db);
+                        w.set_meter_r_held_db(right.held_db);
+                        w.set_meter_l_clipping(left.clipping);
+                        w.set_meter_r_clipping(right.clipping);
+                        if peak_l > 0.0 || peak_r > 0.0 {
+                            saw_nonzero = true;
+                        }
+                    }
                     if showing_mixer {
                         let strips = st.borrow();
                         if let Some(mut row) = strips.mixer_strip_model.row_data(bus) {
