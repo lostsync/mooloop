@@ -1,10 +1,13 @@
 # Focus
 
 Status: active working sequence, rewritten 2026-09-12, amended 2026-09-14 when
-`interface-iteration/` closed and its step left the sequence, and again on
-2026-09-15 when `eq-v2/` came down to one optional step and its section was
-cut back to what is live. That cut is this document's own rule about itself
-being applied: three closed steps had left section 1 mostly archaeology. The previous
+`interface-iteration/` closed and its step left the sequence, and amended twice
+on 2026-09-15: first when `eq-v2/` came down to one optional step and its
+section was cut back to what is live, then again when Adam **closed the EQ and
+settled Buffer's shape**, which emptied this document's "waiting on Adam" of
+everything that was the sequence and left it with a work order for the first
+time in days. The cuts are this document's own rule about itself being applied:
+closed steps had left section 1 mostly archaeology. The previous
 version was written 2026-09-05 and amended 2026-09-07 and 2026-09-08; it was
 replaced rather than amended again, because the mixer it described was not the
 mixer that exists and the work it parked included a feature that shipped.
@@ -96,62 +99,20 @@ A pane that shows what a menu already showed is not progress either.
 
 ## The sequence
 
-Set by Adam on 2026-09-12: finish the interface iteration, then the EQ, then
-Buffer. The interface iteration closed on 2026-09-14 and the EQ on 2026-09-15
-but for one optional step.
+Set by Adam on 2026-09-12 as: finish the interface iteration, then the EQ, then
+Buffer. **All three of those are now settled.** The interface iteration closed
+2026-09-14. MIDI control, which this document had parked, was built and closed
+2026-09-15. And on the same day Adam answered both of the questions the
+sequence had been stalled on: **the EQ is closed** — step 04 declined, the plan
+archived at 03 — and **Buffer stays a device**, which unblocks the step below
+that was forbidden to start.
 
-**As of 2026-09-15 the sequence is waiting on Adam at both remaining points**,
-and that is a state worth naming rather than working around. The EQ's step 04
-is a taste question and wants his ear; Buffer's first move is a question about
-the device's *shape* that the step below says explicitly not to begin
-unprompted. Neither is blocked on a branch. Until one of them is answered, the
-work that is genuinely available is the listening passes below and the fixes
-further down -- which as of the same day includes
-`docs/plans/archive/control-plane-seams/`, five confirmed defects at the control-plane
-boundary that need nobody's ear and nobody's decision.
+**So the sequence is no longer waiting on anybody, for the first time since it
+was written.** It is Buffer, it has a work order rather than a design question,
+and `musical-time/` is the one piece of it that is separable and has to land
+before Buffer can draw a position.
 
-### 1. `docs/plans/eq-v2/` — one optional step left, and two listens owed
-
-**Steps 01, 02 and 03 landed on 2026-09-14 and 2026-09-15.** Every EQ band and
-both pass filters carry their own stable ids; a shelf's Q knob designs its
-slope instead of being ignored; and the response plot is the bank's own
-coefficients evaluated rather than a shape drawn to resemble them. Read
-`eq-v2/00-status.md` for what each one found — this document is not where that
-belongs.
-
-The one thing worth carrying out of it, because it is about the next device
-and not this one: **the face did not have to change.** The EQ's parameter
-space was shaped like its face, and resolving the selection one layer earlier
-left the markup untouched. That is the answer to the question the plan was
-written around — mooloop intends to host CLAP, a plugin's parameters are N
-independent ids with no context, and the EQ was the one native device whose
-model could not be expressed that way. What it did *not* settle is that
-`EffectKind::descriptors()` is a table per **kind** while a plugin's
-parameters belong to an **instance**; that crossing is `SCOPE.md` §"the four
-things standing between here and CLAP", item 1.
-
-**What is left is step 04, it is optional, and it is Adam's call.** It is the
-measured character from five reference EQs — the only step that changes how
-the device sounds when nobody asked it to.
-
-**Two listening passes are owed before it, and they are the live work here --
-but they are smaller than they were written up as.** Step 03's change was
-measured on 2026-09-15 rather than left as "it sounds different": at the Q both
-shelves rest at, it peaks at **0.45 dB**, it pivots about the corner rather
-than moving the shelf, and it is gone three octaves out. The change that is
-worth hearing is on shelves whose **Q knob is away from 0.707** -- up to 1.9 dB
--- which is exactly the knob that did nothing before step 03, so the patches
-affected are the ones where somebody tried to use it and gave up.
-`eq-v2/00-status.md` has the table and says where to listen. Step 02 changed
-nothing audible and changed what the picture *claims*, which wants a look with
-a patch moving.
-
-Done when: ~~every EQ band and pass filter has its own stable ids, a lane on a
-band means one band forever~~ (2026-09-14), and `eq-v2/00-status.md` says which
-of 02 to 04 were taken. It does: 02 and 03 are in, and **04 is the only open
-question, for Adam's ear.**
-
-### 2. Turn Buffer into a composition workflow
+### 1. Turn Buffer into a composition workflow
 
 Still the honest product test, and still last, because its value is a workflow
 judgement better made against finished instruments and an interface that can
@@ -197,14 +158,45 @@ show what the read head is doing, survive save and reload, and render the same
 result offline. If that workflow is not materially better than bouncing a
 sample and loading it again, record why before expanding the device.
 
+### 2. `docs/plans/musical-time/` — one spelling, and Buffer's readouts need it
+
+**Not started, three steps, and nothing on screen changes when it lands — if
+something does, the fix is wrong.** It is a `rust-slint-boundary/` run rather
+than a feature, and it is in the sequence for one reason: Buffer's step 5 wants
+bars:beats:ticks readouts and there is no such thing to reuse, only pieces of
+one in three crates and a markup file. Take it before that step; the rest of
+Buffer does not wait on it.
+
+It earns its place by what the survey found rather than by tidiness. **"Four
+beats to the bar" is spelled nine times across six crates** — the note that
+prompted it guessed three. The comment *"assumes 4/4 for now"* appears in three
+crates independently, which is three people deciding the same thing and none of
+them finding the others. `frames_per_bar`'s doc comment claims it follows *"the
+convention the buffer device already uses"* while the buffer device spells its
+own copy — a prose comment doing the compiler's job. And
+`project.beats_per_bar` is a **persisted, validated field that nothing reads**
+except the integrity pass clamping it back to 4, so the format promises a time
+signature the code cannot honour. Meanwhile `mooloop-core::time::Ticks` has had
+`beat()`, `beat_in_bar()` and `within_beat()` since the beginning with no
+caller outside its own tests — the `LFO_DESCRIPTORS` shape again, a table with
+no reader while everyone hand-rolls what it does.
+
+Done when: one home for the constant, a `BbtPosition`/`BbtDuration` pair (two
+types, because a position counts from one and a duration from zero), and a
+guard that fails if a tenth spelling appears.
+
 ## Waiting on Adam, not on work
 
-Five things are finished or priced and are held up by a judgement rather than
-by a branch (`pane-layout/` was a sixth until 2026-09-15, when it turned out to
-be held up by nothing but the move, and archived). None should be worked
-around, and as of 2026-09-15 the last two of them *are* the sequence rather
-than sitting beside it.
+Four things are finished or priced and are held up by a judgement rather than
+by a branch. **None of them is the sequence any more**, which is new as of
+2026-09-15: two entries left this list that day by being answered — the EQ,
+closed at step 03 — and one, `pane-layout/`, turned out to be held up by
+nothing but the move and archived. None should be worked around.
 
+- **`midi-control/`** — all four steps landed 2026-09-15 and every layer is
+  tested, but **none of it has been run against a keyboard**. That is the only
+  thing between it and the archive, and it needs hardware rather than a
+  judgement. `scripts/mooloop-mcp` and a controller are the check.
 - **`ui-consistency-pass/`** — all six steps landed; it archives once Adam has
   played it.
 - **`mono-synth-v2/`** — complete and played, kept out of the archive by one
@@ -219,16 +211,11 @@ than sitting beside it.
 The console's studio listening pass is the fourth, and it is the one that could
 still change something that shipped.
 
-The fifth is the EQ, and it is two things at once: **the listening passes
-owed for steps 02 and 03**, and whether step 04 is taken at all. Step 03 is
-the one to listen to first, and it has been measured so the listen is short:
-half a decibel at the resting Q, up to two on a shelf whose Q knob somebody
-moved, all of it within an octave or two of the corner.
-
-Adam, if you are reading this list and want the sequence moving again, the
-two answers that unblock the most are **whether the EQ's step 04 is worth
-having**, and **what shape Buffer should be** -- `BUFFER_ENGINE.md` still
-specifies the insert model you said on 2026-08-30 was partly the wrong call.
+**The EQ's two listening passes are still owed** and are no longer on this
+list, because closing the plan turned them from a decision into a check against
+shipped code. They moved to `LOOSE_ENDS.md`. Neither is a defect and step 03's
+is measured, so the listen is short: shelves with a Q away from 0.707, an
+octave either side of the corner.
 
 ## Fixes that may interrupt the sequence
 
@@ -398,5 +385,8 @@ worktrees, commits, and verification.
 and its kit on 2026-09-04, ML-P8 and its bank on 2026-09-05, the ML-M1 with
 its patches, and the channel strip's three voicings on headphones on
 2026-09-11. Both steps above change what can be *done* to a sound rather than
-how it sounds, and a moving patch is the only proof they worked; `eq-v2`'s
-step 04 is the one that changes a sound outright and needs a pass of its own.
+how it sounds, and a moving patch is the only proof they worked. Step 04 of
+`eq-v2/` would have been the one that changed a sound outright, and Adam
+declined it on 2026-09-15 — so nothing in the current sequence needs a pass of
+that kind, and the two EQ passes still owed are checks on shipped code rather
+than on anything being decided (`LOOSE_ENDS.md`).

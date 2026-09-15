@@ -1,5 +1,35 @@
 # EQ v2 status
 
+## Closed 2026-09-15: step 04 is declined, and the plan is done
+
+**Adam's call, 2026-09-15: close the EQ.** Step 04 — band-dependent saturation,
+the measured character from five reference EQs — is **not taken**, and the plan
+archives at step 03.
+
+That is the step file's own recommendation followed rather than overruled. It
+opens with *"Do not start here"* and gives three reasons in order, the first of
+which is the one that decided it: **steps 01 to 03 are corrections — things the
+device claims and does not do — and 04 adds a claim.** It is a sound nobody
+asked for. The plan is therefore complete in the sense that matters: every
+defect it was written around is fixed, and the only unbuilt step is the only
+one that was ever optional.
+
+Nothing is lost by closing. `04-band-dependent-saturation.md` stays in this
+directory with its measurements intact — the VEQ4 THD table, the observation
+that an inductor EQ's nonlinearity sits *inside* the filter network and so
+appears only where a band is boosted, and the note that `preamp.rs`'s
+tilt/shape/untilt sandwich is already the right structure with the band's own
+response as the tilt. If band-dependent saturation is ever wanted, that file is
+the work order and it does not need rewriting.
+
+**Two listening passes were owed and are now owed against shipped code rather
+than against a decision.** They have moved to `LOOSE_ENDS.md` so that closing
+this plan does not bury them. Step 03's is short and is measured: shelves with
+a Q away from 0.707, an octave either side of the corner. Step 02's is a look
+rather than a listen — the plot claims something new about the pass filters and
+wants a patch moving under it.
+
+
 ## The listening brief for step 03, measured 2026-09-15
 
 Step 03 says "**this changes how an existing shelf boost sounds**" and leaves

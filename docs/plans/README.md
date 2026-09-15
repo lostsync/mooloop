@@ -18,7 +18,8 @@ step has landed; the macOS CI job is the one thing that has not yet run.
 **`FOCUS.md` was rewritten on 2026-09-12 and it decided five of the entries
 below.** The sequence it set was: finish `interface-iteration/` (steps 03 and
 04), then `eq-v2/`, then Buffer. The first of those closed on 2026-09-14 and
-archived, so the live sequence is `eq-v2/`, then Buffer. That step's standing
+archived, and `eq-v2/` closed on 2026-09-15 when Adam declined its one optional
+step, so the live sequence is Buffer. That step's standing
 instruction was to raise the device's *shape* before building, because
 `BUFFER_ENGINE.md`'s insert model was not settled; **it was settled on
 2026-09-15 and Buffer stays a device**, with
@@ -28,26 +29,6 @@ followed. `device-registry/`,
 "deliberately not now", each with its reason and with what would unpark it. One
 piece is exempt: take `device-registry/`'s face host component if a device step
 already has `main.slint` open.
-
-`eq-v2/` was added 2026-09-12 and **steps 01 and 03 landed 2026-09-14, step 02
-early on 2026-09-15; only 04 is open, and it is optional.** It came out of fixing one
-bug -- the EQ's Shape control was two settings of different arity behind one
-automatable id -- and out of Adam's question about what that implied: mooloop
-intends to host CLAP, a CLAP plugin exposes arbitrary independently automatable
-parameters, and our own devices should reach the automation system the same way.
-Under that test the EQ is not a device with a missing feature but the one native
-device whose parameter model a plugin host could not express. Step 01 is the only
-one that argument forces; steps 02 to 04 are an EQ that is merely better, and the
-faults they fix were each confirmed against the source -- the pass filters are
-absent from the response plot while their data is *already being sent* to it, a
-shelf ignores its Q in the DSP, and the plot draws shelves at a fixed exponent.
-Step 04 is the measured character from five reference EQs and is the only step
-that changes how the device sounds. It became **step 1 of the sequence** when
-`interface-iteration/` closed on 2026-09-14, and step 01 landed the same day:
-50 per-band descriptors, no `FORMAT_VERSION` bump (the new ids start at 16, so
-a stale lane on a retired one lands in a hole rather than on a neighbour), and
-**no change to the face at all** -- which is the finding worth carrying into
-plugin work, and `00-status.md` says why.
 
 `musical-time/` was added 2026-09-15 and is **not started**. A
 `rust-slint-boundary/` run, written out of `buffer-implementation/03`, whose
@@ -97,13 +78,14 @@ is worth a step was a `FOCUS.md` question, and the answer as of 2026-09-12 is
 **not now** -- safely, because the measurements to judge it by are committed
 either way.
 
-Last swept 2026-09-15, and amended three times later the same day: when
+Last swept 2026-09-15, and amended four times later the same day: when
 `control-plane-seams/` was written; when Buffer's shape was settled and
 `buffer-implementation/03` and `musical-time/` were added; and when five
 finished plans moved to `archive/` -- `control-plane-seams/` itself,
 `pane-layout/`, `session-layer-extraction/`, `preset-system/` and
 `poly-v1-mono-mode/`, the last two of which had been sitting under "Queued,
-not started" while being done. `eq-v2/` steps 01 and 03 landed on the 14th and step 02
+not started" while being done; and a fourth time when Adam **closed the EQ** --
+step 04 declined -- and `eq-v2/` archived with it. `eq-v2/` steps 01 and 03 landed on the 14th and step 02
 seven minutes into the 15th. 01 gave every EQ band and both pass filters their own stable ids --
 the one native device whose parameter model a CLAP host could not have
 expressed -- and the thing it proved is that a face showing one band at a time
@@ -228,7 +210,31 @@ writing steps would presume the answer.
 reading before reopening the area it covers, because several record *why* a
 tempting change was rejected:
 
-`control-plane-seams/` (all five, closed 2026-09-15) is the newest: five
+`eq-v2/` (steps 01-03, closed 2026-09-15 when Adam declined step 04) is the
+newest. It came out of one bug -- the EQ's Shape control was two settings of
+different arity behind one automatable id -- and out of Adam's question about
+what that implied: mooloop intends to host CLAP, a plugin exposes arbitrary
+independently automatable parameters, and our own devices should reach
+automation the same way. Under that test the EQ was not a device with a missing
+feature but **the one native device whose parameter model a plugin host could
+not express**. Step 01 is the only one that argument forces and it landed
+2026-09-14: 50 per-band descriptors, no `FORMAT_VERSION` bump (the new ids
+start at 16, so a stale lane on a retired one lands in a hole rather than on a
+neighbour), and **no change to the face at all** -- the finding worth carrying
+into plugin work, because a face showing one band at a time was never the
+problem and resolving the selection one layer earlier left the markup
+untouched. 03 found a band's Q knob doing nothing while that band was a shelf
+and deleted a private copy of the core Q law that had been running instead of
+it; 02 stopped the response plot approximating, and turned up a pass-slope
+selector wrong by a factor of two since it shipped. **Step 04 was declined
+rather than unbuilt** -- band-dependent saturation, the measured character from
+five reference EQs -- and the step file is kept whole with its VEQ4 data,
+because it is the work order if that sound is ever wanted. The reason is its
+own: 01 to 03 correct things the device claimed and did not do, and 04 adds a
+claim. Two listening passes are still owed and are recorded in
+`LOOSE_ENDS.md`.
+
+`control-plane-seams/` (all five, closed 2026-09-15): five
 confirmed control-plane defects from an outside architectural review that read
 the system end to end rather than reading a diff, and whose verdict on the
 layering was good. Four of the five shared one shape, and it is the shape this

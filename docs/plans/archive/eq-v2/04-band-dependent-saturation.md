@@ -1,5 +1,12 @@
 # 04 — Band-dependent saturation
 
+> **Not taken. Adam declined it on 2026-09-15 and `eq-v2/` closed at step 03.**
+> This file is kept whole because its measurements are the work order: if
+> band-dependent saturation is ever wanted, start here rather than re-deriving
+> it. The reasoning that decided it is this file's own "Do not start here"
+> section below — steps 01 to 03 correct things the device claims and does not
+> do, and this one adds a claim.
+
 The one step here that changes how the device sounds rather than correcting
 something. Last, and optional.
 

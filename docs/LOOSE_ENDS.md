@@ -1109,6 +1109,26 @@ nowhere else to live.
 
 ## Housekeeping
 
+**Two EQ listening passes are owed, and the plan they belonged to has
+closed.** `eq-v2/` archived on 2026-09-15 when Adam declined step 04, so these
+are now owed against shipped code rather than against a pending decision, and
+they are recorded here so the archiving does not bury them. Neither is a
+defect; both are a change nobody has yet confirmed by ear.
+
+- **Step 03, the shelf slope.** Measured rather than guessed, so the listen is
+  narrow: at the Q both shelves rest at (0.707) the change peaks at **0.45 dB**
+  an octave from the corner, it pivots about the corner rather than moving the
+  shelf, and it is gone three octaves out. What actually changed is the Q knob,
+  which did nothing at all before -- **up to 1.9 dB at Q 0.15**. So the patches
+  affected are the ones where somebody tried to use that knob and gave up. Listen
+  to shelves with a Q away from 0.707, an octave either side of the corner.
+  `archive/eq-v2/00-status.md` has the table. See the shelf-Q entry above for
+  why the top 46% of that knob still does nothing.
+- **Step 02, the response plot.** Changed nothing audible and changed what the
+  picture *claims*: the curve is the bank's own coefficients evaluated rather
+  than a shape drawn to resemble them, and the pass filters appear in it at
+  last. That wants a look with a patch moving under it, not a listen.
+
 **`mooloop-ui` had never been linted, and two things had ridden in on that.**
 Fixed 2026-09-07, recorded because the *shape* of it will recur: `cargo
 clippy` walks the dependency graph, `mooloop-core` had been failing since
