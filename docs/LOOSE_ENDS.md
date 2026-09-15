@@ -329,31 +329,30 @@ is much cheaper and shares the diagnostic channel `sanitize_bank`'s entry
 already wants; or narrow the plan to what undo buys. Either of the last two
 still needs the send-drop sentence adding to `CURRENT.md`. Found 2026-09-13.
 
-**A lane that stops covering the playhead leaves its destination stuck at the
-last value it wrote.** `restore_base_param` exists for exactly this and its
-comment names the hazard -- "Removing a lane or a matrix route otherwise
-leaves the device holding whatever the control signal last resolved, until
-someone happens to touch that knob" -- but it is called only when a lane is
-*deleted* or *cleared*, never when a lane stops covering the playhead.
-Pattern 1 sweeps a cutoff down to 200 Hz, pattern 2 has no such lane; switch
-to pattern 2 and `has_automation_at` answers false, `control_events_for_slot`
-takes its early return, and the device never receives another `ParamValue`.
-The filter plays at 200 Hz while its knob and its face both read 1 kHz, until
-the knob is touched or the song reloaded. Same on a song-mode clip boundary
-and on `SetPlaybackMode`. It bites only destinations that are automated and
-*not* modulated -- a modulated one takes `base_normalized = knob_normalized`
-when the curve is `None` and so restores the knob every block by accident.
-Not small: a complete fix needs the engine to know which destinations had a
-curve last block and no longer do, which is per-channel state across blocks on
-the audio thread, and `AutomationBlock` is explicitly "a read-only view".
-Options: restore on the *commands* only (`SetCurrentPattern`,
-`SetPlaybackMode`, `Seek`), walking the outgoing pattern's lanes on the
-command drain where `forget_device` already runs -- bounded, and fixes the
-reachable pattern-mode half; or carry a "driven last block" set and diff it,
-the only complete answer; or declare that automation latches and say so in
-`CURRENT.md`, which is a defensible DAW convention but then makes
-`restore_base_param`'s three existing callers the inconsistency. Found
-2026-09-13.
+**A song-mode clip boundary still leaves its destination stuck at the last
+value the outgoing clip wrote.** The command half was fixed 2026-09-14:
+`SetCurrentPattern`, `SetPlaybackMode` and `Seek` now walk the lanes of the
+patterns covering the position they are *leaving* and hand back every
+destination the incoming position does not cover. That closes the reachable
+pattern-mode case -- pattern 1 sweeps a cutoff down to 200 Hz, pattern 2 has
+no such lane, and the filter used to go on playing at 200 Hz while its knob
+and its face both read 1 kHz.
+
+A clip boundary in song mode is not a command. The playhead simply moves out
+from under a lane, `has_automation_at` answers false on the next block,
+`control_events_for_slot` takes its early return, and nothing ever writes
+again. The same is true of the song wrap. Closing it needs what the original
+entry named as the only complete answer: the engine carrying which
+destinations had a curve last block and no longer do, which is per-channel
+state across blocks on the audio thread, where `AutomationBlock` is
+deliberately "a read-only view". The alternative is to declare that
+automation latches and say so in `CURRENT.md` -- a defensible DAW convention,
+which would then make `restore_base_param`'s five callers the inconsistency.
+
+It bites only destinations that are automated and *not* modulated: a
+modulated one takes `base_normalized = knob_normalized` when the curve is
+`None` and so restores the knob every block by accident. Found 2026-09-13,
+half-fixed 2026-09-14.
 
 **Shortening a pattern hides automation points that still shape the sound --
 the opposite of what it does to notes.** `refresh_automation_points` filters

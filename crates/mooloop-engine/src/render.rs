@@ -14,7 +14,8 @@ use mooloop_core::{
     SamplerParams, SendTap, SliceMap,
     chain_latency, clamp_bus, compensable_send_edges, compile_latency,
     sends_are_compensable, DEFAULT_STEPS, MAX_CONTAINER_DEPTH, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
-    MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS, STRIP_PARAM_VOLUME,
+    MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS,
+    STRIP_PARAM_VOLUME,
 };
 use mooloop_core::mixer::{StripPin, STRIP_PIN};
 use mooloop_core::strip::StripParams;
@@ -541,6 +542,20 @@ impl ModulationBlock<'_> {
             outlets: self.outlets,
         }
     }
+}
+
+/// Where the automation pass was reading, captured before a command moves it.
+///
+/// Three scalars rather than a list of covering patterns, because the point of
+/// capturing it is to re-derive that coverage *after* the command has landed
+/// -- and none of the three commands that move the playhead changes more than
+/// one of them.
+#[derive(Clone, Copy)]
+struct AutomationPosition {
+    mode: PlaybackMode,
+    /// The pattern-mode selection, ignored in song mode.
+    pattern: usize,
+    tick: f64,
 }
 
 /// The clip automation covering this block. Unlike modulation this is not
@@ -3295,6 +3310,70 @@ impl RenderState {
         }
     }
 
+    /// Where the automation pass is reading right now.
+    fn automation_position(&self) -> AutomationPosition {
+        AutomationPosition {
+            mode: self.sequencer.playback_mode(),
+            pattern: self.sequencer.current_pattern(),
+            tick: self.transport.position_ticks,
+        }
+    }
+
+    /// Hand back every destination the outgoing playhead was driving and the
+    /// incoming one is not.
+    ///
+    /// [`Self::restore_base_param`]'s own comment names this hazard, and it
+    /// was called only when a lane was *deleted* or *cleared*. A lane that
+    /// merely stops covering the playhead does exactly the same thing:
+    /// pattern 1 sweeps a cutoff down to 200 Hz, pattern 2 has no such lane,
+    /// and after the switch `has_automation_at` answers false,
+    /// `control_events_for_slot` takes its early return, and the filter plays
+    /// at 200 Hz while its knob and its face both read 1 kHz until somebody
+    /// touches it or reloads the song. It bites only destinations that are
+    /// automated and *not* modulated -- a modulated one takes
+    /// `base_normalized = knob_normalized` when the curve is `None` and so
+    /// restores the knob every block by accident.
+    ///
+    /// **Only the commands that move the playhead**, which is the half a
+    /// user can reach: `SetCurrentPattern`, `SetPlaybackMode` and `Seek`. A
+    /// song-mode clip boundary is not a command and is still open in
+    /// `LOOSE_ENDS.md`; closing it needs the engine to carry which
+    /// destinations had a curve last block and no longer do, which is
+    /// per-channel state across blocks on the audio thread and which
+    /// `AutomationBlock` is explicitly a read-only view to avoid.
+    ///
+    /// Bounded by the **outgoing coverage** and not by the bank: one pattern
+    /// in pattern mode, the covering placements in song mode, each times the
+    /// active channels times `MAX_AUTOMATION_LANES_PER_CHANNEL`. Walking
+    /// every active pattern instead would be 256 x 256 x 8 index lookups on
+    /// a full project, on the audio thread, for a command that is rare.
+    fn restore_lanes_left_behind(&mut self, from: AutomationPosition) {
+        let to = self.transport.position_ticks;
+        let channels = self.sequencer.active_channels();
+        let mut ordinal = 0;
+        while let Some(pattern) =
+            self.sequencer
+                .covering_pattern_at(from.mode, from.pattern, from.tick, ordinal)
+        {
+            for channel in 0..channels {
+                for lane in 0..MAX_AUTOMATION_LANES_PER_CHANNEL {
+                    let Some(target) =
+                        self.sequencer.pattern_lane_destination(pattern, channel, lane)
+                    else {
+                        continue;
+                    };
+                    // Still covered after the move is the common case, and it
+                    // must not be disturbed: writing the knob here would undo
+                    // one block of a curve that is still playing.
+                    if self.sequencer.automation_lane_at(target, to).is_none() {
+                        self.restore_base_param(target);
+                    }
+                }
+            }
+            ordinal += 1;
+        }
+    }
+
     /// Return one destination to its knob value at the next block. Removing a
     /// lane or a matrix route otherwise leaves the device holding whatever the
     /// control signal last resolved, until someone happens to touch that knob.
@@ -3668,6 +3747,7 @@ impl RenderState {
             EngineCommand::SetTempo(bpm) => self.transport.set_tempo(bpm),
             EngineCommand::SetSwing(percent) => self.sequencer.set_swing(percent),
             EngineCommand::SetCurrentPattern(pattern) => {
+                let from = self.automation_position();
                 self.sequencer.set_current_pattern(pattern as usize);
                 // The same debt a seek owes, for the same reason: the
                 // note-off that would have ended a sounding voice lives in
@@ -3676,14 +3756,24 @@ impl RenderState {
                 // mode has no loop fold to catch it either -- `loop_range` is
                 // `None` outside Song mode.
                 self.seeked = true;
+                // A *lane* in that pattern owes the same debt, and it is the
+                // quieter one: a note that never ends is heard, and a knob
+                // parked where the last curve left it is not.
+                self.restore_lanes_left_behind(from);
             }
             EngineCommand::AddPattern => {
                 self.sequencer.add_pattern();
             }
-            EngineCommand::SetPlaybackMode(mode) => self.sequencer.set_playback_mode(mode),
+            EngineCommand::SetPlaybackMode(mode) => {
+                let from = self.automation_position();
+                self.sequencer.set_playback_mode(mode);
+                self.restore_lanes_left_behind(from);
+            }
             EngineCommand::Seek { tick } => {
+                let from = self.automation_position();
                 self.transport.seek(tick);
                 self.seeked = true;
+                self.restore_lanes_left_behind(from);
             }
             EngineCommand::SetLoopRange(range) => self.loop_range = range,
             EngineCommand::SetPatternLength {
@@ -6286,6 +6376,110 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         assert!(
             third.iter().all(|value| (value - 1_000.0).abs() < 1.0),
             "the trigger stayed high for a second block: {third:?}"
+        );
+    }
+
+    /// **A lane that stops covering the playhead hands its destination
+    /// back**, which it did not until 2026-09-14.
+    ///
+    /// Pattern 0 sweeps the filter cutoff and pattern 1 has no such lane.
+    /// After the switch `has_automation_at` answers false,
+    /// `control_events_for_slot` takes its early return, and the filter goes
+    /// on playing at whatever the curve last resolved while its knob and its
+    /// face both read 1 kHz -- until somebody touches that knob or reloads
+    /// the song. `restore_base_param` existed for exactly this and was
+    /// reached only by a lane being *deleted*.
+    #[test]
+    fn switching_off_an_automated_pattern_hands_the_knob_back() {
+        let mut project = synth_project(filter_channel(1_000.0));
+        // A second pattern with nothing drawn on it, which is the whole
+        // setup: one pattern cannot stop covering the playhead.
+        project.pattern_lengths.push(DEFAULT_STEPS);
+        project.channels[0].notes.push(Vec::new());
+        project.channels[0].automation.push(Vec::new());
+
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        for (id, tick, value) in [(1u32, 0u32, 1.0f32), (2, 96, 0.0)] {
+            render.apply_command(EngineCommand::UpsertAutomationPoint {
+                pattern: 0,
+                channel: 0,
+                target: CUTOFF,
+                point: mooloop_core::AutomationPoint::new(id, tick, value),
+            });
+        }
+        render.play();
+        render.process_block(128);
+
+        let driven = cutoff_events(&render);
+        assert_eq!(driven.len(), 4, "the lane was not resolving: {driven:?}");
+        assert!(
+            driven.iter().any(|(_, value)| (value - 1_000.0).abs() > 1.0),
+            "the cutoff never left its knob value: {driven:?}"
+        );
+
+        render.apply_command(EngineCommand::SetCurrentPattern(1));
+        render.process_block(128);
+
+        // One event, at the top of the block, carrying the knob value back --
+        // the same shape a route removal produces, and for the same reason.
+        let restored = cutoff_events(&render);
+        assert_eq!(
+            restored.iter().map(|(offset, _)| *offset).collect::<Vec<_>>(),
+            vec![0],
+            "expected exactly one restoring event: {restored:?}"
+        );
+        assert!(
+            (restored[0].1 - 1_000.0).abs() < 1.0,
+            "the knob was not handed back: {restored:?}"
+        );
+    }
+
+    /// The other half of the same rule: a destination that is **still**
+    /// automated after the switch must not be written at all.
+    ///
+    /// The cheap version of this fix -- restore everything the outgoing
+    /// position drove and let the automation pass re-assert it -- passes the
+    /// test above and fails this one. Measured rather than assumed: dropping
+    /// the still-covered guard puts `(0, 1000.0)` in front of the curve's own
+    /// `(0, 19276.6)`, so the two do *not* coalesce and the knob write is not
+    /// silently dropped. It is inaudible, because both land on frame 0 and
+    /// the later one wins -- and it is still a `ParamValue` that says
+    /// something untrue, at an offset every effect in the chain splits its
+    /// block on.
+    #[test]
+    fn switching_between_two_automated_patterns_disturbs_nothing() {
+        let mut project = synth_project(filter_channel(1_000.0));
+        project.pattern_lengths.push(DEFAULT_STEPS);
+        project.channels[0].notes.push(Vec::new());
+        project.channels[0].automation.push(Vec::new());
+
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        for pattern in 0..2u8 {
+            for (id, tick, value) in [(1u32, 0u32, 1.0f32), (2, 96, 0.0)] {
+                render.apply_command(EngineCommand::UpsertAutomationPoint {
+                    pattern,
+                    channel: 0,
+                    target: CUTOFF,
+                    point: mooloop_core::AutomationPoint::new(id, tick, value),
+                });
+            }
+        }
+        render.play();
+        render.process_block(128);
+
+        render.apply_command(EngineCommand::SetCurrentPattern(1));
+        render.process_block(128);
+
+        let driven = cutoff_events(&render);
+        assert_eq!(
+            driven.len(),
+            4,
+            "the incoming lane should still resolve once per control tick: {driven:?}"
+        );
+        assert!(
+            driven.iter().all(|(_, value)| (value - 1_000.0).abs() > 1.0),
+            "a restoring write landed on a destination that is still \
+             automated: {driven:?}"
         );
     }
 

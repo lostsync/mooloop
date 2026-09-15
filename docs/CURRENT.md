@@ -1227,6 +1227,16 @@ land on its own when it starts to matter:
 - Clip automation is per (pattern, channel), lives in the clip that drew it,
   and may address a bus. Two clips automating one destination is not
   prevented; the lowest channel wins at render time.
+- **A lane that stops driving a destination gives the knob back.** Deleting or
+  clearing a lane does it, and so does moving the playhead off it: switching
+  pattern, switching between pattern and song mode, and seeking all hand every
+  destination the outgoing position was driving — and the incoming one is not
+  — back to the value its knob shows. Without that a filter goes on playing at
+  wherever the last curve left it while its face reads something else.
+  **A song-mode clip boundary is the case this does not cover**, because it is
+  not a command: the playhead moves out from under a lane on its own, and the
+  destination latches until something touches it. That one is in
+  `docs/LOOSE_ENDS.md`.
 - **The mixer is latency compensated.** Every device declares the frames it
   adds, the bus tree compiles into a per-producer delay, and each channel and
   bus waits by the difference before it sums — so two channels hitting on the
