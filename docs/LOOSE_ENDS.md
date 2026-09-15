@@ -6,20 +6,26 @@ to start.
 
 Everything here as of **2026-09-06** was re-verified against the tree that
 day, and a second pass on **2026-09-14** re-read about a third of the file --
-enough to find five entries that had stopped being true. Entries added since
-carry their own date, and entries older than the sweep that covered them have
-not been checked against the tree since — the spike list below was still
-claiming thirty-nine unpushed commits on `main` a day after `main` was pushed,
-which is what this paragraph is now careful about.
+enough to find six entries that had stopped being true, or had never been.
+Entries added since carry their own date, and entries older than the sweep
+that covered them have not been checked against the tree since — the spike
+list below was still claiming thirty-nine unpushed commits on `main` a day
+after `main` was pushed, which is what this paragraph is now careful about.
 
-**An entry goes stale two ways and only one of them is loud.** Three of the
-five on 2026-09-14 had been fixed by work that never came back to delete the
+**An entry goes stale three ways and only one of them is loud.** Three of the
+six on 2026-09-14 had been fixed by work that never came back to delete the
 row: the preamp grew the per-band display that the entry beside it had
 *designed*, `Project` grew `pattern_meta`, and `BUFFER_ENGINE.md` grew the
-caveat the entry said it lacked. The other two were never about the tree at
-all -- a screenshot that had been retaken and a branch list that had moved --
-and those are the ones a reader has no way to doubt. So: **check the claim
-before you act on it, and delete the row in the commit that makes it false.**
+caveat the entry said it lacked. Two were never about the tree at all -- a
+screenshot that had been retaken and a branch list that had moved -- and those
+are the ones a reader has no way to doubt.
+
+The sixth is the one worth reading the code for. It described a real
+`continue` skipping a real publish, and the state it produces **cannot be
+reached**: nothing can subscribe to a sampler channel, so a sampler channel
+never enters that branch. An entry can be accurate about the source and wrong
+about the program. So: **check the claim before you act on it, and delete the
+row in the commit that makes it false.**
 
 This is not a roadmap and not a bug list. Everything here was a deliberate
 stopping point rather than an oversight, and none of it blocks the sequence in
