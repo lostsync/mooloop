@@ -3,7 +3,7 @@
 > **Archived 2026-09-14. Do not use as a contract.** A point-in-time review,
 > and every action in its own summary table is now closed: graph-wide latency
 > compensation landed 2026-09-05 (`plans/archive/latency-compensation/`), the
-> session layer was extracted 2026-09-03 (`plans/session-layer-extraction/`),
+> session layer was extracted 2026-09-03 (`plans/archive/session-layer-extraction/`),
 > and the three "no" recommendations were taken as no. Kept for its verdict,
 > which is still the answer if the question is ever reopened: the engine is
 > **barely** divergent from the reference and is **not** worth rebuilding.
@@ -241,7 +241,7 @@ rebuild of both would discard the strongest code in the repository to fix a
 problem located somewhere else.
 
 The measurements below are from this review, before
-`docs/plans/session-layer-extraction/` ran. They are the diagnosis, and are
+`docs/plans/archive/session-layer-extraction/` ran. They are the diagnosis, and are
 left as they were written; what happened next is under "Extraction: done"
 after the recommendation.
 
@@ -286,7 +286,7 @@ them. And its 58 methods divide along an obvious line: `sync_*` / `refresh_*` /
 logic that has no business knowing about a toolkit.
 
 **Recommendation: extract before migrating, and treat the two as separate
-decisions.** `docs/plans/session-layer-extraction/` lifts a toolkit-free session
+decisions.** `docs/plans/archive/session-layer-extraction/` lifts a toolkit-free session
 crate out of `lib.rs`; `docs/plans/egui-view-layer/` builds a view against it.
 The first is worth doing whether or not the second ever happens, because it is
 what makes a 13,411-line file testable and what turns "rewrite the app" into
@@ -303,7 +303,7 @@ longer holds: `Session` owns the plain fields and `UiState` keeps only the
 `Rc<VecModel<...>>` projections of them.
 
 Two things stayed on the view's side deliberately, both recorded with reasons
-in `docs/plans/session-layer-extraction/00-status.md`: `UiState::new` is still
+in `docs/plans/archive/session-layer-extraction/00-status.md`: `UiState::new` is still
 long, but what is left in it is callback registration rather than decisions;
 and the pump's meter polling stayed where it is, because its per-row change
 detection is what keeps the pump cheap.
@@ -319,7 +319,7 @@ should be answered deliberately rather than by drift.
 | Action | Priority | Where |
 | --- | --- | --- |
 | Compile graph-wide latency compensation into the bus plan | **Next infrastructure step** | `docs/AUDIO_ARCHITECTURE.md` step 5 |
-| Extract a toolkit-free session layer from `mooloop-ui/src/lib.rs` | High, and independent of egui | `docs/plans/session-layer-extraction/` |
+| Extract a toolkit-free session layer from `mooloop-ui/src/lib.rs` | High, and independent of egui | `docs/plans/archive/session-layer-extraction/` |
 | Derive `position_ticks` from `frames_played` | With the tempo map, not before | This document, decision 4 |
 | Build an egui view layer | Adam's call; only after the extraction | `docs/plans/egui-view-layer/` |
 | Rebuild the engine | **No** | — |

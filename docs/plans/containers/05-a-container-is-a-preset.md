@@ -7,7 +7,7 @@ lives inside it travels with it.
 
 ## The manifest entry
 
-`docs/plans/preset-system/04` set a condition on having gone device-specific
+`docs/plans/archive/preset-system/04` set a condition on having gone device-specific
 first: that a later, wider preset would **add** a `contains` entry rather than
 redefine `effect_params`. Confirm that still holds when the entry is written —
 `validate_contains` (`project/lib.rs:1014`) refuses an unknown entry outright,

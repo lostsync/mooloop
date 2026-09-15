@@ -22,4 +22,4 @@ went from a 330x108 banner to a 174x148 left column, the seven full-size
 dropped from 3U to 2U -- pinned by `effect_kind_units(EffectKind::Modulation)
 == 2` rather than left to drift. The face was recomposed as an instrument
 panel in the same pass (`87d18f8`, `5013ad9`). The active
-`docs/plans/effects-feedback/` directory is gone with it.
+`docs/plans/archive/effects-feedback/` directory is gone with it.

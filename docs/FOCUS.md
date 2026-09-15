@@ -107,7 +107,7 @@ the device's *shape* that the step below says explicitly not to begin
 unprompted. Neither is blocked on a branch. Until one of them is answered, the
 work that is genuinely available is the listening passes below and the fixes
 further down -- which as of the same day includes
-`docs/plans/control-plane-seams/`, five confirmed defects at the control-plane
+`docs/plans/archive/control-plane-seams/`, five confirmed defects at the control-plane
 boundary that need nobody's ear and nobody's decision.
 
 ### 1. `docs/plans/eq-v2/` — one optional step left, and two listens owed
@@ -191,14 +191,14 @@ sample and loading it again, record why before expanding the device.
 
 ## Waiting on Adam, not on work
 
-Six things are finished or priced and are held up by a judgement rather than
-by a branch. None should be worked around, and as of 2026-09-15 the last two
-of them *are* the sequence rather than sitting beside it.
+Five things are finished or priced and are held up by a judgement rather than
+by a branch (`pane-layout/` was a sixth until 2026-09-15, when it turned out to
+be held up by nothing but the move, and archived). None should be worked
+around, and as of 2026-09-15 the last two of them *are* the sequence rather
+than sitting beside it.
 
 - **`ui-consistency-pass/`** — all six steps landed; it archives once Adam has
   played it.
-- **`pane-layout/`** — done including the two pieces first left out; ready for
-  `archive/` now.
 - **`mono-synth-v2/`** — complete and played, kept out of the archive by one
   finding: Acid's Cutoff knob means 0.41x nominal where the other two models
   mean 0.65–0.68x. The compensation constant is load-bearing rather than a
@@ -208,10 +208,10 @@ of them *are* the sequence rather than sitting beside it.
   deferred to Adam after living with chain containers. Step 02's clipboard is
   more time living with them, not a reason to revisit.
 
-The console's studio listening pass is the fifth, and it is the one that could
+The console's studio listening pass is the fourth, and it is the one that could
 still change something that shipped.
 
-The sixth is the EQ, and it is two things at once: **the listening passes
+The fifth is the EQ, and it is two things at once: **the listening passes
 owed for steps 02 and 03**, and whether step 04 is taken at all. Step 03 is
 the one to listen to first, and it has been measured so the listen is short:
 half a decibel at the resting Q, up to two on a shelf whose Q knob somebody
@@ -229,8 +229,8 @@ rendering the active step; threatens realtime safety or project compatibility;
 or is a small regression in the surface being touched. Record larger adjacent
 work instead of folding it into the current branch.
 
-- **`docs/plans/control-plane-seams/` — all five steps landed 2026-09-15**,
-  and the directory is ready to archive. Five confirmed control-plane defects
+- **`docs/plans/archive/control-plane-seams/` — all five steps landed 2026-09-15**,
+  and the directory archived the same day. Five confirmed control-plane defects
   from an outside architectural review that read the system end to end and
   passed the layering. `00-status.md` has what each step found; three things
   belong here rather than there.

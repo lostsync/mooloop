@@ -5,13 +5,13 @@ Not started, and **not yet decided**. Written 2026-09-02, out of
 
 This plan exists so the decision can be made against real numbers rather than a
 mood. It is deliberately shorter than
-`docs/plans/session-layer-extraction/`, because the honest state is that a
+`docs/plans/archive/session-layer-extraction/`, because the honest state is that a
 detailed plan for the second half would be pretending to know things that the
 spike in step 01 is supposed to find out.
 
 ## Prerequisite, hard
 
-**`docs/plans/session-layer-extraction/` must be finished first.**
+**`docs/plans/archive/session-layer-extraction/` must be finished first.**
 
 Not as a matter of tidiness. Today the application's live model is stored inside
 Slint containers — about a dozen `Rc<VecModel<...>>` fields on `UiState` — and an

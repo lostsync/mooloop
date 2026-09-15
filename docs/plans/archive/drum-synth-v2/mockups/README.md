@@ -9,7 +9,7 @@ are literals and nothing is wired to anything.
 Re-render any of them without building the UI crate:
 
 ```sh
-scripts/slint-sketch --shot docs/plans/drum-synth-v2/mockups/concept-columns.slint
+scripts/slint-sketch --shot docs/plans/archive/drum-synth-v2/mockups/concept-columns.slint
 ```
 
 `docs/OPERATIONS.md` says sketches belong in `$TMPDIR` rather than in the
@@ -60,7 +60,7 @@ screen fit.
 
 This rendering imports the shipped `Ds01DeviceFace` rather than
 reimplementing it, so it cannot drift from what is built: re-run
-`scripts/slint-sketch --shot docs/plans/drum-synth-v2/mockups/concept-pages.slint`
+`scripts/slint-sketch --shot docs/plans/archive/drum-synth-v2/mockups/concept-pages.slint`
 after a layout change and the picture is current.
 
 ## C: columns — superseded
@@ -154,5 +154,5 @@ Kept rather than deleted, because the reason a layout was not chosen is worth
 as much as the one that was — and because B's second fault is the one D had to
 keep avoiding. Pages are not a licence for pages *of knob rows*: a page is a
 few large controls inside modules that share one chrome.
-`docs/plans/poly-synth-v2/mockups/README.md` makes the same argument for
+`docs/plans/archive/poly-synth-v2/mockups/README.md` makes the same argument for
 ML-P8, and it is the same rule.
