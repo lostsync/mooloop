@@ -11504,7 +11504,15 @@ impl AppUi {
                                 apply_sample_references(&mut state.session.channels, sample_references);
                             }
                             state.update_document_title(&window);
-                            window.set_embed_assets(mode == AssetMode::Embedded);
+                            // What the save *delivered*, not what it was
+                            // asked for. A sample the bundle already owns is
+                            // kept there whatever the mode says, so a box
+                            // driven by the mode would go unticked on a song
+                            // whose samples are all still embedded.
+                            window.set_embed_assets(
+                                mode == AssetMode::Embedded
+                                    || state.session.has_embedded_samples(),
+                            );
                             log_info!(
                                 "project",
                                 "song saved: {} ({} warnings, {} repairs)",
@@ -11754,7 +11762,15 @@ impl AppUi {
                                 if is_song {
                                     state.session.bundle_path = Some(path.clone());
                                     state.session.dirty = false;
-                                    window.set_embed_assets(asset_mode == AssetMode::Embedded);
+                                    // The per-sample flags, not the
+                                    // document's mode: a bundle saved
+                                    // `referenced` can still hold every
+                                    // sample, because un-embedding is
+                                    // refused rather than performed.
+                                    window.set_embed_assets(
+                                        asset_mode == AssetMode::Embedded
+                                            || state.session.has_embedded_samples(),
+                                    );
                                 } else {
                                     state.session.dirty = true;
                                     state.session.revision = state.session.revision.wrapping_add(1);

@@ -643,29 +643,24 @@ Recorded so the deferral stays deliberate.
 
 ## Decisions whose reason expired
 
-**A song's embedded samples can never be turned back into references, and
-unticking the box is discarded in silence.** `keep_owned` is true whenever an
-embedded sample already lives inside the bundle, and it skips the
-`AssetMode::Referenced` branch entirely -- so after the first embedded save,
-every later save keeps them embedded whatever the user asked for. The guard
-itself is **necessary**: without it `replace_song_file` would delete the
-sidecar the new reference points at, destroying the only copy. What is wrong
-is everything around it. Unticking "Embed assets" and saving produces no
-warning, no status message and no change. The manifest records `asset_mode =
-"referenced"` beside `embedded = true` on every sample. And reopening sets the
-checkbox from the document-level `asset_mode`, so the box shows *unticked* on
-a bundle whose samples are all embedded, and the state never converges.
-`CURRENT.md`'s "embedded and referenced asset policies are available per save"
-is true only of a song that has never been embedded.
+**A song's embedded samples can never be turned back into references.** The
+guard is **necessary** and is not the problem: without it `replace_song_file`
+would delete the sidecar the new reference points at, destroying the only
+copy. What was wrong was everything around it, and the cheap half of that was
+fixed 2026-09-14. Unticking "Embed assets" and saving now produces a per-sample
+warning -- "sample stays embedded: the bundle holds the only copy of it" --
+instead of no warning, no status message and no change; and the checkbox
+follows the **per-sample flags** rather than the document-level `asset_mode`,
+so a bundle whose samples are all embedded no longer reopens showing the box
+unticked, which is what stopped the state ever converging.
 
-Not small because un-embedding has to mean something -- copy out to where, and
-under whose name. Options: refuse honestly, reporting "N samples stay in the
-bundle; there is no other copy" in the save report's warnings and leaving the
-box showing embedded; make the checkbox follow the *per-sample* flags rather
-than the document-level mode so it at least tells the truth; or implement a
-real un-embed that copies bundle-owned samples out to a chosen folder first,
-which is a new user-facing gesture. The first two together are cheap and
-remove the lie. Found 2026-09-13.
+What is left is that un-embedding does not exist. Doing it for real means
+copying the bundle-owned samples out to a folder the user chooses first, which
+is a new user-facing gesture and a new dialog. Until then the manifest still
+records `asset_mode = "referenced"` beside `embedded = true` on every sample,
+which is now merely redundant rather than a lie nobody is told about, and
+`CURRENT.md` says what a referenced save of an embedded song actually does.
+Found 2026-09-13, made honest 2026-09-14.
 
 **The limiter still has no lookahead, and the code's stated reason is now
 false.** `mooloop-dsp/src/effects/dynamics.rs:391` says "Add lookahead when

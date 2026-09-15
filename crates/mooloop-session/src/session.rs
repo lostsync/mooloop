@@ -1390,6 +1390,19 @@ impl Session {
         depths
     }
 
+    /// Whether any channel's sample lives inside the song's own bundle.
+    ///
+    /// What the Embed Assets checkbox has to follow, because the
+    /// *document-level* `asset_mode` is not what a save can deliver. A sample
+    /// the bundle already owns is kept there whatever the box says -- the
+    /// guard that does it is necessary, since un-embedding without copying
+    /// the bytes out first would destroy the only copy -- so a box driven by
+    /// the mode showed **unticked** on a bundle whose samples are all
+    /// embedded, and the state never converged.
+    pub fn has_embedded_samples(&self) -> bool {
+        self.channels.iter().any(|channel| channel.sample_embedded)
+    }
+
     /// Live modulation offset currently applied to each destination in
     /// `descriptors`, from the last outputs read off the engine.
     pub fn destination_offsets(

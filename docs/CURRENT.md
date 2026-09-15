@@ -646,7 +646,14 @@ land on its own when it starts to matter:
   live UI still owns incremental edits and produces snapshots for these paths.
 - Songs, kits, and channel presets use the v1 bundle contract documented in
   `PROJECT_FORMAT.md`. Saves stage and replace bundles atomically; embedded and
-  referenced asset policies are available per save.
+  referenced asset policies are available per save. **Embedding is one-way**:
+  a sample the bundle already owns stays there whatever the box says, because
+  the bundle holds the only copy of it and writing a reference would delete
+  that copy. A referenced save of an embedded song is refused per sample, in
+  the save report's warnings, and the Embed Assets box goes on showing
+  embedded — it follows the samples rather than the mode, so it tells the
+  truth on reopening. Un-embedding for real would mean choosing a folder to
+  copy the bytes out to, and there is no such gesture.
 - Channel presets are instrument presets for sampler and generated sources;
   sampler presets may carry a referenced or embedded audio file while synth
   presets contain only inspectable parameter state. They are saved and loaded

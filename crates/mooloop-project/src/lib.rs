@@ -610,6 +610,25 @@ fn prepare_song_asset(
     let source = path.clone();
     let keep_owned = *embedded && (source.starts_with(target) || source.starts_with(target_assets));
     let parent = target.parent().expect("validated song parent");
+    // **A sample the bundle already owns cannot be un-embedded, and now says
+    // so.** The guard itself is necessary: without it `replace_song_file`
+    // deletes the sidecar the new reference would point at, destroying the
+    // only copy. What was wrong was the silence -- unticking "Embed assets"
+    // and saving produced no warning, no status message and no change, so
+    // `CURRENT.md`'s "embedded and referenced asset policies are available
+    // per save" was true only of a song that had never been embedded.
+    //
+    // A warning rather than a refusal, because the save itself is correct and
+    // the rest of the document does follow the mode. Un-embedding for real
+    // means copying the bytes out to somewhere the user has chosen, which is
+    // a gesture that does not exist; `docs/LOOSE_ENDS.md` carries it.
+    if mode == AssetMode::Referenced && keep_owned {
+        warnings.push(AssetWarning {
+            channel,
+            path: source.clone(),
+            message: "sample stays embedded: the bundle holds the only copy of it".into(),
+        });
+    }
     if mode == AssetMode::Referenced && !keep_owned {
         if !source.is_file() {
             warnings.push(AssetWarning {
@@ -1703,6 +1722,90 @@ mod tests {
         };
         assert!(*embedded);
         assert!(path.is_file());
+    }
+
+    /// **Unticking "Embed assets" on an already-embedded song says so.**
+    ///
+    /// The guard that keeps the sample in the bundle is necessary: without it
+    /// `replace_song_file` deletes the sidecar the new reference would point
+    /// at, destroying the only copy. What was wrong was everything around it
+    /// -- the save produced no warning, no status message and no change, and
+    /// reopening set the checkbox from the *document-level* mode, so the box
+    /// showed unticked on a bundle whose samples are all embedded and the
+    /// state never converged.
+    ///
+    /// Un-embedding for real means copying the bytes out to somewhere the
+    /// user has chosen, which is a gesture that does not exist. This is the
+    /// honest refusal, which is what `LOOSE_ENDS.md` called the cheap half.
+    #[test]
+    fn unticking_embed_on_an_embedded_song_is_refused_out_loud() {
+        let temp = tempdir().unwrap();
+        let source = temp.path().join("kick.wav");
+        fs::write(&source, b"wav bytes").unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.channels[0]
+            .setup
+            .sampler_state_mut()
+            .unwrap()
+            .sample = SampleReference::File {
+            path: source.clone(),
+            embedded: false,
+        };
+
+        // Embed it, and take back the document the save produced -- which is
+        // where the bundle-owned path lives.
+        assert!(save_song(&bundle, &project, AssetMode::Embedded)
+            .unwrap()
+            .warnings
+            .is_empty());
+        let LoadedDocument::Song(embedded) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected song")
+        };
+
+        // Now untick the box. The sample stays, and the report says why.
+        let report = save_song(&bundle, &embedded, AssetMode::Referenced).unwrap();
+        assert_eq!(report.warnings.len(), 1, "{:?}", report.warnings);
+        assert!(
+            report.warnings[0].message.contains("stays embedded"),
+            "{:?}",
+            report.warnings[0]
+        );
+
+        let LoadedDocument::Song(after) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected song")
+        };
+        let SampleReference::File { path, embedded: still } =
+            &after.channels[0].setup.sampler_state().unwrap().sample
+        else {
+            panic!("expected file sample")
+        };
+        assert!(*still, "the flag stopped saying what the bundle holds");
+        assert!(path.is_file(), "the only copy was deleted: {}", path.display());
+    }
+
+    /// A sample that is *not* in the bundle un-embeds silently, because that
+    /// one really can: the external file is still there to point at. The
+    /// warning above has to be about the impossible case only, or every
+    /// referenced save would carry it.
+    #[test]
+    fn a_referenced_save_of_an_external_sample_says_nothing() {
+        let temp = tempdir().unwrap();
+        let source = temp.path().join("kick.wav");
+        fs::write(&source, b"wav bytes").unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.channels[0]
+            .setup
+            .sampler_state_mut()
+            .unwrap()
+            .sample = SampleReference::File {
+            path: source,
+            embedded: false,
+        };
+
+        let report = save_song(&bundle, &project, AssetMode::Referenced).unwrap();
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
     }
 
     #[test]
