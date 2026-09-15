@@ -12,6 +12,14 @@
 //! `ElementHandle` search API needs a build with `SLINT_EMIT_DEBUG_INFO=1`,
 //! which this workspace only does under the `mcp` feature.
 //!
+//! Where a control reports rather than writes, the owner's half of the loop is
+//! stood in for here -- `on_route_amount_changed` below is
+//! `touch_mlp8_route_amount` with the engine left out -- so what these tests
+//! hold is the widget's half. Every one of them was run against the face as it
+//! stood before the fix, which is the only thing that makes them evidence: the
+//! route-depth test was pointed at the value *field* first and passed there,
+//! because the field is a binding the knob never touches.
+//!
 //! The fourth thing here is `MODULATION.md`'s rule that every legal control
 //! becomes *visibly* assignable when a source is armed, and that an overlay
 //! shows the resulting excursion. A knob gets both from its ring. A network
@@ -50,10 +58,15 @@ const XMOD_CELL_BOX: (u32, u32, u32, u32) = (269, 63, 196, 26);
 const RATE_DIAL: (f32, f32) = (394.0, 138.0);
 const RATE_DIAL_BOX: (u32, u32, u32, u32) = (377, 121, 34, 34);
 
-/// The first route row's depth knob, and the field beside it that shows what
-/// the route holds.
+/// The first route row's depth knob, and its dial alone.
+///
+/// The dial, not the field beside it: the field is a separate binding that
+/// the knob never writes, so it goes on following the row whatever the knob
+/// does to itself and would hide the defect entirely. This test watched the
+/// field first and passed against the unfixed face, which is the whole of
+/// what `ds01_face.rs` says about picking a region.
 const ROUTE_DEPTH_KNOB: (f32, f32) = (794.0, 67.0);
-const ROUTE_DEPTH_FIELD: (u32, u32, u32, u32) = (807, 58, 48, 18);
+const ROUTE_DEPTH_DIAL: (u32, u32, u32, u32) = (785, 58, 18, 18);
 
 /// A drag of this many pixels is this much of a parameter's travel:
 /// `ParameterKnob` spends its whole range over 150px.
@@ -132,6 +145,20 @@ fn region(harness: &MlP8DeviceDragHarness, (x, y, w, h): (u32, u32, u32, u32)) -
     out
 }
 
+/// Whether a region holds a control rather than empty page.
+///
+/// Every comparison below concludes something from two renders being equal or
+/// unequal, and a region that drifted off its control would answer both
+/// questions with background. Asked of the *first* render of each, so a moved
+/// layout fails saying so rather than passing on a coincidence.
+fn drawn_on(pixels: &[u8]) -> bool {
+    pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|pixel| pixel[..3] != pixels[..3])
+}
+
 /// A network cell is a horizontal slider, so it answers a horizontal drag.
 ///
 /// Both halves matter. The cell is seven times wider than it is tall and its
@@ -191,6 +218,11 @@ fn an_armed_source_reaches_a_network_cell_and_the_cell_shows_it() {
     });
 
     let idle = region(&harness, XMOD_CELL_BOX);
+    assert!(
+        drawn_on(&idle),
+        "nothing is drawn where the cell should be, so this test is about the \
+         wrong pixels"
+    );
     harness.set_modulation_armed(true);
     let armed = region(&harness, XMOD_CELL_BOX);
     assert_ne!(
@@ -250,6 +282,11 @@ fn a_modulated_network_cell_draws_the_offset() {
     harness.set_xmod12(0.0);
 
     let still = region(&harness, XMOD_CELL_BOX);
+    assert!(
+        drawn_on(&still),
+        "nothing is drawn where the cell should be, so this test is about the \
+         wrong pixels"
+    );
     set_slot(
         &harness.get_modulation_offsets(),
         mlp8::PARAM_XMOD_BASE,
@@ -290,6 +327,11 @@ fn the_lfo_rate_dial_changes_the_rate_and_keeps_following_it() {
 
     harness.set_lfo_rate_hz(0.05);
     let slow = region(&harness, RATE_DIAL_BOX);
+    assert!(
+        drawn_on(&slow),
+        "nothing is drawn where the rate dial should be, so this test is about \
+         the wrong pixels"
+    );
     harness.set_lfo_rate_hz(80.0);
     let fast = region(&harness, RATE_DIAL_BOX);
     assert_ne!(
@@ -300,9 +342,16 @@ fn the_lfo_rate_dial_changes_the_rate_and_keeps_following_it() {
 }
 
 /// A route row's depth is a field of a model row, so the knob reports and the
-/// owner writes. Without the owner's half the number under the knob stays on
-/// whatever the list said when the drag began, until something unrelated
-/// rebuilds the list.
+/// owner writes.
+///
+/// Both halves are needed and only one of them is asserted here. The widget's
+/// half is: a knob that wrote its own value would drop the binding onto
+/// `route.amount` and stop following the row -- that is what the dial
+/// comparison at the end catches. The owner's half is `touch_mlp8_route_amount`,
+/// stood in for below by the handler this test installs, exactly as
+/// `ds01_face.rs` stands in for `touch_ds01_param`; without it the knob moves
+/// nothing at all, which is why the drag is asserted to have reached the
+/// route before anything else is concluded.
 #[test]
 fn a_route_depth_field_follows_the_route_it_was_dragged_on() {
     let harness = harness();
@@ -342,7 +391,12 @@ fn a_route_depth_field_follows_the_route_it_was_dragged_on() {
         owned.set_row_data(index, row);
     });
 
-    let parked = region(&harness, ROUTE_DEPTH_FIELD);
+    let parked = region(&harness, ROUTE_DEPTH_DIAL);
+    assert!(
+        drawn_on(&parked),
+        "nothing is drawn where the depth dial should be, so this test is \
+         about the wrong pixels"
+    );
     drag(
         harness.window(),
         ROUTE_DEPTH_KNOB,
@@ -353,21 +407,22 @@ fn a_route_depth_field_follows_the_route_it_was_dragged_on() {
         authored > 10.0,
         "dragging the depth knob upwards left the route at {authored}%"
     );
-    let dragged = region(&harness, ROUTE_DEPTH_FIELD);
+    let dragged = region(&harness, ROUTE_DEPTH_DIAL);
     assert_ne!(
         parked, dragged,
-        "the depth a drag just authored is not the number printed beside it"
+        "the drag did not reach the dial, so the rest of this test proves nothing"
     );
 
-    // And the row is still the one place it lives: a depth set from outside
-    // -- an undo, a preset, the other end of the same route -- has to reach
-    // the field the drag went through.
+    // And the row is still the one place the depth lives: a depth set from
+    // outside -- an undo, a preset, the other end of the same route -- has to
+    // reach the dial the drag went through.
     let mut row = rows.row_data(0).unwrap();
     row.amount = -88.0;
     rows.set_row_data(0, row);
     assert_ne!(
         dragged,
-        region(&harness, ROUTE_DEPTH_FIELD),
-        "the field stopped following its row once it had been dragged"
+        region(&harness, ROUTE_DEPTH_DIAL),
+        "the dial drew the same thing at +{authored}% and -88%, so it stopped \
+         following its row once it had been dragged"
     );
 }
