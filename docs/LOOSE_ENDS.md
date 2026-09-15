@@ -490,15 +490,6 @@ the guard in `add_playlist_placement`; or drop the covered placements and
 report them, which is the only one that also needs a repair path on load.
 Found 2026-09-12.
 
-**Snap-all-markers and the four trim/loop markers are not undoable**, where
-the five slice verbs beside them now are. `add_slice`, `move_slice`,
-`remove_slice`, `divide_slices` and `clear_slices` record from the *caller*
-(`lib.rs:8840`-`8922`, with a gesture token for drags), which is why this
-entry used to say none of them did: it looked for history in `sampler.rs` and
-the snapshot is taken one level up. `snap_all_markers` (`lib.rs:8545`) and
-`wire_marker_param!` (`lib.rs:8410`-`8456`) are still on the cheap path.
-Corrected 2026-09-13.
-
 **Send edits are not undoable, because routing never was.** `add_send`,
 `remove_send`, `set_send_level`, `set_send_tap` and `set_send_enabled` in
 `mooloop-session/src/mixer.rs` mark the document dirty and return an

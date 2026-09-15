@@ -9189,11 +9189,13 @@ impl AppUi {
             ($on:ident, $marker:expr) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let commands = command_state.clone();
                 let window_weak = window.as_weak();
                 window.$on(move |v: f32| {
                     let Some(window) = window_weak.upgrade() else {
                         return;
                     };
+                    let before = project_snapshot(&st.borrow(), &window);
                     let marker = $marker;
                     let (value, status) = {
                         let mut st = st.borrow_mut();
@@ -9225,6 +9227,7 @@ impl AppUi {
                     if let Some(status) = status {
                         window.set_status_message(status.into());
                     }
+                    record_project_history(&commands, before, &st, &window, "Marker moved");
                 });
             }};
         }
@@ -9316,11 +9319,13 @@ impl AppUi {
             // its neighbours' already-resolved positions.
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let commands = command_state.clone();
             let window_weak = window.as_weak();
             window.on_snap_markers_clicked(move || {
                 let Some(window) = window_weak.upgrade() else {
                     return;
                 };
+                let before = project_snapshot(&st.borrow(), &window);
                 let Some(snapped) = st.borrow_mut().session.snap_all_markers() else {
                     window.set_status_message("No sample to snap".into());
                     return;
@@ -9336,6 +9341,9 @@ impl AppUi {
                     )
                     .into(),
                 );
+                if snapped.moved > 0 {
+                    record_project_history(&commands, before, &st, &window, "Markers snapped");
+                }
             });
         }
         wire_unit_param!(on_filter_cutoff_changed, filter_cutoff);
@@ -9553,6 +9561,23 @@ impl AppUi {
         {
             let commands = command_state.clone();
             window.on_slice_drag_finished(move || {
+                commands.borrow_mut().gesture = None;
+            });
+        }
+        // The four trim/loop markers get the same bracket: `wire_marker_param!`
+        // already records on every drag frame, and without a shared gesture
+        // token each frame was its own undo step.
+        {
+            let commands = command_state.clone();
+            window.on_marker_drag_started(move || {
+                let mut commands = commands.borrow_mut();
+                commands.next_gesture = commands.next_gesture.wrapping_add(1);
+                commands.gesture = Some(commands.next_gesture);
+            });
+        }
+        {
+            let commands = command_state.clone();
+            window.on_marker_drag_finished(move || {
                 commands.borrow_mut().gesture = None;
             });
         }

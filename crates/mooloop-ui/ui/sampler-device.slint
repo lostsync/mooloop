@@ -19,6 +19,8 @@ component SampleMarker inherits Rectangle {
     in property <length> editor-width;
     in property <bool> label-at-bottom;
     callback moved(float);
+    callback drag-started();
+    callback drag-finished();
 
     width: 1px;
     background: root.marker-color;
@@ -41,8 +43,13 @@ component SampleMarker inherits Rectangle {
         width: 13px;
         mouse-cursor: ew-resize;
         pointer-event(e) => {
-            if (e.kind == PointerEventKind.down || (e.kind == PointerEventKind.move && self.pressed)) {
+            if (e.kind == PointerEventKind.down) {
+                root.drag-started();
                 root.moved(clamp((root.x + self.x + self.mouse-x) / max(1px, root.editor-width), 0, 1));
+            } else if (e.kind == PointerEventKind.move && self.pressed) {
+                root.moved(clamp((root.x + self.x + self.mouse-x) / max(1px, root.editor-width), 0, 1));
+            } else if (e.kind == PointerEventKind.up) {
+                root.drag-finished();
             }
         }
     }
@@ -338,6 +345,11 @@ export component SamplerDeviceFace inherits Rectangle {
     // undo entry, the way the piano roll's gestures already do.
     callback slice-drag-started();
     callback slice-drag-finished();
+    // Same bracket for the four trim/loop markers -- one shared pair rather
+    // than one per marker, since a drag is a drag whichever of the four it
+    // moves.
+    callback marker-drag-started();
+    callback marker-drag-finished();
     callback commit-clicked();
     callback revert-clicked();
 
@@ -511,6 +523,8 @@ export component SamplerDeviceFace inherits Rectangle {
                         root.start-pos = min(abs, root.end-pos - 0.001); root.start-pos-changed(root.start-pos);
                         if (root.loop-start < root.start-pos) { root.loop-start = root.start-pos; root.loop-start-changed(root.loop-start); }
                     }
+                    drag-started => { root.marker-drag-started(); }
+                    drag-finished => { root.marker-drag-finished(); }
                 }
                 SampleMarker {
                     x: clamp(root.to-view(root.end-pos), 0, 1) * (parent.width - 1px); height: parent.height;
@@ -521,6 +535,8 @@ export component SamplerDeviceFace inherits Rectangle {
                         root.end-pos = max(abs, root.start-pos + 0.001); root.end-pos-changed(root.end-pos);
                         if (root.loop-end > root.end-pos) { root.loop-end = root.end-pos; root.loop-end-changed(root.loop-end); }
                     }
+                    drag-started => { root.marker-drag-started(); }
+                    drag-finished => { root.marker-drag-finished(); }
                 }
                 SampleMarker {
                     x: clamp(root.to-view(root.loop-start), 0, 1) * (parent.width - 1px); height: parent.height;
@@ -530,6 +546,8 @@ export component SamplerDeviceFace inherits Rectangle {
                         let abs = root.waveform-view-offset + v * root.waveform-view-visible-fraction;
                         root.loop-start = clamp(abs, root.start-pos, root.loop-end - 0.001); root.loop-start-changed(root.loop-start);
                     }
+                    drag-started => { root.marker-drag-started(); }
+                    drag-finished => { root.marker-drag-finished(); }
                 }
                 SampleMarker {
                     x: clamp(root.to-view(root.loop-end), 0, 1) * (parent.width - 1px); height: parent.height;
@@ -539,6 +557,8 @@ export component SamplerDeviceFace inherits Rectangle {
                         let abs = root.waveform-view-offset + v * root.waveform-view-visible-fraction;
                         root.loop-end = clamp(abs, root.loop-start + 0.001, root.end-pos); root.loop-end-changed(root.loop-end);
                     }
+                    drag-started => { root.marker-drag-started(); }
+                    drag-finished => { root.marker-drag-finished(); }
                 }
                 // Last, so a handle sitting under a trim marker is the one
                 // the pointer finds: the trim markers are two fixed points a

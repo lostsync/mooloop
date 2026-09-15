@@ -1698,6 +1698,8 @@ export component MainWindow inherits Window {
     callback slices-cleared();
     callback slice-drag-started();
     callback slice-drag-finished();
+    callback marker-drag-started();
+    callback marker-drag-finished();
     callback commit-clicked();
     callback revert-clicked();
     callback voice-mode-changed(int);
@@ -3829,6 +3831,8 @@ export component MainWindow inherits Window {
                                                 slices-cleared() => { root.slices-cleared(); }
                                                 slice-drag-started() => { root.slice-drag-started(); }
                                                 slice-drag-finished() => { root.slice-drag-finished(); }
+                                                marker-drag-started() => { root.marker-drag-started(); }
+                                                marker-drag-finished() => { root.marker-drag-finished(); }
                                                 commit-clicked() => { root.commit-clicked(); }
                                                 revert-clicked() => { root.revert-clicked(); }
                                                 voice-mode-changed(v) => { root.voice-mode-changed(v); }
