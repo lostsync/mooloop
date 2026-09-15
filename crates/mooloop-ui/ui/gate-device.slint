@@ -66,7 +66,7 @@ export component GateDeviceFace inherits EffectDeviceShell {
                 tooltip: "Level the gate opens at";
                 value <=> root.threshold;
                 default-value: 0.5;
-                value-text: round(root.threshold-db) + " dB";
+                value-text: GainMath.format-plain-db(root.threshold-db) + " dB";
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[0];
                 modulation-depth: root.modulation-depths[0];
@@ -138,7 +138,7 @@ export component GateDeviceFace inherits EffectDeviceShell {
                 tooltip: "Attenuation while shut";
                 value <=> root.range;
                 default-value: 0.0;
-                value-text: round(root.range-db) + " dB";
+                value-text: GainMath.format-plain-db(root.range-db) + " dB";
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[4];
                 modulation-depth: root.modulation-depths[4];

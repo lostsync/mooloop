@@ -1,4 +1,5 @@
 import { DisplayPrefs, Theme } from "theme.slint";
+import { GainMath } from "gain.slint";
 import { DraggablePoint } from "controls.slint";
 
 export component SampleTrace inherits Rectangle {
@@ -675,7 +676,7 @@ export component DynamicsCurveDisplay inherits Rectangle {
         x: 4px;
         y: 2px;
         z: 2;
-        text: "GR -" + round(root.reduction-db * 10) / 10 + " dB";
+        text: "GR -" + GainMath.format-plain-db(root.reduction-db) + " dB";
         font-size: 9px;
         color: Theme.warning.with-alpha(0.85);
     }

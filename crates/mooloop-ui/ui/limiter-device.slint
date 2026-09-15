@@ -60,7 +60,7 @@ export component LimiterDeviceFace inherits EffectDeviceShell {
                 tooltip: "Level nothing is allowed past";
                 value <=> root.ceiling;
                 default-value: 0.9875;
-                value-text: round(root.ceiling-db * 10) / 10 + " dB";
+                value-text: GainMath.format-plain-db(root.ceiling-db) + " dB";
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[0];
                 modulation-depth: root.modulation-depths[0];

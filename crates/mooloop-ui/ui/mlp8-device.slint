@@ -409,7 +409,7 @@ component OscEditor inherits Rectangle {
                 label: "LEVEL"; tooltip: "Mix level";
                 param: root.base + 3;
                 value <=> root.level; minimum: 0; maximum: 1; default-value: 0;
-                display-text: root.level <= 0 ? "-inf" : round(GainMath.linear-to-db(root.level) * 10) / 10 + " dB";
+                display-text: GainMath.format-db(GainMath.linear-to-db(root.level));
                 modulation-armed: root.modulation-armed;
                 depths: root.depths; allowed: root.allowed; offsets: root.offsets; route-counts: root.route-counts;
                 changed(v) => { root.level-changed(v); }
@@ -690,7 +690,7 @@ export component MlP8DeviceFace inherits Rectangle {
                             label: "VOLUME"; tooltip: "Device output level";
                             param: 69;
                             value <=> root.master-volume; minimum: 0; maximum: 1; default-value: 1;
-                            display-text: root.master-volume <= 0 ? "-inf" : round(GainMath.linear-to-db(root.master-volume) * 10) / 10 + " dB";
+                            display-text: GainMath.format-db(GainMath.linear-to-db(root.master-volume));
                             modulation-armed: root.modulation-armed;
                             depths: root.modulation-depths; allowed: root.modulation-allowed;
                             offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;

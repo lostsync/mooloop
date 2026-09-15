@@ -1122,18 +1122,6 @@ test. **A disabled test does not fail; it stops existing**, and `dead_code`
 was the only thing that could have said so. When clippy is red anywhere,
 nothing downstream of it is being checked at all.
 
-**Six dB readouts still round for themselves.** `GainMath.format-db` now
-covers every readout that is a *gain*, but six sites spell their own number
-because they are not gains and the shared formatter's signed, `-inf`-floored
-output would misreport them: a `+` on a knee width or a gate range is wrong,
-and `±0.0 dB` on a limiter ceiling parked at full scale reads oddly.
-`compressor-device.slint:70,142`, `gate-device.slint:68,140`,
-`limiter-device.slint:62`, `device-displays.slint:545`. Three of them use
-`round(x * 10) / 10`, which drops the tenth on a whole value — the same
-width-jitter this pass took out of `format-db` itself. What is missing is an
-unsigned one-decimal formatter to sit beside `format-db`; that is a decision
-about the dB vocabulary rather than a typo, which is why it was left.
-
 **The division list is spelled three times, and all three are now checked.**
 `main.slint:820`'s `snap-ticks(index)` gives eleven divisions in ticks,
 `mooloop-ui`'s `MUSICAL_DIVISIONS` gives the same eleven with their names, and

@@ -199,6 +199,15 @@ Three consequences worth stating, because each one is a decision:
   (Slint: `GainMath.format-db`): `-inf`, `±0.0 dB`, `+3.0 dB`, `-12.4 dB`.
   The tooltip carries the value; explanatory text belongs in the status
   bar.
+- **A dB that is not a gain reads through `GainMath.format-plain-db`**:
+  `-24.0`, `0.0`, `6.0`, and the unit appended by the caller. A threshold, a
+  knee width, a gate's range and a limiter ceiling are settings rather than
+  levels, so the `+` and the `-inf` floor would misreport them — but they
+  still owe the reader one decimal place at a fixed width. Neither form is
+  ever spelled `round(x * 10) / 10` in markup, because Slint drops a trailing
+  zero and the field then changes width as the knob moves;
+  `no_db_readout_rounds_for_itself` in `gain_slint_agreement.rs` is what
+  holds that.
 - Blend controls (wet/dry, per-effect `mix`) are ratios, stay in percent,
   and are deliberately not gains.
 
