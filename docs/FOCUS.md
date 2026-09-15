@@ -1,7 +1,10 @@
 # Focus
 
 Status: active working sequence, rewritten 2026-09-12, amended 2026-09-14 when
-`interface-iteration/` closed and its step left the sequence. The previous
+`interface-iteration/` closed and its step left the sequence, and again on
+2026-09-15 when `eq-v2/` came down to one optional step and its section was
+cut back to what is live. That cut is this document's own rule about itself
+being applied: three closed steps had left section 1 mostly archaeology. The previous
 version was written 2026-09-05 and amended 2026-09-07 and 2026-09-08; it was
 replaced rather than amended again, because the mixer it described was not the
 mixer that exists and the work it parked included a feature that shipped.
@@ -94,62 +97,59 @@ A pane that shows what a menu already showed is not progress either.
 ## The sequence
 
 Set by Adam on 2026-09-12: finish the interface iteration, then the EQ, then
-Buffer. The first of those closed on 2026-09-14, so the EQ is the live step.
+Buffer. The interface iteration closed on 2026-09-14 and the EQ on 2026-09-15
+but for one optional step.
 
-### 1. `docs/plans/eq-v2/` — the parameter model first, the EQ second
+**As of 2026-09-15 the sequence is waiting on Adam at both remaining points**,
+and that is a state worth naming rather than working around. The EQ's step 04
+is a taste question and wants his ear; Buffer's first move is a question about
+the device's *shape* that the step below says explicitly not to begin
+unprompted. Neither is blocked on a branch. Until one of them is answered, the
+work that is genuinely available is the listening passes below and the fixes
+further down -- which as of the same day includes
+`docs/plans/control-plane-seams/`, five confirmed defects at the control-plane
+boundary that need nobody's ear and nobody's decision.
 
-Written 2026-09-12, nothing landed. It came out of fixing one bug — the EQ's
-Shape control was two settings of different arity behind one automatable id —
-and out of Adam's question about what that implied.
+### 1. `docs/plans/eq-v2/` — one optional step left, and two listens owed
 
-**The argument, which is bigger than the EQ.** mooloop intends to host CLAP. A
-CLAP plugin hands the host N independent parameters, each with a stable id,
-each individually automatable, and no context; there is no way to say "the
-selected band's frequency" to a plugin. The EQ is built around exactly that
-idea — six parameters cover seven bands and two pass filters, resolved through
-`selected_target` — so **it is the one native device whose parameter model a
-plugin host could not express.** `EQ_PARAM_TARGET` was itself automatable, and
-a lane on it changed which band every other EQ lane referred to. And the
-codebase already does it the other way four times: the strip's EQ, DS-01,
-ML-P8 and the modulator modules are all per-band or per-module.
+**Steps 01, 02 and 03 landed on 2026-09-14 and 2026-09-15.** Every EQ band and
+both pass filters carry their own stable ids; a shelf's Q knob designs its
+slope instead of being ignored; and the response plot is the bank's own
+coefficients evaluated rather than a shape drawn to resemble them. Read
+`eq-v2/00-status.md` for what each one found — this document is not where that
+belongs.
 
-**Step 01 was the only step the argument forced, and it landed 2026-09-14.**
-50 descriptors where there were seven, none of them meaning "the selected
-target's". It was a cheap rehearsal for the same instance-scoped-parameters
-problem, on a device whose behaviour was already understood, and the answer it
-gave is worth carrying into plugin work: **the face did not have to change.**
-A face showing one band at a time is right and always was; what was wrong was
-that the *parameter space* was shaped like the face. Resolving the selection
-one layer earlier — `EqParams::id_for_selected`, one branch in
-`Session::set_effect_param` — left `eq-device.slint` and `main.slint`
-untouched.
+The one thing worth carrying out of it, because it is about the next device
+and not this one: **the face did not have to change.** The EQ's parameter
+space was shaped like its face, and resolving the selection one layer earlier
+left the markup untouched. That is the answer to the question the plan was
+written around — mooloop intends to host CLAP, a plugin's parameters are N
+independent ids with no context, and the EQ was the one native device whose
+model could not be expressed that way. What it did *not* settle is that
+`EffectKind::descriptors()` is a table per **kind** while a plugin's
+parameters belong to an **instance**; that crossing is `SCOPE.md` §"the four
+things standing between here and CLAP", item 1.
 
-Note what it did *not* settle — `EffectKind::descriptors()` is a table per
-*kind*, and a plugin's parameters belong to an instance. That crossing is real
-and is not this plan; it is `SCOPE.md` §"the four things standing between here
-and CLAP", item 1.
+**What is left is step 04, it is optional, and it is Adam's call.** It is the
+measured character from five reference EQs — the only step that changes how
+the device sounds when nobody asked it to.
 
-**Step 03 landed 2026-09-14** and corrected this paragraph on the way past.
-A shelf ignored its Q in the DSP -- so a band's Q knob did nothing whatever
-while that band was a shelf -- and the fix is `Biquad::eq_band`, one function
-the channel strip's bank calls too, which also deleted a private copy of
-`eq_effective_q` that `effects::eq` had been running instead of the core law.
-**It changes how an existing shelf boost sounds**, which the sentence below
-said only step 04 would: the two shelf forms agree on a flat shelf and nothing
-else. A default EQ is unaffected, because both its shelves rest at 0 dB. A song
-that boosted one is not, and that wants a listening pass.
-
-Step 02 is what is left of "an EQ that is merely better", and its faults were
-confirmed against the source rather than reported from use: the pass filters
-are absent from the response plot while their data is *already being sent* to
-it, and the plot draws shelves at a fixed exponent -- which matters more now
-that a shelf has a slope to draw. Step 04 is the measured character from five
-reference EQs and is optional.
+**Two listening passes are owed before it, and they are the live work here --
+but they are smaller than they were written up as.** Step 03's change was
+measured on 2026-09-15 rather than left as "it sounds different": at the Q both
+shelves rest at, it peaks at **0.45 dB**, it pivots about the corner rather
+than moving the shelf, and it is gone three octaves out. The change that is
+worth hearing is on shelves whose **Q knob is away from 0.707** -- up to 1.9 dB
+-- which is exactly the knob that did nothing before step 03, so the patches
+affected are the ones where somebody tried to use it and gave up.
+`eq-v2/00-status.md` has the table and says where to listen. Step 02 changed
+nothing audible and changed what the picture *claims*, which wants a look with
+a patch moving.
 
 Done when: ~~every EQ band and pass filter has its own stable ids, a lane on a
 band means one band forever~~ (2026-09-14), and `eq-v2/00-status.md` says which
-of 02 to 04 were taken. 03 landed 2026-09-14; **02 and 04 are what is left**,
-and 04 is optional and wants Adam's ear.
+of 02 to 04 were taken. It does: 02 and 03 are in, and **04 is the only open
+question, for Adam's ear.**
 
 ### 2. Turn Buffer into a composition workflow
 
@@ -175,8 +175,13 @@ insert model, so **do not treat that document as settled when this step
 starts**: ask first, and do not begin the redesign unprompted.
 
 One piece of Stage 1 is still unverified and is not a design question: its
-acceptance test 8 — no allocations or locks in the callback — needs an
-allocation-tracking harness rather than a reading of the code.
+acceptance test 8 — no allocations or locks in the callback. **The harness it
+was waiting for exists as of 2026-09-15** (`control-plane-seams/04`): it is
+`CountingAllocator::allocations()` in `mooloop-engine`, and it was three lines
+on an allocator that crate had installed all along. What is left is coverage —
+one block on the preview path is measured, the Buffer operations are not, and
+the locks half is not measured at all. That is writing tests, not building an
+instrument.
 
 Done when: a project can generate or load sound, capture it continuously at a
 chosen insert point, sequence an audible jump/reverse/repeat transformation,
@@ -186,8 +191,9 @@ sample and loading it again, record why before expanding the device.
 
 ## Waiting on Adam, not on work
 
-Four things are finished or priced and are held up by a judgement rather than
-by a branch. None of them is a step above, and none should be worked around.
+Six things are finished or priced and are held up by a judgement rather than
+by a branch. None should be worked around, and as of 2026-09-15 the last two
+of them *are* the sequence rather than sitting beside it.
 
 - **`ui-consistency-pass/`** — all six steps landed; it archives once Adam has
   played it.
@@ -205,6 +211,17 @@ by a branch. None of them is a step above, and none should be worked around.
 The console's studio listening pass is the fifth, and it is the one that could
 still change something that shipped.
 
+The sixth is the EQ, and it is two things at once: **the listening passes
+owed for steps 02 and 03**, and whether step 04 is taken at all. Step 03 is
+the one to listen to first, and it has been measured so the listen is short:
+half a decibel at the resting Q, up to two on a shelf whose Q knob somebody
+moved, all of it within an octave or two of the corner.
+
+Adam, if you are reading this list and want the sequence moving again, the
+two answers that unblock the most are **whether the EQ's step 04 is worth
+having**, and **what shape Buffer should be** -- `BUFFER_ENGINE.md` still
+specifies the insert model you said on 2026-08-30 was partly the wrong call.
+
 ## Fixes that may interrupt the sequence
 
 Take a fix immediately when it blocks hearing, playing, saving, loading, or
@@ -212,15 +229,50 @@ rendering the active step; threatens realtime safety or project compatibility;
 or is a small regression in the surface being touched. Record larger adjacent
 work instead of folding it into the current branch.
 
+- **`docs/plans/control-plane-seams/` — all five steps landed 2026-09-15**,
+  and the directory is ready to archive. Five confirmed control-plane defects
+  from an outside architectural review that read the system end to end and
+  passed the layering. `00-status.md` has what each step found; three things
+  belong here rather than there.
+
+  **The allocation harness this document has been asking for since
+  `buffer-implementation/` Stage 1 came out of step 04**, and it was three
+  lines on an allocator `mooloop-engine` already had. See the amended entry
+  above and `LOOSE_ENDS.md`.
+
+  **Two of the five could not be given the test their step specified.** Both
+  wanted to drive an `EngineHandle`, and one cannot be built without opening
+  an audio driver — nothing in the workspace had ever constructed one in a
+  test, which is some of why defects this mechanical survived. Step 01 grew a
+  `CommandSink` trait so a refusal is reachable; step 03 could not, and put
+  the guarantee in the signature instead. **That gap is worth a decision
+  sometime**: a driver-free `EngineHandle` would make the control-plane
+  boundary testable as a whole, and it is the thing standing between these
+  fixes and a test that exercises the actual seam.
+
+  **Step 03 turned up a live defect nobody was looking for.** A project old
+  enough to carry a legacy `Builtin` sample reference opened with that channel
+  silent — the install published the default kick and a republication four
+  lines later cleared it — while its name, waveform and duration all described
+  a kick.
+
+  The review's sixth finding, that the UI/session seam is becoming a god
+  layer, is deliberately **not** a step; it is a direction in that plan's
+  `README.md`, and step 01 is a down payment on it either way.
 - **The sampler's stretching-polyphony cap is not enforced anywhere.**
   `StretchPool::new` builds a reader for all sixteen voices at 100 KB each —
   1.6 MB a stretching channel against 401 KB for four — although the contract
   in #13 names four. Sizing the pool to `polyphony` is not free: it arrives on
   the audio thread, so voices above the old size would silently stop
   stretching when it was raised.
-- **`poly-v1-mono-mode/` is one step and unblocks a deletion.** It is the only
-  thing keeping `DeviceKind::MonoSynth` alive, and that deletion is what lets
-  `MlM1` take the plain name. The held-note stack it needs already exists.
+- ~~**`poly-v1-mono-mode/` is one step and unblocks a deletion.**~~ **Taken
+  2026-09-15.** The v1 poly has a mono mode -- a held-note stack, a note
+  priority, and a Retrig/Legato switch, on the three ids reserved for it -- so
+  `DeviceKind::MonoSynth` is deletable and `MlM1` can take the plain name. The
+  migration itself is the next branch and is deliberately not that one, and it
+  wants a listen before it opens: the acceptance clause the step file ends on
+  is that a v1 mono patch reproduces closely enough for the migration to be
+  mechanical, and that has been argued rather than played.
 - **`from_index` answers out-of-range input two different ways**, depending on
   which enum is asked: the `ALL`-table convention clamps to the nearest end,
   the hand-written `match` convention falls through to variant 0. The input is

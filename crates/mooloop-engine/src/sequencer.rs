@@ -352,6 +352,74 @@ impl Sequencer {
         }
     }
 
+    /// Which pattern the pattern-mode playhead is in.
+    pub fn current_pattern(&self) -> usize {
+        self.current
+    }
+
+    /// The `ordinal`-th pattern covering a position, for a caller that has to
+    /// ask about a position it has already left.
+    ///
+    /// Takes the mode, the pattern-mode selection and the tick rather than
+    /// reading its own three, because the caller is
+    /// `RenderState::restore_lanes_left_behind`, which asks *after* applying
+    /// the command that moved the playhead: the outgoing coverage is what has
+    /// to hand its destinations back.
+    ///
+    /// Indexed rather than returning an iterator for the same reason
+    /// [`Self::pattern_lane_destination`] is: the caller holds `&mut
+    /// RenderState` across each answer.
+    pub fn covering_pattern_at(
+        &self,
+        mode: PlaybackMode,
+        current: usize,
+        song_tick: f64,
+        ordinal: usize,
+    ) -> Option<usize> {
+        match mode {
+            PlaybackMode::Pattern => {
+                (ordinal == 0 && current < self.active_patterns).then_some(current)
+            }
+            PlaybackMode::Song => {
+                let position = wrap_tick(song_tick, self.song_length_ticks());
+                self.playlist
+                    .iter()
+                    .filter(|placement| {
+                        let index = placement.pattern as usize;
+                        if index >= self.active_patterns {
+                            return false;
+                        }
+                        let start = placement.start_tick;
+                        let length = self.patterns[index].length_ticks();
+                        position >= start as f64
+                            && position < start.saturating_add(length) as f64
+                    })
+                    .nth(ordinal)
+                    .map(|placement| placement.pattern as usize)
+            }
+        }
+    }
+
+    /// The destination of one lane of one channel of `pattern`, by position.
+    ///
+    /// An empty lane answers `None`, matching the filter
+    /// [`Self::automation_lane_at`] applies: a lane that was opened and then
+    /// cleared drives nothing, so it has nothing to hand back either.
+    pub fn pattern_lane_destination(
+        &self,
+        pattern: usize,
+        channel: usize,
+        lane: usize,
+    ) -> Option<ParamAddr> {
+        let lane = self
+            .patterns
+            .get(pattern)?
+            .channel(channel)?
+            .lanes()
+            .get(lane)?;
+        (!lane.is_empty()).then_some(lane.target)
+    }
+
     /// Whether anything under the playhead could resolve a lane at all.
     ///
     /// [`Self::automation_lane_at`] answers one destination, and the engine

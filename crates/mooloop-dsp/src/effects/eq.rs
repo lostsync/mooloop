@@ -28,7 +28,7 @@
 //! here for a fortnight, so a fix to the shared RBJ primitive could silently
 //! miss the only EQ that needed it.
 
-use mooloop_core::{EqBand, EqParams, EQ_MAX_BANDS};
+use mooloop_core::{eq_plot_frequency, EqBand, EqParams, EQ_MAX_BANDS};
 
 use crate::biquad::Biquad;
 use crate::bus::StereoBus;
@@ -40,7 +40,7 @@ const PASS_STAGES: usize = 6;
 
 /// Every stage the bank can hold: seven bands, then a high-pass and a
 /// low-pass of up to six stages each.
-const STAGES: usize = EQ_MAX_BANDS + PASS_STAGES * 2;
+pub const STAGES: usize = EQ_MAX_BANDS + PASS_STAGES * 2;
 
 pub struct EqEffect {
     params: EqParams,
@@ -76,74 +76,9 @@ impl EqEffect {
         effect
     }
 
-    /// One band's coefficients, from the one place those laws live.
-    ///
-    /// **A shelf's `q` is its slope.** Until 2026-09-14 this called
-    /// `Biquad::shelf`, which takes no Q at all, so a band's Q knob did
-    /// nothing whatever while that band was a shelf -- and said nothing about
-    /// it. The strip had run `shelf_slope` since it was built, and its own
-    /// comment says why: a band's `q` knob is its slope when it is a shelf
-    /// and its Q when it is a bell, which is what makes the same knob honest
-    /// in both positions.
-    ///
-    /// The bell arm was not wrong, and was worse than wrong: it applied a
-    /// **private copy** of `eq_effective_q`, byte-identical and therefore
-    /// green, in a codebase whose core function carries the sentence "the law
-    /// written twice is the law that drifts, and the copy that drifts is the
-    /// one deciding what is heard." Both arms are `Biquad::eq_band` now, which
-    /// the strip calls too, so there is nothing left to hold in agreement.
-    ///
-    /// **This changes how an existing shelf boost sounds**, and it has to:
-    /// the two shelf forms reach `alpha` differently, so the only shelf they
-    /// agree on is a flat one. A shelf at 0 dB is unaffected whatever its
-    /// slope -- `A == 1` makes numerator and denominator identical -- so a
-    /// default EQ, whose two shelves rest at 0 dB, sounds exactly as it did.
-    /// A song that boosted one does not. `docs/plans/eq-v2/00-status.md`
-    /// records that as the thing to listen to.
-    fn set_band_coefficients(filter: &mut Biquad, band: EqBand, sr: u32) {
-        if !band.enabled {
-            *filter = Biquad::identity();
-            return;
-        }
-        filter.eq_band(
-            band.kind,
-            band.frequency_hz,
-            band.gain_db,
-            band.q,
-            band.q_profile,
-            sr,
-        );
-    }
-
     fn update_coefficients(&mut self) {
-        // `live` is recorded per stage as it is set, rather than re-derived
-        // from the parameters afterwards: the two would be the same rule
-        // written twice, and the copy that drifts is the one that decides
-        // whether a band is *heard*.
-        let mut live = [false; STAGES];
-        for (index, band) in self.params.bands.iter().enumerate() {
-            Self::set_band_coefficients(&mut self.left[index], *band, self.sample_rate);
-            Self::set_band_coefficients(&mut self.right[index], *band, self.sample_rate);
-            live[index] = band.enabled;
-        }
-        for stage in 0..PASS_STAGES {
-            let index = EQ_MAX_BANDS + stage;
-            let enabled = self.params.high_pass.enabled && stage < self.params.high_pass.slope.stages();
-            if enabled {
-                self.left[index].pass(self.params.high_pass.frequency_hz, self.params.high_pass.q, true, self.sample_rate);
-                self.right[index].pass(self.params.high_pass.frequency_hz, self.params.high_pass.q, true, self.sample_rate);
-            } else { self.left[index] = Biquad::identity(); self.right[index] = Biquad::identity(); }
-            live[index] = enabled;
-        }
-        for stage in 0..PASS_STAGES {
-            let index = EQ_MAX_BANDS + PASS_STAGES + stage;
-            let enabled = self.params.low_pass.enabled && stage < self.params.low_pass.slope.stages();
-            if enabled {
-                self.left[index].pass(self.params.low_pass.frequency_hz, self.params.low_pass.q, false, self.sample_rate);
-                self.right[index].pass(self.params.low_pass.frequency_hz, self.params.low_pass.q, false, self.sample_rate);
-            } else { self.left[index] = Biquad::identity(); self.right[index] = Biquad::identity(); }
-            live[index] = enabled;
-        }
+        let live = design_eq_bank(&self.params, self.sample_rate, &mut self.left);
+        design_eq_bank(&self.params, self.sample_rate, &mut self.right);
         self.active_len = 0;
         for (index, live) in live.iter().enumerate() {
             if *live {
@@ -152,7 +87,121 @@ impl EqEffect {
             }
         }
     }
+}
 
+/// One band's coefficients, from the one place those laws live.
+///
+/// **A shelf's `q` is its slope.** Until 2026-09-14 this called
+/// `Biquad::shelf`, which takes no Q at all, so a band's Q knob did nothing
+/// whatever while that band was a shelf -- and said nothing about it. The
+/// strip had run `shelf_slope` since it was built, and its own comment says
+/// why: a band's `q` knob is its slope when it is a shelf and its Q when it
+/// is a bell, which is what makes the same knob honest in both positions.
+///
+/// The bell arm was not wrong, and was worse than wrong: it applied a
+/// **private copy** of `eq_effective_q`, byte-identical and therefore green,
+/// in a codebase whose core function carries the sentence "the law written
+/// twice is the law that drifts, and the copy that drifts is the one deciding
+/// what is heard." Both arms are `Biquad::eq_band` now, which the strip calls
+/// too, so there is nothing left to hold in agreement.
+///
+/// **This changes how an existing shelf boost sounds**, and it has to: the
+/// two shelf forms reach `alpha` differently, so the only shelf they agree on
+/// is a flat one. A shelf at 0 dB is unaffected whatever its slope -- `A == 1`
+/// makes numerator and denominator identical -- so a default EQ, whose two
+/// shelves rest at 0 dB, sounds exactly as it did. A song that boosted one
+/// does not. `docs/plans/eq-v2/00-status.md` records that as the thing to
+/// listen to.
+fn design_band(filter: &mut Biquad, band: EqBand, sample_rate: u32) {
+    if !band.enabled {
+        *filter = Biquad::identity();
+        return;
+    }
+    filter.eq_band(
+        band.kind,
+        band.frequency_hz,
+        band.gain_db,
+        band.q,
+        band.q_profile,
+        sample_rate,
+    );
+}
+
+/// Design the whole bank into `stages`, and report which of them are live.
+///
+/// One function rather than a loop here and a second one in
+/// [`eq_response_db`], for the reason this file already gives about the
+/// active list: the two would be the same rule written twice, and the copy
+/// that drifts is the one that decides what is *seen*. The response plot does
+/// not approximate this bank. It is this bank, evaluated.
+///
+/// The two pass loops were also the same ten lines twice, differing in a
+/// field name and a boolean -- `AGENTS.md`'s note that `repeated-line` cannot
+/// see a copy somebody renamed on the way past is about exactly this shape.
+///
+/// It writes into stages the caller owns rather than returning fresh ones,
+/// because the audio path's stages carry `z1`/`z2` across a coefficient swap
+/// and handing back new ones would zero them: a knob move would click.
+pub fn design_eq_bank(
+    params: &EqParams,
+    sample_rate: u32,
+    stages: &mut [Biquad; STAGES],
+) -> [bool; STAGES] {
+    // `live` is recorded per stage as it is set, rather than re-derived from
+    // the parameters afterwards: the two would be the same rule written
+    // twice, and the copy that drifts is the one that decides whether a band
+    // is *heard*.
+    let mut live = [false; STAGES];
+    for (index, band) in params.bands.iter().enumerate() {
+        design_band(&mut stages[index], *band, sample_rate);
+        live[index] = band.enabled;
+    }
+    for (pass, (filter, high)) in [(&params.high_pass, true), (&params.low_pass, false)]
+        .into_iter()
+        .enumerate()
+    {
+        for stage in 0..PASS_STAGES {
+            let index = EQ_MAX_BANDS + pass * PASS_STAGES + stage;
+            let enabled = filter.enabled && stage < filter.slope.stages();
+            if enabled {
+                stages[index].pass(filter.frequency_hz, filter.q, high, sample_rate);
+            } else {
+                stages[index] = Biquad::identity();
+            }
+            live[index] = enabled;
+        }
+    }
+    live
+}
+
+/// The bank's gain at each of `samples` points along the response plot's
+/// frequency axis, in decibels.
+///
+/// **This is what the device does, not a shape that resembles it.** Every
+/// stage is designed by the function the audio path designs it with and
+/// evaluated by [`Biquad::magnitude_db`], which is held to a measured sine in
+/// `biquad.rs`. The alternative -- and what `EqResponseDisplay` drew until
+/// 2026-09-14 -- is a rational approximation in the markup, which could not
+/// follow a shelf's slope, had no idea the pass filters existed, and was a
+/// second law for the picture sitting next to the first law for the sound.
+///
+/// Sampled in Rust and handed over as a flat array, the way the channel
+/// strip's compressor curve already is: `DynamicsCurveDisplay.curve-db` says
+/// why in the same words.
+pub fn eq_response_db(params: &EqParams, sample_rate: u32, samples: usize) -> Vec<f32> {
+    let mut stages = [Biquad::identity(); STAGES];
+    let live = design_eq_bank(params, sample_rate, &mut stages);
+    let samples = samples.max(2);
+    (0..samples)
+        .map(|index| {
+            let hz = eq_plot_frequency(index as f32 / (samples - 1) as f32);
+            live.iter()
+                .enumerate()
+                .filter(|(_, live)| **live)
+                .map(|(stage, _)| stages[stage].magnitude_db(hz, sample_rate))
+                .sum()
+        })
+        .collect()
 }
 
 impl RangeProcessor for EqEffect {
@@ -343,14 +392,122 @@ mod tests {
         }
     }
 
+    /// **The plot is held to a sine going through the bank.** Not to a second
+    /// derivation of the same coefficients, and not to a shape that resembles
+    /// them: a tone at each of eight frequencies is rendered through a real
+    /// `EqEffect` and its output level compared with what `eq_response_db`
+    /// says the device does there.
+    ///
+    /// This is the standard `02-the-curve-tells-the-truth.md` asked the step
+    /// to state out loud. The answer is the strong one -- the drawn curve is
+    /// the running filter's magnitude response, to a tenth of a decibel --
+    /// and it is reachable only because the curve is sampled in Rust from the
+    /// same `design_eq_bank` the audio path calls. The markup's old rational
+    /// approximation could not have met it at any tolerance.
+    ///
+    /// The bank under test has all three band kinds boosted, a proportional-Q
+    /// bell, and both pass filters in at different slopes, because those are
+    /// the parts the old approximation got wrong or left out entirely.
+    #[test]
+    fn the_plotted_curve_is_what_a_sine_measures_through_the_bank() {
+        let sr = 48_000;
+        let mut params = all_off();
+        params.bands[0] = EqBand {
+            enabled: true,
+            kind: mooloop_core::EqBandKind::LowShelf,
+            frequency_hz: 200.0,
+            gain_db: 6.0,
+            q: 1.2,
+            q_profile: mooloop_core::EqQProfile::Constant,
+        };
+        params.bands[1] = EqBand {
+            enabled: true,
+            kind: mooloop_core::EqBandKind::Bell,
+            frequency_hz: 1_000.0,
+            gain_db: -8.0,
+            q: 2.0,
+            q_profile: mooloop_core::EqQProfile::Proportional,
+        };
+        params.bands[2] = EqBand {
+            enabled: true,
+            kind: mooloop_core::EqBandKind::HighShelf,
+            frequency_hz: 6_000.0,
+            gain_db: 9.0,
+            q: 0.6,
+            q_profile: mooloop_core::EqQProfile::Constant,
+        };
+        params.high_pass.enabled = true;
+        params.high_pass.frequency_hz = 80.0;
+        params.high_pass.slope = mooloop_core::EqSlope::Db18;
+        params.low_pass.enabled = true;
+        params.low_pass.frequency_hz = 12_000.0;
+        params.low_pass.slope = mooloop_core::EqSlope::Db12;
+
+        let samples = 129;
+        let curve = eq_response_db(&params, sr, samples);
+
+        // The tone is placed at the frequency a *sample of the curve* stands
+        // for, rather than at a round number near one. A 36 dB/oct pass
+        // filter moves half a decibel between two adjacent points of a
+        // 129-point axis, so reading the nearest point to 60 Hz would be
+        // measuring the axis's resolution rather than the plot's honesty.
+        for index in [8, 24, 40, 56, 72, 88, 104, 120] {
+            let hz = eq_plot_frequency(index as f32 / (samples - 1) as f32);
+            let drawn = curve[index];
+
+            let frames = sr as usize;
+            let mut effect = EqEffect::new(params, sr);
+            let mut bus = StereoBus::with_capacity(frames);
+            for frame in 0..frames {
+                let sample = (frame as f32 * hz * core::f32::consts::TAU / sr as f32).sin();
+                bus.l[frame] = sample;
+                bus.r[frame] = sample;
+            }
+            effect.process(&ctx_for(sr, frames), &mut bus, &EventList::empty(), None);
+
+            // A whole number of cycles at the end of the render: the start is
+            // the bank's transient, and an RMS over a fraction of a cycle
+            // measures where the window landed.
+            let period = sr as f32 / hz;
+            let span = ((frames as f32 / 2.0 / period).floor() * period).round() as usize;
+            let tail = &bus.l[frames - span..frames];
+            let rms = (tail.iter().map(|s| s * s).sum::<f32>() / tail.len() as f32).sqrt();
+            let measured = 20.0 * (rms * core::f32::consts::SQRT_2).log10();
+
+            assert!(
+                (drawn - measured).abs() < 0.1,
+                "at {hz} Hz the plot draws {drawn} dB and the bank does {measured} dB"
+            );
+        }
+    }
+
+    /// A bank with nothing switched on draws a flat line at 0 dB, which is
+    /// the same claim `an_eq_with_nothing_enabled_passes_the_signal_through_untouched`
+    /// makes about the samples.
+    #[test]
+    fn a_bank_with_nothing_on_draws_a_flat_line() {
+        for value in eq_response_db(&all_off(), 48_000, 64) {
+            assert!(value.abs() < 1e-4, "an empty bank drew {value} dB");
+        }
+    }
+
+    /// A boosted band lifts a tone sitting on its own centre.
+    ///
+    /// The band and the tone both come from `EQ_DEFAULT_BAND_HZ` rather than
+    /// from a literal: this test boosted band 2 and measured at 1 kHz, which
+    /// were the same place until the seven bands spread out on 2026-09-15 and
+    /// were an octave and a half apart afterwards -- so it went on measuring
+    /// the skirt of a band it had moved away from.
     #[test]
     fn eq_boosts_the_selected_peak_frequency() {
         let sr = 48_000;
+        const BAND: usize = 3;
+        let tone_hz = mooloop_core::EQ_DEFAULT_BAND_HZ[BAND];
         let mut params = EqParams::default();
-        params.bands[1].gain_db = 12.0;
+        params.bands[BAND].gain_db = 12.0;
         let mut effect = EqEffect::new(params, sr);
         let mut bus = StereoBus::with_capacity(sr as usize / 2);
-        for i in 0..bus.capacity() { let sample = (i as f32 * 1_000.0 * core::f32::consts::TAU / sr as f32).sin(); bus.l[i] = sample; bus.r[i] = sample; }
+        for i in 0..bus.capacity() { let sample = (i as f32 * tone_hz * core::f32::consts::TAU / sr as f32).sin(); bus.l[i] = sample; bus.r[i] = sample; }
         let ctx = ProcessContext { sample_rate: sr, frames: bus.capacity(), playing: true, bpm: 120.0, position_ticks: 0.0, position_frames: 0 };
         effect.process(&ctx, &mut bus, &EventList::empty(), None);
         let rms = (bus.l[bus.capacity()/2..].iter().map(|s| s*s).sum::<f32>() / (bus.capacity()/2) as f32).sqrt();

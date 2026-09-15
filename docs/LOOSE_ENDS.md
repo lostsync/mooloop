@@ -5,10 +5,27 @@ place so they stop living in chat scrollback. The file and line named is where
 to start.
 
 Everything here as of **2026-09-06** was re-verified against the tree that
-day. Entries added since carry their own date, and entries older than that
-sweep have not been checked against the tree since it — the spike list below
-was still claiming thirty-nine unpushed commits on `main` a day after `main`
-was pushed, which is what this paragraph is now careful about.
+day, and a second pass on **2026-09-14** re-read about a third of the file --
+enough to find six entries that had stopped being true, or had never been.
+Entries added since carry their own date, and entries older than the sweep
+that covered them have not been checked against the tree since — the spike
+list below was still claiming thirty-nine unpushed commits on `main` a day
+after `main` was pushed, which is what this paragraph is now careful about.
+
+**An entry goes stale three ways and only one of them is loud.** Three of the
+six on 2026-09-14 had been fixed by work that never came back to delete the
+row: the preamp grew the per-band display that the entry beside it had
+*designed*, `Project` grew `pattern_meta`, and `BUFFER_ENGINE.md` grew the
+caveat the entry said it lacked. Two were never about the tree at all -- a
+screenshot that had been retaken and a branch list that had moved -- and those
+are the ones a reader has no way to doubt.
+
+The sixth is the one worth reading the code for. It described a real
+`continue` skipping a real publish, and the state it produces **cannot be
+reached**: nothing can subscribe to a sampler channel, so a sampler channel
+never enters that branch. An entry can be accurate about the source and wrong
+about the program. So: **check the claim before you act on it, and delete the
+row in the commit that makes it false.**
 
 This is not a roadmap and not a bug list. Everything here was a deliberate
 stopping point rather than an oversight, and none of it blocks the sequence in
@@ -27,28 +44,31 @@ a wish belongs in `ENHANCEMENTS.md`; a described behaviour gap belongs in
 **A shelf's Q knob stops steepening above 2 and the face does not say so.**
 `Biquad::shelf_slope` clamps the slope to 0.1..2.0, where the cookbook's
 radicand goes negative; a seven-band EQ band's Q descriptor runs to 18, because
-the same id has to serve that band as a bell. So the top four-fifths of the
-knob's travel does nothing while the band is a shelf -- which is better than
+the same id has to serve that band as a bell. So **the top 46% of the knob's
+travel** does nothing while the band is a shelf -- measured 2026-09-15 and
+pinned by `the_shelf_q_knob_saturates_a_little_past_half_its_travel`; this
+entry said "four-fifths" until then, which was estimated and nearly twice the
+truth. That is better than
 2026-09-14, when *all* of it did nothing (`Biquad::shelf` took no Q at all),
 and is still a control showing a number the filter is not using. The channel
 strip avoids this by giving its two shelf-capable bands a narrower Q range, and
 that answer is not available here: every band can be any kind, so the range
 would depend on a *value*, and a descriptor is static per id. Same shape as the
-rest of `eq-v2` -- a parameter model that cannot express a condition. Found
-2026-09-14.
+rest of `eq-v2` -- a parameter model that cannot express a condition. The
+response plot does not hide it any more: since 2026-09-15 the curve is the
+bank's own coefficients evaluated, so a shelf's drawn slope stops moving at
+the same place its sound does. Found 2026-09-14.
 
-**Double-clicking an EQ knob returns to band 2's default, whatever band is
-selected.** The face is one control set over a selection and its resting
-values are hardcoded -- `default-value: 0.566` is 1 kHz, which is what band 2
-opens at. Band 1 is a low shelf resting at 120 Hz and band 3 a high shelf at
-8 kHz, so on either of those a double-click travels to a number that band was
-never at. Equally true before `eq-v2/01`, and invisible then, because one
-`Freq` descriptor stood for all seven bands and declared 1 kHz; the per-band
-table is what made it checkable, and `slint_face_agreement.rs`'s
-`face_param_id` states it where somebody will meet it. The fix is a per-row
-defaults array on `EffectSlotRow`, which is a face-contract change and so
-belongs to a later `eq-v2` step rather than to the one that exposed it. Found
-2026-09-14.
+**`EqSlope`'s variant names are half the slope they name.** `Db6` runs one
+`Biquad::pass` stage, which is a second-order section and therefore 12 dB per
+octave, so the five variants are 12/24/36/48/72 and are spelled 6/12/18/24/36.
+The *face* was corrected on 2026-09-15 -- `EqSlope::db_per_octave` is the
+arithmetic and `eq_face.rs` holds the selector to it -- and the variants were
+left alone on purpose: `serde` writes them (`"db6"`), so renaming them either
+refuses every saved project or silently re-maps one slope to another, to
+correct a spelling nothing reads. Rename them on the next `FORMAT_VERSION`
+bump that happens for a reason worth having one, with serde aliases for the
+old names. Found 2026-09-14.
 
 **The automation destination menu now offers fifty rows for one EQ.** That is
 what per-band addressing means and it is not a defect -- "EQ 1 / B3 Freq" is
@@ -58,49 +78,6 @@ menu long enough that finding a destination by scrolling stops being pleasant,
 which is an argument for filtering it, not for fewer ids. Recorded so the next
 person to open that popup knows it was foreseen. Found 2026-09-14.
 
-**Saving with embedded assets repoints the sampler's prev/next-sample arrows
-into the song's own bundle.** The app writes the resolved paths back into the
-live session after a save, and `selected_sample_target` lists
-`sample_path.parent()` -- so a kick loaded from a fifty-file drum folder, once
-saved with Embed Assets on (the default), has arrows that walk
-`<song>-assets/samples/` instead. With four sampler channels embedded that
-directory is `00-kick.wav, 01-snare.wav, 02-hat.wav, 03-clap.wav`, so "next
-sample" on the kick loads the snare out of the bundle.
-`can_previous_sample`/`can_next_sample` are computed only in
-`apply_loaded_sample` and never recomputed on save, so the buttons stay lit
-and lie about it. The fix is a second field -- the browse origin, which the
-save's write-back must not overwrite -- rather than a change to what is
-stored, because only `project_snapshot` needs the bundle-relative form. Found
-2026-09-13.
-
-**A preset's name appears on the device before the save is known to have
-worked.** `set_effect_preset_name`/`set_source_preset_name` run synchronously
-on confirm, while the write happens on a worker thread and can fail -- a
-too-long name, a permission, a full disk. The error dialog opens and the rack
-row goes on showing the name of a preset that was never written. The fix is to
-move both calls into the `SavedPreset` arm, which means carrying the name on
-that variant. Found 2026-09-13.
-
-**The preamp face has no transfer-curve display, where Drive's has one.**
-`preamp-device.slint` leaves the panel Drive fills with
-`DriveTransferDisplay` empty. Drawing this stage's curve needs the
-coefficients `HarmonicShaper::new` solves for, and reaching them means
-widening `EffectSlotRow` in `main.slint` -- which is what the EQ, the
-dynamics trio and the Buffer already do for `eq-spectrum-data`,
-`gain-reduction-db` and `buffer-collisions`, so the path exists and is
-ordinary. The alternative, computing them in markup from the voicing index,
-would spell `harmonics.rs`'s profile numbers a second time, which is the
-duplication `AGENTS.md` names as this codebase's characteristic fault.
-
-**A transfer curve is probably the wrong display for it anyway.** Adam,
-2026-09-10: the interesting question is *where on the spectrum* the stage is
-distorting, which a curve cannot show and which is the whole point of the
-tilt -- obvious on a kick, nearly clean on a hat. `SpectrumAnalyzer` already
-produces exactly the right thing (48 log bands, a Goertzel bank rather than
-an FFT, published once a hop and only while a display subscribes), and this
-device is unusual in having both the dry and the wet signal in hand at the
-same sample. Two analyzers and a per-band difference would make the tilt
-visible on the same axis `colour_harmonics_vs_freq.csv` plots.
 
 **The oscillator Level knob works in dB; its descriptor is linear 0–1.**
 `device-oscillator.slint:95` drives the knob through `GainMath.linear-to-db`,
@@ -198,26 +175,6 @@ a table. Either extend `automation_destinations` to walk
 not wanted -- delete the engine's route pass and the dead descriptor arm,
 rather than leaving a destination reachable only by hand-edited files. Found
 2026-09-13.
-
-**The ninth automation lane draws, edits and saves, and never plays.** A file
-carrying more than `MAX_AUTOMATION_LANES_PER_CHANNEL` lanes in one (pattern,
-channel) is handled three ways: `integrity::check_lanes` calls `refuse`,
-which records the issue and **repairs nothing**, so the project loads
-unchanged; `Session::replace_project` clones them all, so the editor lists,
-draws, edits and re-saves them; and `Pattern::set_lanes` takes the first
-eight, so the engine has never heard of the rest. Not reachable from the app
-now that the picker refuses past the ceiling (fixed 2026-09-13), so this is
-hand-edited, foreign-build or future-version files -- which is what keeps it
-out of the fixable list, not its severity. `refuse` was chosen because the
-only correction discards authored work, which is the right instinct except
-that `set_lanes` already discards it, silently and on one side only.
-`PROJECT_FORMAT.md` does not state the cap at all. Options: make
-`check_lanes` correct and truncate so both sides agree and the `Doctor` says
-which lanes went; or truncate in `replace_project` too so the document matches
-the engine; or raise the cap, since eight per channel per pattern is low for a
-song automating a channel and two buses, and `CAPACITY_POLICY.md` says "it was
-easier to preallocate" is not a sufficient reason. In every case the number
-belongs in `PROJECT_FORMAT.md`. Found 2026-09-13.
 
 **A container's Mix is offered as an automation destination the engine
 cannot read.** `automation_destinations` (`session.rs:485`) walks every
@@ -352,31 +309,30 @@ is much cheaper and shares the diagnostic channel `sanitize_bank`'s entry
 already wants; or narrow the plan to what undo buys. Either of the last two
 still needs the send-drop sentence adding to `CURRENT.md`. Found 2026-09-13.
 
-**A lane that stops covering the playhead leaves its destination stuck at the
-last value it wrote.** `restore_base_param` exists for exactly this and its
-comment names the hazard -- "Removing a lane or a matrix route otherwise
-leaves the device holding whatever the control signal last resolved, until
-someone happens to touch that knob" -- but it is called only when a lane is
-*deleted* or *cleared*, never when a lane stops covering the playhead.
-Pattern 1 sweeps a cutoff down to 200 Hz, pattern 2 has no such lane; switch
-to pattern 2 and `has_automation_at` answers false, `control_events_for_slot`
-takes its early return, and the device never receives another `ParamValue`.
-The filter plays at 200 Hz while its knob and its face both read 1 kHz, until
-the knob is touched or the song reloaded. Same on a song-mode clip boundary
-and on `SetPlaybackMode`. It bites only destinations that are automated and
-*not* modulated -- a modulated one takes `base_normalized = knob_normalized`
-when the curve is `None` and so restores the knob every block by accident.
-Not small: a complete fix needs the engine to know which destinations had a
-curve last block and no longer do, which is per-channel state across blocks on
-the audio thread, and `AutomationBlock` is explicitly "a read-only view".
-Options: restore on the *commands* only (`SetCurrentPattern`,
-`SetPlaybackMode`, `Seek`), walking the outgoing pattern's lanes on the
-command drain where `forget_device` already runs -- bounded, and fixes the
-reachable pattern-mode half; or carry a "driven last block" set and diff it,
-the only complete answer; or declare that automation latches and say so in
-`CURRENT.md`, which is a defensible DAW convention but then makes
-`restore_base_param`'s three existing callers the inconsistency. Found
-2026-09-13.
+**A song-mode clip boundary still leaves its destination stuck at the last
+value the outgoing clip wrote.** The command half was fixed 2026-09-14:
+`SetCurrentPattern`, `SetPlaybackMode` and `Seek` now walk the lanes of the
+patterns covering the position they are *leaving* and hand back every
+destination the incoming position does not cover. That closes the reachable
+pattern-mode case -- pattern 1 sweeps a cutoff down to 200 Hz, pattern 2 has
+no such lane, and the filter used to go on playing at 200 Hz while its knob
+and its face both read 1 kHz.
+
+A clip boundary in song mode is not a command. The playhead simply moves out
+from under a lane, `has_automation_at` answers false on the next block,
+`control_events_for_slot` takes its early return, and nothing ever writes
+again. The same is true of the song wrap. Closing it needs what the original
+entry named as the only complete answer: the engine carrying which
+destinations had a curve last block and no longer do, which is per-channel
+state across blocks on the audio thread, where `AutomationBlock` is
+deliberately "a read-only view". The alternative is to declare that
+automation latches and say so in `CURRENT.md` -- a defensible DAW convention,
+which would then make `restore_base_param`'s five callers the inconsistency.
+
+It bites only destinations that are automated and *not* modulated: a
+modulated one takes `base_normalized = knob_normalized` when the curve is
+`None` and so restores the knob every block by accident. Found 2026-09-13,
+half-fixed 2026-09-14.
 
 **Shortening a pattern hides automation points that still shape the sound --
 the opposite of what it does to notes.** `refresh_automation_points` filters
@@ -424,24 +380,6 @@ which `CURRENT.md` now at least describes honestly; or make undo refuse to
 run over unrecorded state, which needs a "changed since the last entry"
 marker `record` has no way to set today. Found 2026-09-13.
 
-**Pattern names are wiped by every project edit and never reach disk.**
-`replace_project` does `self.pattern_names = vec![String::new(); ...]`
-(`session.rs:1146`), and every `ProjectEdit` runs through it -- so naming
-three patterns "Verse", "Chorus", "Bridge" and then adding a channel, cloning
-a pattern, or pressing Ctrl+Z blanks all three. `pattern_names` appears
-nowhere in `mooloop-core`, `mooloop-project` or `PROJECT_FORMAT.md`, so they
-do not survive a save either. `CURRENT.md` documents naming a pattern as a
-peer of naming a channel or a track, with a paragraph on why a pattern may be
-blank where the others may not, and says nothing about the name being
-transient. Not small because a name has to survive `replace_project`: either
-carry it in `Project` -- a persisted field, a migration, and length
-validation in `integrity.rs`, which is also the only option that makes
-`CURRENT.md` true and fixes persistence -- or keep it session-side and give
-`ProjectEdit` a pattern-edit field beside `channel_edit`, since
-`queue_pattern_clone` and `queue_pattern_remove` insert and remove pattern
-indices in a cloned `Project` that the session's name vector knows nothing
-about. Found 2026-09-13.
-
 **Two preset producers mutate the live session before queueing, so a refused
 install leaves the document and the engine disagreeing.**
 `on_effect_preset_selected` (`lib.rs:8076`) and `append_effect_preset`
@@ -481,27 +419,34 @@ nothing but needs a decision about what a hidden note's NoteOff means on the
 second pass. Found 2026-09-12.
 
 **A pattern-length change can create the overlapping placements the editor
-refuses to create.** `session/transport.rs:213` guards `add_playlist_placement`
-against overlap, correctly and half-open, and it is the only place the
-invariant exists: `set_pattern_length` (`:123`) rewrites the length with no
-revalidation, `Sequencer::set_playlist_placement` has no overlap notion, and
-`integrity::check_playlist` checks only the pattern index and the start tick.
-Place pattern 0 at ticks 0 and 384 at 16 steps -- accepted, they abut exactly
--- then set it to 32 steps, and the first clip covers the second. Both are
-scheduled: `instance_offset` differs, so the voice ids differ, and **every
-note fires twice 384 ticks apart at doubled amplitude**. The view draws them
-overlapping, and `placement_covering` uses `find` on a list sorted by
-`(pattern, start_tick)`, so a click in the overlap always removes the earlier
-clip and the buried one cannot be reached. Not a small fix because the
-invariant has no owner: enforcing it in `set_pattern_length` means deciding
-what a length increase does to the clips it now swallows, and the same
-decision has to be made in `integrity` for files that already carry the
-overlap -- a `Doctor` entry and a `PROJECT_FORMAT.md` change across two
-crates. Options: clamp the length change to the largest value that keeps the
-pattern's placements disjoint; or make the overlap legal everywhere and drop
-the guard in `add_playlist_placement`; or drop the covered placements and
-report them, which is the only one that also needs a repair path on load.
-Found 2026-09-12.
+refuses to create.** `session/transport.rs:213` guards
+`add_playlist_placement` against overlap, correctly and half-open, and it is
+the only place the invariant exists: `set_pattern_length` rewrites the length
+with no revalidation, `Sequencer::set_playlist_placement` has no overlap
+notion, and `integrity::check_playlist` checks only the pattern index and the
+start tick. Place pattern 0 at ticks 0 and 384 at 16 steps -- accepted, they
+abut exactly -- then set it to 32 steps, and the first clip covers the second.
+Both are scheduled: `instance_offset` differs, so the voice ids differ, and
+**every note fires twice 384 ticks apart at doubled amplitude**.
+
+**The clip is at least reachable now.** `placement_covering` took the first
+match on a list sorted by `(pattern, start_tick)`, so a click in the overlap
+always answered with the earlier clip and the buried one could not be removed,
+moved or undone by any gesture. It takes the **latest-starting** cover as of
+2026-09-14, which is the rule `Sequencer::automation_lane_at` already states
+one layer down for lanes. So the state is escapable rather than permanent.
+
+What is still open is whether the overlap should exist. The invariant has no
+owner: enforcing it in `set_pattern_length` means deciding what a length
+increase does to the clips it now swallows, and the same decision has to be
+made in `integrity` for files that already carry the overlap -- a `Doctor`
+entry and a `PROJECT_FORMAT.md` change across two crates. Options: clamp the
+length change to the largest value that keeps the pattern's placements
+disjoint; or make the overlap legal everywhere, drop the guard in
+`add_playlist_placement`, and say in `CURRENT.md` that a doubled clip is a
+layer; or drop the covered placements and report them, which is the only one
+that also needs a repair path on load. Found 2026-09-12, made escapable
+2026-09-14.
 
 **Snap-all-markers and the four trim/loop markers are not undoable**, where
 the five slice verbs beside them now are. `add_slice`, `move_slice`,
@@ -524,39 +469,47 @@ Unifying them means routing joining `ProjectEdit`, not a per-callback patch.
 
 ## Ceilings and one-shots
 
-**`MAX_CONTAINER_DEPTH` is enforced by nothing, reported by nothing, and
-spelled a fifth time as bare numbers in the markup.** `structure.rs:38` says
-it is "a limit on the *gesture*, not on the format: a deeper chain loads and
-is reported by `integrity.rs` the way an over-long one is", and
-`CAPACITY_POLICY.md:189` and `docs/plans/containers/02-...md:66` repeat the
-same two sentences. Both are false. The constant appears in four places in the
-workspace -- its definition, its re-export, and two uses in `render.rs` --
-and neither `mooloop-session` nor `mooloop-ui` mentions it. No gesture checks
-it: `wrap_in_container`, `insert_into_container` and
-`move_effect_into_container` have no depth test, and `wrap-enabled` is
-unconditional on every row. `integrity.rs` has no depth check either;
-`span_problem`'s own doc says "Depth is deliberately not checked".
+**A chain nested past `MAX_CONTAINER_DEPTH` still loads unreported, and the
+integrity pass has no way to say so.** The gesture half was fixed 2026-09-14:
+`can_wrap`, `can_insert_into_container` and `can_move_into_container` refuse a
+wrap, an insert and a drag that would put a box past the cap, the rack's wrap
+button asks the same function rather than comparing a depth of its own, and
+`the_rack_draws_a_band_for_every_level_the_engine_blends` holds `main.slint`'s
+four literal chrome levels to the constant. Before that, five clicks reached a
+box whose Mix does nothing at any value and which the rack draws no chrome
+for -- inert and invisible at the same time.
 
-So five clicks reach it with no warning: wrap a device, then wrap the box four
-more times. Past the cap the render branch `continue`s, so the innermost box's
-**Mix does nothing at any value**, and `main.slint`'s `for level in [1, 2, 3,
-4]` -- `MAX_CONTAINER_DEPTH` written out as four literals, read by no test --
-has no level 5, so it draws no chrome either. It is inert and invisible at the
-same time.
+The format half is not a missing check, which is why it did not land with the
+rest. **`Doctor` has two severities and this needs a third.** `correct`
+repairs, and every other method -- `refuse`, `block` -- sets `repaired: false`,
+which `Issue::is_blocking` reads as "do not open this document". So reporting
+a deep chain the way an over-long one is reported would stop a song opening
+that opens today, which is the brick this file has already been asked about
+once, under a different name. And there is no safe repair to reach for
+instead: unwrapping looks free, since a box past the cap contributes no blend,
+but its **bypass still works** (fixed 2026-09-13), so removing it would unmute
+whatever it was muting.
 
-Its **bypass** used to be dead too, because the depth `continue` sat above the
-bypass branch; that half was fixed 2026-09-13 by moving the check below it,
-which needs no decision -- being too deep to blend is no reason for a bypass
-button to lie. The rest is a decision, because `CAPACITY_POLICY.md:255` has a
-standing rule for a cap on a user-created collection (document it beside the
-type *and in the persisted-format validation*, make the UI communicate it
-honestly, test the boundary) and one of the four is done. Options: make the
-three claims true -- refuse the gesture, add an `effect.container.depth` check
-to `check_spans`, and derive the Slint level list rather than spelling it; or
-drop the cap, since all it buys is one `StereoBus` per level in a `Box`
-allocated off the audio thread, and 8 or 16 costs a few hundred KB on chains
-that hold a box at all; or cap the gesture only and delete the integrity
-sentence from all three documents. Found 2026-09-13.
+So the options are: give `Doctor` a tolerated severity -- an issue worth
+telling the user about that stops nothing, which the report, the status bar
+count and `Diagnosis::blocking` all have to learn; or accept that the format
+does not check depth and say so, which `structure.rs`, `CAPACITY_POLICY.md`
+and `docs/plans/containers/02-...md` now do rather than claiming otherwise.
+Found 2026-09-13, gesture half fixed 2026-09-14.
+
+**`MAX_AUTOMATION_LANES_PER_CHANNEL` is 8, and raising it is not free.** The
+ninth lane no longer draws and plays nothing -- `check_lanes` truncates and
+reports as of 2026-09-14, so the document, the editor and the engine all keep
+the same eight, and `PROJECT_FORMAT.md` states the cap. What was not decided
+is whether eight is the right number. It is low for a song automating a
+channel and two buses, and `CAPACITY_POLICY.md` says "it was easier to
+preallocate" is not a sufficient reason -- but the preallocation is real here
+in a way it is not for most caps. `Pattern::with_steps` builds
+`MAX_CHANNELS` channel patterns each holding a
+`Vec::with_capacity(MAX_AUTOMATION_LANES_PER_CHANNEL)`, and the sequencer
+builds `MAX_PATTERNS` of those, so the cap is multiplied by 65,536 before it
+is paid. Measure that before changing it. Found 2026-09-13, half-closed
+2026-09-14.
 
 **`MAX_MOD_ROUTES_PER_CHANNEL` is 16** (`modulation.rs:1290`) — two routes per
 module across eight slots. It was left there deliberately, to be raised once
@@ -577,21 +530,24 @@ marker or the directory under `presets/` is deleted by hand.
 
 ## Meter and time
 
-**Device meters are drained only for the chain currently on screen.** The
-pump takes `take_device_peak`/`take_device_dynamics` for one `device_target`,
-and every other channel's and bus's stage cells are `fetch_max` holds that
-nothing ever empties -- so switching the rack to a channel last viewed ten
-minutes ago draws that ten-minute maximum for one 8 ms tick before the next
-read clears it. Two lines in the bus loop used to be an attempt at this and
-could never have worked: both `publish` and `publish_input` are `fetch_max`,
-so writing zero cannot lower a cell. They are gone (2026-09-13) along with the
-comment claiming they cleared the meter. Not small because draining every
-target every tick is `(MAX_CHANNELS + MAX_BUSES) x (MAX_EFFECTS+1) x 6` atomic
-swaps at 125 Hz, which is the cost the spectrum pool exists to avoid in the
-analogous case. Options: drain the *previous* target once when `device_target`
-changes, which needs one `last_device_target` local in the pump and is
-correct; or drain the whole array on a slow secondary timer; or accept the
-one-frame flash and write it down. Found 2026-09-13.
+**Device meters are drained only for the chain currently on screen.** Fixed
+2026-09-14 by the first of the three options this entry named, which it
+already called the correct one: one `last_device_target` local in the pump,
+and `DeviceMeters::clear_target` emptying whatever the rack has just moved
+off. Before that, every other channel's and bus's stage cells were `fetch_max`
+holds that nothing ever emptied, so switching the rack to a channel last
+viewed ten minutes ago drew that ten-minute maximum for one 8 ms tick before
+the next read cleared it.
+
+What is *not* done is the same thing for the two cells the rack does not read
+at all. Nothing here drains a target the rack has never been pointed at, so
+the first tick after opening a chain for the first time still shows whatever
+that chain's loudest block was -- which is a shorter window than before and
+the same shape. Draining every target every tick is
+`(MAX_CHANNELS + MAX_BUSES) x (MAX_EFFECTS+1) x 6` atomic swaps at 125 Hz,
+which is the cost the spectrum pool exists to avoid in the analogous case; a
+slow secondary timer is the option left on the table. Found 2026-09-13,
+fixed for the reachable case 2026-09-14.
 
 **A bus clip latch is cleared by any project edit, which is broader than the
 problem it fixes.** Removing a track shifts every later one down an index and
@@ -621,34 +577,50 @@ reason and invisible anyway -- they wash out in under two seconds.
 could not without driving the application. Found 2026-09-13, fixed
 2026-09-14.
 
-**The master is metered twice, through two transports, with two clip
-latches.** `executor.rs` pushes `EngineEvent::Metering` onto the bounded event
-ring every block and `render.rs` publishes the same numbers into `BusMeters`
-cell 0. The transport bar reads the event; the mixer's master strip reads the
-cell. The event push is `let _ = evt_tx.push(..)`, so under ring pressure the
-**always-visible toolbar meter** is the lossy one while the atomic cell cannot
-drop a block -- the two meters for one signal can disagree. And there are two
-independent clip latches for the master: clicking the toolbar's does not clear
-the mixer strip's, or the reverse. Options: drop `EngineEvent::Metering` and
-read bus 0 for both, which unifies the latch for free and removes a per-block
-ring push; or keep both and share one `MeterBallistics` pair. Found
-2026-09-13.
+**`EngineEvent::Metering` is a per-block ring push that only
+`engine-selftest` reads.** The master used to be metered *twice*, through two
+transports and with two clip latches: `executor.rs` pushes the event every
+block and `render.rs` publishes the same two numbers into `BusMeters` cell 0,
+the toolbar read the event and the mixer's master strip read the cell. The
+event push is `let _ = evt_tx.push(..)`, so under ring pressure the
+always-visible meter was the lossy one while the atomic cell cannot drop a
+block, and clicking one clip lamp did not clear the other.
 
-**A muted channel that something taps meters silent and freezes its playhead
-while its audio flows.** There are two mute paths for a channel. The one where
-nobody taps it skips the render, so a frozen playhead is honest. The other --
-muted, but an Aux In reads this channel -- runs `strip.process`, so voices
-advance and the audio *is* heard through the Aux In, and then `continue`s
-before both the device-meter publish and the playhead publish. So the source
-rail reads silent, and the sampler playhead stops at the mute and never moves
-again or clears, because `source_silent_frames` is reset every block and the
-sleep branch's zero-publish can never run. Adjacent to the solo entry above
-but the opposite sign: there a silenced track meters live, here an audible one
-meters dead. Options: publish both before the `continue`, matching the comment
-that already says "a muted producer publishes"; or publish only the playhead,
-since a frozen line over a moving voice is indefensible under any reading; or
-rule that the Aux In's own channel is where that signal should be metered.
-Whoever rules on the solo entry should rule on this one too. Found 2026-09-13.
+Fixed 2026-09-14 by the second of the two options this entry named: both faces
+read bus 0 through one `MeterBallistics` pair, so the latch is shared and the
+toolbar is no longer the lossy reader. The first option -- dropping the event
+outright -- was **not** taken because `engine-selftest` is built on counting
+it, and it is the only thing that reports whether the *callback* produced
+audio: a held cell says the loudest it ever was, which cannot tell silence
+from a callback that never ran.
+
+So what is left is a per-block push on the audio thread serving one
+diagnostic. Cheap, and worth knowing it is not free: dropping it means giving
+`engine-selftest` another way to ask the same question, not deleting a
+duplicate. Found 2026-09-13, unified 2026-09-14.
+
+**A muted channel that something taps meters silent while its audio flows.**
+There are two mute paths for a channel. The one where nobody taps it skips the
+render, so silence is honest. The other -- muted, but an Aux In reads this
+channel -- runs `strip.process`, so the audio *is* heard through the Aux In,
+and then `continue`s before the device-meter publish. The source rail reads
+silent for a signal that is reaching the master. Adjacent to the solo entry
+above but the opposite sign: there a silenced track meters live, here an
+audible one meters dead. Whoever rules on the solo entry should rule on this
+one too.
+
+**The playhead half of this entry was wrong and the reason is worth keeping.**
+It said the sampler playhead stopped at the mute and never moved again,
+because the `continue` skips that publish too. It does -- and the state is
+unreachable. `AudioGraph::produces` is "does any tap name this channel", a tap
+names an *audio outlet*, and the sampler publishes **no outlets at all**
+(`outlet.rs` asserts exactly that for Sampler, DrumSynth, MonoSynth,
+PolySynth and ML-M1). So nothing can subscribe to a sampler channel, a sampler
+channel never reaches this branch, and the only channels that do -- ML-P8 and
+DS-01 -- have an idle `strip.sampler` whose `voice_positions()` are all `NaN`,
+which `PlayheadMeters::read` filters out. Publishing it there is a no-op, and
+it was written and then reverted on 2026-09-14 rather than shipped as one.
+Found 2026-09-13, half of it withdrawn 2026-09-14.
 
 **A track silenced by someone else's solo still meters, and can still latch
 its clip lamp.** `render.rs` computes `let muted = strip.output.muted ||
@@ -687,29 +659,24 @@ Recorded so the deferral stays deliberate.
 
 ## Decisions whose reason expired
 
-**A song's embedded samples can never be turned back into references, and
-unticking the box is discarded in silence.** `keep_owned` is true whenever an
-embedded sample already lives inside the bundle, and it skips the
-`AssetMode::Referenced` branch entirely -- so after the first embedded save,
-every later save keeps them embedded whatever the user asked for. The guard
-itself is **necessary**: without it `replace_song_file` would delete the
-sidecar the new reference points at, destroying the only copy. What is wrong
-is everything around it. Unticking "Embed assets" and saving produces no
-warning, no status message and no change. The manifest records `asset_mode =
-"referenced"` beside `embedded = true` on every sample. And reopening sets the
-checkbox from the document-level `asset_mode`, so the box shows *unticked* on
-a bundle whose samples are all embedded, and the state never converges.
-`CURRENT.md`'s "embedded and referenced asset policies are available per save"
-is true only of a song that has never been embedded.
+**A song's embedded samples can never be turned back into references.** The
+guard is **necessary** and is not the problem: without it `replace_song_file`
+would delete the sidecar the new reference points at, destroying the only
+copy. What was wrong was everything around it, and the cheap half of that was
+fixed 2026-09-14. Unticking "Embed assets" and saving now produces a per-sample
+warning -- "sample stays embedded: the bundle holds the only copy of it" --
+instead of no warning, no status message and no change; and the checkbox
+follows the **per-sample flags** rather than the document-level `asset_mode`,
+so a bundle whose samples are all embedded no longer reopens showing the box
+unticked, which is what stopped the state ever converging.
 
-Not small because un-embedding has to mean something -- copy out to where, and
-under whose name. Options: refuse honestly, reporting "N samples stay in the
-bundle; there is no other copy" in the save report's warnings and leaving the
-box showing embedded; make the checkbox follow the *per-sample* flags rather
-than the document-level mode so it at least tells the truth; or implement a
-real un-embed that copies bundle-owned samples out to a chosen folder first,
-which is a new user-facing gesture. The first two together are cheap and
-remove the lie. Found 2026-09-13.
+What is left is that un-embedding does not exist. Doing it for real means
+copying the bundle-owned samples out to a folder the user chooses first, which
+is a new user-facing gesture and a new dialog. Until then the manifest still
+records `asset_mode = "referenced"` beside `embedded = true` on every sample,
+which is now merely redundant rather than a lie nobody is told about, and
+`CURRENT.md` says what a referenced save of an embedded song actually does.
+Found 2026-09-13, made honest 2026-09-14.
 
 **The limiter still has no lookahead, and the code's stated reason is now
 false.** `mooloop-dsp/src/effects/dynamics.rs:391` says "Add lookahead when
@@ -717,11 +684,6 @@ the engine can compensate for it, not before." The mixer became latency
 compensated on 2026-09-05, so the condition is met. `CURRENT.md` already
 records this as an open decision rather than a settled no; the source comment
 does not.
-
-**`BUFFER_ENGINE.md` still specifies Buffer as an ordinary insert** "at the
-useful point in a chain" (lines 12, 45, 66). Adam has since said that framing
-is partly wrong — the device belongs at the end of a rack with its own lane.
-Nothing in the repository captures the rethink; the doc reads as settled.
 
 ---
 
@@ -746,39 +708,37 @@ again; the setup also has to put the latency-declaring device in the
 and an effect installed afterwards leaves the send with no ring at all --
 which is how the first attempt at this test came to pass without the fix.
 
-**The modulator plan's acceptance test 8 — RT hygiene, no allocations or
-locks in the audio callback — still has no harness that can express it.**
-There are two `#[global_allocator]`s in the tree and neither one does this
-job: `spikes/time-stretch/src/main.rs:52` is outside the workspace, and
-`mooloop-session/src/lib.rs:55` is `#[cfg(test)]`, counts *live bytes* to
-measure undo-history footprint, and lives in the session crate rather than
-in engine or DSP where the callback actually runs. Counting a steady-state
-total is not the same as trapping an allocation on the audio thread. Until
-something is, the test is satisfiable only by reading code — which is the
-thing it exists to replace.
+**Acceptance test 8 — RT hygiene, no allocations or locks in the audio
+callback — has a harness now, and it covers one block.** Amended 2026-09-15 by
+`control-plane-seams/04`; what this entry said before was that no harness in
+the tree could express it, and the reason given was right about every
+allocator it named.
+
+The instrument turned out to be a small addition to `mooloop-engine`'s own
+`#[cfg(test)]` `CountingAllocator`, which the entry above had overlooked
+because it only named the session crate's. It counts *live bytes*, and a net
+byte figure cannot see an allocation paired with a free inside one block —
+which is exactly what a `Vec` growing on the callback thread looks like. It
+now also carries `allocations()`: a count of `alloc` and `realloc` calls that
+never decreases, held in a `const`-initialised thread-local so that reading it
+from inside `alloc` cannot itself allocate, and so that two tests running in
+parallel do not measure each other the way `block_cost`'s module doc records
+happening with `live()`. `realloc` is counted explicitly, because `System`
+implements it with `mremap` rather than alloc-copy-dealloc.
+
+`a_block_that_retires_a_preview_does_not_allocate` uses it, and was validated
+against the defect it was written for: with `preview_retired` put back to a
+`Vec::new()` it reports one allocation and fails.
+
+**What is still open is the coverage, not the instrument.** Test 8 claims no
+allocations *or locks* in the callback under every Buffer operation the plan
+lists. One block on the preview path is a floor. Extending it is now writing
+tests rather than building a harness, and the locks half is not measured at
+all.
 
 ---
 
 ## Consistency questions, not bugs
-
-**Duplicating the last device in a container puts the copy outside the
-box.** `duplicate_device` is `copy_device` then `paste_device` at the same
-slot, and `paste_device` inserts at `run_of(slot).end` -- where a run's end
-boundary counts as *outside* the container, which is the documented and
-tested rule for paste
-(`pasting_onto_a_containers_last_child_lands_outside_the_box`). For duplicate
-it produces a boundary inconsistency rather than a rule: in `[Chain(2),
-Filter, Drive]`, duplicating the Filter inserts at 2, inside the span, and the
-box grows to 3; duplicating the Drive inserts at 3, the span's exclusive end,
-and the copy lands outside. Same gesture, same box, two answers depending on
-which child was clicked -- and the ejecting one is the case a user reaches for
-most, duplicating the thing at the end of the run they just built. Not a
-one-liner because the ambiguity is the one `insert_into_container` exists to
-resolve: the index after a run's last row means both "still inside" and "just
-after", and only the gesture can say which. Either give `duplicate_device` its
-own landing rule -- grow the parent explicitly when the insertion point is its
-span's end -- or state in `CURRENT.md` that a duplicate lands beside the
-original at the original's own depth. Found 2026-09-13.
 
 **Song-mode swing follows pattern phase, and only a test name says so.**
 `swing_offset_ticks` (`sequencer.rs:867`) takes the offbeat parity from a
@@ -857,34 +817,8 @@ their own passes; nobody has decided whether they should match.
 
 ## One name, two policies
 
-**Renaming a song file makes it permanently unopenable, even when the assets
-sidecar is renamed with it.** `safe_embedded_path` requires a stored relative
-path to begin with *this song's exact file name* followed by `-assets`. Rename
-the pair the only sane way -- in a file manager, both together -- and the song
-refuses to open with "channel 0 has unsafe embedded path
-Untitled.mooloop-assets/samples/00-kick.wav", about a path that is present,
-relative, traversal-free and sitting right beside the file. It is
-`Error::Invalid`, so the whole song is refused rather than one sample warned
-about, and recovery means hand-editing TOML. (Copying the song *without* its
-sidecar is handled correctly: the name matches, the file is missing, you get a
-warning.)
-
-Not small because it is a question about what the check is for. The
-`Component::Normal | CurDir` filter above it already guarantees the path
-cannot escape the song's directory; the name equality only adds "and it is
-*this* song's sidecar", which is exactly what a rename breaks. Options: drop
-the name equality, keeping "first component ends in `-assets`, second is
-`samples`" -- two lines, every traversal property kept, but the stored
-component still names the *old* sidecar so the song then opens with the
-samples missing, turning a brick into a silent loss (pair it with the asset
-warnings now being logged); or repoint on load, substituting the bundle's
-actual assets directory name, so a rename self-repairs -- the behaviour a user
-expects, and the option that makes the product right, but it makes the loader
-a path rewriter and that needs a ruling; or downgrade the mismatch to a
-warning, which is least code and worst outcome. Found 2026-09-13.
-
 **An embedded sample that is a symlink escapes the bundle, is read, and is
-copied into the next bundle saved from it.** `safe_embedded_path` is purely
+copied into the next bundle saved from it.** `embedded_bundle_path` is purely
 lexical and `resolve_setup_asset` then does `is_file()` and reads, so a shared
 `.mooloop-channel` or kit bundle can make the app read an arbitrary local file
 as audio -- and, the part that matters, **re-saving that preset stages the
@@ -959,51 +893,42 @@ deletes. Whoever decides this should also decide the departed-producer versus
 departed-device inconsistency above, which is the same question at a
 different site. Found 2026-09-13.
 
-**Reordering the modulator grid restarts or cross-wires every moved module's
-running state.** `EngineCommand::MoveModulator` goes through
-`edit_modulation` (`render.rs:3168`), whose only mirror into the DSP rack is a
-params diff *by slot number*. A reorder is a permutation, so every moved
-position reads as "the params changed" and gets `set_slot`, which knows about
-a slot being reconfigured and not about a module having moved. Different kinds
-swap and both are rebuilt from scratch: an envelope dragged to the front
-restarts at level 0 stage `Idle`, so a held note's contour drops to zero
-mid-sustain and will not re-arm until the next Note On; a Random module is
-reseeded, changing the sequence that is supposed to be identical between
-realtime and offline. Same kinds **cross-wire**: two LFOs dragged past each
-other keep their own phase, smoothing state and fade position and take the
-other's params, so both jump and nothing shows why. The session layer's own
-comment (`session/modulation.rs:120`) claims "both racks run the same
-permutation", which is true of the data and not of the running state. Not a
-small fix because `edit_modulation` is deliberately generic over
-`FnOnce(&mut ModRack)` and cannot tell a reorder from any other edit -- the
-diff is what makes narrow commands cheap. Options: give `ModulatorRack` a
-`move_slot(from, to)` that permutes `slots` and `outputs` together and give
-`MoveModulator` its own handler ahead of the diff, which then correctly finds
-nothing changed; or key the DSP rack by `ModSourceId` rather than by slot,
-which removes the class; or accept the restart and say so in the spec -- but
-the same-kind cross-wiring is not defensible under any reading. Found
-2026-09-13.
+**Reordering the modulator grid used to restart or cross-wire every moved
+module's running state.** Fixed 2026-09-14 by the first of the three options
+this entry named: `ModRack::move_module_mapped` returns the permutation it
+applied, `ModulatorRack::permute` carries each module's running state through
+it, and `MoveModulator` has its own handler ahead of the params diff.
 
-**A unipolar route only rests at its base when the module's own Amount is
-exactly 1.** `offset_for`'s lift is `(output + 1.0) * 0.5`
-(`modulation.rs:1997`), which assumes the source spans the full `-1..1`. An
-Envelope and a unipolar Random do; an LFO does not, because its output is
-`raw * depth * fade`, so the lift's minimum is `(1 - depth)/2` rather than 0.
-`mlm1_factory.rs:272` ships an LFO to pulse-width route at `Unipolar` with the
-module's Amount at 1.0, which is correct today -- turn that AMOUNT to 0.5 and
-the destination does not modulate less around the same floor, it shrinks its
-swing *and rises*. At Amount 0 the module contributes a constant `+0.5 *
-depth` offset while visibly producing no movement: "the modulator is off" and
-"the destination is parked half a depth up" become the same knob position.
-The spec names this exact hazard for outlets (lines 305-309) and does not
-address it one level down, where it says flatly "A unipolar route maps that
-output to `0..1`, making the base the floor." Not a small fix because it is a
-question about what `Unipolar` means and the answer changes resting values in
-saved projects: map the source's *declared* range onto `0..1`, which needs
-`ModSourceDescriptor.signal` carried into the realtime path where it is not
-today; or accept it on the grounds that reducing a bipolar source's amount
-legitimately collapses it to its midpoint -- defensible, but then the spec's
-polarity paragraph has to say so. Found 2026-09-13.
+Two things about the fix worth knowing before touching it. The permutation is
+**not enough on its own**: `retarget` may rewrite a Math module's
+`input_slot`, which lives in its params, so the handler still runs a params
+pass afterwards -- against the *permuted* previous params, which is what keeps
+it to the Math modules. A `MathSource` is its params and rebuilds for nothing,
+where rebuilding an LFO is the whole defect. And `permute` clears before it
+writes, so a slot the permutation does not name is emptied rather than left
+holding a module that has moved away; an in-place swap would lose that
+silently, which is why there is a test for it.
+
+The option **not** taken was keying the DSP rack by `ModSourceId` rather than
+by slot, which removes the class rather than this instance of it. The diff by
+slot number is what makes every other narrow command cheap, and a reorder is
+the one edit that owes it a permutation instead -- but a second edit that a
+diff cannot see would be the argument for the bigger change. Found
+2026-09-13, fixed 2026-09-14.
+
+**A unipolar route from a *fading-in* LFO rises from half the module's depth
+rather than from the floor.** The steady-state half of this was fixed
+2026-09-14: `offset_for`'s lift now stands on `ModRack::wire_span`, the span
+the module's params say it reaches, so an LFO at half depth rests on the base
+instead of a quarter of the route's depth above it, and one at depth zero
+contributes nothing instead of half a depth of silent offset. What the span
+cannot see is `fade`, because that is DSP state in `Lfo` rather than a
+parameter, and reading it per control tick means a second
+`[[f32; 8]; 256]` table per channel beside `ControlOutputs` -- 8 KB a live
+channel, doubling the control capture, for a transient on a parameter that
+defaults to zero seconds. So during a fade the lift is anchored on the
+unfaded depth and the route rises from `depth * 0.5` to its floor. Exact from
+the moment the fade completes. Found 2026-09-13, mostly fixed 2026-09-14.
 
 **A Math module's `input_slot` follows a reorder but not a removal.**
 `retarget` (`modulation.rs:1767`) goes out of its way to carry the input
@@ -1028,37 +953,30 @@ a dependent input out of range on `clear` and map empty-slot references in
 it cannot represent; or decide the slot number is the contract and delete the
 `retarget` remap so the three behaviours at least agree. Found 2026-09-13.
 
-**Half the bus-bank repair happens in `mooloop-core` and reports nothing, and
-one branch of it can delete every send in the project.** `PROJECT_FORMAT.md`
-attributes three repairs to the loader; only the out-of-range destination is
-there. `mixer::sanitize_bank` (`mooloop-core/src/mixer.rs:305`) does the other
-two -- drop a send whose target is gone, flatten a cycle to
-everything-to-master -- and it is called from `Session::load_project`
-(`session.rs:1140`), after the integrity pass, with no `Doctor` in reach.
+**The bus-bank repair is logged, not reported, and `load_bundle` on its own
+still hands back an unsanitised bank.** Two of the four consequences this
+entry described are fixed as of 2026-09-14. The cycle branch no longer clears
+`sends` on every track: `break_cycles` removes only edges that are genuinely
+on a loop, sends before outputs, so one bad `output` edge in a hand-edited
+file costs that edge rather than a whole bank's aux routing. And
+`sanitize_bank` returns a `BankRepair` per correction, which
+`Session::replace_project` writes to the log.
 
-Four consequences, in order of how much they cost a user. The repair is
-**unreported**: `LoadReport::repairs` is empty for it, so the status bar, the
-repair log and the copyable `Diagnosis::report()` all omit it. It is then
-**persisted** -- the sanitized bank becomes `self.buses`, and the next save
-writes it -- so the sends are gone from the file and not just from the running
-document. The cycle branch clears `sends` on **every** track rather than the
-ones in the cycle, so one bad `output` edge in a hand-edited or foreign-build
-file costs a whole bank's aux routing silently. And `load_bundle` on its own
-returns an unsanitised bank, so anything driving the loader directly -- an
-offline render, a headless measurement loop -- gets a graph `compile_bus_graph`
-will refuse.
+What is left is where those repairs *go*. They are not in
+`LoadReport::repairs`, so the status bar's count, the repair log's load line
+and the copyable `Diagnosis::report()` still omit them -- and the sanitized
+bank is still what the next save writes, so a repair is an edit to the user's
+file that only the log mentions. Folding them into the report means moving the
+sanitise into `integrity::check_buses`, which needs `mooloop-project` to call
+`compile_bus_graph` itself and changes *when* it runs relative to what
+`Session::replace_project` assumes about the bank it is handed -- and that
+function runs on every project install, an undo included, not only on a load.
+The narrow alternative is a second entry point used only by the load path.
 
-The fix is not small because the repair needs the whole graph: moving it into
-`integrity::check_buses` means `mooloop-project` calling `compile_bus_graph`
-itself, and it changes *when* the sanitising runs relative to what
-`Session::load_project` assumes about the bank it is handed. Three options,
-and the third is worth doing whichever of the first two wins: move it into the
-integrity pass and report each dropped send and the cycle flatten through
-`Doctor`; or leave it where it is and have it return its issues for `Session`
-to fold into the `LoadReport`; or narrow the cycle branch to break the smallest
-set of edges that makes the graph compile, instead of clearing everything.
-`PROJECT_FORMAT.md`'s limits section now says where these actually happen
-rather than claiming the loader does all three. Found 2026-09-12.
+Separately, `load_bundle` on its own returns an unsanitised bank, so anything
+driving the loader directly -- an offline render, a headless measurement loop
+-- gets a graph `compile_bus_graph` will refuse. Found 2026-09-12, half-fixed
+2026-09-14.
 
 **`from_index` answers out-of-range input two different ways depending on
 which enum you ask, and nothing currently reaches it.** Forty-five enums
@@ -1175,22 +1093,6 @@ test. **A disabled test does not fail; it stops existing**, and `dead_code`
 was the only thing that could have said so. When clippy is red anywhere,
 nothing downstream of it is being checked at all.
 
-**The README hero screenshot predates effects.** `mooloop-screenshot.png`,
-captioned "channel rack and Mono Synth" — accurate, but no longer showing the
-most interesting part of the app. A fresh one can be rendered headlessly.
-
-**Six dB readouts still round for themselves.** `GainMath.format-db` now
-covers every readout that is a *gain*, but six sites spell their own number
-because they are not gains and the shared formatter's signed, `-inf`-floored
-output would misreport them: a `+` on a knee width or a gate range is wrong,
-and `±0.0 dB` on a limiter ceiling parked at full scale reads oddly.
-`compressor-device.slint:70,142`, `gate-device.slint:68,140`,
-`limiter-device.slint:62`, `device-displays.slint:545`. Three of them use
-`round(x * 10) / 10`, which drops the tenth on a whole value — the same
-width-jitter this pass took out of `format-db` itself. What is missing is an
-unsigned one-decimal formatter to sit beside `format-db`; that is a decision
-about the dB vocabulary rather than a typo, which is why it was left.
-
 **The division list is spelled three times, and all three are now checked.**
 `main.slint:820`'s `snap-ticks(index)` gives eleven divisions in ticks,
 `mooloop-ui`'s `MUSICAL_DIVISIONS` gives the same eleven with their names, and
@@ -1237,10 +1139,11 @@ finding that three had "no slack anywhere". Correcting the source formula
 widens every three-unit source face by 4px and every four-unit one by 8px,
 against faces that were sized by eye and signed off. Found 2026-09-10.
 
-**Three unmerged spikes.** `spike/egui-view-layer` (3 commits),
-`spike/slint-split-build` (5) and `spike/pattern-bank-cost` (1) are answers
-rather than candidates — none is waiting to land. Adam's call whether any
-goes anywhere.
+**Four unmerged spikes**, re-counted 2026-09-14. `spike/slint-split-build`
+(5 commits), `spike/egui-view-layer` (3), `spike/pattern-bank-cost` (1) and
+`spike/song-from-scratch` (1) are answers rather than candidates — none is
+waiting to land. Adam's call whether any goes anywhere. A fifth,
+`spike/measure-charts`, is fully merged and its branch can be deleted.
 
 There is also `claude/device-identity-rack-addressing-99yt4o` on the remote,
 one commit that is not in `origin/main` and has no local branch. Nobody has

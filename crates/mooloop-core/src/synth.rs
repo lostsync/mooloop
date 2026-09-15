@@ -497,6 +497,8 @@ impl Default for MonoSynthParams {
     }
 }
 
+use crate::mlm1::{EnvTrigger, NotePriority};
+
 /// Upper bound on simultaneous poly synth voices.
 pub const MAX_POLY_VOICES: u8 = 16;
 
@@ -533,6 +535,22 @@ pub struct PolySynthParams {
     /// Stereo spread in `[0, 1]`. `0` is mono; `1` pans voices hard across the
     /// field with the centre voice(s) staying centred.
     pub spread: f32,
+    /// Collapse to a single voice with **monosynth note behaviour**, which is
+    /// not the same thing as `polyphony == 1`.
+    ///
+    /// A pool of one voice steals from itself: releasing the newer of two held
+    /// notes leaves the voice on the note that is no longer down, and every
+    /// overlapping note retriggers. Mono mode gives the voice a held-note
+    /// stack, so releasing falls back to what is still held, as a pitch change
+    /// rather than as a new note.
+    ///
+    /// The two fields below apply only while this is on, and all three rest at
+    /// the behaviour the device had before they existed.
+    pub mono_mode: bool,
+    /// Whether an overlapping note restarts the envelope, in mono mode.
+    pub env_trigger: EnvTrigger,
+    /// Which held note wins when several are down, in mono mode.
+    pub note_priority: NotePriority,
 }
 
 impl Default for PolySynthParams {
@@ -571,6 +589,57 @@ impl Default for PolySynthParams {
             lfo: LfoParams::default(),
             polyphony: 8,
             spread: 0.0,
+            mono_mode: false,
+            // `Retrig` is what the v1 poly has always done, which is what
+            // makes switching mono mode on a change of note *behaviour*
+            // rather than of sound.
+            env_trigger: EnvTrigger::Retrig,
+            note_priority: NotePriority::Last,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A poly patch saved before mono mode existed opens as it was.**
+    ///
+    /// The manifest below is a real `PolySynthParams` with the three fields
+    /// `poly-v1-mono-mode/` added cut back out of it, which is exactly what a
+    /// project written before 2026-09-15 contains. `#[serde(default)]` on the
+    /// struct is what makes that load at all; this is what says the values it
+    /// falls back to are the ones that reproduce the device.
+    ///
+    /// Serialized from the default rather than written out by hand: a
+    /// hand-written manifest is a second copy of the struct's field list, and
+    /// it goes stale the moment a field is added -- which is the same reason
+    /// the channel strip's own manifest test gives.
+    #[test]
+    fn a_poly_patch_written_before_mono_mode_loads_as_it_played() {
+        let full = toml::to_string(&PolySynthParams::default()).unwrap();
+        let old: String = full
+            .lines()
+            .filter(|line| {
+                !line.starts_with("mono_mode")
+                    && !line.starts_with("env_trigger")
+                    && !line.starts_with("note_priority")
+            })
+            .map(|line| format!("{line}\n"))
+            .collect();
+        assert!(
+            old.len() < full.len(),
+            "the three fields are not in the serialized form, so this test is \
+             checking nothing"
+        );
+
+        let loaded: PolySynthParams = toml::from_str(&old).unwrap();
+        assert!(!loaded.mono_mode, "an old patch opened in mono mode");
+        assert_eq!(
+            (loaded.env_trigger, loaded.note_priority),
+            (EnvTrigger::Retrig, NotePriority::Last),
+            "the resting behaviour is not the one the v1 poly always had"
+        );
+        assert_eq!(loaded, PolySynthParams::default());
     }
 }

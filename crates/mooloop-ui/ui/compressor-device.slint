@@ -68,7 +68,7 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 tooltip: "Level compression starts at";
                 value <=> root.threshold;
                 default-value: 0.7;
-                value-text: round(root.threshold-db) + " dB";
+                value-text: GainMath.format-plain-db(root.threshold-db) + " dB";
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[0];
                 modulation-depth: root.modulation-depths[0];
@@ -140,7 +140,7 @@ export component CompressorDeviceFace inherits EffectDeviceShell {
                 tooltip: "Width of the soft transition at the threshold";
                 value <=> root.knee;
                 default-value: 0.25;
-                value-text: round(root.knee-db * 10) / 10 + " dB";
+                value-text: GainMath.format-plain-db(root.knee-db) + " dB";
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[4];
                 modulation-depth: root.modulation-depths[4];

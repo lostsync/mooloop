@@ -177,6 +177,30 @@ fn source_peak_at_unity_hits_the_reference_level() {
     }
 }
 
+/// **Mono mode changes note behaviour, not level.**
+///
+/// One voice playing the reference patch has to land where every other
+/// default patch lands, or switching the mode on is a gain change wearing a
+/// mode's clothes -- and the v1 poly is a gain reference as well as a synth,
+/// which is why `poly-v1-mono-mode/00-status.md` says to keep its
+/// calibration.
+#[test]
+fn the_poly_in_mono_mode_still_hits_the_reference_level() {
+    let mut channel = one_note_channel(DeviceKind::PolySynth);
+    channel
+        .setup
+        .poly_synth_state_mut()
+        .unwrap()
+        .params
+        .mono_mode = true;
+    let peak = peak_dbfs(&single_channel_project(channel), 2.0);
+    println!("poly in mono mode: {peak:.1} dBFS");
+    assert!(
+        (-13.0..=-11.0).contains(&peak),
+        "the poly in mono mode peaked at {peak:.1} dBFS, want ~-12"
+    );
+}
+
 /// The sampler's half of the reference level, for the material it actually
 /// gets. A full-scale file in a fresh sampler lands where every default patch
 /// lands -- the same -12 dBFS the loop above asserts for the synths -- because

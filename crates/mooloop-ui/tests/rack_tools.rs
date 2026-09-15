@@ -246,3 +246,50 @@ fn a_drag_past_the_end_of_the_row_stays_in_range() {
         "the drag clamps to the final step"
     );
 }
+
+/// **The rack draws a band for every level the engine blends, and no more.**
+///
+/// `main.slint`'s `for level in [1, 2, 3, 4]` is `MAX_CONTAINER_DEPTH` written
+/// out as four literals, and until 2026-09-14 nothing read it. That mattered
+/// in both directions. A list shorter than the cap is a box the engine blends
+/// and the rack draws without chrome; a list longer than it is chrome around a
+/// box whose Mix does nothing -- which is exactly the state five clicks used
+/// to reach, inert and invisible at the same time.
+///
+/// A markup scan rather than a derived model: four literals that cannot change
+/// at run time do not need a Rust-supplied property crossing the face
+/// contract, they need something that notices when the two part.
+/// `scripts/dupe-audit` names this shape -- a duplicate nothing is watching.
+#[test]
+fn the_rack_draws_a_band_for_every_level_the_engine_blends() {
+    const MARKUP: &str = include_str!("../ui/main.slint");
+    const KEY: &str = "for level in [";
+
+    let list = MARKUP
+        .lines()
+        .find_map(|line| line.split_once(KEY))
+        .map(|(_, rest)| rest)
+        .expect("main.slint no longer loops over container levels");
+    let (inside, _) = list
+        .split_once(']')
+        .expect("the container level list is not a bracketed literal");
+
+    let levels: Vec<usize> = inside
+        .split(',')
+        .map(|entry| {
+            entry
+                .trim()
+                .parse()
+                .unwrap_or_else(|_| panic!("container level list holds a non-integer: {inside}"))
+        })
+        .collect();
+
+    let expected: Vec<usize> = (1..=mooloop_core::MAX_CONTAINER_DEPTH).collect();
+    assert_eq!(
+        levels, expected,
+        "main.slint draws container levels {levels:?} where the engine blends \
+         {} of them; `depth` counts enclosing boxes, so the levels are \
+         1..=MAX_CONTAINER_DEPTH",
+        mooloop_core::MAX_CONTAINER_DEPTH
+    );
+}

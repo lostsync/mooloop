@@ -422,27 +422,69 @@ const EQ_PASS_NAMES: [[&str; EQ_PASS_FIELDS as usize]; EQ_PASS_COUNT] = [
     ["LP On", "LP Freq", "LP Q", "LP Slope"],
 ];
 
-/// Every band's resting state, in the order the fields are numbered. Three
-/// bands start on -- a low shelf, a bell and a high shelf -- which is the
-/// arrangement `EqParams::default` builds, and these are the same numbers
-/// read off it rather than a second copy of them.
-/// (`descriptor_defaults_match_the_params_defaults` is what holds the two
-/// together, and it checks all fifty.)
-const EQ_BAND_DEFAULTS: [[f32; EQ_BAND_FIELDS as usize]; EQ_MAX_BANDS] = [
-    // on, freq, gain, q, kind, q profile
-    [1.0, 120.0, 0.0, 0.707, 1.0, 0.0],
-    [1.0, 1_000.0, 0.0, 0.707, 0.0, 0.0],
-    [1.0, 8_000.0, 0.0, 0.707, 2.0, 0.0],
-    [0.0, 1_000.0, 0.0, 0.707, 0.0, 0.0],
-    [0.0, 1_000.0, 0.0, 0.707, 0.0, 0.0],
-    [0.0, 1_000.0, 0.0, 0.707, 0.0, 0.0],
-    [0.0, 1_000.0, 0.0, 0.707, 0.0, 0.0],
+/// Where the seven bands rest, in hertz.
+///
+/// The seven-band graphic EQ's own centres -- 63, 160, 400, 1k, 2.5k, 6.3k,
+/// 16k -- which is a constant ratio of about 2.5, an octave and a third, per
+/// step. A spread rather than a huddle because **every band starts on and
+/// every band starts somewhere different**: a bank whose bands 4 to 7 all
+/// rested at 1 kHz drew four handles on top of each other, and the first
+/// thing anybody did with one was drag it somewhere else.
+///
+/// Written once here because two tables read it -- [`EQ_BAND_DEFAULTS`],
+/// which the descriptors are generated from, and [`EqParams::default`], which
+/// is what a freshly added EQ actually runs. They were two hand-written
+/// copies of the same seven numbers until 2026-09-15, held together by a test
+/// rather than by construction.
+pub const EQ_DEFAULT_BAND_HZ: [f32; EQ_MAX_BANDS] =
+    [63.0, 160.0, 400.0, 1_000.0, 2_500.0, 6_300.0, 16_000.0];
+
+/// What each band is by default: **the outer two are shelves and the five
+/// between them are bells.**
+///
+/// The low shelf is band 1 and the high shelf is band **7**, which is where a
+/// console puts them and where the face draws them. Until 2026-09-15 the high
+/// shelf was band 3, sitting a third of the way along a row of seven buttons
+/// with four unused bands to the right of it.
+pub const EQ_DEFAULT_BAND_KIND: [EqBandKind; EQ_MAX_BANDS] = [
+    EqBandKind::LowShelf,
+    EqBandKind::Bell,
+    EqBandKind::Bell,
+    EqBandKind::Bell,
+    EqBandKind::Bell,
+    EqBandKind::Bell,
+    EqBandKind::HighShelf,
 ];
+
+/// The Q every band and both pass filters rest at: Butterworth, the width
+/// that neither rings nor smears, and the slope a shelf runs when its Q knob
+/// has not been touched.
+pub const EQ_DEFAULT_Q: f32 = 0.707;
+
+/// Every band's resting state, in the order the fields are numbered.
+///
+/// **Derived rather than written out**, from the same two tables
+/// [`EqParams::default`] builds its bands from, so the frequency a descriptor
+/// calls band 5's default and the frequency a new EQ puts band 5 at cannot
+/// become two different numbers.
+/// (`descriptor_defaults_match_the_params_defaults` still checks all fifty,
+/// and now checks a derivation rather than a copy.)
+const EQ_BAND_DEFAULTS: [[f32; EQ_BAND_FIELDS as usize]; EQ_MAX_BANDS] = {
+    // on, freq, gain, q, kind, q profile
+    let mut out = [[1.0, 0.0, 0.0, EQ_DEFAULT_Q, 0.0, 0.0]; EQ_MAX_BANDS];
+    let mut band = 0;
+    while band < EQ_MAX_BANDS {
+        out[band][EQ_BAND_FREQ as usize] = EQ_DEFAULT_BAND_HZ[band];
+        out[band][EQ_BAND_KIND as usize] = EQ_DEFAULT_BAND_KIND[band].to_index() as f32;
+        band += 1;
+    }
+    out
+};
 
 const EQ_PASS_DEFAULTS: [[f32; EQ_PASS_FIELDS as usize]; EQ_PASS_COUNT] = [
     // on, freq, q, slope (1 = Db12)
-    [0.0, 30.0, 0.707, 1.0],
-    [0.0, 18_000.0, 0.707, 1.0],
+    [0.0, 30.0, EQ_DEFAULT_Q, 1.0],
+    [0.0, 18_000.0, EQ_DEFAULT_Q, 1.0],
 ];
 
 /// One band field's shape, shared by all seven bands. A range written once is
@@ -466,7 +508,12 @@ const fn eq_pass_shape(field: u32) -> (&'static str, f32, f32, ParamCurve) {
         EQ_PASS_ON => ("", 0.0, 1.0, ParamCurve::Stepped(2)),
         EQ_PASS_FREQ => ("Hz", 20.0, 20_000.0, ParamCurve::Exponential),
         EQ_PASS_Q => ("", 0.15, 18.0, ParamCurve::Exponential),
-        _ => ("", 0.0, 4.0, ParamCurve::Stepped(5)),
+        _ => (
+            "",
+            0.0,
+            EQ_SLOPE_COUNT as f32 - 1.0,
+            ParamCurve::Stepped(EQ_SLOPE_COUNT as u16),
+        ),
     }
 }
 
@@ -525,6 +572,36 @@ const fn eq_descriptors() -> [ParamDescriptor; EQ_DESCRIPTOR_COUNT] {
 
 static EQ_DESCRIPTORS: [ParamDescriptor; EQ_DESCRIPTOR_COUNT] = eq_descriptors();
 
+/// The low end of the frequency axis every EQ response plot draws on.
+///
+/// Here rather than in the display or the publisher because four places need
+/// the same answer and they are in three crates: `strip_row` and
+/// `effect_slot_row` normalize a band's hertz onto it, `mooloop_dsp` samples
+/// the bank along it, and the markup reads the result back by position. It
+/// was `(hz / 20.0).ln() / 1000.0f32.ln()` written twice in `mooloop-ui`
+/// until 2026-09-14, which is the shape `AGENTS.md` opens on: an axis is a
+/// policy, and a policy spelled twice is one that drifts.
+///
+/// It is a *display* convention rather than a parameter range -- a band's
+/// frequency descriptor runs 20 Hz to 20 kHz too, and the coincidence is not
+/// load-bearing: a plot that stops at 20 kHz is right whatever the knob can
+/// reach, because that is where hearing stops.
+pub const EQ_PLOT_MIN_HZ: f32 = 20.0;
+/// The high end of that axis.
+pub const EQ_PLOT_MAX_HZ: f32 = 20_000.0;
+
+/// Where `frequency_hz` sits along the response plot's axis, 0 at
+/// [`EQ_PLOT_MIN_HZ`] and 1 at [`EQ_PLOT_MAX_HZ`], logarithmically.
+pub fn eq_plot_position(frequency_hz: f32) -> f32 {
+    (frequency_hz.max(1e-3) / EQ_PLOT_MIN_HZ).ln() / (EQ_PLOT_MAX_HZ / EQ_PLOT_MIN_HZ).ln()
+}
+
+/// The frequency at `position` along that axis. The inverse of
+/// [`eq_plot_position`], and what a response sampler walks.
+pub fn eq_plot_frequency(position: f32) -> f32 {
+    EQ_PLOT_MIN_HZ * (EQ_PLOT_MAX_HZ / EQ_PLOT_MIN_HZ).powf(position.clamp(0.0, 1.0))
+}
+
 /// A band's response topology. The first and last default bands are shelves;
 /// any active interior band is a peaking filter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -537,14 +614,17 @@ pub enum EqBandKind {
 }
 
 impl EqBandKind {
-    pub fn from_index(index: i32) -> Self {
+    pub const fn from_index(index: i32) -> Self {
         match index {
             1 => Self::LowShelf,
             2 => Self::HighShelf,
             _ => Self::Bell,
         }
     }
-    pub fn to_index(self) -> i32 {
+    /// `const` because [`EQ_BAND_DEFAULTS`] is generated at compile time and
+    /// reads a band's kind through here, rather than spelling the same
+    /// integer a second time in a table of floats.
+    pub const fn to_index(self) -> i32 {
         match self {
             Self::Bell => 0,
             Self::LowShelf => 1,
@@ -614,7 +694,7 @@ impl EqBand {
             kind: EqBandKind::Bell,
             frequency_hz,
             gain_db: 0.0,
-            q: 0.707,
+            q: EQ_DEFAULT_Q,
             q_profile: EqQProfile::Constant,
         }
     }
@@ -660,7 +740,41 @@ impl EqSlope {
             Self::Db36 => 6,
         }
     }
+
+    /// What this slope is, in decibels per octave, and what a face should
+    /// call it.
+    ///
+    /// **The variant names are half the slope they name, and they are kept
+    /// anyway.** A stage is `Biquad::pass`, which is the cookbook's
+    /// *second-order* section -- 12 dB per octave -- so `Db6` runs one of
+    /// them and rolls off at twelve, and `Db36` runs six and rolls off at
+    /// seventy-two. The selector on the EQ's face read "6 12 18 24 36" over a
+    /// bank doing 12/24/36/48/72 from the day it shipped, which is this
+    /// codebase's recurring fault in its plainest form: a control saying
+    /// something the engine is not doing.
+    ///
+    /// The names are the *persisted* spelling -- `serde` writes `"db6"` --
+    /// so renaming the variants would either refuse every saved project or
+    /// silently re-map one slope to another, to correct a label. The label is
+    /// what was wrong and the label is what moved. `docs/LOOSE_ENDS.md`
+    /// carries the rename for whenever a `FORMAT_VERSION` bump happens for a
+    /// reason worth having one.
+    pub fn db_per_octave(self) -> u32 {
+        self.stages() as u32 * PASS_STAGE_DB_PER_OCTAVE
+    }
+
+    /// Every slope, in index order, for a face that draws them all.
+    pub fn all() -> [Self; EQ_SLOPE_COUNT] {
+        [Self::Db6, Self::Db12, Self::Db18, Self::Db24, Self::Db36]
+    }
 }
+
+/// One `Biquad::pass` stage is second-order, and second-order is 12 dB per
+/// octave. The one place that arithmetic is stated.
+pub const PASS_STAGE_DB_PER_OCTAVE: u32 = 12;
+
+/// How many slopes a pass filter offers.
+pub const EQ_SLOPE_COUNT: usize = 5;
 
 /// Independent low- or high-pass cleanup filter.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -676,7 +790,7 @@ impl EqPassFilter {
         Self {
             enabled: false,
             frequency_hz: 30.0,
-            q: 0.707,
+            q: EQ_DEFAULT_Q,
             slope: EqSlope::Db12,
         }
     }
@@ -684,7 +798,7 @@ impl EqPassFilter {
         Self {
             enabled: false,
             frequency_hz: 18_000.0,
-            q: 0.707,
+            q: EQ_DEFAULT_Q,
             slope: EqSlope::Db12,
         }
     }
@@ -709,28 +823,23 @@ const fn default_eq_selected_target() -> u8 {
 }
 
 impl Default for EqParams {
+    /// **All seven bands, on, spread across the band, flat.**
+    ///
+    /// Three of the seven were on and the other four were parked at 1 kHz
+    /// until 2026-09-15, which made a seven-band EQ a three-band EQ with four
+    /// handles hidden under band 2's. Every band at 0 dB is transparent --
+    /// a bell at unity gain is the identity filter -- so what this costs is
+    /// seven biquads per channel instead of three, and what it buys is a face
+    /// where every handle on the plot is the handle it looks like.
     fn default() -> Self {
-        let mut bands = [EqBand::bell(1_000.0); EQ_MAX_BANDS];
-        bands[0] = EqBand {
-            enabled: true,
-            kind: EqBandKind::LowShelf,
-            frequency_hz: 120.0,
-            gain_db: 0.0,
-            q: 0.707,
-            q_profile: EqQProfile::Constant,
-        };
-        bands[1] = EqBand {
-            enabled: true,
-            ..EqBand::bell(1_000.0)
-        };
-        bands[2] = EqBand {
-            enabled: true,
-            kind: EqBandKind::HighShelf,
-            frequency_hz: 8_000.0,
-            gain_db: 0.0,
-            q: 0.707,
-            q_profile: EqQProfile::Constant,
-        };
+        let mut bands = [EqBand::bell(EQ_DEFAULT_BAND_HZ[0]); EQ_MAX_BANDS];
+        for (index, band) in bands.iter_mut().enumerate() {
+            *band = EqBand {
+                enabled: true,
+                kind: EQ_DEFAULT_BAND_KIND[index],
+                ..EqBand::bell(EQ_DEFAULT_BAND_HZ[index])
+            };
+        }
         Self {
             bands,
             high_pass: EqPassFilter::high_pass(),
@@ -3057,6 +3166,46 @@ mod tests {
         }
     }
 
+    /// **The bank spreads, and a shelf sits at each end of it.**
+    ///
+    /// Three bands were on and the other four were parked at 1 kHz until
+    /// 2026-09-15, so a seven-band EQ drew four of its handles underneath
+    /// band 2's and the high shelf was band 3 -- a third of the way along a
+    /// row of seven buttons. This is the shape of the bank a face can rely
+    /// on: every band on, every band somewhere of its own, the shelves at
+    /// the ends.
+    #[test]
+    fn the_seven_bands_rest_spread_out_with_a_shelf_at_each_end() {
+        let eq = EqParams::default();
+        assert_eq!(eq.bands[0].kind, EqBandKind::LowShelf);
+        assert_eq!(eq.bands[EQ_MAX_BANDS - 1].kind, EqBandKind::HighShelf);
+        for (index, band) in eq.bands.iter().enumerate() {
+            assert!(band.enabled, "band {} starts off", index + 1);
+            assert_eq!(band.gain_db, 0.0, "band {} starts bent", index + 1);
+            if index > 0 && index < EQ_MAX_BANDS - 1 {
+                assert_eq!(
+                    band.kind,
+                    EqBandKind::Bell,
+                    "band {} is not a bell",
+                    index + 1
+                );
+            }
+        }
+        // A ratio rather than a difference: the axis is logarithmic, so
+        // "spread out" means each band is a fixed factor above the last.
+        for pair in eq.bands.windows(2) {
+            assert!(
+                pair[1].frequency_hz > pair[0].frequency_hz * 1.5,
+                "{} Hz and {} Hz are the same handle as far as a plot is concerned",
+                pair[0].frequency_hz,
+                pair[1].frequency_hz
+            );
+        }
+        // And the outer two are on the plot rather than off the end of it.
+        assert!(eq.bands[0].frequency_hz >= EQ_PLOT_MIN_HZ);
+        assert!(eq.bands[EQ_MAX_BANDS - 1].frequency_hz <= EQ_PLOT_MAX_HZ);
+    }
+
     /// The headline of `eq-v2/01`: a lane addresses a band, not a view.
     ///
     /// This replaced `changing_eq_target_rederives_every_selected_band_value`,
@@ -3072,10 +3221,16 @@ mod tests {
             }
             params.set(eq_band_param(3, EQ_BAND_FREQ), 480.0);
             assert_eq!(params.get(eq_band_param(3, EQ_BAND_FREQ)), Some(480.0));
-            // And nothing else moved with it.
-            assert_eq!(params.get(eq_band_param(4, EQ_BAND_FREQ)), Some(1_000.0));
+            // And nothing else moved with it. Band 5 rests where the shared
+            // table puts it rather than at a number written here: all seven
+            // bands start on and spread across the band since 2026-09-15, so
+            // a literal would have been this test's own copy of one of them.
+            assert_eq!(
+                params.get(eq_band_param(4, EQ_BAND_FREQ)),
+                Some(EQ_DEFAULT_BAND_HZ[4])
+            );
             if let EffectParams::Eq(p) = &mut params {
-                p.bands[3].frequency_hz = 1_000.0;
+                p.bands[3].frequency_hz = EQ_DEFAULT_BAND_HZ[3];
             }
         }
     }

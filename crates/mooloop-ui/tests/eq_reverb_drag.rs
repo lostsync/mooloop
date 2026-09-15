@@ -17,7 +17,10 @@
 //! self-positioning control, only shared `ParameterKnob`s, so that case is
 //! gone rather than untested.
 
-use mooloop_ui::{CompressorDeviceDragHarness, EqDeviceDragHarness, FilterDeviceDragHarness};
+use mooloop_ui::{
+    eq_plot_pass, install_eq_spec, CompressorDeviceDragHarness, EqDeviceDragHarness,
+    FilterDeviceDragHarness, EQ_PLOT_BAND_STRIDE, EQ_PLOT_PASS_STRIDE,
+};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, VecModel};
 use std::cell::RefCell;
@@ -97,14 +100,17 @@ fn eq_point_drag_tracks_the_pointer() {
     ui.window()
         .set_size(LogicalSize::new(EQ_FACE_WIDTH, FACE_HEIGHT));
 
+    // The face reads every range, label and target count out of this; a
+    // harness without it does not draw a wrong number, it divides by a target
+    // count of zero.
+    install_eq_spec(&ui);
+
     // Band 0 active at the plot centre; the other six disabled so their
     // (irrelevant) hit areas can't shadow band 0's.
-    let mut band_data = vec![0.0f32; 35];
+    let mut band_data = vec![0.0f32; 7 * EQ_PLOT_BAND_STRIDE];
     band_data[0] = 0.5; // frequency
     band_data[1] = 0.5; // gain
-    band_data[2] = 0.707; // q
-    band_data[3] = 1.0; // enabled
-    band_data[4] = 0.0; // bell
+    band_data[2] = 1.0; // enabled
     ui.set_band_data(ModelRc::from(Rc::new(VecModel::from(band_data))));
 
     let frequencies = Rc::new(RefCell::new(Vec::new()));
@@ -146,6 +152,99 @@ fn eq_point_drag_tracks_the_pointer() {
     );
 }
 
+/// **A pass filter's corner is on the curve and can be grabbed**, which is
+/// the acceptance line `eq-v2/02` opens on: the high-pass and low-pass were
+/// not drawn at all, while their data was already being sent to the plot.
+///
+/// It also pins the half of that which is easy to lose. A pass filter has no
+/// gain, so dragging its handle must move it in frequency *only* -- and the
+/// engine would refuse a gain write for a pass target anyway
+/// (`EqParams::id_for_selected` has no id for it), which is exactly the kind
+/// of silent refusal that hides a face doing the wrong thing.
+#[test]
+fn a_pass_filter_point_is_grabbable_and_moves_only_in_frequency() {
+    init_software_backend();
+    let ui = EqDeviceDragHarness::new().unwrap();
+    ui.window()
+        .set_size(LogicalSize::new(EQ_FACE_WIDTH, FACE_HEIGHT));
+    install_eq_spec(&ui);
+
+    // Every band off, so only the pass handles have hit areas.
+    ui.set_band_data(ModelRc::from(Rc::new(VecModel::from(vec![
+        0.0f32;
+        7 * EQ_PLOT_BAND_STRIDE
+    ]))));
+    // The high-pass switched on at the middle of the axis, the low-pass off.
+    let mut pass_data = vec![0.0f32; 2 * EQ_PLOT_PASS_STRIDE];
+    pass_data[..EQ_PLOT_PASS_STRIDE].copy_from_slice(&eq_plot_pass(
+        mooloop_core::eq_plot_frequency(0.5),
+        true,
+    ));
+    ui.set_pass_data(ModelRc::from(Rc::new(VecModel::from(pass_data))));
+    // A curve at a flat -12 dB. Not decoration: the handle rides the
+    // response, so this is also the only test that the face *reads*
+    // `curve-db` and scales it the way it draws it. The plot spans +-24 dB,
+    // so -12 puts the handle three quarters of the way down -- and a face
+    // that ignored the curve would leave it at the half-way line, where the
+    // press below would hit nothing at all.
+    let plot_ceiling_db = 24.0;
+    let curve_db = -12.0f32;
+    ui.set_curve_db(ModelRc::from(Rc::new(VecModel::from(vec![curve_db; 140]))));
+
+    let selected = Rc::new(RefCell::new(Vec::new()));
+    let frequencies = Rc::new(RefCell::new(Vec::new()));
+    let gains = Rc::new(RefCell::new(Vec::new()));
+    ui.on_target_changed({
+        let selected = selected.clone();
+        move |v| selected.borrow_mut().push(v)
+    });
+    ui.on_frequency_changed({
+        let frequencies = frequencies.clone();
+        move |v| frequencies.borrow_mut().push(v)
+    });
+    ui.on_gain_changed({
+        let gains = gains.clone();
+        move |v| gains.borrow_mut().push(v)
+    });
+
+    let plot_x = 6.0;
+    let plot_y = HEADER_HEIGHT + 6.0;
+    let plot_w = EQ_FACE_WIDTH - 12.0;
+    let plot_h = 126.0;
+    let handle_y = plot_y + (0.5 - curve_db / (2.0 * plot_ceiling_db)) * plot_h;
+    let start = (plot_x + 0.5 * plot_w, handle_y);
+    let dx = 80.0;
+    // Downward as well as sideways: the vertical travel must go nowhere.
+    let end = (start.0 + dx, start.1 + 30.0);
+    drag(ui.window(), start, end, 16);
+
+    assert!(
+        !frequencies.borrow().is_empty(),
+        "nothing was grabbed where the curve puts the high-pass handle, \
+         {handle_y}px down a plot that starts at {plot_y}px"
+    );
+    assert_monotonic(&frequencies.borrow(), true, "high-pass frequency");
+    let final_freq = *frequencies.borrow().last().unwrap();
+    assert!(
+        (final_freq - (0.5 + dx / plot_w)).abs() < 0.02,
+        "frequency should track the pointer 1:1: got {final_freq}"
+    );
+    assert!(
+        gains.borrow().is_empty(),
+        "dragging a pass filter wrote a gain: {:?}",
+        gains.borrow()
+    );
+    // Every report names the high-pass, which is the target one past the
+    // last band.
+    let hp = 7.0 / 8.0;
+    for value in selected.borrow().iter() {
+        assert!(
+            (value - hp).abs() < 1e-4,
+            "a pass handle selected {value} rather than the high-pass"
+        );
+    }
+}
+
 #[test]
 fn coincident_eq_points_are_separately_selectable() {
     init_software_backend();
@@ -153,13 +252,14 @@ fn coincident_eq_points_are_separately_selectable() {
     ui.window()
         .set_size(LogicalSize::new(EQ_FACE_WIDTH, FACE_HEIGHT));
 
-    let mut band_data = vec![0.0f32; 35];
+    install_eq_spec(&ui);
+
+    let mut band_data = vec![0.0f32; 7 * EQ_PLOT_BAND_STRIDE];
     for index in 0..2 {
-        let base = index * 5;
+        let base = index * EQ_PLOT_BAND_STRIDE;
         band_data[base] = 0.5;
         band_data[base + 1] = 0.5;
-        band_data[base + 2] = 0.707;
-        band_data[base + 3] = 1.0;
+        band_data[base + 2] = 1.0;
     }
     ui.set_band_data(ModelRc::from(Rc::new(VecModel::from(band_data))));
 

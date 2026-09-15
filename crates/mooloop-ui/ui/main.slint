@@ -39,7 +39,7 @@ import { DelayDeviceFace } from "delay-device.slint";
 import { GateDeviceFace } from "gate-device.slint";
 import { CompressorDeviceFace } from "compressor-device.slint";
 import { LimiterDeviceFace } from "limiter-device.slint";
-import { EqDeviceFace } from "eq-device.slint";
+import { EqSpec, EqDeviceFace } from "eq-device.slint";
 import { ReverbDeviceFace } from "reverb-device.slint";
 import { PlateDeviceFace } from "plate-device.slint";
 import { ModulationDeviceFace } from "modulation-device.slint";
@@ -54,6 +54,10 @@ export { StripMeters }
 // while `tests/mixer_snapshot.rs` reads the strip's width out of the second
 // rather than keeping its own copy of 92.
 export { StripSpec }
+// The EQ's table, for the same reason the strip's is exported: Rust fills it
+// once at startup so no range, label or resting value is spelled in
+// `eq-device.slint`.
+export { EqSpec }
 import { MonoDeviceFace } from "mono-device.slint";
 import { MlM1DeviceFace } from "mlm1-device.slint";
 import { MlP8DeviceFace, MlP8RouteRow } from "mlp8-device.slint";
@@ -70,7 +74,7 @@ export { DeviceRackConcepts } from "device-concepts.slint";
 // drag regression tests can drive them directly with real pointer events
 // instead of invoking their callbacks, which would pass even if event
 // routing to the handle were broken.
-export { CompressorDeviceDragHarness, Ds01DeviceDragHarness, EqDeviceDragHarness, FilterDeviceDragHarness } from "device-drag-harness.slint";
+export { CompressorDeviceDragHarness, Ds01DeviceDragHarness, EqDeviceDragHarness, FilterDeviceDragHarness, MlP8DeviceDragHarness } from "device-drag-harness.slint";
 export { MixerSendRow }
 export { MixerStripRow }
 export { AudioDriverCopy, OutputTargetRow }
@@ -248,8 +252,20 @@ struct EffectSlotRow {
     modulation-allowed: [bool],
     modulation-offsets: [float],
     modulation-route-counts: [int],
-    // EQ-only: seven groups of freq/gain/q/enabled/kind plus HP and LP.
+    // EQ-only, and all three are `EqResponseDisplay`'s conventions rather
+    // than parameter values: three floats a band and two a pass filter to
+    // place the handles, and the bank's magnitude response in decibels,
+    // sampled by `mooloop_dsp::effects::eq_response_db` over the plot's own
+    // frequency axis. The curve is the filter evaluated, not a shape drawn to
+    // resemble it -- see `docs/plans/eq-v2/02-the-curve-tells-the-truth.md`.
     eq-band-data: [float],
+    // Each band's `EqBandKind`, as `EqBandKind::to_index` numbers it. Its own
+    // field rather than a fourth float in `eq-band-data`, because that array
+    // is what *places a handle* and a kind places nothing: it is what the
+    // target row draws a shelf's glyph from.
+    eq-band-kinds: [int],
+    eq-pass-data: [float],
+    eq-curve-db: [float],
     eq-spectrum-data: [float],
     eq-analyzer-enabled: bool,
     // Per-band decibels the preamp *added*, already gated and normalized by
@@ -282,6 +298,11 @@ struct EffectSlotRow {
     // once rather than twice.
     children: int,
     depth: int,
+    // Whether wrapping this row would leave every container inside
+    // `MAX_CONTAINER_DEPTH`. A bool and not a comparison against `depth`,
+    // because the cap is an engine number and spelling it here would be a
+    // fifth copy -- `mooloop_core::can_wrap` answers this and the gesture.
+    wrap-enabled: bool,
     // The containers whose run *ends* at this row, innermost first, as rack
     // indices. Each one draws its output rail here, past everything it holds,
     // so a container's chrome encloses its devices instead of sitting beside
@@ -2064,6 +2085,8 @@ export component MainWindow inherits Window {
     in-out property <float> poly-lfo-amp;
     in-out property <int> poly-polyphony: 8;
     in-out property <float> poly-spread;
+    in-out property <bool> poly-mono-mode;
+    in-out property <int> poly-env-trigger; in-out property <int> poly-note-priority;
     callback poly-osc1-wave-changed(int); callback poly-osc1-semitones-changed(float); callback poly-osc1-cents-changed(float); callback poly-osc1-level-changed(float); callback poly-osc1-pulse-width-changed(float);
     callback poly-osc2-wave-changed(int); callback poly-osc2-semitones-changed(float); callback poly-osc2-cents-changed(float); callback poly-osc2-level-changed(float); callback poly-osc2-pulse-width-changed(float);
     callback poly-osc3-wave-changed(int); callback poly-osc3-semitones-changed(float); callback poly-osc3-cents-changed(float); callback poly-osc3-level-changed(float); callback poly-osc3-pulse-width-changed(float);
@@ -2072,6 +2095,8 @@ export component MainWindow inherits Window {
     callback poly-lfo-wave-changed(int); callback poly-lfo-rate-changed(float); callback poly-lfo-retrigger-changed(bool);
     callback poly-lfo-pitch-changed(float); callback poly-lfo-filter-changed(float); callback poly-lfo-pulse-width-changed(float); callback poly-lfo-amp-changed(float);
     callback poly-polyphony-changed(int); callback poly-spread-changed(float);
+    callback poly-mono-mode-changed(bool);
+    callback poly-env-trigger-changed(int); callback poly-note-priority-changed(int);
 
     // ---- transport callbacks ----
     callback new-song();
@@ -4003,6 +4028,8 @@ export component MainWindow inherits Window {
                                                 lfo-wave <=> root.poly-lfo-wave; lfo-rate <=> root.poly-lfo-rate; lfo-retrigger <=> root.poly-lfo-retrigger;
                                                 lfo-pitch <=> root.poly-lfo-pitch; lfo-filter <=> root.poly-lfo-filter; lfo-pulse-width <=> root.poly-lfo-pulse-width; lfo-amp <=> root.poly-lfo-amp;
                                                 polyphony <=> root.poly-polyphony; spread <=> root.poly-spread;
+                                                mono-mode <=> root.poly-mono-mode;
+                                                env-trigger <=> root.poly-env-trigger; note-priority <=> root.poly-note-priority;
                                                 osc1-wave-changed(v) => { root.poly-osc1-wave-changed(v); } osc1-semitones-changed(v) => { root.poly-osc1-semitones-changed(v); } osc1-cents-changed(v) => { root.poly-osc1-cents-changed(v); } osc1-level-changed(v) => { root.poly-osc1-level-changed(v); } osc1-pulse-width-changed(v) => { root.poly-osc1-pulse-width-changed(v); }
                                                 osc2-wave-changed(v) => { root.poly-osc2-wave-changed(v); } osc2-semitones-changed(v) => { root.poly-osc2-semitones-changed(v); } osc2-cents-changed(v) => { root.poly-osc2-cents-changed(v); } osc2-level-changed(v) => { root.poly-osc2-level-changed(v); } osc2-pulse-width-changed(v) => { root.poly-osc2-pulse-width-changed(v); }
                                                 osc3-wave-changed(v) => { root.poly-osc3-wave-changed(v); } osc3-semitones-changed(v) => { root.poly-osc3-semitones-changed(v); } osc3-cents-changed(v) => { root.poly-osc3-cents-changed(v); } osc3-level-changed(v) => { root.poly-osc3-level-changed(v); } osc3-pulse-width-changed(v) => { root.poly-osc3-pulse-width-changed(v); }
@@ -4014,6 +4041,8 @@ export component MainWindow inherits Window {
                                                 lfo-wave-changed(v) => { root.poly-lfo-wave-changed(v); } lfo-rate-changed(v) => { root.poly-lfo-rate-changed(v); } lfo-retrigger-changed(v) => { root.poly-lfo-retrigger-changed(v); }
                                                 lfo-pitch-changed(v) => { root.poly-lfo-pitch-changed(v); } lfo-filter-changed(v) => { root.poly-lfo-filter-changed(v); } lfo-pulse-width-changed(v) => { root.poly-lfo-pulse-width-changed(v); } lfo-amp-changed(v) => { root.poly-lfo-amp-changed(v); }
                                                 polyphony-changed(v) => { root.poly-polyphony-changed(v); } spread-changed(v) => { root.poly-spread-changed(v); }
+                                                mono-mode-changed(v) => { root.poly-mono-mode-changed(v); }
+                                                env-trigger-changed(v) => { root.poly-env-trigger-changed(v); } note-priority-changed(v) => { root.poly-note-priority-changed(v); }
                                             }
 
                                             if !root.editing-bus && root.source-kind == 4 : MlM1DeviceFace {
@@ -4321,6 +4350,17 @@ export component MainWindow inherits Window {
                                             // `depth >= 0` is true of every row -- every
                                             // device in the rack wore a container's band,
                                             // whether or not it was in one.
+                                            //
+                                            // The list is `MAX_CONTAINER_DEPTH`
+                                            // spelled out, and it is held to
+                                            // it by
+                                            // `the_rack_draws_a_band_for_every_level_the_engine_blends`
+                                            // in `rack_tools.rs`. A derived
+                                            // model would be a Rust-supplied
+                                            // property for four literals that
+                                            // never change at run time; a
+                                            // guard on the copy is the cheaper
+                                            // half of the same protection.
                                             for level in [1, 2, 3, 4] : ContainerEnclosure {
                                                 property <bool> inside: slot.depth >= level;
                                                 property <bool> is-head: slot.kind == 13 && slot.depth == level - 1;
@@ -4407,8 +4447,11 @@ export component MainWindow inherits Window {
                                                 container-children: slot.children;
                                                 // Wrapping a container in
                                                 // another is legal, so this
-                                                // is on every row.
-                                                wrap-enabled: true;
+                                                // is on every row -- until
+                                                // the box it would make is
+                                                // one the engine will not
+                                                // blend.
+                                                wrap-enabled: slot.wrap-enabled;
                                                 unwrap-enabled: slot.kind == 13;
                                                 wrap-requested => { root.wrap-effect-clicked(index); }
                                                 unwrap-requested => { root.unwrap-effect-clicked(index); }
@@ -4715,6 +4758,9 @@ export component MainWindow inherits Window {
                                                     pass-slope: slot.p5;
                                                     q-profile: slot.p6;
                                                     band-data: slot.eq-band-data;
+                                                    band-kinds: slot.eq-band-kinds;
+                                                    pass-data: slot.eq-pass-data;
+                                                    curve-db: slot.eq-curve-db;
                                                     spectrum-data: slot.eq-spectrum-data;
                                                     analyzer-enabled: slot.eq-analyzer-enabled;
                                                     target-changed(v) => { root.effect-param-changed(index, 0, v); }

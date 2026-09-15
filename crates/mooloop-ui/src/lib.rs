@@ -66,12 +66,12 @@ use mooloop_core::{
     TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::{
-    buffer_allocation_key, build_effect_at_tempo, Ds01, DrumSynth, IntegerDelay, SampleData,
-    SpectrumAnalyzer, StretchPool,
+    buffer_allocation_key, build_effect_at_tempo, ChannelAudioSnapshot, Ds01, DrumSynth,
+    IntegerDelay, SampleData, SpectrumAnalyzer, StretchPool,
 };
 use mooloop_engine::{
-    ContainerScratch, EffectSlot, EngineHandle, ExportSpec, OfflineRenderer, PreviewCommand,
-    StructuralCommand,
+    CommandSink, ContainerScratch, EffectSlot, EngineHandle, ExportSpec, OfflineRenderer,
+    PreviewCommand, StructuralCommand,
 };
 use mooloop_project::{
     AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, PresetInfo, PresetKind,
@@ -90,7 +90,7 @@ use mooloop_session::dialogs::{
 use mooloop_session::document::{
     log_asset_warnings, log_repairs, quarantine_song, repair_suffix, resolve_document,
     warning_suffix, DocumentProblem,
-    DocumentResult, LoadTarget, ResolvedDocument,
+    DocumentResult, LoadTarget, PresetNaming, ResolvedDocument,
 };
 use mooloop_session::engine::{
     publish_channel_audio_to, AudioAction, AudioActionSender, ChannelAudio, ChannelAudioSender,
@@ -208,6 +208,72 @@ fn sync_drum_preview(window: &MainWindow, params: DrumSynthParams) {
 /// 80px the paned face gives it.
 const STRIP_CURVE_SAMPLES: usize = 64;
 
+/// How many points of an EQ's magnitude response a response plot is handed.
+///
+/// One per column `EqResponseDisplay` draws, so its nearest-point lookup
+/// lands on a published sample rather than between two of them. A frequency
+/// plot cannot take the compressor curve's sixty-four: a 72 dB/oct pass
+/// filter falls most of the plot's height inside two columns, and a curve
+/// sampled coarser than it is drawn would step down that edge.
+const EQ_CURVE_SAMPLES: usize = 140;
+
+/// How many floats a response plot's handle takes for one band, and for one
+/// pass filter.
+///
+/// A flat array with an implicit layout, produced here and consumed in
+/// `device-displays.slint`, which is the shape `02-the-curve-tells-the-truth`
+/// opened on: the pass filters used to be *appended to the band array* at a
+/// different stride, so one model had two layouts and nothing asserted either.
+/// They have their own property now, and `tests/eq_face.rs` reads both strides
+/// back out of the markup.
+///
+/// Three and two rather than five and four because the curve is no longer
+/// drawn from them: a handle needs a position, a height and whether it exists,
+/// and a pass filter has no height of its own -- it rides the response.
+pub const EQ_PLOT_BAND_STRIDE: usize = 3;
+pub const EQ_PLOT_PASS_STRIDE: usize = 2;
+
+/// The gain axis a response plot places a band's handle on, in decibels
+/// either side of flat.
+///
+/// `EqResponseDisplay`'s convention rather than a parameter range -- but it
+/// **coincides** with one, and the coincidence is load-bearing in both faces:
+/// a dragged point reports its height as 0..1 and that number is written
+/// straight to the band's Gain parameter, so the axis and the range have to
+/// be the same span or a point dragged to the top writes something other than
+/// the top. `a_dragged_point_writes_the_parameter_it_looks_like` is what
+/// holds the two together, on both banks.
+///
+/// Note that it is *not* the plot's vertical span, which is wider because
+/// bands sum: `EqResponseDisplay.ceiling-db`.
+const EQ_PLOT_GAIN_DB: f32 = 18.0;
+
+/// One band's handle, as `EqResponseDisplay` reads it: where it sits on the
+/// plot's frequency axis, where it sits on the gain axis, and whether to draw
+/// it at all.
+///
+/// Shared by the seven-band device and the channel strip because it is one
+/// display, and a flat array with an implicit layout written out twice is the
+/// fault this codebase keeps finding. It carried a band's Q and kind as well
+/// until 2026-09-14, for a curve approximation in the markup that no longer
+/// exists.
+pub fn eq_plot_band(frequency_hz: f32, gain_db: f32, enabled: bool) -> [f32; EQ_PLOT_BAND_STRIDE] {
+    [
+        mooloop_core::eq_plot_position(frequency_hz),
+        (gain_db + EQ_PLOT_GAIN_DB) / (2.0 * EQ_PLOT_GAIN_DB),
+        if enabled { 1.0 } else { 0.0 },
+    ]
+}
+
+/// One pass filter's handle. It has no gain, so it rides the response curve
+/// rather than an axis of its own and needs no height here.
+pub fn eq_plot_pass(frequency_hz: f32, enabled: bool) -> [f32; EQ_PLOT_PASS_STRIDE] {
+    [
+        mooloop_core::eq_plot_position(frequency_hz),
+        if enabled { 1.0 } else { 0.0 },
+    ]
+}
+
 /// One track's strip, as the faces take it.
 ///
 /// Public for the reason `install_strip_spec` is: `tests/mixer_snapshot.rs`
@@ -219,9 +285,9 @@ const STRIP_CURVE_SAMPLES: usize = 64;
 /// `StripSpec` global carries. The two derived fields are the ones a face
 /// cannot compute: the response plot's flat band array, and the compressor's
 /// curve as the voicing is actually bending it.
-pub fn strip_row(params: &StripParams) -> StripRow {
+pub fn strip_row(params: &StripParams, sample_rate: u32) -> StripRow {
     let table = mooloop_dsp::strip::strip_voicing(params.voicing).eq;
-    let mut band_data = Vec::with_capacity(STRIP_EQ_BANDS * 5);
+    let mut band_data = Vec::with_capacity(STRIP_EQ_BANDS * EQ_PLOT_BAND_STRIDE);
     let mut positions = Vec::with_capacity(STRIP_EQ_BANDS);
     let mut frequencies = Vec::with_capacity(STRIP_EQ_BANDS);
     let mut gains = Vec::with_capacity(STRIP_EQ_BANDS);
@@ -236,20 +302,12 @@ pub fn strip_row(params: &StripParams) -> StripRow {
         gains.push(band.gain_db);
         qs.push(band.q);
         shelves.push(band.kind != mooloop_core::EqBandKind::Bell);
-        band_data.extend_from_slice(&[
-            // `EqResponseDisplay`'s own convention, the same one the EQ
-            // device's rows use: frequency and gain normalized over the
-            // display's axes, then Q, then whether to draw the band at all,
-            // then the `EqBandKind` index.
-            (frequency_hz / 20.0).ln() / 1000.0_f32.ln(),
-            (band.gain_db + 18.0) / 36.0,
-            // The Q that is *running*, after the voicing's law -- which is
-            // the condition that makes a law-selecting voicing honest, since
-            // the plot is the only place the law is visible.
-            params.effective_q(index),
-            1.0,
-            band.kind.to_index() as f32,
-        ]);
+        // `EqResponseDisplay`'s own convention, the same one the EQ device's
+        // rows use: where the handle goes and whether to draw it. It carried
+        // the band's Q and kind as well until 2026-09-14, for a curve
+        // approximation in the markup that no longer exists -- the curve is
+        // sampled below, from the coefficients the strip is running.
+        band_data.extend_from_slice(&eq_plot_band(frequency_hz, band.gain_db, true));
     }
     StripRow {
         voicing: params.voicing.to_index(),
@@ -262,6 +320,13 @@ pub fn strip_row(params: &StripParams) -> StripRow {
         band_q: qs.as_slice().into(),
         band_shelf: shelves.as_slice().into(),
         band_data: band_data.as_slice().into(),
+        eq_curve_db: mooloop_dsp::strip::strip_eq_response_db(
+            params,
+            sample_rate,
+            EQ_CURVE_SAMPLES,
+        )
+        .as_slice()
+        .into(),
         comp_in: params.comp_in,
         threshold_db: params.threshold_db,
         ratio: params.ratio,
@@ -278,6 +343,105 @@ pub fn strip_row(params: &StripParams) -> StripRow {
         .as_slice()
         .into(),
     }
+}
+
+/// Hand the markup the EQ's table, every label it draws, and every target's
+/// resting values.
+///
+/// `install_strip_spec`'s argument, on the other device whose face is a view
+/// over a table: a knob's range and an automation lane's range are two views
+/// of one number, and a number written twice is how they come to disagree.
+/// The EQ needed it for a second reason the strip does not have -- its face
+/// is one control set over *nine* targets, so a resting value is a column of
+/// nine rather than a number, and spelling one in the markup meant a
+/// double-click returned to band 2's default whatever band was selected.
+///
+/// Public for the reason `install_strip_spec` is: `tests/eq_face.rs` reads
+/// the table back out of the window and holds it to the descriptors.
+/// Generic over the window because the EQ's face is driven by two of them:
+/// the application's, and `EqDeviceDragHarness`, which exists so a drag test
+/// can send real pointer events at the real face. A harness that gets a blank
+/// table does not draw a wrong number, it divides by a target count of zero.
+pub fn install_eq_spec<'a, C>(window: &'a C)
+where
+    C: slint::ComponentHandle,
+    EqSpec<'a>: slint::Global<'a, C>,
+{
+    let spec = window.global::<EqSpec>();
+    let kind = mooloop_core::EffectKind::Eq;
+
+    // A control's range is read off the first target that has that control
+    // at all, rather than from a hand-written mapping: a pass filter has no
+    // gain and a band has no slope, and `id_for_selected` already knows
+    // which is which. Every band's Freq descriptor has every other band's
+    // range -- `eq_band_shape` writes it once -- so which target answers does
+    // not matter, only that one does.
+    let targets = 0..=EqParams::LOW_PASS_TARGET;
+    let controls: Vec<EqControlSpec> = (0..EQ_FACE_CONTROLS as u32)
+        .map(|index| {
+            let descriptor = EqFaceControl::from_face_index(index)
+                .and_then(|control| {
+                    targets
+                        .clone()
+                        .find_map(|target| EqParams::id_for_selected(target, control))
+                })
+                .and_then(|id| kind.descriptor(id));
+            match descriptor {
+                Some(descriptor) => EqControlSpec {
+                    unit: descriptor.unit.into(),
+                    minimum: descriptor.min,
+                    maximum: descriptor.max,
+                    logarithmic: matches!(descriptor.curve, ParamCurve::Exponential),
+                },
+                // Face index 0 is the target selector, which is not a
+                // parameter and has not been one since `eq-v2/01`.
+                None => EqControlSpec::default(),
+            }
+        })
+        .collect();
+    spec.set_controls(controls.as_slice().into());
+
+    // Every target's resting position for every control, in the order the
+    // markup indexes them: `target * EQ_FACE_CONTROLS + face index`.
+    let mut defaults = Vec::with_capacity((EqParams::LOW_PASS_TARGET + 1) * EQ_FACE_CONTROLS);
+    for target in targets.clone() {
+        for index in 0..EQ_FACE_CONTROLS as u32 {
+            let rest = EqFaceControl::from_face_index(index)
+                .and_then(|control| EqParams::id_for_selected(target, control))
+                .and_then(|id| kind.descriptor(id))
+                .map(|descriptor| descriptor.to_normalized(descriptor.default))
+                .unwrap_or_default();
+            defaults.push(rest);
+        }
+    }
+    spec.set_defaults(defaults.as_slice().into());
+
+    spec.set_band_count(mooloop_core::EQ_MAX_BANDS as i32);
+    spec.set_target_count(EqParams::LOW_PASS_TARGET as i32 + 1);
+
+    // The selector's labels. A band is called by the number its own
+    // parameters are called by -- band 0's descriptors are "B1 Freq" and
+    // friends -- so the face and the automation menu count the same way. The
+    // first button said LOW until 2026-09-14, which made them count
+    // differently from the day per-band ids landed.
+    let target_names: Vec<slint::SharedString> = targets
+        .clone()
+        .map(|target| match target {
+            _ if target == EqParams::HIGH_PASS_TARGET => "HP".into(),
+            _ if target == EqParams::LOW_PASS_TARGET => "LP".into(),
+            band => format!("{}", band + 1).into(),
+        })
+        .collect();
+    spec.set_target_names(target_names.as_slice().into());
+
+    // The slope selector, from what the bank actually rolls off at rather
+    // than from what the enum's variants are spelled. See
+    // `EqSlope::db_per_octave`.
+    let slope_names: Vec<slint::SharedString> = mooloop_core::EqSlope::all()
+        .iter()
+        .map(|slope| format!("{}", slope.db_per_octave()).into())
+        .collect();
+    spec.set_slope_names(slope_names.as_slice().into());
 }
 
 /// Hand the markup the strip's parameter table and every id it addresses.
@@ -1568,14 +1732,42 @@ fn effect_face_param_id(effect: &EffectSlotState, control: u32) -> Option<u32> {
     }
 }
 
+/// Where a row sits in the chain it is being drawn into, as opposed to what
+/// device is in it.
+///
+/// Four facts that travel together and are all about the *chain* rather than
+/// the slot, grouped when the sample rate made this function's argument list
+/// eight long: a row builder nobody can call correctly by eye is one that
+/// will eventually be called wrongly.
+struct RackPlacement {
+    depth: i32,
+    /// The containers that close at this row.
+    closing: Vec<i32>,
+    selected: bool,
+    /// Whether wrapping this row would leave every container inside
+    /// `MAX_CONTAINER_DEPTH`. Answered by `mooloop_core::can_wrap` rather than
+    /// by comparing `depth` here, so the cap is not a second number in the
+    /// interface -- the markup asks this and the gesture asks the same
+    /// function, which is what stopped the button lying.
+    wrap_enabled: bool,
+}
+
 fn effect_slot_row(
     slot: &EffectSlotState,
     presets: &[PresetSummary],
     preset_name: Option<&str>,
-    depth: i32,
-    closing: Vec<i32>,
-    selected: bool,
+    placement: RackPlacement,
+    // What the engine is running at, for the EQ's response curve: the plot
+    // is the bank's own coefficients evaluated, and coefficients are designed
+    // against a sample rate.
+    sample_rate: u32,
 ) -> EffectSlotRow {
+    let RackPlacement {
+        depth,
+        closing,
+        selected,
+        wrap_enabled,
+    } = placement;
     let kind = slot.kind();
     let preset_options: Vec<slint::SharedString> = effect_presets_of_kind(presets, kind)
         .map(preset_menu_label)
@@ -1622,27 +1814,32 @@ fn effect_slot_row(
         p[8] = if modulation.tempo_sync { 1.0 } else { 0.0 };
         p[9] = modulation.rate_division.to_index() as f32;
     }
+    // The response plot's three arrays. Two of them place handles -- where
+    // a band or a pass filter sits and whether to draw it -- and the third
+    // is the bank's magnitude response, which is the filter the engine is
+    // running, evaluated. The pass filters were appended to the band array
+    // at their own stride until 2026-09-14: one model with two layouts,
+    // written here and read in `device-displays.slint`, with nothing
+    // asserting the two files agreed.
     let mut eq_band_data = Vec::new();
+    let mut eq_band_kinds = Vec::new();
+    let mut eq_pass_data = Vec::new();
+    let mut eq_curve_db = Vec::new();
     if let Some(eq) = slot.params.eq() {
         for band in eq.bands {
-            eq_band_data.extend_from_slice(&[
-                (band.frequency_hz / 20.0).ln() / 1000.0_f32.ln(),
-                (band.gain_db + 18.0) / 36.0,
-                band.q,
-                if band.enabled { 1.0 } else { 0.0 },
-                band.kind.to_index() as f32,
-            ]);
+            eq_band_data
+                .extend_from_slice(&eq_plot_band(band.frequency_hz, band.gain_db, band.enabled));
+            // Not part of the plot's flat array, which carries only what
+            // places a handle: the face's target row reads this to draw a
+            // shelf as a shelf, and the band's kind moved out of
+            // `eq_plot_band` on 2026-09-14 when the markup stopped drawing
+            // its own curve.
+            eq_band_kinds.push(band.kind.to_index());
         }
-        eq_band_data.extend_from_slice(&[
-            (eq.high_pass.frequency_hz / 20.0).ln() / 1000.0_f32.ln(),
-            eq.high_pass.q,
-            if eq.high_pass.enabled { 1.0 } else { 0.0 },
-            eq.high_pass.slope.to_index() as f32,
-            (eq.low_pass.frequency_hz / 20.0).ln() / 1000.0_f32.ln(),
-            eq.low_pass.q,
-            if eq.low_pass.enabled { 1.0 } else { 0.0 },
-            eq.low_pass.slope.to_index() as f32,
-        ]);
+        for pass in [&eq.high_pass, &eq.low_pass] {
+            eq_pass_data.extend_from_slice(&eq_plot_pass(pass.frequency_hz, pass.enabled));
+        }
+        eq_curve_db = mooloop_dsp::effects::eq_response_db(eq, sample_rate, EQ_CURVE_SAMPLES);
     }
     EffectSlotRow {
         kind: effect_kind_index(kind),
@@ -1665,6 +1862,9 @@ fn effect_slot_row(
         modulation_offsets: Vec::<f32>::new().as_slice().into(),
         modulation_route_counts: Vec::<i32>::new().as_slice().into(),
         eq_band_data: eq_band_data.as_slice().into(),
+        eq_band_kinds: eq_band_kinds.as_slice().into(),
+        eq_pass_data: eq_pass_data.as_slice().into(),
+        eq_curve_db: eq_curve_db.as_slice().into(),
         eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
         eq_analyzer_enabled: slot.params.eq().is_some_and(|eq| eq.analyzer_enabled),
         preamp_deviation: Vec::<f32>::new().as_slice().into(),
@@ -1689,7 +1889,13 @@ fn effect_slot_row(
         depth,
         closing: ModelRc::from(Rc::new(VecModel::from(closing))),
         selected,
+        wrap_enabled,
     }
+}
+
+/// Whether the rack's wrap button on `slot` should be live.
+fn wrap_enabled_at(effects: &[EffectSlotState], slot: usize) -> bool {
+    mooloop_core::can_wrap(effects, slot..mooloop_core::run_of(effects, slot).end)
 }
 
 /// The fixed debug events the buffer device face fires, in the order its
@@ -1850,6 +2056,31 @@ fn refresh_mlp8_routes(window: &MainWindow, routes: &mooloop_core::MlP8Routes) {
     window.set_mlp8_routes_status(
         format!("{} of {}", routes.len(), mooloop_core::MLP8_MAX_ROUTES).into(),
     );
+}
+
+/// Put one route's depth back into the row the face is drawing, without
+/// rebuilding the list.
+///
+/// The list must not be rebuilt here: this runs on every frame of a drag, and
+/// replacing the model destroys the row being dragged along with the gesture
+/// in it. Touching the one field leaves the row's element alone, which is the
+/// same reason the modulation grid's meters are updated field-wise.
+///
+/// It has to happen at all because the row *is* where the depth lives -- the
+/// depth knob reports rather than writes, so nothing else would move the
+/// number under it.
+fn touch_mlp8_route_amount(window: &MainWindow, id: u16, amount: f32) {
+    let rows = window.get_mlp8_routes();
+    let Some(index) = (0..rows.row_count())
+        .find(|index| rows.row_data(*index).is_some_and(|row| row.id == i32::from(id)))
+    else {
+        return;
+    };
+    let Some(mut row) = rows.row_data(index) else {
+        return;
+    };
+    row.amount = amount;
+    rows.set_row_data(index, row);
 }
 
 /// The two picker vocabularies, set once: they are properties of the device,
@@ -2746,6 +2977,13 @@ struct UiState {
     /// here, consumed on the next tick. See [`meter::MeterBallistics::reset`]
     /// for what an inherited latch looks like.
     bus_meters_stale: bool,
+    /// What the audio driver came up at. Held because the response plots are
+    /// the *coefficients* a device is running, evaluated, and a biquad's
+    /// coefficients are designed against a sample rate -- so a row cannot be
+    /// published without one. The window carries the same number as
+    /// `audio-sample-rate` for the readouts; this is the copy the publishers
+    /// reach, which take `&self` and no window.
+    audio_sample_rate: u32,
 }
 
 /// The browser panel's two halves.
@@ -3199,9 +3437,13 @@ impl UiState {
                     &self.session.effect_presets,
                     self.session
                         .effect_preset_name(self.session.effect_target, effect.id),
-                    depth,
-                    containers_closing_at(chain, slot),
-                    self.session.selected_device_slot() == Some(slot),
+                    RackPlacement {
+                        depth,
+                        closing: containers_closing_at(chain, slot),
+                        selected: self.session.selected_device_slot() == Some(slot),
+                        wrap_enabled: wrap_enabled_at(chain, slot),
+                    },
+                    self.audio_sample_rate,
                 ),
             );
         }
@@ -3358,9 +3600,13 @@ impl UiState {
                                     EffectTarget::Channel(channel),
                                     effect.id,
                                 ),
-                                mooloop_core::depth_at(&state.effects, slot) as i32,
-                                containers_closing_at(&state.effects, slot),
-                                selected == Some(slot),
+                                RackPlacement {
+                                    depth: mooloop_core::depth_at(&state.effects, slot) as i32,
+                                    closing: containers_closing_at(&state.effects, slot),
+                                    selected: selected == Some(slot),
+                                    wrap_enabled: wrap_enabled_at(&state.effects, slot),
+                                },
+                                self.audio_sample_rate,
                             );
                             let descriptors = effect.kind().descriptors();
                             let address = |param| {
@@ -3412,9 +3658,13 @@ impl UiState {
                                     effect,
                                     &self.session.effect_presets,
                                     self.session.effect_preset_name(target, effect.id),
-                                    mooloop_core::depth_at(effects, slot) as i32,
-                                    containers_closing_at(effects, slot),
-                                    selected == Some(slot),
+                                    RackPlacement {
+                                        depth: mooloop_core::depth_at(effects, slot) as i32,
+                                        closing: containers_closing_at(effects, slot),
+                                        selected: selected == Some(slot),
+                                        wrap_enabled: wrap_enabled_at(effects, slot),
+                                    },
+                                    self.audio_sample_rate,
                                 )
                             })
                             .collect()
@@ -4027,7 +4277,7 @@ impl UiState {
             // told through: what a solo silences is a property of the whole
             // graph, and the strip dims its name rather than looking muted.
             solo_silenced: solo_silenced.get(index).copied().unwrap_or(false),
-            strip: strip_row(&setup.bus.strip),
+            strip: strip_row(&setup.bus.strip, self.audio_sample_rate),
             sends: self.send_rows(index),
             send_allowed: self.allowed_destinations(index),
             feed_count: self.session.bus_feed_count(index) as i32,
@@ -4108,7 +4358,7 @@ impl UiState {
         window.set_editing_bus_color_hex(
             setup.bus.color.map(|color| color.to_hex()).unwrap_or_default().into(),
         );
-        window.set_editing_bus_strip(strip_row(&setup.bus.strip));
+        window.set_editing_bus_strip(strip_row(&setup.bus.strip, self.audio_sample_rate));
         window.set_editing_bus_can_remove(self.session.can_remove_track(index));
         window.set_editing_bus_allowed(self.allowed_destinations(index));
         window.set_editing_bus_send_feed_count(self.session.track_send_count(index) as i32);
@@ -4492,6 +4742,9 @@ impl UiState {
         window.set_poly_lfo_amp(poly.lfo.to_amp);
         window.set_poly_polyphony(poly.polyphony.clamp(1, MAX_POLY_VOICES) as i32);
         window.set_poly_spread(poly.spread);
+        window.set_poly_mono_mode(poly.mono_mode);
+        window.set_poly_env_trigger(poly.env_trigger.to_index());
+        window.set_poly_note_priority(poly.note_priority.to_index());
         window.set_sample_name(ch.sample_name.as_str().into());
         window.set_sample_description(ch.sample_description.as_str().into());
         window.set_sample_duration(ch.sample_duration);
@@ -4672,8 +4925,21 @@ impl AppUi {
         window.set_color_choices(ModelRc::from(Rc::new(VecModel::from(
             channel_colors::color_choices(),
         ))));
-        handle.send(EngineCommand::SetTempo(INITIAL_BPM as f64));
-        handle.send(EngineCommand::SetSwing(DEFAULT_SWING_PERCENT));
+        // Startup, on an engine that has consumed nothing yet: a refusal here
+        // is not a full ring, it is a broken one, and there is no UI up yet to
+        // say so with. Both sends run unconditionally -- the results are
+        // collected first and judged after, because a `&&` would make the
+        // second depend on the first.
+        let tempo_sent = handle.send(EngineCommand::SetTempo(INITIAL_BPM as f64));
+        let swing_sent = handle.send(EngineCommand::SetSwing(DEFAULT_SWING_PERCENT));
+        if !(tempo_sent && swing_sent) {
+            log_error!(
+                "engine",
+                "the command queue refused the opening tempo and swing on an \
+                 engine that has not started: the transport will run at the \
+                 engine's defaults"
+            );
+        }
 
         // --- Channel rack state: start with one empty channel ---
         //
@@ -4779,6 +5045,7 @@ impl AppUi {
             bus_meters_stale: false,
             automation_point_model,
             automation_target_model,
+            audio_sample_rate,
         }));
         let starter = Project::starter_kit(fresh_starter_seed());
         let starter_samples = vec![None; starter.channels.len()];
@@ -5190,24 +5457,26 @@ impl AppUi {
                     category: category.trim().to_string(),
                     tags: Vec::new(),
                 };
-                // The device now wears the name it was saved under, the
-                // same way it wears the name of a preset loaded into it.
-                match source.target {
-                    PresetSaveTarget::Effect { target, device } => {
-                        let mut state = st.borrow_mut();
-                        state.session.set_effect_preset_name(target, device, &name);
-                        state.sync_effects();
-                    }
-                    PresetSaveTarget::Generator => {
-                        let mut state = st.borrow_mut();
-                        let channel = state.session.selected as u8;
-                        state.session.set_source_preset_name(channel, &name);
-                        window.set_source_preset_name(name.as_str().into());
-                    }
+                // Which device will wear the name it was saved under, the
+                // same way it wears the name of a preset loaded into it --
+                // *resolved* here and *applied* when the write comes back, so
+                // a save that fails leaves the rack row saying what is
+                // actually on disk. The channel has to be read here, while
+                // the dialog's own selection is still the current one.
+                let named = match source.target {
+                    PresetSaveTarget::Effect { target, device } => Some(PresetNaming::Effect {
+                        target,
+                        device,
+                        name: name.clone(),
+                    }),
+                    PresetSaveTarget::Generator => Some(PresetNaming::Source {
+                        channel: st.borrow().session.selected as u8,
+                        name: name.clone(),
+                    }),
                     // A channel preset spans the generator and the mixer, so
                     // no one device is the thing it names.
-                    PresetSaveTarget::Channel => {}
-                }
+                    PresetSaveTarget::Channel => None,
+                };
                 let file_stem = mooloop_project::sanitize_preset_name(&name);
 
                 let (dir, extension, label) = match source.target {
@@ -5291,7 +5560,11 @@ impl AppUi {
                         },
                     };
                     let result = result
-                        .map(|report| DocumentResult::SavedPreset { label, report })
+                        .map(|report| DocumentResult::SavedPreset {
+                            label,
+                            report,
+                            named,
+                        })
                         .unwrap_or_else(|error| DocumentResult::Failed {
                             action: "save this preset",
                             problem: error.into(),
@@ -5399,6 +5672,7 @@ impl AppUi {
         // Once, before anything is drawn: the strip's faces read every range
         // and every parameter id out of this rather than spelling them.
         install_strip_spec(&window);
+        install_eq_spec(&window);
         {
             let settings = ui_settings.borrow();
             apply_appearance(&window, &settings.appearance);
@@ -10990,8 +11264,9 @@ impl AppUi {
             // ordinary automatable value.
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let weak = window.as_weak();
             window.on_mlp8_route_amount_changed(move |id, amount| {
-                let Ok(id) = u16::try_from(id) else {
+                let (Some(window), Ok(id)) = (weak.upgrade(), u16::try_from(id)) else {
                     return;
                 };
                 let mut st = st.borrow_mut();
@@ -11011,6 +11286,14 @@ impl AppUi {
                     route: id,
                     amount,
                 });
+                // The stored value, not the one that arrived: `set_amount`
+                // clamps, and the row has to show what the patch holds.
+                let stored = st.session.channels[channel_index]
+                    .mlp8_params
+                    .routes
+                    .get(id)
+                    .map_or(amount, |route| route.amount);
+                touch_mlp8_route_amount(&window, id, stored);
                 st.session.dirty = true;
             });
         }
@@ -11137,6 +11420,48 @@ impl AppUi {
                 let channel_index = st.session.selected;
                 let channel = &mut st.session.channels[channel_index];
                 channel.poly_params.lfo.retrigger = value;
+                let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
+                    channel: channel_index as u8,
+                    params: channel.poly_params,
+                });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_poly_mono_mode_changed(move |value| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
+                channel.poly_params.mono_mode = value;
+                let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
+                    channel: channel_index as u8,
+                    params: channel.poly_params,
+                });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_poly_env_trigger_changed(move |value| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
+                channel.poly_params.env_trigger = EnvTrigger::from_index(value);
+                let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
+                    channel: channel_index as u8,
+                    params: channel.poly_params,
+                });
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            window.on_poly_note_priority_changed(move |value| {
+                let mut st = st.borrow_mut();
+                let channel_index = st.session.selected;
+                let channel = &mut st.session.channels[channel_index];
+                channel.poly_params.note_priority = NotePriority::from_index(value);
                 let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
                     channel: channel_index as u8,
                     params: channel.poly_params,
@@ -11359,11 +11684,21 @@ impl AppUi {
             let st = state.clone();
             let load_tx = load_tx.clone();
             window.on_browser_sample_loaded(move |path| {
-                let (channel, source_revision) = {
-                    let st = st.borrow();
-                    (st.session.selected, st.session.source_revision)
+                let (channel, source_revision, request) = {
+                    let mut st = st.borrow_mut();
+                    let channel = st.session.selected;
+                    let revision = st.session.source_revision;
+                    let request = st.session.next_sample_request(channel);
+                    (channel, revision, request)
                 };
-                spawn_browser_sample_load(&path, channel, source_revision, false, &load_tx);
+                spawn_browser_sample_load(
+                    &path,
+                    channel,
+                    source_revision,
+                    request,
+                    false,
+                    &load_tx,
+                );
             });
         }
         {
@@ -11374,16 +11709,25 @@ impl AppUi {
                     let st = st.borrow();
                     (st.session.channels.len(), st.session.source_revision)
                 };
-                spawn_browser_sample_load(&path, channel, source_revision, true, &load_tx);
+                // No token: the channel does not exist yet, so there is
+                // nothing to key one by. This path is already correct for a
+                // different reason -- the pump defers these into a `Vec` and
+                // creates one channel per load -- and the comment there
+                // records that somebody got it wrong once. Forcing one
+                // mechanism over both would make the working case worse.
+                spawn_browser_sample_load(&path, channel, source_revision, 0, true, &load_tx);
             });
         }
         {
             let st = state.clone();
             let load_tx = load_tx.clone();
             window.on_load_sample_clicked(move || {
-                let (channel, source_revision) = {
-                    let st = st.borrow();
-                    (st.session.selected, st.session.source_revision)
+                let (channel, source_revision, request) = {
+                    let mut st = st.borrow_mut();
+                    let channel = st.session.selected;
+                    let revision = st.session.source_revision;
+                    let request = st.session.next_sample_request(channel);
+                    (channel, revision, request)
                 };
                 let tx = load_tx.clone();
                 log_debug!("ui", "loading sample for channel {channel}");
@@ -11392,7 +11736,8 @@ impl AppUi {
                     let _ = tx.send(LoadResult {
                         channel,
                         source_revision,
-                    new_channel: false,
+                        request,
+                        new_channel: false,
                         result,
                     });
                 });
@@ -11405,6 +11750,7 @@ impl AppUi {
                 let Some(target) = st.borrow().session.selected_sample_target() else {
                     return;
                 };
+                let request = st.borrow_mut().session.next_sample_request(target.channel);
                 let tx = load_tx.clone();
                 std::thread::spawn(move || {
                     let result = match adjacent_sample(&target.path, -1) {
@@ -11415,6 +11761,7 @@ impl AppUi {
                     let _ = tx.send(LoadResult {
                         channel: target.channel,
                         source_revision: target.source_revision,
+                        request,
                         new_channel: false,
                         result,
                     });
@@ -11428,6 +11775,7 @@ impl AppUi {
                 let Some(target) = st.borrow().session.selected_sample_target() else {
                     return;
                 };
+                let request = st.borrow_mut().session.next_sample_request(target.channel);
                 let tx = load_tx.clone();
                 std::thread::spawn(move || {
                     let result = match adjacent_sample(&target.path, 1) {
@@ -11438,6 +11786,7 @@ impl AppUi {
                     let _ = tx.send(LoadResult {
                         channel: target.channel,
                         source_revision: target.source_revision,
+                        request,
                         new_channel: false,
                         result,
                     });
@@ -11458,9 +11807,17 @@ impl AppUi {
         let stats_in = stats.clone();
         let master_clip_clear_in = master_clip_clear.clone();
         let bus_clip_clear_in = bus_clip_clear.clone();
-        let mut left_meter = MeterBallistics::default();
-        let mut right_meter = MeterBallistics::default();
         // One pair per bus, so a strip's decay is its own rather than shared.
+        //
+        // **Including the toolbar's.** The master used to be metered twice,
+        // through two transports and with two clip latches: `executor.rs`
+        // pushes `EngineEvent::Metering` every block and `render.rs` publishes
+        // the same two numbers into `BusMeters` cell 0, the toolbar read the
+        // event and the mixer's master strip read the cell. The event push is
+        // `let _ = evt_tx.push(..)`, so under ring pressure the
+        // *always-visible* meter was the lossy one while the atomic cell
+        // cannot drop a block -- and clicking one clip lamp did not clear the
+        // other. Both read bus 0 through this pair now.
         let mut bus_meters: Vec<(MeterBallistics, MeterBallistics)> =
             (0..MAX_BUSES).map(|_| Default::default()).collect();
         let mut last_meter_update = std::time::Instant::now();
@@ -11478,6 +11835,12 @@ impl AppUi {
             - std::time::Duration::from_secs(2);
         let autodrive_verbose = std::env::var_os("MOOLOOP_AUTODRIVE_VERBOSE").is_some();
         let mut playhead_was_nonempty = false;
+        // The device-meter target the last tick drained, so the one it is
+        // *leaving* can be emptied. A device meter is a `fetch_max` hold and
+        // only a read empties one, so a chain nobody is looking at keeps its
+        // loudest block forever and shows it for one tick the moment the rack
+        // is turned back to it.
+        let mut last_device_target: Option<usize> = None;
         pump.start(
             TimerMode::Repeated,
             std::time::Duration::from_millis(PUMP_INTERVAL_MS),
@@ -11529,10 +11892,17 @@ impl AppUi {
                             window.set_browser_info_waveform(ModelRc::from(Rc::new(
                                 VecModel::from(inspection.peaks),
                             )));
-                            if window.get_browser_autoplay() {
-                                handle.preview(PreviewCommand::Play {
+                            if window.get_browser_autoplay()
+                                && !handle.preview(PreviewCommand::Play {
                                     sample: inspection.sample,
-                                });
+                                })
+                            {
+                                // A refused preview is silence where the user
+                                // asked to hear something, and nothing else
+                                // will ever mention it.
+                                window.set_status_message(
+                                    "Busy — could not start the preview".into(),
+                                );
                             }
                         }
                         Err((path, error)) => {
@@ -11593,7 +11963,15 @@ impl AppUi {
                                 apply_sample_references(&mut state.session.channels, sample_references);
                             }
                             state.update_document_title(&window);
-                            window.set_embed_assets(mode == AssetMode::Embedded);
+                            // What the save *delivered*, not what it was
+                            // asked for. A sample the bundle already owns is
+                            // kept there whatever the mode says, so a box
+                            // driven by the mode would go unticked on a song
+                            // whose samples are all still embedded.
+                            window.set_embed_assets(
+                                mode == AssetMode::Embedded
+                                    || state.session.has_embedded_samples(),
+                            );
                             log_info!(
                                 "project",
                                 "song saved: {} ({} warnings, {} repairs)",
@@ -11626,7 +12004,30 @@ impl AppUi {
                                 .into(),
                             );
                         }
-                        DocumentResult::SavedPreset { label, report } => {
+                        DocumentResult::SavedPreset {
+                            label,
+                            report,
+                            named,
+                        } => {
+                            // Now, and not on confirm: the file is on disk.
+                            match named {
+                                Some(PresetNaming::Effect {
+                                    target,
+                                    device,
+                                    name,
+                                }) => {
+                                    let mut state = st.borrow_mut();
+                                    state.session.set_effect_preset_name(target, device, &name);
+                                    state.sync_effects();
+                                }
+                                Some(PresetNaming::Source { channel, name }) => {
+                                    st.borrow_mut()
+                                        .session
+                                        .set_source_preset_name(channel, &name);
+                                    window.set_source_preset_name(name.as_str().into());
+                                }
+                                None => {}
+                            }
                             log_info!("project", "{label}");
                             log_repairs(label, &report.repairs);
                             log_asset_warnings(label, &report.warnings);
@@ -11820,7 +12221,15 @@ impl AppUi {
                                 if is_song {
                                     state.session.bundle_path = Some(path.clone());
                                     state.session.dirty = false;
-                                    window.set_embed_assets(asset_mode == AssetMode::Embedded);
+                                    // The per-sample flags, not the
+                                    // document's mode: a bundle saved
+                                    // `referenced` can still hold every
+                                    // sample, because un-embedding is
+                                    // refused rather than performed.
+                                    window.set_embed_assets(
+                                        asset_mode == AssetMode::Embedded
+                                            || state.session.has_embedded_samples(),
+                                    );
                                 } else {
                                     state.session.dirty = true;
                                     state.session.revision = state.session.revision.wrapping_add(1);
@@ -11890,25 +12299,23 @@ impl AppUi {
                 // leaves the slot holding the default while the waveform,
                 // name, and duration on screen all describe the new file.
                 while let Ok(channel) = sample_reset_rx.try_recv() {
-                    if let Some(sample) = default_sample_for_pump.as_ref() {
-                        handle.load_sample(channel, sample.clone());
-                    } else {
-                        handle.clear_sample(channel);
-                    }
+                    // A reset is a channel that has just become a fresh
+                    // sampler, so it has no markers either -- which the two
+                    // separate stores this replaced left standing.
+                    handle.set_channel_audio(
+                        channel,
+                        match default_sample_for_pump.as_ref() {
+                            Some(sample) => ChannelAudioSnapshot::sample(sample.clone()),
+                            None => ChannelAudioSnapshot::default(),
+                        },
+                    );
                 }
                 // After the resets, and both halves together: a slice edit or
                 // a commit is the most specific statement about what a
                 // channel is playing, and its buffer and its map change at
                 // the same instant.
                 while let Ok(update) = channel_audio_rx.try_recv() {
-                    match update.sample {
-                        Some(sample) => handle.load_sample(update.channel, sample),
-                        None => handle.clear_sample(update.channel),
-                    }
-                    match update.slices {
-                        Some(slices) => handle.load_slices(update.channel, slices),
-                        None => handle.clear_slices(update.channel),
-                    }
+                    handle.set_channel_audio(update.channel, update.audio);
                 }
                 // A `Vec`, not an `Option`: two "Load in New Channel"
                 // decodes can land in the same 60 Hz tick, and an `Option`
@@ -11924,7 +12331,21 @@ impl AppUi {
                                     && st
                                         .session.channels
                                         .get(load.channel)
-                                        .is_some_and(|channel| channel.kind == DeviceKind::Sampler))
+                                        .is_some_and(|channel| channel.kind == DeviceKind::Sampler)
+                                    // And it must be the load this channel is
+                                    // still waiting for. `source_revision` is
+                                    // a property of the project, so two
+                                    // in-flight decodes for one channel both
+                                    // pass it and the last to *finish* wins --
+                                    // which is decode time, so a long file
+                                    // chosen first can overwrite the short one
+                                    // chosen after it. A superseded completion
+                                    // is dropped silently: it is not an error,
+                                    // and saying so would be noise.
+                                    && st.session.sample_request_is_current(
+                                        load.channel,
+                                        load.request,
+                                    ))
                     };
                     if !still_current {
                         continue;
@@ -11957,11 +12378,15 @@ impl AppUi {
                         // branch exists to deliver is the last write to the
                         // slot rather than the first.
                         while let Ok(channel) = sample_reset_rx.try_recv() {
-                            if let Some(sample) = default_sample_for_pump.as_ref() {
-                                handle.load_sample(channel, sample.clone());
-                            } else {
-                                handle.clear_sample(channel);
-                            }
+                            handle.set_channel_audio(
+                                channel,
+                                match default_sample_for_pump.as_ref() {
+                                    Some(sample) => {
+                                        ChannelAudioSnapshot::sample(sample.clone())
+                                    }
+                                    None => ChannelAudioSnapshot::default(),
+                                },
+                            );
                         }
                         let channel = st.borrow().session.channels.len().saturating_sub(1);
                         apply_loaded_sample(&handle, &st, &weak, channel, loaded);
@@ -12185,8 +12610,6 @@ impl AppUi {
                 }
                 let Some(w) = weak.upgrade() else { return };
                 let mut saw_nonzero = false;
-                let mut block_peak_l = 0.0f32;
-                let mut block_peak_r = 0.0f32;
                 for ev in handle.drain() {
                     match ev {
                         EngineEvent::Position {
@@ -12205,13 +12628,14 @@ impl AppUi {
                             w.set_position_beat(position.beat);
                             w.set_position_tick(position.tick);
                         }
-                        EngineEvent::Metering { peak_l, peak_r } => {
-                            block_peak_l = block_peak_l.max(peak_l.max(0.0));
-                            block_peak_r = block_peak_r.max(peak_r.max(0.0));
-                            if peak_l > 0.0 || peak_r > 0.0 {
-                                saw_nonzero = true;
-                            }
-                        }
+                        // The master's level comes off `BusMeters` cell 0
+                        // below, beside the mixer strip's, so this carries
+                        // nothing the interface draws any more. The event
+                        // stays because `engine-selftest` is built on
+                        // counting it: it reports whether the *callback*
+                        // produced audio, where a held cell only says the
+                        // loudest it ever was.
+                        EngineEvent::Metering { .. } => {}
                         EngineEvent::Xrun { count } => {
                             // Read off the event queue on the UI thread. The
                             // audio thread only ever pushes the count; it
@@ -12239,6 +12663,13 @@ impl AppUi {
                     let mut moved = false;
                     let mut edited = false;
                     let mut written: Vec<usize> = Vec::new();
+                    // A refused command is a command the session has already
+                    // recorded as delivered -- the seam `control-plane-seams`
+                    // closed everywhere else. Counted across the whole drain
+                    // and reported once: a fader sweep is a hundred messages a
+                    // second, and a line per message would bury the log it is
+                    // meant to warn in.
+                    let mut refused = 0usize;
                     {
                         let mut state = st.borrow_mut();
                         let ports = state.midi_ports.clone();
@@ -12246,7 +12677,9 @@ impl AppUi {
                             let effects =
                                 state.session.apply_control_input(&message, &ports, playing);
                             for command in &effects.commands {
-                                handle.send(*command);
+                                if !handle.send(*command) {
+                                    refused += 1;
+                                }
                             }
                             moved |= !effects.is_empty();
                             // A parameter moved by a knob is an edit; a
@@ -12262,7 +12695,9 @@ impl AppUi {
                                 continue;
                             };
                             for command in &edit.commands {
-                                handle.send(*command);
+                                if !handle.send(*command) {
+                                    refused += 1;
+                                }
                             }
                             written.push(channel);
                             edited = true;
@@ -12270,6 +12705,14 @@ impl AppUi {
                         if edited {
                             state.session.mark_dirty();
                         }
+                    }
+                    if refused > 0 {
+                        log_error!(
+                            "midi",
+                            "the command queue refused {refused} command(s) from a \
+                             control surface: the model has moved where the engine \
+                             has not"
+                        );
                     }
                     // One republish for the whole drain rather than one per
                     // message: a fader sweep is a hundred messages a second,
@@ -12359,19 +12802,6 @@ impl AppUi {
                     }
                     xruns_this_window = 0;
                 }
-                if master_clip_clear_in.replace(false) {
-                    left_meter.clear_clip();
-                    right_meter.clear_clip();
-                }
-                let left = left_meter.update(block_peak_l, elapsed);
-                let right = right_meter.update(block_peak_r, elapsed);
-                w.set_meter_l_db(left.level_db);
-                w.set_meter_r_db(right.level_db);
-                w.set_meter_l_held_db(left.held_db);
-                w.set_meter_r_held_db(right.held_db);
-                w.set_meter_l_clipping(left.clipping);
-                w.set_meter_r_clipping(right.clipping);
-
                 // Bus peaks come from the shared atomic array, not the event
                 // ring. Always drain them, even while the mixer is hidden, so
                 // a strip does not open showing a peak from minutes ago; only
@@ -12429,19 +12859,35 @@ impl AppUi {
                         meters.1.reset();
                     }
                 }
+                let master_clip_cleared = master_clip_clear_in.replace(false);
                 for (bus, meters) in bus_meters.iter_mut().enumerate() {
-                    if bus_clip_clear_in
+                    let strip_clip_cleared = bus_clip_clear_in
                         .borrow_mut()
                         .get_mut(bus)
                         .map(|flag| std::mem::replace(flag, false))
-                        .unwrap_or(false)
-                    {
+                        .unwrap_or(false);
+                    // The master has two lamps on two faces and one latch
+                    // behind them now, so either click clears it. That is the
+                    // half of being metered twice a user could actually see.
+                    let is_master = bus == MASTER_BUS as usize;
+                    if strip_clip_cleared || (is_master && master_clip_cleared) {
                         meters.0.clear_clip();
                         meters.1.clear_clip();
                     }
                     let (peak_l, peak_r) = handle.take_bus_peak(bus);
                     let left = meters.0.update(peak_l, elapsed);
                     let right = meters.1.update(peak_r, elapsed);
+                    if is_master {
+                        w.set_meter_l_db(left.level_db);
+                        w.set_meter_r_db(right.level_db);
+                        w.set_meter_l_held_db(left.held_db);
+                        w.set_meter_r_held_db(right.held_db);
+                        w.set_meter_l_clipping(left.clipping);
+                        w.set_meter_r_clipping(right.clipping);
+                        if peak_l > 0.0 || peak_r > 0.0 {
+                            saw_nonzero = true;
+                        }
+                    }
                     if showing_mixer {
                         let strips = st.borrow();
                         if let Some(mut row) = strips.mixer_strip_model.row_data(bus) {
@@ -12487,6 +12933,17 @@ impl AppUi {
                 } else {
                     selected_channel
                 };
+                // Empty whatever the rack has just moved off, once, rather
+                // than draining every target every tick -- which is
+                // `(MAX_CHANNELS + MAX_BUSES) x (MAX_EFFECTS + 1) x 6` atomic
+                // swaps at 125 Hz, the cost the spectrum pool exists to
+                // avoid in the analogous case.
+                if last_device_target != Some(device_target) {
+                    if let Some(left) = last_device_target {
+                        handle.clear_device_meters(left);
+                    }
+                    last_device_target = Some(device_target);
+                }
                 let ((bus_or_source_in_l, bus_or_source_in_r), (source_out_l, source_out_r)) =
                     handle.take_device_peak(device_target, 0);
                 if showing_device_rack && !editing_bus {
@@ -12796,9 +13253,48 @@ fn install_project_in_ui(
 ) -> bool {
     let mut project = project.clone();
     normalize_project_pattern_banks(&mut project);
-    // Queue the complete state first. If the bounded realtime queue is full,
-    // leave both the sample slots and visible project untouched.
-    if !handle.install_project(Arc::new(project.clone())) {
+    // The bank is composed **before** anything is queued, and travels with
+    // the project as one command.
+    //
+    // It used to be sixteen `ArcSwap` stores made *after* the install was
+    // queued, into a bank every generation shared -- so for the block or two
+    // before the audio thread consumed the install, the outgoing project's
+    // graph was reading the incoming project's samples, and mid-loop, a
+    // half-replaced set of them. Composing first means the existing early
+    // return covers the assets too, with no second bail-out path.
+    let audio: Vec<ChannelAudioSnapshot> = (0..MAX_CHANNELS)
+        .map(|index| {
+            let sample = project
+                .channels
+                .get(index)
+                // Asked through the accessor rather than by naming every
+                // generator: this is a question about samples, and the four
+                // synths were only listed here to say "not me".
+                .and_then(|channel| match channel.setup.source.sampler_state() {
+                    Some(sampler) => samples.get(index).cloned().flatten().or_else(|| {
+                        matches!(sampler.sample, SampleReference::Builtin { .. })
+                            .then(|| default_sample.cloned())
+                            .flatten()
+                    }),
+                    None => default_sample.cloned(),
+                });
+            // The markers come from the project being installed, in the same
+            // pass. Published separately they were a second write of half of
+            // one fact, and the half that arrived first indexed the other
+            // half's buffer.
+            let slices = project
+                .channels
+                .get(index)
+                .and_then(|channel| channel.setup.source.sampler_state())
+                .map(|state| state.slices.clone())
+                .filter(|slices| !slices.is_empty())
+                .map(Arc::new);
+            ChannelAudioSnapshot { sample, slices }
+        })
+        .collect();
+    // If the bounded realtime queue is full, leave the sample bank, the
+    // engine and the visible project untouched.
+    if !handle.install_project(Arc::new(project.clone()), audio) {
         return false;
     }
     // A project install is the only thing that can change which track a strip
@@ -12807,35 +13303,32 @@ fn install_project_in_ui(
     // from here they are about a track that may not be the one they were
     // reading. The pump resets them on its next tick.
     state.borrow_mut().bus_meters_stale = true;
-    for index in 0..MAX_CHANNELS {
-        let sample = project
-            .channels
-            .get(index)
-            // Asked through the accessor rather than by naming every
-            // generator: this is a question about samples, and the four
-            // synths were only listed here to say "not me".
-            .and_then(|channel| match channel.setup.source.sampler_state() {
-                Some(sampler) => samples.get(index).cloned().flatten().or_else(|| {
-                    matches!(sampler.sample, SampleReference::Builtin { .. })
-                        .then(|| default_sample.cloned())
-                        .flatten()
-                }),
-                None => default_sample.cloned(),
-            });
-        if let Some(sample) = sample {
-            handle.load_sample(index, sample);
-        } else {
-            handle.clear_sample(index);
-        }
-    }
     state.borrow_mut().replace_project(&project, samples, window);
-    // Republish from the installed state rather than from `samples`: a
-    // channel whose stretch was committed plays the re-rendered buffer, and
-    // its slice map has to arrive with it.
+    // **Still needed, and now only where it says something the bank could
+    // not.** `samples` carries a project's *sources*; `replace_project`
+    // re-renders any committed stretch, and a channel with a commit plays
+    // that render. The re-render happens on the line above and nowhere
+    // earlier, so this is the first moment that buffer exists.
+    //
+    // It is also no longer a race. `install_project` left the handle
+    // addressing the bank it just prepared, so these stores land in the
+    // incoming generation's own slots and are read the instant it goes live
+    // -- where before they landed in a bank the outgoing generation was still
+    // playing from.
+    //
+    // **The `commit` guard is a fix, not a shortcut.** This ran over every
+    // sampler channel, and `published_sample()` is
+    // `committed_sample.or(sample_data)` where `replace_project` fills
+    // `sample_data` from `samples` alone -- it does not apply the legacy
+    // `SampleReference::Builtin` substitution the bank above does. So opening
+    // a project old enough to carry a `Builtin` reference published the
+    // default kick and then immediately cleared it, leaving the channel
+    // silent while its name, waveform and duration all described a kick. A
+    // channel with no commit has nothing to add here by construction.
     {
         let st = state.borrow();
         for (index, channel) in st.session.channels.iter().enumerate() {
-            if channel.kind == DeviceKind::Sampler {
+            if channel.kind == DeviceKind::Sampler && channel.commit.is_some() {
                 publish_channel_audio(handle, index, channel);
             }
         }
@@ -12976,15 +13469,13 @@ fn refresh_preset_menus(state: &Rc<RefCell<UiState>>, window: &MainWindow) {
 /// the render. Both travel out of band through `ArcSwap` slots rather than on
 /// the command ring, so this is wait-free and safe to call from the UI thread.
 fn publish_channel_audio(handle: &EngineHandle, index: usize, channel: &ChannelState) {
-    match channel.published_sample() {
-        Some(sample) => handle.load_sample(index, sample.clone()),
-        None => handle.clear_sample(index),
-    }
-    if channel.slices.is_empty() {
-        handle.clear_slices(index);
-    } else {
-        handle.load_slices(index, Arc::new(channel.slices.clone()));
-    }
+    handle.set_channel_audio(
+        index,
+        ChannelAudioSnapshot {
+            sample: channel.published_sample().cloned(),
+            slices: (!channel.slices.is_empty()).then(|| Arc::new(channel.slices.clone())),
+        },
+    );
 }
 
 /// Publish a finished background load to `channel`: hand the decoded sample
@@ -13007,16 +13498,24 @@ fn apply_loaded_sample(
     let waveform = waveform_peaks(&loaded.sample, WAVEFORM_BINS);
     let description = sample_description(&loaded.sample);
     let duration = sample_duration(&loaded.sample);
-    handle.load_sample(channel, loaded.sample.clone());
-    // The markers went with the old file; the engine must not keep playing a
-    // map that names frames in audio it no longer holds.
-    handle.clear_slices(channel);
+    // The markers went with the old file, so the snapshot carries none: the
+    // engine must not keep playing a map that names frames in audio it no
+    // longer holds, and now it cannot, because the buffer and the map arrive
+    // as one store.
+    handle.set_channel_audio(
+        channel,
+        ChannelAudioSnapshot::sample(loaded.sample.clone()),
+    );
     let mut st = st.borrow_mut();
     if let Some(ch) = st.session.channels.get_mut(channel) {
         ch.sample_name = name;
         ch.sample_description = description;
         ch.sample_duration = duration;
-        ch.sample_path = Some(loaded.path);
+        ch.sample_path = Some(loaded.path.clone());
+        // Where it came from, which is what "next sample" walks. A load from
+        // the browser or the file dialog is the only thing that sets this;
+        // the save's write-back deliberately does not.
+        ch.sample_browse_path = Some(loaded.path);
         ch.sample_embedded = false;
         ch.sample_data = Some(loaded.sample.clone());
         // A new file retires the old commit and the old markers outright:
@@ -13045,6 +13544,7 @@ fn spawn_browser_sample_load(
     path: &str,
     channel: usize,
     source_revision: u64,
+    request: u64,
     new_channel: bool,
     load_tx: &std::sync::mpsc::Sender<LoadResult>,
 ) {
@@ -13054,6 +13554,7 @@ fn spawn_browser_sample_load(
         let _ = tx.send(LoadResult {
             channel,
             source_revision,
+            request,
             new_channel,
             result: Some(load_sample_at_path(&path)),
         });
@@ -14025,10 +14526,11 @@ mod tests {
     #[test]
     fn browser_load_delivery_carries_its_target() {
         let (tx, rx) = std::sync::mpsc::channel();
-        spawn_browser_sample_load("/nonexistent/missing.wav", 3, 7, true, &tx);
+        spawn_browser_sample_load("/nonexistent/missing.wav", 3, 7, 11, true, &tx);
         let load = rx.recv().unwrap();
         assert_eq!(load.channel, 3);
         assert_eq!(load.source_revision, 7);
+        assert_eq!(load.request, 11);
         assert!(load.new_channel);
         // The decode fails off-thread; the pump owns the user-visible handling.
         assert!(matches!(load.result, Some(Err(_))));

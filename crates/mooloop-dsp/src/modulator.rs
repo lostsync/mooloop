@@ -581,6 +581,37 @@ impl ModulatorRack {
         }
     }
 
+    /// Apply the permutation the control rack just applied to itself, moving
+    /// each module's **running state** with it.
+    ///
+    /// `remap[old] = new`, with [`mooloop_core::modulation::UNRESOLVED_SLOT`]
+    /// for a slot that held nothing -- exactly what `ModRack::move_module_mapped`
+    /// returns. Without this the engine mirrored a reorder as a params diff by
+    /// slot number, which cannot tell a permutation from a reconfiguration:
+    /// every moved position was rebuilt from scratch, so an envelope dragged
+    /// to the front restarted at level 0 mid-sustain and a Random module was
+    /// reseeded. Two modules of the *same kind* dragged past each other were
+    /// worse: `set_slot` retunes in place, so each kept its own phase and
+    /// smoothing and took the other's params.
+    ///
+    /// Everything is cleared first and then written, so a source in a slot the
+    /// permutation does not name is dropped rather than left behind. Nothing
+    /// allocates: a `Source` is `Copy`.
+    pub fn permute(&mut self, remap: &[u8; MAX_MODULATORS_PER_CHANNEL]) {
+        let slots = self.slots;
+        let outputs = self.outputs;
+        self.slots = [None; MAX_MODULATORS_PER_CHANNEL];
+        self.outputs = [0.0; MAX_MODULATORS_PER_CHANNEL];
+        for (old, new) in remap.iter().enumerate() {
+            let new = *new as usize;
+            if new >= MAX_MODULATORS_PER_CHANNEL {
+                continue;
+            }
+            self.slots[new] = slots[old];
+            self.outputs[new] = outputs[old];
+        }
+    }
+
     /// Install or clear one slot. Reconfiguring a slot that already holds the
     /// same kind keeps its phase, so retuning an LFO's rate does not restart
     /// it mid-performance.
@@ -1388,5 +1419,108 @@ mod tests {
         ]);
         inverted.tick(48_000, 0, 120.0);
         assert_eq!(inverted.outputs()[1], 0.5);
+    }
+}
+
+#[cfg(test)]
+mod permute_tests {
+    use super::*;
+    use mooloop_core::modulation::UNRESOLVED_SLOT;
+    use mooloop_core::{ModLfoParams, ModRandomParams, ModulatorParams, MAX_MODULATORS_PER_CHANNEL};
+
+    fn identity() -> [u8; MAX_MODULATORS_PER_CHANNEL] {
+        let mut map = [UNRESOLVED_SLOT; MAX_MODULATORS_PER_CHANNEL];
+        for (slot, entry) in map.iter_mut().enumerate() {
+            *entry = slot as u8;
+        }
+        map
+    }
+
+    /// **Two modules of the same kind swapped keep their own running state.**
+    ///
+    /// This is the half of the reorder defect that is indefensible under any
+    /// reading. `set_slot` retunes an LFO in place, which is right for a rate
+    /// knob and wrong for a drag: the engine mirrored a reorder as a params
+    /// diff by slot number, so each LFO kept the phase it had and took the
+    /// *other's* params. Both jumped, and nothing on screen said why.
+    ///
+    /// Asserted through the outputs rather than through the phases, because
+    /// the output is what a route reads and what the user hears. The two LFOs
+    /// run at different rates and start a quarter cycle apart, so their
+    /// values stay distinguishable through the swap.
+    #[test]
+    fn swapping_two_lfos_carries_each_ones_phase_with_it() {
+        let mut rack = ModulatorRack::new();
+        rack.set_slot(
+            0,
+            Some(ModulatorParams::Lfo(ModLfoParams {
+                rate_hz: 1.0,
+                phase: 0.0,
+                ..ModLfoParams::default()
+            })),
+        );
+        rack.set_slot(
+            1,
+            Some(ModulatorParams::Lfo(ModLfoParams {
+                rate_hz: 7.0,
+                phase: 0.25,
+                ..ModLfoParams::default()
+            })),
+        );
+        // Run them apart.
+        for _ in 0..40 {
+            rack.tick(48_000, 32, 120.0);
+        }
+        let before = *rack.outputs();
+        assert!(
+            (before[0] - before[1]).abs() > 0.05,
+            "the two LFOs were indistinguishable to begin with: {before:?}"
+        );
+
+        let mut remap = identity();
+        remap[0] = 1;
+        remap[1] = 0;
+        rack.permute(&remap);
+
+        let after = *rack.outputs();
+        assert_eq!(after[0], before[1], "slot 0 did not receive slot 1's state");
+        assert_eq!(after[1], before[0], "slot 1 did not receive slot 0's state");
+
+        // And they go on running as themselves: one more tick must move each
+        // by the amount *its own* rate implies, not the other's.
+        rack.tick(48_000, 32, 120.0);
+        let stepped = *rack.outputs();
+        assert!(
+            (stepped[0] - after[0]).abs() > (stepped[1] - after[1]).abs(),
+            "the fast LFO is no longer in slot 0 after the swap: {stepped:?}"
+        );
+    }
+
+    /// A slot the permutation does not name is emptied rather than left
+    /// holding a module that has moved away. Written because clearing first
+    /// and writing second is the only reason that holds, and a later
+    /// in-place implementation would lose it silently.
+    #[test]
+    fn a_slot_the_permutation_does_not_name_is_left_empty() {
+        let mut rack = ModulatorRack::new();
+        rack.set_slot(0, Some(ModulatorParams::Lfo(ModLfoParams::default())));
+        rack.set_slot(
+            1,
+            Some(ModulatorParams::Random(ModRandomParams::default())),
+        );
+        rack.tick(48_000, 32, 120.0);
+        assert!(!rack.is_empty());
+
+        // Compaction: both modules move down to slot 0 and 1 is vacated.
+        let mut remap = [UNRESOLVED_SLOT; MAX_MODULATORS_PER_CHANNEL];
+        remap[1] = 0;
+        rack.permute(&remap);
+
+        rack.tick(48_000, 32, 120.0);
+        assert_eq!(
+            rack.outputs()[1],
+            0.0,
+            "the vacated slot still published a value"
+        );
     }
 }

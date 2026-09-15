@@ -1,4 +1,5 @@
 import { EqDeviceFace } from "eq-device.slint";
+import { MlP8DeviceFace, MlP8RouteRow } from "mlp8-device.slint";
 import { GainMath } from "gain.slint";
 import { FilterDeviceFace } from "filter-device.slint";
 import { CompressorDeviceFace } from "compressor-device.slint";
@@ -20,6 +21,9 @@ export component EqDeviceDragHarness inherits Window {
     in-out property <float> pass-slope;
     in-out property <float> q-profile;
     in property <[float]> band-data;
+    in property <[int]> band-kinds;
+    in property <[float]> pass-data;
+    in property <[float]> curve-db;
     in property <[float]> spectrum-data;
     in property <bool> analyzer-enabled;
     callback target-changed(float);
@@ -44,6 +48,9 @@ export component EqDeviceDragHarness inherits Window {
         pass-slope <=> root.pass-slope;
         q-profile <=> root.q-profile;
         band-data: root.band-data;
+        band-kinds: root.band-kinds;
+        pass-data: root.pass-data;
+        curve-db: root.curve-db;
         spectrum-data: root.spectrum-data;
         analyzer-enabled: root.analyzer-enabled;
         target-changed(v) => { root.target-changed(v); }
@@ -166,5 +173,64 @@ export component Ds01DeviceDragHarness inherits Window {
         page <=> root.page;
         value-changed(p, v) => { root.value-changed(p, v); }
         text-committed(p, t) => { root.text-committed(p, t); }
+    }
+}
+
+// The ML-P8's face, at the size the rack gives it: four rack units minus the
+// two rails, by `face-height` minus the device header.
+//
+// Here for the reasons the four above are, and for one that is this face's
+// own. Two of its controls are neither a property Rust sets nor a plain
+// two-way binding: the network cells read their modulation state out of
+// per-id models, and the LFO's RATE dial reads an *expression* over the free
+// rate and the division. Both are shapes where dragging the control can drop
+// the binding that feeds it, and neither is visible to a test that invokes
+// the callbacks: the defect is in what the widget does to its own property on
+// the way past.
+export component MlP8DeviceDragHarness inherits Window {
+    in-out property <int> page;
+    in property <bool> modulation-armed;
+    in property <[float]> modulation-depths;
+    in property <[bool]> modulation-allowed;
+    in property <[float]> modulation-offsets;
+    in property <[int]> modulation-route-counts;
+    // One network cell is enough to test the grid: they are one component
+    // instantiated twenty-four times.
+    in-out property <float> xmod12;
+    in-out property <bool> lfo-synced;
+    in-out property <float> lfo-rate-hz: 2;
+    in-out property <int> lfo-division: 7;
+    in property <[MlP8RouteRow]> routes;
+    in property <[string]> route-source-names;
+    in property <[string]> route-dest-names;
+    callback xmod12-changed(float);
+    callback modulation-depth-changed(int, float);
+    callback lfo-rate-changed(float);
+    callback lfo-division-changed(int);
+    callback route-amount-changed(int, float);
+
+    preferred-width: 884px;
+    preferred-height: 240px;
+    MlP8DeviceFace {
+        width: 100%;
+        height: 100%;
+        page <=> root.page;
+        modulation-armed: root.modulation-armed;
+        modulation-depths: root.modulation-depths;
+        modulation-allowed: root.modulation-allowed;
+        modulation-offsets: root.modulation-offsets;
+        modulation-route-counts: root.modulation-route-counts;
+        xmod12 <=> root.xmod12;
+        lfo-synced <=> root.lfo-synced;
+        lfo-rate-hz <=> root.lfo-rate-hz;
+        lfo-division <=> root.lfo-division;
+        routes: root.routes;
+        route-source-names: root.route-source-names;
+        route-dest-names: root.route-dest-names;
+        xmod12-changed(v) => { root.xmod12-changed(v); }
+        modulation-depth-changed(p, v) => { root.modulation-depth-changed(p, v); }
+        lfo-rate-changed(v) => { root.lfo-rate-changed(v); }
+        lfo-division-changed(v) => { root.lfo-division-changed(v); }
+        route-amount-changed(id, v) => { root.route-amount-changed(id, v); }
     }
 }

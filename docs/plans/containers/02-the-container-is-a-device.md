@@ -66,8 +66,14 @@ existing integrity pass is where it gets caught, not a `debug_assert`.
 Depth is capped. `CAPACITY_POLICY.md` gets an entry: containers nest four
 deep, chosen because step 03 preallocates one dry buffer per open span and the
 price is per-container, not per-slot. Four is a limit on the gesture, not on
-the format — a deeper chain loads and is reported by `integrity.rs`, the same
-way an over-long chain is.
+the format — a deeper chain loads.
+
+*(2026-09-14: the gesture half landed then and not here; nothing enforced the
+cap for the first year of its life. The sentence this paragraph used to end
+with — "and is reported by `integrity.rs`, the same way an over-long chain
+is" — was never implemented and is harder than it reads, because every way
+the integrity pass has of recording a problem either repairs it or refuses the
+document. `LOOSE_ENDS.md` carries it.)*
 
 ## What structural edits have to learn
 

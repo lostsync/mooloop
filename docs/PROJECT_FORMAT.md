@@ -353,8 +353,10 @@ before any of them existed still loads:
   falls back to the master: a producer with nowhere to go must still be heard,
   and a send with nowhere to go is simply not a send — re-pointing it at the
   master would put a wet path into the mix at full level. A bank whose sends
-  close a loop has its sends cleared along with its outputs, so the file still
-  opens. See `docs/plans/archive/console/05-sends.md`.
+  close a loop gives up **the edges on the loop and no others**, so the file
+  still opens and the sends elsewhere in it survive; a send is given up before
+  an output, for the same reason the paragraph above gives. See
+  `docs/plans/archive/console/05-sends.md`.
 - **Two effects follow the transport, and both persist a division rather
   than its result.** A delay carries `tempo_sync` and `time_division`, and a
   modulation effect carries `tempo_sync` and `rate_division`; all four
@@ -456,8 +458,16 @@ For a song file, the corresponding embedded path includes the sidecar name,
 for example `beat.mooloop-assets/samples/00-kick.wav`. Both forms are resolved
 relative to their document container and checked for path traversal.
 
-Embedded paths must remain below the document's `samples/` directory or its
-matching song sidecar; absolute paths and `..` traversal are rejected. Embedded
+Embedded paths must remain below the document's `samples/` directory or a song
+sidecar; absolute paths and `..` traversal are rejected. **The sidecar's name
+is not required to match** -- a song renamed in a file manager, together with
+its sidecar, stores a first component naming the *old* name, and the loader
+substitutes the one this song actually has and reports it as an asset warning.
+The containment property is the `Component::Normal` filter, not the name: a
+path admitting no `..`, no root and no prefix cannot leave the directory it is
+joined to whatever its first component is called. Requiring the name as well
+was what made a renamed song refuse to open at all. The check is **lexical**,
+so a symlink under `samples/` is still followed. Embedded
 saves copy audio files byte-for-byte, preserve their extensions, and deduplicate
 channels that use the same source file. Referenced saves write paths relative
 to the bundle when possible. Relative paths are resolved from the bundle
@@ -489,6 +499,13 @@ audio file.
   `MAX_MOD_ROUTES_PER_CHANNEL` (16) routes per channel. Both are engine
   constants rather than format fields: a manifest carrying more is truncated
   at load, not refused.
+- Up to `MAX_AUTOMATION_LANES_PER_CHANNEL` (8) automation lanes per (pattern,
+  channel), and at most one lane per destination. Also an engine constant, and
+  truncated on the same terms — `Pattern::set_lanes` takes the first eight, so
+  a manifest carrying more had lanes the *document* kept and the engine had
+  never heard of: they drew, edited and re-saved while changing no sound. The
+  integrity pass now takes the same eight and says how many went, so both
+  sides agree about which.
 - Up to seventeen buses (master plus sixteen inserts), and a bank may hold
   fewer. A short stored bank is a small mixer and is **left as it is** --
   padding it back to seventeen was removed because it silently added fifteen
@@ -497,10 +514,14 @@ audio file.
 
   Two routing repairs run, and **they do not both run in the same place.** An
   out-of-range destination is repaired to the master by the integrity pass,
-  which reports it. A bank whose routing contains a cycle is flattened to
-  everything-to-master, and a send naming a track that is not there is
-  dropped, by `mooloop_core::mixer::sanitize_bank` -- which `Session` calls
-  after the load, and which reports nothing. See `docs/LOOSE_ENDS.md`.
+  which reports it through `Doctor`. A bank whose routing contains a cycle has
+  the edges on that cycle removed, and a send naming a track that is not there
+  is dropped, by `mooloop_core::mixer::sanitize_bank` -- which `Session` calls
+  after the load. Those repairs are named, one line each, but they go to the
+  **log** rather than to `LoadReport::repairs`: `sanitize_bank` runs on every
+  project install and not only on a load, so folding it into the report means
+  moving it into the integrity pass. That half is still in
+  `docs/LOOSE_ENDS.md`.
 - **No limit on sends.** Nothing in the format, the plan or the face reserves
   for a number of them; a track carries as many as it was given.
   `docs/CAPACITY_POLICY.md` is why.

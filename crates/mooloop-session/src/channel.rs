@@ -40,6 +40,23 @@ pub struct ChannelState {
     pub sample_description: String,
     pub sample_duration: f32,
     pub sample_path: Option<PathBuf>,
+    /// The folder the sample was *browsed from*, as a path to the file that
+    /// was picked there. Where `sample_path` says where the bytes are now,
+    /// this says where "next sample" should look.
+    ///
+    /// They are the same thing until a song is saved with Embed Assets on,
+    /// which is the default: the app writes the resolved bundle paths back
+    /// into the live session, and `sample_path.parent()` then names
+    /// `<song>-assets/samples/`. With four sampler channels embedded that
+    /// directory is `00-kick.wav, 01-snare.wav, 02-hat.wav, 03-clap.wav`, so
+    /// "next sample" on the kick loaded the snare out of the bundle -- a kick
+    /// picked from a fifty-file drum folder lost the other forty-nine the
+    /// first time the song was saved.
+    ///
+    /// So this is the field the save's write-back must not touch, which is
+    /// the whole of why it is a second field rather than a change to what is
+    /// stored: only `project_snapshot` needs the bundle-relative form.
+    pub sample_browse_path: Option<PathBuf>,
     pub sample_embedded: bool,
     /// The decoded source. Authoritative, and never what the engine plays
     /// once a stretch has been committed.
@@ -149,6 +166,7 @@ impl ChannelState {
             sample_description: String::new(),
             sample_duration: 0.0,
             sample_path: None,
+            sample_browse_path: None,
             sample_embedded: false,
             sample_data: None,
             committed_sample: None,
@@ -223,6 +241,9 @@ pub fn apply_sample_references(
 ) {
     for (channel, sample) in channels.iter_mut().zip(references) {
         match sample {
+            // `sample_browse_path` is deliberately untouched on both arms:
+            // this runs after a save, and where the bytes went is not where
+            // the user was browsing.
             Some(SampleReference::Builtin { .. } | SampleReference::Empty) => {
                 channel.sample_path = None;
                 channel.sample_embedded = false;
@@ -283,5 +304,48 @@ mod tests {
             ))
         );
         assert!(channel.sample_embedded);
+    }
+
+    /// **A save does not move where "next sample" is looking.**
+    ///
+    /// The write-back above is correct and necessary -- the bytes really are
+    /// in the bundle now -- and it used to take the browse folder with it,
+    /// because there was only one path. So a kick picked out of a fifty-file
+    /// drum folder, saved once with Embed Assets on (the default), had arrows
+    /// that walked `<song>-assets/samples/` instead: with four sampler
+    /// channels embedded that directory is `00-kick.wav, 01-snare.wav,
+    /// 02-hat.wav, 03-clap.wav`, so "next sample" on the kick loaded the
+    /// snare out of the song's own bundle.
+    #[test]
+    fn a_save_does_not_move_the_browse_origin() {
+        let mut channel = ChannelState::new(0);
+        channel.sample_path = Some(PathBuf::from("/samples/drums/kick.wav"));
+        channel.sample_browse_path = Some(PathBuf::from("/samples/drums/kick.wav"));
+
+        apply_sample_references(
+            std::slice::from_mut(&mut channel),
+            [Some(SampleReference::File {
+                path: PathBuf::from("/songs/beat.mooloop-assets/samples/00-kick.wav"),
+                embedded: true,
+            })],
+        );
+
+        assert_eq!(
+            channel.sample_browse_path,
+            Some(PathBuf::from("/samples/drums/kick.wav")),
+            "the save moved the folder the arrows walk"
+        );
+
+        // And a channel whose sample was cleared keeps nothing to walk.
+        apply_sample_references(
+            std::slice::from_mut(&mut channel),
+            [Some(SampleReference::Empty)],
+        );
+        assert_eq!(
+            channel.sample_browse_path,
+            Some(PathBuf::from("/samples/drums/kick.wav")),
+            "clearing the reference is still not a browse"
+        );
+        assert_eq!(channel.sample_path, None);
     }
 }

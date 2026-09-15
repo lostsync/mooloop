@@ -333,6 +333,9 @@ const FROZEN: &[(Owner, &[(u32, &str)])] = &[
         (124, "Width"),
         (15, "Voices"),
         (16, "Spread"),
+        (17, "Mono"),
+        (18, "Env trig"),
+        (19, "Priority"),
     ]),
     (Device(DeviceKind::MlM1), &[
         (0, "Glide"),

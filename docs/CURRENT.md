@@ -252,8 +252,16 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   poly synth faces share the same rack chrome and preserve their dimensions at
   narrow widths through horizontal scrolling. Sampler controls are divided
   into Sample, Voice, and Tone pages; the v1 mono controls into Osc,
-  Amp/Filter, and Mod pages; and poly controls add a VOICE page for polyphony
-  and stereo spread. The ML-M1 is a distinct mono filter/performance instrument:
+  Amp/Filter, and Mod pages; and poly controls add a VOICE page for polyphony,
+  stereo spread and **mono mode**. Mono mode is not `Voices = 1`: a pool of one
+  voice steals from itself, so releasing the newer of two held notes leaves it
+  on the note that is no longer down. Mono mode gives the voice a held-note
+  stack, a note priority of Last, Low or High, and a Retrig/Legato switch over
+  whether an overlapping note restarts the envelope -- and a release falls back
+  to whatever is still held as a pitch change rather than as a new note, in
+  either switch position, which is what makes a trill work. `Voices` greys out
+  while it is on. Overlapping notes glide and a note landing on a release tail
+  jumps; that is one fixed rule rather than a second glide control. The ML-M1 is a distinct mono filter/performance instrument:
   Osc, Amp/Filter, and Perf pages expose separate amplitude and filter ADSRs,
   three low-pass filter characters, pre-filter drive, keytracking, a held-note
   priority stack, legato/retrigger and glide modes, and velocity Accent. The
@@ -263,8 +271,15 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   sixty-nine parameters only at a 20px dial and a 9px caption, which is
   unreadable on a laptop, so the face spends a click per group and every
   control is a 34px `KnobStack` with its value still typed into. NETWORK is
-  the source-by-destination grid with a page to itself, at 176px a column
-  rather than 46. AMP carries the amp envelope beside allocation and
+  the source-by-destination grid with a page to itself; its four columns
+  divide the face's width rather than holding a fixed 176px and centring the
+  remainder. Each cell is a **horizontal** slider -- the bar and the drag both
+  run along the cell's long axis, since a cell seven times wider than it is
+  tall spent its length saying nothing and its height saying the value. A cell
+  draws its modulation state the way a knob's ring does: an armed source marks
+  every legal cell and shows the excursion its route would produce about the
+  authored value, an unarmed one shows where the running sources have actually
+  put the parameter, and a dot per incoming route. AMP carries the amp envelope beside allocation and
   character: Unison and Chorus as selectors under a fixed `VOICES 8` and the
   note count Unison leaves, with Detune, Spread, Drift and Glide as knobs. The
   face stays four rack units. The DS-01 face is six pages at four rack units
@@ -324,9 +339,16 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   model, SAMPLES and PRESETS. **Samples**: persisted locations added through
   a folder picker and removed from a right-click, a tree flattened to one row
   per visible entry, filtering to playable formats, an autoplay arm and a
-  preview-gain trim feeding a dedicated engine preview voice, an info pane
+  preview-gain trim feeding a dedicated engine preview voice -- a preview the
+  command ring refuses says so in the status bar rather than being silence
+  with no explanation -- an info pane
   with waveform, name, and format stats, and loading either into the selected
-  channel or into a new one. **Presets**: every well-known preset directory
+  channel or into a new one. The sampler face's prev/next-sample arrows step
+  through **the folder the sample was browsed from**, which a save does not
+  move: embedding a song rewrites where the bytes are, and before 2026-09-14
+  it took the arrows with it, so "next sample" on a kick loaded the snare out
+  of the song's own bundle. A song opened from disk has no browse folder to
+  remember and steps through its bundle, which is all the document knows. **Presets**: every well-known preset directory
   scanned on entry to the tab and grouped — Channels, then one group per
   device kind, then one per effect kind, empty groups omitted — each group
   expanding to its presets with a count beside it, and a preset's category
@@ -384,7 +406,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   Song documents are inspectable versioned TOML files with
   optional copied WAV assets in a sibling `.mooloop-assets` directory. Older
   directory-style song bundles remain loadable and migrate when resaved.
-  Missing or corrupt samples warn and load as silent slots.
+  Missing or corrupt samples warn and load as silent slots. **Renaming a song
+  and its assets folder together, in a file manager, works**: the document
+  still names the old folder, and the loader reads this song's own instead and
+  says so, which the next save writes back. Until 2026-09-14 that pair of
+  renames made the song permanently unopenable.
 - Offline export of exactly one selected-pattern pass in Pattern mode or one
   derived playlist pass in Song mode, followed by a configurable 0-30 second
   release tail. Outputs are 24-bit PCM WAV, 32-bit float WAV, or 192/256/320
@@ -628,7 +654,13 @@ land on its own when it starts to matter:
   rather than stopping at the canvas edge. Stop still returns it to the
   start.
 - Playlist starts use the shared musical snap while retaining absolute PPQ
-  ticks and are bounded to a 64-bar start canvas. The timeline is horizontally
+  ticks and are bounded to a 64-bar start canvas. **Two clips of one pattern
+  may not be placed overlapping, but growing that pattern can make them
+  overlap anyway** -- nothing revalidates a length change. Both go on playing,
+  which is what layering means here; what a click in the overlap resolves to
+  is the **latest-starting** clip, the same rule automation uses for layered
+  placements, so the buried one can still be removed. Before 2026-09-14 it
+  could not be reached at all. The timeline is horizontally
   zoomable. Global swing delays alternate sixteenth notes from 50% (straight)
   through 75% (strong shuffle), preserving note duration in realtime and
   offline rendering. There is no clip dragging, time-signature model, groove
@@ -641,7 +673,14 @@ land on its own when it starts to matter:
   live UI still owns incremental edits and produces snapshots for these paths.
 - Songs, kits, and channel presets use the v1 bundle contract documented in
   `PROJECT_FORMAT.md`. Saves stage and replace bundles atomically; embedded and
-  referenced asset policies are available per save.
+  referenced asset policies are available per save. **Embedding is one-way**:
+  a sample the bundle already owns stays there whatever the box says, because
+  the bundle holds the only copy of it and writing a reference would delete
+  that copy. A referenced save of an embedded song is refused per sample, in
+  the save report's warnings, and the Embed Assets box goes on showing
+  embedded — it follows the samples rather than the mode, so it tells the
+  truth on reopening. Un-embedding for real would mean choosing a folder to
+  copy the bytes out to, and there is no such gesture.
 - Channel presets are instrument presets for sampler and generated sources;
   sampler presets may carry a referenced or embedded audio file while synth
   presets contain only inspectable parameter state. They are saved and loaded
@@ -651,10 +690,13 @@ land on its own when it starts to matter:
   rack -- the same two buttons on the generator and on every effect row. The
   load button offers only the presets saved for that device's kind, and is
   disabled when there are none. The device's header then names the preset it
-  came from, and keeps saying so after its knobs are moved. A label is dropped
-  when the device wearing it goes: changing the channel's source, loading a
-  channel preset over it, or opening a song or kit, which replaces the whole
-  rack.
+  came from, and keeps saying so after its knobs are moved. **Saving one names
+  the device only once the write has succeeded** -- a preset that cannot be
+  written, because the name is too long for the filesystem or the disk is
+  full, raises its dialog and leaves the rack row saying what is actually on
+  disk. A label is dropped when the device wearing it goes: changing the
+  channel's source, loading a channel preset over it, or opening a song or
+  kit, which replaces the whole rack.
 - File > New Song (Ctrl+N) starts a fresh starter song, asking first when the
   current one has unsaved changes, as Open Song does. Every file and
   confirmation dialog is a separate program: `zenity` on Linux, and on macOS
@@ -663,6 +705,17 @@ land on its own when it starts to matter:
 - Missing samples are recoverable by loading a replacement audio file, but
   there is no dedicated path-search/relink dialog, autosave, or crash recovery
   yet.
+- **A song old enough to reference the built-in kick opens with it audible.**
+  Projects saved before the sampler stopped auto-loading a kick carry a
+  `SampleReference::Builtin`, which the install substitutes the cached default
+  for. Until 2026-09-15 a second publication four lines later cleared it, so
+  the channel was silent while its name, waveform and duration all described a
+  kick; `control-plane-seams/03` fixed it.
+- **Two sample loads into one channel resolve in the order they were asked
+  for, not the order they finish.** Loading a long file and then changing your
+  mind used to be decided by decode time, so the first choice could land last
+  and win. Each dispatch carries a request token now and a superseded
+  completion is discarded.
 
 ### Mixing, Routing, And Effects
 
@@ -841,10 +894,13 @@ land on its own when it starts to matter:
   `mooloop_dsp::console` is where the curve lives.
 - Cycles are refused rather than delayed, at the picker (looping destinations
   are shown greyed with the reason), at the command boundary, and on load,
-  where a cyclic file is flattened to everything-to-master so it still opens
-  and plays. Feedback routing would mean reading a bus's previous block, which
-  is a deliberate feature rather than a fallback and needs a latency story this
-  engine does not have.
+  where a cyclic file gives up **the edges that close the loop** so it still
+  opens and plays. A send on the ring goes before an output on it, because a
+  dropped send loses what was added where a re-pointed output still carries
+  the track's audio; routing elsewhere in the bank is untouched, and each
+  removal is named in the log. Feedback routing would mean reading a bus's
+  previous block, which is a deliberate feature rather than a fallback and
+  needs a latency story this engine does not have.
 - A muted bus still processes, so effect tails on it decay rather than freeze,
   but contributes no audio and meters as silent.
 - Per-bus peaks reach the GUI through a shared array of atomics rather than the
@@ -859,7 +915,12 @@ land on its own when it starts to matter:
   they meter a chain, and a chain has no latch to light or to clear. A track's
   fader row does have one -- the same latch its mixer strip shows, cleared
   from whichever of the two the user clicks -- and shows peak hold from the
-  same reading. Until 2026-09-14 the rails drew a lamp that could not light
+  same reading. **The master's toolbar meter is the same latch again**: it
+  reads bus 0 through the mixer strip's own ballistics, so either lamp clears
+  both and neither can disagree with the other. Before 2026-09-14 it read a
+  separate per-block engine event instead, which is a bounded ring the audio
+  thread drops from under pressure -- the always-visible meter was the lossy
+  one. Until 2026-09-14 the rails drew a lamp that could not light
   and the fader row drew one that was never bound, while its peak marker was
   pinned to the level.
 - Channels retain the historical constant-power pan law, so existing project
@@ -915,7 +976,32 @@ land on its own when it starts to matter:
   function: **a band's Q is its slope while that band is a shelf** and its Q
   while it is a bell, and a proportional bell narrows as it is pushed. The
   shelf half of that arrived 2026-09-14 -- before it, a shelf's Q knob moved
-  nothing; a
+  nothing. **Its response plot draws the filter that is running**, not a
+  shape resembling it: Rust designs the same coefficients the audio path
+  designs and evaluates their magnitude response, so the drawn curve is
+  within a tenth of a decibel of what a sine measures through the bank. Both
+  pass filters are on that curve at their real slopes with grabbable corners,
+  a shelf's drawn slope follows its Q knob, and the same plot draws the
+  channel strip's four bands the same way. The band buttons read 1 to 7 --
+  the numbering their parameters use -- and the pass-slope buttons read
+  12/24/36/48/72 dB per octave, which is what the bank rolls off at; they
+  read LOW/1..6 and 6/12/18/24/36 before 2026-09-15. **All seven bands start
+  on and spread across the band** at the seven-band graphic EQ's own centres
+  -- 63, 160, 400, 1k, 2.5k, 6.3k and 16k -- with a **low shelf at band 1 and
+  a high shelf at band 7**; before 2026-09-15 three were on, the high shelf
+  was band 3, and the other four sat on top of each other at 1 kHz, so four
+  of the seven handles were underneath band 2's. Every band rests flat, and a
+  bell at 0 dB is the identity filter, so a fresh EQ still passes the signal
+  through untouched. The target row is drawn in the order the plot reads --
+  the high-pass, the seven bands, then the low-pass -- and **a target that
+  has a shape of its own draws it**: the two shelves and the two pass filters
+  are line-art glyphs, a plain bell is its number, and the glyph follows the
+  band's live kind rather than a fixed picture of the opening arrangement.
+  The analyzer's switch sits in the plot's own top corner instead of a third
+  button in that row, and the selected target's ON sits beside the three
+  knobs it switches on. Double-clicking a knob
+  returns to the *selected* band's resting value rather than to band 2's. A
+  feedback-delay-network hall reverb; and
   feedback-delay-network hall reverb; and one five-mode modulation processor
   (chorus, flange, phaser, ensemble, and ADT) whose Rate carries the same
   sync lamp the delay does, over the same grid, clamped to the 12 Hz its LFO
@@ -984,7 +1070,11 @@ land on its own when it starts to matter:
   without moving the channel in time. **Nothing in the
   interface**: a device's left rail wraps it in a container, a container's
   right rail unwraps it, and dragging a device onto a row already inside a box
-  puts it in that box, and **dropping onto an emptied box puts it back
+  puts it in that box. **Containers nest four deep and the wrap button goes
+  out at the fourth**, because the engine preallocates one dry buffer per open
+  box and a fifth one would have an inert Mix and no chrome. A *device* inside
+  the fourth box is fine: the cap counts boxes, not rows. And **dropping onto
+  an emptied box puts it back
   inside** -- an empty container's span covers no index, so its own row is
   the only thing there is to aim at and a drop on it means "into this".
   Dropping on a container that still holds something keeps meaning "before
@@ -1033,7 +1123,13 @@ land on its own when it starts to matter:
   than a layout assumption, and the grid scrolls to whatever it is set to.
   Routes carry durable `ModSourceId`s, so reordering the grid moves a module
   without changing what any route means, and `MoveModulator` remaps the Math
-  module's `input_slot` across the same permutation. Arming a module's Assign
+  module's `input_slot` across the same permutation. **A reorder also moves
+  each module's running state**: an LFO keeps its phase, its smoothing and its
+  fade position, an envelope keeps its stage and level, and a Random module
+  keeps its sequence. Before 2026-09-14 a drag rebuilt every moved module, so
+  an envelope dragged to the front dropped a held note's contour to zero
+  mid-sustain, and two LFOs dragged past each other swapped params without
+  swapping phase and both jumped. Arming a module's Assign
   switch makes legal controls assignable; dragging one sets route depth while
   the control keeps its base value. Removing a route restores the
   destination's base, on generator parameters as well as effect ones. The
@@ -1130,9 +1226,18 @@ land on its own when it starts to matter:
   refuses them structurally rather than a rule the picker remembers. An Aux In
   channel is where they are read instead.
   **The two kinds of source publish in different ranges, and a route's
-  polarity is about the module convention.** A rack module always emits
+  polarity is about the module convention.** A rack module emits into
   `-1..1`, and `Unipolar` lifts that into `0..1` so a one-way module rests at
-  the destination's base. An outlet publishes in its *declared* range, where a
+  the destination's base. The lift stands on the module's **own amount**, not
+  on the full range: an LFO at half depth swings `-0.5..0.5`, and a unipolar
+  route from it still rests on the base and reaches half the route's depth.
+  Turning that amount to zero therefore contributes nothing, where until
+  2026-09-14 it parked the destination half a depth above the base while the
+  module visibly stopped moving. An LFO still fading in is the one case the
+  lift cannot see, because the fade is engine state rather than a parameter:
+  for the length of the fade a unipolar route from it rises from half the
+  module's depth instead of from the floor. An outlet publishes in its
+  *declared* range, where a
   unipolar one is already `0..1`, so an outlet route takes the destination's
   own default — `Bipolar`, which passes the value through. `Unipolar` on an
   outlet remains meaningful, but only for a genuinely bipolar one such as
@@ -1228,6 +1333,16 @@ land on its own when it starts to matter:
 - Clip automation is per (pattern, channel), lives in the clip that drew it,
   and may address a bus. Two clips automating one destination is not
   prevented; the lowest channel wins at render time.
+- **A lane that stops driving a destination gives the knob back.** Deleting or
+  clearing a lane does it, and so does moving the playhead off it: switching
+  pattern, switching between pattern and song mode, and seeking all hand every
+  destination the outgoing position was driving — and the incoming one is not
+  — back to the value its knob shows. Without that a filter goes on playing at
+  wherever the last curve left it while its face reads something else.
+  **A song-mode clip boundary is the case this does not cover**, because it is
+  not a command: the playhead moves out from under a lane on its own, and the
+  destination latches until something touches it. That one is in
+  `docs/LOOSE_ENDS.md`.
 - **The mixer is latency compensated.** Every device declares the frames it
   adds, the bus tree compiles into a per-producer delay, and each channel and
   bus waits by the difference before it sums — so two channels hitting on the
@@ -1346,8 +1461,12 @@ land on its own when it starts to matter:
   a paste is a new device that sounds the same rather than the same device
   twice. A paste lands after the run it was dropped on, and a run's end
   boundary is outside a container, so pasting onto a box's last child lands
-  beside the box rather than in it. Duplicate is on every rack row's left
-  rail; all four are on Ctrl+Shift+C/X/V/D, and all but copy are undoable.
+  beside the box rather than in it. **Duplicate does not follow that rule**:
+  a copy lands at the original's own depth, so duplicating a box's last child
+  keeps it in the box. Paste is aimed at a *position* and duplicate is aimed
+  at a *row*, and only the second one can say which side of the boundary it
+  meant. Duplicate is on every rack row's left rail; all four are on
+  Ctrl+Shift+C/X/V/D, and all but copy are undoable.
   **The clipboard does not carry modulation routes or automation lanes**: a
   route's source is a module in the channel's own rack, so it cannot follow a
   device to another channel. That is the question `docs/plans/containers/`

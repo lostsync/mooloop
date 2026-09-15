@@ -26,8 +26,8 @@ because `BUFFER_ENGINE.md`'s insert model is not settled. `device-registry/`,
 piece is exempt: take `device-registry/`'s face host component if a device step
 already has `main.slint` open.
 
-`eq-v2/` was added 2026-09-12 and **step 01 landed 2026-09-14; 02 to 04 are
-open, and 04 is optional.** It came out of fixing one
+`eq-v2/` was added 2026-09-12 and **steps 01 and 03 landed 2026-09-14, step 02
+early on 2026-09-15; only 04 is open, and it is optional.** It came out of fixing one
 bug -- the EQ's Shape control was two settings of different arity behind one
 automatable id -- and out of Adam's question about what that implied: mooloop
 intends to host CLAP, a CLAP plugin exposes arbitrary independently automatable
@@ -46,6 +46,32 @@ a stale lane on a retired one lands in a hole rather than on a neighbour), and
 **no change to the face at all** -- which is the finding worth carrying into
 plugin work, and `00-status.md` says why.
 
+`control-plane-seams/` was added 2026-09-15 and **all five steps landed the
+same day**; it is ready to archive. It came from an outside architectural
+review that read the system end to end rather than reading a diff, and whose
+verdict on the layering was good: the crate stack is one-way, live and offline
+rendering share one prepared `RenderState`, and device identity survives rack
+movement. What it faulted was the **control-plane boundary** -- the place where
+logically atomic operations are written as sequences of independent mutations
+and fallible queue writes. Four of the five shared one shape, and it is the
+shape this repository keeps producing: **the code knew the right rule and
+applied it one layer too shallow.**
+
+Three things in `00-status.md` outlive the plan. The **allocation-tracking
+harness** `FOCUS.md` had been asking for since `buffer-implementation/` Stage 1
+turned out to be three lines on an allocator `mooloop-engine` already had, and
+it was validated against the defect it was written for. **Two steps could not
+be given the test they specified**, both because an `EngineHandle` cannot be
+built without opening an audio driver -- which is a gap worth a decision, and
+is recorded as one. And the fix shapes are worth copying: three of the five
+made the defect *unrepresentable* rather than handled -- one publish call
+instead of four, a bank taken by value, a `#[must_use]` delivery result -- so
+the guarantee is carried by the signature rather than by a test.
+
+The review's sixth item, that the UI/session seam is becoming a god layer, is
+in the plan's `README.md` as a direction rather than a step, for the same
+reason `device-registry/` has no steps.
+
 `pattern-bank-floor/` was added 2026-09-08 and is **not started, and not on
 anyone's list**. It fell out of an audio-dropout investigation whose actual
 cause was `rtkit` demoting the machine's realtime threads. What it records is
@@ -55,11 +81,19 @@ is worth a step was a `FOCUS.md` question, and the answer as of 2026-09-12 is
 **not now** -- safely, because the measurements to judge it by are committed
 either way.
 
-Last swept 2026-09-14, twice. `eq-v2/` step 01 gave every EQ band and both
-pass filters their own stable ids -- the one native device whose parameter
-model a CLAP host could not have expressed -- and the thing it proved is that
-a face showing one band at a time was never the problem: resolving the
-selection one layer earlier left the markup untouched. Earlier the same day,
+Last swept 2026-09-15, and amended later the same day when
+`control-plane-seams/` was written. `eq-v2/` steps 01 and 03 landed on the 14th and step 02
+seven minutes into the 15th. 01 gave every EQ band and both pass filters their own stable ids --
+the one native device whose parameter model a CLAP host could not have
+expressed -- and the thing it proved is that a face showing one band at a time
+was never the problem: resolving the selection one layer earlier left the
+markup untouched. 03 found a band's Q knob doing nothing at all while that
+band was a shelf, and deleted a private copy of the core Q law that had been
+running instead of it. 02 stopped the response plot approximating: the curve
+is the bank's own coefficients evaluated now, held to a sine through a real
+bank, and an `EqSpec` global took the last range out of `eq-device.slint` --
+which closed a double-click defect and turned up a pass-slope selector that
+had been wrong by a factor of two since it shipped. Earlier the same day,
 `interface-iteration/` step 04 landed and the directory archived. The keyboard pass was supposed to be about coverage --
 no stop, nothing device-level, no browser focus -- and 63 actions is that
 coverage. What it found is that **the registry and the keyboard had drifted
@@ -147,8 +181,9 @@ is worth reading before either.
 | Plan | State |
 | --- | --- |
 | `pane-layout/` | **Done 2026-09-08, including the two pieces first left out** -- the tab's right-click menu and the arrangement persisted into settings. Ready for `archive/`; read `00-status.md` first, which records four Slint constraints and one wrong claim worth not repeating. Adam's split-view request, answered as a set of views and three slots rather than a control per requirement. The work area computes each slot's rectangle instead of nesting layouts, so a view needs one instance wherever it is drawn, and the dock's two stacked toolbars are the one row per view that made possible. The top pane splits, any pane zooms to the window, a tab drags between panes, and `editor-page` is gone -- a page index of the lower dock cannot name a view that has moved out of it. Read its `README.md` before touching the work area, and `00-status.md` for the four Slint constraints step 01 found -- one of which, a nested model index that type-checks and does not evaluate, cost a wrong render. |
-| `midi-control/` | **Steps 01-03 landed 2026-09-15; step 04 is the whole interface and is not started.** Adam's brief: a channel picks its MIDI input and channel or Omni, CCs assign to knobs and faders, transport controls, record MIDI to a pattern -- with OSC kept in mind. Everything below the interface is built and tested: per-channel input routing in the engine, a protocol-free mapping layer whose MIDI half is one of three enum variants, transport gestures carried out in one place wherever they are asked for, and note capture into patterns. Nothing is reachable from the application yet, which is exactly what step 04 is. `docs/CONTROL_SURFACES.md` is the design and states where OSC attaches: one `ControlSource` variant, one decoder, and a transport -- nothing else in the layer changes. Two things not to rediscover: JACK presents **one merged MIDI port**, so under JACK keyboards are told apart by MIDI channel rather than by port; and the Core MIDI half has never been compiled, because it is behind a macOS `cfg` and this was written on Linux. |
-| `buffer-implementation/` | **Stage 1 done, Stage 2 open.** Stage 1's acceptance test 8 (RT allocation hygiene) is still unverified. |
+| `midi-control/` | **Steps 01-03 landed 2026-09-15; step 04 is partly landed.** Adam's brief: a channel picks its MIDI input and channel or Omni, CCs assign to knobs and faders, transport controls, record MIDI to a pattern -- with OSC kept in mind. Everything below the interface is built and tested: per-channel input routing in the engine, a protocol-free mapping layer whose MIDI half is one of three enum variants, transport gestures carried out in one place wherever they are asked for, and note capture into patterns. Step 04 made the first half of it reachable -- the channel sidebar's IN and CH rows are live, there is a record-arm button, and the pump carries control input and recorded notes both ways -- but **controller mapping still has no interface**: `Session::begin_control_learn` is tested and nothing calls it, so a CC can be bound only by a project written by hand, and there is no transport mapping surface. **None of it has been run against a MIDI device.** `docs/CONTROL_SURFACES.md` is the design and states where OSC attaches: one `ControlSource` variant, one decoder, and a transport -- nothing else in the layer changes. Two things not to rediscover: JACK presents **one merged MIDI port**, so under JACK keyboards are told apart by MIDI channel rather than by port; and the Core MIDI half has never been compiled, because it is behind a macOS `cfg` and this was written on Linux. |
+| `buffer-implementation/` | **Stage 1 done, Stage 2 open.** Stage 1's acceptance test 8 (RT allocation hygiene) is still unverified, but **no longer for want of an instrument**: `control-plane-seams/04` added `CountingAllocator::allocations()` to `mooloop-engine` on 2026-09-15 and proved it against a real defect. What is left is coverage -- one block on the preview path is measured, the Buffer operations are not, and the locks half of the claim is not measured at all. |
+| `control-plane-seams/` | **All five steps landed 2026-09-15; ready to archive.** Five confirmed control-plane defects from that day's architectural review: commands dropped on a full ring while the session's mirrors record them as delivered, a sample and its slice map published separately, a project install that overwrote the shared sample bank before the queued generation switched, two retirement vectors that could allocate in the callback, and sample loads with no per-request token. All five are fixed. `00-status.md` carries what the work found that the steps did not predict -- the allocation harness, a legacy-project defect nobody was looking for, and two tests that could not be written because an `EngineHandle` needs an audio driver. |
 | `mono-synth-v2/` | **Complete and played**, one finding deliberately left open (Acid's cutoff corner). Kept out of the archive only because that finding needs Adam's ear, not because a step is unbuilt. |
 | `session-layer-extraction/` | **Done, 2026-09-03.** Lifted `mooloop-session` -- the model, the edits, undo, and engine command emission -- out of `mooloop-ui/src/lib.rs`, which is down from 14,157 lines to 9,797. `cargo test -p mooloop-session` is 87 tests in under a second, and is the first coverage the edit logic has ever had. Two departures are recorded in `00-status.md`: `UiState::new` is still long (callback *registration*, no longer decisions), and the pump's meter polling stayed in the view on purpose. |
 | `edit-loop/` | **Steps 01 and 02 landed, 03 closed unstarted, 04 waiting on one measurement.** Six of every ten working hours went on `cargo`. `scripts/antibox` now picks incremental compilation for dev builds and sccache for release builds (64% off `cargo test --workspace`), `AGENTS.md` carries a verification ladder, the mockup tool is behind a Cargo feature, and `scripts/mooloop-run` is one command from edit to running application. Splitting device faces was measured and rejected: 79% of face commits also edit `main.slint`. What is left is `main.slint` itself, which no Slint arrangement reaches -- read `04-decide.md` before `egui-view-layer/`. |
@@ -166,7 +201,7 @@ writing steps would presume the answer.
 | Plan | Why it is queued |
 | --- | --- |
 | `device-registry/` | **A survey, written 2026-09-11, not a work order. Parked 2026-09-12**, except for the face host component, which `FOCUS.md` says to take if a device step already has `main.slint` open. Adam's "we should basically be loading these like plugins we get to have native conversations with", priced. Adding a device kind touches fourteen files, nine of which hold a one-line arm stating one fact; those nine are the registry, spread out. Three findings worth having before anyone tries: the typed `EffectParams` enum is the reason the DSP reads well and should not be flattened into function pointers; a table spanning crates cannot exist, because `mooloop-dsp` depends on `mooloop-core` and so a node constructor is not nameable beside the params it builds from; and Slint has no dynamic component instantiation, so `main.slint` holds one arm per kind under every design short of generating the markup. What *is* reachable is that those arms are 444 lines of which 245 are the same eleven bindings fourteen times -- a face host component would take an arm from twenty-seven lines to eight without a Rust change. |
-| `poly-v1-mono-mode/` | One step. The only thing blocking deletion of `DeviceKind::MonoSynth`, which is what lets `MlM1` take the plain name. The held-note stack it needs already exists. |
+| `poly-v1-mono-mode/` | **Done: its one step landed 2026-09-15.** The v1 poly has a mono mode -- a held-note stack, a note priority and a Retrig/Legato switch, on the three ids that were reserved for it -- so `DeviceKind::MonoSynth` is deletable and `MlM1` can take the plain name. Two things the build settled that the step file had not: mono mode is its own toggle rather than `Voices = 1`, because `Voices = 1` already means a pool of one voice in every saved project; and id 18 carries `EnvTrigger` rather than the `GlideMode` the file named, because the behaviour the file describes is envelope retriggering and the two enums are not the same control. The migration of existing `MonoSynth` channels is the next branch and is not in this plan; it wants a listen first. |
 | `preset-system/` | **Done: steps 01-04 ran 2026-09-04 and landed on `main` after Adam confirmed the interface.** A preset's unit is a device, with relative addressing. The effect-level preset exists end to end: one rack row, no routes, no absolute addressing, `contains = ["effect_params"]` in the manifest so a later fragment format can supersede it cleanly, `presets/effects/<kind>/` on disk, an undoable load through the session, and the rack row's rail buttons wired. `PresetSummary` names three preset classes. Every effect kind ships a factory bank, seeded like the ML-M1 one. A second pass fixed the load path — an effect preset is a rack edit, not a document load — and put the preset's name in the device header. `00-status.md` records what the run found. A second entry, 2026-09-05, moves the *generator* half onto the device rail beside the effect half and gives the source device a preset label in its header. The browser, the taxonomy surface, and an updatable factory mechanism are unblocked now that DS-01's bank ships. As of 2026-09-05 the browser has a home: Adam wants preset browsing in the sample browser panel, and `interface-iteration/` step 01 built it on 2026-09-07. |
 | `extract-mid-level-dsp-blocks/` | The primitives-to-devices ladder has no middle rung on the DSP side, and `device-displays.slint` holds eight visualizers with no shared canvas. |
 | `theming/` | **Parked 2026-09-12**, with the note that it gets cheaper to defer and more expensive to do. Written 2026-09-09 from Adam's question about skins rather than color schemes. `Theme` in `ui/theme.slint` already is the stylesheet -- Slint has no cascade and does not need one -- and the survey in its `README.md` says which axes it is missing: color and radius and motion are tokenized, type and stroke are not at all (313 literal `font-size`, 81 literal `border-width`), and metrics are half-started in `toolbar.slint`'s `ToolbarMetrics`. Queued because it costs more with every device face added, not because it is urgent. **The reason to build it is accessibility rather than the homage**: the working type size is 7-11px and is not adjustable, and nothing checks that a chosen palette is readable. Step 02 (a relief primitive, because a Slint `Rectangle` has one border colour and a bevel needs four) is the only design problem in it; 01 and 03 are a token sweep and a file format, and are worth having on their own. |

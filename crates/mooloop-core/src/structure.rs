@@ -42,7 +42,117 @@ use crate::MAX_EFFECTS_PER_CHANNEL;
 /// step 03 preallocates one dry buffer per open container and the price is
 /// per-container rather than per-slot, so this bounds a real allocation
 /// without bounding anything a musician is likely to reach for.
+///
+/// **Nothing enforced it until 2026-09-14**, so five clicks reached a box the
+/// engine will not blend: past the cap the render branch `continue`s, so the
+/// innermost box's Mix does nothing at any value, and `main.slint`'s chrome
+/// list has no level past four, so it draws nothing either. Inert and
+/// invisible at the same time. [`can_wrap`], [`can_insert_into_container`]
+/// and [`can_move_into_container`] are what the three gestures now ask, and
+/// the rack's wrap button asks the same function rather than comparing a
+/// depth of its own.
+///
+/// **The second sentence above is still not true**, and `LOOSE_ENDS.md`
+/// carries why. `integrity.rs` has no depth check, because every way it has
+/// of recording a problem either repairs it or *blocks the document*: a
+/// `refuse` would stop a song opening that opens today, and unwrapping is not
+/// a safe repair -- a too-deep box is inert for Mix but its bypass still
+/// works, so removing it would unmute whatever it was muting. What is
+/// missing is a third severity, a note that is worth telling the user and
+/// stops nothing.
 pub const MAX_CONTAINER_DEPTH: usize = 4;
+
+/// How far below its own top the deepest container in `run` sits, or `None`
+/// when the run holds no container at all.
+///
+/// Zero means the run's first row is a container and nothing inside it is.
+/// Relative on purpose: the same run answers the same number wherever it is
+/// about to be put, so a gesture adds the destination's depth and compares
+/// once.
+fn container_reach(effects: &[EffectSlotState], run: std::ops::Range<usize>) -> Option<usize> {
+    let top = depth_at(effects, run.start);
+    run.filter(|slot| {
+        matches!(
+            effects.get(*slot).map(|effect| effect.params),
+            Some(EffectParams::Chain(_))
+        )
+    })
+    .map(|slot| depth_at(effects, slot).saturating_sub(top))
+    .max()
+}
+
+/// Whether a run whose containers reach `reach` below their own top may sit
+/// at `depth`.
+///
+/// One comparison for all three gestures, which is the point: they differ in
+/// what they are about to move and agree completely about what "too deep"
+/// means. A run with no container in it fits anywhere -- the cap is on boxes,
+/// not on rows, because it is the open-run stack the engine preallocates.
+fn depth_fits(depth: usize, reach: Option<usize>) -> bool {
+    match reach {
+        None => true,
+        Some(reach) => depth + reach < MAX_CONTAINER_DEPTH,
+    }
+}
+
+/// Whether [`wrap_in_container`] would leave every container inside the cap.
+///
+/// The new box takes `run`'s own depth and everything already in the run
+/// drops one level, so a run holding a box that is already as deep as it may
+/// go cannot be wrapped even though the new box itself would fit.
+pub fn can_wrap(effects: &[EffectSlotState], run: std::ops::Range<usize>) -> bool {
+    if run.is_empty() || run.end > effects.len() {
+        return false;
+    }
+    let reach = container_reach(effects, run.clone()).map_or(0, |reach| reach + 1);
+    depth_fits(depth_at(effects, run.start), Some(reach))
+}
+
+/// Whether [`insert_into_container`] would leave every container inside the
+/// cap.
+///
+/// A leaf always fits: the cap counts open runs, so four nested boxes with a
+/// filter inside them is legal and it is the *fifth box* that is not.
+pub fn can_insert_into_container(
+    effects: &[EffectSlotState],
+    container: usize,
+    params: EffectParams,
+) -> bool {
+    if !matches!(
+        effects.get(container).map(|effect| effect.params),
+        Some(EffectParams::Chain(_))
+    ) {
+        return false;
+    }
+    let reach = matches!(params, EffectParams::Chain(_)).then_some(0);
+    depth_fits(depth_at(effects, container) + 1, reach)
+}
+
+/// Whether [`move_effect_into_container`] would leave every container inside
+/// the cap.
+pub fn can_move_into_container(
+    effects: &[EffectSlotState],
+    from: usize,
+    container: usize,
+) -> bool {
+    if from >= effects.len() || container >= effects.len() || from == container {
+        return false;
+    }
+    if !matches!(
+        effects.get(container).map(|effect| effect.params),
+        Some(EffectParams::Chain(_))
+    ) {
+        return false;
+    }
+    let run = run_of(effects, from);
+    if run.contains(&container) {
+        return false;
+    }
+    depth_fits(
+        depth_at(effects, container) + 1,
+        container_reach(effects, run),
+    )
+}
 
 /// The run of rows `slot` encloses, as `slot + 1 .. end`.
 ///
@@ -270,6 +380,9 @@ pub fn move_effect_into_container(
     if run.contains(&container) {
         return false;
     }
+    if !can_move_into_container(effects, from, container) {
+        return false;
+    }
     let len = run.len();
     resize_enclosing(effects, from, -(len as isize));
     let moved: Vec<EffectSlotState> = effects.drain(run.clone()).collect();
@@ -380,6 +493,9 @@ pub fn insert_into_container(
     if effects.len() >= MAX_EFFECTS_PER_CHANNEL {
         return None;
     }
+    if !can_insert_into_container(effects, container, effect.params) {
+        return None;
+    }
     let at = container + 1;
     // The box itself and every box around it, rather than only the ones whose
     // span already covers `at` -- which for an empty box is none of them.
@@ -443,6 +559,45 @@ pub fn insert_run(
     // arrives, and counting them one at a time means re-deriving the
     // enclosing set against a chain that is already moving.
     resize_enclosing(effects, at, rows.len() as isize);
+    for (offset, row) in rows.iter().enumerate() {
+        effects.insert(at + offset, row.with_id(mint_device_id(next_id)));
+    }
+    Some(at)
+}
+
+/// Insert `rows` immediately after the run at `slot`, **at `slot`'s own
+/// depth**.
+///
+/// The difference from [`insert_run`] at `run_of(slot).end` is one argument to
+/// `resize_enclosing`, and it is the whole of what "beside" means. The index
+/// after a run's last row is ambiguous: for the last child of a container it
+/// is both "still inside" and "just after", and `resize_enclosing` reading
+/// that index resolves it to *outside*, because a span is half-open and does
+/// not contain its own end. Resizing by `slot` instead asks the question of
+/// the row being duplicated, whose enclosing set is not ambiguous at all --
+/// so the copy is enclosed by exactly the containers the original is.
+///
+/// Every other case is unchanged, because `slot` and `at` have the same
+/// enclosing set everywhere except that boundary. Paste keeps [`insert_run`]:
+/// pasting onto a row means "after this run", and landing outside the box is
+/// its documented and tested rule.
+pub fn insert_run_beside(
+    effects: &mut Vec<EffectSlotState>,
+    next_id: &mut u32,
+    slot: usize,
+    rows: &[EffectSlotState],
+) -> Option<usize> {
+    if rows.is_empty() || span_problem(rows).is_some() {
+        return None;
+    }
+    if effects.len() + rows.len() > MAX_EFFECTS_PER_CHANNEL {
+        return None;
+    }
+    if slot >= effects.len() {
+        return None;
+    }
+    let at = run_of(effects, slot).end;
+    resize_enclosing(effects, slot, rows.len() as isize);
     for (offset, row) in rows.iter().enumerate() {
         effects.insert(at + offset, row.with_id(mint_device_id(next_id)));
     }
@@ -515,6 +670,9 @@ pub fn wrap_in_container(
     container: EffectSlotState,
 ) -> Option<usize> {
     if run.is_empty() || run.end > effects.len() || effects.len() >= MAX_EFFECTS_PER_CHANNEL {
+        return None;
+    }
+    if !can_wrap(effects, run.clone()) {
         return None;
     }
     // The selection has to be a whole number of complete runs with one
@@ -1416,5 +1574,170 @@ mod tests {
             removed.address(ParamAddr::strip(EffectTarget::Channel(5), 0)),
             Some(ParamAddr::strip(EffectTarget::Channel(4), 0))
         );
+    }
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+    use crate::effect::EffectKind;
+
+    /// A chain of `levels` boxes nested one inside the next, with a filter at
+    /// the bottom. Built by wrapping outward, so it is built by the gesture
+    /// under test and cannot accidentally describe a shape the gesture
+    /// refuses.
+    fn nested(levels: usize) -> (Vec<EffectSlotState>, u32) {
+        let mut effects = Vec::new();
+        let mut next = 0;
+        insert_effect(
+            &mut effects,
+            &mut next,
+            0,
+            EffectSlotState::of_kind(EffectKind::Filter),
+        );
+        for _ in 0..levels {
+            let whole = 0..effects.len();
+            wrap_in_container(
+                &mut effects,
+                &mut next,
+                whole,
+                EffectSlotState::of_kind(EffectKind::Chain),
+            )
+            .expect("a wrap inside the cap");
+        }
+        (effects, next)
+    }
+
+    /// **Five clicks used to reach a box the engine will not blend.** The cap
+    /// was enforced by nothing: `wrap_in_container` had no depth test and
+    /// `wrap-enabled` was unconditional on every row, so wrapping a device and
+    /// then wrapping the box four more times produced an innermost container
+    /// whose Mix does nothing at any value and which the rack draws no chrome
+    /// for -- inert and invisible at the same time.
+    #[test]
+    fn wrapping_stops_at_the_depth_the_engine_blends() {
+        let (mut effects, mut next) = nested(MAX_CONTAINER_DEPTH);
+        assert_eq!(
+            (0..effects.len())
+                .filter(|slot| effects[*slot].kind() == EffectKind::Chain)
+                .map(|slot| depth_at(&effects, slot))
+                .max(),
+            Some(MAX_CONTAINER_DEPTH - 1),
+            "the deepest box built is the last one the engine blends"
+        );
+
+        let whole = 0..effects.len();
+        assert!(!can_wrap(&effects, whole.clone()));
+        assert_eq!(
+            wrap_in_container(
+                &mut effects,
+                &mut next,
+                whole,
+                EffectSlotState::of_kind(EffectKind::Chain),
+            ),
+            None,
+            "the fifth wrap was accepted"
+        );
+        assert_eq!(effects.len(), MAX_CONTAINER_DEPTH + 1, "and changed nothing");
+    }
+
+    /// The wrap that is refused is refused because of what it does to the run
+    /// it encloses, not only because of where the new box lands. Wrapping the
+    /// *innermost* box -- which sits one level above the cap and would fit --
+    /// still pushes it past.
+    #[test]
+    fn a_wrap_that_deepens_an_inner_box_past_the_cap_is_refused() {
+        let (mut effects, mut next) = nested(MAX_CONTAINER_DEPTH);
+        let innermost = MAX_CONTAINER_DEPTH - 1;
+        assert_eq!(effects[innermost].kind(), EffectKind::Chain);
+        assert_eq!(depth_at(&effects, innermost), MAX_CONTAINER_DEPTH - 1);
+
+        // The new box would land at a depth that fits; what does not fit is
+        // the box inside it dropping one level.
+        let run = innermost..effects.len();
+        assert!(depth_fits(depth_at(&effects, run.start), None), "a leaf would fit here");
+        assert!(!can_wrap(&effects, run.clone()));
+        assert_eq!(
+            wrap_in_container(
+                &mut effects,
+                &mut next,
+                run,
+                EffectSlotState::of_kind(EffectKind::Chain),
+            ),
+            None
+        );
+    }
+
+    /// **A leaf always fits.** The cap counts open runs, because that is what
+    /// the engine preallocates a dry buffer for -- so four nested boxes with a
+    /// filter inside them is legal and it is the fifth *box* that is not.
+    /// Enforcing it on rows instead would refuse a gesture the engine handles
+    /// perfectly well.
+    #[test]
+    fn a_leaf_may_be_added_at_the_bottom_of_the_deepest_box() {
+        let (mut effects, mut next) = nested(MAX_CONTAINER_DEPTH);
+        let innermost = MAX_CONTAINER_DEPTH - 1;
+        assert_eq!(effects[innermost].kind(), EffectKind::Chain);
+
+        assert!(can_insert_into_container(
+            &effects,
+            innermost,
+            EffectSlotState::of_kind(EffectKind::Drive).params,
+        ));
+        assert!(insert_into_container(
+            &mut effects,
+            &mut next,
+            innermost,
+            EffectSlotState::of_kind(EffectKind::Drive),
+        )
+        .is_some());
+
+        // And a box in the same place is not.
+        assert!(!can_insert_into_container(
+            &effects,
+            innermost,
+            EffectSlotState::of_kind(EffectKind::Chain).params,
+        ));
+        assert!(insert_into_container(
+            &mut effects,
+            &mut next,
+            innermost,
+            EffectSlotState::of_kind(EffectKind::Chain),
+        )
+        .is_none());
+    }
+
+    /// Dragging a box into a box is the third way in, and it has to answer
+    /// the same question about the whole run it carries.
+    #[test]
+    fn a_box_cannot_be_dragged_past_the_cap() {
+        let (mut effects, mut next) = nested(MAX_CONTAINER_DEPTH);
+        // A second, top-level box holding one device.
+        let tail = effects.len();
+        insert_effect(
+            &mut effects,
+            &mut next,
+            tail,
+            EffectSlotState::of_kind(EffectKind::Delay),
+        );
+        wrap_in_container(
+            &mut effects,
+            &mut next,
+            tail..tail + 1,
+            EffectSlotState::of_kind(EffectKind::Chain),
+        )
+        .expect("a top-level wrap");
+
+        let innermost = MAX_CONTAINER_DEPTH - 1;
+        assert_eq!(effects[innermost].kind(), EffectKind::Chain);
+        assert!(!can_move_into_container(&effects, tail, innermost));
+        let before = effects.clone();
+        assert!(!move_effect_into_container(&mut effects, tail, innermost));
+        assert_eq!(effects, before, "a refused drag moved rows anyway");
+
+        // One level out, the same drag is legal.
+        let outer = innermost.saturating_sub(1);
+        assert_eq!(effects[outer].kind(), EffectKind::Chain);
+        assert!(can_move_into_container(&effects, tail, outer));
     }
 }

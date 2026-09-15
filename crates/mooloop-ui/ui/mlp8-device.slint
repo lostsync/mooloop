@@ -89,6 +89,12 @@ component RouteRow inherits Rectangle {
             field-width: 48px;
             label: "";
             tooltip: "Depth, as a share of the destination's range";
+            // The row is a model row, so the route is the one place the depth
+            // lives and the drag only reports. A knob that wrote its own
+            // value here would drop the binding this field reads, and the
+            // number would then sit on whatever it said when the drag started
+            // until something else rebuilt the list.
+            controlled: true;
             value: root.route.amount;
             minimum: -100; maximum: 100; default-value: 0; bipolar: true;
             display-text: (root.route.amount > 0 ? "+" : "") + round(root.route.amount) + "%";
@@ -114,6 +120,21 @@ component RouteRow inherits Rectangle {
 // that. What it draws instead of a dial is a bar growing from the centre, so
 // the sign of a route is a direction on screen rather than a minus sign to
 // read.
+//
+// The bar runs **sideways**, along the cell's long axis, and so does the
+// drag. A cell is seven times wider than it is tall, so a bar that grew
+// upwards spent a hundred and seventy pixels saying nothing and twelve saying
+// the value: +30 and +95 were the same picture. The two have to agree --
+// a control drawn as a horizontal slider that only answers a vertical drag is
+// a control nobody finds -- which is why `ParameterKnob` learned an axis
+// rather than this file growing its own pointer handling.
+//
+// It also draws what modulation is doing to it. `MODULATION.md` requires that
+// every legal control become *visibly* assignable when a source is armed, and
+// that an overlay show the resulting excursion; a knob gets both from its
+// ring, and this cell has no ring. Without them the whole network read as a
+// region modulation could not reach, which is the one region a synth like
+// this most wants to modulate.
 component NetworkCell inherits Rectangle {
     in property <string> tooltip;
     // The diagonal: an oscillator modulating itself. The same operation on
@@ -141,45 +162,120 @@ component NetworkCell inherits Rectangle {
     callback route-edit-started(int);
     callback route-edit-finished(int);
 
-    // A level's travel is its dB range; a route's is its signed percent.
+    // A level's travel is its dB range; a route's is its signed percent. Both
+    // reduce to one position along the track, which is the only thing the
+    // drawing below needs to know about the difference.
     private property <float> db: GainMath.linear-to-db(root.value);
-    private property <float> magnitude: root.level
+    private property <float> base: root.level
         ? clamp((root.db + 60) / 60, 0, 1)
-        : abs(root.value) / 100;
+        : clamp((root.value + 100) / 200, 0, 1);
+    // Where a fill grows from: the left wall for a level, the middle for a
+    // signed route.
+    private property <float> datum: root.level ? 0 : 0.5;
     private property <bool> live: root.level ? root.db > -59.5 : abs(root.value) > 0.5;
+
+    // Read from the models rather than from the knob's own copies. A knob
+    // writes its `modulation-depth` as it is dragged and so drops the binding
+    // that feeds it; the overlay has to keep following the rack, including
+    // when a route is removed from the shelf instead of from here.
+    private property <bool> assignable: root.modulation-armed
+        && !root.inert && root.allowed[root.param-id];
+    private property <float> depth: root.depths[root.param-id];
+    private property <float> offset: root.offsets[root.param-id];
+    private property <int> routes: root.route-counts[root.param-id];
+    private property <float> modulated: clamp(root.base + root.offset, 0, 1);
+    private property <bool> modulation-live: !root.modulation-armed
+        && abs(root.modulated - root.base) > 0.002;
+
+    // The track the bar runs in, inset from the border so a full-scale value
+    // does not paint over it.
+    private property <length> track-x: 2px;
+    private property <length> track-w: max(0px, root.width - 4px);
+
+    pure function at(n: float) -> length {
+        return root.track-x + root.track-w * clamp(n, 0, 1);
+    }
 
     min-height: 22px;
     border-radius: Theme.radius-sm;
     background: root.inert ? Theme.surface : Theme.panel;
     border-width: 1px;
     border-color: root.inert ? Theme.border.with-alpha(0.35)
+        : root.assignable ? Theme.warning.with-alpha(0.7)
         : knob.hovered ? Theme.accent.with-alpha(0.55)
+        : root.routes > 0 ? Theme.accent.with-alpha(0.45)
         : root.self-route ? Theme.accent.with-alpha(0.3) : Theme.border;
 
-    // The datum a fill grows from: the middle for a signed route, the floor
-    // for a level. Drawn even at zero so an idle cell still reads as a
-    // control rather than as a gap in the grid.
+    // The datum a fill grows from. Drawn even at zero so an idle cell still
+    // reads as a control rather than as a gap in the grid.
     if !root.inert : Rectangle {
-        y: root.level ? parent.height - 1px : parent.height / 2;
-        width: parent.width;
-        height: 1px;
+        x: root.at(root.datum);
+        y: 2px;
+        width: 1px;
+        height: parent.height - 4px;
         background: Theme.border;
     }
+    // The authored value.
     if !root.inert : Rectangle {
-        x: 1px;
-        width: parent.width - 2px;
-        y: root.level
-            ? parent.height - 1px - (parent.height - 2px) * root.magnitude
-            : root.value >= 0
-                ? parent.height / 2 - (parent.height / 2 - 1px) * root.magnitude
-                : parent.height / 2;
-        height: root.level
-            ? (parent.height - 2px) * root.magnitude
-            : (parent.height / 2 - 1px) * root.magnitude;
+        x: min(root.at(root.datum), root.at(root.base));
+        y: 3px;
+        width: abs(root.at(root.base) - root.at(root.datum));
+        height: parent.height - 6px;
         background: Theme.accent.with-alpha(root.level ? 0.34 : root.value >= 0 ? 0.42 : 0.24);
     }
+    // What the running sources are adding to it right now, as the span from
+    // the authored value to where the parameter actually sits. This is a
+    // knob's moving arc, laid flat.
+    if root.modulation-live : Rectangle {
+        x: min(root.at(root.base), root.at(root.modulated));
+        y: 3px;
+        width: abs(root.at(root.modulated) - root.at(root.base));
+        height: parent.height - 6px;
+        background: Theme.accent.with-alpha(0.55);
+    }
+    if root.modulation-live : Rectangle {
+        x: root.at(root.modulated) - 1px;
+        y: 2px;
+        width: 2px;
+        height: parent.height - 4px;
+        background: Theme.accent;
+    }
+    // Assign mode: the excursion the armed source's route would produce,
+    // about the authored value that stays put underneath it.
+    if root.assignable && abs(root.depth) > 0.002 : Rectangle {
+        x: min(root.at(root.base - root.depth), root.at(root.base + root.depth));
+        y: 2px;
+        width: abs(root.at(root.base + root.depth) - root.at(root.base - root.depth));
+        height: parent.height - 4px;
+        background: Theme.warning.with-alpha(0.28);
+    }
+    if root.assignable : Rectangle {
+        x: root.at(root.base) - 1px;
+        y: 2px;
+        width: 2px;
+        height: parent.height - 4px;
+        background: Theme.warning;
+    }
+    // How many sources land here, in the corner the bar never reaches from
+    // the left. Hidden while assigning, where the excursion says more.
+    if !root.modulation-armed && root.routes > 0 : Rectangle {
+        x: 4px;
+        y: parent.height - 6px;
+        width: 23px;
+        height: 3px;
+        for dot in min(root.routes, 4) : Rectangle {
+            x: dot * 6px;
+            width: 3px;
+            height: 3px;
+            border-radius: 1px;
+            background: Theme.accent;
+        }
+    }
+    // Right-aligned, so the number sits in one place whatever the bar is
+    // doing and the bar's own extent is never behind it.
     Text {
-        width: 100%;
+        x: 0;
+        width: parent.width - 6px;
         height: 100%;
         text: root.inert ? "-"
             : root.level ? (root.live ? round(root.db) + "" : "-inf")
@@ -188,7 +284,7 @@ component NetworkCell inherits Rectangle {
         color: root.inert || !root.live ? Theme.text-faint : Theme.text;
         font-family: "monospace";
         font-size: 9px;
-        horizontal-alignment: center;
+        horizontal-alignment: right;
         vertical-alignment: center;
     }
 
@@ -199,6 +295,7 @@ component NetworkCell inherits Rectangle {
         show-label: false;
         show-value-text: false;
         show-dial: false;
+        horizontal: true;
         label: root.tooltip;
         tooltip: root.tooltip;
         // A level drags in dB and stores linear, like every other mix control
@@ -409,7 +506,7 @@ component OscEditor inherits Rectangle {
                 label: "LEVEL"; tooltip: "Mix level";
                 param: root.base + 3;
                 value <=> root.level; minimum: 0; maximum: 1; default-value: 0;
-                display-text: root.level <= 0 ? "-inf" : round(GainMath.linear-to-db(root.level) * 10) / 10 + " dB";
+                display-text: GainMath.format-db(GainMath.linear-to-db(root.level));
                 modulation-armed: root.modulation-armed;
                 depths: root.depths; allowed: root.allowed; offsets: root.offsets; route-counts: root.route-counts;
                 changed(v) => { root.level-changed(v); }
@@ -690,7 +787,7 @@ export component MlP8DeviceFace inherits Rectangle {
                             label: "VOLUME"; tooltip: "Device output level";
                             param: 69;
                             value <=> root.master-volume; minimum: 0; maximum: 1; default-value: 1;
-                            display-text: root.master-volume <= 0 ? "-inf" : round(GainMath.linear-to-db(root.master-volume) * 10) / 10 + " dB";
+                            display-text: GainMath.format-db(GainMath.linear-to-db(root.master-volume));
                             modulation-armed: root.modulation-armed;
                             depths: root.modulation-depths; allowed: root.modulation-allowed;
                             offsets: root.modulation-offsets; route-counts: root.modulation-route-counts;
@@ -721,23 +818,28 @@ export component MlP8DeviceFace inherits Rectangle {
         }
 
         // ---- NETWORK -----------------------------------------------------
-        if root.page == 1 : HorizontalLayout {
+        // The grid takes the page's whole width and divides it, rather than
+        // holding a fixed 788px and centring what is left over. Four columns
+        // of one measurement each: a wider face makes every bar longer, which
+        // is the only thing a slider gains from room.
+        if root.page == 1 : VerticalLayout {
             vertical-stretch: 1;
-            alignment: center;
-        VerticalLayout {
             spacing: 0px;
             SectionLabel { text: "NETWORK  ·  ROW MODULATES COLUMN"; }
             grid := Rectangle {
                 property <length> label-w: 62px;
-                property <length> cell-w: 176px;
-                property <length> cell-h: 26px;
                 property <length> gap: 4px;
-                property <length> header-h: 16px;
-                property <length> mix-x: self.label-w + 3 * (self.cell-w + self.gap) + 10px;
-                property <length> sync-y: self.header-h + 5 * (self.cell-h + self.gap) + 4px;
+                // The rule between the three route columns and MIX is wider
+                // than the gaps, because it separates two kinds of
+                // destination rather than two columns.
+                property <length> rule-gap: 12px;
+                property <length> cell-w:
+                    max(80px, (self.width - self.label-w - 3 * self.gap - self.rule-gap) / 4);
+                property <length> cell-h: 26px;
+                property <length> header-h: 12px;
+                property <length> mix-x: self.label-w + 3 * (self.cell-w + self.gap) + self.rule-gap;
+                property <length> sync-y: self.header-h + 5 * (self.cell-h + self.gap) + 2px;
 
-                horizontal-stretch: 0;
-                width: self.mix-x + self.cell-w;
                 height: self.sync-y + 18px;
 
                 // The rule between "into another oscillator" and "into the
@@ -1220,8 +1322,6 @@ export component MlP8DeviceFace inherits Rectangle {
                 }
             }
             Rectangle { vertical-stretch: 1; }
-        }
-
         }
 
         // ---- FILTER ------------------------------------------------------
@@ -1743,6 +1843,18 @@ export component MlP8DeviceFace inherits Rectangle {
                                 tooltip: "LFO rate";
                                 show-sync: true;
                                 synced: root.lfo-synced;
+                                // `value` is an expression over two
+                                // properties, and a knob that writes its own
+                                // value drops the binding that feeds it -- so
+                                // this one must not write it, and the handler
+                                // below assigns whichever property the
+                                // current mode means. Without both halves the
+                                // dial moved once and then stopped agreeing
+                                // with the readout beside it, which is what
+                                // "the rate knob does not work" looked like.
+                                // `SyncMiniKnob` makes the same pair for the
+                                // same reason.
+                                controlled: true;
                                 value: root.lfo-synced ? root.lfo-division * 1.0 : root.lfo-rate-hz;
                                 minimum: root.lfo-synced ? 0 : 0.01;
                                 maximum: root.lfo-synced ? 20 : 100;
@@ -1756,8 +1868,10 @@ export component MlP8DeviceFace inherits Rectangle {
                                         : round(root.lfo-rate-hz * 10) / 10 + " Hz");
                                 changed(v) => {
                                     if (root.lfo-synced) {
-                                        root.lfo-division-changed(round(v));
+                                        root.lfo-division = round(v);
+                                        root.lfo-division-changed(root.lfo-division);
                                     } else {
+                                        root.lfo-rate-hz = v;
                                         root.lfo-rate-changed(v);
                                     }
                                 }

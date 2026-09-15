@@ -602,15 +602,17 @@ fn optional_number(text: &str, key: &str) -> Option<f32> {
 /// index is an `EqFaceControl` and the id depends on which target the face is
 /// showing.
 ///
-/// Resolved here against **the target a fresh EQ opens on**, which is the
-/// selection every one of that face's hardcoded resting values was written
-/// for. That is also this arrangement's live limit and it is worth stating
-/// where somebody will meet it: a knob's double-click returns to *band 2's*
-/// default whatever band is selected, so on band 1 -- a low shelf resting at
-/// 120 Hz, not 1 kHz -- it returns to the wrong number. That was equally true
-/// before this change, hidden by one descriptor standing for seven bands;
-/// fixing it means publishing a per-row defaults array, which is a face
-/// contract change and belongs to a later `eq-v2` step.
+/// Resolved here against **the target a fresh EQ opens on**, because a
+/// modulation overlay index is a face control and a face control is only an
+/// id once a selection is chosen. Any target answers the same for the
+/// *pairing*, which is all this is used for.
+///
+/// The limit this comment used to record -- a knob's double-click returning
+/// to band 2's default whatever band was selected -- was closed on
+/// 2026-09-14 by `EqSpec.defaults`, a resting value per target. The EQ's
+/// knobs therefore state no number here any more and `face_knobs` skips
+/// them; `tests/eq_face.rs` is where that face is held to its table now, in
+/// the stronger `strip_face.rs` shape.
 fn face_param_id(kind: EffectKind, index: u32) -> u32 {
     if kind != EffectKind::Eq {
         return index;

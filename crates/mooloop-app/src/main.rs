@@ -2,6 +2,7 @@
 //! Slint event loop.
 
 use mooloop_core::{log_error, log_info, log_warn};
+use mooloop_engine::CommandSink;
 
 fn main() {
     // First, so that everything below is on the record. Reads the saved

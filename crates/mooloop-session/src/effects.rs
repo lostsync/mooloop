@@ -415,13 +415,41 @@ impl Session {
         })
     }
 
-    /// Copies the run at `slot` and pastes it straight after itself.
+    /// Copies the run at `slot` and puts the copy straight after it, **at the
+    /// original's own depth**.
     ///
     /// Deliberately not "copy then paste": it must not disturb the clipboard,
     /// the same way `channel.clone` does not disturb the channel clipboard.
+    ///
+    /// And deliberately not `paste_device` either, which it was until
+    /// 2026-09-14. Paste inserts at `run_of(slot).end`, where a run's end
+    /// boundary counts as *outside* the container -- which is paste's
+    /// documented and tested rule, and the wrong one here. In
+    /// `[Chain(2), Filter, Drive]`, duplicating the Filter inserted at 2,
+    /// inside the span, and the box grew to 3; duplicating the Drive inserted
+    /// at 3, the span's exclusive end, and the copy landed outside. Same
+    /// gesture, same box, two answers depending on which child was clicked --
+    /// and the ejecting one is the case a user reaches for most, duplicating
+    /// the thing at the end of the run they have just built.
+    ///
+    /// `insert_run_beside` resolves the ambiguity by asking `slot` rather
+    /// than the index after it, which is what "duplicate" has always meant:
+    /// the copy is enclosed by exactly the containers the original is.
     pub fn duplicate_device(&mut self, slot: usize) -> Option<EffectRunInserted> {
         let run = self.copy_device(slot)?;
-        self.paste_device(&run, slot)
+        let target = self.effect_target;
+        let (effects, next_id) = self.effect_chain_parts_mut()?;
+        let slot = mooloop_core::insert_run_beside(effects, next_id, slot, &run.effects)?;
+        let devices = effects[slot..slot + run.effects.len()]
+            .iter()
+            .map(|effect| effect.id)
+            .collect();
+        self.mark_dirty();
+        Some(EffectRunInserted {
+            target,
+            slot,
+            devices,
+        })
     }
 
     /// Reorders the chain, returning what the rack is pointed at and the
@@ -1451,6 +1479,74 @@ mod tests {
         assert_eq!(depths(&session), [0, 1, 1]);
     }
 
+    /// **A duplicate lands at the original's depth, wherever in the box it
+    /// is.** Changed 2026-09-14.
+    ///
+    /// `duplicate_device` was `copy_device` then `paste_device`, and paste
+    /// inserts at `run_of(slot).end` -- a boundary that counts as *outside*
+    /// the container, which is paste's documented rule and the wrong one
+    /// here. So the same gesture on the same box gave two answers depending
+    /// on which child was clicked, and the ejecting one is the case a user
+    /// reaches for most: duplicating the thing at the end of the run they
+    /// have just built.
+    #[test]
+    fn duplicating_any_child_of_a_box_keeps_the_copy_in_the_box() {
+        let mut session = Session::default();
+        for kind in [EffectKind::Delay, EffectKind::Filter, EffectKind::Drive] {
+            session.insert_effect_at(kind, usize::MAX).expect("room");
+        }
+        session.wrap_effects_in_container(1..3).expect("wrapped");
+        // Delay, [Chain, Filter, Drive]
+        assert_eq!(depths(&session), [0, 0, 1, 1]);
+
+        // The last child: the case that used to eject.
+        session.duplicate_device(3).expect("room");
+        assert_eq!(
+            depths(&session),
+            [0, 0, 1, 1, 1],
+            "the copy of the last child left the box"
+        );
+        assert_eq!(children(&session, 1), 3);
+
+        // A middle child, which always worked and must keep working.
+        session.duplicate_device(2).expect("room");
+        assert_eq!(depths(&session), [0, 0, 1, 1, 1, 1]);
+        assert_eq!(children(&session, 1), 4);
+
+        // And a top-level row is still top level.
+        session.duplicate_device(0).expect("room");
+        assert_eq!(depths(&session), [0, 0, 0, 1, 1, 1, 1]);
+        assert_eq!(
+            children(&session, 2),
+            4,
+            "the box gained a sibling, not a child"
+        );
+    }
+
+    /// Duplicating a *container* copies its whole run and puts it beside the
+    /// original at the original's depth -- inside the outer box, when there
+    /// is one. The run is what moves, so the ambiguity is the same one and
+    /// the answer has to be too.
+    #[test]
+    fn duplicating_a_box_inside_a_box_stays_inside_the_outer_one() {
+        let mut session = Session::default();
+        for kind in [EffectKind::Delay, EffectKind::Filter] {
+            session.insert_effect_at(kind, usize::MAX).expect("room");
+        }
+        session.wrap_effects_in_container(1..2).expect("inner");
+        session.wrap_effects_in_container(1..3).expect("outer");
+        // Delay, [Outer, [Inner, Filter]]
+        assert_eq!(depths(&session), [0, 0, 1, 2]);
+
+        session.duplicate_device(2).expect("room");
+        assert_eq!(
+            depths(&session),
+            [0, 0, 1, 2, 1, 2],
+            "the copied run left the outer box"
+        );
+        assert_eq!(children(&session, 1), 4, "the outer box gained the run");
+    }
+
     #[test]
     fn pasting_onto_a_containers_last_child_lands_outside_the_box() {
         let mut session = Session::default();
@@ -1736,6 +1832,16 @@ mod tests {
         (0..effects.len())
             .map(|slot| mooloop_core::depth_at(effects, slot))
             .collect()
+    }
+
+    /// How many rows the container at `slot` claims. Panics on a row that is
+    /// not a container, because asking is then a mistake in the test rather
+    /// than a fact about the chain.
+    fn children(session: &Session, slot: usize) -> usize {
+        match session.channels[0].effects[slot].params {
+            EffectParams::Chain(chain) => chain.children as usize,
+            other => panic!("slot {slot} is not a container: {other:?}"),
+        }
     }
 
     #[test]

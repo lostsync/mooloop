@@ -25,6 +25,11 @@ export component PolyDeviceFace inherits Rectangle {
     in-out property <int> lfo-wave; in-out property <float> lfo-rate; in-out property <bool> lfo-retrigger;
     in-out property <float> lfo-pitch; in-out property <float> lfo-filter; in-out property <float> lfo-pulse-width; in-out property <float> lfo-amp;
     in-out property <int> polyphony; in-out property <float> spread;
+    // Mono mode and the two settings that only mean anything while it is
+    // on. Not `Voices = 1`: a pool of one voice steals from itself, and
+    // the difference is what `PolySynthParams::mono_mode` documents.
+    in-out property <bool> mono-mode;
+    in-out property <int> env-trigger; in-out property <int> note-priority;
     callback osc1-wave-changed(int); callback osc1-semitones-changed(float); callback osc1-cents-changed(float); callback osc1-level-changed(float); callback osc1-pulse-width-changed(float);
     callback osc2-wave-changed(int); callback osc2-semitones-changed(float); callback osc2-cents-changed(float); callback osc2-level-changed(float); callback osc2-pulse-width-changed(float);
     callback osc3-wave-changed(int); callback osc3-semitones-changed(float); callback osc3-cents-changed(float); callback osc3-level-changed(float); callback osc3-pulse-width-changed(float);
@@ -36,6 +41,8 @@ export component PolyDeviceFace inherits Rectangle {
     callback lfo-wave-changed(int); callback lfo-rate-changed(float); callback lfo-retrigger-changed(bool);
     callback lfo-pitch-changed(float); callback lfo-filter-changed(float); callback lfo-pulse-width-changed(float); callback lfo-amp-changed(float);
     callback polyphony-changed(int); callback spread-changed(float);
+    callback mono-mode-changed(bool);
+    callback env-trigger-changed(int); callback note-priority-changed(int);
 
     VerticalLayout {
         padding: 6px;
@@ -227,12 +234,45 @@ export component PolyDeviceFace inherits Rectangle {
                     StepperField {
                         label: "POLYPHONY";
                         tooltip: "Active voice count";
+                        // Greyed rather than hidden while mono mode is on: a
+                        // control that vanishes is harder to find again than
+                        // one that is visibly not in play.
+                        enabled: !root.mono-mode;
                         value <=> root.polyphony;
                         minimum: 1;
                         maximum: 16;
                         step: 1;
                         value-width: 18px;
                         changed(v) => { root.polyphony-changed(v); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 6px;
+                    ToggleButton {
+                        text: "MONO";
+                        tooltip: "Mono mode";
+                        hint: "One voice with monosynth note behaviour: held notes, fallback, and a priority";
+                        checked <=> root.mono-mode;
+                        toggled(on) => { root.mono-mode-changed(on); }
+                    }
+                    Text { text: "PRIORITY"; color: Theme.text-faint; font-size: 8px; }
+                    SelectorBank {
+                        options: ["Last", "Low", "High"];
+                        selected-index <=> root.note-priority;
+                        segment-width: 34px;
+                        enabled: root.mono-mode;
+                        tooltip: "Which held note wins";
+                        selected(i) => { root.note-priority-changed(i); }
+                    }
+                    Text { text: "ENV TRIG"; color: Theme.text-faint; font-size: 8px; }
+                    SelectorBank {
+                        options: ["Retrig", "Legato"];
+                        selected-index <=> root.env-trigger;
+                        segment-width: 51px;
+                        enabled: root.mono-mode;
+                        tooltip: "Whether an overlapping note restarts the envelope";
+                        selected(i) => { root.env-trigger-changed(i); }
                     }
                 }
                 VerticalLayout {

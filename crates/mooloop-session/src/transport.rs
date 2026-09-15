@@ -273,6 +273,76 @@ mod tests {
     use super::*;
     use mooloop_core::{MAX_PLAYLIST_BARS, TICKS_PER_BAR};
 
+    /// **A clip buried by a pattern-length change can still be reached.**
+    ///
+    /// `add_playlist_placement` refuses an overlap and is the only place that
+    /// invariant exists. `set_pattern_length` rewrites the length with no
+    /// revalidation, so two clips that abut exactly -- which is accepted --
+    /// swallow each other the moment the pattern grows. Both go on playing,
+    /// which is what layering means and is not this; what could not be done
+    /// was *removing* the later one, because `placement_covering` took the
+    /// first match on a list sorted by `(pattern, start_tick)` and so always
+    /// answered with the earlier clip. The buried one could not be reached at
+    /// all, by any gesture.
+    #[test]
+    fn a_clip_buried_by_a_length_change_can_still_be_removed() {
+        let mut session = Session::default();
+        session
+            .add_playlist_placement(0, 0)
+            .expect("the first clip");
+        session
+            .add_playlist_placement(0, 16 * TICKS_PER_STEP as i32)
+            .expect("abutting exactly is accepted");
+        assert_eq!(session.playlist.len(), 2);
+
+        // Double the pattern: the first clip now covers the second.
+        assert_eq!(session.current_pattern, 0);
+        session.set_pattern_length(32);
+
+        let buried = 16 * TICKS_PER_STEP;
+        assert_eq!(
+            session
+                .placement_covering(0, buried)
+                .map(|placement| placement.start_tick),
+            Some(buried),
+            "a click in the overlap resolved to the clip underneath"
+        );
+        let removed = session
+            .remove_playlist_placement(0, buried as i32)
+            .expect("the buried clip is removable");
+        assert_eq!(removed.start_tick, buried);
+        assert_eq!(
+            session.playlist.iter().map(|p| p.start_tick).collect::<Vec<_>>(),
+            vec![0],
+            "and removing it left the one that was on top of it"
+        );
+    }
+
+    /// Outside the overlap nothing changed: a tick covered by one clip
+    /// resolves to that clip, and a tick covered by none resolves to nothing.
+    #[test]
+    fn a_tick_under_one_clip_or_no_clip_answers_the_same_as_it_always_did() {
+        let mut session = Session::default();
+        session.add_playlist_placement(0, 0).expect("a clip");
+        let length = 16 * TICKS_PER_STEP;
+
+        assert_eq!(
+            session.placement_covering(0, 0).map(|p| p.start_tick),
+            Some(0)
+        );
+        assert_eq!(
+            session.placement_covering(0, length - 1).map(|p| p.start_tick),
+            Some(0)
+        );
+        assert_eq!(session.placement_covering(0, length), None, "half-open");
+        assert_eq!(session.placement_covering(1, 0), None, "another pattern");
+        assert_eq!(
+            session.placement_covering(usize::MAX, 0),
+            None,
+            "a pattern that is not there must not index the length table"
+        );
+    }
+
     /// A pattern may go nameless -- the playlist gutter and the pattern menu
     /// both fall back to its number -- so blanking one is an edit, not a
     /// refusal. That is the deliberate difference from `rename_channel` and

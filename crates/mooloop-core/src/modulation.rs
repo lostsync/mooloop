@@ -1738,13 +1738,33 @@ impl ModRack {
     /// rewrites it through the permutation. A slot reference that the user
     /// never sees must not be the thing that breaks when the grid is tidied.
     pub fn move_module(&mut self, from: usize, to: usize) -> bool {
+        self.move_module_mapped(from, to).is_some()
+    }
+
+    /// The same reorder, returning **the permutation it applied**: old slot
+    /// to new, with [`UNRESOLVED_SLOT`] for a slot that held nothing.
+    ///
+    /// The engine needs the permutation and not just the fact of the move.
+    /// `edit_modulation` mirrors a rack edit into the DSP rack as a params
+    /// diff *by slot number*, and a reorder is exactly the edit a diff by slot
+    /// number cannot see: every moved position reads as "the params changed"
+    /// and is rebuilt from scratch. An envelope dragged to the front restarted
+    /// at level 0 stage `Idle`, dropping a held note's contour to zero
+    /// mid-sustain; a Random module was reseeded, so a realtime take and an
+    /// offline render of the same song stopped matching. And two LFOs dragged
+    /// past each other **cross-wired**: each kept its own phase, smoothing
+    /// state and fade position and took the other's params, so both jumped and
+    /// nothing on screen said why.
+    pub fn move_module_mapped(
+        &mut self,
+        from: usize,
+        to: usize,
+    ) -> Option<[u8; MAX_MODULATORS_PER_CHANNEL]> {
         let order: Vec<usize> = self.occupied().map(|(slot, _)| slot).collect();
-        let Some(position) = order.iter().position(|slot| *slot == from) else {
-            return false;
-        };
+        let position = order.iter().position(|slot| *slot == from)?;
         let target = to.min(order.len().saturating_sub(1));
         if target == position {
-            return false;
+            return None;
         }
         let mut order = order;
         let moved = order.remove(position);
@@ -1758,7 +1778,7 @@ impl ModRack {
             remap[old_slot] = index as u8;
         }
         self.retarget(&remap);
-        true
+        Some(remap)
     }
 
     const fn identity_map() -> [u8; MAX_MODULATORS_PER_CHANNEL] {
@@ -2033,13 +2053,54 @@ impl ModRack {
             };
             let shaped = match route.polarity {
                 ModPolarity::Bipolar => output,
-                // Half the swing, lifted, so the base value is the floor
-                // rather than the midpoint.
-                ModPolarity::Unipolar => (output + 1.0) * 0.5,
+                // Half the swing, lifted onto the source's own span, so the
+                // base value is the floor rather than the midpoint.
+                ModPolarity::Unipolar => (output + self.wire_span(route.source_slot)) * 0.5,
             };
             total += shaped * policy.clamp_depth(route.depth);
         }
         total
+    }
+
+    /// How far a slot's wire output can travel from zero, which is what the
+    /// unipolar lift has to stand on if the base is to be the floor.
+    ///
+    /// Every source publishes into `-1..1`, and they do not all reach the
+    /// ends of it. The envelope and the random module apply their own amount
+    /// *inside* the unipolar domain and lift afterwards, so their wire value
+    /// still spans the full range; the step sequencer and the math module
+    /// have no amount at all. The LFO is the exception: `depth` scales an
+    /// already-signed waveform, so an LFO at half depth spans `-0.5..0.5`.
+    /// Lifting that with `(v + 1) * 0.5` used to rest it at `0.25` -- a
+    /// quarter of the route's depth above the base -- and at depth zero it
+    /// parked the destination half a depth up while visibly producing no
+    /// movement at all. Both readings of one knob position, "the modulator
+    /// is off" and "the destination is offset", were the same picture.
+    ///
+    /// An outlet is deliberately `1.0` and not a rack module's span:
+    /// `MODULATION.md` gives outlet routes the destination's default
+    /// `Bipolar` polarity precisely because an outlet publishes in its own
+    /// declared range rather than in the rack's signed convention.
+    ///
+    /// Read from the params and not from the running module, which is why an
+    /// LFO's *fade-in* is not in it. `fade` is DSP state and reaching it
+    /// would mean a second per-tick control table beside `ControlOutputs`.
+    /// So a unipolar route from a fading-in LFO rises from half the module's
+    /// depth rather than from the floor for the length of the fade, and is
+    /// exact from the moment the fade completes. Fade-in is zero by default.
+    fn wire_span(&self, slot: u8) -> f32 {
+        let Some(Some(module)) = self.slots.get(slot as usize) else {
+            // An outlet, or a slot that holds nothing: neither has a rack
+            // module's depth to read, and an outlet must not be rescaled.
+            return 1.0;
+        };
+        match module.params {
+            ModulatorParams::Lfo(lfo) => lfo.depth.clamp(0.0, 1.0),
+            ModulatorParams::Envelope(_)
+            | ModulatorParams::Step(_)
+            | ModulatorParams::Random(_)
+            | ModulatorParams::Math(_) => 1.0,
+        }
     }
 
     /// Whether a control signal will actually resolve `destination` this
@@ -2249,6 +2310,89 @@ retrigger = true
 
         // An unrelated destination is untouched.
         assert_eq!(rack.offset_for(addr(2), sources(&outputs), &open(2)), 0.0);
+    }
+
+    /// **A unipolar route rests on the base whatever the module's own
+    /// amount is**, which it did not until 2026-09-14.
+    ///
+    /// The lift was `(output + 1) * 0.5`, which is the source's span written
+    /// as a literal, and the LFO is the one module that does not fill it:
+    /// `depth` scales an already-signed waveform. So an LFO at half depth
+    /// rested a quarter of the route's depth above the base and swung about
+    /// that, and at depth zero it parked the destination half a depth up
+    /// while producing no movement -- "the modulator is off" and "the
+    /// destination is offset" at the same knob position.
+    ///
+    /// The envelope is the contrast that makes it an oversight rather than a
+    /// convention: its `amount` multiplies the level *before* the lift into
+    /// the signed convention, so it has always rested on the base. This
+    /// asserts both, from the same rack, so the two cannot part again.
+    #[test]
+    fn a_unipolar_route_rests_on_the_base_at_any_module_amount() {
+        let mut rack = ModRack::default();
+        rack.install(
+            0,
+            ModulatorParams::Lfo(ModLfoParams {
+                depth: 0.5,
+                ..ModLfoParams::default()
+            }),
+        );
+        rack.install(1, ModulatorParams::Envelope(ModEnvelopeParams::default()));
+        rack.add_route(ModRoute::to_slot(0, addr(1), 1.0, ModPolarity::Unipolar));
+        rack.add_route(ModRoute::to_slot(1, addr(2), 1.0, ModPolarity::Unipolar));
+
+        // The trough of a half-depth LFO is -0.5, not -1.
+        let mut outputs = [0.0; CONTROL_SOURCE_SLOTS];
+        outputs[0] = -0.5;
+        assert_eq!(rack.offset_for(addr(1), sources(&outputs), &open(1)), 0.0);
+        // The peak reaches the module's own amount rather than the route's.
+        outputs[0] = 0.5;
+        assert_eq!(rack.offset_for(addr(1), sources(&outputs), &open(1)), 0.5);
+
+        // An idle envelope publishes -1 whatever its amount, because the
+        // amount is already inside the value it lifted, so its span is 1.
+        outputs[1] = -1.0;
+        assert_eq!(rack.offset_for(addr(2), sources(&outputs), &open(2)), 0.0);
+        outputs[1] = 0.0;
+        assert_eq!(rack.offset_for(addr(2), sources(&outputs), &open(2)), 0.5);
+
+        // A module that has stopped moving contributes nothing, rather than
+        // half a depth of silent offset.
+        rack.install(
+            0,
+            ModulatorParams::Lfo(ModLfoParams {
+                depth: 0.0,
+                ..ModLfoParams::default()
+            }),
+        );
+        outputs[0] = 0.0;
+        assert_eq!(rack.offset_for(addr(1), sources(&outputs), &open(1)), 0.0);
+    }
+
+    /// An outlet is not a rack module and must not be rescaled by one.
+    ///
+    /// `wire_span` reads `slots`, and an outlet's flat slot number is past
+    /// the end of it -- so the answer is 1.0 by the same arithmetic that
+    /// makes `ControlSources::get` split the address space. Asserted because
+    /// the obvious implementation, indexing `slots` without the bound,
+    /// would silently give outlet 0 the span of modulator slot 0.
+    #[test]
+    fn an_outlet_route_is_lifted_on_its_own_declared_range() {
+        let mut rack = ModRack::default();
+        rack.install(
+            0,
+            ModulatorParams::Lfo(ModLfoParams {
+                depth: 0.25,
+                ..ModLfoParams::default()
+            }),
+        );
+        rack.add_route(ModRoute::from_outlet(0, addr(1), 1.0, ModPolarity::Unipolar));
+
+        let mut outputs = [0.0; CONTROL_SOURCE_SLOTS];
+        outputs[MAX_MODULATORS_PER_CHANNEL] = -1.0;
+        assert_eq!(rack.offset_for(addr(1), sources(&outputs), &open(1)), 0.0);
+        outputs[MAX_MODULATORS_PER_CHANNEL] = 1.0;
+        assert_eq!(rack.offset_for(addr(1), sources(&outputs), &open(1)), 1.0);
     }
 
     /// The destination's declaration is the gate. A route parked on a

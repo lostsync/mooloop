@@ -1,5 +1,166 @@
 # EQ v2 status
 
+## The listening brief for step 03, measured 2026-09-15
+
+Step 03 says "**this changes how an existing shelf boost sounds**" and leaves
+it there, which is true and not much use to somebody about to listen. Step 02
+handed us the instrument to say it properly: `Biquad::magnitude_db` is the
+running filter's response, so the two shelf laws can simply be subtracted.
+`shelf_law_change_in_decibels` prints the table; run it with `--ignored`.
+
+**The change is smaller than the sentence implies, and it is somewhere
+specific.**
+
+- **At the Q both shelves rest at (0.707), the difference peaks at 0.45 dB**,
+  an octave from the corner, for a shelf at ±12 dB. At ±3 dB it is 0.21 dB.
+- **It is a pivot, not a move.** The two laws agree *exactly* at the corner --
+  a cookbook shelf passes through half its gain there whatever its slope -- and
+  they agree again beyond about three octaves either side, where the shelf is
+  its gain and unity. Everything happens in between, and it is antisymmetric:
+  what one side loses the other gains.
+- **The real change is across the Q knob, which did nothing at all before.**
+  At Q 0.15 the same +6 dB shelf differs by 1.86 dB; at Q 4 by 0.96 dB the
+  other way. So a patch where somebody left the shelf Q alone barely moved,
+  and a patch where somebody *tried* to use that knob — and heard nothing, and
+  probably gave up — is the one that changed.
+
+**So the listen is: shelves with a Q away from 0.707, an octave either side of
+the corner.** A default EQ is unaffected, and a song that never touched a
+shelf's Q is within half a decibel.
+
+`the_shelf_law_change_pivots_about_the_corner` holds all three of those claims,
+and the first version of it asserted the *opposite* of the corner one. The
+table is what corrected it — which is the argument for measuring before
+writing prose about a change, and this file had already written the prose.
+
+### And a number `LOOSE_ENDS.md` had estimated at nearly twice the truth
+
+That entry says the shelf Q knob "stops steepening above 2" and calls it "the
+top four-fifths of the knob's travel". Measured, it is **the top 46%**:
+`shelf_slope` clamps the slope at 2.0, the Q descriptor runs 0.15..18
+exponentially, and `ln(2/0.15) / ln(18/0.15)` is 0.54 of the way along.
+`the_shelf_q_knob_saturates_a_little_past_half_its_travel` pins it, because the
+fraction is a product of a clamp in `mooloop-dsp` and a range in
+`mooloop-core` and neither of them looks like it has anything to do with a
+knob.
+
+## The face and the bank's resting arrangement, 2026-09-15
+
+Not a step in this plan and recorded here because anyone reading it about the
+EQ should know the defaults moved. Adam's mockup, and two things he named:
+**the low shelf is band 1 and the high shelf is band 7**, and the seven bands
+init to the seven-band graphic EQ's own centres -- 63, 160, 400, 1k, 2.5k,
+6.3k, 16k -- all of them on. The high shelf was band 3 and four bands sat
+stacked at 1 kHz, which is what made a seven-band EQ read as a three-band one
+with some spare handles hidden under band 2's.
+
+The face followed: the target row runs high-pass, seven bands, low-pass, in
+the order the plot reads; a target with a shape of its own draws that shape
+(the two shelves and the two pass filters) and a plain bell draws its number;
+the analyzer switch moved out of that row into the plot's corner; and ON
+moved down beside the knobs it switches. The glyph follows the band's **live**
+kind, through a `band-kinds` array published per frame, so it cannot go on
+saying "shelf" about a band a preset has made a bell.
+
+Band kind is still a parameter with no control on the face -- it can be
+automated and preset, not clicked. That was deliberate for this pass; a Type
+control is an eighth face control and widens the modulation arrays with it.
+
+## Step 02 — the curve tells the truth
+
+Landed on `feat/eq-curve-truth` (2026-09-15). **02 and 03 are done; 04 is
+optional and wants Adam's ear.**
+
+All the work and every date written into the code is 2026-09-14; the merge
+landed at 00:07 the next morning. Where a document's job is to say *when*, it
+says the 15th.
+
+### The fidelity question had a third answer, and it is the strong one
+
+The step file said the acceptance line could not be met in the form the plot
+used, and left a decision: either evaluate the real magnitude response in
+Slint, or state the weaker standard out loud. Both were wrong about where the
+work goes. **Rust samples the curve and the markup draws what it is handed**,
+which is what `DynamicsCurveDisplay.curve-db` has done for the channel strip's
+compressor since the console pass, in the same words: *"two formulas, one
+name, and the copy that drifts is the one a user is reading."*
+
+So `mooloop_dsp::effects::eq_response_db` designs the bank with the function
+`EqEffect::update_coefficients` designs it with -- one `design_eq_bank`, not
+two loops that agree -- and evaluates `Biquad::magnitude_db` at each point.
+The standard the step asked to have stated is therefore the strongest one
+available: **the drawn curve is the running filter's magnitude response**, and
+`the_plotted_curve_is_what_a_sine_measures_through_the_bank` holds it to a
+tone rendered through a real `EqEffect`, to a tenth of a decibel, at eight
+frequencies, over a bank with all three band kinds and both pass filters in.
+`Biquad::magnitude_db` is held to a measured sine the same way.
+
+The markup's rational approximation is **gone**, not improved. With it went
+the fixed `1.6` shelf exponent, the question of what `k = 2S` should be, and
+the two fields of `band-data` that only it read.
+
+### What the display still reads, and what a test now pins
+
+Three floats a band and two a pass filter, and they place *handles*: a
+position, a height, and whether the handle exists. A pass filter has no gain,
+so its handle rides the curve -- you grab the corner where it is.
+
+The pass filters have their own property, which is the shape the step file
+said would survive: one array with two strides, written in `lib.rs` and read
+in `device-displays.slint`, with nothing asserting either. `eq_face.rs`
+reads both strides back out of the markup and compares them to the constants
+the publisher uses, and one `mooloop_ui::eq_plot_band` builds the row for both
+banks.
+
+### The fourth acceptance line cost the most and paid for itself twice
+
+*"No range or curve constant is spelled in `eq-device.slint`."* That is the
+strip's arrangement, so the EQ got the strip's answer: an `EqSpec` global that
+Rust fills once at startup from the descriptor table. It carries the ranges,
+the units, the counts, the selector labels and -- the part the strip does not
+need -- **a resting value per target**, because this face is one control set
+over nine targets.
+
+Two things fell out of it that were not the point:
+
+- **The double-click defect closed.** `LOOSE_ENDS.md` had carried it since
+  step 01: a knob's double-click returned to band 2's default whatever band
+  was selected, because the resting values were three numbers in the markup.
+  It was priced as "a face-contract change, a later step" and this was that
+  step.
+- **The band buttons say what the parameters say.** They read LOW, 1..6 while
+  the descriptors read B1..B7, so the face and the automation menu counted
+  differently. They read 1..7 now, held there by a test that compares the
+  button's label with the descriptor's name.
+
+### And a defect the plot could not have drawn around
+
+**The pass-slope selector was wrong by a factor of two from the day it
+shipped.** `EqSlope::Db6` runs one `Biquad::pass`, which is the cookbook's
+*second-order* section -- 12 dB per octave -- so the five positions are
+12/24/36/48/72 and the face called them 6/12/18/24/36. Nothing could have
+noticed: the plot did not draw pass filters at all, which is the fault this
+step opened on, and the label was checked against nothing.
+
+`EqSlope::db_per_octave` is the arithmetic and the face reads it. The variant
+*names* were left wrong on purpose -- `serde` writes them, so renaming them
+either refuses every saved project or silently re-maps one slope to another,
+to correct a spelling nothing reads. That is in `LOOSE_ENDS.md` for the next
+`FORMAT_VERSION` bump that happens for a reason worth having one.
+
+### What it cost elsewhere, and what it gave back
+
+`strip_eq_response_db` is the same treatment for the channel strip, because
+the two banks share one display and a display that holds a law for one of them
+holds it for both. `StripEq::update` and `EqEffect::update_coefficients` are
+both two calls to a free `design_*_bank` now, and the EQ's two pass loops --
+ten lines each, differing in a field name and a boolean -- became one.
+
+`strip_row` and `effect_slot_row` both take a sample rate, because a biquad's
+coefficients are designed against one and the plot is those coefficients.
+`UiState` holds the number the driver came up at.
+
+
 ## Step 03 — a shelf has a slope, and one bank designs both EQs
 
 Landed on `feat/eq-shelf-slope` (2026-09-14), out of order: step 02 is a
@@ -64,34 +225,6 @@ kind, so the range would have to depend on a *value*, and a descriptor is
 static per id. It is the same shape as everything else in this plan -- a
 parameter model that cannot express a condition -- and it is recorded in
 `LOOSE_ENDS.md` rather than bodged.
-
-## Where step 02 stands, without being started
-
-Nothing of step 02 is built. Three things about it changed on 2026-09-14 and
-are written into the step file itself, so the next person does not re-derive
-them:
-
-- **One of its three faults is already closed.** The controls no longer lag a
-  point click; see the regression section below, which that note is what found.
-- **"Let the display read values by id" cannot be done literally.**
-  `EqResponseDisplay` is shared with the channel strip -- deliberately, since
-  2026-09-11, so there is not a second answer to what a bell of a given Q looks
-  like -- and the two callers have different id spaces. The shape that survives
-  is giving the *pass filters their own property* rather than appending them
-  after the bands in one array with two strides, which is what the fault is
-  really about; the band half stays as it is and wants a test rather than a
-  table.
-- **The step says a shelf's drawn curve should "match what the DSP runs".**
-  It cannot, in the form the plot uses: the DSP is an RBJ biquad and the plot
-  is a rational approximation, for the bell as well as the shelf, and always
-  has been. `strip_face.rs` holds the strip's plot to its *descriptors*, not
-  its coefficients. Either the step evaluates the real magnitude response in
-  Slint or it states the weaker standard plainly. That is a decision for
-  whoever takes it.
-
-Step 03 also left it something to draw: a shelf has a real slope now, and the
-display's fixed `1.6` exponent turns out to be `2S` at `S = 0.8`, so following
-the knob has an anchor rather than needing a new approximation.
 
 ## A regression step 01 shipped, and what found it
 

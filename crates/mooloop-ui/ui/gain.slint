@@ -114,6 +114,25 @@ export global GainMath {
         return (db > 0 ? "+" : "-") + GainMath.one-decimal(abs(db));
     }
 
+    // A dB number that is *not* a gain: one decimal, its natural sign, and no
+    // floor. Thresholds, a knee width, a gate's range and a limiter ceiling
+    // all read in dB and none of them is a level, which is why they cannot
+    // share `format-db`: a `+` on a knee width is meaningless, and a ceiling
+    // parked at full scale reading "±0.0 dB" says something about a signal
+    // rather than about a setting. None of the five crosses zero -- the
+    // descriptor tables give them -80..0, -60..0, 0..24 and -24..0 -- so the
+    // sign here is carried rather than announced, and "0.0" is unsigned.
+    //
+    // What it is for is the *width*. Six readouts spelled their own
+    // `round(x * 10) / 10`, which drops the tenth on a whole value, so a
+    // limiter ceiling read "-0.3 dB" at one knob position and "-1 dB" at the
+    // next and the field changed width under the pointer. That is the same
+    // jitter `format-db` was written to take out of the faders.
+    public pure function format-plain-db(db: float) -> string {
+        if (abs(db) < 0.05) { return "0.0"; }
+        return (db < 0 ? "-" : "") + GainMath.one-decimal(abs(db));
+    }
+
     // A non-negative number to exactly one decimal place. The tenth is
     // rounded first and the whole part taken from it, so a tenth that rounds
     // up carries: 12.96 is "13.0", where taking the two halves separately

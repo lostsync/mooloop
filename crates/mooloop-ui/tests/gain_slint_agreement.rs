@@ -308,3 +308,68 @@ fn slint_meter_segment_counts_match_the_throttle() {
         );
     }
 }
+
+/// **No readout rounds a dB for itself.** `GainMath` owns the two dB formats
+/// -- `format-db` for a gain, `format-plain-db` for a setting that merely
+/// reads in dB -- and a face that spells `round(x * 10) / 10` is neither.
+///
+/// The failure is width, not accuracy. Slint's number-to-string drops a
+/// trailing zero, so `round(x * 10) / 10` renders 6.0 as "6": a limiter
+/// ceiling read "-0.3 dB" at one knob position and "-1 dB" at the next, and
+/// the field changed width under the pointer. That is the same jitter
+/// `format-db` was written to take out of the faders, left behind on ten
+/// readouts because the note that recorded it counted six and looked only at
+/// the dynamics trio.
+///
+/// The two it missed are the interesting ones. `preamp-device.slint`'s Drive
+/// and Output are -24..24 dB *gains* that had simply never been given
+/// `format-db`, and ML-P8's two level fields hand-rolled their own `-inf`
+/// floor beside it -- so "every readout that is a gain uses the shared
+/// formatter" was false while nothing could say so.
+///
+/// A literal-text search, like `no_face_spells_the_floor_for_itself` above:
+/// the rendered string cannot be read back without `ElementHandle`, and the
+/// defect and its fix are both one line of markup.
+#[test]
+fn no_db_readout_rounds_for_itself() {
+    let mut swept = 0usize;
+    let mut readouts = 0usize;
+    for entry in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/ui"))
+        .expect("mooloop-ui/ui is unreadable")
+    {
+        let path = entry.expect("unreadable directory entry").path();
+        if path.extension().is_none_or(|kind| kind != "slint") {
+            continue;
+        }
+        swept += 1;
+        let file = path.file_name().unwrap().to_string_lossy().into_owned();
+        let source = std::fs::read_to_string(&path).expect("unreadable .slint file");
+        for (number, line) in source.lines().enumerate() {
+            // A dB readout is a line that puts the unit into a string. The
+            // comment above `format-plain-db` says `" dB"` too, so the line
+            // also has to be building a value rather than describing one.
+            if !line.contains("\" dB\"") || line.trim_start().starts_with("//") {
+                continue;
+            }
+            readouts += 1;
+            assert!(
+                !line.contains("round("),
+                "{file}:{} rounds a dB for itself instead of calling \
+                 GainMath.format-db (for a gain) or GainMath.format-plain-db \
+                 (for a setting that reads in dB): {}",
+                number + 1,
+                line.trim()
+            );
+        }
+    }
+    assert!(
+        swept > 20,
+        "only {swept} .slint files were swept; the walk has stopped finding them"
+    );
+    assert!(
+        readouts >= 6,
+        "only {readouts} dB readouts were found; the scan used to see the \
+         dynamics trio, the preamp, ML-P8 and the gain-reduction badge, so \
+         either the unit moved out of the markup or this test stopped looking"
+    );
+}

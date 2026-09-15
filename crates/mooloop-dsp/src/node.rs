@@ -322,15 +322,10 @@ mod tests {
     }
 
     fn sampler() -> Sampler {
-        let sample = Arc::new(ArcSwapOption::from(Some(SampleData::default_kick(
-            SAMPLE_RATE,
+        let audio = Arc::new(ArcSwapOption::from(Some(Arc::new(
+            crate::sampler::ChannelAudioSnapshot::sample(SampleData::default_kick(SAMPLE_RATE)),
         ))));
-        Sampler::new(
-            sample,
-            Arc::new(ArcSwapOption::empty()),
-            SamplerParams::default(),
-            SAMPLE_RATE,
-        )
+        Sampler::new(audio, SamplerParams::default(), SAMPLE_RATE)
     }
 
     fn generators() -> Vec<(&'static str, Box<dyn AudioNode + Send>)> {

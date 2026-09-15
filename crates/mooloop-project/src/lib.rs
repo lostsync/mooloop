@@ -610,6 +610,25 @@ fn prepare_song_asset(
     let source = path.clone();
     let keep_owned = *embedded && (source.starts_with(target) || source.starts_with(target_assets));
     let parent = target.parent().expect("validated song parent");
+    // **A sample the bundle already owns cannot be un-embedded, and now says
+    // so.** The guard itself is necessary: without it `replace_song_file`
+    // deletes the sidecar the new reference would point at, destroying the
+    // only copy. What was wrong was the silence -- unticking "Embed assets"
+    // and saving produced no warning, no status message and no change, so
+    // `CURRENT.md`'s "embedded and referenced asset policies are available
+    // per save" was true only of a song that had never been embedded.
+    //
+    // A warning rather than a refusal, because the save itself is correct and
+    // the rest of the document does follow the mode. Un-embedding for real
+    // means copying the bytes out to somewhere the user has chosen, which is
+    // a gesture that does not exist; `docs/LOOSE_ENDS.md` carries it.
+    if mode == AssetMode::Referenced && keep_owned {
+        warnings.push(AssetWarning {
+            channel,
+            path: source.clone(),
+            message: "sample stays embedded: the bundle holds the only copy of it".into(),
+        });
+    }
     if mode == AssetMode::Referenced && !keep_owned {
         if !source.is_file() {
             warnings.push(AssetWarning {
@@ -671,6 +690,14 @@ fn prepare_song_asset(
     Ok(())
 }
 
+/// What a song's sidecar directory is called, after the song's own file name.
+///
+/// Spelled once because two functions need it from opposite ends:
+/// [`song_assets_path`] builds *this* song's, and [`embedded_bundle_path`]
+/// recognises the one a document was written against -- which, after a
+/// rename, is a different name for the same directory.
+const ASSETS_SUFFIX: &str = "-assets";
+
 fn song_assets_path(path: &Path) -> Result<PathBuf, Error> {
     let parent = path
         .parent()
@@ -679,7 +706,7 @@ fn song_assets_path(path: &Path) -> Result<PathBuf, Error> {
         .file_name()
         .ok_or_else(|| Error::Invalid("song path has no file name".into()))?;
     let mut assets_name = name.to_os_string();
-    assets_name.push("-assets");
+    assets_name.push(ASSETS_SUFFIX);
     Ok(parent.join(assets_name))
 }
 
@@ -1161,11 +1188,29 @@ fn resolve_setup_asset(
     let SampleReference::File { path, embedded } = &mut sampler.sample else {
         return Ok(());
     };
-    if *embedded && !safe_embedded_path(bundle, path) {
-        return Err(Error::Invalid(format!(
-            "channel {channel} has unsafe embedded path {}",
-            path.display()
-        )));
+    if *embedded {
+        match embedded_bundle_path(bundle, path) {
+            Some(inside) => {
+                if inside != *path {
+                    warnings.push(AssetWarning {
+                        channel,
+                        path: path.clone(),
+                        message: format!(
+                            "embedded sample read from this song's own assets \
+                             folder, {}, rather than the one the document names",
+                            inside.display()
+                        ),
+                    });
+                    *path = inside;
+                }
+            }
+            None => {
+                return Err(Error::Invalid(format!(
+                    "channel {channel} has unsafe embedded path {}",
+                    path.display()
+                )))
+            }
+        }
     }
     let resolved = if path.is_absolute() {
         path.clone()
@@ -1188,20 +1233,55 @@ fn resolve_setup_asset(
     Ok(())
 }
 
-fn safe_embedded_path(bundle: &Path, path: &Path) -> bool {
+/// Where inside `bundle` an embedded reference actually points, or `None` if
+/// it points somewhere this loader may not follow.
+///
+/// **A song that was renamed still opens.** The check used to require the
+/// stored path to begin with *this song's exact file name* followed by
+/// `-assets`, which is precisely what renaming breaks: rename the pair the
+/// only sane way, in a file manager and both together, and the song refused
+/// to open at all -- `Error::Invalid`, so the whole document was rejected
+/// rather than one sample warned about, and recovery meant hand-editing TOML.
+/// The name equality was never what made the path safe. The
+/// `Component::Normal | CurDir` filter is: it admits no `..`, no root and no
+/// prefix, so the path cannot leave the directory it is joined to, whatever
+/// the first component is called.
+///
+/// So the shape is checked and the *name* is substituted: a first component
+/// ending in `-assets`, a second of `samples`, and the answer is that path
+/// with the first component replaced by the sidecar this song actually has.
+/// A rename therefore self-repairs, which is what a user expects and is the
+/// only option that leaves the song playing -- merely relaxing the equality
+/// would open the song with every sample missing, turning a brick into a
+/// silent loss. The caller reports the substitution, and the next save writes
+/// the corrected path.
+///
+/// The check stays **lexical**: a symlink under `samples/` still escapes,
+/// which `PROJECT_FORMAT.md` records and `LOOSE_ENDS.md` still carries.
+fn embedded_bundle_path(bundle: &Path, path: &Path) -> Option<PathBuf> {
     if !path
         .components()
         .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
     {
-        return false;
+        return None;
     }
+    // A directory bundle *is* the song, so its assets sit directly inside it
+    // and there is no sidecar name to substitute.
     if bundle.is_dir() {
-        return path.starts_with("samples");
+        return path.starts_with("samples").then(|| path.to_path_buf());
     }
-    song_assets_path(bundle)
+    let sidecar = song_assets_path(bundle)
         .ok()
-        .and_then(|assets| assets.file_name().map(PathBuf::from))
-        .is_some_and(|assets| path.starts_with(assets.join("samples")))
+        .and_then(|assets| assets.file_name().map(PathBuf::from))?;
+    let mut components = path.components().filter(|component| {
+        !matches!(component, Component::CurDir)
+    });
+    let stored = components.next()?.as_os_str().to_str()?.to_string();
+    if !stored.ends_with(ASSETS_SUFFIX) {
+        return None;
+    }
+    let rest: PathBuf = components.collect();
+    rest.starts_with("samples").then(|| sidecar.join(rest))
 }
 
 /// Whether `project` is already exactly what the format stores, with no
@@ -1701,6 +1781,90 @@ mod tests {
         assert!(path.is_file());
     }
 
+    /// **Unticking "Embed assets" on an already-embedded song says so.**
+    ///
+    /// The guard that keeps the sample in the bundle is necessary: without it
+    /// `replace_song_file` deletes the sidecar the new reference would point
+    /// at, destroying the only copy. What was wrong was everything around it
+    /// -- the save produced no warning, no status message and no change, and
+    /// reopening set the checkbox from the *document-level* mode, so the box
+    /// showed unticked on a bundle whose samples are all embedded and the
+    /// state never converged.
+    ///
+    /// Un-embedding for real means copying the bytes out to somewhere the
+    /// user has chosen, which is a gesture that does not exist. This is the
+    /// honest refusal, which is what `LOOSE_ENDS.md` called the cheap half.
+    #[test]
+    fn unticking_embed_on_an_embedded_song_is_refused_out_loud() {
+        let temp = tempdir().unwrap();
+        let source = temp.path().join("kick.wav");
+        fs::write(&source, b"wav bytes").unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.channels[0]
+            .setup
+            .sampler_state_mut()
+            .unwrap()
+            .sample = SampleReference::File {
+            path: source.clone(),
+            embedded: false,
+        };
+
+        // Embed it, and take back the document the save produced -- which is
+        // where the bundle-owned path lives.
+        assert!(save_song(&bundle, &project, AssetMode::Embedded)
+            .unwrap()
+            .warnings
+            .is_empty());
+        let LoadedDocument::Song(embedded) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected song")
+        };
+
+        // Now untick the box. The sample stays, and the report says why.
+        let report = save_song(&bundle, &embedded, AssetMode::Referenced).unwrap();
+        assert_eq!(report.warnings.len(), 1, "{:?}", report.warnings);
+        assert!(
+            report.warnings[0].message.contains("stays embedded"),
+            "{:?}",
+            report.warnings[0]
+        );
+
+        let LoadedDocument::Song(after) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected song")
+        };
+        let SampleReference::File { path, embedded: still } =
+            &after.channels[0].setup.sampler_state().unwrap().sample
+        else {
+            panic!("expected file sample")
+        };
+        assert!(*still, "the flag stopped saying what the bundle holds");
+        assert!(path.is_file(), "the only copy was deleted: {}", path.display());
+    }
+
+    /// A sample that is *not* in the bundle un-embeds silently, because that
+    /// one really can: the external file is still there to point at. The
+    /// warning above has to be about the impossible case only, or every
+    /// referenced save would carry it.
+    #[test]
+    fn a_referenced_save_of_an_external_sample_says_nothing() {
+        let temp = tempdir().unwrap();
+        let source = temp.path().join("kick.wav");
+        fs::write(&source, b"wav bytes").unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        project.channels[0]
+            .setup
+            .sampler_state_mut()
+            .unwrap()
+            .sample = SampleReference::File {
+            path: source,
+            embedded: false,
+        };
+
+        let report = save_song(&bundle, &project, AssetMode::Referenced).unwrap();
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    }
+
     #[test]
     fn resaving_without_embedded_samples_removes_the_old_sidecar() {
         let temp = tempdir().unwrap();
@@ -1904,6 +2068,121 @@ mod tests {
         assert_eq!(saved.warnings.len(), 1);
         let report = load_bundle(&bundle).unwrap();
         assert_eq!(report.warnings.len(), 1);
+    }
+
+    /// **Renaming a song in a file manager must not brick it.**
+    ///
+    /// Rename the pair the only sane way -- the song and its `-assets`
+    /// sidecar, together -- and the song used to refuse to open at all:
+    /// `safe_embedded_path` required the stored path to begin with *this
+    /// song's exact file name*, so it answered false about a path that is
+    /// present, relative, traversal-free and sitting right beside the file.
+    /// It was an `Error::Invalid`, so the whole document was rejected rather
+    /// than one sample warned about, and recovery meant hand-editing TOML.
+    ///
+    /// It now opens, plays, and says what it did. The sample is *found*,
+    /// which is the half that a mere relaxation of the name check would have
+    /// missed: dropping the equality alone would have opened the song with
+    /// every sample missing, turning a brick into a silent loss.
+    #[test]
+    fn a_renamed_song_opens_with_its_samples() {
+        let temp = tempdir().unwrap();
+        let source = temp.path().join("kick.wav");
+        fs::write(&source, b"wav bytes").unwrap();
+        let bundle = temp.path().join("before.mooloop");
+        let mut project = Project::default();
+        project.channels[0]
+            .setup
+            .sampler_state_mut()
+            .unwrap()
+            .sample = SampleReference::File {
+            path: source.clone(),
+            embedded: false,
+        };
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+
+        // What a file manager does: both, together, nothing else touched.
+        let renamed = temp.path().join("after.mooloop");
+        fs::rename(&bundle, &renamed).unwrap();
+        fs::rename(
+            temp.path().join("before.mooloop-assets"),
+            temp.path().join("after.mooloop-assets"),
+        )
+        .unwrap();
+
+        let report = load_bundle(&renamed).expect("a renamed song must still open");
+        let LoadedDocument::Song(song) = report.document else {
+            panic!("expected song")
+        };
+        let SampleReference::File { path, embedded } =
+            &song.channels[0].setup.sampler_state().unwrap().sample
+        else {
+            panic!("expected file sample")
+        };
+        assert!(*embedded);
+        assert!(
+            path.is_file(),
+            "the sample was not found under the renamed sidecar: {}",
+            path.display()
+        );
+        assert!(
+            path.starts_with(temp.path().join("after.mooloop-assets")),
+            "the path was not repointed at this song's own sidecar: {}",
+            path.display()
+        );
+
+        // Said out loud rather than silently repaired: the document named a
+        // directory that is not there, and the loader read a different one.
+        assert_eq!(report.warnings.len(), 1, "{:?}", report.warnings);
+        assert!(
+            report.warnings[0].message.contains("assets folder"),
+            "{:?}",
+            report.warnings[0]
+        );
+
+        // And the correction is what the next save writes, so it is a
+        // one-time warning rather than a permanent one.
+        let resaved = save_song(&renamed, &song, AssetMode::Embedded).unwrap();
+        assert!(resaved.warnings.is_empty(), "{:?}", resaved.warnings);
+        assert!(load_bundle(&renamed).unwrap().warnings.is_empty());
+    }
+
+    /// A rename is forgiven; leaving the bundle is not. The sidecar name is
+    /// substituted, and every traversal property the old check had is kept by
+    /// the `Component::Normal` filter that was always doing that work.
+    #[test]
+    fn a_repointed_path_still_cannot_leave_the_bundle() {
+        let song = Path::new("/songs/after.mooloop");
+        let sidecar = PathBuf::from("after.mooloop-assets");
+
+        assert_eq!(
+            embedded_bundle_path(song, Path::new("before.mooloop-assets/samples/00-kick.wav")),
+            Some(sidecar.join("samples/00-kick.wav")),
+            "a renamed sidecar is substituted"
+        );
+        assert_eq!(
+            embedded_bundle_path(song, Path::new("after.mooloop-assets/samples/00-kick.wav")),
+            Some(sidecar.join("samples/00-kick.wav")),
+            "and an unrenamed one is unchanged"
+        );
+
+        for refused in [
+            "../escape.wav",
+            "/etc/passwd",
+            "before.mooloop-assets/../../escape.wav",
+            // The shape is still checked: a first component that is not a
+            // sidecar, or a second that is not `samples`, is not a path into
+            // any song's assets.
+            "elsewhere/samples/00-kick.wav",
+            "before.mooloop-assets/secrets/00-kick.wav",
+            "before.mooloop-assets",
+        ] {
+            assert_eq!(
+                embedded_bundle_path(song, Path::new(refused)),
+                None,
+                "{refused} was accepted"
+            );
+        }
     }
 
     #[test]

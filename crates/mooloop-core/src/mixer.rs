@@ -259,7 +259,9 @@ pub fn is_legal_send(from: u8, target: u8) -> bool {
     // by `compile_bus_graph` and never released -- the Kahn loop skips the
     // master *before* the release step -- so the whole bank failed to sort
     // and was reported cyclic when it was not. `sanitize_bank` then ran its
-    // cycle branch, which clears the sends on every track in the song.
+    // cycle branch, which at the time cleared the sends on every track in the
+    // song; it breaks one edge at a time now, but this guard is still what
+    // stops a bank with no cycle in it being repaired at all.
     from != MASTER_BUS
         && from != target
         && (from as usize) < MAX_BUSES
@@ -323,32 +325,132 @@ pub fn default_buses() -> Vec<BusSetup> {
     vec![BusSetup::new(MASTER_BUS as usize)]
 }
 
+/// One correction [`sanitize_bank`] made, in enough detail to say which
+/// track lost what.
+///
+/// The repairs used to be silent, which cost more than it looks: the bank the
+/// sanitiser returns becomes `Session::buses` and the *next save writes it*,
+/// so a repair is not a running-document workaround but an edit to the user's
+/// file that nobody was told about. Carrying them out means the caller can at
+/// least log them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BankRepair {
+    /// The bank had no tracks at all; a master was created.
+    MasterRestored,
+    /// Tracks past [`MAX_BUSES`] were dropped.
+    TracksDropped { past: usize },
+    /// A track's output named itself, the master's own output, or a track
+    /// that is not there, and now names the master.
+    OutputToMaster { track: u8, was: u8 },
+    /// A send named a track that is not there, and is gone.
+    SendDropped { track: u8, target: u8 },
+    /// An edge that closed a loop. `was_send` separates the two, because the
+    /// prices differ: a dropped send is an addition the user loses, and an
+    /// output moved to the master still carries the track's audio.
+    CycleBroken { track: u8, target: u8, was_send: bool },
+    /// No single edge could be found on a cycle and the bank still would not
+    /// sort, so everything went to the master. The old behaviour, kept only
+    /// as the fallback that guarantees the caller a bank the engine accepts.
+    Flattened,
+}
+
+impl core::fmt::Display for BankRepair {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::MasterRestored => write!(f, "the bank had no master; one was created"),
+            Self::TracksDropped { past } => {
+                write!(f, "{past} track(s) past the addressable space were dropped")
+            }
+            Self::OutputToMaster { track, was } => {
+                write!(f, "track {track}'s output named {was} and now names the master")
+            }
+            Self::SendDropped { track, target } => {
+                write!(f, "track {track}'s send to {target} was dropped: no such track")
+            }
+            Self::CycleBroken { track, target, was_send: true } => {
+                write!(f, "track {track}'s send to {target} was dropped: it closed a loop")
+            }
+            Self::CycleBroken { track, target, was_send: false } => {
+                write!(f, "track {track}'s output to {target} closed a loop and now names the master")
+            }
+            Self::Flattened => write!(
+                f,
+                "no single edge accounted for the loop; every output was moved to the \
+                 master and every send dropped"
+            ),
+        }
+    }
+}
+
+/// A repaired bank and the list of what had to be done to it.
+pub struct SanitizedBank {
+    pub buses: Vec<BusSetup>,
+    /// Empty for a bank that was already legal, which is every bank this
+    /// program writes. Anything here came from a hand-edited file, a foreign
+    /// build, or a bug in the edit layer.
+    pub repairs: Vec<BankRepair>,
+}
+
 /// Repair a loaded track bank: guarantee the master, drop anything past the
 /// addressable space, and coerce individually illegal routing to the master.
 ///
 /// Per-edge nonsense is fixed first and the graph as a whole second, so a file
-/// whose routing contains a loop is flattened to everything-to-master rather
-/// than rejected -- it still opens and plays, which is the same treatment the
-/// engine gives it.
-pub fn sanitize_bank(buses: &[BusSetup]) -> Vec<BusSetup> {
+/// whose routing contains a loop still opens and plays rather than being
+/// rejected -- which is the same treatment the engine gives it.
+///
+/// **The loop is broken edge by edge, not by clearing the bank.** Until
+/// 2026-09-14 the second half of that was one `if`: a graph that did not sort
+/// had *every* track's output moved to the master and *every* track's sends
+/// cleared. So one bad `output` edge in a hand-edited or foreign-build file
+/// cost a whole song's aux routing, silently, and the sanitised bank is what
+/// the next save writes -- the sends were gone from the file and not only from
+/// the running document. `is_legal_send`'s own comment records the shape of
+/// how that was reached in practice: a master send that the Kahn sort could
+/// not release made a perfectly acyclic bank report cyclic, and this branch
+/// then emptied it.
+///
+/// [`break_cycles`] removes the fewest edges it can find instead, sends before
+/// outputs, and says which. Greedy rather than provably minimum -- a minimum
+/// feedback arc set is NP-hard and a track bank does not need one -- but it
+/// only ever touches an edge that is genuinely on a cycle, which is the
+/// property the old branch did not have.
+pub fn sanitize_bank(buses: &[BusSetup]) -> SanitizedBank {
+    let mut repairs = Vec::new();
+    if buses.len() > MAX_BUSES {
+        repairs.push(BankRepair::TracksDropped {
+            past: buses.len() - MAX_BUSES,
+        });
+    }
     let mut bank: Vec<BusSetup> = buses
         .iter()
         .take(MAX_BUSES)
         .enumerate()
         .map(|(index, setup)| {
             let mut setup = setup.clone();
-            setup.bus.output = sanitize_route(index as u8, setup.bus.output);
+            let sanitized = sanitize_route(index as u8, setup.bus.output);
+            if sanitized != setup.bus.output {
+                repairs.push(BankRepair::OutputToMaster {
+                    track: index as u8,
+                    was: setup.bus.output,
+                });
+            }
+            setup.bus.output = sanitized;
             setup
         })
         .collect();
     if bank.is_empty() {
         bank.push(BusSetup::new(MASTER_BUS as usize));
+        repairs.push(BankRepair::MasterRestored);
     }
     // A route naming a track that is not there lands on the master, the same
     // repair `sanitize_route` makes for an out-of-range one.
     let count = bank.len();
     for (index, setup) in bank.iter_mut().enumerate() {
         if index != MASTER_BUS as usize && setup.bus.output as usize >= count {
+            repairs.push(BankRepair::OutputToMaster {
+                track: index as u8,
+                was: setup.bus.output,
+            });
             setup.bus.output = MASTER_BUS;
         }
         // A send naming a track that is not there is **dropped**, not
@@ -356,17 +458,94 @@ pub fn sanitize_bank(buses: &[BusSetup]) -> Vec<BusSetup> {
         // or the channel is silently unheard, which is why that one falls
         // back; a send is an addition, and the honest repair for one whose
         // destination is gone is that it is gone too.
-        setup
-            .sends
-            .retain(|send| is_legal_send(index as u8, send.target) && (send.target as usize) < count);
+        setup.sends.retain(|send| {
+            let keep =
+                is_legal_send(index as u8, send.target) && (send.target as usize) < count;
+            if !keep {
+                repairs.push(BankRepair::SendDropped {
+                    track: index as u8,
+                    target: send.target,
+                });
+            }
+            keep
+        });
     }
     if compile_bus_graph(&bank).is_none() {
-        for setup in &mut bank {
+        break_cycles(&mut bank, &mut repairs);
+    }
+    SanitizedBank {
+        buses: bank,
+        repairs,
+    }
+}
+
+/// Remove edges until `bank` sorts, one edge per pass and only ever one that
+/// is on a cycle.
+///
+/// An edge `track -> next` is on a cycle exactly when `next` reaches `track`
+/// again, which is what [`reaches`] answers, so no separate cycle search is
+/// needed. Sends go first: a send is an addition and dropping one loses what
+/// the user added, where moving an output to the master still carries the
+/// track's audio to somewhere audible. Within each kind the order is by track
+/// and then by position, so the same file repairs the same way every time.
+///
+/// Each pass removes exactly one edge and a bank has finitely many, so this
+/// terminates. The flatten at the end is unreachable by the argument above --
+/// a graph that does not sort has a cycle, and a cycle has an edge on it --
+/// and is kept anyway, because the caller's invariant is that what comes back
+/// compiles, and an invariant guarded by a proof is guarded by nothing when
+/// the proof is about code somebody else may change.
+fn break_cycles(bank: &mut [BusSetup], repairs: &mut Vec<BankRepair>) {
+    while compile_bus_graph(bank).is_none() {
+        if let Some((track, position)) = cyclic_send(bank) {
+            let target = bank[track].sends.remove(position).target;
+            repairs.push(BankRepair::CycleBroken {
+                track: track as u8,
+                target,
+                was_send: true,
+            });
+            continue;
+        }
+        if let Some(track) = cyclic_output(bank) {
+            let was = core::mem::replace(&mut bank[track].bus.output, MASTER_BUS);
+            repairs.push(BankRepair::CycleBroken {
+                track: track as u8,
+                target: was,
+                was_send: false,
+            });
+            continue;
+        }
+        for setup in bank.iter_mut() {
             setup.bus.output = MASTER_BUS;
             setup.sends.clear();
         }
+        repairs.push(BankRepair::Flattened);
+        return;
     }
-    bank
+}
+
+/// The first send whose target can reach its owner again, by track and then
+/// by position in that track's send list.
+fn cyclic_send(bank: &[BusSetup]) -> Option<(usize, usize)> {
+    bank.iter().enumerate().find_map(|(track, setup)| {
+        setup
+            .sends
+            .iter()
+            .position(|send| {
+                is_legal_send(track as u8, send.target) && reaches(bank, send.target, track as u8)
+            })
+            .map(|position| (track, position))
+    })
+}
+
+/// The first output that can reach its own track again. The master has no
+/// output and an output already on the master cannot close anything.
+fn cyclic_output(bank: &[BusSetup]) -> Option<usize> {
+    bank.iter().enumerate().position(|(track, setup)| {
+        track != MASTER_BUS as usize
+            && setup.bus.output != MASTER_BUS
+            && reaches(bank, setup.bus.output, track as u8)
+    })
 }
 
 /// Whether `bus` could address `output` at all, ignoring what the rest of the
@@ -1569,8 +1748,10 @@ mod tests {
     /// audio, so an empty or hand-emptied file gets one back.
     #[test]
     fn a_bank_always_has_a_master() {
-        assert_eq!(sanitize_bank(&[]).len(), 1);
-        assert_eq!(sanitize_bank(&[])[0].bus.name, "Master");
+        let repaired = sanitize_bank(&[]);
+        assert_eq!(repaired.buses.len(), 1);
+        assert_eq!(repaired.buses[0].bus.name, "Master");
+        assert_eq!(repaired.repairs, vec![BankRepair::MasterRestored]);
     }
 
     /// A route naming a track that is not there lands on the master, the same
@@ -1582,8 +1763,13 @@ mod tests {
         bank[1].bus.output = 9;
         bank.truncate(3);
         let repaired = sanitize_bank(&bank);
-        assert_eq!(repaired.len(), 3);
-        assert_eq!(repaired[1].bus.output, MASTER_BUS);
+        assert_eq!(repaired.buses.len(), 3);
+        assert_eq!(repaired.buses[1].bus.output, MASTER_BUS);
+        assert_eq!(
+            repaired.repairs,
+            vec![BankRepair::OutputToMaster { track: 1, was: 9 }],
+            "the fallback is a repair the caller can name, not a silent edit"
+        );
     }
 
     /// A short bank still compiles, and every track in it is rendered before
@@ -1672,10 +1858,11 @@ mod tests {
     /// in-degree on its target and never releases it, because the Kahn loop
     /// skips the master *before* the release step -- so the bank fails to
     /// sort and is reported cyclic when there is no cycle. `sanitize_bank`
-    /// then runs its cycle branch, which clears the sends on **every** track
-    /// in the song and, per `docs/LOOSE_ENDS.md`, persists that on the next
-    /// save. Not reachable through the interface; reachable from a
-    /// hand-edited or foreign-build file, which nothing upstream checks
+    /// then ran its cycle branch, which at the time cleared the sends on
+    /// **every** track in the song and persisted that on the next save --
+    /// that branch is narrow now, but a bank with no cycle in it should not
+    /// be reaching it at all. Not reachable through the interface; reachable
+    /// from a hand-edited or foreign-build file, which nothing upstream checks
     /// because `integrity` fits a send's level and never its target.
     #[test]
     fn the_master_may_not_own_a_send_any_more_than_it_owns_an_output() {
@@ -1704,13 +1891,17 @@ mod tests {
         );
         let repaired = sanitize_bank(&buses);
         assert!(
-            repaired[0].sends.is_empty(),
+            repaired.buses[0].sends.is_empty(),
             "the master's impossible send is dropped"
         );
         assert_eq!(
-            repaired[1].sends.len(),
+            repaired.buses[1].sends.len(),
             1,
             "and every other track keeps the sends it authored"
+        );
+        assert_eq!(
+            repaired.repairs,
+            vec![BankRepair::SendDropped { track: 0, target: 2 }]
         );
     }
 
@@ -1732,16 +1923,89 @@ mod tests {
 
     /// A bank whose sends loop has no valid schedule, and the repair is the
     /// one a looping output already gets: it opens and plays.
+    ///
+    /// **One edge goes, not the bank.** This used to assert that *both* sends
+    /// were cleared, which was the behaviour and was the defect: the cycle
+    /// branch emptied every track in the song, and the sanitised bank is what
+    /// the next save writes. Breaking the first edge on the ring is enough to
+    /// make it sort, so the second send -- authored work that was never on
+    /// its own a problem -- survives.
     #[test]
-    fn a_cyclic_send_has_no_plan_and_is_repaired() {
+    fn a_cyclic_send_costs_one_edge_and_not_the_bank() {
         let mut bank = full_bank();
         bank[1].sends.push(AuxSend::new(2));
         bank[2].sends.push(AuxSend::new(1));
+        // A send elsewhere in the bank, on nothing: the old branch took this
+        // too, which is the part a user would actually have noticed.
+        bank[5].sends.push(AuxSend::new(6));
         assert!(compile_bus_graph(&bank).is_none());
+
         let repaired = sanitize_bank(&bank);
-        assert!(repaired[1].sends.is_empty());
-        assert!(repaired[2].sends.is_empty());
-        assert!(compile_bus_graph(&repaired).is_some());
+        assert!(compile_bus_graph(&repaired.buses).is_some(), "it sorts now");
+        assert!(repaired.buses[1].sends.is_empty(), "the first edge on the ring went");
+        assert_eq!(
+            repaired.buses[2].sends.len(),
+            1,
+            "and the second one did not have to"
+        );
+        assert_eq!(
+            repaired.buses[5].sends.len(),
+            1,
+            "a send nowhere near the loop is untouched"
+        );
+        assert_eq!(
+            repaired.repairs,
+            vec![BankRepair::CycleBroken { track: 1, target: 2, was_send: true }]
+        );
+    }
+
+    /// A loop closed by *outputs* has no send to give up, so an output moves
+    /// to the master -- and only the one that closes it.
+    ///
+    /// Outputs are broken second for a reason worth keeping: a dropped send
+    /// loses what the user added, while an output on the master still carries
+    /// the track's audio somewhere audible. So a ring that can be opened by
+    /// giving up a send gives up the send.
+    #[test]
+    fn a_cyclic_output_costs_one_output_and_not_the_bank() {
+        let mut bank = full_bank();
+        bank[1].bus.output = 2;
+        bank[2].bus.output = 3;
+        bank[3].bus.output = 1;
+        bank[5].sends.push(AuxSend::new(6));
+        assert!(compile_bus_graph(&bank).is_none());
+
+        let repaired = sanitize_bank(&bank);
+        assert!(compile_bus_graph(&repaired.buses).is_some(), "it sorts now");
+        assert_eq!(repaired.buses[1].bus.output, MASTER_BUS, "the first edge on the ring");
+        assert_eq!(repaired.buses[2].bus.output, 3, "the rest of the chain is intact");
+        assert_eq!(repaired.buses[3].bus.output, 1);
+        assert_eq!(repaired.buses[5].sends.len(), 1, "and no send was touched");
+        assert_eq!(
+            repaired.repairs,
+            vec![BankRepair::CycleBroken { track: 1, target: 2, was_send: false }]
+        );
+    }
+
+    /// A ring that a send closes gives up the send, even though breaking an
+    /// output would also open it. This is the ordering rule, stated where it
+    /// can fail: 1 -> 2 by output and 2 -> 1 by send is one ring with one of
+    /// each kind on it.
+    #[test]
+    fn a_ring_with_both_kinds_on_it_gives_up_the_send() {
+        let mut bank = full_bank();
+        bank[1].bus.output = 2;
+        bank[2].sends.push(AuxSend::new(1));
+        assert!(compile_bus_graph(&bank).is_none());
+
+        let repaired = sanitize_bank(&bank);
+        assert!(compile_bus_graph(&repaired.buses).is_some());
+        assert_eq!(repaired.buses[1].bus.output, 2, "the output survives");
+        assert!(repaired.buses[2].sends.is_empty(), "the send is what went");
+        assert_eq!(
+            repaired.repairs,
+            vec![BankRepair::CycleBroken { track: 2, target: 1, was_send: true }]
+        );
     }
 
     /// A send naming a track that is not there is dropped, where an *output*
@@ -1756,8 +2020,16 @@ mod tests {
         bank[1].sends.push(AuxSend::new(1));
         bank[1].sends.push(AuxSend::new(2));
         let repaired = sanitize_bank(&bank);
-        assert_eq!(repaired[1].sends.len(), 1, "only the reachable one survives");
-        assert_eq!(repaired[1].sends[0].target, 2);
+        assert_eq!(repaired.buses[1].sends.len(), 1, "only the reachable one survives");
+        assert_eq!(repaired.buses[1].sends[0].target, 2);
+        assert_eq!(
+            repaired.repairs,
+            vec![
+                BankRepair::SendDropped { track: 1, target: 9 },
+                BankRepair::SendDropped { track: 1, target: 1 },
+            ],
+            "both drops are named; a self-send is as lost as an absent target"
+        );
     }
 
     /// A send is enabled and at unity when it is made. A send you have just

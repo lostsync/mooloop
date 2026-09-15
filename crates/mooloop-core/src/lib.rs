@@ -155,11 +155,14 @@ pub use effect::{
     DELAY_PARAM_FEEDBACK, DELAY_PARAM_MIX, DELAY_PARAM_MODE, DELAY_PARAM_TIME_MS, DELAY_PARAM_TONE,
     MODULATION_MAX_RATE_HZ, MODULATION_MIN_RATE_HZ,
     DRIVE_PARAM_CURVE, DRIVE_PARAM_DRIVE, DRIVE_PARAM_MIX, DRIVE_PARAM_OUTPUT, DRIVE_PARAM_TONE,
-    eq_band_of, eq_band_param, eq_pass_of, eq_pass_param, EqFaceControl, EQ_BAND_BASE,
+    eq_band_of, eq_band_param, eq_pass_of, eq_pass_param, eq_plot_frequency,
+    eq_plot_position, EqFaceControl, EQ_BAND_BASE, EQ_PLOT_MAX_HZ, EQ_PLOT_MIN_HZ,
     EQ_BAND_FIELDS, EQ_BAND_FREQ, EQ_BAND_GAIN, EQ_BAND_KIND, EQ_BAND_ON, EQ_BAND_Q,
     EQ_BAND_Q_PROFILE, EQ_BAND_STRIDE, EQ_FIRST, EQ_HIGH_PASS, EQ_LOW_PASS, EQ_MAX_BANDS,
     EQ_PASS_BASE, EQ_PASS_COUNT, EQ_PASS_FIELDS, EQ_PASS_FREQ, EQ_PASS_ON, EQ_PASS_Q,
-    EQ_PASS_SLOPE, EQ_PASS_STRIDE, EQ_FACE_CONTROLS,
+    EQ_PASS_SLOPE, EQ_PASS_STRIDE, EQ_FACE_CONTROLS, EQ_SLOPE_COUNT,
+    EQ_DEFAULT_BAND_HZ, EQ_DEFAULT_BAND_KIND, EQ_DEFAULT_Q,
+    PASS_STAGE_DB_PER_OCTAVE,
     PREAMP_PARAM_DRIVE_DB, PREAMP_PARAM_MIX, PREAMP_PARAM_OUTPUT_DB, PREAMP_PARAM_VOICING,
     FILTER_PARAM_CUTOFF_HZ, FILTER_PARAM_DRIVE, FILTER_PARAM_MODE,
     FILTER_PARAM_RESONANCE, FILTER_PARAM_SLOPE,
@@ -178,8 +181,10 @@ pub use mixer::{
     compile_bus_graph, compile_latency,
     compile_render_order, default_buses, default_render_order, is_legal_route, is_legal_send,
     sanitize_bank, sanitize_route, send_edges, sends_are_compensable,
-    would_create_cycle, AudioEdge, AudioOrder, AuxSend, BusSetup, CompiledAudioGraph, CompiledBusGraph,
-    CompiledLatency, EdgeRefusal, EffectTarget, MixerBus, RenderOrder, SendEdge, SendTap,
+    would_create_cycle, AudioEdge, AudioOrder, AuxSend, BankRepair, BusSetup, CompiledAudioGraph,
+    CompiledBusGraph,
+    CompiledLatency, EdgeRefusal, EffectTarget, MixerBus, RenderOrder, SanitizedBank, SendEdge,
+    SendTap,
     INSERT_BUSES, MASTER_BUS, MAX_BUSES,
 };
 pub use pattern::{
@@ -206,7 +211,9 @@ pub use sampler::{
 };
 pub use structure::{
     assign_device_ids, depth_at, device_slot, drop_lanes_for_device, insert_effect,
-    insert_into_container, insert_run, mint_device_id, move_sequence, parent_of, run_of, span_of, span_problem, unwrap_container, wrap_in_container,
+    can_insert_into_container, can_move_into_container, can_wrap, insert_into_container, insert_run,
+    insert_run_beside, mint_device_id, move_sequence, parent_of, run_of, span_of, span_problem,
+    unwrap_container, wrap_in_container,
     MAX_CONTAINER_DEPTH, move_effect, move_effect_into_container, remove_effect,
     replace_run, rescope_lanes, rescope_lanes_for_track, slot_of, ChannelEdit, TrackEdit,
 };

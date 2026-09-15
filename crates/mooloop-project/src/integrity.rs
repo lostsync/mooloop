@@ -1008,20 +1008,36 @@ fn check_notes(doctor: &mut Doctor, where_: &str, notes: &mut [mooloop_core::Not
 }
 
 fn check_lanes(doctor: &mut Doctor, where_: &str, lanes: &mut Vec<mooloop_core::AutomationLane>) {
+    // **Truncated, not refused.** `refuse` records the problem and repairs
+    // nothing, on the principle that the only correction discards authored
+    // work -- which is the right instinct and was the wrong answer here,
+    // because `Pattern::set_lanes` already takes the first
+    // `MAX_AUTOMATION_LANES_PER_CHANNEL` and throws the rest away. So the
+    // work was discarded either way; the difference was that the *document*
+    // kept them, so the editor listed, drew, edited and re-saved lanes the
+    // engine had never heard of. A lane that draws and plays nothing is worse
+    // than one that is gone and named.
+    //
+    // Before the duplicate pass below, and deliberately: `set_lanes` takes
+    // the first eight of whatever it is handed, so taking them here is what
+    // makes the two sides agree about *which* eight.
     if lanes.len() > MAX_AUTOMATION_LANES_PER_CHANNEL {
         let found = lanes.len();
-        doctor.refuse(
+        if doctor.correct(
             "channel.automation.count",
             where_,
             format!(
-                "it has {found} automation lanes; one pattern stores \
-                 {MAX_AUTOMATION_LANES_PER_CHANNEL}"
+                "it has {found} automation lanes; the engine plays the first \
+                 {MAX_AUTOMATION_LANES_PER_CHANNEL} and has never seen the rest, \
+                 so they draw and edit in the roll and change no sound"
             ),
             format!(
-                "delete {} lanes from it",
+                "drop the {} the engine ignores",
                 found - MAX_AUTOMATION_LANES_PER_CHANNEL
             ),
-        );
+        ) {
+            lanes.truncate(MAX_AUTOMATION_LANES_PER_CHANNEL);
+        }
     }
 
     // Only one lane per destination can be honoured, and the editor addresses
@@ -2649,6 +2665,102 @@ mod tests {
         assert_eq!(codes(&diagnosis), ["channel.automation.duplicate"]);
         assert_eq!(project.channels[0].automation[0].len(), 1);
         assert_eq!(project.channels[0].automation[0][0].points().len(), 2);
+    }
+
+    /// **A lane the engine cannot play is dropped and named, not kept and
+    /// refused.** Changed 2026-09-14.
+    ///
+    /// A file carrying more than `MAX_AUTOMATION_LANES_PER_CHANNEL` lanes in
+    /// one (pattern, channel) used to be handled three ways at once:
+    /// `check_lanes` called `refuse`, which repairs nothing, so the project
+    /// loaded unchanged; `Session::replace_project` cloned them all, so the
+    /// editor listed, drew, edited and re-saved them; and `Pattern::set_lanes`
+    /// took the first eight, so the engine had never heard of the rest.
+    /// `refuse` was chosen because the only correction discards authored work
+    /// -- the right instinct, except that `set_lanes` was already discarding
+    /// it, silently and on one side only.
+    ///
+    /// Not reachable from the app, which refuses past the ceiling at the
+    /// picker; this is hand-edited, foreign-build or future-version files.
+    #[test]
+    fn lanes_past_the_engines_cap_are_dropped_and_reported() {
+        let mut project = Project::default();
+        let lanes: Vec<AutomationLane> = (0..MAX_AUTOMATION_LANES_PER_CHANNEL + 3)
+            .map(|index| {
+                // One lane each on a different *sampler* destination, so the
+                // duplicate and address passes have nothing to say and the
+                // count is the only finding.
+                let mut lane = AutomationLane::new(ParamAddr {
+                    scope: EffectTarget::Channel(0),
+                    owner: ParamOwner::Source,
+                    param: index as u32,
+                });
+                assert!(lane.upsert(AutomationPoint::new(1, 0, 0.5)));
+                lane
+            })
+            .collect();
+        let ninth = lanes[MAX_AUTOMATION_LANES_PER_CHANNEL].target;
+        project.channels[0].automation[0] = lanes;
+
+        let diagnosis = repair_project(&mut project);
+        assert!(diagnosis.is_usable(), "{diagnosis}");
+        assert_eq!(codes(&diagnosis), ["channel.automation.count"]);
+
+        let kept = &project.channels[0].automation[0];
+        assert_eq!(kept.len(), MAX_AUTOMATION_LANES_PER_CHANNEL);
+        assert!(
+            !kept.iter().any(|lane| lane.target == ninth),
+            "the ninth lane survived the repair"
+        );
+        // The same eight `Pattern::set_lanes` takes, in the same order: the
+        // point of truncating here is that the two sides agree about *which*.
+        assert!(kept
+            .iter()
+            .enumerate()
+            .all(|(index, lane)| lane.target.param == index as u32));
+    }
+
+    /// The report says it was applied, and says the price. A `Costly` remedy
+    /// that repairs nothing is what left the ninth lane drawing and silent.
+    #[test]
+    fn the_lane_truncation_is_reported_as_an_applied_repair() {
+        let mut project = Project::default();
+        project.channels[0].automation[0] = (0..MAX_AUTOMATION_LANES_PER_CHANNEL + 1)
+            .map(|index| {
+                let mut lane = AutomationLane::new(ParamAddr {
+                    scope: EffectTarget::Channel(0),
+                    owner: ParamOwner::Source,
+                    param: index as u32,
+                });
+                assert!(lane.upsert(AutomationPoint::new(1, 0, 0.5)));
+                lane
+            })
+            .collect();
+
+        let diagnosis = repair_project(&mut project);
+        let issue = diagnosis
+            .issues
+            .iter()
+            .find(|issue| issue.code == "channel.automation.count")
+            .expect("the count was not reported");
+        assert!(issue.repaired, "reported without being applied: {issue}");
+        assert!(
+            matches!(&issue.remedy, Remedy::Safe(fix) if fix.contains("1")),
+            "the price was not stated: {issue}"
+        );
+        // Inspection is not repair: the same document read without applying
+        // keeps its lanes and still reports.
+        let mut untouched = Project::default();
+        untouched.channels[0].automation[0] =
+            project.channels[0].automation[0].clone();
+        untouched.channels[0].automation[0].push(AutomationLane::new(ParamAddr {
+            scope: EffectTarget::Channel(0),
+            owner: ParamOwner::Source,
+            param: mooloop_core::SAMPLER_PARAM_FILTER_CUTOFF,
+        }));
+        let looked = inspect_project(&untouched);
+        assert!(!looked.is_clean());
+        assert_eq!(untouched.channels[0].automation[0].len(), 9);
     }
 
     #[test]

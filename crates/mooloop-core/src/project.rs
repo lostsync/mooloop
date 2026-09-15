@@ -1072,7 +1072,16 @@ impl Project {
         }
         // A track that fed the removed one, or the removed one itself, may
         // have left the graph in a shape that no longer sorts.
-        self.buses = crate::sanitize_bank(&self.buses);
+        //
+        // The repairs are dropped here and not logged, which is deliberate
+        // rather than the omission it looks like: a removal only ever
+        // *removes* edges, so it cannot introduce a cycle, and the rescope
+        // above has already re-pointed or dropped everything that named the
+        // departed track. Anything this finds is a bug in `TrackEdit`, and
+        // the place that reports a repaired bank to the user is the load
+        // path, where the bank came from a file rather than from this
+        // program.
+        self.buses = crate::sanitize_bank(&self.buses).buses;
     }
 
     /// The audio edges this project's channels compile to, and the order

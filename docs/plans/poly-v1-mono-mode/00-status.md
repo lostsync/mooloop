@@ -1,6 +1,77 @@
 # Poly v1 mono mode — plan status
 
-Not started.
+## Step 01 landed 2026-09-15
+
+The v1 poly has a mono mode: a held-note stack, a note priority, and an
+envelope-trigger switch, on the three ids that were reserved for exactly this.
+`DeviceKind::MonoSynth` is now deletable — that migration is the next branch
+and is deliberately not this one.
+
+### The step file named the wrong enum, and the behaviour it described is right
+
+It asks for `SYNTH_PARAM_POLY_GLIDE_MODE` carrying `GlideMode`, and then
+describes what the parameter does: *"Retrigger the envelopes only when the
+stack was empty before the push... Under `Legato` with a note already down,
+change pitch and leave both envelopes running."* That is `EnvTrigger`, whose
+doc comment in `mlm1.rs` reads "Whether an overlapping note restarts the
+envelopes" — and `GlideMode` is something else entirely and says so: *"Both
+modes glide between overlapping notes and neither glides from silence. They
+differ only over a still-sounding release tail."*
+
+So id 18 is `SYNTH_PARAM_POLY_ENV_TRIGGER` and carries `EnvTrigger`. Shipping
+the file's names would have put a control labelled for glide in charge of
+envelopes, which is this codebase's recurring fault in its plainest form.
+
+**Glide is therefore fixed rather than switched.** Overlapping notes glide;
+a note landing on a release tail jumps. That is `GlideMode::Legato`, the
+ML-M1's own default, and one rule instead of a fourth parameter — which is
+the scope boundary doing its job: a second glide mode is ML-M1 identity
+rather than v1 competence.
+
+### What it cost, against what the step file expected
+
+Less. `voice_limit()` was the only place that needed to learn about mono mode:
+`apply_params_to_voices` retires the slots past it, `any_active` and
+`select_voice` only look inside it, and `render_range` hands it to `voice_pan`,
+which already answers centre at one. The step file's two separate instructions
+— deactivate voices above zero, and centre the spread — are both that one
+function.
+
+### The open question is answered, in the direction the step file assumed
+
+**Mono mode is its own toggle, not `Voices = 1`.** The deciding argument is
+not the control count: a pool of one voice and a monosynth are different
+instruments, and `Voices = 1` would have to mean one of them. It means the
+pool today, in every project already saved. So the mode is a mode, `Voices`
+greys out while it is on, and nothing that is already on disk changes meaning.
+
+### Verified
+
+Every line of the step file's Verify list, plus the one it did not ask for:
+
+- **Old projects are bit-identical.** Two renders of a three-note gesture,
+  one with the two mode fields at their *other* values, compared sample for
+  sample — so what is asserted is not that the defaults are inert but that
+  nothing outside `mono_mode` can reach the poly path at all. And the serde
+  half: a manifest with the three keys cut out of it loads to exactly
+  `PolySynthParams::default()`.
+- Legato holds the envelope, Retrig restarts it, and a fallback restarts it
+  in **neither** mode — in both directions, because releasing the newer note
+  and releasing the older one fail differently.
+- Three priorities pick three winners from one gesture.
+- A transport stop clears the stack, and so does leaving mono mode.
+- The gain calibration holds in mono mode:
+  `the_poly_in_mono_mode_still_hits_the_reference_level`.
+
+### Not done, and it is the acceptance test the next branch depends on
+
+The step file's last clause — that a v1 mono patch can be reproduced closely
+enough that migrating `MonoSynth` channels is mechanical — **has not been
+played**. The parameter sets line up on paper (the v1 mono's thirty ids are
+the poly's first thirty, by construction), but that is an argument and not a
+listen. `FOCUS.md`'s rule stands: listening is a step. Do it before opening
+the migration branch, and record the gap here if there is one.
+
 
 This plan records a decision Adam made on 2026-08-30, during the ML-M1
 restructure. It was captured as a consequence note inside
@@ -81,19 +152,17 @@ synth.
 
 ## Steps
 
-1. `01-mono-and-legato-toggles.md` — the parameters, the DSP, and the face.
+1. ~~`01-mono-and-legato-toggles.md` — the parameters, the DSP, and the face.~~
+   Landed 2026-09-15.
 
 Migration of existing `MonoSynth` channels onto the toggled poly, and the
 deletion of `DeviceKind::MonoSynth`, are deliberately **not** in this plan.
 They are a separate branch that this one unblocks, and they should not be
 attempted until the toggles have been played.
 
-## Open question for Adam
+## ~~Open question for Adam~~ — answered by the build, 2026-09-15
 
-**Does mono mode ship as its own toggle, or as `Voices = 1`?**
-
-The parameter already exists and already clamps to 1. Reusing it means no new
-id and no redundant control; against that, "Voices 1" and "Mono" are not quite
-the same claim — a mono synth's note behaviour is a mode, and a user looking
-for it will look for the word. Step 01 assumes a distinct toggle and explains
-the cost; overrule it there if the simpler reading is preferred.
+**Does mono mode ship as its own toggle, or as `Voices = 1`?** Its own toggle.
+See the status section at the top for why: `Voices = 1` already means a pool
+of one voice in every saved project, and it cannot start meaning something
+else.
