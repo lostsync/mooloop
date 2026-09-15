@@ -1504,6 +1504,90 @@ model be the only writer.
 
 **The same silence, from two different places.** `archive/MIXER_PLAN.md` had specified solo as an AFL-style monitor tap since the mixer's first pass, and the console plan closed without it on the grounds that a monitor tap is a second output path rather than a control — correctly, as far as it went. Asked to choose, Adam picked solo **in place**, which needs no second path at all, because the silence happens exactly where mute already happens. A feature can be blocked by its specification rather than by its difficulty, and the way to find out is to ask which of the thing's properties are actually wanted.
 
+## Sep 14 (the loose ends) — the note is a hypothesis, not a patch
+
+A pass down `LOOSE_ENDS.md` from the top, asked for open-endedly and with one
+instruction attached: do not hesitate because a fix would change how an
+existing song sounds. Fifteen entries closed or narrowed. The interesting part
+is not the list — the commits have that — it is what happened on the way.
+
+**Five entries had stopped being true, and the split is the lesson.** Three
+had been *fixed* by work that never came back to delete the row: the preamp
+grew the per-band spectrum display that the entry beside it had designed,
+`Project` grew `pattern_meta`, and `BUFFER_ENGINE.md` grew the caveat the
+entry said it lacked. Those are recoverable — open the file and the claim
+falls over. The other two were never about the tree at all: a README
+screenshot described as predating effects, which had been retaken at 0.1.3 and
+shows ML-P8 and the modulation shelf, and a count of unmerged spikes that had
+moved. **A reader has no way to doubt those.** So the preamble now says both
+failure modes out loud, and repeats the scope rule as an instruction to the
+person *making* a row false rather than as a note about the file.
+
+**Four of the entries were wrong about their own fix.** Not wrong that there
+was a defect — every one was real — wrong about what closing it involved,
+which is what a note written at handover time is always at risk of.
+
+- "Six dB readouts still round for themselves" was ten, and its premise —
+  "`format-db` now covers every readout that is a *gain*" — was false. The
+  four it missed were gains: the preamp's Drive and Output had simply never
+  been given the shared formatter, and ML-P8's two level fields hand-rolled
+  their own `-inf` beside it.
+- The container-depth entry wanted `integrity.rs` to report a deep chain "the
+  way an over-long one is", as three documents had claimed for a year. It
+  cannot, and the reason is structural: **`Doctor` has two severities.**
+  `correct` repairs; everything else sets `repaired: false`, which
+  `is_blocking` reads as "do not open this document". Reporting a deep chain
+  would stop a song opening that opens today. There is no safe repair to
+  reach for either — unwrapping a box past the cap looks free, since it
+  contributes no blend, but its *bypass* still works, so removing it would
+  unmute whatever it was muting. The gesture half landed; the format half is
+  now written down as a missing third severity rather than a missing check.
+- "The master is metered twice" offered dropping `EngineEvent::Metering` as
+  the option that "removes a per-block ring push" for free. It is not free:
+  `engine-selftest` is built on counting that event, and it is the only thing
+  that reports whether the *callback* produced audio — a held atomic cell says
+  the loudest it ever was, which cannot tell silence from a callback that
+  never ran. Both faces share one `MeterBallistics` pair now; the push stays,
+  and is a diagnostic's rather than a second meter's.
+- The sampler-arrows entry predicted that `can_previous_sample` and
+  `can_next_sample` would need recomputing on save. With the browse origin
+  held still they do not: the folder they were computed against has not moved.
+
+**Two mutation checks corrected me rather than the code.** The automation
+restore has a guard against writing a destination that is *still* automated
+after a pattern switch, and the comment claimed the unguarded version lost a
+race in the event list. Removing the guard showed otherwise: the knob write
+lands at offset 0 *in front of* the curve's own tick at offset 0, so it is
+inaudible and merely untrue. And the container-depth tests were written
+against a rack one level shallower than the cap, where the wrap they asserted
+was refused is in fact legal — the assertion passed for the wrong reason until
+the shape was worked out on paper.
+
+**What the unipolar fix costs existing songs, stated plainly.** `offset_for`
+lifted a unipolar route with `(v + 1) * 0.5`, which is the source's span
+written as a literal, and the LFO is the one module that does not fill it —
+`depth` scales an already-signed waveform. So an LFO at half depth rested a
+quarter of the route's depth above the base, and at depth zero it parked the
+destination half a depth up while visibly not moving: "the modulator is off"
+and "the destination is offset" were the same knob position. Any song with a
+unipolar route from an LFO below full depth had a constant offset it did not
+ask for and now does not. A route at depth 1 is untouched.
+
+Two things were made *escapable* rather than correct, which is a category
+worth having. A playlist clip buried by a pattern-length change still plays
+twice — that is what layering means here, and `automation_lane_at` says the
+same thing about lanes one layer down — but it could not be reached by any
+gesture, because `placement_covering` took the first match on a list sorted by
+start tick. It takes the latest-starting cover now, the rule already written
+down for automation. And a renamed song used to be a brick: `safe_embedded_path`
+required the stored path to begin with *this song's exact file name*, so
+renaming the pair the only sane way, in a file manager together, made the song
+refuse to open at all. The name equality was never what made the path safe —
+the `Component::Normal` filter is — so the shape is checked and the sidecar's
+name substituted, and the song opens with its samples rather than opening
+silent.
+
+
 ## Open threads
 
 Refreshed 2026-09-02, with the September documentation audit's threads merged in on 2026-09-04 and Adam's 2026-09-05 list merged in after that. Four of the six threads listed here in August are closed: modulation drives things now, the buffer device exists, undo and clipboard are real, and the convolution reverb that needed an IR loader was replaced outright by an FDN hall — so `StereoIr` is no longer the boundary anything is waiting on.
