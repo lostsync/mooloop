@@ -699,6 +699,16 @@ impl EngineHandle {
     /// level its detector reached and the deepest gain reduction it applied
     /// over the blocks since the last read, as `(detector level, dB)`.
     /// Stages that do not reduce gain read `(0.0, 0.0)`.
+    /// Empty every held cell of one chain's device meters.
+    ///
+    /// For the pump to call on the target it is *leaving*: a device meter is
+    /// a `fetch_max` hold and only a read empties one, so a chain nobody is
+    /// looking at keeps its loudest block forever and shows it for one tick
+    /// the moment the rack is turned back to it.
+    pub fn clear_device_meters(&self, target: usize) {
+        self.device_meters.clear_target(target);
+    }
+
     pub fn take_device_dynamics(&self, target: usize, stage: usize) -> (f32, f32) {
         self.device_meters.take_dynamics(target, stage)
     }

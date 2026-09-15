@@ -508,21 +508,24 @@ marker or the directory under `presets/` is deleted by hand.
 
 ## Meter and time
 
-**Device meters are drained only for the chain currently on screen.** The
-pump takes `take_device_peak`/`take_device_dynamics` for one `device_target`,
-and every other channel's and bus's stage cells are `fetch_max` holds that
-nothing ever empties -- so switching the rack to a channel last viewed ten
-minutes ago draws that ten-minute maximum for one 8 ms tick before the next
-read clears it. Two lines in the bus loop used to be an attempt at this and
-could never have worked: both `publish` and `publish_input` are `fetch_max`,
-so writing zero cannot lower a cell. They are gone (2026-09-13) along with the
-comment claiming they cleared the meter. Not small because draining every
-target every tick is `(MAX_CHANNELS + MAX_BUSES) x (MAX_EFFECTS+1) x 6` atomic
-swaps at 125 Hz, which is the cost the spectrum pool exists to avoid in the
-analogous case. Options: drain the *previous* target once when `device_target`
-changes, which needs one `last_device_target` local in the pump and is
-correct; or drain the whole array on a slow secondary timer; or accept the
-one-frame flash and write it down. Found 2026-09-13.
+**Device meters are drained only for the chain currently on screen.** Fixed
+2026-09-14 by the first of the three options this entry named, which it
+already called the correct one: one `last_device_target` local in the pump,
+and `DeviceMeters::clear_target` emptying whatever the rack has just moved
+off. Before that, every other channel's and bus's stage cells were `fetch_max`
+holds that nothing ever emptied, so switching the rack to a channel last
+viewed ten minutes ago drew that ten-minute maximum for one 8 ms tick before
+the next read cleared it.
+
+What is *not* done is the same thing for the two cells the rack does not read
+at all. Nothing here drains a target the rack has never been pointed at, so
+the first tick after opening a chain for the first time still shows whatever
+that chain's loudest block was -- which is a shorter window than before and
+the same shape. Draining every target every tick is
+`(MAX_CHANNELS + MAX_BUSES) x (MAX_EFFECTS+1) x 6` atomic swaps at 125 Hz,
+which is the cost the spectrum pool exists to avoid in the analogous case; a
+slow secondary timer is the option left on the table. Found 2026-09-13,
+fixed for the reachable case 2026-09-14.
 
 **A bus clip latch is cleared by any project edit, which is broader than the
 problem it fixes.** Removing a track shifts every later one down an index and

@@ -318,6 +318,32 @@ impl DeviceMeters {
             .unwrap_or((0.0, 0.0))
     }
 
+    /// Empty every cell of one target's stages in one pass.
+    ///
+    /// **A cell nobody reads is a `fetch_max` hold, and nothing else empties
+    /// it.** The pump drains `take`/`take_dynamics` for the one chain the rack
+    /// is showing, so every other channel's and bus's stage cells keep
+    /// whatever their loudest block ever was -- and switching the rack to a
+    /// channel last viewed ten minutes ago drew that ten-minute maximum for
+    /// one 8 ms tick before the next read cleared it. A transient nobody can
+    /// hear, on a meter that has been dark since it was last looked at.
+    ///
+    /// The whole-array alternative is what this exists to avoid: draining
+    /// every target every tick is `TARGETS * STAGES * VALUES_PER_STAGE`
+    /// swaps at 125 Hz, which is the cost the spectrum pool exists to dodge
+    /// in the analogous case. Draining the *outgoing* target once, when the
+    /// rack moves, is `STAGES * VALUES_PER_STAGE` swaps on a gesture a user
+    /// makes by hand.
+    pub fn clear_target(&self, target: usize) {
+        let Some(base) = Self::base(target, 0) else {
+            return;
+        };
+        let end = base + Self::STAGES * Self::VALUES_PER_STAGE;
+        for cell in &self.cells[base..end] {
+            cell.store(0, Ordering::Relaxed);
+        }
+    }
+
     pub fn take(&self, target: usize, stage: usize) -> ((f32, f32), (f32, f32)) {
         let read = |index: usize| f32::from_bits(self.cells[index].swap(0, Ordering::Relaxed));
         Self::base(target, stage)
@@ -693,5 +719,77 @@ mod tests {
         let meters = PlayheadMeters::new();
         meters.publish(MAX_CHANNELS + 5, &[0.5; VOICES_PER_CHANNEL]);
         assert!(meters.read(MAX_CHANNELS + 5).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod clear_target_tests {
+    use super::*;
+
+    /// **A chain nobody is looking at does not keep its loudest block.**
+    ///
+    /// Device meter cells are `fetch_max` holds and only a read empties one.
+    /// The pump drains the one chain the rack is showing, so every other
+    /// target held whatever its loudest block ever was -- and switching the
+    /// rack to a channel last viewed ten minutes ago drew that ten-minute
+    /// maximum for one 8 ms tick before the next read cleared it.
+    ///
+    /// Both halves are asserted, because the peaks and the dynamics live in
+    /// the same stage and are read by two different methods: an earlier
+    /// attempt at this in the bus loop wrote zeros through `publish`, which
+    /// is a `fetch_max` and so cannot lower a cell at all.
+    #[test]
+    fn clearing_a_target_empties_its_peaks_and_its_dynamics() {
+        let meters = DeviceMeters::new();
+        meters.publish_input(3, 0, 0.9, 0.8);
+        meters.publish_output(3, 1, 0.7, 0.6);
+        meters.publish_dynamics(
+            3,
+            1,
+            DynamicsFrame {
+                detector_db: -6.0,
+                reduction_db: -4.0,
+            },
+        );
+        // A different target, to prove the clear is not a reset.
+        meters.publish_output(4, 1, 0.25, 0.25);
+
+        meters.clear_target(3);
+
+        assert_eq!(meters.take(3, 0), ((0.0, 0.0), (0.0, 0.0)));
+        assert_eq!(meters.take(3, 1), ((0.0, 0.0), (0.0, 0.0)));
+        assert_eq!(meters.take_dynamics(3, 1), (0.0, 0.0));
+        assert_eq!(
+            meters.take(4, 1),
+            ((0.0, 0.0), (0.25, 0.25)),
+            "clearing one target emptied another"
+        );
+    }
+
+    /// The last stage of a target is inside the clear and the first stage of
+    /// the next target is outside it. Written because the range is computed
+    /// from `STAGES * VALUES_PER_STAGE` and an off-by-one there would be
+    /// invisible in the test above.
+    #[test]
+    fn the_clear_covers_exactly_one_targets_stages() {
+        let meters = DeviceMeters::new();
+        let last = MAX_EFFECTS_PER_CHANNEL;
+        meters.publish_output(3, last, 0.9, 0.9);
+        meters.publish_output(4, 0, 0.9, 0.9);
+
+        meters.clear_target(3);
+
+        assert_eq!(meters.take(3, last), ((0.0, 0.0), (0.0, 0.0)));
+        assert_eq!(meters.take(4, 0), ((0.0, 0.0), (0.9, 0.9)));
+    }
+
+    /// An out-of-range target is ignored rather than clearing the wrong one
+    /// or panicking, matching every other method here.
+    #[test]
+    fn an_out_of_range_target_clears_nothing() {
+        let meters = DeviceMeters::new();
+        meters.publish_output(0, 0, 0.5, 0.5);
+        meters.clear_target(MAX_CHANNELS + MAX_BUSES + 7);
+        assert_eq!(meters.take(0, 0), ((0.0, 0.0), (0.5, 0.5)));
     }
 }

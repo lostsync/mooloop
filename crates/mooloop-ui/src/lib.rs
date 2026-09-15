@@ -11375,6 +11375,12 @@ impl AppUi {
         let mut reported_time_shared = false;
         let autodrive_verbose = std::env::var_os("MOOLOOP_AUTODRIVE_VERBOSE").is_some();
         let mut playhead_was_nonempty = false;
+        // The device-meter target the last tick drained, so the one it is
+        // *leaving* can be emptied. A device meter is a `fetch_max` hold and
+        // only a read empties one, so a chain nobody is looking at keeps its
+        // loudest block forever and shows it for one tick the moment the rack
+        // is turned back to it.
+        let mut last_device_target: Option<usize> = None;
         pump.start(
             TimerMode::Repeated,
             std::time::Duration::from_millis(PUMP_INTERVAL_MS),
@@ -12319,6 +12325,17 @@ impl AppUi {
                 } else {
                     selected_channel
                 };
+                // Empty whatever the rack has just moved off, once, rather
+                // than draining every target every tick -- which is
+                // `(MAX_CHANNELS + MAX_BUSES) x (MAX_EFFECTS + 1) x 6` atomic
+                // swaps at 125 Hz, the cost the spectrum pool exists to
+                // avoid in the analogous case.
+                if last_device_target != Some(device_target) {
+                    if let Some(left) = last_device_target {
+                        handle.clear_device_meters(left);
+                    }
+                    last_device_target = Some(device_target);
+                }
                 let ((bus_or_source_in_l, bus_or_source_in_r), (source_out_l, source_out_r)) =
                     handle.take_device_peak(device_target, 0);
                 if showing_device_rack && !editing_bus {
