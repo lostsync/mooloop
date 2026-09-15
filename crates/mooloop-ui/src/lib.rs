@@ -90,7 +90,7 @@ use mooloop_session::dialogs::{
 use mooloop_session::document::{
     log_asset_warnings, log_repairs, quarantine_song, repair_suffix, resolve_document,
     warning_suffix, DocumentProblem,
-    DocumentResult, LoadTarget, ResolvedDocument,
+    DocumentResult, LoadTarget, PresetNaming, ResolvedDocument,
 };
 use mooloop_session::engine::{
     publish_channel_audio_to, AudioAction, AudioActionSender, ChannelAudio, ChannelAudioSender,
@@ -5143,24 +5143,26 @@ impl AppUi {
                     category: category.trim().to_string(),
                     tags: Vec::new(),
                 };
-                // The device now wears the name it was saved under, the
-                // same way it wears the name of a preset loaded into it.
-                match source.target {
-                    PresetSaveTarget::Effect { target, device } => {
-                        let mut state = st.borrow_mut();
-                        state.session.set_effect_preset_name(target, device, &name);
-                        state.sync_effects();
-                    }
-                    PresetSaveTarget::Generator => {
-                        let mut state = st.borrow_mut();
-                        let channel = state.session.selected as u8;
-                        state.session.set_source_preset_name(channel, &name);
-                        window.set_source_preset_name(name.as_str().into());
-                    }
+                // Which device will wear the name it was saved under, the
+                // same way it wears the name of a preset loaded into it --
+                // *resolved* here and *applied* when the write comes back, so
+                // a save that fails leaves the rack row saying what is
+                // actually on disk. The channel has to be read here, while
+                // the dialog's own selection is still the current one.
+                let named = match source.target {
+                    PresetSaveTarget::Effect { target, device } => Some(PresetNaming::Effect {
+                        target,
+                        device,
+                        name: name.clone(),
+                    }),
+                    PresetSaveTarget::Generator => Some(PresetNaming::Source {
+                        channel: st.borrow().session.selected as u8,
+                        name: name.clone(),
+                    }),
                     // A channel preset spans the generator and the mixer, so
                     // no one device is the thing it names.
-                    PresetSaveTarget::Channel => {}
-                }
+                    PresetSaveTarget::Channel => None,
+                };
                 let file_stem = mooloop_project::sanitize_preset_name(&name);
 
                 let (dir, extension, label) = match source.target {
@@ -5244,7 +5246,11 @@ impl AppUi {
                         },
                     };
                     let result = result
-                        .map(|report| DocumentResult::SavedPreset { label, report })
+                        .map(|report| DocumentResult::SavedPreset {
+                            label,
+                            report,
+                            named,
+                        })
                         .unwrap_or_else(|error| DocumentResult::Failed {
                             action: "save this preset",
                             problem: error.into(),
@@ -11502,7 +11508,30 @@ impl AppUi {
                                 .into(),
                             );
                         }
-                        DocumentResult::SavedPreset { label, report } => {
+                        DocumentResult::SavedPreset {
+                            label,
+                            report,
+                            named,
+                        } => {
+                            // Now, and not on confirm: the file is on disk.
+                            match named {
+                                Some(PresetNaming::Effect {
+                                    target,
+                                    device,
+                                    name,
+                                }) => {
+                                    let mut state = st.borrow_mut();
+                                    state.session.set_effect_preset_name(target, device, &name);
+                                    state.sync_effects();
+                                }
+                                Some(PresetNaming::Source { channel, name }) => {
+                                    st.borrow_mut()
+                                        .session
+                                        .set_source_preset_name(channel, &name);
+                                    window.set_source_preset_name(name.as_str().into());
+                                }
+                                None => {}
+                            }
                             log_info!("project", "{label}");
                             log_repairs(label, &report.repairs);
                             log_asset_warnings(label, &report.warnings);

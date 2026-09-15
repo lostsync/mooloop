@@ -102,6 +102,34 @@ pub fn quarantine_song(
     }
 }
 
+/// A device that should wear the name a preset was saved under: resolved when
+/// the dialog is confirmed, applied when the write comes back.
+///
+/// **The name used to appear before the save was known to have worked.**
+/// `set_effect_preset_name` and `set_source_preset_name` ran synchronously on
+/// confirm while the write happened on a worker thread, and a write can fail
+/// -- a name too long for the filesystem, a permission, a full disk. The error
+/// dialog opened and the rack row went on showing the name of a preset that
+/// was never written.
+///
+/// Carrying it here rather than re-deriving it in the result handler is what
+/// makes the *generator* case right as well: the channel is the one that was
+/// selected when the dialog was confirmed, not whichever one is selected when
+/// the disk finishes. The effect case is already safe either way, because
+/// `DeviceId` is durable -- a device removed while the write was in flight is
+/// simply not found, and nothing is renamed.
+pub enum PresetNaming {
+    Effect {
+        target: mooloop_core::EffectTarget,
+        device: mooloop_core::DeviceId,
+        name: String,
+    },
+    Source {
+        channel: u8,
+        name: String,
+    },
+}
+
 pub enum DocumentResult {
     Cancelled,
     NewSong(Project),
@@ -119,6 +147,9 @@ pub enum DocumentResult {
     SavedPreset {
         label: &'static str,
         report: SaveReport,
+        /// The device that should wear the name, applied here rather than on
+        /// confirm. See [`PresetNaming`].
+        named: Option<PresetNaming>,
     },
     /// `action` completes "Could not ...", e.g. `save this song`.
     Failed {

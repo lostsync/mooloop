@@ -84,14 +84,6 @@ save's write-back must not overwrite -- rather than a change to what is
 stored, because only `project_snapshot` needs the bundle-relative form. Found
 2026-09-13.
 
-**A preset's name appears on the device before the save is known to have
-worked.** `set_effect_preset_name`/`set_source_preset_name` run synchronously
-on confirm, while the write happens on a worker thread and can fail -- a
-too-long name, a permission, a full disk. The error dialog opens and the rack
-row goes on showing the name of a preset that was never written. The fix is to
-move both calls into the `SavedPreset` arm, which means carrying the name on
-that variant. Found 2026-09-13.
-
 **The oscillator Level knob works in dB; its descriptor is linear 0–1.**
 `device-oscillator.slint:95` drives the knob through `GainMath.linear-to-db`,
 while `generator.rs:75`'s `unit()` helper declares the parameter as a linear

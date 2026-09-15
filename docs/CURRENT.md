@@ -645,10 +645,13 @@ land on its own when it starts to matter:
   rack -- the same two buttons on the generator and on every effect row. The
   load button offers only the presets saved for that device's kind, and is
   disabled when there are none. The device's header then names the preset it
-  came from, and keeps saying so after its knobs are moved. A label is dropped
-  when the device wearing it goes: changing the channel's source, loading a
-  channel preset over it, or opening a song or kit, which replaces the whole
-  rack.
+  came from, and keeps saying so after its knobs are moved. **Saving one names
+  the device only once the write has succeeded** -- a preset that cannot be
+  written, because the name is too long for the filesystem or the disk is
+  full, raises its dialog and leaves the rack row saying what is actually on
+  disk. A label is dropped when the device wearing it goes: changing the
+  channel's source, loading a channel preset over it, or opening a song or
+  kit, which replaces the whole rack.
 - File > New Song (Ctrl+N) starts a fresh starter song, asking first when the
   current one has unsaved changes, as Open Song does. Every file and
   confirmation dialog is a separate program: `zenity` on Linux, and on macOS
