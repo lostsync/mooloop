@@ -645,7 +645,19 @@ impl ControlMapState {
     ) -> Vec<(usize, ControlOutcome)> {
         let mut outcomes = Vec::new();
         for (index, binding) in map.bindings.iter().enumerate() {
-            let port = self.ports.get(index).copied().unwrap_or_default();
+            // A binding this state has not resolved does nothing.
+            //
+            // It used to fall back to `MidiPortMatch::default()`, which is
+            // `Any` -- so a state that had not been resolved against the port
+            // list made every binding *promiscuous*, listening to every
+            // keyboard, which is the one thing `Missing` exists to prevent.
+            // That is exactly the state a project load leaves behind until
+            // somebody remembers to call `Session::resolve_control_map`, and
+            // "forgot to resolve" should be a binding that does nothing
+            // rather than a binding that does everything.
+            let Some(port) = self.ports.get(index).copied() else {
+                continue;
+            };
             let Some(value) = binding.source.read(message, port) else {
                 continue;
             };
@@ -676,8 +688,11 @@ impl ControlMapState {
             .iter()
             .enumerate()
             .filter(|(index, binding)| {
-                let port = self.ports.get(*index).copied().unwrap_or_default();
-                binding.source.read(message, port).is_some()
+                // Unresolved is inert here too; see `apply`.
+                self.ports
+                    .get(*index)
+                    .copied()
+                    .is_some_and(|port| binding.source.read(message, port).is_some())
             })
             .map(|(index, _)| index)
             .collect()
@@ -807,6 +822,34 @@ mod tests {
                 name: "Faderfox".to_owned(),
             },
         ]
+    }
+
+    /// A map that has not been resolved against the port list does nothing.
+    ///
+    /// The fallback used to be `MidiPortMatch::default()`, which is `Any`, so
+    /// an unresolved state was not inert -- it was *promiscuous*, and every
+    /// binding that names one keyboard listened to all of them. A project
+    /// load leaves exactly that state behind until the caller resolves it.
+    #[test]
+    fn an_unresolved_map_hears_nothing() {
+        let mut map = ControlMap::default();
+        map.bind(ControlBinding::new(
+            ControlSource::Cc {
+                port: MidiPortFilter::Named("Faderfox".to_owned()),
+                channel: MidiChannelFilter::Omni,
+                controller: 7,
+            },
+            ControlTarget::Transport(TransportControl::Play),
+        ));
+        let mut state = ControlMapState::default();
+        let message = cc(1, 0, 7, 127);
+
+        assert!(state.apply(&map, &message, |_| 0.0).is_empty());
+        assert!(state.listening(&map, &message).is_empty());
+
+        // Resolved, the same message reaches it.
+        state.resolve(&map, &ports());
+        assert_eq!(state.listening(&map, &message), vec![0]);
     }
 
     /// Inverting a binding points its range the other way and keeps the span

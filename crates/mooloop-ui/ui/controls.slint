@@ -5,6 +5,24 @@ import { GainMath } from "gain.slint";
 export enum ValueScale { linear, logarithmic }
 export enum AudioOrientation { horizontal, vertical }
 
+// Whether a MIDI learn gesture is waiting for a control to be named.
+//
+// A global rather than a property threaded down through the device faces,
+// which is what `modulation-armed` is. Arming modulation is per-destination —
+// a source can only reach the channel it lives on, and a face has to be told
+// which of its parameters accept it — whereas learn reaches every parameter
+// there is, so there is nothing per-control to say. Threading a second
+// boolean through fifty faces to say the same thing everywhere would have
+// been fifty call sites in `main.slint` and an eight-minute build for each
+// one that was missed.
+export global ControlAssign {
+    // While this is on, a press on a parameter control names it as the thing
+    // to bind and does not move it. The control reports the press through the
+    // callback modulation assignment already uses, because that callback is
+    // the one place in every face that knows which parameter was touched.
+    in-out property <bool> midi-learn;
+}
+
 // Interaction-only graph handle. Consumers bind its position to their plotted
 // transfer function and map the relative pixel deltas into their parameters.
 export component DraggablePoint inherits TouchArea {
@@ -440,6 +458,11 @@ component KnobFace inherits Rectangle {
     in property <float> modulation-offset;
     // How many routes land here, drawn as dots in the track's bottom gap.
     in property <int> modulation-route-count;
+    // A MIDI learn gesture is armed and this control can be named by it.
+    // Drawn as a ring around the whole face rather than through the value arc
+    // the way modulation arming is: learn does not change what the knob is
+    // showing, only what pressing it means.
+    in property <bool> learn-armed;
 
     // The arc sweeps 270 degrees, from 7:30 round to 4:30, matching the
     // pointer dot below. Geometry is expressed in a 100x100 viewbox so a
@@ -608,6 +631,16 @@ component KnobFace inherits Rectangle {
         background: Theme.warning;
     }
 
+    // The learn ring. Outside the track, so it reads as something applied to
+    // the control rather than as a value the control is carrying.
+    if root.learn-armed : Rectangle {
+        width: root.diameter;
+        height: root.diameter;
+        border-radius: self.width / 2;
+        border-width: 2px;
+        border-color: root.hovered ? Theme.accent : Theme.focus;
+    }
+
     @children
 }
 
@@ -683,7 +716,14 @@ export component ParameterKnob inherits Rectangle {
     private property <bool> fine-drag;
     private property <bool> modulation-edited;
     private property <float> normalized: root.normalized-value(root.value);
-    private property <bool> modulation-active: root.modulation-armed && root.modulation-allowed;
+    // Learn takes the gesture off modulation while it is armed: a drag in
+    // learn mode must not quietly retune a route on the way past.
+    private property <bool> modulation-active:
+        !ControlAssign.midi-learn && root.modulation-armed && root.modulation-allowed;
+    // Either kind of assignment. Both report through `modulation-edit-started`,
+    // which is the only callback a device face carries that knows which
+    // parameter was pressed; Rust reads its own arm state to tell them apart.
+    private property <bool> assign-active: root.modulation-active || ControlAssign.midi-learn;
 
     width: root.show-label ? 56px : root.diameter;
     height: root.show-label || root.show-value-text ? 80px : root.diameter;
@@ -710,6 +750,10 @@ export component ParameterKnob inherits Rectangle {
     }
 
     function set-normalized(n: float) {
+        // Naming a control is not moving it. A learn drag writes nothing --
+        // neither the base value nor a route depth -- so the parameter is
+        // still where it was when the mapping takes effect.
+        if (ControlAssign.midi-learn) { return; }
         if (root.modulation-active) {
             root.set-modulation-depth(root.modulation-depth + n - root.normalized);
             return;
@@ -726,6 +770,7 @@ export component ParameterKnob inherits Rectangle {
     }
 
     function set-modulation-depth(depth: float) {
+        if (ControlAssign.midi-learn) { return; }
         let next = clamp(depth, -1, 1);
         if (next != root.modulation-depth) {
             if (!root.controlled) { root.modulation-depth = next; }
@@ -765,6 +810,7 @@ export component ParameterKnob inherits Rectangle {
                 modulation-depth: root.modulation-depth;
                 modulation-offset: root.modulation-offset;
                 modulation-route-count: root.modulation-route-count;
+                learn-armed: ControlAssign.midi-learn && root.enabled;
                 focused: keyboard.has-focus;
                 hovered: knob-touch.has-hover;
             }
@@ -785,7 +831,7 @@ export component ParameterKnob inherits Rectangle {
     // drag, reset, and wheel interaction instead of becoming dead pixels.
     knob-touch := TouchArea {
         enabled: root.enabled;
-        mouse-cursor: root.modulation-active ? crosshair
+        mouse-cursor: root.assign-active ? crosshair
             : root.horizontal ? ew-resize : ns-resize;
         changed has-hover => {
             if (self.has-hover) { StatusHint.show(root.tooltip); }
@@ -798,7 +844,7 @@ export component ParameterKnob inherits Rectangle {
                 root.pressed-modulation-depth = root.modulation-depth;
                 root.modulation-edited = false;
                 root.fine-drag = e.modifiers.control || e.modifiers.shift;
-                if (root.modulation-active) { root.modulation-edit-started(); }
+                if (root.assign-active) { root.modulation-edit-started(); }
             } else if (e.kind == PointerEventKind.move && self.pressed) {
                 // Measured from the press rather than from the last event, so
                 // a control whose own position follows its value cannot feed
@@ -816,6 +862,9 @@ export component ParameterKnob inherits Rectangle {
             }
         }
         double-clicked => {
+            // The second click of a learn press is still the same gesture,
+            // not a request to reset the parameter it just named.
+            if (ControlAssign.midi-learn) { return; }
             if (root.modulation-active) {
                 root.modulation-edit-started();
                 root.modulation-edited = false;
@@ -1609,7 +1658,11 @@ export component MiniKnob inherits Rectangle {
     private property <bool> fine-drag;
     private property <bool> modulation-edited;
     private property <float> normalized: root.normalized-value(root.value);
-    private property <bool> modulation-active: root.modulation-armed && root.modulation-allowed;
+    // See `ParameterKnob`: learn takes the gesture, and both kinds of
+    // assignment report through the same callback.
+    private property <bool> modulation-active:
+        !ControlAssign.midi-learn && root.modulation-armed && root.modulation-allowed;
+    private property <bool> assign-active: root.modulation-active || ControlAssign.midi-learn;
 
     width: root.diameter;
     height: root.diameter;
@@ -1636,6 +1689,7 @@ export component MiniKnob inherits Rectangle {
     }
 
     function set-normalized(n: float) {
+        if (ControlAssign.midi-learn) { return; }
         if (root.modulation-active) {
             root.set-modulation-depth(root.modulation-depth + n - root.normalized);
             return;
@@ -1652,6 +1706,7 @@ export component MiniKnob inherits Rectangle {
     }
 
     function set-modulation-depth(depth: float) {
+        if (ControlAssign.midi-learn) { return; }
         let next = clamp(depth, -1, 1);
         if (next != root.modulation-depth) {
             if (!root.controlled) { root.modulation-depth = next; }
@@ -1670,12 +1725,13 @@ export component MiniKnob inherits Rectangle {
         modulation-depth: root.modulation-depth;
         modulation-offset: root.modulation-offset;
         modulation-route-count: root.modulation-route-count;
+        learn-armed: ControlAssign.midi-learn && root.enabled;
         focused: mini-keyboard.has-focus;
         hovered: mini-touch.has-hover;
 
         mini-touch := TouchArea {
             enabled: root.enabled;
-            mouse-cursor: root.modulation-active ? crosshair : ns-resize;
+            mouse-cursor: root.assign-active ? crosshair : ns-resize;
             changed has-hover => {
                 if (self.has-hover) { StatusHint.show(root.hint); }
                 else { StatusHint.clear(root.hint); }
@@ -1687,7 +1743,7 @@ export component MiniKnob inherits Rectangle {
                     root.pressed-modulation-depth = root.modulation-depth;
                     root.modulation-edited = false;
                     root.fine-drag = e.modifiers.control || e.modifiers.shift;
-                    if (root.modulation-active) { root.modulation-edit-started(); }
+                    if (root.assign-active) { root.modulation-edit-started(); }
                     else { root.edit-started(); }
                 } else if (e.kind == PointerEventKind.move && self.pressed) {
                     if (root.modulation-active) {
@@ -1698,7 +1754,10 @@ export component MiniKnob inherits Rectangle {
                             + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : root.travel));
                     }
                 } else if (e.kind == PointerEventKind.up) {
-                    if (root.modulation-active) {
+                    // `modulation-edited` is false through a learn press, so
+                    // this closes nothing: naming a control is not an edit,
+                    // and it must not open an undo step either.
+                    if (root.assign-active) {
                         if (root.modulation-edited) { root.modulation-edit-finished(); }
                     } else {
                         root.edit-finished();
@@ -1706,6 +1765,7 @@ export component MiniKnob inherits Rectangle {
                 }
             }
             double-clicked => {
+                if (ControlAssign.midi-learn) { return; }
                 if (root.modulation-active) {
                     root.modulation-edit-started();
                     root.modulation-edited = false;
@@ -1720,14 +1780,16 @@ export component MiniKnob inherits Rectangle {
                 }
             }
             scroll-event(e) => {
-                if (root.modulation-active) { root.modulation-edit-started(); root.modulation-edited = false; }
-                else { root.edit-started(); }
+                if (root.assign-active) {
+                    if (root.modulation-active) { root.modulation-edit-started(); }
+                    root.modulation-edited = false;
+                } else { root.edit-started(); }
                 // Four times the drag's travel, which keeps a wheel notch
                 // worth about the same fraction of the range on a knob that
                 // has shortened its throw as on one that has not.
                 root.set-normalized(root.normalized
                     - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : root.travel * 4));
-                if (root.modulation-active) {
+                if (root.assign-active) {
                     if (root.modulation-edited) { root.modulation-edit-finished(); }
                 } else {
                     root.edit-finished();
@@ -1742,22 +1804,26 @@ export component MiniKnob inherits Rectangle {
         focus-on-click: false;
         key-pressed(e) => {
             if (e.text == Key.UpArrow || e.text == Key.RightArrow) {
-                if (root.modulation-active) { root.modulation-edit-started(); root.modulation-edited = false; }
-                else { root.edit-started(); }
+                if (root.assign-active) {
+                    if (root.modulation-active) { root.modulation-edit-started(); }
+                    root.modulation-edited = false;
+                } else { root.edit-started(); }
                 root.set-normalized(root.normalized
                     + ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01));
-                if (root.modulation-active) {
+                if (root.assign-active) {
                     if (root.modulation-edited) { root.modulation-edit-finished(); }
                 } else {
                     root.edit-finished();
                 }
                 accept
             } else if (e.text == Key.DownArrow || e.text == Key.LeftArrow) {
-                if (root.modulation-active) { root.modulation-edit-started(); root.modulation-edited = false; }
-                else { root.edit-started(); }
+                if (root.assign-active) {
+                    if (root.modulation-active) { root.modulation-edit-started(); }
+                    root.modulation-edited = false;
+                } else { root.edit-started(); }
                 root.set-normalized(root.normalized
                     - ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01));
-                if (root.modulation-active) {
+                if (root.assign-active) {
                     if (root.modulation-edited) { root.modulation-edit-finished(); }
                 } else {
                     root.edit-finished();

@@ -1,7 +1,8 @@
 # Control surfaces
 
 Status: the design behind `mooloop-core::control`, written 2026-09-15 with
-steps 01–03 of `docs/plans/midi-control/` built and the interface not.
+steps 01–03 of `docs/plans/midi-control/` built and the interface not, and
+brought up to date the same day when step 04 landed.
 
 `MODULATION.md` owns parameter addressing and the modulator rack. This
 document owns how something *outside* mooloop moves something inside it — a
@@ -85,7 +86,33 @@ one, for exactly that reason.
   it. One physical control drives one thing.
 - **A learn gesture does not hand the knob's position to the parameter.** It
   binds; the knob still has to catch the value. Otherwise mapping a knob
-  somebody left at zero onto a centred pan slams it hard left.
+  somebody left at zero onto a centred pan slams it hard left. The on-screen
+  half of the same rule is that *pressing* a control to name it does not move
+  it either: the whole gesture writes nothing, and the mapping lands on the
+  value that was there before the press.
+- **A learn gesture binds the port it heard only if asked to**, and the
+  default is not to. With it off, replacing a keyboard keeps every mapping and
+  a second controller sending CC 7 moves the same fader; with it on, a studio
+  with a desk *and* a keyboard stops the two colliding. Off is the right guess
+  for one controller and the wrong one for several, and the case that decided
+  it is the failure each way looks like: off, two controllers fight over one
+  parameter, which is visible and fixable from the mapping page; on, a device
+  plugged into a different socket can come back under another name and every
+  mapping silently stops working, with nothing on screen to say why. It is a
+  preference on Preferences > MIDI rather than a per-binding field, because a
+  studio is one answer or the other.
+- **Pickup is released by the binding noticing, not by the interface telling
+  it.** A caught binding writes the parameter and records the value the
+  parameter then *reads back*; the next message that finds it somewhere else
+  knows something has overtaken it and starts catching again. The alternative
+  -- every on-screen control, preset recall and undo step calling
+  `release_control_pickup_for` -- was the original plan and does not survive
+  contact with this codebase: a generator's parameters are written by three
+  dozen individually named callbacks that assign the field directly, so the
+  call would have been scattered across every device face and forgotten by the
+  next one. The read-back rather than the requested value is the load-bearing
+  half: a stepped parameter quantizes, so comparing against the request would
+  find a difference on every message and nothing would ever follow anything.
 - **Bindings live in the project**, because `ParamAddr` names a channel of
   *this* song. A surface template that outlives a song — a desk's transport
   row, say — is a separate document that stamps bindings into a project. It
@@ -114,7 +141,53 @@ rather than positional, because the connection list is pruned when a device is
 unplugged and a reused position would point a project at somebody else's
 keyboard.
 
+The MIDI preferences page says this in words when it sees the merged port, so
+a one-entry input list does not read as a bug. The name it recognises is
+`mooloop_engine::MERGED_MIDI_IN_LABEL`, which is why that constant lives in
+the engine's `lib.rs` rather than in the JACK driver: the driver and the
+interface have to agree on it, and a second spelling is the copy that drifts.
+
 A project stores a port by the **name** the driver reported and resolves it
 once per run. A name no current port carries leaves the channel silent for that
 run and the name in the project, so plugging the device back in restores the
 routing rather than requiring it to be set up again.
+
+## The gesture, and why it is where it is
+
+**Learn is armed from the toolbar and aimed by pressing a control.** LEARN
+sits beside the transport buttons rather than on the preferences page,
+because the thing it arms is a press on a control in the main window and a
+modal dialog is covering those. It stays on after a binding lands, so a desk
+is mapped control after control in one pass.
+
+**The press arrives on `modulation-edit-started`.** That is a deliberate
+overload of modulation assignment's callback, and it is worth stating why,
+because the obvious reading is that learn should have one of its own. Every
+device face already forwards that callback with the parameter that was
+pressed, through the rack, to `main.slint` -- about fifty call sites. A
+second callback beside it would be fifty more lines of markup, and each face
+missed is an eight-minute build to discover. The Rust side tells the two
+gestures apart from its own arm, which is a fact it already holds.
+
+**The arm reaches the controls through a Slint global**, `ControlAssign`,
+rather than a property threaded down. Modulation's `modulation-armed` *is*
+threaded down, and correctly: arming modulation is per-destination, since a
+source only reaches its own channel and a face has to say which parameters
+accept it. Learn reaches every parameter there is, so there is nothing
+per-control to say and nothing to thread.
+
+**Its reach is exactly modulation's reach**, and that is not a coincidence:
+both stop where `Session::param_descriptor` stops -- a generator's controls, a
+device's, and the strip's volume and pan. A modulator slot's own parameters
+and an instrument's internal routes are outside both.
+
+## What is not built
+
+- **A mapped control carries no mark.** See `LOOSE_ENDS.md`; it needs a
+  per-parameter model on every face and was left out of step 04 on purpose.
+- **A binding's mode cannot be changed from the editor.** A row switches
+  takeover and inversion; the mode itself is whatever learn chose, which is
+  Toggle for a note and Absolute for anything else. Relative encoders are the
+  case that would want it, and their three conventions cannot be told apart
+  without a device to try them on.
+- **Nothing here has been run against a MIDI device.**

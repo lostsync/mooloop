@@ -1,9 +1,9 @@
 # 04 — the interface
 
-**Partly landed 2026-09-15.** The channel sidebar's IN and CH rows are live,
-there is a record-arm button, and the pump carries control input and recorded
-notes. Learn, the mapping editor and the transport mapping surface are not
-built, so **a CC can be bound only by a project written by hand**.
+**Landed 2026-09-15.** The channel sidebar's IN and CH rows, a record-arm
+button, the pump in both directions, a learn gesture on every parameter
+control modulation reaches, and a mapping editor with the transport list on
+Preferences > MIDI.
 
 ## What landed
 
@@ -29,27 +29,73 @@ built, so **a CC can be bound only by a project written by hand**.
   re-resolves the control map when — and only when — the list moves. A
   keyboard plugged in mid-session is a channel whose stored port name resolves
   for the first time and a binding that stops being inert.
+- **LEARN, beside the transport.** Arms the gesture; a press on any parameter
+  control names it; the next control moved on the desk binds to it. The arm
+  stays on through a binding landing, so a desk is mapped control after
+  control in one pass, and the status bar names what was just bound. While it
+  is armed a press writes nothing at all — not the value, not a modulation
+  depth, not an undo gesture — because a mapping must land on the value that
+  was there before the press.
+- **The mapping editor and the transport list**, on Preferences > MIDI, with
+  the ports the driver is offering and the one preference that is the user's
+  rather than the song's. A row relearns, removes, switches pickup/jump and
+  inverts. A transport gesture is learned from its own row: it has no
+  on-screen control to press, and `TransportControl::ALL` is the menu.
+- **Pickup releases itself.** See below; this replaces item 3 of what was
+  left, and it is the one place the plan was wrong about its own codebase.
+
+## The three decisions that changed the shape
+
+1. **The learn press rides on `modulation-edit-started`.** The plan said the
+   gesture's home was "the context menu that already reaches modulation
+   assignment". There is no such menu — modulation is assigned by arming a
+   source and dragging a control, and no parameter control in this interface
+   has a context menu at all. What the faces *do* have is one callback that
+   already knows which parameter was pressed, forwarded through the rack to
+   `main.slint` from about fifty call sites. Overloading it costs a branch in
+   three Rust handlers; a second callback beside it would have cost fifty
+   lines of markup and an eight-minute build for each site missed.
+
+2. **The arm is a Slint global**, `ControlAssign`, not a property threaded
+   down beside `modulation-armed`. Modulation's is threaded correctly —
+   arming it is per-destination. Learn reaches every parameter, so there is
+   nothing per-control to say.
+
+3. **`release_control_pickup_for` is still not called, and should not be.**
+   The plan asked for "one call per control handler". There is no such set of
+   handlers: a generator's parameters are written by three dozen individually
+   named callbacks that assign the field directly, so the call would have been
+   scattered across every device face and forgotten by the next one. Instead a
+   caught binding records the value the parameter *reads back* after it writes
+   it, and releases itself when it next finds the parameter somewhere else.
+   That covers the on-screen knob, undo, a preset, automation and another
+   binding, with one comparison and no call sites. The read-back rather than
+   the request is the load-bearing half — a stepped parameter quantizes, so
+   comparing against the request releases on every message and nothing follows
+   anything. `a_quantized_parameter_does_not_release_its_own_control` fails
+   against that version.
 
 ## What is left
 
-1. **Learn, and a mapping editor.** `Session::begin_control_learn` exists and
-   is tested; nothing calls it. The obvious home for the gesture is the
-   context menu that already reaches modulation assignment. A bound control
-   wants a mark on it, and an unresolved binding wants to say so.
-2. **A transport mapping surface.** `TransportControl::ALL` is the menu.
-3. **`release_control_pickup_for` is not called.** Moving a control on screen
-   should make its bound knob catch the new value; until this is wired, a knob
-   that has already taken over will pull the parameter back to the knob's
-   position on its next message. One call per control handler, which is why it
-   is worth doing with the learn pass rather than scattered now.
-4. **Preferences → MIDI**, still a placeholder page. The port list and a
-   default takeover belong there.
-5. **Nothing here has been run.** It compiles and the layers below it are
-   tested; no MIDI device has been plugged into it. `scripts/mooloop-mcp` and
-   a keyboard are the next step.
+1. **A mapped control carries no mark.** Deliberate: it needs a per-parameter
+   `[bool]` on every device face, beside the `modulation-route-counts` model
+   that already goes to all of them, which is the fifty-file markup edit
+   decision 1 exists to avoid. The mapping page is where a binding is visible
+   today. Recorded in `LOOSE_ENDS.md`.
+2. **A binding's mode cannot be changed.** Learn picks it — Toggle for a note,
+   Absolute for anything else — and the editor switches takeover and inversion
+   but not the mode. Relative encoders are what would want it, and their three
+   conventions cannot be told apart without a device to try them on.
+3. **Nothing here has been run.** It compiles, it draws, and every layer below
+   it is tested; no MIDI device has been plugged into it. `scripts/mooloop-mcp`
+   and a keyboard are the check.
 
-## One decision left open
+## The decision that was open
 
 Whether a learn gesture binds the port it heard (`ControlLearn::bind_port`).
-On for a studio with several controllers, off for one. It is a preference, and
-picking a default without a user is guesswork — ask Adam.
+**Off by default**, as a preference on the MIDI page rather than a per-binding
+field. Off is right for one controller and wrong for several, and the tie was
+broken on what each failure looks like: with it off two controllers fight over
+one parameter, which is visible on the mapping page and fixable there; with it
+on, a device that comes back under a different name takes every mapping with
+it and nothing on screen says why. Adam can move it in one click.

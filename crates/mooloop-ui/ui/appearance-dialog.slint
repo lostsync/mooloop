@@ -640,6 +640,271 @@ export component AppearancePage inherits VerticalLayout {
     }
 }
 
+// One binding in the map, as the Preferences > MIDI page draws it. Every
+// field is already resolved on the Rust side -- the target's name comes from
+// the project and `unresolved` from the ports that exist right now -- because
+// neither question can be asked from here.
+export struct MidiBindingRow {
+    // Position in the map, and the handle every callback takes. Not the row's
+    // position in this model: the two are the same today and a filter would
+    // part them, and the handle has to keep meaning the binding.
+    index: int,
+    source: string,
+    target: string,
+    mode: string,
+    // Whether this binding has a takeover to switch at all. A toggle or a
+    // relative encoder does not, and the switch is left off the row rather
+    // than drawn dead.
+    has-takeover: bool,
+    jump: bool,
+    inverted: bool,
+    // The named port is not plugged in, so this binding does nothing this
+    // run. Said out loud rather than dropped: a controller that is not
+    // plugged in is not a mistake.
+    unresolved: bool,
+}
+
+// One transport gesture and whatever is mapped to it. The whole list is
+// always drawn, bound or not: it is the menu as well as the map, which is
+// what `TransportControl::ALL` exists to be.
+export struct MidiTransportRow {
+    // Position in `TransportControl::ALL`.
+    gesture: int,
+    label: string,
+    // The control mapped to it, or empty for one nothing reaches.
+    source: string,
+    // This gesture is the learn gesture currently waiting for a control.
+    listening: bool,
+    // The binding's position in the map, or -1 when there is none.
+    binding: int,
+}
+
+component MidiBindingRowView inherits Rectangle {
+    in property <MidiBindingRow> entry;
+    callback relearn();
+    callback removed();
+    callback takeover-toggled();
+    callback invert-toggled();
+
+    height: 30px;
+    HorizontalBox {
+        padding: 3px;
+        spacing: 6px;
+        alignment: start;
+        VerticalLayout {
+            width: 160px;
+            alignment: center;
+            Text {
+                text: root.entry.source;
+                color: root.entry.unresolved ? Theme.warning : Theme.text;
+                font-size: 11px;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            width: 200px;
+            alignment: center;
+            Text {
+                text: root.entry.target;
+                color: Theme.text-muted;
+                font-size: 11px;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            width: 96px;
+            alignment: center;
+            Text {
+                text: root.entry.unresolved ? "not plugged in" : root.entry.mode;
+                color: root.entry.unresolved ? Theme.warning : Theme.text-faint;
+                font-size: 10px;
+                overflow: elide;
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        // The takeover cell is kept even when the row has no takeover to
+        // switch, so RELEARN and the remove cross line up down the list. A
+        // toggle and an absolute knob otherwise draw their buttons at
+        // different x, and the column reads as three ragged rows.
+        Rectangle {
+            width: 60px;
+            if root.entry.has-takeover : ToolButton {
+                width: 60px;
+                text: root.entry.jump ? "JUMP" : "PICKUP";
+                tooltip: root.entry.jump
+                    ? "The parameter jumps to the control's position"
+                    : "The control takes over where it passes the value";
+                active: root.entry.jump;
+                clicked => { root.takeover-toggled(); }
+            }
+        }
+        ToolButton {
+            width: 34px;
+            text: "INV";
+            tooltip: "Run the control's range backwards";
+            active: root.entry.inverted;
+            clicked => { root.invert-toggled(); }
+        }
+        ToolButton {
+            width: 58px;
+            text: "RELEARN";
+            tooltip: "Move another control to take this mapping over";
+            clicked => { root.relearn(); }
+        }
+        ToolButton {
+            width: 24px;
+            text: "\u{00d7}";
+            tooltip: "Remove this mapping";
+            text-color: Theme.destructive;
+            clicked => { root.removed(); }
+        }
+    }
+}
+
+component MidiTransportRowView inherits Rectangle {
+    in property <MidiTransportRow> entry;
+    callback learn();
+    callback removed();
+
+    height: 30px;
+    HorizontalBox {
+        padding: 3px;
+        spacing: 6px;
+        alignment: start;
+        VerticalLayout {
+            width: 140px;
+            alignment: center;
+            Text { text: root.entry.label; color: Theme.text; font-size: 11px; }
+        }
+        VerticalLayout {
+            width: 240px;
+            alignment: center;
+            Text {
+                text: root.entry.listening
+                    ? "move a control on your controller"
+                    : root.entry.source == "" ? "not mapped" : root.entry.source;
+                color: root.entry.listening ? Theme.focus
+                    : root.entry.source == "" ? Theme.text-faint : Theme.text-muted;
+                font-size: 11px;
+                overflow: elide;
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        ToolButton {
+            width: 72px;
+            text: root.entry.listening ? "CANCEL" : "LEARN";
+            tooltip: root.entry.listening
+                ? "Stop waiting for a control"
+                : "Wait for a control, then map it to this gesture";
+            active: root.entry.listening;
+            clicked => { root.learn(); }
+        }
+        ToolButton {
+            width: 24px;
+            text: "\u{00d7}";
+            tooltip: "Remove this mapping";
+            enabled: root.entry.binding >= 0;
+            text-color: Theme.destructive;
+            clicked => { root.removed(); }
+        }
+    }
+}
+
+// The MIDI page's body, exported for the same reason `AppearancePage` is: the
+// dialog only ever shows it through a ScrollView, which crops it to the fixed
+// dialog height, and a snapshot wants to see the whole thing.
+export component MidiPage inherits VerticalLayout {
+    in property <[string]> ports;
+    in property <string> port-note;
+    in property <[MidiBindingRow]> bindings;
+    in property <[MidiTransportRow]> transport-rows;
+    in-out property <bool> learn-binds-port;
+    callback learn-binds-port-toggled(bool);
+    callback binding-removed(int);
+    callback binding-takeover-toggled(int);
+    callback binding-inverted-toggled(int);
+    callback binding-relearn(int);
+    callback transport-learn(int);
+
+    spacing: 8px;
+    // Children keep their preferred heights and stack from the top, the way
+    // the appearance page does, so the ScrollView above decides the scroll
+    // rather than a layout stretching rows to fill it.
+    alignment: start;
+
+    Text { text: "MIDI"; color: Theme.text; font-size: 14px; height: 20px; }
+
+    SectionLabel { text: "MIDI INPUTS"; }
+    if root.ports.length == 0 : Text {
+        text: "No MIDI input is connected.";
+        color: Theme.text-faint;
+        font-size: 11px;
+    }
+    for port in root.ports : Text {
+        text: port;
+        color: Theme.text-muted;
+        font-size: 11px;
+        height: 16px;
+    }
+    if root.port-note != "" : Text {
+        text: root.port-note;
+        color: Theme.text-faint;
+        font-size: 10px;
+        wrap: word-wrap;
+    }
+
+    SectionLabel { text: "CONTROLLER MAPPING"; }
+    Text {
+        text: "Turn on LEARN beside the transport, press a knob or fader, "
+            + "then move the control you want it to follow.";
+        color: Theme.text-faint;
+        font-size: 10px;
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        alignment: start;
+        height: 24px;
+        ToggleButton {
+            // Stated, because `ToolButton`'s preferred width is 44px and this
+            // label is six times that: left to its own size the button draws
+            // a 44px box with the text hanging out of both ends of it.
+            width: 210px;
+            text: "Bind to the controller it hears";
+            checked: root.learn-binds-port;
+            tooltip: "On, a mapping only listens to the controller that taught "
+                + "it. Off, any controller sending the same control drives it.";
+            toggled(value) => { root.learn-binds-port-toggled(value); }
+        }
+    }
+    if root.bindings.length == 0 : Text {
+        text: "Nothing is mapped.";
+        color: Theme.text-faint;
+        font-size: 11px;
+    }
+    for entry in root.bindings : MidiBindingRowView {
+        entry: entry;
+        relearn => { root.binding-relearn(entry.index); }
+        removed => { root.binding-removed(entry.index); }
+        takeover-toggled => { root.binding-takeover-toggled(entry.index); }
+        invert-toggled => { root.binding-inverted-toggled(entry.index); }
+    }
+
+    SectionLabel { text: "TRANSPORT"; }
+    Text {
+        text: "A transport gesture has no control to press, so it is learned "
+            + "from here. Start, Stop and Continue from an external sequencer "
+            + "work without being mapped.";
+        color: Theme.text-faint;
+        font-size: 10px;
+        wrap: word-wrap;
+    }
+    for entry in root.transport-rows : MidiTransportRowView {
+        entry: entry;
+        learn => { root.transport-learn(entry.gesture); }
+        removed => { root.binding-removed(entry.binding); }
+    }
+}
+
 export component PreferencesDialog inherits Rectangle {
     in-out property <bool> open;
     in-out property <string> appearance-scheme;
@@ -669,6 +934,17 @@ export component PreferencesDialog inherits Rectangle {
     in-out property <string> shortcut-capturing-id;
     in property <[GestureRow]> gesture-rows;
     in property <[string]> gesture-choices;
+    in property <[string]> midi-ports;
+    in property <string> midi-port-note;
+    in property <[MidiBindingRow]> midi-bindings;
+    in property <[MidiTransportRow]> midi-transport-rows;
+    in-out property <bool> midi-learn-binds-port;
+    callback midi-learn-binds-port-toggled(bool);
+    callback midi-binding-removed(int);
+    callback midi-binding-takeover-toggled(int);
+    callback midi-binding-inverted-toggled(int);
+    callback midi-binding-relearn(int);
+    callback midi-transport-learn(int);
     // base, accent, alert, contrast, roundness
     callback appearance-preview(string, string, string, float, float);
     callback appearance-select-scheme(string);
@@ -823,11 +1099,35 @@ export component PreferencesDialog inherits Rectangle {
                                 }
                             }
                         }
-                        if root.page == 2 : VerticalBox {
-                            spacing: 8px;
-                            Text { text: "MIDI"; color: Theme.text; font-size: 14px; height: 20px; }
-                            SectionLabel { text: "MIDI DEVICES"; }
-                            Text { text: "MIDI device settings will appear here."; color: Theme.text-muted; font-size: 11px; }
+                        if root.page == 2 : ScrollView {
+                            // Like the audio page: the mapping list has no
+                            // bound on its length, so this one scrolls rather
+                            // than growing the dialog. The viewport height is
+                            // a constant for the reason the appearance page
+                            // states -- binding it to the page's own
+                            // preferred height is circular -- except that
+                            // here the content's length is known, so it is
+                            // computed from the row counts rather than
+                            // written down and left to drift.
+                            vertical-stretch: 1;
+                            viewport-width: self.visible-width;
+                            viewport-height: max(
+                                self.visible-height,
+                                470px + (root.midi-bindings.length + root.midi-ports.length) * 30px);
+                            MidiPage {
+                                width: parent.visible-width - 8px;
+                                ports: root.midi-ports;
+                                port-note: root.midi-port-note;
+                                bindings: root.midi-bindings;
+                                transport-rows: root.midi-transport-rows;
+                                learn-binds-port: root.midi-learn-binds-port;
+                                learn-binds-port-toggled(v) => { root.midi-learn-binds-port-toggled(v); }
+                                binding-removed(i) => { root.midi-binding-removed(i); }
+                                binding-takeover-toggled(i) => { root.midi-binding-takeover-toggled(i); }
+                                binding-inverted-toggled(i) => { root.midi-binding-inverted-toggled(i); }
+                                binding-relearn(i) => { root.midi-binding-relearn(i); }
+                                transport-learn(i) => { root.midi-transport-learn(i); }
+                            }
                         }
                         if root.page == 3 : ScrollView {
                             // The page is taller than the dialog body, so it
@@ -969,7 +1269,7 @@ export component PreferencesDialog inherits Rectangle {
                         // it: two siblings at vertical-stretch 1 split the
                         // space evenly, which halves the scroll viewport and
                         // hides everything past the fold.
-                        if root.page != 1 && root.page != 3 : Rectangle { vertical-stretch: 1; }
+                        if root.page != 1 && root.page != 2 && root.page != 3 : Rectangle { vertical-stretch: 1; }
                     }
                 }
             }

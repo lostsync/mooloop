@@ -37,7 +37,10 @@ const MIDI_IN_NAME: &str = "mooloop:midi_in";
 /// keyboards apart under JACK needs a port per source, which is a driver
 /// change (`docs/CONTROL_SURFACES.md`); until then a two-keyboard setup is
 /// separated by MIDI channel, which is what the channel filter is for.
-const MIDI_IN_LABEL: &str = "All Hardware Inputs";
+///
+/// The name itself lives in `lib.rs`, because the MIDI preferences page
+/// explains this to the user and has to recognise the port to do it.
+use crate::MERGED_MIDI_IN_LABEL as MIDI_IN_LABEL;
 /// JACK's built-in MIDI port type, spelled here for the same reason as
 /// [`AUDIO_PORT_TYPE`].
 const MIDI_PORT_TYPE: &str = "8 bit raw midi";

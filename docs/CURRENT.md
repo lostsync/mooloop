@@ -20,10 +20,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - **A channel sidebar flanks the work area on the left**, as of 2026-09-13.
   It holds the selected **channel or track**'s name and colour -- following
   the same selection the device rack does, so the two cannot describe
-  different things -- plus three inert MIDI rows for a channel. A track draws
-  no MIDI rows at all rather than disabled ones: disabled means "not
-  configurable yet", which is true of a channel's and would be a lie about a
-  track, which has no MIDI input to configure. It is hidden until the status
+  different things -- plus three MIDI rows for a channel: IN and CH are live,
+  and OUT is inert because MIDI output does not exist. A track draws no MIDI
+  rows at all rather than disabled ones: disabled means "not configurable
+  yet", which is true of OUT and would be a lie about a track, which has no
+  MIDI input to configure. It is hidden until the status
   bar's leftmost chip opens it. For a track it also holds that track's
   **sends**: one row each with destination, level, pre/post tap, enable and
   remove, plus a picker that routes a copy to another track. They were an area
@@ -366,8 +367,14 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   keyboard.
 - A two-pane Preferences dialog with General, Audio, MIDI, Appearance, and
   Shortcuts pages; General persists developer mode and reveals the presently
-  empty Developer page, and the MIDI page is a placeholder with no controls
-  on it yet. Appearance is seeded by three colors -- base (every
+  empty Developer page. The MIDI page lists the inputs the driver is offering,
+  every controller mapping in the project, and all seven transport gestures
+  with whatever is mapped to each. A mapping row can be relearned, removed,
+  switched between pickup and jump takeover, and inverted; a transport gesture
+  is learned from its own row, since it has no on-screen control to press. One
+  preference lives there, *bind to the controller it hears*, which is off by
+  default and decides whether a learned mapping listens to one controller or
+  to any. Appearance is seeded by three colors -- base (every
   neutral), accent (state), and alert (attention) -- with six built-in
   schemes, user schemes that can be saved and removed, and roundness and
   contrast scalars that retune the whole UI. All of it previews live and
@@ -458,18 +465,34 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   of the keyboard, but nothing installs one:
   `EngineHandle::set_buffer_midi_map` has no caller outside its own tests.
 - **Per-channel MIDI input, controller mapping, transport control and MIDI
-  recording are built but unreachable.** Steps 01–03 of
-  `docs/plans/midi-control/` landed on 2026-09-15: a channel can hold an input
-  and an Omni-or-1-16 channel filter and the engine routes by them, control
-  changes and transport messages are forwarded to the control thread and
-  mapped against the project's bindings, the transport follows an external
-  Start, Continue, Stop or Song Position, and an armed transport captures
-  played notes into the pattern. Every part of that is tested and **none of it
-  has an interface**. The channel sidebar's MIDI rows are still drawn inert,
-  there is no learn gesture, no mapping editor, no transport mapping surface,
-  no record-arm button, and the MIDI preferences page still has no controls;
-  which inputs are listened to is in the log. `docs/CONTROL_SURFACES.md` is
-  the design and step 04 of the plan is what is left.
+  recording.** `docs/plans/midi-control/` landed on 2026-09-15. A channel picks
+  its input and an Omni-or-1–16 channel filter from the sidebar's IN and CH
+  rows, and the engine routes notes by them; a stored port that is not plugged
+  in says so under the picker rather than leaving the channel silently
+  unplayable. A record-arm button sits beside play and stop — arming, not
+  recording, so arming while stopped works — and an armed transport captures
+  played notes into the pattern. The transport follows an external Start,
+  Continue, Stop or Song Position without any mapping, because a device that
+  sends Start is asking for exactly one thing.
+
+  **LEARN** beside the transport arms controller mapping: press any knob or
+  fader and then move a control on the desk, and the two are bound. The arm
+  stays on, so a desk is mapped control after control without reaching back to
+  the toolbar; the status bar names what was just bound. While it is armed
+  every parameter control carries a ring, the pointer is a crosshair, and a
+  press names the control rather than moving it — mapping a knob does not
+  change the value it is about to follow. It reaches the same parameters
+  modulation does: a device's own controls, the generator's, and the channel
+  strip's volume and pan. A mapped control takes over on **pickup** by
+  default, so a fader left at zero does not slam a filter shut the first time
+  it is touched, and a control that has taken over gives the parameter back
+  the moment anything else moves it. The map is reviewed and edited on
+  Preferences > MIDI, and it is saved with the project.
+
+  **MIDI output does not exist**, so the sidebar's OUT row is still inert
+  (`SCOPE.md` §2 item 2). **None of it has been run against a MIDI device**:
+  every layer is tested and the application compiles, and no keyboard has been
+  plugged into it.
 
 ## Current Audio Path
 

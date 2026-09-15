@@ -14,7 +14,7 @@ import {
 } from "toolbar.slint";
 import { MasterMeter } from "meters.slint";
 import { EnvelopeEditor } from "envelope.slint";
-import { PreferencesDialog, AppearanceSchemeRow, AudioDriverCopy, OutputTargetRow, ShortcutRow, GestureRow } from "appearance-dialog.slint";
+import { PreferencesDialog, AppearanceSchemeRow, AudioDriverCopy, OutputTargetRow, ShortcutRow, GestureRow, MidiBindingRow, MidiTransportRow } from "appearance-dialog.slint";
 import { SavePresetDialog } from "save-preset-dialog.slint";
 import { SaveErrorDialog } from "save-error-dialog.slint";
 import { AboutDialog } from "about-dialog.slint";
@@ -80,6 +80,8 @@ export { MixerStripRow }
 export { AudioDriverCopy, OutputTargetRow }
 export { ShortcutRow }
 export { AppearanceSchemeRow }
+export { MidiBindingRow, MidiTransportRow }
+export { ControlAssign } from "controls.slint";
 
 // One step cell used in the step-grid models.
 struct StepCell {
@@ -1700,6 +1702,26 @@ export component MainWindow inherits Window {
     // Whether recording is armed. A transport state rather than a document
     // one: opening a song and pressing play must not record.
     in-out property <bool> record-armed;
+
+    // ---- controller mapping ----
+    // The toolbar arm. Rust owns it, because it also ends when a binding
+    // lands or a project is loaded; `ControlAssign.midi-learn` is the copy
+    // every control reads and is set from the same place.
+    in-out property <bool> midi-learn-armed;
+    callback midi-learn-toggled();
+    // The mapping editor, on the Preferences MIDI page. Rows carry their
+    // position in the map, which is the handle every callback below takes.
+    in property <[string]> preferences-midi-ports;
+    in property <string> preferences-midi-port-note;
+    in property <[MidiBindingRow]> preferences-midi-bindings;
+    in property <[MidiTransportRow]> preferences-midi-transport-rows;
+    in-out property <bool> preferences-midi-learn-binds-port;
+    callback preferences-midi-learn-binds-port-toggled(bool);
+    callback midi-binding-removed(int);
+    callback midi-binding-takeover-toggled(int);
+    callback midi-binding-inverted-toggled(int);
+    callback midi-binding-relearn(int);
+    callback midi-transport-learn(int);
     in-out property <[float]> waveform;
     in-out property <[float]> playhead-positions;
     in-out property <int> sample-frames;
@@ -2592,6 +2614,22 @@ export component MainWindow inherits Window {
                                 role: "record";
                                 active: root.record-armed;
                                 clicked => { root.record-armed-toggled(); }
+                            }
+                            // The arm for controller mapping. It lives here
+                            // rather than in Preferences because the gesture
+                            // it arms is a press on a control in the main
+                            // window, which a modal dialog is covering.
+                            ToolButton {
+                                text: "LEARN";
+                                width: 48px;
+                                tooltip: root.midi-learn-armed
+                                    ? "Press a control to map it, then move a knob on your controller"
+                                    : "MIDI Learn: map a control to a controller";
+                                hint: root.midi-learn-armed
+                                    ? "MIDI Learn is on. Press any knob or fader, then move the control you want to map to it."
+                                    : "Turn on MIDI Learn, then press a control to map it to your controller.";
+                                active: root.midi-learn-armed;
+                                clicked => { root.midi-learn-toggled(); }
                             }
 
                             ToolbarRule {}
@@ -6899,6 +6937,17 @@ export component MainWindow inherits Window {
         gesture-rows: root.preferences-gesture-rows;
         gesture-choices: root.preferences-gesture-choices;
         shortcut-capturing-id <=> root.preferences-shortcut-capturing-id;
+        midi-ports: root.preferences-midi-ports;
+        midi-port-note: root.preferences-midi-port-note;
+        midi-bindings: root.preferences-midi-bindings;
+        midi-transport-rows: root.preferences-midi-transport-rows;
+        midi-learn-binds-port: root.preferences-midi-learn-binds-port;
+        midi-learn-binds-port-toggled(v) => { root.preferences-midi-learn-binds-port-toggled(v); }
+        midi-binding-removed(i) => { root.midi-binding-removed(i); }
+        midi-binding-takeover-toggled(i) => { root.midi-binding-takeover-toggled(i); }
+        midi-binding-inverted-toggled(i) => { root.midi-binding-inverted-toggled(i); }
+        midi-binding-relearn(i) => { root.midi-binding-relearn(i); }
+        midi-transport-learn(i) => { root.midi-transport-learn(i); }
         appearance-preview(base, accent, alert, contrast, roundness) => {
             root.preferences-appearance-preview(base, accent, alert, contrast, roundness);
         }

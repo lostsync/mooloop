@@ -365,10 +365,12 @@ device step open waiting for it.
 crash recovery, and richer missing-sample relinking remain important. They do
 not interrupt this sequence unless one becomes necessary to preserve its work.
 
-**Metronome, MIDI configuration, and the graph editor.** None is required to
-prove the active workflows. MIDI in particular is decoded and routed and
-configurable nowhere, and the channel sidebar draws rows for it as of
-2026-09-13: build the setting, let them stay inert.
+**Metronome and the graph editor.** Neither is required to prove the active
+workflows. MIDI configuration was on this list until 2026-09-15, when
+`docs/plans/midi-control/` built it: a channel picks its input, a controller
+maps to any parameter, and the transport takes gestures. What is left of it is
+not construction — **none of it has been run against a keyboard**, and that is
+the next MIDI thing to do.
 
 ## Working discipline
 

@@ -449,6 +449,29 @@ pub(crate) struct BrowserSettings {
     pub locations: Vec<PathBuf>,
 }
 
+/// Everything the MIDI page owns that is the user's rather than the song's.
+///
+/// A control map lives in the *project*, because its targets name channels of
+/// one song (`CONTROL_SURFACES.md`). What a learn gesture *does* is not: it is
+/// a fact about the desk in the room, and it should be the same in every song
+/// opened on this machine.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct MidiSettings {
+    /// Whether a learn gesture binds the controller it heard, so that only
+    /// that one drives the mapping.
+    ///
+    /// Off by default, which is the right answer for one controller and the
+    /// wrong one for several: with it off, replacing a keyboard keeps every
+    /// mapping, and a second keyboard sending CC 7 moves the same fader. A
+    /// studio with a desk *and* a keyboard turns it on, and the two stop
+    /// colliding. Guessing the multi-controller case for everybody would mean
+    /// a mapping that silently stops working when a device is plugged into a
+    /// different socket and comes back under another name.
+    #[serde(default)]
+    pub learn_binds_port: bool,
+}
+
 /// Where the panes were left.
 ///
 /// UI state rather than project state, which is the whole reason it is here
@@ -623,6 +646,8 @@ pub(crate) struct UiSettings {
     #[serde(default)]
     pub browser: BrowserSettings,
     #[serde(default)]
+    pub midi: MidiSettings,
+    #[serde(default)]
     pub layout: LayoutSettings,
 }
 
@@ -636,6 +661,7 @@ impl Default for UiSettings {
             shortcuts: ShortcutSettings::default(),
             gestures: GestureSettings::default(),
             browser: BrowserSettings::default(),
+            midi: MidiSettings::default(),
             layout: LayoutSettings::default(),
         }
     }
@@ -1279,6 +1305,12 @@ mod tests {
             },
             browser: BrowserSettings {
                 locations: vec![PathBuf::from("/sounds/one-shots")],
+            },
+            // Not the default, for the reason the layout section below gives:
+            // a round trip through a default value passes even when the
+            // section is never written at all.
+            midi: MidiSettings {
+                learn_binds_port: true,
             },
             // Deliberately not the default arrangement, and deliberately one
             // that `sanitized()` must leave alone: the mixer in the dock and

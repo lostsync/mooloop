@@ -230,11 +230,38 @@ become one without renumbering anything automation has persisted. Recorded
 `mooloop-ui` nor `mooloop-session` calls it. MIDI is decoded and routed; it is
 just not reachable from the app.
 
-**The whole MIDI control layer has no UI either, as of 2026-09-15.** Per-channel
-input, the channel filter, controller bindings, transport gestures and note
-recording are built and tested through `mooloop-session`, and nothing in
-`mooloop-ui` calls any of it. Unlike the entry above this one has a plan and a
-named next step: `docs/plans/midi-control/04-interface.md`.
+**A mapped control carries no mark of its own.** As of 2026-09-15 the only
+place a binding is visible is Preferences > MIDI: the knob it moves looks
+exactly like an unmapped one. Drawing the mark is not hard, it is *wide* -- it
+needs a per-parameter `[bool]` on every device face, beside the
+`modulation-route-counts` model that already goes to all of them, which is a
+line in fifty markup files and a `main.slint` crossing for each face that is
+missed. `docs/plans/midi-control/04-interface.md` records the same thing as
+the one piece of step 04 deliberately left out.
+
+**`ParameterFader` cannot be learned, and neither can it be modulated.** The
+learn gesture rides on `modulation-edit-started`, so its reach is exactly
+modulation's reach, and the inline fader rows have never carried that
+callback. Nothing is inconsistent between the two features; both simply stop
+at the same place.
+
+**Learning or removing a mapping is not undoable.** The control map is part
+of the project and travels through `ProjectSnapshot` like everything else, so
+the machinery is there; nothing records an entry. Ctrl+Z after a learn reaches
+past it to the previous recorded edit, the way a channel or generator preset
+already does. The document is marked dirty, so the mapping is at least saved.
+
+**The record-arm and LEARN toolbar buttons have no action ids.** `ACTIONS.md`
+says every operation a shortcut or menu row can perform is a named action in
+`actions.rs`; these two are toolbar buttons only, so neither can be bound to a
+key and neither appears on the Shortcuts page. Adding them means moving the
+"63 actions in 11 categories" sentence and its test, which is why it was not
+done on the way past.
+
+**Nothing in the MIDI control layer has been run against a device, as of
+2026-09-15.** Every layer has tests and the application compiles and draws its
+mapping page, and no keyboard has been plugged into it. `scripts/mooloop-mcp`
+and a controller are the check.
 
 **The Core MIDI driver's port ids have never been compiled.**
 `coreaudio_driver.rs` is behind `#[cfg(target_os = "macos")]` and the

@@ -105,6 +105,20 @@ pub(crate) static COUNTING: CountingAllocator = CountingAllocator {
     live: std::sync::atomic::AtomicUsize::new(0),
 };
 
+/// What a driver calls one MIDI input that merges every hardware source.
+///
+/// **JACK gives mooloop one merged MIDI port**, with every keyboard
+/// auto-connected to it, and a message arriving on it carries no record of
+/// which one sent it. The picker therefore has one entry, named for what it
+/// actually is rather than for a device, and two keyboards are told apart by
+/// MIDI channel (`docs/CONTROL_SURFACES.md`).
+///
+/// Defined here rather than in `jack_driver`, and unconditionally, because
+/// the interface says the same thing on the MIDI preferences page and a
+/// second spelling of the name is exactly the copy that drifts. Core MIDI
+/// connects per source, so nothing there ever carries it.
+pub const MERGED_MIDI_IN_LABEL: &str = "All Hardware Inputs";
+
 #[cfg(target_os = "macos")]
 mod coreaudio_driver;
 mod driver;

@@ -44,7 +44,8 @@ use mooloop_core::{
     GeneratorParams, GlideMode, HatCharacter,
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor,
     ModPolarity, ModRack, ModRandomTrigger, ModStepTrigger,
-    ControlRate, ModulatorKind, ModulatorParams, OutletDescriptor, PublishesOutlets, SendTap,
+    ControlRate, ControlTarget, ModulatorKind, ModulatorParams, OutletDescriptor,
+    PublishesOutlets, SendTap, Takeover, TransportControl,
     SignalShape,
     modulation::outlet_slot,
     aux_in, AuxInParams, EdgeRefusal,
@@ -535,6 +536,18 @@ fn apply_theme(window: &MainWindow, palette: ThemePalette) {
     theme.set_meter_safe(palette.meter_safe.color());
     theme.set_meter_warning(palette.meter_warning.color());
     theme.set_meter_clip(palette.meter_clip.color());
+}
+
+/// Turns the MIDI learn arm on or off on both sides of the boundary.
+///
+/// The toolbar button reads a window property and every parameter control
+/// reads the `ControlAssign` global. They are one fact, so it is written in
+/// one place: a control left armed after the button went dark would name a
+/// parameter the next time it was touched, and nothing on screen would say
+/// why.
+fn set_midi_learn_armed(window: &MainWindow, armed: bool) {
+    window.set_midi_learn_armed(armed);
+    window.global::<ControlAssign>().set_midi_learn(armed);
 }
 
 /// Pushes one appearance state -- colors and the shared radius scale -- into
@@ -2917,6 +2930,14 @@ struct UiState {
     /// list of `String` clones, and the input picker, the routing table and
     /// every control binding's port all want it.
     midi_ports: Vec<mooloop_core::MidiPortInfo>,
+    /// Whether the toolbar's MIDI Learn arm is on.
+    ///
+    /// The arm and the *pending* target are two different things and both are
+    /// needed. `Session::control_learn` holds the target a control was pressed
+    /// for; this holds whether pressing one would name it. The arm outlives a
+    /// binding landing, so a desk can be mapped knob after knob without
+    /// reaching for the toolbar between each.
+    midi_learn_armed: bool,
     rows: Rc<VecModel<ChannelRow>>,
     step_models: Vec<Rc<VecModel<StepCell>>>,
     note_model: Rc<VecModel<NoteCell>>,
@@ -4191,6 +4212,116 @@ impl UiState {
         }
     }
 
+    /// Name `target` as the thing the next control touched should move, when
+    /// the toolbar's learn arm is on. Answers whether the press was a learn
+    /// gesture, so the caller can stop rather than also starting a
+    /// modulation edit.
+    ///
+    /// Both gestures arrive on the same callback — `modulation-edit-started`,
+    /// the one thing every device face carries that knows which parameter was
+    /// pressed. The alternative was a second callback threaded through fifty
+    /// faces to say the same thing, and each face missed is an eight-minute
+    /// build to find out.
+    fn learn_if_armed(
+        &mut self,
+        window: &MainWindow,
+        binds_port: bool,
+        target: ControlTarget,
+    ) -> bool {
+        if !self.midi_learn_armed {
+            return false;
+        }
+        self.begin_control_learn(window, binds_port, target);
+        true
+    }
+
+    /// Wait for a control to bind to `target`, and say so.
+    ///
+    /// Three surfaces ask for this — a press on a control, a mapping row's
+    /// RELEARN, and a transport row's LEARN — and the sentence they put in the
+    /// status bar is one sentence, so it is written once.
+    fn begin_control_learn(
+        &mut self,
+        window: &MainWindow,
+        binds_port: bool,
+        target: ControlTarget,
+    ) {
+        let label = self.session.control_target_label(&target);
+        self.session.begin_control_learn(target, binds_port);
+        window.set_status_message(format!("Move a control to map {label}").as_str().into());
+        self.refresh_midi_mappings(window);
+    }
+
+    /// Publish the ports, the mappings and the transport list onto the
+    /// Preferences MIDI page.
+    ///
+    /// Rebuilt whole rather than touched field-wise, unlike the meters: this
+    /// is a dialog page that changes when something is learned or removed,
+    /// not something redrawn sixty times a second.
+    fn refresh_midi_mappings(&self, window: &MainWindow) {
+        let names: Vec<slint::SharedString> = self
+            .midi_ports
+            .iter()
+            .map(|port| port.name.as_str().into())
+            .collect();
+        // JACK merges every hardware source into one port, so its picker has
+        // one entry and no message on it says which keyboard sent it. That is
+        // a driver fact rather than a mapping one, and a reader who does not
+        // know it will read a single entry as a bug (`CONTROL_SURFACES.md`).
+        let note = if self
+            .midi_ports
+            .iter()
+            .any(|port| port.name == mooloop_engine::MERGED_MIDI_IN_LABEL)
+        {
+            "This driver merges every connected keyboard into one input, so a \
+             message does not say which one sent it. Tell two controllers apart \
+             by their MIDI channel."
+        } else {
+            ""
+        };
+        let views = self.session.control_binding_views(&self.midi_ports);
+        let learning = self.session.control_learn_target();
+        let transport: Vec<MidiTransportRow> = TransportControl::ALL
+            .iter()
+            .enumerate()
+            .map(|(index, gesture)| {
+                let target = ControlTarget::Transport(*gesture);
+                let bound = views
+                    .iter()
+                    .find(|view| self.session.control_binding_target(view.index) == Some(target));
+                MidiTransportRow {
+                    gesture: index as i32,
+                    label: gesture.label().into(),
+                    source: bound.map_or("", |view| view.source.as_str()).into(),
+                    listening: learning == Some(target),
+                    binding: bound.map_or(-1, |view| view.index as i32),
+                }
+            })
+            .collect();
+        // Transport bindings are drawn in the transport list, beside the
+        // gestures that have none. Listing them here as well would be the
+        // same mapping in two places, each with its own remove button.
+        let bindings: Vec<MidiBindingRow> = views
+            .iter()
+            .filter(|view| !view.transport)
+            .map(|view| MidiBindingRow {
+                index: view.index as i32,
+                source: view.source.as_str().into(),
+                target: view.target.as_str().into(),
+                mode: view.mode.as_str().into(),
+                has_takeover: view.takeover.is_some(),
+                jump: view.takeover == Some(Takeover::Jump),
+                inverted: view.inverted,
+                unresolved: view.unresolved,
+            })
+            .collect();
+        window.set_preferences_midi_ports(ModelRc::from(Rc::new(VecModel::from(names))));
+        window.set_preferences_midi_port_note(note.into());
+        window.set_preferences_midi_bindings(ModelRc::from(Rc::new(VecModel::from(bindings))));
+        window
+            .set_preferences_midi_transport_rows(ModelRc::from(Rc::new(VecModel::from(transport))));
+    }
+
     /// Retune (or first create) the armed source's one explicit route. The
     /// base parameter is deliberately absent from this mutation: a normal
     /// knob drag in armed mode moves only the depth, and the renderer keeps
@@ -5019,6 +5150,7 @@ impl AppUi {
             // routing. Starting empty rather than scanning here keeps one
             // path for "the ports changed", and the first pump is 16 ms away.
             midi_ports: Vec::new(),
+            midi_learn_armed: false,
             session: Session {
                 channels: vec![first],
                 default_waveform,
@@ -6124,6 +6256,7 @@ impl AppUi {
         }
         {
             let settings = ui_settings.clone();
+            let st = state.clone();
             let tx = audio_tx.clone();
             let weak = window.as_weak();
             window.on_preferences_opened(move || {
@@ -6131,7 +6264,26 @@ impl AppUi {
                 let settings = settings.borrow();
                 apply_appearance(&window, &settings.appearance);
                 sync_preferences_properties(&window, &settings);
+                window.set_preferences_midi_learn_binds_port(settings.midi.learn_binds_port);
+                // Built on open rather than kept current: the ports move, the
+                // map moves, and nothing outside this page reads either.
+                st.borrow().refresh_midi_mappings(&window);
                 tx.send(AudioAction::RefreshTargets);
+            });
+        }
+        {
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_preferences_midi_learn_binds_port_toggled(move |value| {
+                let Some(window) = weak.upgrade() else { return };
+                let mut settings = settings.borrow_mut();
+                let previous = std::mem::replace(&mut settings.midi.learn_binds_port, value);
+                if let Err(error) = settings.save() {
+                    settings.midi.learn_binds_port = previous;
+                    window
+                        .set_preferences_error(format!("Could not save settings: {error}").into());
+                }
+                window.set_preferences_midi_learn_binds_port(settings.midi.learn_binds_port);
             });
         }
         {
@@ -8385,6 +8537,142 @@ impl AppUi {
                 }
             });
         }
+        // MIDI Learn: the arm, and the four things the mapping editor can do
+        // to a row. Every one of them ends by republishing the page, because
+        // removing a binding renumbers the ones after it and a stale index is
+        // a remove button that deletes somebody else's mapping.
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_midi_learn_toggled(move || {
+                let Some(window) = weak.upgrade() else { return };
+                let mut state = st.borrow_mut();
+                let armed = !state.midi_learn_armed;
+                state.midi_learn_armed = armed;
+                if !armed {
+                    // Turning the arm off abandons a gesture that was waiting
+                    // for a control. Leaving it armed would mean the next
+                    // knob touched on the desk bound itself to a parameter
+                    // nobody could see had been chosen.
+                    state.session.cancel_control_learn();
+                }
+                set_midi_learn_armed(&window, armed);
+                window.set_status_message(
+                    if armed {
+                        "MIDI Learn: press a control, then move the knob to map to it"
+                    } else {
+                        ""
+                    }
+                    .into(),
+                );
+                state.refresh_midi_mappings(&window);
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_midi_binding_removed(move |index| {
+                let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let ports = state.midi_ports.clone();
+                if state.session.remove_control_binding(index, &ports) {
+                    state.session.mark_dirty();
+                    state.refresh_midi_mappings(&window);
+                    state.update_document_title(&window);
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_midi_binding_takeover_toggled(move |index| {
+                let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let jump = state
+                    .session
+                    .control_map
+                    .bindings
+                    .get(index)
+                    .and_then(|binding| binding.mode.takeover())
+                    == Some(Takeover::Jump);
+                let next = if jump { Takeover::Pickup } else { Takeover::Jump };
+                if state.session.set_control_binding_takeover(index, next) {
+                    state.session.mark_dirty();
+                    state.refresh_midi_mappings(&window);
+                    state.update_document_title(&window);
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_midi_binding_inverted_toggled(move |index| {
+                let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let inverted = state
+                    .session
+                    .control_map
+                    .bindings
+                    .get(index)
+                    .is_some_and(|binding| binding.inverted());
+                if state.session.set_control_binding_inverted(index, !inverted) {
+                    state.session.mark_dirty();
+                    state.refresh_midi_mappings(&window);
+                    state.update_document_title(&window);
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_midi_binding_relearn(move |index| {
+                let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let Some(target) = state.session.control_binding_target(index) else {
+                    return;
+                };
+                // Relearn is the arm and the target at once: there is no
+                // control on screen to press, because the row already says
+                // which parameter it means.
+                let binds_port = settings.borrow().midi.learn_binds_port;
+                state.begin_control_learn(&window, binds_port, target);
+            });
+        }
+        {
+            let st = state.clone();
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_midi_transport_learn(move |index| {
+                let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
+                    return;
+                };
+                let Some(gesture) = TransportControl::ALL.get(index).copied() else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let target = ControlTarget::Transport(gesture);
+                // The button is a toggle: pressing it while it is listening
+                // stops waiting, which is the only way out of a gesture whose
+                // controller turns out not to be plugged in.
+                if state.session.control_learn_target() == Some(target) {
+                    state.session.cancel_control_learn();
+                    window.set_status_message("".into());
+                    state.refresh_midi_mappings(&window);
+                } else {
+                    let binds_port = settings.borrow().midi.learn_binds_port;
+                    state.begin_control_learn(&window, binds_port, target);
+                }
+            });
+        }
 
         // The channel sidebar's colour swatches and its hex field, which are
         // one gesture as far as this is concerned: both hand over the string
@@ -8726,10 +9014,26 @@ impl AppUi {
         // binding on that knob rather than another callback triple here.
         {
             let st = state.clone();
+            let settings = ui_settings.clone();
             let weak = window.as_weak();
-            window.on_source_modulation_edit_started(move |_| {
-                let Some(window) = weak.upgrade() else { return };
-                st.borrow_mut().begin_modulation_edit(&window);
+            window.on_source_modulation_edit_started(move |param| {
+                let (Some(window), Ok(param)) = (weak.upgrade(), u32::try_from(param)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                // The press that starts a modulation edit is the same press
+                // that names a control for MIDI learn, so which of the two it
+                // is comes from this side's arm rather than from the face.
+                let address = ParamAddr {
+                    scope: EffectTarget::Channel(state.session.selected as u8),
+                    owner: ParamOwner::Source,
+                    param,
+                };
+                let binds_port = settings.borrow().midi.learn_binds_port;
+                if state.learn_if_armed(&window, binds_port, ControlTarget::Param(address)) {
+                    return;
+                }
+                state.begin_modulation_edit(&window);
             });
         }
         {
@@ -8774,10 +9078,20 @@ impl AppUi {
         }
         {
             let st = state.clone();
+            let settings = ui_settings.clone();
             let weak = window.as_weak();
-            window.on_strip_modulation_edit_started(move |_| {
-                let Some(window) = weak.upgrade() else { return };
-                st.borrow_mut().begin_modulation_edit(&window);
+            window.on_strip_modulation_edit_started(move |param| {
+                let (Some(window), Ok(param)) = (weak.upgrade(), u32::try_from(param)) else {
+                    return;
+                };
+                let mut state = st.borrow_mut();
+                let address =
+                    ParamAddr::strip(EffectTarget::Channel(state.session.selected as u8), param);
+                let binds_port = settings.borrow().midi.learn_binds_port;
+                if state.learn_if_armed(&window, binds_port, ControlTarget::Param(address)) {
+                    return;
+                }
+                state.begin_modulation_edit(&window);
             });
         }
         {
@@ -8816,6 +9130,7 @@ impl AppUi {
         }
         {
             let st = state.clone();
+            let settings = ui_settings.clone();
             let weak = window.as_weak();
             window.on_effect_modulation_edit_started(move |slot, param| {
                 let (Some(window), Ok(slot), Ok(param)) = (
@@ -8826,19 +9141,34 @@ impl AppUi {
                     return;
                 };
                 let mut state = st.borrow_mut();
-                let valid = matches!(state.session.effect_target, EffectTarget::Channel(channel) if channel as usize == state.session.selected)
-                    && state
-                        .session.channels
-                        .get(state.session.selected)
-                        .and_then(|channel| channel.effects.get(slot))
-                        .and_then(|effect| {
-                            let id = effect_face_param_id(effect, param)?;
-                            effect.kind().descriptor(id)
-                        })
-                        .is_some();
-                if valid {
-                    state.begin_modulation_edit(&window);
+                // The address rather than a bare "is this legal": a learn
+                // gesture needs the address, and asking the same question two
+                // ways is how the two answers come to disagree.
+                let address = match state.session.effect_target {
+                    EffectTarget::Channel(channel)
+                        if channel as usize == state.session.selected =>
+                    {
+                        state
+                            .session
+                            .channels
+                            .get(state.session.selected)
+                            .and_then(|state| state.effects.get(slot))
+                            .and_then(|effect| {
+                                let id = effect_face_param_id(effect, param)?;
+                                effect.kind().descriptor(id).map(|_| (effect.id, id))
+                            })
+                            .map(|(device, id)| {
+                                ParamAddr::effect(EffectTarget::Channel(channel), device, id)
+                            })
+                    }
+                    _ => None,
+                };
+                let Some(address) = address else { return };
+                let binds_port = settings.borrow().midi.learn_binds_port;
+                if state.learn_if_armed(&window, binds_port, ControlTarget::Param(address)) {
+                    return;
                 }
+                state.begin_modulation_edit(&window);
             });
         }
         {
@@ -12670,6 +13000,10 @@ impl AppUi {
                     // second, and a line per message would bury the log it is
                     // meant to warn in.
                     let mut refused = 0usize;
+                    // What a completed learn gesture bound, for the status
+                    // bar. Collected rather than reported inside the borrow,
+                    // because saying it needs the window.
+                    let mut learned: Vec<(String, String)> = Vec::new();
                     {
                         let mut state = st.borrow_mut();
                         let ports = state.midi_ports.clone();
@@ -12680,6 +13014,12 @@ impl AppUi {
                                 if !handle.send(*command) {
                                     refused += 1;
                                 }
+                            }
+                            if let Some(binding) = &effects.learned {
+                                learned.push((
+                                    binding.source.detail_label(),
+                                    state.session.control_target_label(&binding.target),
+                                ));
                             }
                             moved |= !effects.is_empty();
                             // A parameter moved by a knob is an edit; a
@@ -12713,6 +13053,16 @@ impl AppUi {
                              control surface: the model has moved where the engine \
                              has not"
                         );
+                    }
+                    // A binding landing leaves the arm on, so a desk is
+                    // mapped knob after knob without reaching for the toolbar
+                    // between each. The status line is what says the last one
+                    // took.
+                    if let Some((source, target)) = learned.last() {
+                        w.set_status_message(
+                            format!("{source} now moves {target}").as_str().into(),
+                        );
+                        st.borrow().refresh_midi_mappings(&w);
                     }
                     // One republish for the whole drain rather than one per
                     // message: a fader sweep is a hundred messages a second,
@@ -12762,6 +13112,14 @@ impl AppUi {
                         handle.set_midi_routing(state.session.midi_routing(&ports));
                         drop(state);
                         st.borrow().refresh_editor(&w);
+                        // The mapping page marks bindings whose controller is
+                        // not plugged in, and that is exactly what just
+                        // changed. Only while the page is open: rebuilding
+                        // four models for a dialog nobody is looking at is
+                        // the kind of once-a-second cost that adds up.
+                        if w.get_preferences_open() {
+                            st.borrow().refresh_midi_mappings(&w);
+                        }
                     }
                 }
                 if now.duration_since(last_load_report) >= std::time::Duration::from_secs(1) {
@@ -13336,6 +13694,18 @@ fn install_project_in_ui(
     sync_effect_spectrum_subscriptions(&state.borrow(), handle);
     window.set_playing(false);
     window.set_playlist_position_ticks(0);
+    // A new project brings its own control map, so a learn gesture waiting on
+    // the old one has nothing left to bind to -- `Session::load` has already
+    // dropped it. The arm goes with it rather than staying lit over a gesture
+    // that is no longer pending.
+    {
+        let mut st = state.borrow_mut();
+        st.midi_learn_armed = false;
+        let ports = st.midi_ports.clone();
+        st.session.resolve_control_map(&ports);
+    }
+    set_midi_learn_armed(window, false);
+    state.borrow().refresh_midi_mappings(window);
     refresh_preset_menus(state, window);
     true
 }
