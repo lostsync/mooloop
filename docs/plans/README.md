@@ -26,8 +26,8 @@ because `BUFFER_ENGINE.md`'s insert model is not settled. `device-registry/`,
 piece is exempt: take `device-registry/`'s face host component if a device step
 already has `main.slint` open.
 
-`eq-v2/` was added 2026-09-12 and **steps 01, 02 and 03 landed 2026-09-14;
-only 04 is open, and it is optional.** It came out of fixing one
+`eq-v2/` was added 2026-09-12 and **steps 01 and 03 landed 2026-09-14, step 02
+early on 2026-09-15; only 04 is open, and it is optional.** It came out of fixing one
 bug -- the EQ's Shape control was two settings of different arity behind one
 automatable id -- and out of Adam's question about what that implied: mooloop
 intends to host CLAP, a CLAP plugin exposes arbitrary independently automatable
@@ -55,8 +55,8 @@ is worth a step was a `FOCUS.md` question, and the answer as of 2026-09-12 is
 **not now** -- safely, because the measurements to judge it by are committed
 either way.
 
-Last swept 2026-09-14, three times. `eq-v2/` steps 01, 02 and 03 all landed
-that day. 01 gave every EQ band and both pass filters their own stable ids --
+Last swept 2026-09-15. `eq-v2/` steps 01 and 03 landed on the 14th and step 02
+seven minutes into the 15th. 01 gave every EQ band and both pass filters their own stable ids --
 the one native device whose parameter model a CLAP host could not have
 expressed -- and the thing it proved is that a face showing one band at a time
 was never the problem: resolving the selection one layer earlier left the

@@ -2,8 +2,12 @@
 
 ## Step 02 — the curve tells the truth
 
-Landed on `feat/eq-curve-truth` (2026-09-14). **02 and 03 are done; 04 is
+Landed on `feat/eq-curve-truth` (2026-09-15). **02 and 03 are done; 04 is
 optional and wants Adam's ear.**
+
+All the work and every date written into the code is 2026-09-14; the merge
+landed at 00:07 the next morning. Where a document's job is to say *when*, it
+says the 15th.
 
 ### The fidelity question had a third answer, and it is the strong one
 

@@ -52,14 +52,14 @@ strip avoids this by giving its two shelf-capable bands a narrower Q range, and
 that answer is not available here: every band can be any kind, so the range
 would depend on a *value*, and a descriptor is static per id. Same shape as the
 rest of `eq-v2` -- a parameter model that cannot express a condition. The
-response plot does not hide it any more: since 2026-09-14 the curve is the
+response plot does not hide it any more: since 2026-09-15 the curve is the
 bank's own coefficients evaluated, so a shelf's drawn slope stops moving at
 the same place its sound does. Found 2026-09-14.
 
 **`EqSlope`'s variant names are half the slope they name.** `Db6` runs one
 `Biquad::pass` stage, which is a second-order section and therefore 12 dB per
 octave, so the five variants are 12/24/36/48/72 and are spelled 6/12/18/24/36.
-The *face* was corrected on 2026-09-14 -- `EqSlope::db_per_octave` is the
+The *face* was corrected on 2026-09-15 -- `EqSlope::db_per_octave` is the
 arithmetic and `eq_face.rs` holds the selector to it -- and the variants were
 left alone on purpose: `serde` writes them (`"db6"`), so renaming them either
 refuses every saved project or silently re-maps one slope to another, to

@@ -954,7 +954,7 @@ land on its own when it starts to matter:
   channel strip's four bands the same way. The band buttons read 1 to 7 --
   the numbering their parameters use -- and the pass-slope buttons read
   12/24/36/48/72 dB per octave, which is what the bank rolls off at; they
-  read LOW/1..6 and 6/12/18/24/36 before 2026-09-14. Double-clicking a knob
+  read LOW/1..6 and 6/12/18/24/36 before 2026-09-15. Double-clicking a knob
   returns to the *selected* band's resting value rather than to band 2's. A
   feedback-delay-network hall reverb; and
   feedback-delay-network hall reverb; and one five-mode modulation processor

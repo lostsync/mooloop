@@ -1,6 +1,7 @@
 # 02 — The curve tells the truth
 
-**Landed 2026-09-14 on `feat/eq-curve-truth`.** `00-status.md` records what it
+**Landed 2026-09-15 on `feat/eq-curve-truth`,** after a day's work dated the
+14th. `00-status.md` records what it
 did; what is below is the step as it was written, with the notes added on the
 way past. Two of its own conclusions did not survive being built, and both are
 worth reading against the result:

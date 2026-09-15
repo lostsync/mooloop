@@ -1,7 +1,8 @@
 # Focus
 
 Status: active working sequence, rewritten 2026-09-12, amended 2026-09-14 when
-`interface-iteration/` closed and its step left the sequence. The previous
+`interface-iteration/` closed and its step left the sequence, and 2026-09-15
+when `eq-v2/`'s step 02 landed. The previous
 version was written 2026-09-05 and amended 2026-09-07 and 2026-09-08; it was
 replaced rather than amended again, because the mixer it described was not the
 mixer that exists and the work it parked included a feature that shipped.
@@ -129,7 +130,8 @@ Note what it did *not* settle — `EffectKind::descriptors()` is a table per
 and is not this plan; it is `SCOPE.md` §"the four things standing between here
 and CLAP", item 1.
 
-**Steps 02 and 03 landed 2026-09-14.** 02 is the one that answered the
+**Step 03 landed 2026-09-14 and step 02 at seven minutes past midnight the
+next morning.** 02 is the one that answered the
 question it was written around. Its plot could not match what the DSP ran
 because the markup approximated the shapes itself, and the step was left
 deciding between evaluating a real magnitude response in Slint and stating a
@@ -158,7 +160,8 @@ it is all that is left.
 
 Done when: ~~every EQ band and pass filter has its own stable ids, a lane on a
 band means one band forever~~ (2026-09-14), and `eq-v2/00-status.md` says which
-of 02 to 04 were taken. 02 and 03 landed 2026-09-14; **04 is what is left**,
+of 02 to 04 were taken. 03 landed 2026-09-14 and 02 on 2026-09-15; **04 is
+what is left**,
 it is optional, and it wants Adam's ear. Two listening passes are owed before
 it: 03 changed how an existing shelf boost sounds, and 02 changed nothing
 audible but changed what the picture claims, which is worth a look with a
