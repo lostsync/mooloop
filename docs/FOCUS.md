@@ -106,7 +106,9 @@ is a taste question and wants his ear; Buffer's first move is a question about
 the device's *shape* that the step below says explicitly not to begin
 unprompted. Neither is blocked on a branch. Until one of them is answered, the
 work that is genuinely available is the listening passes below and the fixes
-further down.
+further down -- which as of the same day includes
+`docs/plans/control-plane-seams/`, five confirmed defects at the control-plane
+boundary that need nobody's ear and nobody's decision.
 
 ### 1. `docs/plans/eq-v2/` — one optional step left, and two listens owed
 
@@ -222,6 +224,27 @@ rendering the active step; threatens realtime safety or project compatibility;
 or is a small regression in the surface being touched. Record larger adjacent
 work instead of folding it into the current branch.
 
+- **`docs/plans/control-plane-seams/` is five confirmed defects and is the
+  work that is actually available right now.** An outside architectural review
+  on 2026-09-15 read the system end to end and passed the layering; what it
+  faulted was the control-plane boundary. Two of the five meet the bar at the
+  top of this list on their own. **A channel's sample and its slice map are
+  published through two separate `ArcSwap`s** although the code that sends
+  them documents them as one fact -- so a note-on can pair a new buffer with
+  old markers, and after a stretch commit those markers index a buffer of a
+  different length. **Opening a song overwrites the shared sample bank before
+  the queued render generation switches**, so the outgoing project can play
+  the incoming one's samples. A third, preview retirement allocating on the
+  callback thread, is the same unverified claim as
+  `buffer-implementation/`'s Stage 1 acceptance test 8, and one
+  allocation-tracking harness closes both. The other two -- commands dropped
+  on a full ring while the session records them as delivered, and sample loads
+  with no per-request token -- are cheap and are the kind of thing that
+  accumulates into an impression rather than a bug report. Four of the five
+  are an afternoon each. The review's sixth finding, that the UI/session seam
+  is becoming a god layer, is deliberately **not** a step; it is a direction
+  recorded in that plan's `README.md`, and step 01 is a down payment on it
+  either way.
 - **The sampler's stretching-polyphony cap is not enforced anywhere.**
   `StretchPool::new` builds a reader for all sixteen voices at 100 KB each —
   1.6 MB a stretching channel against 401 KB for four — although the contract
