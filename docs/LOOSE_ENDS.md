@@ -700,25 +700,6 @@ thing it exists to replace.
 
 ## Consistency questions, not bugs
 
-**Duplicating the last device in a container puts the copy outside the
-box.** `duplicate_device` is `copy_device` then `paste_device` at the same
-slot, and `paste_device` inserts at `run_of(slot).end` -- where a run's end
-boundary counts as *outside* the container, which is the documented and
-tested rule for paste
-(`pasting_onto_a_containers_last_child_lands_outside_the_box`). For duplicate
-it produces a boundary inconsistency rather than a rule: in `[Chain(2),
-Filter, Drive]`, duplicating the Filter inserts at 2, inside the span, and the
-box grows to 3; duplicating the Drive inserts at 3, the span's exclusive end,
-and the copy lands outside. Same gesture, same box, two answers depending on
-which child was clicked -- and the ejecting one is the case a user reaches for
-most, duplicating the thing at the end of the run they just built. Not a
-one-liner because the ambiguity is the one `insert_into_container` exists to
-resolve: the index after a run's last row means both "still inside" and "just
-after", and only the gesture can say which. Either give `duplicate_device` its
-own landing rule -- grow the parent explicitly when the insertion point is its
-span's end -- or state in `CURRENT.md` that a duplicate lands beside the
-original at the original's own depth. Found 2026-09-13.
-
 **Song-mode swing follows pattern phase, and only a test name says so.**
 `swing_offset_ticks` (`sequencer.rs:867`) takes the offbeat parity from a
 note's position *inside its pattern*, so a clip placed at an odd number of

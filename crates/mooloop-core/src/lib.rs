@@ -199,7 +199,7 @@ pub use sampler::{
 };
 pub use structure::{
     assign_device_ids, depth_at, device_slot, drop_lanes_for_device, insert_effect,
-    insert_into_container, insert_run, mint_device_id, move_sequence, parent_of, run_of, span_of, span_problem, unwrap_container, wrap_in_container,
+    insert_into_container, insert_run, insert_run_beside, mint_device_id, move_sequence, parent_of, run_of, span_of, span_problem, unwrap_container, wrap_in_container,
     MAX_CONTAINER_DEPTH, move_effect, move_effect_into_container, remove_effect,
     replace_run, rescope_lanes, rescope_lanes_for_track, slot_of, ChannelEdit, TrackEdit,
 };

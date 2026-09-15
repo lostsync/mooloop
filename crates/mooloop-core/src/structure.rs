@@ -449,6 +449,45 @@ pub fn insert_run(
     Some(at)
 }
 
+/// Insert `rows` immediately after the run at `slot`, **at `slot`'s own
+/// depth**.
+///
+/// The difference from [`insert_run`] at `run_of(slot).end` is one argument to
+/// `resize_enclosing`, and it is the whole of what "beside" means. The index
+/// after a run's last row is ambiguous: for the last child of a container it
+/// is both "still inside" and "just after", and `resize_enclosing` reading
+/// that index resolves it to *outside*, because a span is half-open and does
+/// not contain its own end. Resizing by `slot` instead asks the question of
+/// the row being duplicated, whose enclosing set is not ambiguous at all --
+/// so the copy is enclosed by exactly the containers the original is.
+///
+/// Every other case is unchanged, because `slot` and `at` have the same
+/// enclosing set everywhere except that boundary. Paste keeps [`insert_run`]:
+/// pasting onto a row means "after this run", and landing outside the box is
+/// its documented and tested rule.
+pub fn insert_run_beside(
+    effects: &mut Vec<EffectSlotState>,
+    next_id: &mut u32,
+    slot: usize,
+    rows: &[EffectSlotState],
+) -> Option<usize> {
+    if rows.is_empty() || span_problem(rows).is_some() {
+        return None;
+    }
+    if effects.len() + rows.len() > MAX_EFFECTS_PER_CHANNEL {
+        return None;
+    }
+    if slot >= effects.len() {
+        return None;
+    }
+    let at = run_of(effects, slot).end;
+    resize_enclosing(effects, slot, rows.len() as isize);
+    for (offset, row) in rows.iter().enumerate() {
+        effects.insert(at + offset, row.with_id(mint_device_id(next_id)));
+    }
+    Some(at)
+}
+
 /// Replace the run at `at` with `rows`, minting each an identity.
 ///
 /// Returns what went, in rack order. `None` when `at` names nothing or the

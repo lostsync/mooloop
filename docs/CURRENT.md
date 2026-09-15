@@ -1365,8 +1365,12 @@ land on its own when it starts to matter:
   a paste is a new device that sounds the same rather than the same device
   twice. A paste lands after the run it was dropped on, and a run's end
   boundary is outside a container, so pasting onto a box's last child lands
-  beside the box rather than in it. Duplicate is on every rack row's left
-  rail; all four are on Ctrl+Shift+C/X/V/D, and all but copy are undoable.
+  beside the box rather than in it. **Duplicate does not follow that rule**:
+  a copy lands at the original's own depth, so duplicating a box's last child
+  keeps it in the box. Paste is aimed at a *position* and duplicate is aimed
+  at a *row*, and only the second one can say which side of the boundary it
+  meant. Duplicate is on every rack row's left rail; all four are on
+  Ctrl+Shift+C/X/V/D, and all but copy are undoable.
   **The clipboard does not carry modulation routes or automation lanes**: a
   route's source is a module in the channel's own rack, so it cannot follow a
   device to another channel. That is the question `docs/plans/containers/`
