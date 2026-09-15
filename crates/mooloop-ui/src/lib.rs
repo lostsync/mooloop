@@ -1864,6 +1864,31 @@ fn refresh_mlp8_routes(window: &MainWindow, routes: &mooloop_core::MlP8Routes) {
     );
 }
 
+/// Put one route's depth back into the row the face is drawing, without
+/// rebuilding the list.
+///
+/// The list must not be rebuilt here: this runs on every frame of a drag, and
+/// replacing the model destroys the row being dragged along with the gesture
+/// in it. Touching the one field leaves the row's element alone, which is the
+/// same reason the modulation grid's meters are updated field-wise.
+///
+/// It has to happen at all because the row *is* where the depth lives -- the
+/// depth knob reports rather than writes, so nothing else would move the
+/// number under it.
+fn touch_mlp8_route_amount(window: &MainWindow, id: u16, amount: f32) {
+    let rows = window.get_mlp8_routes();
+    let Some(index) = (0..rows.row_count())
+        .find(|index| rows.row_data(*index).is_some_and(|row| row.id == i32::from(id)))
+    else {
+        return;
+    };
+    let Some(mut row) = rows.row_data(index) else {
+        return;
+    };
+    row.amount = amount;
+    rows.set_row_data(index, row);
+}
+
 /// The two picker vocabularies, set once: they are properties of the device,
 /// not of the patch, so nothing that changes while editing can move them.
 fn install_mlp8_route_vocabularies(window: &MainWindow) {
@@ -10893,8 +10918,9 @@ impl AppUi {
             // ordinary automatable value.
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let weak = window.as_weak();
             window.on_mlp8_route_amount_changed(move |id, amount| {
-                let Ok(id) = u16::try_from(id) else {
+                let (Some(window), Ok(id)) = (weak.upgrade(), u16::try_from(id)) else {
                     return;
                 };
                 let mut st = st.borrow_mut();
@@ -10914,6 +10940,14 @@ impl AppUi {
                     route: id,
                     amount,
                 });
+                // The stored value, not the one that arrived: `set_amount`
+                // clamps, and the row has to show what the patch holds.
+                let stored = st.session.channels[channel_index]
+                    .mlp8_params
+                    .routes
+                    .get(id)
+                    .map_or(amount, |route| route.amount);
+                touch_mlp8_route_amount(&window, id, stored);
                 st.session.dirty = true;
             });
         }

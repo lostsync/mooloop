@@ -263,8 +263,15 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   sixty-nine parameters only at a 20px dial and a 9px caption, which is
   unreadable on a laptop, so the face spends a click per group and every
   control is a 34px `KnobStack` with its value still typed into. NETWORK is
-  the source-by-destination grid with a page to itself, at 176px a column
-  rather than 46. AMP carries the amp envelope beside allocation and
+  the source-by-destination grid with a page to itself; its four columns
+  divide the face's width rather than holding a fixed 176px and centring the
+  remainder. Each cell is a **horizontal** slider -- the bar and the drag both
+  run along the cell's long axis, since a cell seven times wider than it is
+  tall spent its length saying nothing and its height saying the value. A cell
+  draws its modulation state the way a knob's ring does: an armed source marks
+  every legal cell and shows the excursion its route would produce about the
+  authored value, an unarmed one shows where the running sources have actually
+  put the parameter, and a dot per incoming route. AMP carries the amp envelope beside allocation and
   character: Unison and Chorus as selectors under a fixed `VOICES 8` and the
   note count Unison leaves, with Detune, Spread, Drift and Glide as knobs. The
   face stays four rack units. The DS-01 face is six pages at four rack units

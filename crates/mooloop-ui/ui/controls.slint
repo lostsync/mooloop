@@ -639,6 +639,11 @@ export component ParameterKnob inherits Rectangle {
     // than build a second interactive control: there would then be two
     // implementations of what arming a route does to a gesture.
     in property <bool> show-dial: true;
+    // Which way a drag reads. A knob is dragged up; a control drawn as a
+    // horizontal bar has to be dragged sideways, or the gesture disagrees
+    // with the picture. The travel distance is the same either way, so a
+    // parameter does not change sensitivity by changing shape.
+    in property <bool> horizontal;
     // Callers opt only legal, continuous destinations into this mode. While
     // active, every ordinary knob gesture adjusts this source's route depth
     // and leaves `value` — the authored base — untouched.
@@ -780,7 +785,8 @@ export component ParameterKnob inherits Rectangle {
     // drag, reset, and wheel interaction instead of becoming dead pixels.
     knob-touch := TouchArea {
         enabled: root.enabled;
-        mouse-cursor: root.modulation-active ? crosshair : ns-resize;
+        mouse-cursor: root.modulation-active ? crosshair
+            : root.horizontal ? ew-resize : ns-resize;
         changed has-hover => {
             if (self.has-hover) { StatusHint.show(root.tooltip); }
             else { StatusHint.clear(root.tooltip); }
@@ -794,12 +800,16 @@ export component ParameterKnob inherits Rectangle {
                 root.fine-drag = e.modifiers.control || e.modifiers.shift;
                 if (root.modulation-active) { root.modulation-edit-started(); }
             } else if (e.kind == PointerEventKind.move && self.pressed) {
+                // Measured from the press rather than from the last event, so
+                // a control whose own position follows its value cannot feed
+                // its own drag -- the trap `eq_reverb_drag.rs` guards.
+                let travel = (root.horizontal
+                    ? self.mouse-x - self.pressed-x
+                    : self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : 150px);
                 if (root.modulation-active) {
-                    root.set-modulation-depth(root.pressed-modulation-depth
-                        + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : 150px));
+                    root.set-modulation-depth(root.pressed-modulation-depth + travel);
                 } else {
-                    root.set-normalized(root.pressed-normalized
-                        + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 5000px : 150px));
+                    root.set-normalized(root.pressed-normalized + travel);
                 }
             } else if (e.kind == PointerEventKind.up && root.modulation-active && root.modulation-edited) {
                 root.modulation-edit-finished();
@@ -880,6 +890,11 @@ export component KnobField inherits Rectangle {
     in property <length> diameter: 30px;
     in property <length> label-width: 34px;
     in property <length> field-width: 62px;
+    /// Whether the caller owns this row's value; see `ParameterKnob`. A row
+    /// drawn from a model -- one route in a list, say -- must set it, or the
+    /// first drag drops the binding that feeds it and the field goes on
+    /// showing whatever the model said when the drag began.
+    in property <bool> controlled;
     in property <bool> modulation-armed;
     in property <bool> modulation-allowed: true;
     in-out property <float> modulation-depth;
@@ -923,6 +938,7 @@ export component KnobField inherits Rectangle {
         diameter: root.diameter;
         label: root.label;
         tooltip: root.tooltip;
+        controlled: root.controlled;
         value <=> root.value;
         minimum: root.minimum;
         maximum: root.maximum;
