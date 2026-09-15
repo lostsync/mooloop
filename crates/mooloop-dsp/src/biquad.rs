@@ -328,6 +328,186 @@ mod tests {
         }
     }
 
+    /// **What `eq-v2`'s step 03 did to a shelf that was already boosted**, in
+    /// decibels, so the listening pass it asks for knows what to listen for.
+    ///
+    /// The seven-band EQ called [`Biquad::shelf`] until 2026-09-14 and calls
+    /// [`Biquad::shelf_slope`] now. Both are the cookbook's shelf and they
+    /// differ only in how they reach `alpha` -- `shelf` uses
+    /// `sqrt(A + 1/A)`, which is a slope that *varies with gain*, and
+    /// `shelf_slope` uses the knob. So the two agree exactly at 0 dB and
+    /// nowhere else, and "it sounds different" is true but useless without a
+    /// number.
+    ///
+    /// Run it deliberately; it measures rather than asserts. The bound that
+    /// *is* asserted is in `the_shelf_law_change_pivots_about_the_corner`
+    /// below, which is the claim this table supports.
+    #[test]
+    #[ignore = "prints a listening brief; run deliberately"]
+    fn shelf_law_change_in_decibels() {
+        let sr = 48_000;
+        let fc = 200.0;
+        println!();
+        println!("  a {fc} Hz low shelf, old law (`shelf`) against new (`shelf_slope`)");
+        println!("  at the 0.707 both shelves rest at, in dB, new minus old");
+        println!();
+        print!("  gain  ");
+        for octave in -3..=3 {
+            print!("{:>9}", format!("{:.0}Hz", fc * 2.0_f32.powi(octave)));
+        }
+        println!();
+        for gain in [-12.0, -6.0, -3.0, 3.0, 6.0, 12.0] {
+            print!("  {gain:>4}  ");
+            for octave in -3..=3 {
+                let hz = fc * 2.0_f32.powi(octave);
+                let mut old = Biquad::identity();
+                old.shelf(fc, gain, true, sr);
+                let mut new = Biquad::identity();
+                new.shelf_slope(fc, gain, 0.707, true, sr);
+                print!(
+                    "{:>9.2}",
+                    new.magnitude_db(hz, sr) - old.magnitude_db(hz, sr)
+                );
+            }
+            println!();
+        }
+        println!();
+
+        // The other axis, and the one that matters: the knob was *ignored*
+        // before, so a patch that moved it was rendered at the old law
+        // whatever it said. Now it is the slope.
+        println!("  the same shelf at +6 dB, across the Q knob's travel");
+        println!("  (the knob did nothing at all before 2026-09-14)");
+        println!();
+        print!("  Q     ");
+        for octave in -3..=3 {
+            print!("{:>9}", format!("{:.0}Hz", fc * 2.0_f32.powi(octave)));
+        }
+        println!();
+        for q in [0.15_f32, 0.35, 0.707, 1.4, 4.0, 18.0] {
+            print!("  {q:>4}  ");
+            for octave in -3..=3 {
+                let hz = fc * 2.0_f32.powi(octave);
+                let mut old = Biquad::identity();
+                old.shelf(fc, 6.0, true, sr);
+                let mut new = Biquad::identity();
+                new.shelf_slope(fc, 6.0, q, true, sr);
+                print!(
+                    "{:>9.2}",
+                    new.magnitude_db(hz, sr) - old.magnitude_db(hz, sr)
+                );
+            }
+            println!();
+        }
+        println!();
+    }
+
+    /// **The shelf law change pivots a shelf about its corner; it does not
+    /// move the shelf.**
+    ///
+    /// Three things have to hold for that sentence, and the third is the one
+    /// the measurement taught rather than confirmed: the two laws agree
+    /// *exactly* at the corner frequency. A cookbook shelf passes through half
+    /// its gain at `w0` whatever `alpha` is, so the only thing a slope can
+    /// change is how fast it gets there. The first version of this test
+    /// asserted the opposite, and the table above is what corrected it.
+    ///
+    /// Far out on either side they agree too -- a shelf is its gain and unity
+    /// there -- so the whole of the difference lives in the octave or two
+    /// around the corner. That is what lets `eq-v2/00-status.md` tell a
+    /// listener where to listen instead of "it sounds different".
+    #[test]
+    fn the_shelf_law_change_pivots_about_the_corner() {
+        let sr = 48_000;
+        let fc = 200.0;
+        for gain in [-12.0_f32, -6.0, -3.0, 3.0, 6.0, 12.0] {
+            let mut previous = Biquad::identity();
+            previous.shelf(fc, gain, true, sr);
+            let mut current = Biquad::identity();
+            current.shelf_slope(fc, gain, 0.707, true, sr);
+            let delta = |hz| current.magnitude_db(hz, sr) - previous.magnitude_db(hz, sr);
+
+            // The plateau and the untouched side.
+            for hz in [fc / 16.0, fc * 16.0] {
+                assert!(
+                    delta(hz).abs() < 0.1,
+                    "a {gain} dB shelf moved by {} dB four octaves from its corner",
+                    delta(hz)
+                );
+            }
+            // The corner itself: both laws pass through half the gain.
+            assert!(
+                delta(fc).abs() < 1.0e-3,
+                "the two laws disagree at the corner by {} dB",
+                delta(fc)
+            );
+            // An octave out they differ, or step 03 changed nothing and its
+            // status file is wrong to ask for a listen.
+            assert!(
+                delta(fc / 2.0).abs() > 0.05 && delta(fc * 2.0).abs() > 0.05,
+                "a {gain} dB shelf is unchanged an octave from its corner"
+            );
+            // Antisymmetric: what one side loses the other gains.
+            assert!(
+                (delta(fc / 2.0) + delta(fc * 2.0)).abs() < 0.02,
+                "the pivot is lopsided: {} below, {} above",
+                delta(fc / 2.0),
+                delta(fc * 2.0)
+            );
+        }
+    }
+
+    /// **Where the shelf Q knob stops doing anything, as a fraction of its own
+    /// travel.**
+    ///
+    /// `shelf_slope` clamps the slope at 2.0 and the seven-band EQ's Q
+    /// descriptor runs 0.15..18 exponentially, because the same id has to
+    /// serve that band as a bell. So the knob saturates part way along and the
+    /// rest of it is one filter. `LOOSE_ENDS.md` carried that as "the top
+    /// four-fifths", which was estimated rather than measured and is nearly
+    /// twice the truth.
+    ///
+    /// Pinned because the fraction is a *product* of two numbers that live in
+    /// different crates -- the clamp here and the descriptor range in
+    /// `mooloop_core` -- so either one moving silently changes what a face is
+    /// promising, and neither one looks like it has anything to do with a
+    /// knob's travel.
+    #[test]
+    fn the_shelf_q_knob_saturates_a_little_past_half_its_travel() {
+        let sr = 48_000;
+        // The descriptor's range, from the one table that states it.
+        let descriptor = mooloop_core::EffectKind::Eq
+            .descriptor(mooloop_core::eq_band_param(0, mooloop_core::EQ_BAND_Q))
+            .expect("a band has a Q descriptor");
+        let (min, max) = (descriptor.min, descriptor.max);
+        assert_eq!((min, max), (0.15, 18.0));
+
+        // Everything from the clamp upward is the same filter.
+        const SLOPE_CEILING: f32 = 2.0;
+        let mut at_ceiling = Biquad::identity();
+        at_ceiling.shelf_slope(200.0, 6.0, SLOPE_CEILING, true, sr);
+        let mut at_top = Biquad::identity();
+        at_top.shelf_slope(200.0, 6.0, max, true, sr);
+        for hz in [50.0, 200.0, 800.0] {
+            assert!(
+                (at_ceiling.magnitude_db(hz, sr) - at_top.magnitude_db(hz, sr)).abs() < 1.0e-4,
+                "the knob is still moving the filter above its clamp"
+            );
+        }
+        // And just below it, it is not.
+        let mut below = Biquad::identity();
+        below.shelf_slope(200.0, 6.0, SLOPE_CEILING * 0.7, true, sr);
+        assert!((below.magnitude_db(100.0, sr) - at_ceiling.magnitude_db(100.0, sr)).abs() > 0.05);
+
+        // Which is 46% of the travel, not the 80% that was written down.
+        let dead = 1.0 - (SLOPE_CEILING / min).ln() / (max / min).ln();
+        assert!(
+            (0.45..0.47).contains(&dead),
+            "the dead fraction of the shelf Q knob is {dead}, and \
+             `LOOSE_ENDS.md` states a figure that has to move with it"
+        );
+    }
+
     /// A pass-through stage is 0 dB everywhere, which is what lets a bank sum
     /// the stages it is not running without a special case.
     #[test]

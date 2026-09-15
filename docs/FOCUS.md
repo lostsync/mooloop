@@ -132,10 +132,15 @@ things standing between here and CLAP", item 1.
 measured character from five reference EQs — the only step that changes how
 the device sounds when nobody asked it to.
 
-**Two listening passes are owed before it, and they are the live work here.**
-Step 03 changed how an existing shelf boost sounds and had to: the knob was
-doing nothing, so any value it now takes is a change from "ignored". A default
-EQ is unaffected, because both its shelves rest at 0 dB. Step 02 changed
+**Two listening passes are owed before it, and they are the live work here --
+but they are smaller than they were written up as.** Step 03's change was
+measured on 2026-09-15 rather than left as "it sounds different": at the Q both
+shelves rest at, it peaks at **0.45 dB**, it pivots about the corner rather
+than moving the shelf, and it is gone three octaves out. The change that is
+worth hearing is on shelves whose **Q knob is away from 0.707** -- up to 1.9 dB
+-- which is exactly the knob that did nothing before step 03, so the patches
+affected are the ones where somebody tried to use it and gave up.
+`eq-v2/00-status.md` has the table and says where to listen. Step 02 changed
 nothing audible and changed what the picture *claims*, which wants a look with
 a patch moving.
 
@@ -200,9 +205,10 @@ The console's studio listening pass is the fifth, and it is the one that could
 still change something that shipped.
 
 The sixth is the EQ, and it is two things at once: **the listening passes
-owed for steps 02 and 03**, and whether step 04 is taken at all. Step 03
-changed how an existing shelf boost sounds -- it had to, because the knob was
-doing nothing before it -- and that is the one to listen to first.
+owed for steps 02 and 03**, and whether step 04 is taken at all. Step 03 is
+the one to listen to first, and it has been measured so the listen is short:
+half a decibel at the resting Q, up to two on a shelf whose Q knob somebody
+moved, all of it within an octave or two of the corner.
 
 Adam, if you are reading this list and want the sequence moving again, the
 two answers that unblock the most are **whether the EQ's step 04 is worth

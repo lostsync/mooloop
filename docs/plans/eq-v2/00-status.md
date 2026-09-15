@@ -1,5 +1,49 @@
 # EQ v2 status
 
+## The listening brief for step 03, measured 2026-09-15
+
+Step 03 says "**this changes how an existing shelf boost sounds**" and leaves
+it there, which is true and not much use to somebody about to listen. Step 02
+handed us the instrument to say it properly: `Biquad::magnitude_db` is the
+running filter's response, so the two shelf laws can simply be subtracted.
+`shelf_law_change_in_decibels` prints the table; run it with `--ignored`.
+
+**The change is smaller than the sentence implies, and it is somewhere
+specific.**
+
+- **At the Q both shelves rest at (0.707), the difference peaks at 0.45 dB**,
+  an octave from the corner, for a shelf at ±12 dB. At ±3 dB it is 0.21 dB.
+- **It is a pivot, not a move.** The two laws agree *exactly* at the corner --
+  a cookbook shelf passes through half its gain there whatever its slope -- and
+  they agree again beyond about three octaves either side, where the shelf is
+  its gain and unity. Everything happens in between, and it is antisymmetric:
+  what one side loses the other gains.
+- **The real change is across the Q knob, which did nothing at all before.**
+  At Q 0.15 the same +6 dB shelf differs by 1.86 dB; at Q 4 by 0.96 dB the
+  other way. So a patch where somebody left the shelf Q alone barely moved,
+  and a patch where somebody *tried* to use that knob — and heard nothing, and
+  probably gave up — is the one that changed.
+
+**So the listen is: shelves with a Q away from 0.707, an octave either side of
+the corner.** A default EQ is unaffected, and a song that never touched a
+shelf's Q is within half a decibel.
+
+`the_shelf_law_change_pivots_about_the_corner` holds all three of those claims,
+and the first version of it asserted the *opposite* of the corner one. The
+table is what corrected it — which is the argument for measuring before
+writing prose about a change, and this file had already written the prose.
+
+### And a number `LOOSE_ENDS.md` had estimated at nearly twice the truth
+
+That entry says the shelf Q knob "stops steepening above 2" and calls it "the
+top four-fifths of the knob's travel". Measured, it is **the top 46%**:
+`shelf_slope` clamps the slope at 2.0, the Q descriptor runs 0.15..18
+exponentially, and `ln(2/0.15) / ln(18/0.15)` is 0.54 of the way along.
+`the_shelf_q_knob_saturates_a_little_past_half_its_travel` pins it, because the
+fraction is a product of a clamp in `mooloop-dsp` and a range in
+`mooloop-core` and neither of them looks like it has anything to do with a
+knob.
+
 ## Step 02 — the curve tells the truth
 
 Landed on `feat/eq-curve-truth` (2026-09-15). **02 and 03 are done; 04 is

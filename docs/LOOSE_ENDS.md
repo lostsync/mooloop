@@ -44,8 +44,11 @@ a wish belongs in `ENHANCEMENTS.md`; a described behaviour gap belongs in
 **A shelf's Q knob stops steepening above 2 and the face does not say so.**
 `Biquad::shelf_slope` clamps the slope to 0.1..2.0, where the cookbook's
 radicand goes negative; a seven-band EQ band's Q descriptor runs to 18, because
-the same id has to serve that band as a bell. So the top four-fifths of the
-knob's travel does nothing while the band is a shelf -- which is better than
+the same id has to serve that band as a bell. So **the top 46% of the knob's
+travel** does nothing while the band is a shelf -- measured 2026-09-15 and
+pinned by `the_shelf_q_knob_saturates_a_little_past_half_its_travel`; this
+entry said "four-fifths" until then, which was estimated and nearly twice the
+truth. That is better than
 2026-09-14, when *all* of it did nothing (`Biquad::shelf` took no Q at all),
 and is still a control showing a number the filter is not using. The channel
 strip avoids this by giving its two shelf-capable bands a narrower Q range, and
