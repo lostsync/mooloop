@@ -9,7 +9,8 @@ use crate::{
     KickCharacter, AutomationLane, LoopRange, ModRack, MAX_CHANNELS, MonoSynthParams, MlM1Params, MlP8Params, NoteEvent, NoteId,
     PatternPlacement,
     PlaybackMode, PolySynthParams,
-    SampleCommit, SamplerParams, SliceMap, SnareCharacter, DEFAULT_STEPS,
+    SampleCommit, SamplerParams, SliceMap, SnareCharacter, DEFAULT_STEPS, STARTER_LOOP_BARS,
+    TICKS_PER_BAR,
 };
 
 pub const MIN_SWING_PERCENT: u8 = 50;
@@ -1169,6 +1170,12 @@ impl Project {
             })
             .collect(),
             buses: starter_tracks(),
+            // The first two bars, marked and switched off. The strip above
+            // the bar numbers is where a loop is made and nothing says so, so
+            // a new song arrives with one already drawn on it -- close enough
+            // to grab an end of, and inert until the toggle is pressed.
+            loop_range: LoopRange::marked(0, STARTER_LOOP_BARS * TICKS_PER_BAR)
+                .unwrap_or_default(),
             ..Self::default()
         };
         // Four drum channels onto one track, which is the grouping: it is the

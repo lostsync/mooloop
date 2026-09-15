@@ -257,56 +257,65 @@ fn no_face_spells_the_floor_for_itself() {
     );
 }
 
-/// The repaint throttle quantizes a meter's dB into segments and repaints only
-/// when the count changes, so it has to use the count the meter draws with.
-/// The two numbers live on opposite sides of the boundary -- `mixer.slint` and
-/// `device-rack.slint` draw them, `lib.rs` throttles by them -- and nothing
-/// joined them until this test.
+/// **No meter in the application states a segment count.**
 ///
-/// The failure it prevents is not a crash: the throttle would simply swallow a
-/// change that moves a visible segment, which is the "peak marker one segment
-/// behind where the audio put it" the throttle's own call site warns about.
+/// This replaces `slint_meter_segment_counts_match_the_throttle`, which held
+/// `mixer.slint`'s and `device-rack.slint`'s counts against two Rust
+/// constants the repaint throttle quantized by. Meters became continuous bars
+/// on 2026-09-15, the constants went, and the old test would have passed
+/// forever by finding nothing on either side -- `left: [], right: []` -- which
+/// is the shape of a guard that has stopped guarding.
+///
+/// So this checks what is now true instead. A `segments:` literal in an
+/// application face means that meter went back to LEDs, and the throttle --
+/// which now steps by a quarter of a decibel, finer than a pixel -- would be
+/// repainting a meter far more often than it can change. `mockup-catalog.slint`
+/// is the one file allowed to state a count, because the LED form is a widget
+/// it exists to display.
 #[test]
-fn slint_meter_segment_counts_match_the_throttle() {
-    /// Every literal segment count `key` introduces. A binding that is not a
-    /// literal -- `segments: MixerMetrics.meter-segments;` -- is the markup
-    /// reading the count from somewhere rather than stating it, and is not a
-    /// copy for this test to hold. Anything else that fails to parse is, so
-    /// it panics rather than being skipped: a silent skip is how a check
-    /// stops checking.
-    fn counts(source: &str, key: &str) -> Vec<u32> {
-        source
-            .lines()
-            .filter_map(|line| line.split_once(key).map(|(_, rest)| (line, rest)))
-            .filter_map(|(line, rest)| {
-                let stated = rest.trim().trim_end_matches(';');
-                if stated.starts_with(|c: char| c.is_ascii_digit()) {
-                    Some(stated.parse().unwrap_or_else(|_| {
-                        panic!("segment count is not a plain integer: {line}")
-                    }))
-                } else {
-                    None
-                }
-            })
-            .collect()
+fn no_application_meter_states_a_segment_count() {
+    let mut swept = 0;
+    let mut stating = Vec::new();
+    for entry in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/ui")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("slint") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if name == "mockup-catalog.slint" {
+            continue;
+        }
+        swept += 1;
+        for (number, line) in std::fs::read_to_string(&path).unwrap().lines().enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            let Some((_, rest)) = line.split_once("segments:") else {
+                continue;
+            };
+            let stated = rest.trim().trim_end_matches(';').trim();
+            // Only a literal is a count. `segments: root.segments;` is a
+            // wrapper handing its own property down, which is the markup
+            // reading the number from somewhere rather than stating it --
+            // the same distinction the test this replaced drew, and for the
+            // same reason. `segments: 0` is a component declaring the
+            // continuous default.
+            if stated.starts_with(|c: char| c.is_ascii_digit()) && stated != "0" {
+                stating.push(format!("{name}:{}: {}", number + 1, line.trim()));
+            }
+        }
     }
-
-    let mixer = counts(include_str!("../ui/mixer.slint"), "meter-segments:");
-    assert_eq!(
-        mixer,
-        vec![mooloop_ui::MIXER_STRIP_METER_SEGMENTS],
-        "mixer.slint's MixerMetrics.meter-segments against MIXER_STRIP_METER_SEGMENTS"
+    assert!(
+        stating.is_empty(),
+        "these faces ask for LED segments, which the repaint throttle no \
+         longer matches: {stating:#?}"
     );
-
-    let rails = counts(include_str!("../ui/device-rack.slint"), "segments:");
-    assert!(!rails.is_empty(), "device-rack.slint states no segment count");
-    for drawn in &rails {
-        assert_eq!(
-            *drawn,
-            mooloop_ui::DEVICE_RAIL_METER_SEGMENTS,
-            "device-rack.slint's segments against DEVICE_RAIL_METER_SEGMENTS"
-        );
-    }
+    // The sweep reads the directory, so a rename cannot quietly empty it --
+    // the failure the test this replaced went out on.
+    assert!(
+        swept > 20,
+        "only {swept} .slint files were swept; the walk has stopped finding them"
+    );
 }
 
 /// **No readout rounds a dB for itself.** `GainMath` owns the two dB formats

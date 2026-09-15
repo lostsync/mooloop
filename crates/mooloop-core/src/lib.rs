@@ -194,7 +194,7 @@ pub use pattern::{
 };
 pub use playlist::{
     LoopRange, PatternPlacement, PlaybackMode, MAX_PLAYLIST_BARS, MAX_PLAYLIST_PLACEMENTS,
-    MAX_PLAYLIST_TICKS, STEPS_PER_BAR, TICKS_PER_BAR,
+    MAX_PLAYLIST_TICKS, STARTER_LOOP_BARS, STEPS_PER_BAR, TICKS_PER_BAR,
 };
 pub use project::{
     AuxInState, ChannelPreset, ChannelSetup, ChannelSource, Ds01State, DrumSynthState, Kit,

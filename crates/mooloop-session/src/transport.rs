@@ -181,7 +181,34 @@ impl Session {
     /// toggle has something to switch back on. Ticks arrive snapped by the
     /// editor, and a drag with no width in it is a click rather than a loop.
     pub fn set_loop_range(&mut self, from_tick: i32, to_tick: i32) -> Option<EngineCommand> {
+        self.apply_loop_range(LoopRange::from_drag(
+            from_tick.max(0) as u32,
+            to_tick.max(0) as u32,
+        )?)
+    }
+
+    /// Moves the section without deciding whether it runs.
+    ///
+    /// This is the edge-handle drag, and it is a different gesture from
+    /// [`set_loop_range`](Self::set_loop_range) above in exactly one respect:
+    /// dragging a loop *out* asks for one and gets it switched on, while
+    /// dragging an end of a loop that is already there says nothing about
+    /// whether it should be live. A new song opens with two bars marked and
+    /// looping off, so an edge drag that enabled it would overturn that
+    /// answer on the way past -- and there would be no way to nudge a marked
+    /// section without starting the repeat.
+    pub fn adjust_loop_range(&mut self, from_tick: i32, to_tick: i32) -> Option<EngineCommand> {
         let range = LoopRange::from_drag(from_tick.max(0) as u32, to_tick.max(0) as u32)?;
+        self.apply_loop_range(LoopRange {
+            enabled: self.loop_range.enabled,
+            ..range
+        })
+    }
+
+    /// Stores a range and reports the command for it, or nothing when it is
+    /// the range already held. The one writer of `loop_range`, so "a changed
+    /// loop marks the song dirty and reaches the engine" is stated once.
+    fn apply_loop_range(&mut self, range: LoopRange) -> Option<EngineCommand> {
         if self.loop_range == range {
             return None;
         }
@@ -202,19 +229,15 @@ impl Session {
         if enabled && self.loop_range.end_tick <= self.loop_range.start_tick {
             return None;
         }
-        self.loop_range.enabled = enabled;
-        self.mark_dirty();
-        Some(EngineCommand::SetLoopRange(self.loop_range))
+        self.apply_loop_range(LoopRange {
+            enabled,
+            ..self.loop_range
+        })
     }
 
     /// Removes the loop entirely, points and all.
     pub fn clear_loop_range(&mut self) -> Option<EngineCommand> {
-        if self.loop_range == LoopRange::default() {
-            return None;
-        }
-        self.loop_range = LoopRange::default();
-        self.mark_dirty();
-        Some(EngineCommand::SetLoopRange(self.loop_range))
+        self.apply_loop_range(LoopRange::default())
     }
 
     /// Places `pattern` on the playlist at `start_tick`.

@@ -248,7 +248,7 @@ export component DeviceOutputRail inherits Rectangle {
         Rectangle { vertical-stretch: 1; }
         Text { text: "OUT"; color: Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
         ChannelMeter {
-            width: 22px; height: 58px; segments: 12;
+            width: 22px; height: 58px;
             // A rail meters a chain, which has no clip latch to show or clear.
             show-clip: false;
             left-db: root.output-left-db; right-db: root.output-right-db;
@@ -429,7 +429,6 @@ export component DeviceFrame inherits Rectangle {
             ChannelMeter {
                 width: 22px;
                 height: 58px;
-                segments: 12;
                 // As the OUT rail: no clip latch behind this, so no lamp.
                 show-clip: false;
                 left-db: root.input-left-db;

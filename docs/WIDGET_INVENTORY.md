@@ -232,6 +232,14 @@ would have been a second implementation of that contract. `show-dial` joins
   banner) and the browser sidebar grip; the comment at `main.slint:4023` says
   the second is *"the same moving-origin drag integrator as the dock
   splitter"*.
+  - Added 2026-09-15, after this file's audit date: `PlaylistLoopHandle`
+    (`main.slint`, PLAYLIST banner) is a third thin grabbable edge, and it is
+    worth being explicit that it is **not** a third splitter. A splitter
+    accumulates deltas to move a boundary; this reports an absolute pointer
+    position the caller turns into a tick. What the three do share is the
+    paint-narrower-than-target rule — 2px drawn in a 9px hit area — and the
+    resize cursor that advertises it. If a fourth appears, that rule is the
+    component to ask for, not the drag integrator.
 - **`ListRow`**, **`TitledPanel`**, **`EmptyState`**, **`TabBar`** — each
   recurs, none is factored. `EmptyState` in particular is inconsistent:
   `audio-preferences.slint:86` and `main.slint:3896` phrase and style the

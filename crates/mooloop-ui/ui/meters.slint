@@ -9,6 +9,23 @@ import { AudioOrientation } from "controls.slint";
 // peak hold, clip latch) belong to the audio side in `meter.rs`; these
 // components only draw what they are handed.
 
+// The meter ballistics a user can tune.
+//
+// `falloff` is an index into the row Preferences > Appearance shows, and that
+// is deliberately all it is: the rates in dB per second live in `meter.rs`,
+// which is the thing that runs them, and Rust persists the choice by name.
+// This global exists for the same reason `Motion` does -- the preference page
+// writes straight into it, so the change is live before Apply, and Rust reads
+// it back when the time comes to save.
+//
+// The markup never needs the number. Ballistics run on the audio side and
+// these components only draw what they are handed, which is the rule stated
+// at the top of this file and the reason a dB/s does not appear in it.
+export global MeterPrefs {
+    // 0=Fast, 1=Standard (IEC), 2=Slow, 3=Slowest
+    in-out property <int> falloff: 1;
+}
+
 // Shared dB -> 0..1 mapping, exposed so a scale and its meter cannot drift.
 export global MeterScaleMath {
     public pure function normalize(db: float, minimum-db: float) -> float {
@@ -80,16 +97,90 @@ export component MeterScale inherits Rectangle {
     }
 }
 
-// LED-segment peak meter. Segments are coloured by where they sit on the
-// scale, not by the current level, so the meter reads like hardware: the top
-// of the range is always red whether or not it is lit.
+// The colour zones of the scale, drawn at full height and one alpha.
+//
+// **Position, never level.** A zone is red because it is the top of the range,
+// not because the signal reached it -- which is the convention the LED form
+// has had since it was written, and the one thing a continuous bar can lose
+// by accident: stretch a single three-stop gradient to the lit height and the
+// whole bar turns red the moment it hits 0 dB. Drawing the zones full height
+// and showing a window onto them is what keeps a colour attached to a dB.
+component MeterZones inherits Rectangle {
+    in property <float> minimum-db;
+    in property <float> warning-db;
+    in property <float> hot-db;
+    in property <float> zone-alpha: 1.0;
+    in property <AudioOrientation> orientation: AudioOrientation.vertical;
+
+    private property <float> warn-n: MeterScaleMath.normalize(root.warning-db, root.minimum-db);
+    private property <float> hot-n: MeterScaleMath.normalize(root.hot-db, root.minimum-db);
+
+    if root.orientation == AudioOrientation.vertical : Rectangle {
+        Rectangle {
+            y: parent.height * (1 - root.warn-n);
+            width: parent.width;
+            height: parent.height * root.warn-n;
+            background: Theme.meter-safe.with-alpha(root.zone-alpha);
+        }
+        Rectangle {
+            y: parent.height * (1 - root.hot-n);
+            width: parent.width;
+            height: parent.height * (root.hot-n - root.warn-n);
+            background: Theme.meter-warning.with-alpha(root.zone-alpha);
+        }
+        Rectangle {
+            y: 0px;
+            width: parent.width;
+            height: parent.height * (1 - root.hot-n);
+            background: Theme.meter-clip.with-alpha(root.zone-alpha);
+        }
+    }
+    if root.orientation == AudioOrientation.horizontal : Rectangle {
+        Rectangle {
+            x: 0px;
+            width: parent.width * root.warn-n;
+            height: parent.height;
+            background: Theme.meter-safe.with-alpha(root.zone-alpha);
+        }
+        Rectangle {
+            x: parent.width * root.warn-n;
+            width: parent.width * (root.hot-n - root.warn-n);
+            height: parent.height;
+            background: Theme.meter-warning.with-alpha(root.zone-alpha);
+        }
+        Rectangle {
+            x: parent.width * root.hot-n;
+            width: parent.width * (1 - root.hot-n);
+            height: parent.height;
+            background: Theme.meter-clip.with-alpha(root.zone-alpha);
+        }
+    }
+}
+
+// Peak meter, continuous by default and LED-segmented on request.
+//
+// **`segments: 0` means one unbroken bar, and that is what every meter in the
+// application asks for.** The LED form is what this drew everywhere until
+// 2026-09-15; at the sizes a mixer strip actually has, a dozen-odd lozenges
+// quantise the reading to about 4 dB a step and the gaps eat a third of the
+// column. Raising the count does not fix it on its own either -- the 1px gap
+// between segments does not scale, so past about thirty the segments compute
+// a negative height and the meter goes blank. Continuous or coarse are the
+// two things this can honestly be, which is why the option is a count and
+// zero, rather than a count anyone is invited to tune.
+//
+// The segmented path is kept because it is the readable one at very large
+// sizes and because `mockup-catalog.slint` still draws it, not because
+// anything in the mixer does.
 export component SegmentedMeter inherits Rectangle {
     in property <float> level-db: GainMath.min-db;
     in property <float> held-db: GainMath.min-db;
     in property <float> minimum-db: GainMath.min-db;
     in property <float> warning-db: GainMath.meter-warning-db;
     in property <float> hot-db: GainMath.meter-hot-db;
-    in property <int> segments: 22;
+    /// Zero -- the default -- draws one continuous bar. A positive count
+    /// draws that many LED lozenges. See the note above the component.
+    in property <int> segments: 0;
     in property <AudioOrientation> orientation: AudioOrientation.vertical;
 
     private property <float> level-normalized: MeterScaleMath.normalize(root.level-db, root.minimum-db);
@@ -114,7 +205,89 @@ export component SegmentedMeter inherits Rectangle {
         return root.level-normalized * root.segments > i;
     }
 
-    if root.orientation == AudioOrientation.vertical : Rectangle {
+    // The continuous bar: the zones at rest, a window onto the zones at full
+    // strength for the part that is lit, and a hairline for the peak hold --
+    // which is the segmented form's "held segment stays bright" with nothing
+    // left to round it to.
+    if root.segments <= 0 && root.orientation == AudioOrientation.vertical : column := Rectangle {
+        x: 1px;
+        y: 1px;
+        width: parent.width - 2px;
+        height: parent.height - 2px;
+
+        MeterZones {
+            width: 100%;
+            height: 100%;
+            zone-alpha: 0.13;
+            minimum-db: root.minimum-db;
+            warning-db: root.warning-db;
+            hot-db: root.hot-db;
+        }
+        Rectangle {
+            y: column.height * (1 - root.level-normalized);
+            width: column.width;
+            height: column.height * root.level-normalized;
+            clip: true;
+            MeterZones {
+                // Pushed back up by exactly what the window came down, so the
+                // zones sit at their own dB positions rather than at the top
+                // of whatever the window happens to be.
+                y: -column.height * (1 - root.level-normalized);
+                width: column.width;
+                height: column.height;
+                minimum-db: root.minimum-db;
+                warning-db: root.warning-db;
+                hot-db: root.hot-db;
+            }
+        }
+        if root.held-db > root.minimum-db : Rectangle {
+            y: min(column.height - 1px,
+                column.height * (1 - root.held-normalized));
+            width: column.width;
+            height: 1px;
+            background: Theme.text;
+        }
+    }
+
+    if root.segments <= 0 && root.orientation == AudioOrientation.horizontal : row := Rectangle {
+        x: 1px;
+        y: 1px;
+        width: parent.width - 2px;
+        height: parent.height - 2px;
+
+        MeterZones {
+            width: 100%;
+            height: 100%;
+            zone-alpha: 0.13;
+            orientation: AudioOrientation.horizontal;
+            minimum-db: root.minimum-db;
+            warning-db: root.warning-db;
+            hot-db: root.hot-db;
+        }
+        Rectangle {
+            x: 0px;
+            width: row.width * root.level-normalized;
+            height: row.height;
+            clip: true;
+            MeterZones {
+                x: 0px;
+                width: row.width;
+                height: row.height;
+                orientation: AudioOrientation.horizontal;
+                minimum-db: root.minimum-db;
+                warning-db: root.warning-db;
+                hot-db: root.hot-db;
+            }
+        }
+        if root.held-db > root.minimum-db : Rectangle {
+            x: min(row.width - 1px, row.width * root.held-normalized);
+            width: 1px;
+            height: row.height;
+            background: Theme.text;
+        }
+    }
+
+    if root.segments > 0 && root.orientation == AudioOrientation.vertical : Rectangle {
         for i in root.segments : Rectangle {
             property <bool> lit: root.segment-lit(i);
             property <bool> peak: i == root.held-index;
@@ -131,7 +304,7 @@ export component SegmentedMeter inherits Rectangle {
         }
     }
 
-    if root.orientation == AudioOrientation.horizontal : Rectangle {
+    if root.segments > 0 && root.orientation == AudioOrientation.horizontal : Rectangle {
         for i in root.segments : Rectangle {
             property <bool> lit: root.segment-lit(i);
             property <bool> peak: i == root.held-index;
@@ -176,7 +349,8 @@ export component ChannelMeter inherits Rectangle {
     in property <float> held-left-db: GainMath.min-db;
     in property <float> held-right-db: GainMath.min-db;
     in property <bool> clipping;
-    in property <int> segments: 18;
+    /// Passed through to `SegmentedMeter`; zero is one continuous bar.
+    in property <int> segments: 0;
     /// Whether to draw the clip lamp at all.
     ///
     /// **A meter whose owner has no clip state must turn this off.** The lamp
@@ -228,7 +402,8 @@ export component MasterMeter inherits Rectangle {
     in property <bool> left-clipping;
     in property <bool> right-clipping;
     in property <float> minimum-db: GainMath.min-db;
-    in property <int> segments: 26;
+    /// Passed through to `SegmentedMeter`; zero is one continuous bar.
+    in property <int> segments: 0;
     in property <AudioOrientation> orientation: AudioOrientation.horizontal;
     in property <bool> show-readout: true;
     callback clip-reset();

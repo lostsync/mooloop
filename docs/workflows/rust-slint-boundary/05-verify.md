@@ -14,7 +14,7 @@ From the 2026-09-13/14 runs, every new assertion, and what it said:
 | --- | --- |
 | `min-db: -60.0` → `-61.0` | `min-db: slint -61 vs rust -60` |
 | one `GainMath.min-db` → `-60` | named the file and line that spelled the floor |
-| `meter-segments: 14` → `15` | mixer.slint against `MIXER_STRIP_METER_SEGMENTS` |
+| `meter-segments: 14` → `15` | mixer.slint against `MIXER_STRIP_METER_SEGMENTS` (retired 2026-09-15, see below) |
 | aux-in default `0.3552344` → `0.35` | the face rests at 0.35, the table at 0.3552344 |
 | `LfoParam.phase: 3` → `4` | the shelf sends 4, mooloop-core says 3 |
 | Smoothing `maximum: 2` → `3` | face max 3, table 2 |
@@ -25,6 +25,28 @@ From the 2026-09-13/14 runs, every new assertion, and what it said:
 | the fader row loses `clip-reset` | `... can light and cannot be cleared, which is worse` |
 | the knob entry loses its Escape handler | `controls.slint:957`, the line the row pointed at |
 | `NameField` loses its Escape handler | `Escape left the caret in the field, so Space would still type a space` |
+
+From the 2026-09-15 run, after the meters became continuous bars and both
+segment constants were retired:
+
+| Mutation | What the check said |
+| --- | --- |
+| a mixer `ChannelMeter` regains `segments: 14` | `these faces ask for LED segments, which the repaint throttle no longer matches: ["mixer.slint:447: segments: 14;"]` |
+
+Two things that run is worth keeping. **The replacement guard's first version
+failed on the wrong things** — it flagged a `//` comment containing the word
+and six `segments: root.segments;` pass-throughs in `meters.slint`, which are a
+wrapper handing its own property down rather than a face stating a count. The
+test it replaced had already drawn that distinction, in a helper whose comment
+says a non-literal binding "is the markup reading the count from somewhere
+rather than stating it". Rewriting the filter from scratch lost it. **Read the
+check you are replacing before you replace it**; its awkward clauses are
+usually load-bearing.
+
+**And the mutation has to be the one the check is for.** Seeing the guard fail
+on comments proved only that it could read the directory and render a message.
+The row above is the run that proved it names the face, the line and the count
+a real regression would introduce.
 
 **Mutate one thing at a time.** Three mutations in one run killed two checks and
 the third never ran, because cargo stops at the first failing binary. If you

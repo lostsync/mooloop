@@ -1,5 +1,6 @@
 import { ComboBox, HorizontalBox, LineEdit, ScrollView, VerticalBox } from "std-widgets.slint";
 import { Theme, Motion } from "theme.slint";
+import { MeterPrefs } from "meters.slint";
 import { AudioOrientation, IconButton, ParameterFader, SectionLabel, SegmentedControl, ToggleButton, ToolButton } from "controls.slint";
 import { AudioDriverCopy, DriverControlSurface, OutputTargetRow } from "audio-preferences.slint";
 export { AudioDriverCopy, OutputTargetRow }
@@ -401,6 +402,9 @@ export component AppearancePage inherits VerticalLayout {
     in-out property <float> roundness;
     in-out property <string> scheme-name;
     in-out property <bool> smooth-curves;
+    /// The meter falloff rows, passed straight down from the dialog. See the
+    /// note on its copy of this property.
+    in property <[string]> meter-falloff-options;
     in property <string> validation-error;
     callback preview-changed();
     callback select-scheme(string);
@@ -610,6 +614,33 @@ export component AppearancePage inherits VerticalLayout {
             options: ["Linear", "Ease out", "In-out", "Overshoot"];
             max-width: 240px;
             selected-index <=> Motion.easing;
+        }
+    }
+
+    // Metering, on the same terms as Motion above: written straight into the
+    // shared global so the mixer answers while the dialog is still open, and
+    // persisted by name on Apply.
+    SectionLabel { text: "METERING"; }
+    HorizontalBox {
+        height: 36px;
+        padding: 0px;
+        spacing: 8px;
+        VerticalBox {
+            spacing: 0px;
+            padding: 0px;
+            Text { text: "Falloff"; color: Theme.text; font-size: 11px; }
+            Text {
+                text: "How fast a meter falls back after a peak";
+                color: Theme.text-muted;
+                font-size: 10px;
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        SegmentedControl {
+            options: root.meter-falloff-options;
+            max-width: 240px;
+            hint: "Meter fall rate. 12 dB/s is the broadcast standard.";
+            selected-index <=> MeterPrefs.falloff;
         }
     }
 
@@ -934,6 +965,11 @@ export component PreferencesDialog inherits Rectangle {
     in-out property <string> shortcut-capturing-id;
     in property <[GestureRow]> gesture-rows;
     in property <[string]> gesture-choices;
+    /// The falloff rows, labelled with the rate each one is. Handed over by
+    /// Rust from `meter::FALLOFF_DB_PER_SECOND` rather than typed out here:
+    /// the label *is* the number, so a copy in the markup would be a number
+    /// written twice with nothing able to notice the two drifting apart.
+    in property <[string]> meter-falloff-options;
     in property <[string]> midi-ports;
     in property <string> midi-port-note;
     in property <[MidiBindingRow]> midi-bindings;
@@ -1151,6 +1187,7 @@ export component PreferencesDialog inherits Rectangle {
                                 roundness <=> root.appearance-roundness;
                                 scheme-name <=> root.appearance-scheme-name;
                                 smooth-curves <=> root.smooth-curves;
+                                meter-falloff-options: root.meter-falloff-options;
                                 validation-error: root.validation-error;
                                 preview-changed => { root.preview-appearance(); }
                                 select-scheme(name) => { root.appearance-select-scheme(name); }

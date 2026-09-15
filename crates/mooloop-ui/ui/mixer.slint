@@ -30,9 +30,9 @@ export global MixerMetrics {
     /// reasonable min height"* -- and this is the floor it stops at, which is
     /// what lets the turned-over face take the rest of the strip.
     /// The output section's floor, which is the column beside the fader: a
-    /// pan knob and three 18px buttons with their gaps. The meter (79px at
-    /// `meter-segments`) and the fader (100px of its own, overridden at the
-    /// instance) both shrink to it, and it is the last of the three numbers
+    /// pan knob and three 18px buttons with their gaps. The meter and the
+    /// fader (100px of its own, overridden at the instance) both shrink to
+    /// it, and it is the last of the three numbers
     /// that had to come down before the analog-sum switch fit the room a
     /// 200px dock leaves.
     out property <length> fader-floor: 82px;
@@ -74,13 +74,6 @@ export global MixerMetrics {
     /// the same reason, one level down.
     out property <length> scroll-bar: 12px;
 
-    /// Segments in a strip's meter. Resolution only: `SegmentedMeter`
-    /// draws them proportionally and declares a 60px minimum whatever the
-    /// count, so this number has never had anything to do with the face's
-    /// height -- which is worth writing down, because it was trimmed to 12
-    /// on that theory before the column of buttons turned out to be the one
-    /// holding the door.
-    out property <int> meter-segments: 14;
     /// The front face's lower half: the destination picker, the feed count
     /// and the analog-sum switch, with the two gaps between them. Stated
     /// rather than left to `preferred-height`, because the faces are inside
@@ -451,7 +444,6 @@ component StripOutput inherits HorizontalLayout {
 
     ChannelMeter {
         width: MixerMetrics.meter-width;
-        segments: MixerMetrics.meter-segments;
         left-db: root.strip.left-db;
         right-db: root.strip.right-db;
         held-left-db: root.strip.held-left-db;

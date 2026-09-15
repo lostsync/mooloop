@@ -396,12 +396,28 @@ them lost the argument.
 | Loop strip (thin, top) | Drag | Loops every snap unit the drag crossed |
 | Loop strip | Click | Loops the one unit clicked |
 | Loop strip | Right-click | Clears the loop, points and all |
+| Loop end handle | Drag | Moves that end, snapped, leaving the toggle alone |
 | Bar numbers | Click or drag | Moves the playhead, snapped |
+
+A drag across the strip *creates* a loop and switches it on, because asking
+for one is what the gesture is. Dragging an end of a loop that already exists
+says nothing about whether it should be live, so it leaves the toggle where it
+was -- without that split, a song that opens with two bars marked and looping
+off could not have its section nudged without starting the repeat.
 
 Both ends of a loop drag snap down and the range runs to the end of the last
 unit touched. That is what makes a click loop the bar clicked rather than
-nothing, and it is why the strip needs no separate handles: the section is
-re-dragged rather than resized.
+nothing.
+
+This paragraph used to end "and it is why the strip needs no separate handles:
+the section is re-dragged rather than resized." **That stopped being true on
+2026-09-15**, and the reasoning is worth keeping rather than just deleting,
+because it was sound while it held. Re-dragging is a fine way to move a loop
+you are *making*; it is a poor way to nudge one you already have, and a song
+that now opens with two bars already marked makes the second case the common
+one. So both ends carry a handle: 2px of paint in a 9px target, with an
+`ew-resize` cursor, because a two-pixel hit area is not a hit area and the
+cursor is what says so before the press rather than after it.
 
 The section is drawn in the strip whether or not looping is live, dimmed when
 it is not, because switching a loop off keeps its points and a strip that went

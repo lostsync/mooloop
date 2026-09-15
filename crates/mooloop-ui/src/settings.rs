@@ -93,6 +93,13 @@ pub(crate) struct AppearanceSettings {
     pub motion_speed: String,
     #[serde(default = "default_motion_easing")]
     pub motion_easing: String,
+    /// How fast a meter falls back, by option name. The rates themselves
+    /// live in `meter.rs`, which is what runs them; this is only which row
+    /// of that table the user picked, kept as a word so `settings.toml`
+    /// stays readable and so reordering the table cannot silently change
+    /// what an existing config means.
+    #[serde(default = "default_meter_falloff")]
+    pub meter_falloff: String,
     /// Schemes saved from the Appearance page, listed after the built-ins.
     #[serde(default)]
     pub user_schemes: Vec<ThemeScheme>,
@@ -140,6 +147,31 @@ pub(crate) fn motion_easing_name(index: i32) -> &'static str {
     MOTION_EASINGS
         .get(index.clamp(0, 3) as usize)
         .unwrap_or(&MOTION_EASINGS[2])
+}
+
+/// Meter fall rates by name, in the order `meter::FALLOFF_DB_PER_SECOND`
+/// states them. Index 1, Standard, is the IEC rate and the default.
+pub(crate) const METER_FALLOFFS: [&str; 4] = ["fast", "standard", "slow", "slowest"];
+
+fn default_meter_falloff() -> String {
+    "standard".to_owned()
+}
+
+/// Maps a persisted falloff name onto its row. Unknown names -- an older
+/// config, or one edited by hand -- fall back to Standard.
+pub(crate) fn meter_falloff_index(name: &str) -> i32 {
+    METER_FALLOFFS
+        .iter()
+        .position(|&option| option == name)
+        .map(|index| index as i32)
+        .unwrap_or(1)
+}
+
+/// Inverse of [`meter_falloff_index`], for persisting the global back.
+pub(crate) fn meter_falloff_name(index: i32) -> &'static str {
+    METER_FALLOFFS
+        .get(index.clamp(0, 3) as usize)
+        .unwrap_or(&METER_FALLOFFS[1])
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -297,6 +329,7 @@ impl Default for AppearanceSettings {
             smooth_curves: true,
             motion_speed: default_motion_speed(),
             motion_easing: default_motion_easing(),
+            meter_falloff: default_meter_falloff(),
             user_schemes: Vec::new(),
         }
     }
@@ -332,6 +365,11 @@ impl AppearanceSettings {
                 self.motion_easing.clone()
             } else {
                 default_motion_easing()
+            },
+            meter_falloff: if METER_FALLOFFS.contains(&self.meter_falloff.as_str()) {
+                self.meter_falloff.clone()
+            } else {
+                default_meter_falloff()
             },
             user_schemes: self.user_schemes.clone(),
         })
@@ -1466,6 +1504,32 @@ mod tests {
             assert_eq!(motion_easing_index(name), index as i32);
             assert_eq!(motion_easing_name(index as i32), *name);
         }
+    }
+
+    /// The falloff name is the *only* thing that survives a restart, so it
+    /// has to land on the same row it came from -- and it has to be the same
+    /// length as the rate table it indexes, which is in `meter.rs` and cannot
+    /// see this one.
+    #[test]
+    fn meter_falloff_names_round_trip_and_match_the_rate_table() {
+        for (index, name) in METER_FALLOFFS.iter().enumerate() {
+            assert_eq!(meter_falloff_index(name), index as i32);
+            assert_eq!(meter_falloff_name(index as i32), *name);
+        }
+        assert_eq!(
+            METER_FALLOFFS.len(),
+            crate::meter::FALLOFF_DB_PER_SECOND.len(),
+            "a name with no rate behind it, or a rate with no name to store it by"
+        );
+        // A hand-edited or pre-2026-09-15 config lands on the IEC rate.
+        assert_eq!(meter_falloff_index("glacial"), 1);
+        let settings = AppearanceSettings {
+            meter_falloff: "glacial".to_owned(),
+            ..AppearanceSettings::default()
+        }
+        .validated()
+        .unwrap();
+        assert_eq!(settings.meter_falloff, "standard");
     }
 
     #[test]

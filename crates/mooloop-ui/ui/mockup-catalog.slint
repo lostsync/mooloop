@@ -488,6 +488,11 @@ export component MockupSpecimen inherits Rectangle {
         height: 100%;
     }
     if root.kind == 24: SegmentedMeter {
+        // Explicit, and the only place left that asks for it: every meter in
+        // the application is continuous now, and a catalog entry called
+        // "Segmented meter" that drew a plain bar would be showing the one
+        // form nothing uses under the name of the one form nothing sees.
+        segments: 22;
         level-db: root.value * 60 - 60;
         held-db: root.value * 60 - 60;
         width: 100%;

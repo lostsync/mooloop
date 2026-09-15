@@ -7,6 +7,33 @@ use mooloop_core::gain::linear_to_db;
 const DECAY_DB_PER_SECOND: f32 = 20.0 / 1.7;
 const HOLD_SECONDS: f32 = 1.0;
 
+/// The fall rates Preferences > Appearance offers, in dB per second.
+///
+/// Index 1 is the IEC rate above -- what every meter here did before the
+/// preference existed, and what it still does unless somebody says otherwise.
+/// The others are two stops slower and one faster: fast enough to read the
+/// shape of a transient, or slow enough to read a level from across the room.
+pub(crate) const FALLOFF_DB_PER_SECOND: [f32; 4] = [30.0, DECAY_DB_PER_SECOND, 6.0, 3.0];
+
+/// The rate an option index means, for the metering pump.
+pub(crate) fn falloff_db_per_second(index: i32) -> f32 {
+    FALLOFF_DB_PER_SECOND[index.clamp(0, FALLOFF_DB_PER_SECOND.len() as i32 - 1) as usize]
+}
+
+/// The rows the preference offers, labelled with the rate itself.
+///
+/// Derived from the table rather than written beside it. A hand-typed
+/// `["30 dB/s", "12 dB/s", ...]` in the markup would be the fault `AGENTS.md`
+/// opens on -- a number spelled in Rust and again in Slint, with nothing able
+/// to notice when one of them moved -- and the label here is *only* the
+/// number, so there is nothing else for it to say.
+pub(crate) fn falloff_options() -> Vec<String> {
+    FALLOFF_DB_PER_SECOND
+        .iter()
+        .map(|rate| format!("{rate:.0} dB/s"))
+        .collect()
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MeterReading {
     pub level_db: f32,
@@ -34,14 +61,24 @@ impl Default for MeterBallistics {
 }
 
 impl MeterBallistics {
-    pub(crate) fn update(&mut self, linear_peak: f32, elapsed_seconds: f32) -> MeterReading {
+    /// `decay_db_per_second` is the tuned fall rate, which the metering pump
+    /// reads from the preference once a tick and hands to every meter --
+    /// rather than each meter holding a copy that would have to be kept in
+    /// step when the preference changes.
+    pub(crate) fn update(
+        &mut self,
+        linear_peak: f32,
+        elapsed_seconds: f32,
+        decay_db_per_second: f32,
+    ) -> MeterReading {
         let elapsed = elapsed_seconds.max(0.0);
         let incoming_db = linear_to_db(linear_peak);
+        let decay = decay_db_per_second.max(0.0);
 
         self.level_db = if incoming_db >= self.level_db {
             incoming_db
         } else {
-            (self.level_db - DECAY_DB_PER_SECOND * elapsed).max(incoming_db)
+            (self.level_db - decay * elapsed).max(incoming_db)
         };
 
         if incoming_db >= self.held_db {
@@ -52,8 +89,7 @@ impl MeterBallistics {
         } else {
             let release_elapsed = elapsed - self.hold_remaining;
             self.hold_remaining = 0.0;
-            self.held_db =
-                (self.held_db - DECAY_DB_PER_SECOND * release_elapsed).max(self.level_db);
+            self.held_db = (self.held_db - decay * release_elapsed).max(self.level_db);
         }
 
         self.clipped |= linear_peak >= 1.0;
@@ -104,7 +140,7 @@ mod tests {
     #[test]
     fn a_reset_meter_has_forgotten_the_clip_and_the_hold() {
         let mut meter = MeterBallistics::default();
-        let clipped = meter.update(1.5, 0.01);
+        let clipped = meter.update(1.5, 0.01, DECAY_DB_PER_SECOND);
         assert!(clipped.clipping);
         assert!(clipped.held_db > MIN_DB);
 
@@ -112,13 +148,13 @@ mod tests {
         // far as they are going to, and the latch is still lit -- which is the
         // whole design, and the reason an inherited one never goes out.
         for _ in 0..200 {
-            meter.update(0.0, 0.05);
+            meter.update(0.0, 0.05, DECAY_DB_PER_SECOND);
         }
-        let quiet = meter.update(0.0, 0.05);
+        let quiet = meter.update(0.0, 0.05, DECAY_DB_PER_SECOND);
         assert!(quiet.clipping, "the latch released on its own");
 
         meter.reset();
-        let fresh = meter.update(0.0, 0.01);
+        let fresh = meter.update(0.0, 0.01, DECAY_DB_PER_SECOND);
         assert!(!fresh.clipping, "a reset meter is still latched");
         assert_eq!(fresh.held_db, MIN_DB, "a reset meter still holds a peak");
         assert_eq!(fresh.level_db, MIN_DB, "a reset meter still shows a level");
@@ -127,33 +163,67 @@ mod tests {
     #[test]
     fn attacks_instantly_and_falls_twenty_db_in_one_point_seven_seconds() {
         let mut meter = MeterBallistics::default();
-        assert_eq!(meter.update(1.0, 0.01).level_db, 0.0);
+        assert_eq!(meter.update(1.0, 0.01, DECAY_DB_PER_SECOND).level_db, 0.0);
         // Half the standard's fall time, half the fall.
-        let reading = meter.update(0.0, 0.85);
+        let reading = meter.update(0.0, 0.85, DECAY_DB_PER_SECOND);
         assert!((reading.level_db - -10.0).abs() < 0.01);
     }
 
     #[test]
     fn holds_peak_then_releases_it_while_the_clip_latch_stays_lit() {
         let mut meter = MeterBallistics::default();
-        meter.update(1.1, 0.01);
-        let held = meter.update(0.0, 0.75);
+        meter.update(1.1, 0.01, DECAY_DB_PER_SECOND);
+        let held = meter.update(0.0, 0.75, DECAY_DB_PER_SECOND);
         assert!(held.held_db > 0.0);
         assert!(held.clipping);
 
-        let released = meter.update(0.0, 0.5);
+        let released = meter.update(0.0, 0.5, DECAY_DB_PER_SECOND);
         assert!(released.held_db < held.held_db);
         // Silence for a minute does not put a clip light out.
-        assert!(meter.update(0.0, 60.0).clipping);
+        assert!(meter.update(0.0, 60.0, DECAY_DB_PER_SECOND).clipping);
+    }
+
+    /// The preference reaches the fall, and the labels name the rates.
+    ///
+    /// Worth a test rather than a reading of the code: the rate is handed in
+    /// per tick now, so nothing stops a caller passing a constant and leaving
+    /// the option inert -- the "convincing but inert control" this codebase
+    /// keeps a rule about. A slower setting must fall less far in the same
+    /// time, and the row the user reads must be the number that is used.
+    #[test]
+    fn the_falloff_preference_changes_the_fall_and_says_which_rate_it_is() {
+        let fall_after = |rate: f32| {
+            let mut meter = MeterBallistics::default();
+            meter.update(1.0, 0.01, rate);
+            meter.update(0.0, 1.0, rate).level_db
+        };
+        let fast = fall_after(falloff_db_per_second(0));
+        let standard = fall_after(falloff_db_per_second(1));
+        let slowest = fall_after(falloff_db_per_second(3));
+        assert!(fast < standard, "the fast setting must fall further");
+        assert!(slowest > standard, "the slowest setting must fall less far");
+
+        // A second of fall at N dB/s is N dB down, which is what the label on
+        // the row promises the user.
+        assert!((standard - -FALLOFF_DB_PER_SECOND[1]).abs() < 0.01);
+        assert_eq!(falloff_options()[0], "30 dB/s");
+        assert_eq!(
+            falloff_options().len(),
+            FALLOFF_DB_PER_SECOND.len(),
+            "every rate needs a row to pick it with"
+        );
+        // Out-of-range indices come from a hand-edited settings file.
+        assert_eq!(falloff_db_per_second(-3), FALLOFF_DB_PER_SECOND[0]);
+        assert_eq!(falloff_db_per_second(99), FALLOFF_DB_PER_SECOND[3]);
     }
 
     #[test]
     fn the_clip_latch_is_released_only_by_clearing_it() {
         let mut meter = MeterBallistics::default();
-        assert!(meter.update(1.0, 0.01).clipping);
+        assert!(meter.update(1.0, 0.01, DECAY_DB_PER_SECOND).clipping);
         meter.clear_clip();
-        assert!(!meter.update(0.0, 0.01).clipping);
+        assert!(!meter.update(0.0, 0.01, DECAY_DB_PER_SECOND).clipping);
         // And it re-arms: clearing is not disabling.
-        assert!(meter.update(2.0, 0.01).clipping);
+        assert!(meter.update(2.0, 0.01, DECAY_DB_PER_SECOND).clipping);
     }
 }

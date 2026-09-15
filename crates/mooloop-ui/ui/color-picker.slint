@@ -1,10 +1,11 @@
 // Choosing a colour a song will keep.
 //
-// Two surfaces want this: the channel sidebar, which has room to show the
-// swatches outright, and the pattern field in the transport toolbar, which
-// has room for one 20px chip and a popup. They share the grid rather than
-// each drawing their own, because the grid is where the arithmetic is and
-// arithmetic written twice is this codebase's characteristic fault.
+// Two surfaces want this: the channel sidebar and the pattern field in the
+// transport toolbar. Both spend one 20px chip on it and put the swatches in a
+// popup, so both draw `ColorChipButton` and the grid is written once rather
+// than twice -- the grid is where the arithmetic is, and arithmetic written
+// twice is this codebase's characteristic fault. The sidebar drew the grid
+// outright until 2026-09-15, when it gave the two rows back to the panel.
 
 import { Theme, StatusHint } from "theme.slint";
 import { NameField, ToolbarMetrics } from "toolbar.slint";
@@ -76,8 +77,9 @@ export component ColorSwatchGrid inherits Rectangle {
     in property <int> columns: 6;
     callback chosen(string);
 
-    // Six columns of 18px on a 22px pitch is 128px, which fits the sidebar's
-    // 180px minimum width with 8px of padding either side and room to spare.
+    // Six columns of 18px on a 22px pitch is 128px, and the popup that holds
+    // the grid sizes itself to that. Eleven colours and the none square in two
+    // rows is the shape; the width follows from it rather than setting it.
     property <length> swatch: 18px;
     property <length> cell: 22px;
     // `+ 1` is the "no colour" square, which is why this counts the choices
@@ -150,7 +152,7 @@ export component ColorChooser inherits VerticalLayout {
     }
 }
 
-// A 20px chip that opens the chooser, for a toolbar that has no room for it.
+// A 20px chip that opens the chooser, for a row with no room for the grid.
 //
 // The chip *is* the current colour, so the control shows its own value the way
 // a knob does rather than needing a label to say what it holds.

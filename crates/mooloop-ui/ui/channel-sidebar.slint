@@ -33,7 +33,7 @@
 import { Theme } from "theme.slint";
 import { SectionLabel } from "controls.slint";
 import { MenuField, NameField } from "toolbar.slint";
-import { ColorChoice, ColorChooser } from "color-picker.slint";
+import { ColorChipButton, ColorChoice } from "color-picker.slint";
 // The same row the mixer strip draws, not a second one. A send has one model
 // and these are two views of it; a row of its own here would be the third
 // spelling of the same four controls.
@@ -149,25 +149,34 @@ export component ChannelSidebar inherits Rectangle {
             padding: 8px;
             spacing: 10px;
 
+            // The name and the colour share a row, and the colour is a chip.
+            //
+            // They are the two facts you give a channel by hand, and they are
+            // the pair the transport toolbar already draws this way for a
+            // pattern -- so this is the same control, not a second one. The
+            // chip needs no label of its own because it *is* the colour; the
+            // swatches move into its popup, which buys the panel back the two
+            // rows it was spending on a palette that gets looked at once per
+            // channel and then never again.
             SidebarField {
                 label: "NAME";
-                name-field := NameField {
-                    width: 100%;
-                    text: root.channel-name;
-                    placeholder: root.is-track ? "Track name" : "Channel name";
-                    tooltip: root.is-track ? "Rename this track" : "Rename this channel";
-                    edited(value) => { root.renamed(value); }
-                }
-            }
-
-            SidebarField {
-                label: "COLOR";
-                ColorChooser {
-                    choices: root.color-choices;
-                    has-color: root.has-color;
-                    tint: root.tint;
-                    color-hex: root.color-hex;
-                    chosen(value) => { root.color-chosen(value); }
+                HorizontalLayout {
+                    spacing: 4px;
+                    NameField {
+                        horizontal-stretch: 1;
+                        text: root.channel-name;
+                        placeholder: root.is-track ? "Track name" : "Channel name";
+                        tooltip: root.is-track ? "Rename this track" : "Rename this channel";
+                        edited(value) => { root.renamed(value); }
+                    }
+                    ColorChipButton {
+                        choices: root.color-choices;
+                        has-color: root.has-color;
+                        tint: root.tint;
+                        color-hex: root.color-hex;
+                        tooltip: root.is-track ? "Color this track" : "Color this channel";
+                        chosen(value) => { root.color-chosen(value); }
+                    }
                 }
             }
 

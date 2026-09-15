@@ -145,9 +145,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   instances, and remains editable while either mode plays. Clip width follows
   each pattern's natural length.
 - A song loop repeats a marked section of the arrangement. The section is
-  dragged out on a strip above the playlist's bar numbers, the Loop button and
-  the L key switch it on and off without discarding its points, and the
-  playhead is dragged along the bar numbers themselves.
+  dragged out on a strip above the playlist's bar numbers, or moved by the
+  grab handle on either of its ends; the loop toggle in the playlist toolbar
+  and the L key switch it on and off without discarding its points, and the
+  playhead is dragged along the bar numbers themselves. **A new song opens
+  with its first two bars marked and looping off**, so the strip arrives with
+  something on it to grab rather than needing to be discovered.
 - Tick-addressed notes with stable IDs, start, duration, MIDI pitch, and
   velocity. Starts snap to 64ths in the piano roll while retaining PPQ tick
   precision internally.
@@ -934,7 +937,11 @@ land on its own when it starts to matter:
   value is a peak hold that only the GUI's read clears, so a transient landing
   between two UI frames is still shown. The channel rack has no meter of its
   own: `ChannelMeter` is drawn on the mixer strip, the device rack's two rails
-  and a track's fader row, and nowhere else.
+  and a track's fader row, and nowhere else. **All of them are continuous
+  bars with a peak-hold hairline**; the LED-segment form they had until
+  2026-09-15 survives only in the mockup catalog. Preferences > Appearance >
+  Metering tunes how fast they fall, from 30 dB/s down to 3, defaulting to the
+  IEC rate of about 12.
 
   **Only a meter with a clip latch behind it draws a clip lamp.**
   `ChannelMeter` takes `show-clip`, and the rack's two rails set it false:
@@ -1455,13 +1462,12 @@ land on its own when it starts to matter:
 - Keyboard note *selection* still does not exist: the arrow keys move an
   existing selection but cannot build one, which stays open in
   `ENHANCEMENTS.md`.
-- **A channel takes a colour from the channel sidebar**, either from its
-  eleven swatches or by typing any `#RRGGBB` into the field beside them, and
-  the colour survives save and reload. It is stored as a colour the song owns
-  rather than an index into the theme's palette, so a song looks the same
-  under every scheme. **A pattern takes one on the same terms**, from a colour
-  chip beside its name field in the transport toolbar, which opens the same
-  swatches in a popup.
+- **A channel takes a colour from a chip beside its name field in the channel
+  sidebar**, which opens eleven swatches and a field that accepts any
+  `#RRGGBB`, and the colour survives save and reload. It is stored as a colour
+  the song owns rather than an index into the theme's palette, so a song looks
+  the same under every scheme. **A pattern takes one on the same terms**, from
+  the same chip beside its name field in the transport toolbar.
 - **A colour is drawn wherever the thing it names is drawn, and a colour a
   thing *inherits* is drawn differently from one it owns.** A colour something
   owns is a 3px bar down the left edge of its plate: a channel's on its rack

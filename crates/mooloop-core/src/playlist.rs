@@ -14,6 +14,16 @@ pub const MAX_PLAYLIST_TICKS: u32 = MAX_PLAYLIST_BARS * TICKS_PER_BAR;
 /// Fixed upper bound so the realtime sequencer never grows its placement store.
 pub const MAX_PLAYLIST_PLACEMENTS: usize = 512;
 
+/// How much of a new song is marked as its loop, in bars.
+///
+/// Marked, and *not* running -- see [`LoopRange::marked`] and
+/// `Project::starter_kit`. A song used to open with no loop at all, which put
+/// a disabled toggle and an empty strip in front of anyone who had not yet
+/// found out that the strip above the bar numbers is draggable. Two bars is
+/// the smallest section that reads as a repeat rather than as a stutter, and
+/// it is where a drag would most likely have been aimed anyway.
+pub const STARTER_LOOP_BARS: u32 = 2;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlaybackMode {
@@ -92,6 +102,20 @@ impl LoopRange {
             start_tick: start,
             end_tick: end,
             enabled: true,
+        })
+    }
+
+    /// A section marked out but not running.
+    ///
+    /// [`from_drag`](Self::from_drag) cannot express this and should not: it
+    /// is the gesture that *creates* a loop, and someone who drags one out is
+    /// asking for it. A song that opens with its first two bars marked is
+    /// making a suggestion instead, and a suggestion that started the
+    /// transport repeating would not be one.
+    pub fn marked(a: u32, b: u32) -> Option<Self> {
+        Self::from_drag(a, b).map(|range| Self {
+            enabled: false,
+            ..range
         })
     }
 }

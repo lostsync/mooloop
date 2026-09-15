@@ -12,7 +12,11 @@ import {
     BeatLamps, MenuField, NameField, PositionReadout, StepperField, TempoField,
     ToolbarLabel, ToolbarRule, ToolIcons, ToolModeButton
 } from "toolbar.slint";
-import { MasterMeter } from "meters.slint";
+import { MasterMeter, MeterPrefs } from "meters.slint";
+// Re-exported for the reason `StripSpec` is: a global is visible to the
+// generated Rust only from the entry file, and the metering pump reads the
+// fall rate out of this one once a tick.
+export { MeterPrefs }
 import { EnvelopeEditor } from "envelope.slint";
 import { PreferencesDialog, AppearanceSchemeRow, AudioDriverCopy, OutputTargetRow, ShortcutRow, GestureRow, MidiBindingRow, MidiTransportRow } from "appearance-dialog.slint";
 import { SavePresetDialog } from "save-preset-dialog.slint";
@@ -395,6 +399,51 @@ component AutomationLaneMenu inherits VerticalLayout {
 component FlatButton inherits ToolButton { }
 component MuteButton inherits DesignMuteButton { }
 
+// One end of the playlist loop, as something a pointer can catch.
+//
+// **Two pixels of paint and nine of target.** The line has to stay thin to
+// read as an edge of the section rather than as a block on top of it, and two
+// pixels is not a thing anybody can hit; so the paint is centred in a hit area
+// four pixels wider on each side, and the `ew-resize` cursor is what says so
+// before the press rather than after it.
+//
+// The target overhangs the strip by four pixels at bar 1, where the loop a new
+// song opens with begins. That sliver lands on empty canvas beside the
+// "PATTERN" gutter and catches nothing, which is cheaper than clamping the
+// target and taking the paint off the edge it is marking.
+component PlaylistLoopHandle inherits Rectangle {
+    // Whether the loop this end belongs to is running. The same distinction
+    // the section behind it draws: the points are kept when looping is off, so
+    // the handle stays grabbable and goes quiet rather than disappearing.
+    in property <bool> live;
+    /// Where the pointer is along the *strip*, not along the handle. Only the
+    /// handle knows how wide its own target is, and the caller only wants a
+    /// tick, so the conversion happens here and the tick happens there.
+    callback moved(length);
+
+    property <string> hint: "Drag this end of the loop. Right-click the strip clears it.";
+
+    width: 9px;
+
+    Rectangle {
+        width: 2px;
+        x: (parent.width - self.width) / 2;
+        height: 100%;
+        background: root.live ? Theme.text : Theme.text-muted;
+    }
+
+    TouchArea {
+        mouse-cursor: ew-resize;
+        moved => {
+            if (self.pressed) { root.moved(self.mouse-x + root.x); }
+        }
+        changed has-hover => {
+            if (self.has-hover) { StatusHint.show(root.hint); }
+            else { StatusHint.clear(root.hint); }
+        }
+    }
+}
+
 // ===== Panes =====
 //
 // Five views and three slots. `main` and `split` divide the top of the work
@@ -708,6 +757,9 @@ export component MainWindow inherits Window {
     in property <[ShortcutRow]> preferences-shortcut-rows;
     in property <[GestureRow]> preferences-gesture-rows;
     in property <[string]> preferences-gesture-choices;
+    // Filled once at startup from `meter::falloff_options`, which builds each
+    // label out of the rate it selects.
+    in property <[string]> preferences-meter-falloff-options;
     in-out property <string> preferences-shortcut-capturing-id;
     callback preferences-opened();
     callback preferences-appearance-preview(string, string, string, float, float);
@@ -894,6 +946,16 @@ export component MainWindow inherits Window {
     pure function playlist-tick-x(tick: int) -> length {
         tick * root.playlist-bar-width / root.playlist-bar-ticks
     }
+    // The loop as bar numbers, for the sentence the status bar shows.
+    //
+    // The last bar the loop *touches*, counted from the tick before its
+    // exclusive end so a section ending mid-bar still names that bar, and so
+    // the arithmetic reads the same whether the division truncates or not.
+    pure function playlist-loop-bars() -> string {
+        (floor(root.playlist-loop-start-ticks / root.playlist-bar-ticks) + 1)
+            + "\u{2013}"
+            + (floor((root.playlist-loop-end-ticks - 1) / root.playlist-bar-ticks) + 1)
+    }
 
     callback step-clicked(int, int);       // channel, step
     callback step-removed(int, int);       // channel, step
@@ -938,6 +1000,11 @@ export component MainWindow inherits Window {
     callback playlist-placement-removed(int, int); // pattern, tick covered by clip
     callback playlist-seek(int);                   // absolute tick to play from
     callback playlist-loop-set(int, int);          // two ticks, in either order
+    // The same two ticks, from an edge handle rather than a drag across the
+    // empty strip. Separate because the two gestures disagree about one
+    // thing: `-set` turns looping on, being the gesture that asks for a loop,
+    // and `-adjusted` leaves the toggle alone. See `Session::adjust_loop_range`.
+    callback playlist-loop-adjusted(int, int);
     callback playlist-loop-enabled-changed(bool);
     callback playlist-loop-cleared();
 
@@ -5833,41 +5900,60 @@ export component MainWindow inherits Window {
                                     selected(i) => { root.playlist-snap-index = i; }
                                 }
                                 Rectangle { width: 4px; }
-                                FlatButton {
-                                    text: "Loop";
-                                    tooltip: "Repeat the marked section (L)";
-                                    active: root.playlist-loop-enabled;
-                                    enabled: root.playlist-has-loop;
-                                    clicked => {
-                                        root.playlist-loop-enabled-changed(
-                                            !root.playlist-loop-enabled);
+                                // A toggle the width of a toggle.
+                                //
+                                // It was a 44px `Loop` with a sentence of
+                                // grey text beside it, and between them they
+                                // took a fifth of the bar to say something
+                                // that is true of one button. The icon is the
+                                // transport's repeat sign, lit when the loop
+                                // is running; the sentence -- including which
+                                // bars are marked, which is the part actually
+                                // worth reading -- is the status bar's job on
+                                // hover, which is what `hint` is for
+                                // everywhere else in this interface.
+                                loop-toggle := Rectangle {
+                                    width: 26px;
+                                    // The sentence, once, with two readers.
+                                    //
+                                    // A `ToolButton` shows its own `hint`
+                                    // from its own TouchArea, and that
+                                    // TouchArea is switched off along with
+                                    // the button -- so the one state where
+                                    // the sentence is worth reading, "there
+                                    // is no loop, and here is how to make
+                                    // one", was the state you could not
+                                    // reach it from. The TouchArea below
+                                    // covers exactly that gap, and reads the
+                                    // same property rather than holding a
+                                    // second copy of the words.
+                                    property <string> hint: root.playlist-has-loop
+                                        ? "Repeat bars " + root.playlist-loop-bars()
+                                            + ". Drag either end of the marked strip to move it."
+                                        : "Drag the strip above the bar numbers to mark a section to repeat.";
+
+                                    if !root.playlist-has-loop : TouchArea {
+                                        changed has-hover => {
+                                            if (self.has-hover) {
+                                                StatusHint.show(loop-toggle.hint);
+                                            } else {
+                                                StatusHint.clear(loop-toggle.hint);
+                                            }
+                                        }
                                     }
-                                }
-                                // Reads the section rather than
-                                // explaining the strip: the strip
-                                // above the ruler is where a loop
-                                // is made, and this row is where
-                                // it can be read back without
-                                // scrolling to find the brackets.
-                                Text {
-                                    text: root.playlist-has-loop
-                                        // The last bar the loop
-                                        // touches, counted from
-                                        // the tick before its
-                                        // exclusive end so a
-                                        // section ending mid-bar
-                                        // still names that bar,
-                                        // and so the arithmetic
-                                        // reads the same whether
-                                        // the division truncates
-                                        // or not.
-                                        ? "bar " + (floor(root.playlist-loop-start-ticks / root.playlist-bar-ticks) + 1)
-                                            + " – " + (floor((root.playlist-loop-end-ticks - 1) / root.playlist-bar-ticks) + 1)
-                                        : "drag the strip above the bar numbers";
-                                    color: root.playlist-has-loop
-                                        ? Theme.text-muted : Theme.text-faint;
-                                    font-size: 9px;
-                                    vertical-alignment: center;
+                                    FlatButton {
+                                        width: 100%;
+                                        height: 100%;
+                                        icon: ToolIcons.loop;
+                                        tooltip: "Loop (L)";
+                                        hint: loop-toggle.hint;
+                                        active: root.playlist-loop-enabled;
+                                        enabled: root.playlist-has-loop;
+                                        clicked => {
+                                            root.playlist-loop-enabled-changed(
+                                                !root.playlist-loop-enabled);
+                                        }
+                                    }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
                                 Text { text: "↔"; color: Theme.text-faint; vertical-alignment: center; }
@@ -6004,6 +6090,46 @@ export component MainWindow inherits Window {
                                                     ? "Drag to loop a section. Right-click clears the loop."
                                                     : root.hover-hint == "Drag to loop a section. Right-click clears the loop."
                                                         ? "" : root.hover-hint;
+                                            }
+                                        }
+
+                                        // The two ends, as grab handles, and
+                                        // *after* the drag-out TouchArea
+                                        // above rather than beside the
+                                        // section they belong to: last
+                                        // sibling is topmost, and a handle
+                                        // underneath that TouchArea would
+                                        // have started a new loop on top of
+                                        // the one being adjusted instead of
+                                        // moving its edge.
+                                        //
+                                        // Each end reports its own tick and
+                                        // passes the other through unchanged,
+                                        // so a handle dragged past its
+                                        // partner swaps the two rather than
+                                        // collapsing the loop --
+                                        // `LoopRange::from_drag` takes them
+                                        // in either order and always has.
+                                        if root.playlist-has-loop : PlaylistLoopHandle {
+                                            x: root.playlist-tick-x(root.playlist-loop-start-ticks)
+                                                - self.width / 2;
+                                            height: parent.height;
+                                            live: root.playlist-loop-enabled;
+                                            moved(at) => {
+                                                root.playlist-loop-adjusted(
+                                                    root.playlist-snapped-tick-at(at),
+                                                    root.playlist-loop-end-ticks);
+                                            }
+                                        }
+                                        if root.playlist-has-loop : PlaylistLoopHandle {
+                                            x: root.playlist-tick-x(root.playlist-loop-end-ticks)
+                                                - self.width / 2;
+                                            height: parent.height;
+                                            live: root.playlist-loop-enabled;
+                                            moved(at) => {
+                                                root.playlist-loop-adjusted(
+                                                    root.playlist-loop-start-ticks,
+                                                    root.playlist-snapped-tick-at(at));
                                             }
                                         }
                                     }
@@ -6951,6 +7077,7 @@ export component MainWindow inherits Window {
         shortcut-rows: root.preferences-shortcut-rows;
         gesture-rows: root.preferences-gesture-rows;
         gesture-choices: root.preferences-gesture-choices;
+        meter-falloff-options: root.preferences-meter-falloff-options;
         shortcut-capturing-id <=> root.preferences-shortcut-capturing-id;
         midi-ports: root.preferences-midi-ports;
         midi-port-note: root.preferences-midi-port-note;

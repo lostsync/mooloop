@@ -19,6 +19,15 @@ export global ToolIcons {
         "M 2.5 5 L 13.5 5 L 13.5 11 L 2.5 11 Z M 6.2 5 L 6.2 11 M 9.8 5 L 9.8 11";
     out property <string> stretch:
         "M 2.5 8 L 13.5 8 M 5 5.5 L 2.5 8 L 5 10.5 M 11 5.5 L 13.5 8 L 11 10.5";
+    // The transport's repeat sign: a stadium the eye runs round, with an
+    // arrowhead where each straight meets its arc so it reads as motion
+    // rather than as an oval. Drawn wider and flatter than a circle would be,
+    // because at 16px a round one with two chevrons on it closes up into a
+    // blob -- checked at 1x rather than assumed from the 4x drawing.
+    out property <string> loop:
+        "M 5 4.5 L 10.5 4.5 A 3.5 3.5 0 0 1 10.5 11.5 L 5.5 11.5 "
+        + "A 3.5 3.5 0 0 1 5.5 4.5 M 8.8 2.6 L 11 4.5 L 8.8 6.4 "
+        + "M 7.2 9.6 L 5 11.5 L 7.2 13.4";
     // Layout toggles. The outline is the window and the inner rule marks the
     // region; `*-fill` is the region drawn solid, on a second Path beneath
     // the outline because one Path has one fill and filling the outline would

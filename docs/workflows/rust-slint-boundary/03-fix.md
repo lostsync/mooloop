@@ -33,10 +33,40 @@ to stop it being anonymous on one side.
 The repaint throttle passed a bare `14` for the mixer strip and `12` for the
 device rails, mirroring `MixerMetrics.meter-segments` and the rails' `segments:`.
 They became `MIXER_STRIP_METER_SEGMENTS` and `DEVICE_RAIL_METER_SEGMENTS`, and
-a test reads the counts back out of the markup.
+a test read the counts back out of the markup.
 
 This is the shape to reach for when A would need a property threaded through
 markup that does not otherwise need it.
+
+### When the duplicate stops existing, the guard does not just get deleted
+
+**Both constants were retired on 2026-09-15**, when the meters became
+continuous bars and a segment count stopped being a thing either side had. The
+example above is kept because the *shape* is still the right one; what happened
+next is the part worth having written down.
+
+The throttle was the real casualty, and it failed in the direction that does
+not announce itself. It quantised each meter's dB into segments and repainted
+only when the count changed — so a continuous bar, gated in fourteenths of the
+scale, would have drawn in fourteen visible steps. The markup would have been
+correct, the meters would have looked exactly as they had before, and nothing
+would have failed. **A boundary value can be wrong by becoming meaningless, not
+only by drifting.** The throttle now steps by a quarter of a decibel, which is
+finer than a pixel on the widest meter in the window.
+
+And `slint_meter_segment_counts_match_the_throttle` could not simply go. With
+both constants gone it would have compared `[]` against `[]` and passed for
+ever, having checked nothing — the green-test-that-stopped-guarding failure
+[04-guard.md](04-guard.md) is about. It was replaced by
+`no_application_meter_states_a_segment_count`, which asserts what is now true:
+no face outside `mockup-catalog.slint` states a literal count, because one that
+did would be drawing LEDs the throttle no longer matches. The replacement kept
+the original's two disciplines — a literal is a stated count while
+`segments: root.segments` is the markup reading one from elsewhere, and the
+directory sweep asserts a floor so a rename cannot quietly empty it.
+
+**When a shared value is deleted, ask what its guard is now asserting.** The
+answer is usually "nothing, successfully".
 
 ## C. Decide the policy once, in the crate that owns the concept
 

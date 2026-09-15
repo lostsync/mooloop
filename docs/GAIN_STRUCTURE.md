@@ -257,9 +257,24 @@ reverb and plate open at 0.25, modulation at 0.5.
 Peak metering in dBFS, floor -60 dBFS (`gain::MIN_DB`). Green below -10
 (`gain::METER_WARNING_DB`), yellow -10 to -3, red above -3
 (`gain::METER_HOT_DB`); both thresholds are mirrored into `GainMath` and
-the SegmentedMeter/PeakMeter defaults read from there. Ballistics per
-IEC 60268-18 digital peak: instantaneous attack, 20 dB fall in 1.7 s,
-1 s peak hold (`MeterBallistics` in `mooloop-ui/src/meter.rs`). The clip
+the SegmentedMeter/PeakMeter defaults read from there.
+
+**Every meter in the application draws one continuous bar**, not LED
+segments: `SegmentedMeter`'s `segments` defaults to 0, which means a bar, and
+only `mockup-catalog.slint` still asks for a count. A colour still belongs to
+a position on the scale rather than to the level, which for a bar means the
+three zones are drawn at full height and the lit part is a *window* onto
+them. Stretching one gradient to the lit height instead would turn the whole
+bar red at 0 dBFS.
+
+Ballistics: instantaneous attack, 1 s peak hold, and a fall rate the user
+picks in Preferences > Appearance > Metering (`MeterBallistics` and
+`FALLOFF_DB_PER_SECOND` in `mooloop-ui/src/meter.rs`). The default and middle
+option is IEC 60268-18 digital peak, 20 dB in 1.7 s; the rows are labelled
+with the rate itself, generated from the table so the label cannot drift from
+what the meter does. The choice is persisted by name in `settings.toml` and
+reaches the meters through the `MeterPrefs` Slint global, which the pump reads
+once a tick -- the same shape `Motion` uses for panel animation. The clip
 latch is a separate full-scale detector (≥ 0 dBFS) held **until it is
 clicked**, not on a timer, and is not tied to the colour thresholds.
 `clear_clip`'s own comment gives the reason: "A clip light that puts itself

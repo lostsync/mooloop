@@ -580,6 +580,14 @@ fn window_appearance(window: &MainWindow, stored: &AppearanceSettings) -> Appear
         smooth_curves: window.get_preferences_smooth_curves(),
         motion_speed: settings::motion_speed_name(motion.get_speed()).to_owned(),
         motion_easing: settings::motion_easing_name(motion.get_easing()).to_owned(),
+        // From the live global, not from `stored`, for the same reason motion
+        // is: this is what a scheme selection and Save Scheme are built from,
+        // so reading the persisted value here would quietly undo a falloff
+        // the user had just picked every time they touched the palette.
+        meter_falloff: settings::meter_falloff_name(
+            window.global::<MeterPrefs>().get_falloff(),
+        )
+        .to_owned(),
         user_schemes: stored.user_schemes.clone(),
     }
 }
@@ -620,6 +628,9 @@ fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
     let motion = window.global::<Motion>();
     motion.set_speed(settings::motion_speed_index(&appearance.motion_speed));
     motion.set_easing(settings::motion_easing_index(&appearance.motion_easing));
+    window
+        .global::<MeterPrefs>()
+        .set_falloff(settings::meter_falloff_index(&appearance.meter_falloff));
     window.set_preferences_error("".into());
     window.set_preferences_audio_driver(DRIVER_COPY.to_slint());
     let buffer_index = settings
@@ -942,31 +953,30 @@ fn sync_command_availability(window: &MainWindow, commands: &CommandState) {
     window.set_project_edit_pending(commands.project_edit_pending);
 }
 
-/// How many segments a mixer strip's meter draws, mirroring
-/// `MixerMetrics.meter-segments` in `mixer.slint`.
+/// How far a meter's dB must move before rewriting its model row is worth the
+/// repaint it costs.
 ///
-/// The throttle below quantizes a dB value into segments and repaints only
-/// when the count changes, so it has to quantize by the same count the meter
-/// draws with. If the markup's count were raised and this were not, the
-/// throttle would swallow a change that moves a visible segment -- which is
-/// the "peak marker one segment behind where the audio put it" failure the
-/// throttle's own call site names. `slint_meter_segment_counts_match_the_throttle`
-/// holds the two together.
-pub const MIXER_STRIP_METER_SEGMENTS: u32 = 14;
+/// **This was one segment of the meter that draws it, until 2026-09-15.** Two
+/// constants mirrored `mixer.slint` and `device-rack.slint`, and
+/// `slint_meter_segment_counts_match_the_throttle` held them together. Meters
+/// became continuous bars that day and the quantum stopped existing: a bar
+/// moves at every dB, so a throttle still working in fourteenths of the scale
+/// would have drawn the new continuous meter in fourteen visible steps. The
+/// bars would have been redrawn and nothing would have looked any smoother --
+/// the change landing invisibly, which is worse than it failing.
+///
+/// A quarter of a decibel is one pixel on the widest meter here -- the
+/// transport's 200px master, 60 dB across -- and finer than a pixel on every
+/// other. It costs nothing in the case the throttle exists for, a meter
+/// sitting still; while one is falling, every tick moves it and is meant to.
+const METER_DISPLAY_STEP_DB: f32 = 0.25;
 
-/// How many segments a device rail's meter draws, mirroring the `segments: 12`
-/// the rails set in `device-rack.slint`. See [`MIXER_STRIP_METER_SEGMENTS`].
-pub const DEVICE_RAIL_METER_SEGMENTS: u32 = 12;
-
-/// `SegmentedMeter` only changes pixels when its lit-segment count changes.
-/// Keeping the raw dB value in the model is useful at that boundary, but
-/// rewriting it for an in-between ballistics update just invalidates Slint.
-fn meter_segments(db: f32, segments: u32) -> u32 {
-    (((db - METER_FLOOR_DB) / -METER_FLOOR_DB).clamp(0.0, 1.0) * segments as f32).ceil() as u32
-}
-
-fn meter_display_changed(previous: f32, next: f32, segments: u32) -> bool {
-    meter_segments(previous, segments) != meter_segments(next, segments)
+/// Clamped to the drawn range first, which is what the segment count used to
+/// do for free: a meter decaying from -70 to -90 dB is not moving on screen,
+/// and repainting it would be work for a change nobody can see.
+fn meter_display_changed(previous: f32, next: f32) -> bool {
+    let drawn = |db: f32| db.clamp(METER_FLOOR_DB, 0.0);
+    (drawn(previous) - drawn(next)).abs() >= METER_DISPLAY_STEP_DB
 }
 
 /// A dynamics display is a continuous readout, not a segmented meter: its dot
@@ -6131,6 +6141,15 @@ impl AppUi {
                 .collect::<Vec<_>>(),
         ))));
         sync_gesture_rows(&window, &gesture_table.borrow());
+        // The falloff rows, built from the rate table so the label a user
+        // reads is the number the meter runs. Set once: the table is a
+        // constant, unlike the gesture and shortcut rows above it.
+        window.set_preferences_meter_falloff_options(ModelRc::from(Rc::new(VecModel::from(
+            meter::falloff_options()
+                .into_iter()
+                .map(slint::SharedString::from)
+                .collect::<Vec<_>>(),
+        ))));
         {
             let settings = ui_settings.clone();
             let table = gesture_table.clone();
@@ -6428,6 +6447,10 @@ impl AppUi {
                             .to_owned(),
                         motion_easing: settings::motion_easing_name(motion.get_easing())
                             .to_owned(),
+                        meter_falloff: settings::meter_falloff_name(
+                            window.global::<MeterPrefs>().get_falloff(),
+                        )
+                        .to_owned(),
                         ..settings.appearance.clone()
                     };
                     let mut appearance = match candidate.validated() {
@@ -6766,6 +6789,28 @@ impl AppUi {
             window.on_playlist_loop_set(move |from_tick, to_tick| {
                 let mut st = st.borrow_mut();
                 let Some(command) = st.session.set_loop_range(from_tick, to_tick) else {
+                    return;
+                };
+                if let Some(window) = weak.upgrade() {
+                    st.sync_loop_range(&window);
+                    st.update_document_title(&window);
+                }
+                let _ = tx.send(command);
+            });
+        }
+        {
+            let tx = cmd_tx.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            // An edge handle, which fires on every pointer move over a new
+            // snap unit rather than once on release. `adjust_loop_range`
+            // returns `None` for a range it already holds, so the moves that
+            // land inside the unit the loop already ends on cost nothing --
+            // and the ones that do not are what makes the edge follow the
+            // pointer instead of jumping when it is let go.
+            window.on_playlist_loop_adjusted(move |from_tick, to_tick| {
+                let mut st = st.borrow_mut();
+                let Some(command) = st.session.adjust_loop_range(from_tick, to_tick) else {
                     return;
                 };
                 if let Some(window) = weak.upgrade() {
@@ -13225,6 +13270,11 @@ impl AppUi {
                     }
                 }
                 let master_clip_cleared = master_clip_clear_in.replace(false);
+                // Read once per tick rather than per meter: it is one
+                // preference, every meter falls at it, and a strip that got a
+                // different rate from its neighbour would be the thing this
+                // whole indirection exists to prevent.
+                let falloff = meter::falloff_db_per_second(w.global::<MeterPrefs>().get_falloff());
                 for (bus, meters) in bus_meters.iter_mut().enumerate() {
                     let strip_clip_cleared = bus_clip_clear_in
                         .borrow_mut()
@@ -13240,8 +13290,8 @@ impl AppUi {
                         meters.1.clear_clip();
                     }
                     let (peak_l, peak_r) = handle.take_bus_peak(bus);
-                    let left = meters.0.update(peak_l, elapsed);
-                    let right = meters.1.update(peak_r, elapsed);
+                    let left = meters.0.update(peak_l, elapsed, falloff);
+                    let right = meters.1.update(peak_r, elapsed, falloff);
                     if is_master {
                         w.set_meter_l_db(left.level_db);
                         w.set_meter_r_db(right.level_db);
@@ -13263,10 +13313,10 @@ impl AppUi {
                             // peak marker comes to sit one segment behind
                             // where the audio put it.
                             let clipping = left.clipping || right.clipping;
-                            if meter_display_changed(row.left_db, left.level_db, MIXER_STRIP_METER_SEGMENTS)
-                                || meter_display_changed(row.right_db, right.level_db, MIXER_STRIP_METER_SEGMENTS)
-                                || meter_display_changed(row.held_left_db, left.held_db, MIXER_STRIP_METER_SEGMENTS)
-                                || meter_display_changed(row.held_right_db, right.held_db, MIXER_STRIP_METER_SEGMENTS)
+                            if meter_display_changed(row.left_db, left.level_db)
+                                || meter_display_changed(row.right_db, right.level_db)
+                                || meter_display_changed(row.held_left_db, left.held_db)
+                                || meter_display_changed(row.held_right_db, right.held_db)
                                 || row.clipping != clipping
                             {
                                 row.left_db = left.level_db;
@@ -13339,10 +13389,10 @@ impl AppUi {
                                 let input_right_db = linear_to_db(in_r);
                                 let output_left_db = linear_to_db(out_l);
                                 let output_right_db = linear_to_db(out_r);
-                                let meter_changed = meter_display_changed(row.input_left_db, input_left_db, DEVICE_RAIL_METER_SEGMENTS)
-                                    || meter_display_changed(row.input_right_db, input_right_db, DEVICE_RAIL_METER_SEGMENTS)
-                                    || meter_display_changed(row.output_left_db, output_left_db, DEVICE_RAIL_METER_SEGMENTS)
-                                    || meter_display_changed(row.output_right_db, output_right_db, DEVICE_RAIL_METER_SEGMENTS);
+                                let meter_changed = meter_display_changed(row.input_left_db, input_left_db)
+                                    || meter_display_changed(row.input_right_db, input_right_db)
+                                    || meter_display_changed(row.output_left_db, output_left_db)
+                                    || meter_display_changed(row.output_right_db, output_right_db);
                                 // Non-dynamics stages never publish here, so
                                 // they read the resting pair and need no
                                 // check for what kind of device they hold.

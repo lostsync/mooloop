@@ -679,13 +679,24 @@ fn render_a_tracks_sends() {
 /// `MOOLOOP_SENDS_SNAPSHOT` rather than derived. Probe it again if these move.
 ///
 /// They moved on 2026-09-13, when sends left the track's device face for the
-/// channel sidebar: the row pitch is 45px and the first row's controls sit at
+/// channel sidebar: the row pitch is 45px and the first row's controls sat at
 /// y 248 in a 260px-wide panel. The lamps were found by scanning the render
 /// for accent-coloured pixels rather than by counting paddings, which is the
 /// same reason the old numbers were measured rather than derived.
+///
+/// **They moved again on 2026-09-15**, up 74px, when the colour picker became
+/// a chip beside the name field and its swatch grid left the panel. Measured
+/// the same way, and the arithmetic is why: the block that went looks like
+/// 94px of label, grid and hex field, but the grid draws one row rather than
+/// two when the palette model is empty, as it is in a headless fixture. A
+/// derived number would have been 20px wrong and the clicks would have landed
+/// on nothing.
+///
+/// Only rows 0 and 2 are lit in the fixture -- row 1's send is disabled -- so
+/// the scan finds lamps 90px apart and the pitch is half that.
 const SEND_ENABLE_X: f32 = 216.0;
-const SEND_ROW_0_Y: f32 = 248.0;
-const SEND_ROW_1_Y: f32 = 293.0;
+const SEND_ROW_0_Y: f32 = 174.0;
+const SEND_ROW_1_Y: f32 = 219.0;
 
 /// A send row reports **its own** index.
 ///
