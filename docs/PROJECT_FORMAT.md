@@ -499,6 +499,13 @@ audio file.
   `MAX_MOD_ROUTES_PER_CHANNEL` (16) routes per channel. Both are engine
   constants rather than format fields: a manifest carrying more is truncated
   at load, not refused.
+- Up to `MAX_AUTOMATION_LANES_PER_CHANNEL` (8) automation lanes per (pattern,
+  channel), and at most one lane per destination. Also an engine constant, and
+  truncated on the same terms — `Pattern::set_lanes` takes the first eight, so
+  a manifest carrying more had lanes the *document* kept and the engine had
+  never heard of: they drew, edited and re-saved while changing no sound. The
+  integrity pass now takes the same eight and says how many went, so both
+  sides agree about which.
 - Up to seventeen buses (master plus sixteen inserts), and a bank may hold
   fewer. A short stored bank is a small mixer and is **left as it is** --
   padding it back to seventeen was removed because it silently added fifteen

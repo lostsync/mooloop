@@ -189,26 +189,6 @@ not wanted -- delete the engine's route pass and the dead descriptor arm,
 rather than leaving a destination reachable only by hand-edited files. Found
 2026-09-13.
 
-**The ninth automation lane draws, edits and saves, and never plays.** A file
-carrying more than `MAX_AUTOMATION_LANES_PER_CHANNEL` lanes in one (pattern,
-channel) is handled three ways: `integrity::check_lanes` calls `refuse`,
-which records the issue and **repairs nothing**, so the project loads
-unchanged; `Session::replace_project` clones them all, so the editor lists,
-draws, edits and re-saves them; and `Pattern::set_lanes` takes the first
-eight, so the engine has never heard of the rest. Not reachable from the app
-now that the picker refuses past the ceiling (fixed 2026-09-13), so this is
-hand-edited, foreign-build or future-version files -- which is what keeps it
-out of the fixable list, not its severity. `refuse` was chosen because the
-only correction discards authored work, which is the right instinct except
-that `set_lanes` already discards it, silently and on one side only.
-`PROJECT_FORMAT.md` does not state the cap at all. Options: make
-`check_lanes` correct and truncate so both sides agree and the `Doctor` says
-which lanes went; or truncate in `replace_project` too so the document matches
-the engine; or raise the cap, since eight per channel per pattern is low for a
-song automating a channel and two buses, and `CAPACITY_POLICY.md` says "it was
-easier to preallocate" is not a sufficient reason. In every case the number
-belongs in `PROJECT_FORMAT.md`. Found 2026-09-13.
-
 **A container's Mix is offered as an automation destination the engine
 cannot read.** `automation_destinations` (`session.rs:485`) walks every
 slot's `kind.descriptors()` with no filter, and `EffectKind::Chain`'s table is
@@ -515,6 +495,20 @@ drop the cap, since all it buys is one `StereoBus` per level in a `Box`
 allocated off the audio thread, and 8 or 16 costs a few hundred KB on chains
 that hold a box at all; or cap the gesture only and delete the integrity
 sentence from all three documents. Found 2026-09-13.
+
+**`MAX_AUTOMATION_LANES_PER_CHANNEL` is 8, and raising it is not free.** The
+ninth lane no longer draws and plays nothing -- `check_lanes` truncates and
+reports as of 2026-09-14, so the document, the editor and the engine all keep
+the same eight, and `PROJECT_FORMAT.md` states the cap. What was not decided
+is whether eight is the right number. It is low for a song automating a
+channel and two buses, and `CAPACITY_POLICY.md` says "it was easier to
+preallocate" is not a sufficient reason -- but the preallocation is real here
+in a way it is not for most caps. `Pattern::with_steps` builds
+`MAX_CHANNELS` channel patterns each holding a
+`Vec::with_capacity(MAX_AUTOMATION_LANES_PER_CHANNEL)`, and the sequencer
+builds `MAX_PATTERNS` of those, so the cap is multiplied by 65,536 before it
+is paid. Measure that before changing it. Found 2026-09-13, half-closed
+2026-09-14.
 
 **`MAX_MOD_ROUTES_PER_CHANNEL` is 16** (`modulation.rs:1290`) — two routes per
 module across eight slots. It was left there deliberately, to be raised once
