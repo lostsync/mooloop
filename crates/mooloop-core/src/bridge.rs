@@ -15,6 +15,7 @@ use crate::{
     MlM1Params,
     NoteEvent,
     NoteId,
+    MidiMessage,
     ParamAddr, PlaybackMode, PointId, PolySynthParams, SamplerParams, SendTap,
 };
 
@@ -75,6 +76,11 @@ pub enum EngineCommand {
         start_tick: u32,
         on: bool,
     },
+    /// Arm or disarm recording. Armed, the transport captures what arrives on
+    /// each channel's MIDI input into that channel's notes; it is a state
+    /// rather than a gesture so that arming before pressing play works, which
+    /// is how every recorder is operated.
+    SetRecordArmed(bool),
     /// Shrink the channel pool's active region by one (removes the last
     /// channel). Kept last-index-only so existing indices stay valid.
     RemoveChannel,
@@ -418,4 +424,28 @@ pub enum EngineEvent {
     /// Internal acknowledgement used to reclaim a replaced project snapshot
     /// on the non-realtime thread.
     ProjectInstalled { generation: u64 },
+    /// One MIDI message the control layer has to see: a control change, a
+    /// pitch bend, a transport gesture, or a note on a channel that is
+    /// listening -- forwarded so that mapping, learning, and transport follow
+    /// happen where the project lives.
+    ///
+    /// **Notes still sound on the audio thread**; this is a copy for the
+    /// control layer, not the route by which anything is played. See the
+    /// header of `mooloop_core::control` for why control is resolved off the
+    /// realtime thread and notes are not.
+    ControlInput(MidiMessage),
+    /// A note captured while recording, complete: a note is reported when its
+    /// key comes up, because until then its length is not known.
+    ///
+    /// `start_tick` is where it landed on the looping playhead, so it is
+    /// already the position in the pattern. `length_ticks` is measured in
+    /// frames and converted, so a note held across a loop point reports the
+    /// length it was actually held rather than a negative one.
+    RecordedNote {
+        channel: u8,
+        note: u8,
+        velocity: u8,
+        start_tick: u32,
+        length_ticks: u32,
+    },
 }

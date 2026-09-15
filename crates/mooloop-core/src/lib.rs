@@ -9,6 +9,7 @@ pub mod bridge;
 pub mod buffer;
 pub mod channel;
 pub mod color;
+pub mod control;
 pub mod ds01;
 pub mod ds01_factory;
 pub mod effect;
@@ -53,7 +54,15 @@ pub use ds01::{
     DS01_DESTINATIONS, DS01_MATRIX_ROWS, DS01_MAX_PARTIALS, DS01_MAX_REPEATS, DS01_VOICES,
 };
 pub use buffer::{BufferDuration, BufferEvent};
-pub use midi::{cc_bucket, MidiKind, MidiMessage, RelativeEncoding};
+pub use control::{
+    ControlBinding, ControlLearn, ControlMap, ControlMapState, ControlMode, ControlOutcome,
+    ControlSource, ControlTarget, ControlValue, PickupState, Takeover, TransportControl,
+};
+pub use midi::{
+    cc_bucket, ChannelMidiInput, MidiChannelFilter, MidiInputRoute, MidiInputSource, MidiKind,
+    MidiMessage, MidiPortFilter, MidiPortId, MidiPortInfo, MidiPortMatch, MidiRouteSource,
+    RelativeEncoding, MIDI_CHANNEL_FILTER_ROWS, SYSTEM_CHANNEL,
+};
 pub use mlm1::{EnvTrigger, FilterModel, GlideMode, MlM1Params, NotePriority};
 pub use mlp8::{
     route_descriptor as mlp8_route_descriptor, MlP8Chorus, MlP8FilterMode, MlP8LfoParams,

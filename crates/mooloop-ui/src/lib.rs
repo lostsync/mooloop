@@ -2681,6 +2681,11 @@ fn note_cell(note: NoteEvent, selected_ids: &HashSet<NoteId>) -> NoteCell {
 struct UiState {
     /// Everything the application would still be if the window went away.
     session: Session,
+    /// The MIDI inputs the driver is offering, as of the last scan. Cached
+    /// rather than asked per use: under Core MIDI the answer is a lock and a
+    /// list of `String` clones, and the input picker, the routing table and
+    /// every control binding's port all want it.
+    midi_ports: Vec<mooloop_core::MidiPortInfo>,
     rows: Rc<VecModel<ChannelRow>>,
     step_models: Vec<Rc<VecModel<StepCell>>>,
     note_model: Rc<VecModel<NoteCell>>,
@@ -4209,6 +4214,43 @@ impl UiState {
         );
     }
 
+    /// The selected channel's MIDI input, for the sidebar's IN and CH rows.
+    ///
+    /// Both lists come from `mooloop_core`, which owns the rows *and* the
+    /// index-to-value mapping with round-trip tests behind it. Building them
+    /// here from a list spelled in the markup, or reading a row back into a
+    /// value by a `match` written here, would be the second copy.
+    fn publish_midi_input(&self, window: &MainWindow, channel: &ChannelState) {
+        use mooloop_core::{MidiChannelFilter, MidiInputSource, MIDI_CHANNEL_FILTER_ROWS};
+
+        let ports = &self.midi_ports;
+        let rows: Vec<SharedString> = MidiInputSource::picker_rows(ports)
+            .into_iter()
+            .map(SharedString::from)
+            .collect();
+        window.set_midi_input_options(ModelRc::from(Rc::new(VecModel::from(rows))));
+        window.set_midi_input_index(channel.midi_input.source.row(ports) as i32);
+        // A port the project names and the system does not have. The row falls
+        // back to "Follow Selection", so the panel has to say this out loud or
+        // it is misreporting what the channel is set to.
+        let missing = channel.midi_input.source.is_missing(ports);
+        window.set_midi_input_missing(missing);
+        window.set_midi_input_missing_name(
+            channel
+                .midi_input
+                .source
+                .port_name()
+                .filter(|_| missing)
+                .unwrap_or_default()
+                .into(),
+        );
+        let channels: Vec<SharedString> = (0..MIDI_CHANNEL_FILTER_ROWS)
+            .map(|row| SharedString::from(MidiChannelFilter::from_row(row).label()))
+            .collect();
+        window.set_midi_channel_options(ModelRc::from(Rc::new(VecModel::from(channels))));
+        window.set_midi_channel_index(channel.midi_input.channel.row() as i32);
+    }
+
     /// Refresh the bottom editor's properties from `selected`.
     fn refresh_editor(&self, window: &MainWindow) {
         let Some(ch) = self.session.channels.get(self.session.selected) else {
@@ -4228,6 +4270,7 @@ impl UiState {
             ch.color.map(|color| color.to_hex()).unwrap_or_default().into(),
         );
         window.set_selected_channel_color(channel_colors::to_slint(ch.color));
+        self.publish_midi_input(window, ch);
         window.set_selected_channel_volume_db(linear_to_db(ch.volume));
         window.set_source_kind(device_kind_to_int(ch.kind));
         // Derived rather than remembered per channel: the selection names one
@@ -4706,6 +4749,10 @@ impl AppUi {
         window.set_pattern_count(1);
 
         let state = Rc::new(RefCell::new(UiState {
+            // Filled by the pump's first scan, which also installs the
+            // routing. Starting empty rather than scanning here keeps one
+            // path for "the ports changed", and the first pump is 16 ms away.
+            midi_ports: Vec::new(),
             session: Session {
                 channels: vec![first],
                 default_waveform,
@@ -7990,6 +8037,77 @@ impl AppUi {
                     guard.sync_row_flags();
                     guard.refresh_editor(&window);
                     guard.update_document_title(&window);
+                }
+            });
+        }
+
+        // The channel sidebar's MIDI IN and CH rows. Both hand back a row
+        // index and nothing else: `mooloop_core` owns the lists and the
+        // mapping, so neither this nor the markup holds a second copy.
+        //
+        // A change here rebuilds the *whole* routing table rather than
+        // patching one entry. The table is one small struct per channel and is
+        // rebuilt on a menu pick, not in a loop; a patch would be a second
+        // path to the same state, which is what `Session::midi_routing`
+        // exists to avoid.
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            let tx = cmd_tx.clone();
+            window.on_midi_input_picked(move |row| {
+                let mut guard = st.borrow_mut();
+                let channel = guard.session.selected;
+                let ports = guard.midi_ports.clone();
+                let mut input = guard.session.channel_midi_input(channel);
+                input.source = mooloop_core::MidiInputSource::from_row(row.max(0) as usize, &ports);
+                if !guard.session.set_channel_midi_input(channel, input) {
+                    return;
+                }
+                guard.session.mark_dirty();
+                tx.send_routing(guard.session.midi_routing(&ports));
+                if let Some(window) = weak.upgrade() {
+                    guard.refresh_editor(&window);
+                    guard.update_document_title(&window);
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            let tx = cmd_tx.clone();
+            window.on_midi_channel_picked(move |row| {
+                let mut guard = st.borrow_mut();
+                let channel = guard.session.selected;
+                let ports = guard.midi_ports.clone();
+                let mut input = guard.session.channel_midi_input(channel);
+                input.channel = mooloop_core::MidiChannelFilter::from_row(row.max(0) as usize);
+                if !guard.session.set_channel_midi_input(channel, input) {
+                    return;
+                }
+                guard.session.mark_dirty();
+                tx.send_routing(guard.session.midi_routing(&ports));
+                if let Some(window) = weak.upgrade() {
+                    guard.refresh_editor(&window);
+                    guard.update_document_title(&window);
+                }
+            });
+        }
+
+        // Record arm. Not an edit: a song does not reopen armed, so arming it
+        // must not make an untouched document look unsaved -- the same rule
+        // the transport commands already follow.
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            let tx = cmd_tx.clone();
+            window.on_record_armed_toggled(move || {
+                let mut guard = st.borrow_mut();
+                let armed = !guard.session.record_armed();
+                if let Some(command) = guard.session.set_record_armed(armed) {
+                    let _ = tx.send(command);
+                }
+                if let Some(window) = weak.upgrade() {
+                    window.set_record_armed(armed);
                 }
             });
         }
@@ -11352,6 +11470,12 @@ impl AppUi {
         let mut last_load_report = std::time::Instant::now();
         let mut xruns_this_window = 0u32;
         let mut reported_time_shared = false;
+        // Reused across pumps rather than allocated per pump: a desk sending
+        // a fader stream fills these sixty times a second.
+        let mut control_input: Vec<mooloop_core::MidiMessage> = Vec::new();
+        let mut recorded: Vec<(u8, u8, u8, u32, u32)> = Vec::new();
+        let mut last_port_scan = std::time::Instant::now()
+            - std::time::Duration::from_secs(2);
         let autodrive_verbose = std::env::var_os("MOOLOOP_AUTODRIVE_VERBOSE").is_some();
         let mut playhead_was_nonempty = false;
         pump.start(
@@ -12094,9 +12218,78 @@ impl AppUi {
                             // does no formatting and takes no lock.
                             xruns_this_window += count;
                         }
+                        // Both are answered after the loop: acting on one
+                        // needs the session *and* the engine handle, and the
+                        // handle is borrowed for the drain.
+                        EngineEvent::ControlInput(message) => control_input.push(message),
+                        EngineEvent::RecordedNote {
+                            channel,
+                            note,
+                            velocity,
+                            start_tick,
+                            length_ticks,
+                        } => recorded.push((channel, note, velocity, start_tick, length_ticks)),
                         EngineEvent::ProjectInstalled { .. } => {
                             unreachable!("EngineHandle filters project acknowledgements")
                         }
+                    }
+                }
+                if !control_input.is_empty() || !recorded.is_empty() {
+                    let playing = w.get_playing();
+                    let mut moved = false;
+                    let mut edited = false;
+                    let mut written: Vec<usize> = Vec::new();
+                    {
+                        let mut state = st.borrow_mut();
+                        let ports = state.midi_ports.clone();
+                        for message in control_input.drain(..) {
+                            let effects =
+                                state.session.apply_control_input(&message, &ports, playing);
+                            for command in &effects.commands {
+                                handle.send(*command);
+                            }
+                            moved |= !effects.is_empty();
+                            // A parameter moved by a knob is an edit; a
+                            // transport gesture is not. `ControlEffects` has
+                            // already drawn that line.
+                            edited |= effects.edits;
+                        }
+                        for (channel, note, velocity, start, length) in recorded.drain(..) {
+                            let channel = usize::from(channel);
+                            let Some(edit) =
+                                state.session.record_note(channel, note, velocity, start, length)
+                            else {
+                                continue;
+                            };
+                            for command in &edit.commands {
+                                handle.send(*command);
+                            }
+                            written.push(channel);
+                            edited = true;
+                        }
+                        if edited {
+                            state.session.mark_dirty();
+                        }
+                    }
+                    // One republish for the whole drain rather than one per
+                    // message: a fader sweep is a hundred messages a second,
+                    // and redrawing the editor for each would cost more than
+                    // the sweep.
+                    if moved {
+                        let state = st.borrow();
+                        state.refresh_editor(&w);
+                        state.sync_row_flags();
+                    }
+                    if !written.is_empty() {
+                        let state = st.borrow();
+                        written.sort_unstable();
+                        written.dedup();
+                        for channel in &written {
+                            state.refresh_rack_row(*channel);
+                        }
+                    }
+                    if edited {
+                        st.borrow().update_document_title(&w);
                     }
                 }
                 let now = std::time::Instant::now();
@@ -12109,6 +12302,25 @@ impl AppUi {
                 // took too long, or a block that was never run in time.
                 // Reported together so the difference is legible without
                 // guessing, and only when there is something to say.
+                // The port list, once a second. A keyboard plugged in
+                // mid-session is a channel whose stored port name resolves for
+                // the first time and a binding that stops being inert, so the
+                // routing and the control map are both rebuilt when it moves
+                // -- and only when it moves, because neither is free.
+                if now.duration_since(last_port_scan) >= std::time::Duration::from_secs(1) {
+                    last_port_scan = now;
+                    let ports = handle.midi_ports();
+                    let changed = st.borrow().midi_ports != ports;
+                    if changed {
+                        let mut state = st.borrow_mut();
+                        state.midi_ports = ports;
+                        let ports = state.midi_ports.clone();
+                        state.session.resolve_control_map(&ports);
+                        handle.set_midi_routing(state.session.midi_routing(&ports));
+                        drop(state);
+                        st.borrow().refresh_editor(&w);
+                    }
+                }
                 if now.duration_since(last_load_report) >= std::time::Duration::from_secs(1) {
                     last_load_report = now;
                     let load = handle.take_load();

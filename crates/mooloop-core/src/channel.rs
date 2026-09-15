@@ -139,6 +139,19 @@ pub struct Channel {
         deserialize_with = "crate::color::deserialize_lenient"
     )]
     pub color: Option<crate::color::ProjectColor>,
+    /// Which MIDI input, and which MIDI channel on it, plays this channel.
+    ///
+    /// Defaulted, and its default is what mooloop did before the field
+    /// existed: follow the selection, on every channel. So this is an
+    /// addition rather than a change -- every song written before it opens
+    /// playing exactly as it used to, and a song that has never been
+    /// configured does not grow a table of defaults on disk.
+    #[serde(default, skip_serializing_if = "is_default_midi_input")]
+    pub midi_input: crate::midi::ChannelMidiInput,
+}
+
+fn is_default_midi_input(input: &crate::midi::ChannelMidiInput) -> bool {
+    input == &crate::midi::ChannelMidiInput::default()
 }
 
 impl Channel {
@@ -154,6 +167,7 @@ impl Channel {
             pan: 0.0,
             bus: crate::MASTER_BUS,
             color: None,
+            midi_input: crate::midi::ChannelMidiInput::default(),
         }
     }
 }

@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use midir::{Ignore, MidiInput, MidiInputConnection};
+use mooloop_core::{MidiPortId, MidiPortInfo};
 use mooloop_dsp::MAX_BLOCK_SIZE;
 use rtrb::{Consumer, Producer, RingBuffer};
 
@@ -59,21 +60,44 @@ const MAX_MIDI_PER_CALLBACK: usize = 256;
 /// One channel message, copied out of Core MIDI's buffer so it can cross
 /// threads without allocating. System exclusive is filtered before it gets
 /// here, so three bytes is every message mooloop reads.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MidiBytes {
     len: u8,
+    /// Which source it came in on. Core MIDI gives every source its own
+    /// connection, so unlike JACK this driver really can tell two keyboards
+    /// apart -- which is what makes the input picker worth having here.
+    port: MidiPortId,
     bytes: [u8; 3],
 }
 
+impl Default for MidiBytes {
+    fn default() -> Self {
+        Self {
+            len: 0,
+            port: MidiPortId::FIRST,
+            bytes: [0; 3],
+        }
+    }
+}
+
 impl MidiBytes {
-    fn new(message: &[u8]) -> Option<Self> {
+    fn new(port: MidiPortId, message: &[u8]) -> Option<Self> {
         if message.is_empty() || message.len() > 3 {
+            return None;
+        }
+        // Clock, MTC quarter-frame and active sensing: a stream rather than a
+        // gesture, and nothing reads them. Dropped here so they never take a
+        // place in the queue. Start, Continue, Stop and Song Position are
+        // *not* dropped -- they are transport gestures, and the transport
+        // follows them.
+        if matches!(message[0], 0xF1 | 0xF8 | 0xF9 | 0xFE) {
             return None;
         }
         let mut bytes = [0; 3];
         bytes[..message.len()].copy_from_slice(message);
         Some(Self {
             len: message.len() as u8,
+            port,
             bytes,
         })
     }
@@ -167,6 +191,18 @@ struct State {
     last_probe: Option<Instant>,
 }
 
+/// One Core MIDI source mooloop is listening to.
+struct Listening {
+    /// Core MIDI's own id for the source, which survives a rename.
+    id: String,
+    /// What the source calls itself, which is what a project stores.
+    name: String,
+    /// This run's id for it.
+    port: MidiPortId,
+    /// Held because dropping it stops the listening.
+    _connection: MidiInputConnection<()>,
+}
+
 /// Every Core MIDI source mooloop is listening to.
 struct MidiInputs {
     /// Lists the sources. Connecting consumes a `MidiInput`, so each
@@ -176,8 +212,16 @@ struct MidiInputs {
     /// Shared by every connection's callback. Those run on Core MIDI's own
     /// thread, not the audio thread, so taking a lock there is fine.
     queue: Arc<Mutex<Producer<MidiBytes>>>,
-    /// By source id, which survives a rename.
-    connections: Vec<(String, String, MidiInputConnection<()>)>,
+    /// By source id, which survives a rename, with the port id this run gave
+    /// it.
+    connections: Vec<Listening>,
+    /// The next port id to hand out. Monotonic rather than positional,
+    /// because `connections` is pruned when a device is unplugged and a
+    /// position would then be reused -- a project naming a port by index
+    /// would end up pointing at somebody else's keyboard. Ids are matched to
+    /// names once per run by `mooloop_core::midi::resolve_port_name`, so a
+    /// gap in them costs nothing.
+    next_port: u16,
     /// Sources that refused a connection, by id, so a broken one is reported
     /// once rather than once a second.
     refused: Vec<String>,
@@ -197,6 +241,7 @@ impl MidiInputs {
             scanner,
             queue: Arc::new(Mutex::new(queue)),
             connections: Vec::new(),
+            next_port: 0,
             refused: Vec::new(),
             last_scan: None,
         }
@@ -215,9 +260,10 @@ impl MidiInputs {
             .filter_map(|port| Some((port.id(), scanner.port_name(&port).ok()?, port)))
             .collect();
         let is_present = |id: &String| present.iter().any(|(present, _, _)| present == id);
-        self.connections.retain(|(id, name, _)| {
-            let keep = is_present(id);
+        self.connections.retain(|listening| {
+            let keep = is_present(&listening.id);
             if !keep {
+                let name = &listening.name;
                 mooloop_core::log_info!("midi", "the MIDI input {name:?} went away");
             }
             keep
@@ -228,7 +274,7 @@ impl MidiInputs {
             let known = self
                 .connections
                 .iter()
-                .any(|(connected, _, _)| *connected == id);
+                .any(|listening| listening.id == id);
             if known || self.refused.contains(&id) {
                 continue;
             }
@@ -240,12 +286,18 @@ impl MidiInputs {
                     continue;
                 }
             };
-            // Clock, active sensing and system exclusive: none of it plays a
-            // note, and a clock alone is 24 messages a beat.
-            input.ignore(Ignore::All);
+            // System exclusive and active sensing: neither plays a note nor
+            // moves the transport. **Not `Ignore::All`**, which also takes
+            // timing -- and this driver now wants Start, Continue, Stop and
+            // Song Position, which arrive in the same system range. The
+            // clock itself is dropped in `MidiBytes::new`, where the rule is
+            // stated once and applies to both drivers' traffic.
+            input.ignore(Ignore::Sysex | Ignore::ActiveSense);
             let queue = self.queue.clone();
+            let port_id = MidiPortId(self.next_port);
+            self.next_port = self.next_port.wrapping_add(1);
             let listener = move |_timestamp: u64, message: &[u8], _: &mut ()| {
-                if let Some(message) = MidiBytes::new(message) {
+                if let Some(message) = MidiBytes::new(port_id, message) {
                     // Full means the audio callback has stopped taking; a
                     // note from then is not one anybody is waiting to hear.
                     let _ = lock(&queue).push(message);
@@ -254,7 +306,12 @@ impl MidiInputs {
             match input.connect(&port, "input", listener, ()) {
                 Ok(connection) => {
                     mooloop_core::log_info!("midi", "listening to the MIDI input {name:?}");
-                    self.connections.push((id, name, connection));
+                    self.connections.push(Listening {
+                        id,
+                        name,
+                        port: port_id,
+                        _connection: connection,
+                    });
                 }
                 Err(e) => {
                     mooloop_core::log_warn!("midi", "could not listen to {name:?} ({e})");
@@ -384,6 +441,22 @@ pub(crate) struct CoreAudioDriver {
 impl CoreAudioDriver {
     /// The system default first, then every device with at least two output
     /// channels, addressed by its first two.
+    /// Every Core MIDI source being listened to, for the input picker.
+    ///
+    /// Core MIDI connects to each source separately, so this really is a list
+    /// of devices rather than JACK's single merged port -- and a project that
+    /// names one of them is naming a keyboard.
+    pub(crate) fn midi_ports(&self) -> Vec<MidiPortInfo> {
+        lock(&self.midi)
+            .connections
+            .iter()
+            .map(|listening| MidiPortInfo {
+                id: listening.port,
+                name: listening.name.clone(),
+            })
+            .collect()
+    }
+
     pub(crate) fn available_output_targets(&self) -> Vec<OutputTarget> {
         let default = Route::system_default().target();
         let mut targets = vec![OutputTarget {
@@ -621,7 +694,9 @@ fn render_callback(
             // and a key's lateness is already smaller than one callback.
             let block_midi = if index == 0 { &midi[..arrived] } else { &[] };
             executor.process(
-                block_midi.iter().map(|message| (0, message.as_slice())),
+                block_midi
+                .iter()
+                .map(|message| (message.port, 0, message.as_slice())),
                 out_l,
                 out_r,
             );
@@ -664,12 +739,22 @@ mod tests {
     /// hands over in one piece, and an empty packet do not cross at all.
     #[test]
     fn only_a_channel_message_fits_the_ring() {
-        let note = MidiBytes::new(&[0x90, 60, 100]).expect("a note-on fits");
+        let note = MidiBytes::new(MidiPortId::FIRST, &[0x90, 60, 100]).expect("a note-on fits");
         assert_eq!(note.as_slice(), [0x90, 60, 100]);
-        let program = MidiBytes::new(&[0xC0, 5]).expect("a program change fits");
+        let program =
+            MidiBytes::new(MidiPortId::FIRST, &[0xC0, 5]).expect("a program change fits");
         assert_eq!(program.as_slice(), [0xC0, 5]);
-        assert_eq!(MidiBytes::new(&[]), None);
-        assert_eq!(MidiBytes::new(&[0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7]), None);
+        assert_eq!(MidiBytes::new(MidiPortId::FIRST, &[]), None);
+        assert_eq!(
+            MidiBytes::new(MidiPortId::FIRST, &[0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7]),
+            None
+        );
+        // Clock and active sensing never take a place in the queue; the
+        // transport messages in the same range do.
+        assert_eq!(MidiBytes::new(MidiPortId::FIRST, &[0xF8]), None);
+        assert_eq!(MidiBytes::new(MidiPortId::FIRST, &[0xFE]), None);
+        assert!(MidiBytes::new(MidiPortId::FIRST, &[0xFA]).is_some());
+        assert!(MidiBytes::new(MidiPortId::FIRST, &[0xF2, 16, 0]).is_some());
     }
 
     #[test]

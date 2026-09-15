@@ -12,6 +12,8 @@ use jack::{
     ProcessScope,
 };
 
+use mooloop_core::{MidiPortId, MidiPortInfo};
+
 use crate::driver::{AudioConfig, OutputTarget};
 use crate::executor::Executor;
 use crate::Error;
@@ -26,6 +28,16 @@ const DEFAULT_OUTPUT_L: &str = "system:playback_1";
 const AUDIO_PORT_TYPE: &str = "32 bit float mono audio";
 const DEFAULT_OUTPUT_R: &str = "system:playback_2";
 const MIDI_IN_NAME: &str = "mooloop:midi_in";
+/// What the one JACK input is called in the input picker.
+///
+/// **JACK gives mooloop one merged MIDI port**, with every hardware source
+/// auto-connected to it, and a message arriving on it carries no record of
+/// which source sent it. So there is exactly one port to pick here, and it is
+/// named for what it actually is rather than for a device. Telling two
+/// keyboards apart under JACK needs a port per source, which is a driver
+/// change (`docs/CONTROL_SURFACES.md`); until then a two-keyboard setup is
+/// separated by MIDI channel, which is what the channel filter is for.
+const MIDI_IN_LABEL: &str = "All Hardware Inputs";
 /// JACK's built-in MIDI port type, spelled here for the same reason as
 /// [`AUDIO_PORT_TYPE`].
 const MIDI_PORT_TYPE: &str = "8 bit raw midi";
@@ -40,8 +52,12 @@ struct Graph {
 impl ProcessHandler for Graph {
     fn process(&mut self, _client: &Client, scope: &ProcessScope) -> Control {
         // JACK hands over whole messages already ordered by time, which is
-        // the executor's contract for its MIDI input.
-        let midi = self.midi_in.iter(scope).map(|raw| (raw.time, raw.bytes));
+        // the executor's contract for its MIDI input. One port, so every
+        // message carries the same id; see `MIDI_IN_LABEL`.
+        let midi = self
+            .midi_in
+            .iter(scope)
+            .map(|raw| (MidiPortId::FIRST, raw.time, raw.bytes));
         self.executor.process(
             midi,
             self.out_l.as_mut_slice(scope),
@@ -303,6 +319,15 @@ pub(crate) struct JackDriver {
 }
 
 impl JackDriver {
+    /// The MIDI inputs a channel or a binding can name. One, under JACK; see
+    /// [`MIDI_IN_LABEL`].
+    pub(crate) fn midi_ports(&self) -> Vec<MidiPortInfo> {
+        vec![MidiPortInfo {
+            id: MidiPortId::FIRST,
+            name: MIDI_IN_LABEL.to_owned(),
+        }]
+    }
+
     pub(crate) fn available_output_targets(&self) -> Vec<OutputTarget> {
         stereo_destinations(self.client.as_client())
     }

@@ -273,6 +273,19 @@ become one without renumbering anything automation has persisted. Recorded
 `mooloop-ui` nor `mooloop-session` calls it. MIDI is decoded and routed; it is
 just not reachable from the app.
 
+**The whole MIDI control layer has no UI either, as of 2026-09-15.** Per-channel
+input, the channel filter, controller bindings, transport gestures and note
+recording are built and tested through `mooloop-session`, and nothing in
+`mooloop-ui` calls any of it. Unlike the entry above this one has a plan and a
+named next step: `docs/plans/midi-control/04-interface.md`.
+
+**The Core MIDI driver's port ids have never been compiled.**
+`coreaudio_driver.rs` is behind `#[cfg(target_os = "macos")]` and the
+2026-09-15 MIDI work was done on Linux, so the port threaded through
+`MidiBytes`, the `Listening` struct that replaced the connection tuple, and the
+narrowed `Ignore` flags are all unverified. Mechanical changes, but mechanical
+is not checked. Build `mooloop-engine` on macOS.
+
 **There is no way to hear a track before its own fader.** Solo is in place
 as of 2026-09-11, which silences the others rather than opening a monitor
 path, so a soloed track is still heard through its fader, its pan and its

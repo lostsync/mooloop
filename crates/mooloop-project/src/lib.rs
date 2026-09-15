@@ -1422,6 +1422,63 @@ mod tests {
         );
     }
 
+    /// A channel's MIDI input and the project's control bindings survive a
+    /// save, and -- the part that matters -- a song written before either
+    /// existed loads unchanged.
+    ///
+    /// Both are skipped when they are at their defaults, so an unconfigured
+    /// song is byte-identical to one written before the fields existed. That
+    /// is asserted here against the serialized text rather than against a
+    /// struct, because a `skip_serializing_if` nobody checks the output of is
+    /// not evidence of anything.
+    #[test]
+    fn midi_input_and_control_bindings_round_trip_and_cost_nothing_unused() {
+        use mooloop_core::{
+            ChannelMidiInput, ControlBinding, ControlSource, ControlTarget, MidiChannelFilter,
+            MidiInputSource, MidiPortFilter,
+        };
+
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+
+        // A song nobody has configured writes neither key.
+        let plain = Project::default();
+        save_song(&bundle, &plain, AssetMode::Embedded).unwrap();
+        let written = std::fs::read_to_string(temp.path().join("song.mooloop").join("project.toml"))
+            .or_else(|_| std::fs::read_to_string(&bundle))
+            .expect("the song's document is readable");
+        assert!(
+            !written.contains("midi_input"),
+            "an unconfigured channel should not write a MIDI input"
+        );
+        assert!(
+            !written.contains("control_map"),
+            "a song with no bindings should not write a control map"
+        );
+
+        let mut project = Project::default();
+        project.channels[0].setup.channel.midi_input = ChannelMidiInput {
+            source: MidiInputSource::Port("Launchkey MK3".to_owned()),
+            channel: MidiChannelFilter::One(9),
+        };
+        project.control_map.bind(ControlBinding::new(
+            ControlSource::Cc {
+                port: MidiPortFilter::Named("Faderfox".to_owned()),
+                channel: MidiChannelFilter::Omni,
+                controller: 74,
+            },
+            ControlTarget::Param(ParamAddr::strip(
+                mooloop_core::EffectTarget::Channel(0),
+                mooloop_core::STRIP_PARAM_VOLUME,
+            )),
+        ));
+
+        let bundle = temp.path().join("configured.mooloop");
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let loaded = load_bundle(&bundle).unwrap();
+        assert_eq!(loaded.document, LoadedDocument::Song(project.clone()));
+    }
+
     /// Stretch settings survive a save, and -- the part that actually
     /// matters -- a song written before they existed still loads, with
     /// stretch off and the ratio at unity.

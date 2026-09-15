@@ -424,16 +424,26 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   registers later; under Core Audio every Core MIDI source is listened to
   through `midir`, and a keyboard plugged in later is picked up within a
   second. JACK notes keep their frame offsets; Core MIDI notes act at the top
-  of the next block. A key comes up on the channel it went down on, so moving
-  the selection while holding one does not strand a note. Only note-on and
-  note-off play: velocity is passed through, and CC, pitch bend, sustain, and
-  program change do nothing on a channel. Notes are not recorded. A
-  `BufferMidiMap` — note and CC mappings onto one Buffer insert's gestures —
-  takes the notes it maps ahead of the keyboard, but nothing installs one:
+  of the next block. A key comes up on every channel it went down on, so
+  moving the selection while holding one does not strand a note. Only note-on
+  and note-off play: velocity is passed through, and CC, pitch bend, sustain,
+  and program change do nothing on a channel. A `BufferMidiMap` — note and CC
+  mappings onto one Buffer insert's gestures — takes the notes it maps ahead
+  of the keyboard, but nothing installs one:
   `EngineHandle::set_buffer_midi_map` has no caller outside its own tests.
-  There is no MIDI device list, input choice, learn, or mapping editor, and the
-  MIDI preferences page has no controls; which inputs are listened to is in
-  the log.
+- **Per-channel MIDI input, controller mapping, transport control and MIDI
+  recording are built but unreachable.** Steps 01–03 of
+  `docs/plans/midi-control/` landed on 2026-09-15: a channel can hold an input
+  and an Omni-or-1-16 channel filter and the engine routes by them, control
+  changes and transport messages are forwarded to the control thread and
+  mapped against the project's bindings, the transport follows an external
+  Start, Continue, Stop or Song Position, and an armed transport captures
+  played notes into the pattern. Every part of that is tested and **none of it
+  has an interface**. The channel sidebar's MIDI rows are still drawn inert,
+  there is no learn gesture, no mapping editor, no transport mapping surface,
+  no record-arm button, and the MIDI preferences page still has no controls;
+  which inputs are listened to is in the log. `docs/CONTROL_SURFACES.md` is
+  the design and step 04 of the plan is what is left.
 
 ## Current Audio Path
 

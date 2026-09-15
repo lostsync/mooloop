@@ -892,6 +892,10 @@ export component MainWindow inherits Window {
     // named thing, and which thing that is must not depend on what happens to
     // be selected when the keystroke lands.
     callback channel-renamed(int, string);
+    // The row that was picked, never a value: Rust owns both lists.
+    callback midi-input-picked(int);
+    callback midi-channel-picked(int);
+    callback record-armed-toggled();
     // Channel structure is a project edit, so these callbacks carry the
     // clicked row rather than relying on whichever row was selected before a
     // context menu opened.
@@ -1662,6 +1666,19 @@ export component MainWindow inherits Window {
     in-out property <float> sample-duration;
     in-out property <int> audio-sample-rate: 48000;
     in-out property <string> selected-channel-name;
+    // The selected channel's MIDI input, for the sidebar's IN and CH rows.
+    // Both option lists are built in Rust -- `MidiInputSource::picker_rows`
+    // and `MidiChannelFilter` own the rows and the index-to-value mapping, so
+    // this markup never spells a list it would then have to keep in step.
+    in-out property <[string]> midi-input-options;
+    in-out property <int> midi-input-index;
+    in-out property <bool> midi-input-missing;
+    in-out property <string> midi-input-missing-name;
+    in-out property <[string]> midi-channel-options;
+    in-out property <int> midi-channel-index;
+    // Whether recording is armed. A transport state rather than a document
+    // one: opening a song and pressing play must not record.
+    in-out property <bool> record-armed;
     in-out property <[float]> waveform;
     in-out property <[float]> playhead-positions;
     in-out property <int> sample-frames;
@@ -2539,6 +2556,18 @@ export component MainWindow inherits Window {
                                 enabled: root.playing || root.current-step > 0;
                                 clicked => { root.stop-clicked(); }
                             }
+                            // Arm, not record: it arms and the transport does
+                            // the recording, which is how every recorder is
+                            // operated and is why arming while stopped works.
+                            TransportButton {
+                                text: "●";
+                                tooltip: root.record-armed
+                                    ? "Recording armed — MIDI is captured while playing"
+                                    : "Arm MIDI recording";
+                                role: "record";
+                                active: root.record-armed;
+                                clicked => { root.record-armed-toggled(); }
+                            }
 
                             ToolbarRule {}
 
@@ -2678,6 +2707,14 @@ export component MainWindow inherits Window {
                             color-hex: root.editing-bus
                                 ? root.editing-bus-color-hex : root.selected-channel-color-hex;
                             color-choices: root.color-choices;
+                            midi-input-options: root.midi-input-options;
+                            midi-input-index: root.midi-input-index;
+                            midi-input-missing: root.midi-input-missing;
+                            midi-input-missing-name: root.midi-input-missing-name;
+                            midi-channel-options: root.midi-channel-options;
+                            midi-channel-index: root.midi-channel-index;
+                            midi-input-picked(row) => { root.midi-input-picked(row); }
+                            midi-channel-picked(row) => { root.midi-channel-picked(row); }
                             // The renames the rest of the interface already
                             // does. A second callback for either would be a
                             // second way to rename the same thing, and they

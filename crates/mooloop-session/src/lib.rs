@@ -59,6 +59,7 @@ pub(crate) static COUNTING: CountingAllocator = CountingAllocator {
 pub mod effects;
 pub mod engine;
 pub mod history;
+pub mod midi;
 pub mod mixer;
 pub mod modulation;
 pub mod notes;

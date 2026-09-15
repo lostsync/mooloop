@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use mooloop_core::{EngineEvent, MidiMessage};
+use mooloop_core::{EngineEvent, MidiMessage, MidiPortId};
 use mooloop_dsp::{SampleData, MAX_BLOCK_SIZE};
 use rtrb::Consumer;
 
@@ -79,6 +79,7 @@ impl Executor {
             render,
             midi_scratch: [MidiMessage {
                 offset: 0,
+                port: MidiPortId::FIRST,
                 channel: 0,
                 kind: mooloop_core::MidiKind::NoteOff { note: 0 },
             }; MAX_MIDI_PER_BLOCK],
@@ -112,12 +113,16 @@ impl Executor {
 
     /// Render one block into `out_l` and `out_r`.
     ///
-    /// `midi` yields `(frame offset, raw message)` pairs for this block, in
-    /// time order and one whole message each. At most [`MAX_BLOCK_SIZE`]
-    /// frames are rendered; anything past that in the buffers is silenced.
+    /// `midi` yields `(port, frame offset, raw message)` triples for this
+    /// block, in time order and one whole message each. The port is the
+    /// driver's own numbering for this run, and is what a channel's input
+    /// setting and a control binding's port filter are resolved against; a
+    /// driver with one input port passes [`MidiPortId::FIRST`] for every
+    /// message. At most [`MAX_BLOCK_SIZE`] frames are rendered; anything past
+    /// that in the buffers is silenced.
     pub(crate) fn process<'m>(
         &mut self,
-        midi: impl IntoIterator<Item = (u32, &'m [u8])>,
+        midi: impl IntoIterator<Item = (MidiPortId, u32, &'m [u8])>,
         out_l: &mut [f32],
         out_r: &mut [f32],
     ) {
@@ -206,11 +211,11 @@ impl Executor {
         // block's audio. Drivers hand over whole messages already ordered by
         // time, so no sort is needed.
         let mut midi_len = 0;
-        for (offset, bytes) in midi {
+        for (port, offset, bytes) in midi {
             if midi_len == MAX_MIDI_PER_BLOCK {
                 break;
             }
-            if let Some(message) = MidiMessage::decode(offset, bytes) {
+            if let Some(message) = MidiMessage::decode(port, offset, bytes) {
                 self.midi_scratch[midi_len] = message;
                 midi_len += 1;
             }
@@ -238,6 +243,18 @@ impl Executor {
         out_l[frames..].fill(0.0);
         out_r[frames..].fill(0.0);
 
+        // What the control layer has to see: control changes to map, and
+        // notes that were recorded. After the render, so a note reported here
+        // has already sounded. Two slots are left for the position and
+        // metering events below, which are this block's own truth and must
+        // not be crowded out by a desk sending a fader stream; what does not
+        // fit waits in the renderer for the next block.
+        while self.evt_tx.slots() > 2 {
+            let Some(event) = self.render.pop_outgoing() else {
+                break;
+            };
+            let _ = self.evt_tx.push(event);
+        }
         let _ = self.evt_tx.push(EngineEvent::Position {
             tick: report.position_tick,
             beat_in_bar: report.beat_in_bar,

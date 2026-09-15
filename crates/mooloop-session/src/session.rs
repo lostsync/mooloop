@@ -169,6 +169,20 @@ pub struct Session {
     /// not a session gesture: a loop is set around the part being worked on
     /// and is worth reopening the song to.
     pub loop_range: LoopRange,
+    /// Control-surface bindings: document state, because their targets name
+    /// this song's channels. See `mooloop_core::control::ControlMap`.
+    pub control_map: mooloop_core::ControlMap,
+    /// The bindings' resolved ports and pickup state. **Not** document state:
+    /// where a knob was last seen is the state of one performance, and a
+    /// project reopened is a performance that has not started.
+    pub control_state: mooloop_core::ControlMapState,
+    /// A learn gesture waiting for a control to be touched. A session gesture
+    /// like modulation assignment, and forgotten by a load for the same
+    /// reason.
+    pub control_learn: Option<mooloop_core::ControlLearn>,
+    /// Whether recording is armed. A session gesture: a song does not reopen
+    /// armed, because opening a song and pressing play should not record.
+    pub record_armed: bool,
     pub song_mode: bool,
     pub current_pattern: usize,
     pub selected: usize,
@@ -251,6 +265,10 @@ impl Default for Session {
             pattern_meta: vec![PatternMeta::default()],
             playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
             loop_range: LoopRange::default(),
+            control_map: mooloop_core::ControlMap::default(),
+            control_state: mooloop_core::ControlMapState::default(),
+            control_learn: None,
+            record_armed: false,
             song_mode: false,
             current_pattern: 0,
             selected: 0,
@@ -396,6 +414,7 @@ impl Session {
                     setup: ChannelSetup {
                         channel: Channel {
                             name: channel.name.clone(),
+                            midi_input: channel.midi_input.clone(),
                             color: channel.color,
                             kind: channel.kind,
                             muted: channel.muted,
@@ -437,6 +456,7 @@ impl Session {
             pattern_meta: trim_pattern_meta(&self.pattern_meta),
             playlist: self.playlist.clone(),
             loop_range: self.loop_range,
+            control_map: self.control_map.clone(),
         }
     }
 
@@ -1129,6 +1149,7 @@ impl Session {
                     .unwrap_or((false, false));
                 ChannelState {
                     name: setup.channel.name.clone(),
+                    midi_input: setup.channel.midi_input.clone(),
                     color: setup.channel.color,
                     kind: setup.channel.kind,
                     muted: setup.channel.muted,
@@ -1199,6 +1220,13 @@ impl Session {
         self.pattern_meta.resize(self.pattern_lengths.len(), PatternMeta::default());
         self.playlist = project.playlist.clone();
         self.loop_range = project.loop_range;
+        self.control_map = project.control_map.clone();
+        // A load may have moved every bound parameter, so every control has
+        // to catch its value again rather than snapping it back to wherever
+        // the knob was left. The caller re-resolves the ports, which it can
+        // do and this cannot: the port list belongs to the driver.
+        self.control_state = mooloop_core::ControlMapState::default();
+        self.control_learn = None;
         self.song_mode = project.playback_mode == PlaybackMode::Song;
         self.current_pattern = project.current_pattern as usize;
         self.selected = project.selected_channel as usize;

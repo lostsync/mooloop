@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
 
-use arc_swap::ArcSwapOption;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use mooloop_core::{
     audio_tap_index, compile_bus_graph, AutomationLane, AuxInParams, ChannelSource,
     CompiledAudioGraph, CompiledBusGraph, DeviceKind, OutletDescriptor, PublishesOutlets,
@@ -2430,6 +2430,119 @@ fn add_encoded(sum: &mut StereoBus, source: &StereoBus, frames: usize) {
 /// in the same block, because what falls past the cap can be a note-off.
 const MAX_AUDITIONS_PER_BLOCK: usize = 64;
 
+/// The most events one block hands back to the control layer. Control input is
+/// forwarded, not acted on here, and a desk sending a fader stream must not be
+/// able to make the audio thread grow a buffer -- so the surplus is dropped,
+/// which for a stream of positions means the control layer sees a slightly
+/// coarser sweep and nothing worse. A note-off is never in this list: notes
+/// sound on the audio thread and their release does not depend on it.
+const MAX_OUTGOING_EVENTS_PER_BLOCK: usize = 128;
+
+/// Words of the held-key bitset: one bit per channel, so a note held on
+/// several listening channels releases on all of them.
+const HELD_KEY_WORDS: usize = MAX_CHANNELS / 64;
+
+/// Which channels are holding each MIDI note down.
+///
+/// A bitset rather than [`Renderer::keyboard_channel`]'s single byte, because
+/// a note can now go down on several channels at once: that is what a
+/// multitimbral setup *is*. The release still goes exactly where the press
+/// went, which is what the single byte was protecting, and now protects it for
+/// every channel that took the note rather than for the last one to.
+#[derive(Clone, Copy)]
+struct HeldKeys {
+    channels: [[u64; HELD_KEY_WORDS]; 128],
+}
+
+impl HeldKeys {
+    const fn new() -> Self {
+        Self {
+            channels: [[0; HELD_KEY_WORDS]; 128],
+        }
+    }
+
+    fn hold(&mut self, note: u8, channel: u8) {
+        let channel = usize::from(channel);
+        self.channels[usize::from(note & 0x7f)][channel / 64] |= 1 << (channel % 64);
+    }
+
+    fn is_held(&self, note: u8, channel: u8) -> bool {
+        let channel = usize::from(channel);
+        self.channels[usize::from(note & 0x7f)][channel / 64] & (1 << (channel % 64)) != 0
+    }
+
+    /// Take every channel holding `note`, clearing them.
+    fn release(&mut self, note: u8) -> HeldChannels {
+        HeldChannels {
+            words: std::mem::replace(&mut self.channels[usize::from(note & 0x7f)], [0; HELD_KEY_WORDS]),
+            word: 0,
+        }
+    }
+
+    #[cfg(test)]
+    fn any_held(&self) -> bool {
+        self.channels
+            .iter()
+            .any(|note| note.iter().any(|word| *word != 0))
+    }
+}
+
+/// The channels a released note was held on.
+struct HeldChannels {
+    words: [u64; HELD_KEY_WORDS],
+    word: usize,
+}
+
+impl Iterator for HeldChannels {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<u8> {
+        while self.word < HELD_KEY_WORDS {
+            let word = &mut self.words[self.word];
+            if *word == 0 {
+                self.word += 1;
+                continue;
+            }
+            let bit = word.trailing_zeros() as usize;
+            *word &= *word - 1;
+            return Some((self.word * 64 + bit) as u8);
+        }
+        None
+    }
+}
+
+/// How each channel takes MIDI input, indexed by channel.
+///
+/// Built on the control thread from the project's stored input settings and
+/// the driver's current port list, and swapped in whole. Shorter than the
+/// channel bank is not an error: a channel past the end has no explicit route
+/// and so follows the selection, which is the default and what every project
+/// written before this existed does.
+#[derive(Debug, Clone, Default)]
+pub struct MidiRouting {
+    pub routes: Vec<mooloop_core::MidiInputRoute>,
+}
+
+impl MidiRouting {
+    fn route(&self, channel: usize) -> mooloop_core::MidiInputRoute {
+        self.routes.get(channel).copied().unwrap_or_default()
+    }
+}
+
+/// One note being recorded, from its press until its release.
+#[derive(Clone, Copy)]
+struct RecordingNote {
+    channel: u8,
+    velocity: u8,
+    /// Where it landed on the looping playhead: already the position in the
+    /// pattern.
+    start_tick: u32,
+    /// Absolute frames at the press. Length is measured from this rather than
+    /// from `start_tick`, so a note held across the loop point reports how
+    /// long it was held instead of a negative number.
+    start_frames: u64,
+}
+
 /// Note ids for auditioned notes, kept clear of the sequencer's.
 ///
 /// Counted down from the top rather than up from zero because the sequencer
@@ -2613,11 +2726,25 @@ pub(crate) struct RenderState {
     /// The channel a MIDI keyboard plays, or [`NO_KEYBOARD_CHANNEL`]. Shared
     /// with the control layer, which follows the editor's selection with it.
     keyboard_channel: Arc<AtomicU8>,
-    /// Per MIDI note, the channel its key went down on plus one, or zero
-    /// while the key is up. The release goes where the press went: a key held
-    /// while the selection moves would otherwise send its note-off to a
-    /// channel that never started it and leave the first one sounding.
-    held_keys: [u8; 128],
+    /// How each channel takes MIDI input. Shared with the control layer,
+    /// which rebuilds it when a channel's setting changes or a port appears.
+    midi_routing: Arc<ArcSwap<MidiRouting>>,
+    /// Which channels are holding each MIDI note down. The release goes where
+    /// the press went: a key held while the selection moves would otherwise
+    /// send its note-off to a channel that never started it and leave the
+    /// first one sounding.
+    held_keys: HeldKeys,
+    /// Whether recording is armed. Capture also needs the transport running,
+    /// which is checked at the note rather than here, so arming while stopped
+    /// is the ordinary thing it looks like.
+    record_armed: bool,
+    /// Notes being recorded, by MIDI note. One per pitch: a second press of a
+    /// pitch already down closes the first, which is the same rule
+    /// [`Renderer::press_key`] applies to sounding it.
+    recording: [Option<RecordingNote>; 128],
+    /// Events for the control layer, collected this block and drained by the
+    /// executor after the block renders.
+    outgoing: [Option<mooloop_core::EngineEvent>; MAX_OUTGOING_EVENTS_PER_BLOCK],
     playhead_meters: Arc<PlayheadMeters>,
     modulator_meters: Arc<ModulatorMeters>,
     /// The sample browser's audition voice, if something is playing. One at
@@ -2743,7 +2870,11 @@ impl RenderState {
             buffer_midi: Arc::new(ArcSwapOption::empty()),
             buffer_cc: BufferCcState::default(),
             keyboard_channel: Arc::new(AtomicU8::new(NO_KEYBOARD_CHANNEL)),
-            held_keys: [0; 128],
+            midi_routing: Arc::new(ArcSwap::from_pointee(MidiRouting::default())),
+            held_keys: HeldKeys::new(),
+            record_armed: false,
+            recording: [None; 128],
+            outgoing: [None; MAX_OUTGOING_EVENTS_PER_BLOCK],
             playhead_meters: PlayheadMeters::new(),
             modulator_meters: ModulatorMeters::new(),
             auditions: [None; MAX_AUDITIONS_PER_BLOCK],
@@ -3665,6 +3796,7 @@ impl RenderState {
             EngineCommand::Play => self.transport.play(),
             EngineCommand::Pause => self.transport.pause(),
             EngineCommand::Stop => self.transport.stop(),
+            EngineCommand::SetRecordArmed(armed) => self.set_record_armed(armed),
             EngineCommand::SetTempo(bpm) => self.transport.set_tempo(bpm),
             EngineCommand::SetSwing(percent) => self.sequencer.set_swing(percent),
             EngineCommand::SetCurrentPattern(pattern) => {
@@ -4115,14 +4247,60 @@ impl RenderState {
         self.keyboard_channel = channel;
     }
 
+    /// Share the control layer's MIDI routing cell. Same transport as the
+    /// buffer map: built and dropped off the audio thread, only ever loaded
+    /// here.
+    pub(crate) fn attach_midi_routing(&mut self, routing: Arc<ArcSwap<MidiRouting>>) {
+        self.midi_routing = routing;
+    }
+
+    /// Arm or disarm recording.
+    pub(crate) fn set_record_armed(&mut self, armed: bool) {
+        self.record_armed = armed;
+        if !armed {
+            // A note still down when recording is disarmed is abandoned
+            // rather than reported half-measured. Its *sound* is untouched:
+            // the key is still held, and `held_keys` is what releases it.
+            self.recording = [None; 128];
+        }
+    }
+
+    /// Take one event for the control layer, oldest first. Called by the
+    /// executor after the block has rendered, which is the only place that
+    /// holds the event ring. What the executor does not take stays here and
+    /// goes out next block, so a full ring delays control input rather than
+    /// dropping it.
+    pub(crate) fn pop_outgoing(&mut self) -> Option<mooloop_core::EngineEvent> {
+        self.outgoing.iter_mut().find(|slot| slot.is_some())?.take()
+    }
+
+    /// Queue one event for the control layer. Dropped past the cap; see
+    /// [`MAX_OUTGOING_EVENTS_PER_BLOCK`].
+    fn emit(&mut self, event: mooloop_core::EngineEvent) {
+        if let Some(slot) = self.outgoing.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(event);
+        }
+    }
+
     /// Translate one block's MIDI input into notes and buffer events. Runs
     /// before the block renders, so input acts on the audio it arrived with.
     ///
-    /// A note a buffer mapping claims drives the buffer; every other note
-    /// plays the keyboard channel. For the buffer, note says what and how
-    /// long, velocity says how hard, and a CC carries whatever else the tuple
-    /// needs — the note table holds the shape of an edit and the controls bend
-    /// it.
+    /// The split this method makes is the one the whole MIDI design rests on:
+    ///
+    /// - **Notes are realtime.** A note a buffer mapping claims drives the
+    ///   buffer; otherwise every channel whose input claims the message sounds
+    ///   it, and if none does, the selected channel does. All of that happens
+    ///   here, at the message's own frame offset.
+    /// - **Control is not.** Control changes, pitch bends and transport
+    ///   messages are *forwarded* to the control layer, which maps them
+    ///   against the project's bindings and issues the same edits the
+    ///   interface would. See the header of `mooloop_core::control` for why.
+    ///
+    /// For the buffer, note says what and how long, velocity says how hard,
+    /// and a CC carries whatever else the tuple needs — the note table holds
+    /// the shape of an edit and the controls bend it. A buffer mapping is
+    /// resolved here rather than forwarded because it is a performance gesture
+    /// on a block boundary, which is the one thing the round trip would spoil.
     pub(crate) fn apply_midi(&mut self, messages: &[mooloop_core::MidiMessage]) {
         use mooloop_core::midi::BufferCcTarget;
         use mooloop_core::MidiKind;
@@ -4133,6 +4311,12 @@ impl RenderState {
         let map = self.buffer_midi.load();
         let map = map.as_deref().copied();
         for message in messages {
+            // A transport message is addressed to no channel and claimed by
+            // no mapping; it goes straight up.
+            if message.kind.is_transport() {
+                self.emit(mooloop_core::EngineEvent::ControlInput(*message));
+                continue;
+            }
             let claimed = |note| {
                 map.filter(|map| map.accepts(message))
                     .filter(|map| map.note_event(note, 1).is_some())
@@ -4147,7 +4331,7 @@ impl RenderState {
                             }
                         }
                     }
-                    None => self.press_key(message.offset, note, velocity),
+                    None => self.play_note(message, note, velocity),
                 },
                 MidiKind::NoteOff { note } => match claimed(note) {
                     // Only a note this map owns may release; an unmapped key
@@ -4157,9 +4341,13 @@ impl RenderState {
                             chain.queue_buffer_release(map.slot as usize);
                         }
                     }
-                    None => self.release_key(message.offset, note),
+                    None => self.stop_note(message.offset, note),
                 },
                 MidiKind::ControlChange { controller, value } => {
+                    // Forwarded whether or not a buffer mapping also claims
+                    // it: the control layer needs to see every control that
+                    // moves, both to map it and to learn it.
+                    self.emit(mooloop_core::EngineEvent::ControlInput(*message));
                     let Some(map) = map.filter(|map| map.accepts(message)) else {
                         continue;
                     };
@@ -4195,7 +4383,14 @@ impl RenderState {
                         }
                     }
                 }
-                MidiKind::PitchBend { .. } => {}
+                MidiKind::PitchBend { .. } => {
+                    self.emit(mooloop_core::EngineEvent::ControlInput(*message));
+                }
+                // Handled above, before any channel or mapping saw it.
+                MidiKind::Start
+                | MidiKind::Continue
+                | MidiKind::Stop
+                | MidiKind::SongPosition { .. } => {}
             }
         }
     }
@@ -4207,30 +4402,124 @@ impl RenderState {
         self.sample_rate as f64 * 60.0 / self.transport.bpm.max(1.0) / 128.0
     }
 
-    /// A key went down: sound it on the keyboard channel, and remember which
-    /// channel that was.
-    fn press_key(&mut self, offset: u32, note: u8, velocity: u8) {
-        let channel = self.keyboard_channel.load(Ordering::Relaxed);
+    /// A key went down: sound it on every channel listening to the input it
+    /// arrived on, and remember which those were.
+    ///
+    /// **The selected channel is a fallback, not an addition.** A channel that
+    /// claimed the message by its own input setting plays it; only if nothing
+    /// claimed it does the selection sound it. Adding the selection to the
+    /// claimants instead would double every note on a channel that was both
+    /// selected and listening -- once at full velocity, once again, which
+    /// reads as a stuck-sounding 6 dB rather than as a bug.
+    fn play_note(&mut self, message: &mooloop_core::MidiMessage, note: u8, velocity: u8) {
+        let offset = message.offset;
         // A key pressed again before its release arrived -- a dropped
         // note-off, or two controllers on one pitch -- lets the first go
         // rather than stranding it under an id the second is about to reuse.
-        self.release_key(offset, note);
-        if channel == NO_KEYBOARD_CHANNEL {
-            return;
-        }
+        self.stop_note(offset, note);
+        let routing = self.midi_routing.load();
         let id = keyboard_note_id(note);
-        if self.queue_audition(channel, offset, Event::NoteOn { id, note, velocity }) {
-            self.held_keys[usize::from(note & 0x7f)] = channel + 1;
+        let mut claimed = false;
+        for channel in 0..self.channel_count() {
+            if !routing.route(channel).claims(message) {
+                continue;
+            }
+            claimed = true;
+            let channel = channel as u8;
+            if self.queue_audition(channel, offset, Event::NoteOn { id, note, velocity }) {
+                self.held_keys.hold(note, channel);
+            }
         }
+        if !claimed {
+            let channel = self.keyboard_channel.load(Ordering::Relaxed);
+            if channel != NO_KEYBOARD_CHANNEL
+                && usize::from(channel) < self.channel_count()
+                && routing.route(usize::from(channel)).follows_selection(message)
+                && self.queue_audition(channel, offset, Event::NoteOn { id, note, velocity })
+            {
+                self.held_keys.hold(note, channel);
+            }
+        }
+        drop(routing);
+        self.capture_note_on(message, note, velocity);
     }
 
-    /// A key came up: release it on the channel it went down on.
-    fn release_key(&mut self, offset: u32, note: u8) {
-        let held = std::mem::take(&mut self.held_keys[usize::from(note & 0x7f)]);
-        if held != 0 {
-            let id = keyboard_note_id(note);
-            self.queue_audition(held - 1, offset, Event::NoteOff { id, note });
+    /// A key came up: release it on every channel it went down on.
+    fn stop_note(&mut self, offset: u32, note: u8) {
+        let id = keyboard_note_id(note);
+        for channel in self.held_keys.release(note) {
+            self.queue_audition(channel, offset, Event::NoteOff { id, note });
         }
+        self.capture_note_off(offset, note);
+    }
+
+    /// How many channels the renderer currently has. A route past the end
+    /// names nothing, so routing never reaches beyond the bank.
+    fn channel_count(&self) -> usize {
+        self.events.len()
+    }
+
+    /// Note down while recording: remember where and how hard, on whichever
+    /// channel took it. Nothing is reported yet -- a note's length is not
+    /// known until its key comes up.
+    ///
+    /// Capture follows the *sound*: the channels in `held_keys` are the ones
+    /// that played the note, so recording can never write to a channel that
+    /// did not hear it. Only one of them is recorded, and it is the first,
+    /// because a pattern note belongs to one channel: a layered input records
+    /// where it is played, and the others sound without being written down.
+    fn capture_note_on(&mut self, message: &mooloop_core::MidiMessage, note: u8, velocity: u8) {
+        if !self.record_armed || !self.transport.playing {
+            return;
+        }
+        // `min` and then the cast, not the cast and then the range: a full
+        // bank is 256 channels, and `256 as u8` is 0, which would make an
+        // empty range and stop recording entirely at exactly the capacity the
+        // bank is sized for.
+        let Some(channel) = (0..self.channel_count().min(MAX_CHANNELS))
+            .map(|channel| channel as u8)
+            .find(|&channel| self.held_keys.is_held(note, channel))
+        else {
+            return;
+        };
+        let start_tick = self.tick_at(message.offset);
+        self.recording[usize::from(note & 0x7f)] = Some(RecordingNote {
+            channel,
+            velocity,
+            start_tick,
+            start_frames: self.transport.frames_played() + u64::from(message.offset),
+        });
+    }
+
+    /// Note up while recording: report the whole note.
+    fn capture_note_off(&mut self, offset: u32, note: u8) {
+        let Some(held) = self.recording[usize::from(note & 0x7f)].take() else {
+            return;
+        };
+        let frames = (self.transport.frames_played() + u64::from(offset))
+            .saturating_sub(held.start_frames);
+        // At least one tick: a note tapped inside a single block is still a
+        // note, and a zero-length one would be invisible in the pattern.
+        let length_ticks = ((frames as f64 * self.transport.ticks_per_sample()).round() as u32)
+            .max(1);
+        self.emit(mooloop_core::EngineEvent::RecordedNote {
+            channel: held.channel,
+            note,
+            velocity: held.velocity,
+            start_tick: held.start_tick,
+            length_ticks,
+        });
+    }
+
+    /// Where `offset` frames into this block falls on the playhead.
+    ///
+    /// The transport has not advanced yet when MIDI is applied, so this is the
+    /// block's start plus the offset's own share -- the position the note was
+    /// actually played at, not the position the block ends at.
+    fn tick_at(&self, offset: u32) -> u32 {
+        let ticks = self.transport.position_ticks
+            + f64::from(offset) * self.transport.ticks_per_sample();
+        ticks.max(0.0) as u32
     }
 
     /// Hold an auditioned note until the block's event lists exist.
@@ -5165,6 +5454,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         };
         let key = |kind| MidiMessage {
             offset: 0,
+            port: mooloop_core::MidiPortId::FIRST,
             channel: 0,
             kind,
         };
@@ -5176,7 +5466,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         })]);
         render.process_block(128);
         assert!(!sounding(&render, 0) && !sounding(&render, 1));
-        assert!(render.held_keys.iter().all(|&held| held == 0));
+        assert!(!render.held_keys.any_held());
 
         keyboard.store(0, Ordering::Relaxed);
         render.apply_midi(&[key(MidiKind::NoteOn {
@@ -5205,9 +5495,301 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             releases[0].1,
             Event::NoteOff { id, note: 62 } if id == keyboard_note_id(62)
         ));
-        assert!(render.held_keys.iter().all(|&held| held == 0));
+        assert!(!render.held_keys.any_held());
         render.process_block(128);
         assert!(!sounding(&render, 1), "the second channel was never played");
+    }
+
+    /// A render state with two sampler channels, each holding a second of
+    /// audio, for the MIDI routing tests. They need a channel bank and voices
+    /// that outlast a block; none of them cares what the audio is.
+    fn two_channel_render() -> RenderState {
+        let sample = Arc::new(SampleData {
+            frames: vec![[0.5, -0.5]; 48_000],
+            sample_rate: 48_000,
+            root_note: 60,
+        });
+        let slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>> = Arc::new(
+            (0..MAX_CHANNELS)
+                .map(|_| Arc::new(ArcSwapOption::empty()))
+                .collect(),
+        );
+        slots[0].store(Some(sample.clone()));
+        slots[1].store(Some(sample));
+        let slice_slots = Arc::new(
+            (0..MAX_CHANNELS)
+                .map(|_| Arc::new(ArcSwapOption::empty()))
+                .collect(),
+        );
+        let mut render = RenderState::new(48_000, slots, slice_slots);
+        let mut project = Project::default();
+        project.channels.push(ProjectChannel::sampler(1, 1));
+        render.load_project(&project);
+        render
+    }
+
+    /// Two channels listening to different MIDI channels play their own notes
+    /// and not each other's. This is what multitimbral means, and it is the
+    /// point of the whole input setting.
+    #[test]
+    fn channels_listening_on_different_midi_channels_play_their_own_notes() {
+        use mooloop_core::{
+            MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage, MidiPortId, MidiRouteSource,
+        };
+
+        let mut render = two_channel_render();
+        // Channel 0 takes MIDI channel 1, channel 1 takes MIDI channel 10.
+        let routing = Arc::new(ArcSwap::from_pointee(MidiRouting {
+            routes: vec![
+                MidiInputRoute {
+                    source: MidiRouteSource::AllPorts,
+                    channel: MidiChannelFilter::One(0),
+                },
+                MidiInputRoute {
+                    source: MidiRouteSource::AllPorts,
+                    channel: MidiChannelFilter::One(9),
+                },
+            ],
+        }));
+        render.attach_midi_routing(routing);
+        let note = |channel, note| MidiMessage {
+            offset: 0,
+            port: MidiPortId::FIRST,
+            channel,
+            kind: MidiKind::NoteOn {
+                note,
+                velocity: 100,
+            },
+        };
+
+        render.apply_midi(&[note(0, 60), note(9, 62)]);
+        let played: Vec<_> = render
+            .auditions
+            .iter()
+            .flatten()
+            .map(|audition| audition.channel)
+            .collect();
+        assert_eq!(played, vec![0, 1]);
+
+        // A note on a MIDI channel neither wants plays nothing -- not even
+        // the selected channel, which has an explicit route of its own.
+        render.process_block(128);
+        render.keyboard_channel.store(0, Ordering::Relaxed);
+        render.apply_midi(&[note(5, 64)]);
+        assert_eq!(render.auditions.iter().flatten().count(), 0);
+    }
+
+    /// A channel that claims a note is not *also* played by being selected.
+    /// Adding the selection to the claimants would sound the note twice on the
+    /// same channel, which reads as a stuck 6 dB rather than as a bug.
+    #[test]
+    fn a_claiming_channel_is_not_played_twice_for_being_selected() {
+        use mooloop_core::{
+            MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage, MidiPortId, MidiRouteSource,
+        };
+
+        let mut render = two_channel_render();
+        render.attach_midi_routing(Arc::new(ArcSwap::from_pointee(MidiRouting {
+            routes: vec![MidiInputRoute {
+                source: MidiRouteSource::AllPorts,
+                channel: MidiChannelFilter::Omni,
+            }],
+        })));
+        render.keyboard_channel.store(0, Ordering::Relaxed);
+        render.apply_midi(&[MidiMessage {
+            offset: 0,
+            port: MidiPortId::FIRST,
+            channel: 0,
+            kind: MidiKind::NoteOn {
+                note: 60,
+                velocity: 100,
+            },
+        }]);
+        let played: Vec<_> = render
+            .auditions
+            .iter()
+            .flatten()
+            .map(|audition| audition.channel)
+            .collect();
+        assert_eq!(played, vec![0], "the selected channel claimed it once");
+    }
+
+    /// Two channels holding one note both let go of it. The single byte this
+    /// bitset replaced could only remember one of them, so the second would
+    /// have been left sounding.
+    #[test]
+    fn a_note_held_on_two_channels_is_released_on_both() {
+        use mooloop_core::{
+            MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage, MidiPortId, MidiRouteSource,
+        };
+
+        let mut render = two_channel_render();
+        let both = MidiInputRoute {
+            source: MidiRouteSource::AllPorts,
+            channel: MidiChannelFilter::Omni,
+        };
+        render.attach_midi_routing(Arc::new(ArcSwap::from_pointee(MidiRouting {
+            routes: vec![both, both],
+        })));
+        let message = |kind| MidiMessage {
+            offset: 0,
+            port: MidiPortId::FIRST,
+            channel: 0,
+            kind,
+        };
+
+        render.apply_midi(&[message(MidiKind::NoteOn {
+            note: 60,
+            velocity: 100,
+        })]);
+        render.process_block(128);
+        render.apply_midi(&[message(MidiKind::NoteOff { note: 60 })]);
+        let released: Vec<_> = render
+            .auditions
+            .iter()
+            .flatten()
+            .map(|audition| audition.channel)
+            .collect();
+        assert_eq!(released, vec![0, 1]);
+        assert!(!render.held_keys.any_held());
+    }
+
+    /// Control and transport messages leave for the control layer and play
+    /// nothing. A Start message arriving while a channel listens Omni must not
+    /// be heard as a note.
+    #[test]
+    fn control_and_transport_messages_are_forwarded_rather_than_played() {
+        use mooloop_core::{
+            EngineEvent, MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage, MidiPortId,
+            MidiRouteSource, SYSTEM_CHANNEL,
+        };
+
+        let mut render = two_channel_render();
+        render.attach_midi_routing(Arc::new(ArcSwap::from_pointee(MidiRouting {
+            routes: vec![MidiInputRoute {
+                source: MidiRouteSource::AllPorts,
+                channel: MidiChannelFilter::Omni,
+            }],
+        })));
+        let cc = MidiMessage {
+            offset: 0,
+            port: MidiPortId::FIRST,
+            channel: 2,
+            kind: MidiKind::ControlChange {
+                controller: 74,
+                value: 100,
+            },
+        };
+        let start = MidiMessage {
+            offset: 0,
+            port: MidiPortId::FIRST,
+            channel: SYSTEM_CHANNEL,
+            kind: MidiKind::Start,
+        };
+        let bend = MidiMessage {
+            offset: 0,
+            port: MidiPortId::FIRST,
+            channel: 2,
+            kind: MidiKind::PitchBend { value: 1000 },
+        };
+
+        render.apply_midi(&[cc, start, bend]);
+        assert_eq!(
+            render.auditions.iter().flatten().count(),
+            0,
+            "nothing about a control message is a note"
+        );
+        let forwarded: Vec<_> = std::iter::from_fn(|| render.pop_outgoing()).collect();
+        assert_eq!(
+            forwarded,
+            vec![
+                EngineEvent::ControlInput(cc),
+                EngineEvent::ControlInput(start),
+                EngineEvent::ControlInput(bend),
+            ]
+        );
+    }
+
+    /// Recording reports a note when its key comes up, with the position it
+    /// was played at and the length it was actually held.
+    #[test]
+    fn a_recorded_note_carries_its_position_and_its_length() {
+        use mooloop_core::{
+            EngineEvent, MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage, MidiPortId,
+            MidiRouteSource,
+        };
+
+        let mut render = two_channel_render();
+        render.attach_midi_routing(Arc::new(ArcSwap::from_pointee(MidiRouting {
+            routes: vec![MidiInputRoute {
+                source: MidiRouteSource::AllPorts,
+                channel: MidiChannelFilter::Omni,
+            }],
+        })));
+        let message = |offset, kind| MidiMessage {
+            offset,
+            port: MidiPortId::FIRST,
+            channel: 0,
+            kind,
+        };
+        let down = |offset| {
+            message(
+                offset,
+                MidiKind::NoteOn {
+                    note: 60,
+                    velocity: 90,
+                },
+            )
+        };
+        let up = |offset| message(offset, MidiKind::NoteOff { note: 60 });
+
+        // Armed but stopped: nothing is captured, because a recorder that
+        // wrote while the transport was parked would fill the pattern's first
+        // tick with everything anybody played.
+        render.set_record_armed(true);
+        render.apply_midi(&[down(0)]);
+        render.process_block(128);
+        render.apply_midi(&[up(0)]);
+        render.process_block(128);
+        assert_eq!(std::iter::from_fn(|| render.pop_outgoing()).count(), 0);
+
+        // Running: one note, at the position it was played and for as long as
+        // it was held. At 120 bpm and 48 kHz a quarter note is 24 000 frames,
+        // and the transport's own resolution is 96 ticks to the quarter.
+        render.play();
+        render.apply_midi(&[down(0)]);
+        for _ in 0..93 {
+            render.process_block(256);
+        }
+        // 93 blocks of 256 is 23 808 frames, a hair under a quarter note.
+        render.apply_midi(&[up(0)]);
+        render.process_block(256);
+        let recorded: Vec<_> = std::iter::from_fn(|| render.pop_outgoing()).collect();
+        let [EngineEvent::RecordedNote {
+            channel,
+            note,
+            velocity,
+            start_tick,
+            length_ticks,
+        }] = recorded[..]
+        else {
+            panic!("expected exactly one recorded note, got {recorded:?}");
+        };
+        assert_eq!((channel, note, velocity), (0, 60, 90));
+        assert_eq!(start_tick, 0, "it was played at the top of the pattern");
+        assert!(
+            (94..=96).contains(&length_ticks),
+            "a note held just under a quarter should be just under 96 ticks, was {length_ticks}"
+        );
+
+        // Disarming abandons a note still down rather than reporting a
+        // half-measured one.
+        render.apply_midi(&[down(0)]);
+        render.process_block(256);
+        render.set_record_armed(false);
+        render.apply_midi(&[up(0)]);
+        render.process_block(256);
+        assert_eq!(std::iter::from_fn(|| render.pop_outgoing()).count(), 0);
     }
 
     /// Auditioning has to work with the transport stopped -- that is the
@@ -8848,6 +9430,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             for block in 0..8 {
                 if Some(block) == messages_at {
                     render.apply_midi(&[MidiMessage {
+                        port: mooloop_core::MidiPortId::FIRST,
                         offset: 0,
                         channel: 0,
                         kind: MidiKind::NoteOn {
@@ -8886,6 +9469,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
 
         let project = synth_project(ProjectChannel::sampler(0, 1));
         let note_off = |note| MidiMessage {
+            port: mooloop_core::MidiPortId::FIRST,
             offset: 0,
             channel: 0,
             kind: MidiKind::NoteOff { note },
@@ -8932,6 +9516,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         });
 
         let cc = |value| MidiMessage {
+            port: mooloop_core::MidiPortId::FIRST,
             offset: 0,
             channel: 0,
             kind: MidiKind::ControlChange {

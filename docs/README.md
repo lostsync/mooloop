@@ -42,6 +42,7 @@ table of which document to read for which task. Start there, not here.
 | --- | --- |
 | [AUDIO_ARCHITECTURE.md](AUDIO_ARCHITECTURE.md) | The boundary between editable musical state and audio execution: control plane, graph compiler, executor, time, latency. |
 | [MODULATION.md](MODULATION.md) | Parameters and modulation, end to end: descriptors, `ParamAddr`, ownership, base-plus-offset, control rate, destination policy, and the assign gesture. |
+| [CONTROL_SURFACES.md](CONTROL_SURFACES.md) | How something outside mooloop moves something inside it: MIDI input routing, controller mapping, transport gestures, recording — and where OSC attaches. |
 | [BUFFER_ENGINE.md](BUFFER_ENGINE.md) | The retained-audio thesis, what shipped against it, and the product test still outstanding. |
 | [COMPOSABLE_DEVICE_UNITS.md](COMPOSABLE_DEVICE_UNITS.md) | How a reusable DSP unit presents itself. Mostly a target; its three load-bearing habits are not. |
 | [UI_DESIGN.md](UI_DESIGN.md) | The interface composition language, the rack layout contract, and the acceptance checklist. |

@@ -72,6 +72,11 @@ pub enum PendingEngineMessage {
     /// Linear preview gain. A plain value rather than a command because the
     /// engine reads it from a shared cell, live, while a preview plays.
     PreviewGain(f32),
+    /// How each channel takes MIDI input, in channel order. A whole table
+    /// rather than one channel's entry: it is one small struct per channel,
+    /// it is rebuilt on a menu pick rather than in a loop, and a patching
+    /// verb would be a second path to the same state.
+    MidiRouting(Vec<mooloop_core::MidiInputRoute>),
 }
 
 /// Display subscriptions are handled by the pump, which exclusively owns the
@@ -114,6 +119,14 @@ impl EngineCommandSender {
     pub fn resize_buffers(&self, bpm: f64) -> bool {
         self.0
             .send(PendingEngineMessage::ResizeBuffers { bpm })
+            .is_ok()
+    }
+
+    /// Install how each channel takes MIDI input. See
+    /// [`PendingEngineMessage::MidiRouting`].
+    pub fn send_routing(&self, routes: Vec<mooloop_core::MidiInputRoute>) -> bool {
+        self.0
+            .send(PendingEngineMessage::MidiRouting(routes))
             .is_ok()
     }
 }
@@ -492,6 +505,13 @@ impl Session {
             }
             PendingEngineMessage::PreviewGain(gain) => {
                 handle.set_preview_gain(gain);
+                false
+            }
+            PendingEngineMessage::MidiRouting(routes) => {
+                handle.set_midi_routing(routes);
+                // The *document* was already dirtied by the edit that changed
+                // a channel's input; installing the resolved table is not a
+                // second edit, and a port appearing must not dirty anything.
                 false
             }
             PendingEngineMessage::ResizeBuffers { bpm } => {

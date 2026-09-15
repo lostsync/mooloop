@@ -16,10 +16,19 @@
 // becomes easier to reach. So the tab strip is drawn with one tab rather than
 // four stubs: it is the shape, without the promise.
 //
-// **The MIDI rows are deliberately inert.** MIDI is decoded and routed and
-// configurable nowhere, and `docs/FOCUS.md` is explicit that this panel must
-// not pull MIDI configuration forward. They are drawn disabled so the panel
-// says what it will hold without claiming to hold it yet.
+// **IN and CH are live as of 2026-09-15; OUT is still inert.** A channel picks
+// which input plays it and on which MIDI channel, which is
+// `docs/plans/midi-control/` step 04. MIDI *output* does not exist at all --
+// `SCOPE.md` §2 item 2 puts it in 0.2.0 -- so that row stays disabled and says
+// so, which is the distinction the original comment here drew: a disabled row
+// means "not configurable yet", and it would be a lie about the two that now
+// are.
+//
+// **Neither picker holds its own list.** `MidiInputSource::picker_rows` and
+// `MidiChannelFilter` own the rows and the index-to-value mapping, with
+// round-trip tests; this markup receives the strings and hands back an index.
+// A menu that spelled "Omni, 1, 2, ... 16" here would be the second copy of a
+// list, which is the fault `AGENTS.md` opens on.
 
 import { Theme } from "theme.slint";
 import { SectionLabel } from "controls.slint";
@@ -68,6 +77,20 @@ export component ChannelSidebar inherits Rectangle {
     in property <int> track-index;
     in property <bool> is-master;
 
+    // The MIDI input rows. Both lists come from Rust -- see the header -- and
+    // both callbacks hand back the row that was picked, never a value.
+    in property <[string]> midi-input-options;
+    in property <int> midi-input-index;
+    // Set when the stored input names a port that is not plugged in. The row
+    // falls back to "Follow Selection", so without this the panel would
+    // silently misreport what the channel is set to.
+    in property <bool> midi-input-missing;
+    in property <string> midi-input-missing-name;
+    in property <[string]> midi-channel-options;
+    in property <int> midi-channel-index;
+
+    callback midi-input-picked(int);
+    callback midi-channel-picked(int);
     callback renamed(string);
     callback send-added(int);
     callback send-removed(int);
@@ -221,26 +244,40 @@ export component ChannelSidebar inherits Rectangle {
                     MenuField {
                         field-width: parent.value-width;
                         label: "IN";
-                        enabled: false;
-                        options: ["All Inputs"];
-                        selected-index: 0;
-                        tooltip: "MIDI input — not configurable yet";
+                        options: root.midi-input-options;
+                        selected-index: root.midi-input-index;
+                        tooltip: root.midi-input-missing
+                            ? "MIDI input — " + root.midi-input-missing-name + " is not connected"
+                            : "Which MIDI input plays this channel";
+                        selected(index) => { root.midi-input-picked(index); }
                     }
+                    // The one row still drawn disabled, and it means what a
+                    // disabled row here has always meant: MIDI output does not
+                    // exist, so there is nothing to configure.
                     MenuField {
                         field-width: parent.value-width;
                         label: "OUT";
                         enabled: false;
                         options: ["None"];
                         selected-index: 0;
-                        tooltip: "MIDI output — not configurable yet";
+                        tooltip: "MIDI output — not built yet";
                     }
                     MenuField {
                         field-width: parent.value-width;
                         label: "CH";
-                        enabled: false;
-                        options: ["All"];
-                        selected-index: 0;
-                        tooltip: "MIDI channel — not configurable yet";
+                        options: root.midi-channel-options;
+                        selected-index: root.midi-channel-index;
+                        tooltip: "Which MIDI channel this channel listens on";
+                        selected(index) => { root.midi-channel-picked(index); }
+                    }
+                    // A device the project names and the system does not have.
+                    // Said out loud rather than left to a silent channel.
+                    if root.midi-input-missing : Text {
+                        text: root.midi-input-missing-name + " not connected";
+                        font-size: 9px;
+                        color: Theme.warning;
+                        wrap: word-wrap;
+                        width: parent.value-width + 38px;
                     }
                 }
             }

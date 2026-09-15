@@ -14,7 +14,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
-use arc_swap::ArcSwapOption;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use mooloop_core::{
     BufferParams, EffectKind, EffectParams, EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS,
     modulation::CONTROL_SOURCE_SLOTS,
@@ -406,6 +406,8 @@ impl Engine {
         let buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>> =
             Arc::new(ArcSwapOption::empty());
         let keyboard_channel = Arc::new(AtomicU8::new(render::NO_KEYBOARD_CHANNEL));
+        let midi_routing: Arc<ArcSwap<render::MidiRouting>> =
+            Arc::new(ArcSwap::from_pointee(render::MidiRouting::default()));
         let mut render = RenderState::new(sample_rate, sample_slots.clone(), slice_slots.clone());
         render.attach_keyboard_channel(keyboard_channel.clone());
         render.attach_meters(bus_meters.clone());
@@ -414,6 +416,7 @@ impl Engine {
         render.attach_playhead_meters(playhead_meters.clone());
         render.attach_modulator_meters(modulator_meters.clone());
         render.attach_buffer_midi_map(buffer_midi_map.clone());
+        render.attach_midi_routing(midi_routing.clone());
         render.attach_preview_gain(preview_gain.clone());
         let executor = Executor::new(
             ExecutorIo {
@@ -441,6 +444,7 @@ impl Engine {
                 device_telemetry,
                 buffer_midi_map,
                 keyboard_channel,
+                midi_routing,
                 playhead_meters,
                 modulator_meters,
                 sample_slots,
@@ -467,6 +471,7 @@ pub struct EngineHandle {
     device_telemetry: Arc<DeviceTelemetry>,
     buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>>,
     keyboard_channel: Arc<AtomicU8>,
+    midi_routing: Arc<ArcSwap<render::MidiRouting>>,
     playhead_meters: Arc<PlayheadMeters>,
     modulator_meters: Arc<ModulatorMeters>,
     sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
@@ -746,6 +751,32 @@ impl EngineHandle {
     /// Built and dropped on this thread; the audio thread only loads it.
     pub fn set_buffer_midi_map(&self, map: Option<mooloop_core::midi::BufferMidiMap>) {
         self.buffer_midi_map.store(map.map(Arc::new));
+    }
+
+    /// Install how each channel takes MIDI input, indexed by channel.
+    ///
+    /// Built from the project's stored settings resolved against
+    /// [`Self::midi_ports`], so the audio thread compares port ids rather
+    /// than names. Call it when a channel's setting changes and when the port
+    /// list does -- a keyboard plugged in mid-session is a channel whose
+    /// stored port name resolves for the first time.
+    pub fn set_midi_routing(&self, routes: Vec<mooloop_core::MidiInputRoute>) {
+        self.midi_routing
+            .store(Arc::new(render::MidiRouting { routes }));
+    }
+
+    /// The MIDI inputs available to pick from right now.
+    ///
+    /// Under JACK this is one merged port; under Core MIDI it is one entry per
+    /// source. The difference is the driver's, and the picker shows whichever
+    /// it is rather than pretending they are the same.
+    pub fn midi_ports(&self) -> Vec<mooloop_core::MidiPortInfo> {
+        self.driver.midi_ports()
+    }
+
+    /// Arm or disarm recording.
+    pub fn set_record_armed(&mut self, armed: bool) {
+        self.send(EngineCommand::SetRecordArmed(armed));
     }
 
     /// How many times a retained-audio buffer insert has been overtaken by

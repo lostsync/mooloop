@@ -773,6 +773,23 @@ pub struct Project {
     /// at the origin rather than failing to decode.
     #[serde(default)]
     pub loop_range: LoopRange,
+    /// Control-surface bindings: which knob on a desk moves what here.
+    ///
+    /// In the project because its targets are: a [`crate::ParamAddr`] names a
+    /// device on a channel of *this* song, so a map stored beside the
+    /// application would be pointing at another song's channels the moment
+    /// one was opened. A surface template that outlives a song -- a desk's
+    /// transport row, say -- is a separate document that stamps bindings into
+    /// a project, and `docs/CONTROL_SURFACES.md` records it as not built.
+    ///
+    /// Defaulted and skipped when empty, so a song nobody has mapped is
+    /// byte-identical to one written before the field existed.
+    #[serde(default, skip_serializing_if = "is_empty_control_map")]
+    pub control_map: crate::control::ControlMap,
+}
+
+fn is_empty_control_map(map: &crate::control::ControlMap) -> bool {
+    map.bindings.is_empty()
 }
 
 impl Project {
@@ -890,6 +907,7 @@ impl Default for Project {
             pattern_meta: Vec::new(),
             playlist: Vec::new(),
             loop_range: LoopRange::default(),
+            control_map: crate::control::ControlMap::default(),
         }
     }
 }

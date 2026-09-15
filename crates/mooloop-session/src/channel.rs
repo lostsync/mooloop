@@ -18,6 +18,8 @@ use std::sync::Arc;
 
 pub struct ChannelState {
     pub name: String,
+    /// Which MIDI input, and which MIDI channel on it, plays this channel.
+    pub midi_input: mooloop_core::ChannelMidiInput,
     /// The colour the user gave this channel, or `None` for one nobody has
     /// coloured. Content, like the name: it survives a save and it survives a
     /// change of source device.
@@ -100,11 +102,36 @@ impl ChannelState {
         }
     }
 
+    /// Write one of the current generator's parameters by descriptor id,
+    /// returning the value that was actually stored -- the descriptor's own
+    /// clamp, not the one asked for.
+    ///
+    /// `generator_params` hands out a copy, because the eight device kinds are
+    /// separate fields rather than one box, so a caller cannot write through
+    /// it. This puts the copy back on the field the current kind reads from,
+    /// which is the only reason it exists.
+    pub fn set_generator_param(&mut self, id: u32, value: f32) -> Option<f32> {
+        let mut params = self.generator_params();
+        let written = params.set(id, value)?;
+        match params {
+            GeneratorParams::Sampler(params) => self.params = params,
+            GeneratorParams::DrumSynth(params) => self.drum_params = params,
+            GeneratorParams::MonoSynth(params) => self.mono_params = params,
+            GeneratorParams::PolySynth(params) => self.poly_params = params,
+            GeneratorParams::MlM1(params) => self.mlm1_params = params,
+            GeneratorParams::MlP8(params) => self.mlp8_params = params,
+            GeneratorParams::Ds01(params) => self.ds01_params = params,
+            GeneratorParams::AuxIn(params) => self.aux_in_params = params,
+        }
+        Some(written)
+    }
+
     /// A brand new sampler channel is silent and empty until a sample is
     /// loaded or a project assigns one.
     pub fn new(index: usize) -> Self {
         Self {
             name: DeviceKind::Sampler.default_channel_name(index),
+            midi_input: mooloop_core::ChannelMidiInput::default(),
             color: None,
             kind: DeviceKind::Sampler,
             muted: false,
