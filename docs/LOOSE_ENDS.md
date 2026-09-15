@@ -397,27 +397,34 @@ nothing but needs a decision about what a hidden note's NoteOff means on the
 second pass. Found 2026-09-12.
 
 **A pattern-length change can create the overlapping placements the editor
-refuses to create.** `session/transport.rs:213` guards `add_playlist_placement`
-against overlap, correctly and half-open, and it is the only place the
-invariant exists: `set_pattern_length` (`:123`) rewrites the length with no
-revalidation, `Sequencer::set_playlist_placement` has no overlap notion, and
-`integrity::check_playlist` checks only the pattern index and the start tick.
-Place pattern 0 at ticks 0 and 384 at 16 steps -- accepted, they abut exactly
--- then set it to 32 steps, and the first clip covers the second. Both are
-scheduled: `instance_offset` differs, so the voice ids differ, and **every
-note fires twice 384 ticks apart at doubled amplitude**. The view draws them
-overlapping, and `placement_covering` uses `find` on a list sorted by
-`(pattern, start_tick)`, so a click in the overlap always removes the earlier
-clip and the buried one cannot be reached. Not a small fix because the
-invariant has no owner: enforcing it in `set_pattern_length` means deciding
-what a length increase does to the clips it now swallows, and the same
-decision has to be made in `integrity` for files that already carry the
-overlap -- a `Doctor` entry and a `PROJECT_FORMAT.md` change across two
-crates. Options: clamp the length change to the largest value that keeps the
-pattern's placements disjoint; or make the overlap legal everywhere and drop
-the guard in `add_playlist_placement`; or drop the covered placements and
-report them, which is the only one that also needs a repair path on load.
-Found 2026-09-12.
+refuses to create.** `session/transport.rs:213` guards
+`add_playlist_placement` against overlap, correctly and half-open, and it is
+the only place the invariant exists: `set_pattern_length` rewrites the length
+with no revalidation, `Sequencer::set_playlist_placement` has no overlap
+notion, and `integrity::check_playlist` checks only the pattern index and the
+start tick. Place pattern 0 at ticks 0 and 384 at 16 steps -- accepted, they
+abut exactly -- then set it to 32 steps, and the first clip covers the second.
+Both are scheduled: `instance_offset` differs, so the voice ids differ, and
+**every note fires twice 384 ticks apart at doubled amplitude**.
+
+**The clip is at least reachable now.** `placement_covering` took the first
+match on a list sorted by `(pattern, start_tick)`, so a click in the overlap
+always answered with the earlier clip and the buried one could not be removed,
+moved or undone by any gesture. It takes the **latest-starting** cover as of
+2026-09-14, which is the rule `Sequencer::automation_lane_at` already states
+one layer down for lanes. So the state is escapable rather than permanent.
+
+What is still open is whether the overlap should exist. The invariant has no
+owner: enforcing it in `set_pattern_length` means deciding what a length
+increase does to the clips it now swallows, and the same decision has to be
+made in `integrity` for files that already carry the overlap -- a `Doctor`
+entry and a `PROJECT_FORMAT.md` change across two crates. Options: clamp the
+length change to the largest value that keeps the pattern's placements
+disjoint; or make the overlap legal everywhere, drop the guard in
+`add_playlist_placement`, and say in `CURRENT.md` that a doubled clip is a
+layer; or drop the covered placements and report them, which is the only one
+that also needs a repair path on load. Found 2026-09-12, made escapable
+2026-09-14.
 
 **Snap-all-markers and the four trim/loop markers are not undoable**, where
 the five slice verbs beside them now are. `add_slice`, `move_slice`,

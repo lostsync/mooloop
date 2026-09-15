@@ -471,14 +471,41 @@ impl Session {
         content_end.div_ceil(TICKS_PER_BAR) * TICKS_PER_BAR
     }
 
+    /// The clip of `pattern` under `tick`, and **the latest-starting one**
+    /// when two cover it.
+    ///
+    /// `add_playlist_placement` refuses to create an overlap and is the only
+    /// place that invariant exists: `set_pattern_length` rewrites a length
+    /// with no revalidation, so growing a pattern makes its own clips swallow
+    /// each other. Place pattern 0 at ticks 0 and 384 at sixteen steps -- they
+    /// abut exactly, which is accepted -- then set it to thirty-two, and the
+    /// first clip covers the second.
+    ///
+    /// Both are still scheduled, which is what layering *means* here and is
+    /// not the defect: `Sequencer::automation_lane_at` says the same thing
+    /// about lanes, "layered placements resolve the same way notes do". The
+    /// defect was that `find` takes the first match on a list sorted by
+    /// `(pattern, start_tick)`, so a click in the overlap always resolved to
+    /// the **earlier** clip and the buried one could not be reached at all --
+    /// not to remove, not to move, not to undo. An unreachable clip is the
+    /// only part of this a user cannot get out of.
+    ///
+    /// Latest-starting rather than, say, nearest, because that is the rule
+    /// already written down one layer below for automation, and two rules for
+    /// "which of these layers do you mean" is the disagreement this codebase
+    /// keeps finding. Whether the overlap should exist at all is still open
+    /// in `docs/LOOSE_ENDS.md`; this is only about being able to undo it.
     pub fn placement_covering(&self, pattern: usize, tick: u32) -> Option<PatternPlacement> {
-        self.playlist.iter().copied().find(|placement| {
-            if placement.pattern as usize != pattern {
-                return false;
-            }
-            let length = self.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-            tick >= placement.start_tick && tick < placement.start_tick.saturating_add(length)
-        })
+        let length = self.pattern_lengths.get(pattern).copied()? as u32 * TICKS_PER_STEP;
+        self.playlist
+            .iter()
+            .copied()
+            .filter(|placement| {
+                placement.pattern as usize == pattern
+                    && tick >= placement.start_tick
+                    && tick < placement.start_tick.saturating_add(length)
+            })
+            .max_by_key(|placement| placement.start_tick)
     }
 
     /// Every destination the selected clip can address: the channel's own

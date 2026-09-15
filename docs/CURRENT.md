@@ -627,7 +627,13 @@ land on its own when it starts to matter:
   rather than stopping at the canvas edge. Stop still returns it to the
   start.
 - Playlist starts use the shared musical snap while retaining absolute PPQ
-  ticks and are bounded to a 64-bar start canvas. The timeline is horizontally
+  ticks and are bounded to a 64-bar start canvas. **Two clips of one pattern
+  may not be placed overlapping, but growing that pattern can make them
+  overlap anyway** -- nothing revalidates a length change. Both go on playing,
+  which is what layering means here; what a click in the overlap resolves to
+  is the **latest-starting** clip, the same rule automation uses for layered
+  placements, so the buried one can still be removed. Before 2026-09-14 it
+  could not be reached at all. The timeline is horizontally
   zoomable. Global swing delays alternate sixteenth notes from 50% (straight)
   through 75% (strong shuffle), preserving note duration in realtime and
   offline rendering. There is no clip dragging, time-signature model, groove
