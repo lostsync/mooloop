@@ -1,8 +1,10 @@
 # Focus
 
 Status: active working sequence, rewritten 2026-09-12, amended 2026-09-14 when
-`interface-iteration/` closed and its step left the sequence, and 2026-09-15
-when `eq-v2/`'s step 02 landed. The previous
+`interface-iteration/` closed and its step left the sequence, and again on
+2026-09-15 when `eq-v2/` came down to one optional step and its section was
+cut back to what is live. That cut is this document's own rule about itself
+being applied: three closed steps had left section 1 mostly archaeology. The previous
 version was written 2026-09-05 and amended 2026-09-07 and 2026-09-08; it was
 replaced rather than amended again, because the mixer it described was not the
 mixer that exists and the work it parked included a feature that shipped.
@@ -95,77 +97,52 @@ A pane that shows what a menu already showed is not progress either.
 ## The sequence
 
 Set by Adam on 2026-09-12: finish the interface iteration, then the EQ, then
-Buffer. The first of those closed on 2026-09-14, so the EQ is the live step.
+Buffer. The interface iteration closed on 2026-09-14 and the EQ on 2026-09-15
+but for one optional step.
 
-### 1. `docs/plans/eq-v2/` — the parameter model first, the EQ second
+**As of 2026-09-15 the sequence is waiting on Adam at both remaining points**,
+and that is a state worth naming rather than working around. The EQ's step 04
+is a taste question and wants his ear; Buffer's first move is a question about
+the device's *shape* that the step below says explicitly not to begin
+unprompted. Neither is blocked on a branch. Until one of them is answered, the
+work that is genuinely available is the listening passes below and the fixes
+further down.
 
-Written 2026-09-12, nothing landed. It came out of fixing one bug — the EQ's
-Shape control was two settings of different arity behind one automatable id —
-and out of Adam's question about what that implied.
+### 1. `docs/plans/eq-v2/` — one optional step left, and two listens owed
 
-**The argument, which is bigger than the EQ.** mooloop intends to host CLAP. A
-CLAP plugin hands the host N independent parameters, each with a stable id,
-each individually automatable, and no context; there is no way to say "the
-selected band's frequency" to a plugin. The EQ is built around exactly that
-idea — six parameters cover seven bands and two pass filters, resolved through
-`selected_target` — so **it is the one native device whose parameter model a
-plugin host could not express.** `EQ_PARAM_TARGET` was itself automatable, and
-a lane on it changed which band every other EQ lane referred to. And the
-codebase already does it the other way four times: the strip's EQ, DS-01,
-ML-P8 and the modulator modules are all per-band or per-module.
+**Steps 01, 02 and 03 landed on 2026-09-14 and 2026-09-15.** Every EQ band and
+both pass filters carry their own stable ids; a shelf's Q knob designs its
+slope instead of being ignored; and the response plot is the bank's own
+coefficients evaluated rather than a shape drawn to resemble them. Read
+`eq-v2/00-status.md` for what each one found — this document is not where that
+belongs.
 
-**Step 01 was the only step the argument forced, and it landed 2026-09-14.**
-50 descriptors where there were seven, none of them meaning "the selected
-target's". It was a cheap rehearsal for the same instance-scoped-parameters
-problem, on a device whose behaviour was already understood, and the answer it
-gave is worth carrying into plugin work: **the face did not have to change.**
-A face showing one band at a time is right and always was; what was wrong was
-that the *parameter space* was shaped like the face. Resolving the selection
-one layer earlier — `EqParams::id_for_selected`, one branch in
-`Session::set_effect_param` — left `eq-device.slint` and `main.slint`
-untouched.
+The one thing worth carrying out of it, because it is about the next device
+and not this one: **the face did not have to change.** The EQ's parameter
+space was shaped like its face, and resolving the selection one layer earlier
+left the markup untouched. That is the answer to the question the plan was
+written around — mooloop intends to host CLAP, a plugin's parameters are N
+independent ids with no context, and the EQ was the one native device whose
+model could not be expressed that way. What it did *not* settle is that
+`EffectKind::descriptors()` is a table per **kind** while a plugin's
+parameters belong to an **instance**; that crossing is `SCOPE.md` §"the four
+things standing between here and CLAP", item 1.
 
-Note what it did *not* settle — `EffectKind::descriptors()` is a table per
-*kind*, and a plugin's parameters belong to an instance. That crossing is real
-and is not this plan; it is `SCOPE.md` §"the four things standing between here
-and CLAP", item 1.
+**What is left is step 04, it is optional, and it is Adam's call.** It is the
+measured character from five reference EQs — the only step that changes how
+the device sounds when nobody asked it to.
 
-**Step 03 landed 2026-09-14 and step 02 at seven minutes past midnight the
-next morning.** 02 is the one that answered the
-question it was written around. Its plot could not match what the DSP ran
-because the markup approximated the shapes itself, and the step was left
-deciding between evaluating a real magnitude response in Slint and stating a
-weaker standard. Neither: **Rust samples the curve from the coefficients the
-audio path designs**, the way the strip's compressor plot already did, so the
-drawn curve *is* the running filter to a tenth of a decibel and a test holds
-it to a tone through a real bank. The pass filters are on it at their real
-slopes, the markup's approximation is gone rather than improved, and an
-`EqSpec` global took every range, count, label and resting value out of
-`eq-device.slint` -- which closed the double-click-returns-to-band-2 defect
-and found the pass-slope selector had been wrong by a factor of two since it
-shipped.
-
-**Step 03 landed 2026-09-14** and corrected this paragraph on the way past.
-A shelf ignored its Q in the DSP -- so a band's Q knob did nothing whatever
-while that band was a shelf -- and the fix is `Biquad::eq_band`, one function
-the channel strip's bank calls too, which also deleted a private copy of
-`eq_effective_q` that `effects::eq` had been running instead of the core law.
-**It changes how an existing shelf boost sounds**, which the sentence below
-said only step 04 would: the two shelf forms agree on a flat shelf and nothing
-else. A default EQ is unaffected, because both its shelves rest at 0 dB. A song
-that boosted one is not, and that wants a listening pass.
-
-Step 04 is the measured character from five reference EQs, it is optional, and
-it is all that is left.
+**Two listening passes are owed before it, and they are the live work here.**
+Step 03 changed how an existing shelf boost sounds and had to: the knob was
+doing nothing, so any value it now takes is a change from "ignored". A default
+EQ is unaffected, because both its shelves rest at 0 dB. Step 02 changed
+nothing audible and changed what the picture *claims*, which wants a look with
+a patch moving.
 
 Done when: ~~every EQ band and pass filter has its own stable ids, a lane on a
 band means one band forever~~ (2026-09-14), and `eq-v2/00-status.md` says which
-of 02 to 04 were taken. 03 landed 2026-09-14 and 02 on 2026-09-15; **04 is
-what is left**,
-it is optional, and it wants Adam's ear. Two listening passes are owed before
-it: 03 changed how an existing shelf boost sounds, and 02 changed nothing
-audible but changed what the picture claims, which is worth a look with a
-patch moving.
+of 02 to 04 were taken. It does: 02 and 03 are in, and **04 is the only open
+question, for Adam's ear.**
 
 ### 2. Turn Buffer into a composition workflow
 
@@ -202,8 +179,9 @@ sample and loading it again, record why before expanding the device.
 
 ## Waiting on Adam, not on work
 
-Four things are finished or priced and are held up by a judgement rather than
-by a branch. None of them is a step above, and none should be worked around.
+Six things are finished or priced and are held up by a judgement rather than
+by a branch. None should be worked around, and as of 2026-09-15 the last two
+of them *are* the sequence rather than sitting beside it.
 
 - **`ui-consistency-pass/`** — all six steps landed; it archives once Adam has
   played it.
@@ -220,6 +198,16 @@ by a branch. None of them is a step above, and none should be worked around.
 
 The console's studio listening pass is the fifth, and it is the one that could
 still change something that shipped.
+
+The sixth is the EQ, and it is two things at once: **the listening passes
+owed for steps 02 and 03**, and whether step 04 is taken at all. Step 03
+changed how an existing shelf boost sounds -- it had to, because the knob was
+doing nothing before it -- and that is the one to listen to first.
+
+Adam, if you are reading this list and want the sequence moving again, the
+two answers that unblock the most are **whether the EQ's step 04 is worth
+having**, and **what shape Buffer should be** -- `BUFFER_ENGINE.md` still
+specifies the insert model you said on 2026-08-30 was partly the wrong call.
 
 ## Fixes that may interrupt the sequence
 
