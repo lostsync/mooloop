@@ -476,9 +476,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   sends Start is asking for exactly one thing.
 
   **LEARN** beside the transport arms controller mapping: press any knob or
-  fader and then move a control on the desk, and the two are bound. The arm
-  stays on, so a desk is mapped control after control without reaching back to
-  the toolbar; the status bar names what was just bound. While it is armed
+  fader and then move a control on the desk, and the two are bound. The button
+  reads LISTENING while it waits, and names the parameter it is waiting for in
+  its tooltip — the status bar cannot hold that, because a hover hint outranks
+  a status message there. The arm stays on, so a desk is mapped control after
+  control without reaching back to the toolbar; the status bar names what was
+  just bound. While it is armed
   every parameter control carries a ring, the pointer is a crosshair, and a
   press names the control rather than moving it — mapping a knob does not
   change the value it is about to follow. It reaches the same parameters

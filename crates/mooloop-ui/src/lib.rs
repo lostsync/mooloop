@@ -4315,6 +4315,13 @@ impl UiState {
                 unresolved: view.unresolved,
             })
             .collect();
+        window.set_midi_learn_target(
+            learning
+                .map(|target| self.session.control_target_label(&target))
+                .unwrap_or_default()
+                .as_str()
+                .into(),
+        );
         window.set_preferences_midi_ports(ModelRc::from(Rc::new(VecModel::from(names))));
         window.set_preferences_midi_port_note(note.into());
         window.set_preferences_midi_bindings(ModelRc::from(Rc::new(VecModel::from(bindings))));

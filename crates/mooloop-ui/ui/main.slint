@@ -1708,6 +1708,10 @@ export component MainWindow inherits Window {
     // lands or a project is loaded; `ControlAssign.midi-learn` is the copy
     // every control reads and is set from the same place.
     in-out property <bool> midi-learn-armed;
+    /// What a learn gesture is waiting to bind, or empty when none is. Both
+    /// the toolbar button and Preferences > MIDI draw it, and Rust writes it
+    /// wherever it writes the mapping page.
+    in-out property <string> midi-learn-target;
     callback midi-learn-toggled();
     // The mapping editor, on the Preferences MIDI page. Rows carry their
     // position in the map, which is the handle every callback below takes.
@@ -2620,14 +2624,25 @@ export component MainWindow inherits Window {
                             // it arms is a press on a control in the main
                             // window, which a modal dialog is covering.
                             ToolButton {
-                                text: "LEARN";
-                                width: 48px;
-                                tooltip: root.midi-learn-armed
-                                    ? "Press a control to map it, then move a knob on your controller"
-                                    : "MIDI Learn: map a control to a controller";
-                                hint: root.midi-learn-armed
-                                    ? "MIDI Learn is on. Press any knob or fader, then move the control you want to map to it."
-                                    : "Turn on MIDI Learn, then press a control to map it to your controller.";
+                                // The label carries the *pending* target as
+                                // well as the arm, because the status bar
+                                // cannot: a hover hint outranks a status
+                                // message there, so the moment the pointer
+                                // crosses a control the sentence naming what
+                                // is being mapped is covered by that
+                                // control's own.
+                                text: root.midi-learn-target == "" ? "LEARN" : "LISTENING";
+                                width: 72px;
+                                tooltip: root.midi-learn-target != ""
+                                    ? "Move a control on your controller to map " + root.midi-learn-target
+                                    : root.midi-learn-armed
+                                        ? "Press a control to map it, then move a knob on your controller"
+                                        : "MIDI Learn: map a control to a controller";
+                                hint: root.midi-learn-target != ""
+                                    ? "Waiting for a control. Move the knob, fader or pad you want to map to " + root.midi-learn-target + "."
+                                    : root.midi-learn-armed
+                                        ? "MIDI Learn is on. Press any knob or fader, then move the control you want to map to it."
+                                        : "Turn on MIDI Learn, then press a control to map it to your controller.";
                                 active: root.midi-learn-armed;
                                 clicked => { root.midi-learn-toggled(); }
                             }

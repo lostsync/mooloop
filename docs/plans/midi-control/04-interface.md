@@ -32,7 +32,11 @@ Preferences > MIDI.
 - **LEARN, beside the transport.** Arms the gesture; a press on any parameter
   control names it; the next control moved on the desk binds to it. The arm
   stays on through a binding landing, so a desk is mapped control after
-  control in one pass, and the status bar names what was just bound. While it
+  control in one pass, and the status bar names what was just bound. The
+  button reads LISTENING while a gesture is pending and names its target,
+  because the status bar cannot: a hover hint outranks a status message there,
+  so the sentence naming the pending parameter vanished the moment the pointer
+  crossed any control. While it
   is armed a press writes nothing at all — not the value, not a modulation
   depth, not an undo gesture — because a mapping must land on the value that
   was there before the press.
