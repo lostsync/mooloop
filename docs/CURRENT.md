@@ -984,7 +984,11 @@ land on its own when it starts to matter:
   without moving the channel in time. **Nothing in the
   interface**: a device's left rail wraps it in a container, a container's
   right rail unwraps it, and dragging a device onto a row already inside a box
-  puts it in that box, and **dropping onto an emptied box puts it back
+  puts it in that box. **Containers nest four deep and the wrap button goes
+  out at the fourth**, because the engine preallocates one dry buffer per open
+  box and a fifth one would have an inert Mix and no chrome. A *device* inside
+  the fourth box is fine: the cap counts boxes, not rows. And **dropping onto
+  an emptied box puts it back
   inside** -- an empty container's span covers no index, so its own row is
   the only thing there is to aim at and a drop on it means "into this".
   Dropping on a container that still holds something keeps meaning "before

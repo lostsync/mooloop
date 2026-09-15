@@ -1575,6 +1575,12 @@ fn effect_slot_row(
     depth: i32,
     closing: Vec<i32>,
     selected: bool,
+    // Whether wrapping this row would leave every container inside
+    // `MAX_CONTAINER_DEPTH`. Answered by `mooloop_core::can_wrap` rather than
+    // by comparing `depth` here, so the cap is not a second number in the
+    // interface -- the markup asks this and the gesture asks the same
+    // function, which is what stopped the button lying.
+    wrap_enabled: bool,
 ) -> EffectSlotRow {
     let kind = slot.kind();
     let preset_options: Vec<slint::SharedString> = effect_presets_of_kind(presets, kind)
@@ -1689,7 +1695,13 @@ fn effect_slot_row(
         depth,
         closing: ModelRc::from(Rc::new(VecModel::from(closing))),
         selected,
+        wrap_enabled,
     }
+}
+
+/// Whether the rack's wrap button on `slot` should be live.
+fn wrap_enabled_at(effects: &[EffectSlotState], slot: usize) -> bool {
+    mooloop_core::can_wrap(effects, slot..mooloop_core::run_of(effects, slot).end)
 }
 
 /// The fixed debug events the buffer device face fires, in the order its
@@ -3197,6 +3209,7 @@ impl UiState {
                     depth,
                     containers_closing_at(chain, slot),
                     self.session.selected_device_slot() == Some(slot),
+                    wrap_enabled_at(chain, slot),
                 ),
             );
         }
@@ -3356,6 +3369,7 @@ impl UiState {
                                 mooloop_core::depth_at(&state.effects, slot) as i32,
                                 containers_closing_at(&state.effects, slot),
                                 selected == Some(slot),
+                                wrap_enabled_at(&state.effects, slot),
                             );
                             let descriptors = effect.kind().descriptors();
                             let address = |param| {
@@ -3410,6 +3424,7 @@ impl UiState {
                                     mooloop_core::depth_at(effects, slot) as i32,
                                     containers_closing_at(effects, slot),
                                     selected == Some(slot),
+                                    wrap_enabled_at(effects, slot),
                                 )
                             })
                             .collect()

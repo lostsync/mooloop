@@ -187,11 +187,22 @@ the decision has a before to point at.
   fixed mixer-bank model rather than normalizing it as permanent.
 - Pattern IDs likewise use a complete `u8` address space (256 patterns).
 - Containers nest four deep (`MAX_CONTAINER_DEPTH`), and this is a limit on
-  the *gesture* rather than on the format: a deeper chain loads and is
-  reported by the integrity pass the way an over-long one is. The number
-  bounds a real allocation — one dry buffer per open container in the realtime
-  pass — rather than a data structure, which is the distinction the section
-  above is about.
+  the *gesture* rather than on the format. The number bounds a real
+  allocation — one dry buffer per open container in the realtime pass — rather
+  than a data structure, which is the distinction the section above is about.
+
+  **The gesture half is enforced as of 2026-09-14 and the format half is
+  not.** `mooloop_core::can_wrap` and its two siblings refuse a wrap, an
+  insert and a drag that would put a box past the cap, and the rack's wrap
+  button asks the same function rather than comparing a depth of its own —
+  before that, five clicks reached a box whose Mix did nothing at any value
+  and which the rack drew no chrome for. A deeper chain loaded, and still
+  loads, **unreported**: this entry used to claim the integrity pass caught it
+  "the way an over-long one is", and that has never been true. It is not a
+  one-line addition either, which is the part worth knowing — see
+  `docs/LOOSE_ENDS.md`. A leaf is deliberately not capped: the number bounds
+  open runs, so four nested boxes with a filter inside them is legal and it is
+  the fifth *box* that is not.
 - Event lists, block size, voice pools, sample memory, playlist span, and
   routing have explicit realtime, DSP, or file-format reasons. Any change to
   one must name the reason and show overflow behavior.

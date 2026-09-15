@@ -454,39 +454,33 @@ Unifying them means routing joining `ProjectEdit`, not a per-callback patch.
 
 ## Ceilings and one-shots
 
-**`MAX_CONTAINER_DEPTH` is enforced by nothing, reported by nothing, and
-spelled a fifth time as bare numbers in the markup.** `structure.rs:38` says
-it is "a limit on the *gesture*, not on the format: a deeper chain loads and
-is reported by `integrity.rs` the way an over-long one is", and
-`CAPACITY_POLICY.md:189` and `docs/plans/containers/02-...md:66` repeat the
-same two sentences. Both are false. The constant appears in four places in the
-workspace -- its definition, its re-export, and two uses in `render.rs` --
-and neither `mooloop-session` nor `mooloop-ui` mentions it. No gesture checks
-it: `wrap_in_container`, `insert_into_container` and
-`move_effect_into_container` have no depth test, and `wrap-enabled` is
-unconditional on every row. `integrity.rs` has no depth check either;
-`span_problem`'s own doc says "Depth is deliberately not checked".
+**A chain nested past `MAX_CONTAINER_DEPTH` still loads unreported, and the
+integrity pass has no way to say so.** The gesture half was fixed 2026-09-14:
+`can_wrap`, `can_insert_into_container` and `can_move_into_container` refuse a
+wrap, an insert and a drag that would put a box past the cap, the rack's wrap
+button asks the same function rather than comparing a depth of its own, and
+`the_rack_draws_a_band_for_every_level_the_engine_blends` holds `main.slint`'s
+four literal chrome levels to the constant. Before that, five clicks reached a
+box whose Mix does nothing at any value and which the rack draws no chrome
+for -- inert and invisible at the same time.
 
-So five clicks reach it with no warning: wrap a device, then wrap the box four
-more times. Past the cap the render branch `continue`s, so the innermost box's
-**Mix does nothing at any value**, and `main.slint`'s `for level in [1, 2, 3,
-4]` -- `MAX_CONTAINER_DEPTH` written out as four literals, read by no test --
-has no level 5, so it draws no chrome either. It is inert and invisible at the
-same time.
+The format half is not a missing check, which is why it did not land with the
+rest. **`Doctor` has two severities and this needs a third.** `correct`
+repairs, and every other method -- `refuse`, `block` -- sets `repaired: false`,
+which `Issue::is_blocking` reads as "do not open this document". So reporting
+a deep chain the way an over-long one is reported would stop a song opening
+that opens today, which is the brick this file has already been asked about
+once, under a different name. And there is no safe repair to reach for
+instead: unwrapping looks free, since a box past the cap contributes no blend,
+but its **bypass still works** (fixed 2026-09-13), so removing it would unmute
+whatever it was muting.
 
-Its **bypass** used to be dead too, because the depth `continue` sat above the
-bypass branch; that half was fixed 2026-09-13 by moving the check below it,
-which needs no decision -- being too deep to blend is no reason for a bypass
-button to lie. The rest is a decision, because `CAPACITY_POLICY.md:255` has a
-standing rule for a cap on a user-created collection (document it beside the
-type *and in the persisted-format validation*, make the UI communicate it
-honestly, test the boundary) and one of the four is done. Options: make the
-three claims true -- refuse the gesture, add an `effect.container.depth` check
-to `check_spans`, and derive the Slint level list rather than spelling it; or
-drop the cap, since all it buys is one `StereoBus` per level in a `Box`
-allocated off the audio thread, and 8 or 16 costs a few hundred KB on chains
-that hold a box at all; or cap the gesture only and delete the integrity
-sentence from all three documents. Found 2026-09-13.
+So the options are: give `Doctor` a tolerated severity -- an issue worth
+telling the user about that stops nothing, which the report, the status bar
+count and `Diagnosis::blocking` all have to learn; or accept that the format
+does not check depth and say so, which `structure.rs`, `CAPACITY_POLICY.md`
+and `docs/plans/containers/02-...md` now do rather than claiming otherwise.
+Found 2026-09-13, gesture half fixed 2026-09-14.
 
 **`MAX_AUTOMATION_LANES_PER_CHANNEL` is 8, and raising it is not free.** The
 ninth lane no longer draws and plays nothing -- `check_lanes` truncates and

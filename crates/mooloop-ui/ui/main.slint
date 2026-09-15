@@ -282,6 +282,11 @@ struct EffectSlotRow {
     // once rather than twice.
     children: int,
     depth: int,
+    // Whether wrapping this row would leave every container inside
+    // `MAX_CONTAINER_DEPTH`. A bool and not a comparison against `depth`,
+    // because the cap is an engine number and spelling it here would be a
+    // fifth copy -- `mooloop_core::can_wrap` answers this and the gesture.
+    wrap-enabled: bool,
     // The containers whose run *ends* at this row, innermost first, as rack
     // indices. Each one draws its output rail here, past everything it holds,
     // so a container's chrome encloses its devices instead of sitting beside
@@ -4284,6 +4289,17 @@ export component MainWindow inherits Window {
                                             // `depth >= 0` is true of every row -- every
                                             // device in the rack wore a container's band,
                                             // whether or not it was in one.
+                                            //
+                                            // The list is `MAX_CONTAINER_DEPTH`
+                                            // spelled out, and it is held to
+                                            // it by
+                                            // `the_rack_draws_a_band_for_every_level_the_engine_blends`
+                                            // in `rack_tools.rs`. A derived
+                                            // model would be a Rust-supplied
+                                            // property for four literals that
+                                            // never change at run time; a
+                                            // guard on the copy is the cheaper
+                                            // half of the same protection.
                                             for level in [1, 2, 3, 4] : ContainerEnclosure {
                                                 property <bool> inside: slot.depth >= level;
                                                 property <bool> is-head: slot.kind == 13 && slot.depth == level - 1;
@@ -4370,8 +4386,11 @@ export component MainWindow inherits Window {
                                                 container-children: slot.children;
                                                 // Wrapping a container in
                                                 // another is legal, so this
-                                                // is on every row.
-                                                wrap-enabled: true;
+                                                // is on every row -- until
+                                                // the box it would make is
+                                                // one the engine will not
+                                                // blend.
+                                                wrap-enabled: slot.wrap-enabled;
                                                 unwrap-enabled: slot.kind == 13;
                                                 wrap-requested => { root.wrap-effect-clicked(index); }
                                                 unwrap-requested => { root.unwrap-effect-clicked(index); }

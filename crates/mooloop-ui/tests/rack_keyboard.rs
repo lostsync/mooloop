@@ -135,6 +135,9 @@ fn effect_slot(kind: EffectKind) -> EffectSlotRow {
         gain_reduction_db: 0.0,
         children: 0,
         depth: 0,
+        // A fixture row: these tests are about what the rack draws, not
+        // about the depth cap, so wrapping is offered.
+        wrap_enabled: true,
         closing: Vec::<i32>::new().as_slice().into(),
         selected: false,
     }
