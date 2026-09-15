@@ -21,6 +21,7 @@ export component EqDeviceDragHarness inherits Window {
     in-out property <float> pass-slope;
     in-out property <float> q-profile;
     in property <[float]> band-data;
+    in property <[int]> band-kinds;
     in property <[float]> pass-data;
     in property <[float]> curve-db;
     in property <[float]> spectrum-data;
@@ -47,6 +48,7 @@ export component EqDeviceDragHarness inherits Window {
         pass-slope <=> root.pass-slope;
         q-profile <=> root.q-profile;
         band-data: root.band-data;
+        band-kinds: root.band-kinds;
         pass-data: root.pass-data;
         curve-db: root.curve-db;
         spectrum-data: root.spectrum-data;

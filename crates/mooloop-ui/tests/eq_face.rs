@@ -15,9 +15,9 @@
 //! so the axis and the range have to be the same span.
 
 use mooloop_core::{
-    eq_band_param, eq_pass_param, eq_plot_position, EffectKind, EqFaceControl, EqParams, EqSlope,
-    ParamCurve, EQ_BAND_FREQ, EQ_BAND_GAIN, EQ_FACE_CONTROLS, EQ_MAX_BANDS, EQ_PASS_SLOPE,
-    EQ_SLOPE_COUNT,
+    eq_band_param, eq_pass_param, eq_plot_position, EffectKind, EqBandKind, EqFaceControl,
+    EqParams, EqSlope, ParamCurve, EQ_BAND_FREQ, EQ_BAND_GAIN, EQ_DEFAULT_BAND_HZ,
+    EQ_FACE_CONTROLS, EQ_MAX_BANDS, EQ_PASS_SLOPE, EQ_SLOPE_COUNT,
 };
 use mooloop_ui::{
     eq_plot_band, eq_plot_pass, install_eq_spec, EqSpec, MainWindow, EQ_PLOT_BAND_STRIDE,
@@ -132,15 +132,20 @@ fn every_target_rests_where_its_own_descriptors_do() {
     }
 
     // The case that was wrong, stated as itself rather than left to the loop:
-    // band 0 is a low shelf resting at 120 Hz and band 1 a bell at 1 kHz, so
-    // one resting value could not have served both.
-    let freq = EffectKind::Eq
-        .descriptor(eq_band_param(0, EQ_BAND_FREQ))
-        .unwrap();
-    let band_two = EffectKind::Eq
-        .descriptor(eq_band_param(1, EQ_BAND_FREQ))
-        .unwrap();
-    assert_eq!((freq.default, band_two.default), (120.0, 1_000.0));
+    // no two bands rest at the same frequency, so one resting value could not
+    // have served any two of them. It is the whole bank rather than the first
+    // two because all seven spread out on 2026-09-15.
+    for (band, rest_hz) in EQ_DEFAULT_BAND_HZ.iter().enumerate() {
+        let descriptor = EffectKind::Eq
+            .descriptor(eq_band_param(band, EQ_BAND_FREQ))
+            .unwrap();
+        assert_eq!(
+            descriptor.default,
+            *rest_hz,
+            "band {} rests somewhere the shared table does not put it",
+            band + 1
+        );
+    }
     let freq_control = EqFaceControl::Frequency.face_index() as usize;
     assert!(
         (defaults.row_data(freq_control).unwrap()
@@ -324,4 +329,34 @@ fn the_eq_face_declares_no_bounds_of_its_own() {
             "eq-device.slint no longer reads {name}"
         );
     }
+}
+
+/// **The selector's glyphs are the bands' own kinds.**
+///
+/// A target button draws a shelf where its band is a shelf and its number
+/// where it is a bell, from the `band-kinds` array Rust publishes -- which
+/// carries `EqBandKind::to_index`. Those two integers are the only thing
+/// about the engine's numbering `eq-device.slint` knows, so they are the only
+/// thing that can drift, and the drift would be silent in the way this
+/// codebase keeps finding: a reordered enum would leave every high shelf
+/// drawn as a low one and nothing about the sound would change.
+#[test]
+fn the_selectors_glyphs_follow_the_bands_own_kind() {
+    for (kind, icon) in [
+        (EqBandKind::LowShelf, "low-shelf-icon"),
+        (EqBandKind::HighShelf, "high-shelf-icon"),
+    ] {
+        let clause = format!("kind == {} ? root.{icon}", kind.to_index());
+        assert!(
+            EQ_SLINT.contains(&clause),
+            "eq-device.slint does not say `{clause}`, so the glyph a band draws \
+             and the kind it is have stopped agreeing"
+        );
+    }
+    // The fallback is the band's number, which is what a bell draws.
+    assert_eq!(EqBandKind::Bell.to_index(), 0);
+    assert!(
+        EQ_SLINT.contains("root.band-kinds[target]"),
+        "the face no longer reads the live kinds, so its glyphs are decoration"
+    );
 }

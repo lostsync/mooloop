@@ -44,6 +44,28 @@ fraction is a product of a clamp in `mooloop-dsp` and a range in
 `mooloop-core` and neither of them looks like it has anything to do with a
 knob.
 
+## The face and the bank's resting arrangement, 2026-09-15
+
+Not a step in this plan and recorded here because anyone reading it about the
+EQ should know the defaults moved. Adam's mockup, and two things he named:
+**the low shelf is band 1 and the high shelf is band 7**, and the seven bands
+init to the seven-band graphic EQ's own centres -- 63, 160, 400, 1k, 2.5k,
+6.3k, 16k -- all of them on. The high shelf was band 3 and four bands sat
+stacked at 1 kHz, which is what made a seven-band EQ read as a three-band one
+with some spare handles hidden under band 2's.
+
+The face followed: the target row runs high-pass, seven bands, low-pass, in
+the order the plot reads; a target with a shape of its own draws that shape
+(the two shelves and the two pass filters) and a plain bell draws its number;
+the analyzer switch moved out of that row into the plot's corner; and ON
+moved down beside the knobs it switches. The glyph follows the band's **live**
+kind, through a `band-kinds` array published per frame, so it cannot go on
+saying "shelf" about a band a preset has made a bell.
+
+Band kind is still a parameter with no control on the face -- it can be
+automated and preset, not clicked. That was deliberate for this pass; a Type
+control is an eighth face control and widens the modulation arrays with it.
+
 ## Step 02 — the curve tells the truth
 
 Landed on `feat/eq-curve-truth` (2026-09-15). **02 and 03 are done; 04 is

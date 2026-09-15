@@ -125,6 +125,15 @@ export component EqDeviceFace inherits EffectDeviceShell {
     /// The selected *band's* Q profile, two positions.
     in-out property <float> q-profile;
     in property <[float]> band-data;
+    /// Each band's shape, as `EqBandKind::to_index` numbers it, so the
+    /// selector can draw a shelf as a shelf rather than as a number.
+    ///
+    /// Live rather than installed once with the rest of `EqSpec`: a preset or
+    /// an automation lane can make band 4 a low shelf, and a glyph that could
+    /// not follow that would be a control saying something the engine is not
+    /// doing. `tests/eq_face.rs` holds the two integers below to
+    /// `EqBandKind::to_index`.
+    in property <[int]> band-kinds;
     in property <[float]> pass-data;
     in property <[float]> curve-db;
     in property <[float]> spectrum-data;
@@ -142,46 +151,134 @@ export component EqDeviceFace inherits EffectDeviceShell {
     private property <bool> pass-target: EqSpec.is-pass(root.target-index);
     private property <bool> proportional-q: root.q-profile >= 0.5;
 
+    // The selector's glyphs, on `ToolButton`'s 16x16 grid: what each target
+    // does to the curve, drawn as the curve. A band that is a plain bell
+    // draws its number instead -- the number its own parameters are called
+    // by -- so the row reads as the bank does, shelf, five bells, shelf,
+    // with the two pass filters at the ends.
+    private property <string> low-shelf-icon: "M 2 5 L 5 5 C 7 5 7 11 9 11 L 14 11";
+    private property <string> high-shelf-icon: "M 2 11 L 7 11 C 9 11 9 5 11 5 L 14 5";
+    private property <string> high-pass-icon: "M 2 13 C 5 13 6 5 9 5 L 14 5";
+    private property <string> low-pass-icon: "M 2 5 L 7 5 C 10 5 11 13 14 13";
+    private property <string> analyzer-icon:
+        "M 3 13 L 3 9 M 6.5 13 L 6.5 5 M 10 13 L 10 8 M 13.5 13 L 13.5 3";
+
+    // Which target the button at `position` aims at: the high-pass first,
+    // then the seven bands, then the low-pass, so the row runs left to right
+    // the way the plot does and a shelf sits at the end it shelves.
+    //
+    // Only the *row* is reordered. A target keeps the number its parameters
+    // keep -- the passes are the two past the bands, which is what
+    // `EqSpec.is-pass` reads and what a dragged handle reports itself as.
+    pure function row-target(position: int) -> int {
+        if (position == 0) { return EqSpec.band-count; }
+        return position > EqSpec.band-count ? EqSpec.band-count + 1 : position - 1;
+    }
+
+    // The glyph a target draws instead of its label, or "" for its label.
+    //
+    // The two integers are `EqBandKind::to_index`'s, which is the one thing
+    // this face knows about the engine's numbering and the one thing
+    // `the_selectors_glyphs_follow_the_bands_own_kind` pins.
+    pure function target-icon(target: int) -> string {
+        if (EqSpec.is-pass(target)) {
+            return target == EqSpec.band-count ? root.high-pass-icon : root.low-pass-icon;
+        }
+        let kind = target < root.band-kinds.length ? root.band-kinds[target] : 0;
+        return kind == 1 ? root.low-shelf-icon : kind == 2 ? root.high-shelf-icon : "";
+    }
+
     VerticalLayout {
         padding: 6px; padding-top: DeviceRackMetrics.header-height + 6px; spacing: 4px;
-        EqResponseDisplay {
-            height: 126px; width: 100%; band-data: root.band-data; pass-data: root.pass-data;
-            curve-db: root.curve-db; spectrum-data: root.spectrum-data;
-            selected-target: root.target-index; spectrum-visible: root.analyzer-enabled;
-            point-grabbed(index) => { root.target-changed(EqSpec.target-value(index)); }
-            // A pass filter's point moves in frequency only, so its gain
-            // argument is the value it already had and writing it back is
-            // refused in Rust anyway -- `EqParams::id_for_selected` has no id
-            // for a pass filter's gain. Not sending it is the honest half of
-            // that; the refusal is the belt.
-            point-dragged(index, freq, gain) => {
-                root.target-changed(EqSpec.target-value(index));
-                root.frequency-changed(freq);
-                if (!EqSpec.is-pass(index)) { root.gain-changed(gain); }
+        // The plot, with the analyzer's switch in its own top corner. The
+        // switch said FFT and sat in the row of band buttons until
+        // 2026-09-15, which put a control over what the *display* shows in a
+        // row of things to aim the knobs at.
+        Rectangle {
+            height: 126px;
+            EqResponseDisplay {
+                width: 100%; height: 100%; band-data: root.band-data; pass-data: root.pass-data;
+                curve-db: root.curve-db; spectrum-data: root.spectrum-data;
+                selected-target: root.target-index; spectrum-visible: root.analyzer-enabled;
+                point-grabbed(index) => { root.target-changed(EqSpec.target-value(index)); }
+                // A pass filter's point moves in frequency only, so its gain
+                // argument is the value it already had and writing it back is
+                // refused in Rust anyway -- `EqParams::id_for_selected` has no id
+                // for a pass filter's gain. Not sending it is the honest half of
+                // that; the refusal is the belt.
+                point-dragged(index, freq, gain) => {
+                    root.target-changed(EqSpec.target-value(index));
+                    root.frequency-changed(freq);
+                    if (!EqSpec.is-pass(index)) { root.gain-changed(gain); }
+                }
+            }
+            ToolButton {
+                // Width and height rather than a min/max pair: outside a
+                // layout an element takes its preferred size, and this one is
+                // placed against the plot's right edge by its own width.
+                x: parent.width - self.width - 6px;
+                y: 6px;
+                width: 28px; height: 22px;
+                icon: root.analyzer-icon;
+                tooltip: "Analyzer";
+                hint: "Show spectrum analyzer";
+                active: root.analyzer-enabled;
+                clicked => { root.analyzer-toggled(!root.analyzer-enabled); }
             }
         }
+        // The target row, centred under the plot and nothing else in it.
+        //
+        // Built out of `ToolButton` rather than with a `SelectorBank`
+        // because a segment draws a **glyph** where its target has a shape --
+        // the shelves and the two pass filters -- and its number where it is
+        // a plain bell, and a bank carries one string per segment. The chrome
+        // is `SelectorBank`'s own, through the same `Theme` tokens: what is
+        // not shared is the choice of what to put inside a segment.
         HorizontalLayout {
-            spacing: 4px;
-            SelectorBank {
-                options: EqSpec.target-names;
-                selected-index: root.target-index;
-                segment-width: 30px;
-                tooltip: "Select EQ band";
-                selected(index) => { root.target-changed(EqSpec.target-value(index)); }
-            }
-            ToolButton {
-                min-width: 30px; max-width: 30px; min-height: 26px; max-height: 26px;
-                text: "ON"; tooltip: "On"; hint: "Enable selected EQ section"; active: root.enabled >= 0.5;
-                clicked => { root.enabled-changed(root.enabled >= 0.5 ? 0 : 1); }
-            }
-            ToolButton {
-                min-width: 30px; max-width: 30px; min-height: 26px; max-height: 26px;
-                text: "FFT"; tooltip: "Analyzer"; hint: "Show spectrum analyzer"; active: root.analyzer-enabled;
-                clicked => { root.analyzer-toggled(!root.analyzer-enabled); }
+            alignment: center;
+            Rectangle {
+                height: 26px;
+                width: targets.preferred-width;
+                background: Theme.surface;
+                border-radius: Theme.radius-md;
+                border-width: 1px;
+                border-color: Theme.border;
+                targets := HorizontalLayout {
+                    spacing: 1px;
+                    // One button per target, in row order rather than in
+                    // target order; the loop is over the names only to get
+                    // one iteration per target.
+                    for name[position] in EqSpec.target-names : ToolButton {
+                        property <int> target: root.row-target(position);
+                        min-width: 30px; max-width: 30px;
+                        text: root.target-icon(self.target) == ""
+                            ? EqSpec.target-names[self.target] : "";
+                        icon: root.target-icon(self.target);
+                        tooltip: EqSpec.target-names[self.target];
+                        hint: "Select EQ band";
+                        active: root.target-index == self.target;
+                        clicked => { root.target-changed(EqSpec.target-value(self.target)); }
+                    }
+                }
             }
         }
         HorizontalLayout {
             spacing: 0px;
+            // The selected target's switch, beside the knobs it switches on
+            // rather than in the row of targets: it is this band's control,
+            // like the three knobs to its right, and not a way of choosing
+            // one.
+            VerticalLayout {
+                alignment: center;
+                padding-left: 6px;
+                padding-right: 12px;
+                ToolButton {
+                    min-width: 30px; max-width: 30px; min-height: 26px; max-height: 26px;
+                    text: "ON"; tooltip: "On"; hint: "Enable selected EQ section"; active: root.enabled >= 0.5;
+                    clicked => { root.enabled-changed(root.enabled >= 0.5 ? 0 : 1); }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
             ParameterKnob { width: 80px; diameter: 40px; label: "Freq"; tooltip: "Selected band frequency"; value <=> root.frequency; default-value: EqSpec.rest(root.target-index, 2); value-text: EqSpec.format(2, root.frequency); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[2]; modulation-depth: root.modulation-depths[2]; modulation-offset: root.modulation-offsets[2]; modulation-route-count: root.modulation-route-counts[2]; changed(v) => { root.frequency-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); } modulation-edit-started => { root.modulation-edit-started(2); } modulation-edit-finished => { root.modulation-edit-finished(2); } }
             ParameterKnob { width: 80px; diameter: 40px; label: "Gain"; tooltip: "Selected band boost or cut"; enabled: !root.pass-target; bipolar: true; value <=> root.gain; default-value: EqSpec.rest(root.target-index, 3); value-text: EqSpec.format(3, root.gain); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[3]; modulation-depth: root.modulation-depths[3]; modulation-offset: root.modulation-offsets[3]; modulation-route-count: root.modulation-route-counts[3]; changed(v) => { root.gain-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); } modulation-edit-started => { root.modulation-edit-started(3); } modulation-edit-finished => { root.modulation-edit-finished(3); } }
             ParameterKnob { width: 80px; diameter: 40px; label: "Q"; tooltip: "Selected band width or pass resonance"; value <=> root.q; default-value: EqSpec.rest(root.target-index, 4); value-text: EqSpec.format(4, root.q); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[4]; modulation-depth: root.modulation-depths[4]; modulation-offset: root.modulation-offsets[4]; modulation-route-count: root.modulation-route-counts[4]; changed(v) => { root.q-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); } modulation-edit-started => { root.modulation-edit-started(4); } modulation-edit-finished => { root.modulation-edit-finished(4); } }

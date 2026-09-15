@@ -259,6 +259,11 @@ struct EffectSlotRow {
     // frequency axis. The curve is the filter evaluated, not a shape drawn to
     // resemble it -- see `docs/plans/eq-v2/02-the-curve-tells-the-truth.md`.
     eq-band-data: [float],
+    // Each band's `EqBandKind`, as `EqBandKind::to_index` numbers it. Its own
+    // field rather than a fourth float in `eq-band-data`, because that array
+    // is what *places a handle* and a kind places nothing: it is what the
+    // target row draws a shelf's glyph from.
+    eq-band-kinds: [int],
     eq-pass-data: [float],
     eq-curve-db: [float],
     eq-spectrum-data: [float],
@@ -4716,6 +4721,7 @@ export component MainWindow inherits Window {
                                                     pass-slope: slot.p5;
                                                     q-profile: slot.p6;
                                                     band-data: slot.eq-band-data;
+                                                    band-kinds: slot.eq-band-kinds;
                                                     pass-data: slot.eq-pass-data;
                                                     curve-db: slot.eq-curve-db;
                                                     spectrum-data: slot.eq-spectrum-data;

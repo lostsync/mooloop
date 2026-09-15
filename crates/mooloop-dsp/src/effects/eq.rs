@@ -491,14 +491,23 @@ mod tests {
         }
     }
 
+    /// A boosted band lifts a tone sitting on its own centre.
+    ///
+    /// The band and the tone both come from `EQ_DEFAULT_BAND_HZ` rather than
+    /// from a literal: this test boosted band 2 and measured at 1 kHz, which
+    /// were the same place until the seven bands spread out on 2026-09-15 and
+    /// were an octave and a half apart afterwards -- so it went on measuring
+    /// the skirt of a band it had moved away from.
     #[test]
     fn eq_boosts_the_selected_peak_frequency() {
         let sr = 48_000;
+        const BAND: usize = 3;
+        let tone_hz = mooloop_core::EQ_DEFAULT_BAND_HZ[BAND];
         let mut params = EqParams::default();
-        params.bands[1].gain_db = 12.0;
+        params.bands[BAND].gain_db = 12.0;
         let mut effect = EqEffect::new(params, sr);
         let mut bus = StereoBus::with_capacity(sr as usize / 2);
-        for i in 0..bus.capacity() { let sample = (i as f32 * 1_000.0 * core::f32::consts::TAU / sr as f32).sin(); bus.l[i] = sample; bus.r[i] = sample; }
+        for i in 0..bus.capacity() { let sample = (i as f32 * tone_hz * core::f32::consts::TAU / sr as f32).sin(); bus.l[i] = sample; bus.r[i] = sample; }
         let ctx = ProcessContext { sample_rate: sr, frames: bus.capacity(), playing: true, bpm: 120.0, position_ticks: 0.0, position_frames: 0 };
         effect.process(&ctx, &mut bus, &EventList::empty(), None);
         let rms = (bus.l[bus.capacity()/2..].iter().map(|s| s*s).sum::<f32>() / (bus.capacity()/2) as f32).sqrt();

@@ -1822,12 +1822,19 @@ fn effect_slot_row(
     // written here and read in `device-displays.slint`, with nothing
     // asserting the two files agreed.
     let mut eq_band_data = Vec::new();
+    let mut eq_band_kinds = Vec::new();
     let mut eq_pass_data = Vec::new();
     let mut eq_curve_db = Vec::new();
     if let Some(eq) = slot.params.eq() {
         for band in eq.bands {
             eq_band_data
                 .extend_from_slice(&eq_plot_band(band.frequency_hz, band.gain_db, band.enabled));
+            // Not part of the plot's flat array, which carries only what
+            // places a handle: the face's target row reads this to draw a
+            // shelf as a shelf, and the band's kind moved out of
+            // `eq_plot_band` on 2026-09-14 when the markup stopped drawing
+            // its own curve.
+            eq_band_kinds.push(band.kind.to_index());
         }
         for pass in [&eq.high_pass, &eq.low_pass] {
             eq_pass_data.extend_from_slice(&eq_plot_pass(pass.frequency_hz, pass.enabled));
@@ -1855,6 +1862,7 @@ fn effect_slot_row(
         modulation_offsets: Vec::<f32>::new().as_slice().into(),
         modulation_route_counts: Vec::<i32>::new().as_slice().into(),
         eq_band_data: eq_band_data.as_slice().into(),
+        eq_band_kinds: eq_band_kinds.as_slice().into(),
         eq_pass_data: eq_pass_data.as_slice().into(),
         eq_curve_db: eq_curve_db.as_slice().into(),
         eq_spectrum_data: Vec::<f32>::new().as_slice().into(),

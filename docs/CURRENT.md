@@ -962,7 +962,21 @@ land on its own when it starts to matter:
   channel strip's four bands the same way. The band buttons read 1 to 7 --
   the numbering their parameters use -- and the pass-slope buttons read
   12/24/36/48/72 dB per octave, which is what the bank rolls off at; they
-  read LOW/1..6 and 6/12/18/24/36 before 2026-09-15. Double-clicking a knob
+  read LOW/1..6 and 6/12/18/24/36 before 2026-09-15. **All seven bands start
+  on and spread across the band** at the seven-band graphic EQ's own centres
+  -- 63, 160, 400, 1k, 2.5k, 6.3k and 16k -- with a **low shelf at band 1 and
+  a high shelf at band 7**; before 2026-09-15 three were on, the high shelf
+  was band 3, and the other four sat on top of each other at 1 kHz, so four
+  of the seven handles were underneath band 2's. Every band rests flat, and a
+  bell at 0 dB is the identity filter, so a fresh EQ still passes the signal
+  through untouched. The target row is drawn in the order the plot reads --
+  the high-pass, the seven bands, then the low-pass -- and **a target that
+  has a shape of its own draws it**: the two shelves and the two pass filters
+  are line-art glyphs, a plain bell is its number, and the glyph follows the
+  band's live kind rather than a fixed picture of the opening arrangement.
+  The analyzer's switch sits in the plot's own top corner instead of a third
+  button in that row, and the selected target's ON sits beside the three
+  knobs it switches on. Double-clicking a knob
   returns to the *selected* band's resting value rather than to band 2's. A
   feedback-delay-network hall reverb; and
   feedback-delay-network hall reverb; and one five-mode modulation processor
