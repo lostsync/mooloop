@@ -18,9 +18,12 @@ step has landed; the macOS CI job is the one thing that has not yet run.
 **`FOCUS.md` was rewritten on 2026-09-12 and it decided five of the entries
 below.** The sequence it set was: finish `interface-iteration/` (steps 03 and
 04), then `eq-v2/`, then Buffer. The first of those closed on 2026-09-14 and
-archived, so the live sequence is `eq-v2/`, then Buffer -- whose *shape* that
-step has to raise before building,
-because `BUFFER_ENGINE.md`'s insert model is not settled. `device-registry/`,
+archived, so the live sequence is `eq-v2/`, then Buffer. That step's standing
+instruction was to raise the device's *shape* before building, because
+`BUFFER_ENGINE.md`'s insert model was not settled; **it was settled on
+2026-09-15 and Buffer stays a device**, with
+`buffer-implementation/03-freeze-and-the-grid.md` as the work order that
+followed. `device-registry/`,
 `theming/`, `pattern-bank-floor/` and `egui-view-layer/` are all parked under
 "deliberately not now", each with its reason and with what would unpark it. One
 piece is exempt: take `device-registry/`'s face host component if a device step
@@ -45,6 +48,19 @@ that changes how the device sounds. It became **step 1 of the sequence** when
 a stale lane on a retired one lands in a hole rather than on a neighbour), and
 **no change to the face at all** -- which is the finding worth carrying into
 plugin work, and `00-status.md` says why.
+
+`musical-time/` was added 2026-09-15 and is **not started**. A
+`rust-slint-boundary/` run, written out of `buffer-implementation/03`, whose
+BBT readouts had no shared thing to reuse. The survey is the value: "four beats
+to the bar" is spelled **nine times across six crates**, the comment *"assumes
+4/4 for now"* appears in three of them independently, `frames_per_bar`'s doc
+comment claims a convention the buffer device then spells its own copy of, and
+`project.beats_per_bar` is a persisted field read by nothing but the integrity
+pass that clamps it. `mooloop-core::time::Ticks` has had the three helpers all
+of them needed since the beginning and **no caller outside its own tests**.
+Three steps: one home for the constant, a `BbtPosition`/`BbtDuration` pair
+(two types, because a position counts from one and a duration from zero), and
+the guard. Nothing on screen changes; if something does, the fix is wrong.
 
 `control-plane-seams/` was added 2026-09-15 and **all five steps landed the
 same day**; it is ready to archive. It came from an outside architectural
@@ -81,8 +97,9 @@ is worth a step was a `FOCUS.md` question, and the answer as of 2026-09-12 is
 **not now** -- safely, because the measurements to judge it by are committed
 either way.
 
-Last swept 2026-09-15, and amended later the same day when
-`control-plane-seams/` was written. `eq-v2/` steps 01 and 03 landed on the 14th and step 02
+Last swept 2026-09-15, and amended twice later the same day: once when
+`control-plane-seams/` was written, and again when Buffer's shape was settled
+and `buffer-implementation/03` and `musical-time/` were added. `eq-v2/` steps 01 and 03 landed on the 14th and step 02
 seven minutes into the 15th. 01 gave every EQ band and both pass filters their own stable ids --
 the one native device whose parameter model a CLAP host could not have
 expressed -- and the thing it proved is that a face showing one band at a time

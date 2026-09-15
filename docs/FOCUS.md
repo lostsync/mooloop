@@ -164,15 +164,23 @@ Buffer, sequence a transformation, understand the active head, and keep the
 result as part of a project without relying on debug controls or a hidden MIDI
 mapping.
 
-**Raise the shape of the device before building the workflow.** Adam's
-position, 2026-08-30: making Buffer an ordinary insert device was partly the
-wrong call. He designed it as though it had to work unchanged in another DAW,
-and Buffer is not meant to be portable — it is meant to be part of how audio
-playback works inside mooloop. His stated intent is to build it into the **end
-of a device rack, with its own sequencing lane**. The lane design is not worked
-out and he deprioritized it at the time. `BUFFER_ENGINE.md` still specifies the
-insert model, so **do not treat that document as settled when this step
-starts**: ask first, and do not begin the redesign unprompted.
+**The shape was raised on 2026-09-15, and Buffer stays a device.** Adam's
+2026-08-30 position was that making Buffer an ordinary insert device was partly
+the wrong call — he designed it as though it had to work unchanged in another
+DAW, and Buffer is meant to be part of how audio playback works inside mooloop,
+built into the **end of a device rack, with its own sequencing lane**. Put to
+him again with a realtime-sampler framing, his answer was that it *"puts some
+of my doubts about a device-based implementation to rest."* The rack-end
+placement and the lane are still not ruled out; they are simply not the next
+move, and nothing in the work order forecloses them, because a lane would drive
+the same published parameters.
+
+That work order is
+`docs/plans/buffer-implementation/03-freeze-and-the-grid.md`: an always-rolling
+history with FREEZE, a Rate parameter that Freeze forces into existence, Offset
+retired in favour of a normalized Position, Length and freeze quantization on
+the shared `ModTimeDivision` grid, and a 2U face whose buttons are macros over
+published parameters.
 
 One piece of Stage 1 is still unverified and is not a design question: its
 acceptance test 8 — no allocations or locks in the callback. **The harness it
