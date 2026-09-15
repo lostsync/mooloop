@@ -306,7 +306,7 @@ Named here so none of it is discovered as an absence.
   is reachable -- the ids exist and are stable -- but it is a change to the
   addressing scheme rather than a rider on this feature.
 - **A strip preset.** The preset system's unit is a device
-  (`docs/plans/preset-system/`), and a strip is not one. The voicing is the
+  (`docs/plans/archive/preset-system/`), and a strip is not one. The voicing is the
   thing worth recalling and it is one value.
 - **The voicing's own EQ curve.** `06-preamp-modelling.md` asks for a broad
   presence lift on `Iron` and a top-end bump and rolloff, as fixed voicing

@@ -250,7 +250,7 @@ that sets `root.lfo-wave`. Picking a saw or a square changes the DSP and
 nothing on screen. It is here rather than in an issue because the reason it
 is wrong twice is that there was no `ModulatorShape` to reach for —
 `modulation-shelf.slint:231` has one, privately (see 7). Both faces are v1
-devices on their way out (`docs/plans/poly-v1-mono-mode/`), which is a reason
+devices on their way out (`docs/plans/archive/poly-v1-mono-mode/`), which is a reason
 to fix this by adopting a shared component rather than by editing two
 hardcoded paths.
 

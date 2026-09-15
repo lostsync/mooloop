@@ -9,7 +9,7 @@ wired to anything.
 Re-render it without building the UI crate:
 
 ```sh
-scripts/slint-sketch --shot docs/plans/poly-synth-v2/mockups/concept-pages.slint
+scripts/slint-sketch --shot docs/plans/archive/poly-synth-v2/mockups/concept-pages.slint
 ```
 
 `docs/OPERATIONS.md` says sketches belong in `$TMPDIR` rather than in the
@@ -30,7 +30,7 @@ So the face spends pages, the way the v1 mono and poly faces do, and every
 control is the 34px dial the poly face already uses. **OSC · NETWORK · FILTER
 · AMP · ML-P8 MOD.**
 
-The failure this had to avoid is the one `docs/plans/drum-synth-v2/mockups`
+The failure this had to avoid is the one `docs/plans/archive/drum-synth-v2/mockups`
 names: "pages of knob rows", twenty-six near-identical small knobs per page,
 which is what got ML-P8's *first* face rejected. The current face is that same
 failure arrived at from the other direction — one screen of small knobs rather

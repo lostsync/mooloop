@@ -170,7 +170,7 @@ fragment can only be stored as a whole channel, because nothing knows where
 else it may legally go. With one, the browser question answers itself: an
 insert point *is* a known boundary, so the browser offers only fragments whose
 signature fits. That is the same problem the ML-M1 factory bank hit one level
-down (`plans/preset-system/00-status.md`).
+down (`plans/archive/preset-system/00-status.md`).
 
 **Deliberately undecided**: whether a node view is a separate editor, a rack
 row expansion or a whole-channel view; whether users author objects or only

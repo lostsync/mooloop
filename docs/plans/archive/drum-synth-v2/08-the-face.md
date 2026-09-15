@@ -38,7 +38,7 @@ So:
   patch is doing; a knob is how it is changed.
 - **The face is six pages**, and a page is a few large controls inside modules
   that share one chrome — never a grid of small ones.
-  `docs/plans/poly-synth-v2/mockups/README.md` is the argument, and the trap
+  `docs/plans/archive/poly-synth-v2/mockups/README.md` is the argument, and the trap
   it names ("pages of knob rows") is the same one this plan's own mockups
   rejected once.
 - **Four rack units, not five.** The fifth existed to make one screen fit.

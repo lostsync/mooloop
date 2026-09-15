@@ -3,7 +3,7 @@
 Adam, 2026-09-05: *"i think i want that panel to also be able to browse and
 load presets."*
 
-`docs/plans/preset-system/` decided a preset's unit is a device and shipped
+`docs/plans/archive/preset-system/` decided a preset's unit is a device and shipped
 the whole mechanism — four preset classes, relative addressing, factory banks
 for every effect kind and both instrument banks. It then stopped, explicitly,
 waiting for something to design a browser against. Both banks now ship, so

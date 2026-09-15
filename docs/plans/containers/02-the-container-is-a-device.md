@@ -105,7 +105,7 @@ step fails the load with "unknown variant", which is the correct and existing
 behaviour for a project using a device the reader does not have.
 
 `contains = ["effect_params"]` on a leaf preset is unchanged, so
-`docs/plans/preset-system/04`'s condition — that going specific first left
+`docs/plans/archive/preset-system/04`'s condition — that going specific first left
 room for a container entry rather than a redefinition — still holds. Step 05
 writes the new entry.
 

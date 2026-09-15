@@ -474,7 +474,7 @@ with every host control. It loads onto any other container on any chain in any
 project, and loading it twice onto the same chain gives two independent runs.
 `contains = ["effect_params", "effect_run"]` — an entry **added** rather than
 `effect_params` redefined, which is the condition
-`docs/plans/preset-system/00-status.md` set on having built the one-row preset
+`docs/plans/archive/preset-system/00-status.md` set on having built the one-row preset
 first, and it holds: a reader that predates runs meets `effect_run`, does not
 know it, and refuses the bundle instead of loading the first device and
 silently dropping the box.

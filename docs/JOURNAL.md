@@ -1070,7 +1070,7 @@ moment there was. A position you can aim has to be visible to aim.
 Adam opened the week by changing the method rather than the target: *"we were
 supposed to go straight into making the 1.0 mockup a reality but im not sure i
 want to do that anymore. i think we should just keep iterating and let it take
-shape."* `docs/plans/interface-iteration/` is what `FOCUS.md` step 3 became —
+shape."* `docs/plans/archive/interface-iteration/` is what `FOCUS.md` step 3 became —
 four independent steps, each one exposing something already built, in an order
 that can be rearranged. Presets in the browser first, by his call.
 
@@ -1606,7 +1606,7 @@ Refreshed 2026-09-02, with the September documentation audit's threads merged in
 - MIDI input is wired to nothing: there is a JACK port, a decoder, and a `BufferMidiMap` the render state will apply, with no caller installing one and no controls on the MIDI preferences page.
 - The Buffer's product question is untested. The device is built and is an ordinary insert; whether routing a source into it and sequencing the result beats bouncing to a sample is what `docs/FOCUS.md` step 4 decides.
 - The tooltip audit is unfinished: the status bar exists and about forty sites feed it, but deciding per control which half of the rule it falls under has not happened, and the sampler face is not plumbed in at all.
-- The v1 mono synth cannot be deleted until its channels have somewhere to land, which is the poly mono/legato toggle in `docs/plans/poly-v1-mono-mode/`. Until then the picker lists both mono synths.
+- The v1 mono synth cannot be deleted until its channels have somewhere to land, which is the poly mono/legato toggle in `docs/plans/archive/poly-v1-mono-mode/`. Until then the picker lists both mono synths.
 - ~~Keyboard focus is unreliable and it eats shortcuts, spacebar included.~~ Fixed 2026-09-07, and this bullet is a good example of the failure it describes: the explanation here was wrong. The root `FocusScope` was a sibling of the UI rather than its ancestor, so keys never bubbled to it at all; the focusable things inside it were mostly innocent. Text fields are the one remaining case, and they are in `LOOSE_ENDS.md` — a caret parked in one still eats Space, because there is no way to leave a field except Enter.
 - ~~Keyboard navigation exists in the piano roll and nowhere else.~~ Closed 2026-09-14: the browser tree is navigable (Ctrl+B, then the arrows, Enter and Ctrl+Enter), and the clipboard chords resolve against the focused panel. What is left of this thread is that **the roll's arrow keys move a selection without being able to build one** — keyboard *selection* has never existed and is `ENHANCEMENTS.md`'s, not a plan's.
 - Channels have no colour — no field in the UI, the session model, or the project format — which is the one genuinely new persisted thing the planned channel sidebar needs.
