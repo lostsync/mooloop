@@ -1120,9 +1120,18 @@ land on its own when it starts to matter:
   refuses them structurally rather than a rule the picker remembers. An Aux In
   channel is where they are read instead.
   **The two kinds of source publish in different ranges, and a route's
-  polarity is about the module convention.** A rack module always emits
+  polarity is about the module convention.** A rack module emits into
   `-1..1`, and `Unipolar` lifts that into `0..1` so a one-way module rests at
-  the destination's base. An outlet publishes in its *declared* range, where a
+  the destination's base. The lift stands on the module's **own amount**, not
+  on the full range: an LFO at half depth swings `-0.5..0.5`, and a unipolar
+  route from it still rests on the base and reaches half the route's depth.
+  Turning that amount to zero therefore contributes nothing, where until
+  2026-09-14 it parked the destination half a depth above the base while the
+  module visibly stopped moving. An LFO still fading in is the one case the
+  lift cannot see, because the fade is engine state rather than a parameter:
+  for the length of the fade a unipolar route from it rises from half the
+  module's depth instead of from the floor. An outlet publishes in its
+  *declared* range, where a
   unipolar one is already `0..1`, so an outlet route takes the destination's
   own default — `Bipolar`, which passes the value through. `Unipolar` on an
   outlet remains meaningful, but only for a genuinely bipolar one such as

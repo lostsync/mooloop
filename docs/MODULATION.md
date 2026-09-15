@@ -244,6 +244,17 @@ A bipolar route swings source `-1..1` about the base. A unipolar route maps
 that output to `0..1`, making the base the floor. Signed depth inverts either
 form without inventing another source. Clamp only after all offsets sum.
 
+**The lift stands on the source's own span, not on the literal `1`.** A module
+emits *into* `-1..1` and does not have to fill it: the envelope and the random
+module scale by their own amount before lifting into the signed convention, so
+they do fill it, while the LFO scales an already-signed waveform by `depth` and
+so spans `-depth..depth`. Lifting that with `(v + 1) / 2` would rest the
+destination `(1 - depth) / 2` above its base and — at depth zero — offset it
+half a depth while producing no movement. `ModRack::wire_span` reads the span
+off the module's params, which is also why an LFO's **fade-in** is outside it:
+a fade is engine state and reading it per control tick would mean a second
+table beside `ControlOutputs`.
+
 ## Modulation architecture
 
 ### Modulator rack

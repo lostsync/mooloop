@@ -971,26 +971,19 @@ which removes the class; or accept the restart and say so in the spec -- but
 the same-kind cross-wiring is not defensible under any reading. Found
 2026-09-13.
 
-**A unipolar route only rests at its base when the module's own Amount is
-exactly 1.** `offset_for`'s lift is `(output + 1.0) * 0.5`
-(`modulation.rs:1997`), which assumes the source spans the full `-1..1`. An
-Envelope and a unipolar Random do; an LFO does not, because its output is
-`raw * depth * fade`, so the lift's minimum is `(1 - depth)/2` rather than 0.
-`mlm1_factory.rs:272` ships an LFO to pulse-width route at `Unipolar` with the
-module's Amount at 1.0, which is correct today -- turn that AMOUNT to 0.5 and
-the destination does not modulate less around the same floor, it shrinks its
-swing *and rises*. At Amount 0 the module contributes a constant `+0.5 *
-depth` offset while visibly producing no movement: "the modulator is off" and
-"the destination is parked half a depth up" become the same knob position.
-The spec names this exact hazard for outlets (lines 305-309) and does not
-address it one level down, where it says flatly "A unipolar route maps that
-output to `0..1`, making the base the floor." Not a small fix because it is a
-question about what `Unipolar` means and the answer changes resting values in
-saved projects: map the source's *declared* range onto `0..1`, which needs
-`ModSourceDescriptor.signal` carried into the realtime path where it is not
-today; or accept it on the grounds that reducing a bipolar source's amount
-legitimately collapses it to its midpoint -- defensible, but then the spec's
-polarity paragraph has to say so. Found 2026-09-13.
+**A unipolar route from a *fading-in* LFO rises from half the module's depth
+rather than from the floor.** The steady-state half of this was fixed
+2026-09-14: `offset_for`'s lift now stands on `ModRack::wire_span`, the span
+the module's params say it reaches, so an LFO at half depth rests on the base
+instead of a quarter of the route's depth above it, and one at depth zero
+contributes nothing instead of half a depth of silent offset. What the span
+cannot see is `fade`, because that is DSP state in `Lfo` rather than a
+parameter, and reading it per control tick means a second
+`[[f32; 8]; 256]` table per channel beside `ControlOutputs` -- 8 KB a live
+channel, doubling the control capture, for a transient on a parameter that
+defaults to zero seconds. So during a fade the lift is anchored on the
+unfaded depth and the route rises from `depth * 0.5` to its floor. Exact from
+the moment the fade completes. Found 2026-09-13, mostly fixed 2026-09-14.
 
 **A Math module's `input_slot` follows a reorder but not a removal.**
 `retarget` (`modulation.rs:1767`) goes out of its way to carry the input
