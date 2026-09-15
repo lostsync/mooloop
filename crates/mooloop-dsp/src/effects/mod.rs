@@ -26,7 +26,7 @@ pub use preamp::PreampEffect;
 pub use delay::DelayEffect;
 pub use drive::DriveEffect;
 pub use dynamics::{CompressorEffect, GateEffect, LimiterEffect};
-pub use eq::EqEffect;
+pub use eq::{eq_response_db, EqEffect};
 pub use filter::FilterEffect;
 pub use modulation::ModulationEffect;
 pub use plate::PlateEffect;

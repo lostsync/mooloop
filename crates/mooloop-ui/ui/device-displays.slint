@@ -394,40 +394,65 @@ export component DelayEchoDisplay inherits Rectangle {
 // strip's own four bands are drawn by it too, and a second copy would be a
 // second answer to what a bell of a given Q looks like.
 //
-// It reads a flat `band-data` of five floats a band -- normalized frequency,
-// normalized gain, Q, enabled, `EqBandKind` index -- and draws up to seven of
-// them. A caller with four bands sends four; `band-value` answers 0 past the
-// end of the model, and a band whose `enabled` field is 0 is neither plotted
-// nor draggable.
+// **The curve is handed to it, not worked out here.** `curve-db` is the bank's
+// magnitude response sampled in Rust -- `mooloop_dsp::effects::eq_response_db`
+// for the device, `mooloop_dsp::strip::strip_eq_response_db` for the strip --
+// by designing the coefficients the audio path designs and evaluating them.
+// Until 2026-09-14 this file approximated the shapes itself, which was a
+// second law for the picture standing beside the law for the sound: it drew
+// every shelf at a fixed exponent whatever its slope, and it did not know the
+// pass filters existed at all. Sharing the component meant the two banks could
+// not disagree with *each other*; it did nothing about either disagreeing with
+// what was being heard. See `docs/plans/eq-v2/02-the-curve-tells-the-truth.md`.
+//
+// So what it reads per band is now only what a *handle* needs: three floats a
+// band -- normalized frequency, normalized gain, enabled -- and two a pass
+// filter, which has no gain to place it by. Q and kind left with the
+// approximation that was the only thing reading them. A caller with four bands
+// sends four; `band-value` answers 0 past the end of the model, and a band
+// whose `enabled` field is 0 is neither plotted nor draggable.
+//
+// The point index is the EQ's own target numbering: bands first, then the
+// high-pass and the low-pass, which is what `EqParams::selected_target`
+// counts and what `point-grabbed` reports.
 export component EqResponseDisplay inherits Rectangle {
     in property <[float]> band-data;
+    in property <[float]> pass-data;
+    // The response, in decibels, at `curve-db.length` points evenly spaced
+    // along this plot's logarithmic frequency axis. Empty draws nothing,
+    // which is what a drag harness with no engine behind it gets.
+    in property <[float]> curve-db;
     in property <[float]> spectrum-data;
     in property <int> selected-target;
     in property <bool> spectrum-visible;
     callback point-grabbed(int);
     callback point-dragged(int, float, float);
     private property <int> sample-count: 140;
+    // Pinned to the publishers by `tests/eq_face.rs`, which reads these two
+    // lines: a flat array with an implicit layout is only safe while
+    // something asserts both ends agree about it.
+    private property <int> band-stride: 3;
+    private property <int> pass-stride: 2;
+    private property <int> band-count: 7;
+    // The plot's vertical span. Deliberately wider than a band's +-18 dB
+    // range, because bands sum.
+    private property <float> ceiling-db: 24;
 
     pure function band-value(index: int, field: int) -> float {
-        return index * 5 + field < root.band-data.length ? root.band-data[index * 5 + field] : 0;
+        return index * root.band-stride + field < root.band-data.length
+            ? root.band-data[index * root.band-stride + field] : 0;
     }
-    pure function band-shape(index: int, x: float) -> float {
-        let frequency = 20 * pow(1000, clamp(x, 0, 1));
-        let center = 20 * pow(1000, clamp(root.band-value(index, 0), 0, 1));
-        // Q is the inverse of bandwidth: a larger Q must visibly narrow the
-        // bell. The old exponent approximation changed the curve's skirt but
-        // not its half-width, which made the display read backwards.
-        let bell = 1 / (1 + pow(abs(ln(frequency / center)) * max(0.15, root.band-value(index, 2)), 2));
-        return root.band-value(index, 4) == 1 ? 1 / (1 + pow(frequency / center, 1.6))
-            : root.band-value(index, 4) == 2 ? 1 / (1 + pow(center / frequency, 1.6)) : bell;
+    pure function pass-value(index: int, field: int) -> float {
+        return index * root.pass-stride + field < root.pass-data.length
+            ? root.pass-data[index * root.pass-stride + field] : 0;
     }
     // Coincident points cannot be independently clicked when they occupy the
     // same TouchArea. Spread only matching, enabled points horizontally; the
     // callback still addresses the band at the curve position.
     pure function overlaps(index: int, other: int) -> bool {
         return index != other
-            && root.band-value(index, 3) > 0.5
-            && root.band-value(other, 3) > 0.5
+            && root.band-value(index, 2) > 0.5
+            && root.band-value(other, 2) > 0.5
             && abs(root.band-value(index, 0) - root.band-value(other, 0)) < 0.002
             && abs(root.band-value(index, 1) - root.band-value(other, 1)) < 0.002;
     }
@@ -446,15 +471,19 @@ export component EqResponseDisplay inherits Rectangle {
             + (index > 4 && root.overlaps(index, 4) ? 1 : 0)
             + (index > 5 && root.overlaps(index, 5) ? 1 : 0);
     }
+    /// What the device does at `x` along the axis, read off the sampled
+    /// curve. Nearest point rather than interpolated: the publishers send
+    /// more points than this plot has pixels.
     pure function response-db(x: float) -> float {
-        let b0 = root.band-value(0, 3) > 0.5 ? (root.band-value(0, 1) * 36 - 18) * root.band-shape(0, x) : 0;
-        let b1 = root.band-value(1, 3) > 0.5 ? (root.band-value(1, 1) * 36 - 18) * root.band-shape(1, x) : 0;
-        let b2 = root.band-value(2, 3) > 0.5 ? (root.band-value(2, 1) * 36 - 18) * root.band-shape(2, x) : 0;
-        let b3 = root.band-value(3, 3) > 0.5 ? (root.band-value(3, 1) * 36 - 18) * root.band-shape(3, x) : 0;
-        let b4 = root.band-value(4, 3) > 0.5 ? (root.band-value(4, 1) * 36 - 18) * root.band-shape(4, x) : 0;
-        let b5 = root.band-value(5, 3) > 0.5 ? (root.band-value(5, 1) * 36 - 18) * root.band-shape(5, x) : 0;
-        let b6 = root.band-value(6, 3) > 0.5 ? (root.band-value(6, 1) * 36 - 18) * root.band-shape(6, x) : 0;
-        return clamp(b0 + b1 + b2 + b3 + b4 + b5 + b6, -24, 24);
+        return root.curve-db.length < 2 ? 0 : clamp(
+            root.curve-db[clamp(round(clamp(x, 0, 1) * (root.curve-db.length - 1)),
+                0, root.curve-db.length - 1)],
+            -root.ceiling-db, root.ceiling-db);
+    }
+    // Where a decibel value sits, 0 at the top and 1 at the bottom. The
+    // curve's axis, which a pass filter's handle rides.
+    pure function db-y(db: float) -> float {
+        return 0.5 - db / (2 * root.ceiling-db);
     }
     pure function point-color(index: int) -> color {
         return index == 0 ? #eab308 : index == 1 ? #84cc16 : index == 2 ? #22c55e
@@ -476,13 +505,35 @@ export component EqResponseDisplay inherits Rectangle {
     for sample in root.sample-count : Rectangle {
         private property <float> x0: sample / (root.sample-count - 1);
         private property <float> x1: min(1, (sample + 1) / (root.sample-count - 1));
-        private property <float> y0: 0.5 - root.response-db(x0) / 48;
-        private property <float> y1: 0.5 - root.response-db(x1) / 48;
+        private property <float> y0: root.db-y(root.response-db(x0));
+        private property <float> y1: root.db-y(root.response-db(x1));
         x: x0 * parent.width; y: min(y0, y1) * parent.height;
         width: max(1px, parent.width / root.sample-count + 0.5px); height: max(1px, abs(y1 - y0) * parent.height);
         background: Theme.accent;
     }
-    for index in 7 : DraggablePoint {
+    // A pass filter's corner, on the curve it cuts. It has no gain, so its
+    // handle rides the response rather than an axis of its own, and a drag
+    // moves it in frequency only -- the second argument is the value it
+    // already has, so a caller that writes it back writes what was there.
+    for pass in 2 : DraggablePoint {
+        private property <float> frequency: root.pass-value(pass, 0);
+        x: frequency * parent.width - 7px;
+        y: root.db-y(root.response-db(frequency)) * parent.height - 7px;
+        width: 14px; height: 14px;
+        enabled: root.pass-value(pass, 1) > 0.5;
+        grabbed => { root.point-grabbed(root.band-count + pass); }
+        dragged(dx, dy) => {
+            root.point-dragged(root.band-count + pass,
+                clamp(self.frequency + dx * 1px / parent.width, 0, 1), 0.5);
+        }
+        Rectangle {
+            width: 14px; height: 14px; border-radius: 7px;
+            background: Theme.text-faint;
+            border-width: root.selected-target == root.band-count + pass ? 2px : 1px;
+            border-color: root.selected-target == root.band-count + pass ? Theme.text : Theme.panel;
+        }
+    }
+    for index in root.band-count : DraggablePoint {
         private property <float> frequency: root.band-value(index, 0);
         private property <float> gain: root.band-value(index, 1);
         private property <int> coincident-count: root.overlap-count(index);
@@ -490,7 +541,7 @@ export component EqResponseDisplay inherits Rectangle {
         x: frequency * parent.width - 7px + (coincident-rank - (coincident-count - 1) / 2) * 18px;
         y: (1 - gain) * parent.height - 7px;
         width: 14px; height: 14px;
-        enabled: root.band-value(index, 3) > 0.5;
+        enabled: root.band-value(index, 2) > 0.5;
         grabbed => { root.point-grabbed(index); }
         dragged(dx, dy) => {
             root.point-dragged(index,

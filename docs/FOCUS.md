@@ -129,6 +129,20 @@ Note what it did *not* settle — `EffectKind::descriptors()` is a table per
 and is not this plan; it is `SCOPE.md` §"the four things standing between here
 and CLAP", item 1.
 
+**Steps 02 and 03 landed 2026-09-14.** 02 is the one that answered the
+question it was written around. Its plot could not match what the DSP ran
+because the markup approximated the shapes itself, and the step was left
+deciding between evaluating a real magnitude response in Slint and stating a
+weaker standard. Neither: **Rust samples the curve from the coefficients the
+audio path designs**, the way the strip's compressor plot already did, so the
+drawn curve *is* the running filter to a tenth of a decibel and a test holds
+it to a tone through a real bank. The pass filters are on it at their real
+slopes, the markup's approximation is gone rather than improved, and an
+`EqSpec` global took every range, count, label and resting value out of
+`eq-device.slint` -- which closed the double-click-returns-to-band-2 defect
+and found the pass-slope selector had been wrong by a factor of two since it
+shipped.
+
 **Step 03 landed 2026-09-14** and corrected this paragraph on the way past.
 A shelf ignored its Q in the DSP -- so a band's Q knob did nothing whatever
 while that band was a shelf -- and the fix is `Biquad::eq_band`, one function
@@ -139,17 +153,16 @@ said only step 04 would: the two shelf forms agree on a flat shelf and nothing
 else. A default EQ is unaffected, because both its shelves rest at 0 dB. A song
 that boosted one is not, and that wants a listening pass.
 
-Step 02 is what is left of "an EQ that is merely better", and its faults were
-confirmed against the source rather than reported from use: the pass filters
-are absent from the response plot while their data is *already being sent* to
-it, and the plot draws shelves at a fixed exponent -- which matters more now
-that a shelf has a slope to draw. Step 04 is the measured character from five
-reference EQs and is optional.
+Step 04 is the measured character from five reference EQs, it is optional, and
+it is all that is left.
 
 Done when: ~~every EQ band and pass filter has its own stable ids, a lane on a
 band means one band forever~~ (2026-09-14), and `eq-v2/00-status.md` says which
-of 02 to 04 were taken. 03 landed 2026-09-14; **02 and 04 are what is left**,
-and 04 is optional and wants Adam's ear.
+of 02 to 04 were taken. 02 and 03 landed 2026-09-14; **04 is what is left**,
+it is optional, and it wants Adam's ear. Two listening passes are owed before
+it: 03 changed how an existing shelf boost sounds, and 02 changed nothing
+audible but changed what the picture claims, which is worth a look with a
+patch moving.
 
 ### 2. Turn Buffer into a composition workflow
 

@@ -466,7 +466,12 @@ const fn eq_pass_shape(field: u32) -> (&'static str, f32, f32, ParamCurve) {
         EQ_PASS_ON => ("", 0.0, 1.0, ParamCurve::Stepped(2)),
         EQ_PASS_FREQ => ("Hz", 20.0, 20_000.0, ParamCurve::Exponential),
         EQ_PASS_Q => ("", 0.15, 18.0, ParamCurve::Exponential),
-        _ => ("", 0.0, 4.0, ParamCurve::Stepped(5)),
+        _ => (
+            "",
+            0.0,
+            EQ_SLOPE_COUNT as f32 - 1.0,
+            ParamCurve::Stepped(EQ_SLOPE_COUNT as u16),
+        ),
     }
 }
 
@@ -524,6 +529,36 @@ const fn eq_descriptors() -> [ParamDescriptor; EQ_DESCRIPTOR_COUNT] {
 }
 
 static EQ_DESCRIPTORS: [ParamDescriptor; EQ_DESCRIPTOR_COUNT] = eq_descriptors();
+
+/// The low end of the frequency axis every EQ response plot draws on.
+///
+/// Here rather than in the display or the publisher because four places need
+/// the same answer and they are in three crates: `strip_row` and
+/// `effect_slot_row` normalize a band's hertz onto it, `mooloop_dsp` samples
+/// the bank along it, and the markup reads the result back by position. It
+/// was `(hz / 20.0).ln() / 1000.0f32.ln()` written twice in `mooloop-ui`
+/// until 2026-09-14, which is the shape `AGENTS.md` opens on: an axis is a
+/// policy, and a policy spelled twice is one that drifts.
+///
+/// It is a *display* convention rather than a parameter range -- a band's
+/// frequency descriptor runs 20 Hz to 20 kHz too, and the coincidence is not
+/// load-bearing: a plot that stops at 20 kHz is right whatever the knob can
+/// reach, because that is where hearing stops.
+pub const EQ_PLOT_MIN_HZ: f32 = 20.0;
+/// The high end of that axis.
+pub const EQ_PLOT_MAX_HZ: f32 = 20_000.0;
+
+/// Where `frequency_hz` sits along the response plot's axis, 0 at
+/// [`EQ_PLOT_MIN_HZ`] and 1 at [`EQ_PLOT_MAX_HZ`], logarithmically.
+pub fn eq_plot_position(frequency_hz: f32) -> f32 {
+    (frequency_hz.max(1e-3) / EQ_PLOT_MIN_HZ).ln() / (EQ_PLOT_MAX_HZ / EQ_PLOT_MIN_HZ).ln()
+}
+
+/// The frequency at `position` along that axis. The inverse of
+/// [`eq_plot_position`], and what a response sampler walks.
+pub fn eq_plot_frequency(position: f32) -> f32 {
+    EQ_PLOT_MIN_HZ * (EQ_PLOT_MAX_HZ / EQ_PLOT_MIN_HZ).powf(position.clamp(0.0, 1.0))
+}
 
 /// A band's response topology. The first and last default bands are shelves;
 /// any active interior band is a peaking filter.
@@ -660,7 +695,41 @@ impl EqSlope {
             Self::Db36 => 6,
         }
     }
+
+    /// What this slope is, in decibels per octave, and what a face should
+    /// call it.
+    ///
+    /// **The variant names are half the slope they name, and they are kept
+    /// anyway.** A stage is `Biquad::pass`, which is the cookbook's
+    /// *second-order* section -- 12 dB per octave -- so `Db6` runs one of
+    /// them and rolls off at twelve, and `Db36` runs six and rolls off at
+    /// seventy-two. The selector on the EQ's face read "6 12 18 24 36" over a
+    /// bank doing 12/24/36/48/72 from the day it shipped, which is this
+    /// codebase's recurring fault in its plainest form: a control saying
+    /// something the engine is not doing.
+    ///
+    /// The names are the *persisted* spelling -- `serde` writes `"db6"` --
+    /// so renaming the variants would either refuse every saved project or
+    /// silently re-map one slope to another, to correct a label. The label is
+    /// what was wrong and the label is what moved. `docs/LOOSE_ENDS.md`
+    /// carries the rename for whenever a `FORMAT_VERSION` bump happens for a
+    /// reason worth having one.
+    pub fn db_per_octave(self) -> u32 {
+        self.stages() as u32 * PASS_STAGE_DB_PER_OCTAVE
+    }
+
+    /// Every slope, in index order, for a face that draws them all.
+    pub fn all() -> [Self; EQ_SLOPE_COUNT] {
+        [Self::Db6, Self::Db12, Self::Db18, Self::Db24, Self::Db36]
+    }
 }
+
+/// One `Biquad::pass` stage is second-order, and second-order is 12 dB per
+/// octave. The one place that arithmetic is stated.
+pub const PASS_STAGE_DB_PER_OCTAVE: u32 = 12;
+
+/// How many slopes a pass filter offers.
+pub const EQ_SLOPE_COUNT: usize = 5;
 
 /// Independent low- or high-pass cleanup filter.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]

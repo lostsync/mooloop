@@ -624,6 +624,8 @@ fn effect_slot(kind: EffectKind) -> EffectSlotRow {
         modulation_offsets: Vec::<f32>::new().as_slice().into(),
         modulation_route_counts: Vec::<i32>::new().as_slice().into(),
         eq_band_data: Vec::<f32>::new().as_slice().into(),
+            eq_pass_data: Vec::<f32>::new().as_slice().into(),
+            eq_curve_db: Vec::<f32>::new().as_slice().into(),
         eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
         eq_analyzer_enabled: false,
         preamp_deviation: Vec::<f32>::new().as_slice().into(),

@@ -51,21 +51,21 @@ and is still a control showing a number the filter is not using. The channel
 strip avoids this by giving its two shelf-capable bands a narrower Q range, and
 that answer is not available here: every band can be any kind, so the range
 would depend on a *value*, and a descriptor is static per id. Same shape as the
-rest of `eq-v2` -- a parameter model that cannot express a condition. Found
-2026-09-14.
+rest of `eq-v2` -- a parameter model that cannot express a condition. The
+response plot does not hide it any more: since 2026-09-14 the curve is the
+bank's own coefficients evaluated, so a shelf's drawn slope stops moving at
+the same place its sound does. Found 2026-09-14.
 
-**Double-clicking an EQ knob returns to band 2's default, whatever band is
-selected.** The face is one control set over a selection and its resting
-values are hardcoded -- `default-value: 0.566` is 1 kHz, which is what band 2
-opens at. Band 1 is a low shelf resting at 120 Hz and band 3 a high shelf at
-8 kHz, so on either of those a double-click travels to a number that band was
-never at. Equally true before `eq-v2/01`, and invisible then, because one
-`Freq` descriptor stood for all seven bands and declared 1 kHz; the per-band
-table is what made it checkable, and `slint_face_agreement.rs`'s
-`face_param_id` states it where somebody will meet it. The fix is a per-row
-defaults array on `EffectSlotRow`, which is a face-contract change and so
-belongs to a later `eq-v2` step rather than to the one that exposed it. Found
-2026-09-14.
+**`EqSlope`'s variant names are half the slope they name.** `Db6` runs one
+`Biquad::pass` stage, which is a second-order section and therefore 12 dB per
+octave, so the five variants are 12/24/36/48/72 and are spelled 6/12/18/24/36.
+The *face* was corrected on 2026-09-14 -- `EqSlope::db_per_octave` is the
+arithmetic and `eq_face.rs` holds the selector to it -- and the variants were
+left alone on purpose: `serde` writes them (`"db6"`), so renaming them either
+refuses every saved project or silently re-maps one slope to another, to
+correct a spelling nothing reads. Rename them on the next `FORMAT_VERSION`
+bump that happens for a reason worth having one, with serde aliases for the
+old names. Found 2026-09-14.
 
 **The automation destination menu now offers fifty rows for one EQ.** That is
 what per-band addressing means and it is not a defect -- "EQ 1 / B3 Freq" is

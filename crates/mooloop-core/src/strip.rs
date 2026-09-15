@@ -39,7 +39,7 @@
 //! hole matters because `strip.slint` finds a descriptor by arithmetic on
 //! its position, not by search.
 
-use crate::effect::{EqBandKind, EqQProfile, ParamCurve, ParamDescriptor, PreampVoicing};
+use crate::effect::{EqBandKind, ParamCurve, ParamDescriptor, PreampVoicing};
 
 /// Bands in a strip's EQ, read left to right and top to bottom: high shelf,
 /// high mid, low mid, low shelf. Adam, 2026-09-09: *"this has been annoying
@@ -280,32 +280,6 @@ impl StripParams {
 
     pub fn descriptor(id: u32) -> Option<&'static ParamDescriptor> {
         DESCRIPTORS.iter().find(|descriptor| descriptor.id == id)
-    }
-
-    /// Whether the Q law is proportional for this strip's voicing -- the one
-    /// thing a voicing does that a knob's reading depends on, and it is
-    /// drawn by the response display rather than merely applied.
-    pub fn proportional_q(&self) -> bool {
-        matches!(self.voicing, PreampVoicing::Grip | PreampVoicing::Punch)
-    }
-
-    /// The Q a band is actually running, after the voicing's law.
-    ///
-    /// The response display plots this, not `band.q`, which is the condition
-    /// that makes a law-selecting voicing honest.
-    pub fn effective_q(&self, band: usize) -> f32 {
-        let Some(band) = self.bands.get(band) else {
-            return 0.707;
-        };
-        crate::effect::eq_effective_q(
-            band.q,
-            band.gain_db,
-            if self.proportional_q() {
-                EqQProfile::Proportional
-            } else {
-                EqQProfile::Constant
-            },
-        )
     }
 
     /// Whether anything at all is switched in. A strip that answers `true`
@@ -834,37 +808,6 @@ mod tests {
             ..StripParams::default()
         };
         assert!(!with_eq.is_out());
-    }
-
-    /// The one place a voicing touches what a knob means, and the two it
-    /// does not.
-    #[test]
-    fn only_two_voicings_narrow_a_boosted_band() {
-        let mut params = StripParams::default();
-        // Not a field assignment on a fresh `default()`, which clippy denies
-        // (`field_reassign_with_default`): this is the band inside an array.
-        params.bands[1] = StripBand {
-            gain_db: 12.0,
-            ..params.bands[1]
-        };
-        for (voicing, proportional) in [
-            (PreampVoicing::Moo, false),
-            (PreampVoicing::Grip, true),
-            (PreampVoicing::Punch, true),
-            (PreampVoicing::Iron, false),
-        ] {
-            params.voicing = voicing;
-            assert_eq!(params.proportional_q(), proportional, "{voicing:?}");
-            let effective = params.effective_q(1);
-            if proportional {
-                assert!(
-                    effective > params.bands[1].q * 1.5,
-                    "{voicing:?} {effective}"
-                );
-            } else {
-                assert!((effective - params.bands[1].q).abs() < 1e-6, "{voicing:?}");
-            }
-        }
     }
 
     /// Every field of a strip as TOML, which is how a project stores one.

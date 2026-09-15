@@ -42,7 +42,7 @@ use mooloop_core::strip::{
     STRIP_COMP_THRESHOLD_DB, STRIP_DRIVE_DB, STRIP_EQ_BANDS, STRIP_EQ_IN, STRIP_PRE_IN,
     STRIP_VOICING,
 };
-use mooloop_core::{db_to_linear, EqQProfile, StripBand};
+use mooloop_core::{db_to_linear, EqQProfile};
 
 use crate::biquad::Biquad;
 use crate::bus::StereoBus;
@@ -369,6 +369,78 @@ pub fn static_curve_db(params: &StripParams, floor_db: f32, samples: usize) -> V
         .collect()
 }
 
+/// Design the strip's four stages into `stages`, and report which of them are
+/// live.
+///
+/// The list is recorded as each stage is set rather than re-derived
+/// afterwards, for the reason `EqEffect::update_coefficients` gives: the two
+/// would be the same rule written twice, and the copy that drifts is the one
+/// that decides whether a band is heard. Since 2026-09-14 that argument
+/// covers the response plot as well, which is why this is a free function
+/// rather than a method -- [`strip_eq_response_db`] designs the same bank the
+/// same way and cannot hold a different opinion about which bands are on.
+///
+/// What is the strip's own is the frequency and the profile: a band's
+/// frequency is a *position* resolved by the voicing, and the profile is the
+/// voicing's rather than the band's. The design itself is `Biquad::eq_band`,
+/// which the seven-band effect EQ calls too -- it was the same `match` in
+/// both files until 2026-09-14, and the copy in the other one had a shelf arm
+/// that ignored `q`.
+pub fn design_strip_eq_bank(
+    params: &StripParams,
+    voicing: &StripVoicing,
+    sample_rate: u32,
+    stages: &mut [Biquad; STRIP_EQ_BANDS],
+) -> [bool; STRIP_EQ_BANDS] {
+    let mut live = [false; STRIP_EQ_BANDS];
+    for (index, band) in params.bands.iter().enumerate() {
+        live[index] = band.gain_db != 0.0;
+        if live[index] {
+            stages[index].eq_band(
+                band.kind,
+                voicing.eq.frequency(index, band.position),
+                band.gain_db,
+                band.q,
+                voicing.q_profile(),
+                sample_rate,
+            );
+        } else {
+            // Keep the stored samples: a band taken back to 0 dB stops
+            // filtering from that sample and the tail of what it was doing is
+            // already in the buffer, not in `z1`.
+            stages[index] = Biquad::identity();
+        }
+    }
+    live
+}
+
+/// The strip EQ's gain at each of `samples` points along the response plot's
+/// frequency axis, in decibels.
+///
+/// The effect EQ's `eq_response_db` with the strip's bank behind it, and the
+/// same claim: this is the filter, evaluated, rather than a shape that
+/// resembles it. The strip and the device share one response display
+/// deliberately -- since 2026-09-11, so there is not a second answer to what
+/// a bell of a given Q looks like -- and that sharing only did its job while
+/// the display held the law. Now that the law is in Rust on both sides, the
+/// display holds no law at all, which is the stronger form of the same idea.
+pub fn strip_eq_response_db(params: &StripParams, sample_rate: u32, samples: usize) -> Vec<f32> {
+    let voicing = strip_voicing(params.voicing);
+    let mut stages = [Biquad::identity(); STRIP_EQ_BANDS];
+    let live = design_strip_eq_bank(params, &voicing, sample_rate, &mut stages);
+    let samples = samples.max(2);
+    (0..samples)
+        .map(|index| {
+            let hz = mooloop_core::eq_plot_frequency(index as f32 / (samples - 1) as f32);
+            live.iter()
+                .enumerate()
+                .filter(|(_, live)| **live)
+                .map(|(stage, _)| stages[stage].magnitude_db(hz, sample_rate))
+                .sum()
+        })
+        .collect()
+}
+
 /// The strip's four-band EQ.
 ///
 /// A fixed bank of four stages a channel, coefficients recomputed only when
@@ -410,52 +482,16 @@ impl StripEq {
     }
 
     /// Rebuild every stage from `params`, and the active list with them.
-    ///
-    /// The list is recorded as each stage is set rather than re-derived
-    /// afterwards, for the reason `EqEffect::update_coefficients` gives: the
-    /// two would be the same rule written twice, and the copy that drifts is
-    /// the one that decides whether a band is heard.
     fn update(&mut self, params: &StripParams, voicing: &StripVoicing, sample_rate: u32) {
+        let live = design_strip_eq_bank(params, voicing, sample_rate, &mut self.left);
+        design_strip_eq_bank(params, voicing, sample_rate, &mut self.right);
         self.active_len = 0;
-        for (index, band) in params.bands.iter().enumerate() {
-            let live = band.gain_db != 0.0;
-            if live {
-                Self::design(&mut self.left[index], index, *band, voicing, sample_rate);
-                Self::design(&mut self.right[index], index, *band, voicing, sample_rate);
+        for (index, live) in live.iter().enumerate() {
+            if *live {
                 self.active[self.active_len] = index as u8;
                 self.active_len += 1;
-            } else {
-                // Keep the stored samples: a band taken back to 0 dB stops
-                // filtering from that sample and the tail of what it was
-                // doing is already in the buffer, not in `z1`.
-                self.left[index] = Biquad::identity();
-                self.right[index] = Biquad::identity();
             }
         }
-    }
-
-    fn design(
-        stage: &mut Biquad,
-        index: usize,
-        band: StripBand,
-        voicing: &StripVoicing,
-        sample_rate: u32,
-    ) {
-        // What is the strip's own is the two lines above and the profile:
-        // a band's frequency is a *position* resolved by the voicing, and the
-        // profile is the voicing's rather than the band's. The design itself
-        // is `Biquad::eq_band`, which the seven-band effect EQ calls too --
-        // it was the same `match` in both files until 2026-09-14, and the
-        // copy in the other one had a shelf arm that ignored `q`.
-        let frequency_hz = voicing.eq.frequency(index, band.position);
-        stage.eq_band(
-            band.kind,
-            frequency_hz,
-            band.gain_db,
-            band.q,
-            voicing.q_profile(),
-            sample_rate,
-        );
     }
 
     fn process(&mut self, bus: &mut StereoBus, frames: usize) {
@@ -853,6 +889,44 @@ mod tests {
         let mut strip = Strip::new(params, SAMPLE_RATE);
         strip.process_block(&mut bus, frames);
         bus
+    }
+
+    /// **The strip's plot is held to a sine through the strip**, the same
+    /// standard `eq_response_db` is held to in `effects::eq` -- and it has to
+    /// be the same standard, because the two banks draw on one display.
+    ///
+    /// Only the EQ is in: the drive and the compressor are level-dependent
+    /// and are not what this plot claims to show.
+    #[test]
+    fn the_strip_plot_is_what_a_sine_measures_through_its_eq() {
+        let params = tweak(|params| {
+            params.voicing = PreampVoicing::Grip;
+            params.eq_in = true;
+            params.bands[0].gain_db = 8.0;
+            params.bands[1].gain_db = -6.0;
+            params.bands[1].q = 2.5;
+            params.bands[3].gain_db = 5.0;
+        });
+
+        let samples = 129;
+        let curve = strip_eq_response_db(&params, SAMPLE_RATE, samples);
+
+        for index in [16, 40, 64, 88, 112] {
+            let hz = mooloop_core::eq_plot_frequency(index as f32 / (samples - 1) as f32);
+            let drawn = curve[index];
+
+            let frames = SAMPLE_RATE as usize;
+            let out = run(params, sine(frames, hz, 0.25));
+            let period = SAMPLE_RATE as f32 / hz;
+            let span = ((frames as f32 / 2.0 / period).floor() * period).round() as usize;
+            let tail = &out.l[frames - span..frames];
+            let measured = 20.0 * (rms(tail) / 0.25 * std::f32::consts::SQRT_2).log10();
+
+            assert!(
+                (drawn - measured).abs() < 0.1,
+                "at {hz} Hz the plot draws {drawn} dB and the strip does {measured} dB"
+            );
+        }
     }
 
     /// **The claim that entitles the strip to exist on every track.** A
@@ -1576,28 +1650,30 @@ mod tests {
         }
     }
 
-    /// **The Q law is stated twice and only one of them is heard.**
+    /// **The one place a voicing touches what a knob means, and the two it
+    /// does not.**
     ///
-    /// [`StripVoicing::proportional_q`] is what the bank is designed
-    /// against; `StripParams::proportional_q` is the same rule spelled again
-    /// in `mooloop-core`, because `strip_row` plots the running Q and
-    /// `mooloop-core` cannot see this table. Two answers to "does `Grip`
-    /// narrow a boosted band", in two crates, and the one that drifts is
-    /// whichever is edited second -- at which point the response display
-    /// draws a curve the audio is not running, which is the exact failure
-    /// "a voicing selects laws, never values" was adopted to avoid.
+    /// This was `a_voicings_q_law_is_the_one_the_display_plots` until
+    /// 2026-09-14, and it guarded a real duplicate: the same rule was spelled
+    /// in [`StripVoicing::proportional_q`] here and in
+    /// `StripParams::proportional_q` in `mooloop-core`, because `strip_row`
+    /// had to publish the *running* Q to the response display and
+    /// `mooloop-core` cannot see this table.
     ///
-    /// So they are held to each other here, the way
-    /// `a_voicings_input_stage_is_the_same_one_the_device_gets` holds the
-    /// preamp table to `preamp_voicing`. `mooloop-dsp` depends on
-    /// `mooloop-core`, so this is the only side that can ask.
+    /// The display does not read a Q any more -- it is handed the bank's
+    /// magnitude response, designed by [`design_strip_eq_bank`] -- so the
+    /// second spelling had no reader left and went with it, along with
+    /// `StripParams::effective_q`. What survives is the fact, asserted
+    /// against the copy that is actually heard. Which is the question
+    /// `AGENTS.md` says to ask of any mirrored value: **does anything read
+    /// the copy the test checks?**
     #[test]
-    fn a_voicings_q_law_is_the_one_the_display_plots() {
-        for choice in [
-            PreampVoicing::Moo,
-            PreampVoicing::Grip,
-            PreampVoicing::Punch,
-            PreampVoicing::Iron,
+    fn only_two_voicings_narrow_a_boosted_band() {
+        for (choice, proportional) in [
+            (PreampVoicing::Moo, false),
+            (PreampVoicing::Grip, true),
+            (PreampVoicing::Punch, true),
+            (PreampVoicing::Iron, false),
         ] {
             let params = tweak(|params| {
                 params.voicing = choice;
@@ -1607,23 +1683,16 @@ mod tests {
                 };
             });
             let voicing = strip_voicing(choice);
-            assert_eq!(
-                voicing.proportional_q,
-                params.proportional_q(),
-                "{choice:?} narrows a boosted band in one crate and not the other"
-            );
-            // And the number, not just the flag: the display plots
-            // `effective_q` and the bank is designed at `eq_effective_q`
-            // under this voicing's profile, so those have to be one value.
-            assert_eq!(
-                params.effective_q(1),
-                mooloop_core::eq_effective_q(
-                    params.bands[1].q,
-                    params.bands[1].gain_db,
-                    voicing.q_profile()
-                ),
-                "{choice:?} plots a Q it is not running"
-            );
+            assert_eq!(voicing.proportional_q, proportional, "{choice:?}");
+
+            let band = params.bands[1];
+            let effective =
+                mooloop_core::eq_effective_q(band.q, band.gain_db, voicing.q_profile());
+            if proportional {
+                assert!(effective > band.q * 1.5, "{choice:?} {effective}");
+            } else {
+                assert!((effective - band.q).abs() < 1e-6, "{choice:?}");
+            }
         }
     }
 }

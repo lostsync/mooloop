@@ -1,5 +1,18 @@
 # 02 — The curve tells the truth
 
+**Landed 2026-09-14 on `feat/eq-curve-truth`.** `00-status.md` records what it
+did; what is below is the step as it was written, with the notes added on the
+way past. Two of its own conclusions did not survive being built, and both are
+worth reading against the result:
+
+- **The fidelity question had a third answer.** It offered two -- evaluate the
+  real response in Slint, or state a weaker standard -- and the answer was
+  neither: Rust samples the curve from the coefficients the audio path
+  designs, which is what the channel strip's compressor plot already did.
+- **The band half did not "stay as it is".** Once the curve arrived from
+  Rust, two of its five floats had nothing reading them.
+
+
 The response plot is the EQ's main instrument and it is currently drawing
 something other than what the device does.
 

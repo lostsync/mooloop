@@ -12,10 +12,13 @@
 //! Two numbers in `strip.slint` are not covered by that and should not be:
 //! the response plot's axes, which `StripEqPage` inverts to turn a dragged
 //! point back into hertz and decibels. Those are `EqResponseDisplay`'s
-//! convention, spelled the same way in `eq-device.slint`. The last two tests
-//! here are for the couplings that leaves -- the gain axis against the range
-//! it coincides with, and the floor the compressor's curve is sampled over
-//! against the floor the plot indexes it by.
+//! convention. The seven-band EQ stopped spelling them on 2026-09-14 -- its
+//! own point writes its parameters directly, and `tests/eq_face.rs` holds
+//! that coincidence open on its side -- so this is the last face that states
+//! them. The last two tests here are for the couplings that leaves -- the
+//! gain axis against the range it coincides with, and the floor the
+//! compressor's curve is sampled over against the floor the plot indexes it
+//! by.
 
 use mooloop_core::gain::MIN_DB as METER_FLOOR_DB;
 use mooloop_core::strip::{
@@ -238,6 +241,10 @@ fn the_sampled_curve_and_the_plot_share_a_floor() {
 /// knob draws a curve off the top of it. Nothing about that is visible at
 /// either end, so it is asserted here -- where the number is already spelled
 /// twice, a third spelling that *fails* is the cheap one.
+///
+/// `a_dragged_point_writes_the_parameter_it_looks_like` in `eq_face.rs` is
+/// the same assertion for the seven-band EQ, where the axis comes from
+/// `mooloop_ui::eq_plot_band` rather than from the markup.
 #[test]
 fn the_response_plots_gain_axis_is_the_bands_gain_range() {
     for band in 0..STRIP_EQ_BANDS {
@@ -247,9 +254,8 @@ fn the_response_plots_gain_axis_is_the_bands_gain_range() {
             (gain.min, gain.max),
             (-18.0, 18.0),
             "band {band}'s gain range left the response plot's axis behind: \
-             `strip.slint` and `eq-device.slint` both invert a dragged point \
-             as `gain * 36 - 18`, and `strip_row` normalizes as \
-             `(gain_db + 18) / 36`"
+             `strip.slint` inverts a dragged point as `gain * 36 - 18`, and \
+             `mooloop_ui::eq_plot_band` normalizes it back"
         );
     }
 }

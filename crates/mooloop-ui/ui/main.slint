@@ -39,7 +39,7 @@ import { DelayDeviceFace } from "delay-device.slint";
 import { GateDeviceFace } from "gate-device.slint";
 import { CompressorDeviceFace } from "compressor-device.slint";
 import { LimiterDeviceFace } from "limiter-device.slint";
-import { EqDeviceFace } from "eq-device.slint";
+import { EqSpec, EqDeviceFace } from "eq-device.slint";
 import { ReverbDeviceFace } from "reverb-device.slint";
 import { PlateDeviceFace } from "plate-device.slint";
 import { ModulationDeviceFace } from "modulation-device.slint";
@@ -54,6 +54,10 @@ export { StripMeters }
 // while `tests/mixer_snapshot.rs` reads the strip's width out of the second
 // rather than keeping its own copy of 92.
 export { StripSpec }
+// The EQ's table, for the same reason the strip's is exported: Rust fills it
+// once at startup so no range, label or resting value is spelled in
+// `eq-device.slint`.
+export { EqSpec }
 import { MonoDeviceFace } from "mono-device.slint";
 import { MlM1DeviceFace } from "mlm1-device.slint";
 import { MlP8DeviceFace, MlP8RouteRow } from "mlp8-device.slint";
@@ -248,8 +252,15 @@ struct EffectSlotRow {
     modulation-allowed: [bool],
     modulation-offsets: [float],
     modulation-route-counts: [int],
-    // EQ-only: seven groups of freq/gain/q/enabled/kind plus HP and LP.
+    // EQ-only, and all three are `EqResponseDisplay`'s conventions rather
+    // than parameter values: three floats a band and two a pass filter to
+    // place the handles, and the bank's magnitude response in decibels,
+    // sampled by `mooloop_dsp::effects::eq_response_db` over the plot's own
+    // frequency axis. The curve is the filter evaluated, not a shape drawn to
+    // resemble it -- see `docs/plans/eq-v2/02-the-curve-tells-the-truth.md`.
     eq-band-data: [float],
+    eq-pass-data: [float],
+    eq-curve-db: [float],
     eq-spectrum-data: [float],
     eq-analyzer-enabled: bool,
     // Per-band decibels the preamp *added*, already gated and normalized by
@@ -4697,6 +4708,8 @@ export component MainWindow inherits Window {
                                                     pass-slope: slot.p5;
                                                     q-profile: slot.p6;
                                                     band-data: slot.eq-band-data;
+                                                    pass-data: slot.eq-pass-data;
+                                                    curve-db: slot.eq-curve-db;
                                                     spectrum-data: slot.eq-spectrum-data;
                                                     analyzer-enabled: slot.eq-analyzer-enabled;
                                                     target-changed(v) => { root.effect-param-changed(index, 0, v); }

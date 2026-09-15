@@ -945,7 +945,18 @@ land on its own when it starts to matter:
   function: **a band's Q is its slope while that band is a shelf** and its Q
   while it is a bell, and a proportional bell narrows as it is pushed. The
   shelf half of that arrived 2026-09-14 -- before it, a shelf's Q knob moved
-  nothing; a
+  nothing. **Its response plot draws the filter that is running**, not a
+  shape resembling it: Rust designs the same coefficients the audio path
+  designs and evaluates their magnitude response, so the drawn curve is
+  within a tenth of a decibel of what a sine measures through the bank. Both
+  pass filters are on that curve at their real slopes with grabbable corners,
+  a shelf's drawn slope follows its Q knob, and the same plot draws the
+  channel strip's four bands the same way. The band buttons read 1 to 7 --
+  the numbering their parameters use -- and the pass-slope buttons read
+  12/24/36/48/72 dB per octave, which is what the bank rolls off at; they
+  read LOW/1..6 and 6/12/18/24/36 before 2026-09-14. Double-clicking a knob
+  returns to the *selected* band's resting value rather than to band 2's. A
+  feedback-delay-network hall reverb; and
   feedback-delay-network hall reverb; and one five-mode modulation processor
   (chorus, flange, phaser, ensemble, and ADT) whose Rate carries the same
   sync lamp the delay does, over the same grid, clamped to the 12 Hz its LFO

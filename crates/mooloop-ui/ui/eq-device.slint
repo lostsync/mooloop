@@ -1,8 +1,113 @@
+// The seven-band EQ's face.
+//
+// **No range, resting value, label or count is spelled here.** `EqSpec` is a
+// global whose table Rust fills once at startup from `mooloop_core`'s EQ
+// descriptors, the same arrangement `strip.slint` uses and for the same
+// reason: a knob's minimum and its automation lane's minimum are two views of
+// one number, and a number written twice is how they come to disagree.
+// `tests/eq_face.rs` reads the table back out of the window, holds it to the
+// descriptors, and fails if a bound reappears in this file.
+//
+// The face is **one control set over a selection**, and it should be: seven
+// duplicated rows of knobs is not an interface. What changed on 2026-09-14 is
+// that the selection is resolved in Rust, to a real per-band parameter id,
+// rather than being a parameter the DSP had to consult -- so this file's
+// control indices are `EqFaceControl` positions, not descriptor ids. See
+// `docs/plans/archive/../eq-v2/01-per-band-parameters.md`.
+
 import { Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
 import { NoteFormat, ParameterKnob, SelectorBank, ToolButton } from "controls.slint";
 import { EqResponseDisplay } from "device-displays.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
+
+// One face control's range, as `mooloop_core::ParamDescriptor` states it.
+// Handed over once at startup, never per frame.
+export struct EqControlSpec {
+    unit: string,
+    minimum: float,
+    maximum: float,
+    logarithmic: bool,
+}
+
+// Everything about the EQ that is a fact rather than a layout.
+//
+// Rust sets all of it once, from the descriptor table the engine reads. The
+// one thing this markup decides is which control goes where.
+export global EqSpec {
+    /// One row per `EqFaceControl`, in face-control order. A control that
+    /// does not apply to the selected target -- a pass filter has no gain --
+    /// still has a row, because the range belongs to the control and the
+    /// face greys the knob rather than hiding it.
+    in-out property <[EqControlSpec]> controls;
+    /// How many bands the bank has. Targets past it are pass filters.
+    in-out property <int> band-count;
+    /// How many positions the target selector has: the bands, then the
+    /// high-pass and the low-pass.
+    in-out property <int> target-count;
+    /// The selector's labels, in target order. Band *names*, from the same
+    /// numbering the descriptors use -- band 0's parameters are "B1 Freq"
+    /// and friends, so its button says 1. It said LOW until 2026-09-14,
+    /// which made the face and the automation menu count differently.
+    in-out property <[string]> target-names;
+    /// The pass-filter slope selector's labels, in index order, from
+    /// `EqSlope::db_per_octave`. They read 12/24/36/48/72 and said
+    /// 6/12/18/24/36 until 2026-09-14: a stage is a second-order section, so
+    /// every name was half the slope the bank was running.
+    in-out property <[string]> slope-names;
+    /// Every target's resting position for every control, normalized, laid
+    /// out `target * controls.length + control`.
+    ///
+    /// Per target rather than one row for the whole face, because band 0
+    /// rests at 120 Hz and band 1 at 1 kHz: a single resting value meant a
+    /// knob's double-click returned to *band 2's* default whatever band was
+    /// selected. `LOOSE_ENDS.md` had carried that since 2026-09-14.
+    in-out property <[float]> defaults;
+
+    /// A control's value in its own units, from the knob's 0..1 position.
+    public pure function natural(control: int, value: float) -> float {
+        let spec = root.controls[clamp(control, 0, max(0, root.controls.length - 1))];
+        return spec.logarithmic && spec.minimum > 0 && spec.maximum > 0
+            ? spec.minimum * pow(spec.maximum / spec.minimum, clamp(value, 0, 1))
+            : spec.minimum + (spec.maximum - spec.minimum) * clamp(value, 0, 1);
+    }
+
+    /// A knob's readout, in the unit its own descriptor names. One formatter
+    /// for the face rather than an expression per knob, the way
+    /// `StripSpec.format` does it.
+    public pure function format(control: int, value: float) -> string {
+        let unit = root.controls[clamp(control, 0, max(0, root.controls.length - 1))].unit;
+        let natural = root.natural(control, value);
+        if (unit == "dB") { return GainMath.format-db(natural); }
+        if (unit == "Hz") { return NoteFormat.frequency-value(natural); }
+        return round(natural * 100) / 100;
+    }
+
+    /// Where `control` rests for `target`, for a double-click to return to.
+    public pure function rest(target: int, control: int) -> float {
+        let index = target * root.controls.length + control;
+        return index >= 0 && index < root.defaults.length ? root.defaults[index] : 0;
+    }
+
+    /// The selector's position from the face's 0..1 selection, and back.
+    public pure function target-index(value: float) -> int {
+        return round(clamp(value, 0, 1) * (root.target-count - 1));
+    }
+    public pure function target-value(index: int) -> float {
+        return clamp(index, 0, root.target-count - 1) / (root.target-count - 1);
+    }
+    public pure function slope-index(value: float) -> int {
+        return round(clamp(value, 0, 1) * (root.slope-names.length - 1));
+    }
+    public pure function slope-value(index: int) -> float {
+        return clamp(index, 0, root.slope-names.length - 1) / (root.slope-names.length - 1);
+    }
+    /// Whether a target is a pass filter, which has no gain and no Q profile
+    /// but does have a slope.
+    public pure function is-pass(target: int) -> bool {
+        return target >= root.band-count;
+    }
+}
 
 export component EqDeviceFace inherits EffectDeviceShell {
     name: "EQ";
@@ -20,6 +125,8 @@ export component EqDeviceFace inherits EffectDeviceShell {
     /// The selected *band's* Q profile, two positions.
     in-out property <float> q-profile;
     in property <[float]> band-data;
+    in property <[float]> pass-data;
+    in property <[float]> curve-db;
     in property <[float]> spectrum-data;
     in property <bool> analyzer-enabled: false;
     callback target-changed(float);
@@ -31,28 +138,36 @@ export component EqDeviceFace inherits EffectDeviceShell {
     callback q-profile-changed(float);
     callback analyzer-toggled(bool);
 
-    private property <int> target-index: round(root.target * 8);
-    private property <float> frequency-hz: 20 * pow(1000, root.frequency);
-    private property <float> gain-db: root.gain * 36 - 18;
-    private property <float> q-value: 0.15 * pow(120, root.q);
-    private property <bool> pass-target: root.target-index >= 7;
+    private property <int> target-index: EqSpec.target-index(root.target);
+    private property <bool> pass-target: EqSpec.is-pass(root.target-index);
     private property <bool> proportional-q: root.q-profile >= 0.5;
 
     VerticalLayout {
         padding: 6px; padding-top: DeviceRackMetrics.header-height + 6px; spacing: 4px;
         EqResponseDisplay {
-            height: 126px; width: 100%; band-data: root.band-data; spectrum-data: root.spectrum-data; selected-target: root.target-index; spectrum-visible: root.analyzer-enabled;
-            point-grabbed(index) => { root.target-changed(index / 8); }
-            point-dragged(index, freq, gain) => { root.target-changed(index / 8); root.frequency-changed(freq); root.gain-changed(gain); }
+            height: 126px; width: 100%; band-data: root.band-data; pass-data: root.pass-data;
+            curve-db: root.curve-db; spectrum-data: root.spectrum-data;
+            selected-target: root.target-index; spectrum-visible: root.analyzer-enabled;
+            point-grabbed(index) => { root.target-changed(EqSpec.target-value(index)); }
+            // A pass filter's point moves in frequency only, so its gain
+            // argument is the value it already had and writing it back is
+            // refused in Rust anyway -- `EqParams::id_for_selected` has no id
+            // for a pass filter's gain. Not sending it is the honest half of
+            // that; the refusal is the belt.
+            point-dragged(index, freq, gain) => {
+                root.target-changed(EqSpec.target-value(index));
+                root.frequency-changed(freq);
+                if (!EqSpec.is-pass(index)) { root.gain-changed(gain); }
+            }
         }
         HorizontalLayout {
             spacing: 4px;
             SelectorBank {
-                options: ["LOW", "1", "2", "3", "4", "5", "6", "HP", "LP"];
+                options: EqSpec.target-names;
                 selected-index: root.target-index;
                 segment-width: 30px;
                 tooltip: "Select EQ band";
-                selected(index) => { root.target-changed(index / 8); }
+                selected(index) => { root.target-changed(EqSpec.target-value(index)); }
             }
             ToolButton {
                 min-width: 30px; max-width: 30px; min-height: 26px; max-height: 26px;
@@ -67,16 +182,16 @@ export component EqDeviceFace inherits EffectDeviceShell {
         }
         HorizontalLayout {
             spacing: 0px;
-            ParameterKnob { width: 80px; diameter: 40px; label: "Freq"; tooltip: "Selected band frequency"; value <=> root.frequency; default-value: 0.566; value-text: NoteFormat.frequency-value(root.frequency-hz); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[2]; modulation-depth: root.modulation-depths[2]; modulation-offset: root.modulation-offsets[2]; modulation-route-count: root.modulation-route-counts[2]; changed(v) => { root.frequency-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); } modulation-edit-started => { root.modulation-edit-started(2); } modulation-edit-finished => { root.modulation-edit-finished(2); } }
-            ParameterKnob { width: 80px; diameter: 40px; label: "Gain"; tooltip: "Selected band boost or cut"; enabled: !root.pass-target; bipolar: true; value <=> root.gain; default-value: 0.5; value-text: GainMath.format-db(root.gain-db); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[3]; modulation-depth: root.modulation-depths[3]; modulation-offset: root.modulation-offsets[3]; modulation-route-count: root.modulation-route-counts[3]; changed(v) => { root.gain-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); } modulation-edit-started => { root.modulation-edit-started(3); } modulation-edit-finished => { root.modulation-edit-finished(3); } }
-            ParameterKnob { width: 80px; diameter: 40px; label: "Q"; tooltip: "Selected band width or pass resonance"; value <=> root.q; default-value: 0.323843; value-text: round(root.q-value * 100) / 100; modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[4]; modulation-depth: root.modulation-depths[4]; modulation-offset: root.modulation-offsets[4]; modulation-route-count: root.modulation-route-counts[4]; changed(v) => { root.q-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); } modulation-edit-started => { root.modulation-edit-started(4); } modulation-edit-finished => { root.modulation-edit-finished(4); } }
+            ParameterKnob { width: 80px; diameter: 40px; label: "Freq"; tooltip: "Selected band frequency"; value <=> root.frequency; default-value: EqSpec.rest(root.target-index, 2); value-text: EqSpec.format(2, root.frequency); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[2]; modulation-depth: root.modulation-depths[2]; modulation-offset: root.modulation-offsets[2]; modulation-route-count: root.modulation-route-counts[2]; changed(v) => { root.frequency-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); } modulation-edit-started => { root.modulation-edit-started(2); } modulation-edit-finished => { root.modulation-edit-finished(2); } }
+            ParameterKnob { width: 80px; diameter: 40px; label: "Gain"; tooltip: "Selected band boost or cut"; enabled: !root.pass-target; bipolar: true; value <=> root.gain; default-value: EqSpec.rest(root.target-index, 3); value-text: EqSpec.format(3, root.gain); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[3]; modulation-depth: root.modulation-depths[3]; modulation-offset: root.modulation-offsets[3]; modulation-route-count: root.modulation-route-counts[3]; changed(v) => { root.gain-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); } modulation-edit-started => { root.modulation-edit-started(3); } modulation-edit-finished => { root.modulation-edit-finished(3); } }
+            ParameterKnob { width: 80px; diameter: 40px; label: "Q"; tooltip: "Selected band width or pass resonance"; value <=> root.q; default-value: EqSpec.rest(root.target-index, 4); value-text: EqSpec.format(4, root.q); modulation-armed: root.modulation-armed; modulation-allowed: root.modulation-allowed[4]; modulation-depth: root.modulation-depths[4]; modulation-offset: root.modulation-offsets[4]; modulation-route-count: root.modulation-route-counts[4]; changed(v) => { root.q-changed(v); } modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); } modulation-edit-started => { root.modulation-edit-started(4); } modulation-edit-finished => { root.modulation-edit-finished(4); } }
             Rectangle { horizontal-stretch: 1; }
             if root.pass-target : SelectorBank {
-                options: ["6", "12", "18", "24", "36"];
-                selected-index: round(root.pass-slope * 4);
+                options: EqSpec.slope-names;
+                selected-index: EqSpec.slope-index(root.pass-slope);
                 segment-width: 26px;
                 tooltip: "Pass filter slope (dB per octave)";
-                selected(i) => { root.pass-slope-changed(i / 4); }
+                selected(i) => { root.pass-slope-changed(EqSpec.slope-value(i)); }
             }
             if !root.pass-target : ToolButton {
                 min-width: 26px; max-width: 26px; min-height: 26px; max-height: 26px;

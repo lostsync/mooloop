@@ -17,11 +17,14 @@
 //
 // The two numbers that *are* written here are `EqResponseDisplay`'s axes,
 // which `StripEqPage` inverts to turn a dragged point back into hertz and
-// decibels. They are the display's convention rather than a parameter's, and
-// `eq-device.slint` spells them the same way for the seven-band EQ; the gain
-// one coincides with the bands' gain range, and
-// `the_response_plots_gain_axis_is_the_bands_gain_range` is what stops the
-// two coming apart.
+// decibels. They are the display's convention rather than a parameter's.
+// This is the only face that still spells them: the seven-band EQ's point
+// writes its parameters directly, because its frequency descriptor runs the
+// plot's own 20 Hz to 20 kHz and its gain descriptor the plot's own +-18, so
+// a dragged position *is* the normalized value. Those coincidences are what
+// `the_response_plots_gain_axis_is_the_bands_gain_range` and
+// `a_dragged_point_writes_the_parameter_it_looks_like` hold open; the axis
+// itself is `mooloop_core::EQ_PLOT_MIN_HZ`, which the publishers use.
 
 import { Motion, StatusHint, Theme } from "theme.slint";
 import { GainMath } from "gain.slint";
@@ -62,9 +65,11 @@ export struct StripRow {
     band-gain-db: [float],
     band-q: [float],
     band-shelf: [bool],
-    // The response plot's own convention: five floats a band. See
-    // `EqResponseDisplay`.
+    // The response plot's own conventions: three floats a band to place its
+    // handle, and the bank's magnitude response in decibels, sampled by
+    // `mooloop_dsp::strip::strip_eq_response_db`. See `EqResponseDisplay`.
     band-data: [float],
+    eq-curve-db: [float],
     comp-in: bool,
     threshold-db: float,
     ratio: float,
@@ -872,6 +877,7 @@ export component StripSections inherits Rectangle {
                     EqResponseDisplay {
                         vertical-stretch: 1;
                         band-data: root.strip.band-data;
+                        curve-db: root.strip.eq-curve-db;
                         selected-target: -1;
                         spectrum-visible: false;
                         opacity: root.strip.eq-in ? 1.0 : 0.45;

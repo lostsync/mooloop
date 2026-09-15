@@ -208,6 +208,72 @@ fn sync_drum_preview(window: &MainWindow, params: DrumSynthParams) {
 /// 80px the paned face gives it.
 const STRIP_CURVE_SAMPLES: usize = 64;
 
+/// How many points of an EQ's magnitude response a response plot is handed.
+///
+/// One per column `EqResponseDisplay` draws, so its nearest-point lookup
+/// lands on a published sample rather than between two of them. A frequency
+/// plot cannot take the compressor curve's sixty-four: a 72 dB/oct pass
+/// filter falls most of the plot's height inside two columns, and a curve
+/// sampled coarser than it is drawn would step down that edge.
+const EQ_CURVE_SAMPLES: usize = 140;
+
+/// How many floats a response plot's handle takes for one band, and for one
+/// pass filter.
+///
+/// A flat array with an implicit layout, produced here and consumed in
+/// `device-displays.slint`, which is the shape `02-the-curve-tells-the-truth`
+/// opened on: the pass filters used to be *appended to the band array* at a
+/// different stride, so one model had two layouts and nothing asserted either.
+/// They have their own property now, and `tests/eq_face.rs` reads both strides
+/// back out of the markup.
+///
+/// Three and two rather than five and four because the curve is no longer
+/// drawn from them: a handle needs a position, a height and whether it exists,
+/// and a pass filter has no height of its own -- it rides the response.
+pub const EQ_PLOT_BAND_STRIDE: usize = 3;
+pub const EQ_PLOT_PASS_STRIDE: usize = 2;
+
+/// The gain axis a response plot places a band's handle on, in decibels
+/// either side of flat.
+///
+/// `EqResponseDisplay`'s convention rather than a parameter range -- but it
+/// **coincides** with one, and the coincidence is load-bearing in both faces:
+/// a dragged point reports its height as 0..1 and that number is written
+/// straight to the band's Gain parameter, so the axis and the range have to
+/// be the same span or a point dragged to the top writes something other than
+/// the top. `a_dragged_point_writes_the_parameter_it_looks_like` is what
+/// holds the two together, on both banks.
+///
+/// Note that it is *not* the plot's vertical span, which is wider because
+/// bands sum: `EqResponseDisplay.ceiling-db`.
+const EQ_PLOT_GAIN_DB: f32 = 18.0;
+
+/// One band's handle, as `EqResponseDisplay` reads it: where it sits on the
+/// plot's frequency axis, where it sits on the gain axis, and whether to draw
+/// it at all.
+///
+/// Shared by the seven-band device and the channel strip because it is one
+/// display, and a flat array with an implicit layout written out twice is the
+/// fault this codebase keeps finding. It carried a band's Q and kind as well
+/// until 2026-09-14, for a curve approximation in the markup that no longer
+/// exists.
+pub fn eq_plot_band(frequency_hz: f32, gain_db: f32, enabled: bool) -> [f32; EQ_PLOT_BAND_STRIDE] {
+    [
+        mooloop_core::eq_plot_position(frequency_hz),
+        (gain_db + EQ_PLOT_GAIN_DB) / (2.0 * EQ_PLOT_GAIN_DB),
+        if enabled { 1.0 } else { 0.0 },
+    ]
+}
+
+/// One pass filter's handle. It has no gain, so it rides the response curve
+/// rather than an axis of its own and needs no height here.
+pub fn eq_plot_pass(frequency_hz: f32, enabled: bool) -> [f32; EQ_PLOT_PASS_STRIDE] {
+    [
+        mooloop_core::eq_plot_position(frequency_hz),
+        if enabled { 1.0 } else { 0.0 },
+    ]
+}
+
 /// One track's strip, as the faces take it.
 ///
 /// Public for the reason `install_strip_spec` is: `tests/mixer_snapshot.rs`
@@ -219,9 +285,9 @@ const STRIP_CURVE_SAMPLES: usize = 64;
 /// `StripSpec` global carries. The two derived fields are the ones a face
 /// cannot compute: the response plot's flat band array, and the compressor's
 /// curve as the voicing is actually bending it.
-pub fn strip_row(params: &StripParams) -> StripRow {
+pub fn strip_row(params: &StripParams, sample_rate: u32) -> StripRow {
     let table = mooloop_dsp::strip::strip_voicing(params.voicing).eq;
-    let mut band_data = Vec::with_capacity(STRIP_EQ_BANDS * 5);
+    let mut band_data = Vec::with_capacity(STRIP_EQ_BANDS * EQ_PLOT_BAND_STRIDE);
     let mut positions = Vec::with_capacity(STRIP_EQ_BANDS);
     let mut frequencies = Vec::with_capacity(STRIP_EQ_BANDS);
     let mut gains = Vec::with_capacity(STRIP_EQ_BANDS);
@@ -236,20 +302,12 @@ pub fn strip_row(params: &StripParams) -> StripRow {
         gains.push(band.gain_db);
         qs.push(band.q);
         shelves.push(band.kind != mooloop_core::EqBandKind::Bell);
-        band_data.extend_from_slice(&[
-            // `EqResponseDisplay`'s own convention, the same one the EQ
-            // device's rows use: frequency and gain normalized over the
-            // display's axes, then Q, then whether to draw the band at all,
-            // then the `EqBandKind` index.
-            (frequency_hz / 20.0).ln() / 1000.0_f32.ln(),
-            (band.gain_db + 18.0) / 36.0,
-            // The Q that is *running*, after the voicing's law -- which is
-            // the condition that makes a law-selecting voicing honest, since
-            // the plot is the only place the law is visible.
-            params.effective_q(index),
-            1.0,
-            band.kind.to_index() as f32,
-        ]);
+        // `EqResponseDisplay`'s own convention, the same one the EQ device's
+        // rows use: where the handle goes and whether to draw it. It carried
+        // the band's Q and kind as well until 2026-09-14, for a curve
+        // approximation in the markup that no longer exists -- the curve is
+        // sampled below, from the coefficients the strip is running.
+        band_data.extend_from_slice(&eq_plot_band(frequency_hz, band.gain_db, true));
     }
     StripRow {
         voicing: params.voicing.to_index(),
@@ -262,6 +320,13 @@ pub fn strip_row(params: &StripParams) -> StripRow {
         band_q: qs.as_slice().into(),
         band_shelf: shelves.as_slice().into(),
         band_data: band_data.as_slice().into(),
+        eq_curve_db: mooloop_dsp::strip::strip_eq_response_db(
+            params,
+            sample_rate,
+            EQ_CURVE_SAMPLES,
+        )
+        .as_slice()
+        .into(),
         comp_in: params.comp_in,
         threshold_db: params.threshold_db,
         ratio: params.ratio,
@@ -278,6 +343,105 @@ pub fn strip_row(params: &StripParams) -> StripRow {
         .as_slice()
         .into(),
     }
+}
+
+/// Hand the markup the EQ's table, every label it draws, and every target's
+/// resting values.
+///
+/// `install_strip_spec`'s argument, on the other device whose face is a view
+/// over a table: a knob's range and an automation lane's range are two views
+/// of one number, and a number written twice is how they come to disagree.
+/// The EQ needed it for a second reason the strip does not have -- its face
+/// is one control set over *nine* targets, so a resting value is a column of
+/// nine rather than a number, and spelling one in the markup meant a
+/// double-click returned to band 2's default whatever band was selected.
+///
+/// Public for the reason `install_strip_spec` is: `tests/eq_face.rs` reads
+/// the table back out of the window and holds it to the descriptors.
+/// Generic over the window because the EQ's face is driven by two of them:
+/// the application's, and `EqDeviceDragHarness`, which exists so a drag test
+/// can send real pointer events at the real face. A harness that gets a blank
+/// table does not draw a wrong number, it divides by a target count of zero.
+pub fn install_eq_spec<'a, C>(window: &'a C)
+where
+    C: slint::ComponentHandle,
+    EqSpec<'a>: slint::Global<'a, C>,
+{
+    let spec = window.global::<EqSpec>();
+    let kind = mooloop_core::EffectKind::Eq;
+
+    // A control's range is read off the first target that has that control
+    // at all, rather than from a hand-written mapping: a pass filter has no
+    // gain and a band has no slope, and `id_for_selected` already knows
+    // which is which. Every band's Freq descriptor has every other band's
+    // range -- `eq_band_shape` writes it once -- so which target answers does
+    // not matter, only that one does.
+    let targets = 0..=EqParams::LOW_PASS_TARGET;
+    let controls: Vec<EqControlSpec> = (0..EQ_FACE_CONTROLS as u32)
+        .map(|index| {
+            let descriptor = EqFaceControl::from_face_index(index)
+                .and_then(|control| {
+                    targets
+                        .clone()
+                        .find_map(|target| EqParams::id_for_selected(target, control))
+                })
+                .and_then(|id| kind.descriptor(id));
+            match descriptor {
+                Some(descriptor) => EqControlSpec {
+                    unit: descriptor.unit.into(),
+                    minimum: descriptor.min,
+                    maximum: descriptor.max,
+                    logarithmic: matches!(descriptor.curve, ParamCurve::Exponential),
+                },
+                // Face index 0 is the target selector, which is not a
+                // parameter and has not been one since `eq-v2/01`.
+                None => EqControlSpec::default(),
+            }
+        })
+        .collect();
+    spec.set_controls(controls.as_slice().into());
+
+    // Every target's resting position for every control, in the order the
+    // markup indexes them: `target * EQ_FACE_CONTROLS + face index`.
+    let mut defaults = Vec::with_capacity((EqParams::LOW_PASS_TARGET + 1) * EQ_FACE_CONTROLS);
+    for target in targets.clone() {
+        for index in 0..EQ_FACE_CONTROLS as u32 {
+            let rest = EqFaceControl::from_face_index(index)
+                .and_then(|control| EqParams::id_for_selected(target, control))
+                .and_then(|id| kind.descriptor(id))
+                .map(|descriptor| descriptor.to_normalized(descriptor.default))
+                .unwrap_or_default();
+            defaults.push(rest);
+        }
+    }
+    spec.set_defaults(defaults.as_slice().into());
+
+    spec.set_band_count(mooloop_core::EQ_MAX_BANDS as i32);
+    spec.set_target_count(EqParams::LOW_PASS_TARGET as i32 + 1);
+
+    // The selector's labels. A band is called by the number its own
+    // parameters are called by -- band 0's descriptors are "B1 Freq" and
+    // friends -- so the face and the automation menu count the same way. The
+    // first button said LOW until 2026-09-14, which made them count
+    // differently from the day per-band ids landed.
+    let target_names: Vec<slint::SharedString> = targets
+        .clone()
+        .map(|target| match target {
+            _ if target == EqParams::HIGH_PASS_TARGET => "HP".into(),
+            _ if target == EqParams::LOW_PASS_TARGET => "LP".into(),
+            band => format!("{}", band + 1).into(),
+        })
+        .collect();
+    spec.set_target_names(target_names.as_slice().into());
+
+    // The slope selector, from what the bank actually rolls off at rather
+    // than from what the enum's variants are spelled. See
+    // `EqSlope::db_per_octave`.
+    let slope_names: Vec<slint::SharedString> = mooloop_core::EqSlope::all()
+        .iter()
+        .map(|slope| format!("{}", slope.db_per_octave()).into())
+        .collect();
+    spec.set_slope_names(slope_names.as_slice().into());
 }
 
 /// Hand the markup the strip's parameter table and every id it addresses.
@@ -1568,20 +1732,42 @@ fn effect_face_param_id(effect: &EffectSlotState, control: u32) -> Option<u32> {
     }
 }
 
+/// Where a row sits in the chain it is being drawn into, as opposed to what
+/// device is in it.
+///
+/// Four facts that travel together and are all about the *chain* rather than
+/// the slot, grouped when the sample rate made this function's argument list
+/// eight long: a row builder nobody can call correctly by eye is one that
+/// will eventually be called wrongly.
+struct RackPlacement {
+    depth: i32,
+    /// The containers that close at this row.
+    closing: Vec<i32>,
+    selected: bool,
+    /// Whether wrapping this row would leave every container inside
+    /// `MAX_CONTAINER_DEPTH`. Answered by `mooloop_core::can_wrap` rather than
+    /// by comparing `depth` here, so the cap is not a second number in the
+    /// interface -- the markup asks this and the gesture asks the same
+    /// function, which is what stopped the button lying.
+    wrap_enabled: bool,
+}
+
 fn effect_slot_row(
     slot: &EffectSlotState,
     presets: &[PresetSummary],
     preset_name: Option<&str>,
-    depth: i32,
-    closing: Vec<i32>,
-    selected: bool,
-    // Whether wrapping this row would leave every container inside
-    // `MAX_CONTAINER_DEPTH`. Answered by `mooloop_core::can_wrap` rather than
-    // by comparing `depth` here, so the cap is not a second number in the
-    // interface -- the markup asks this and the gesture asks the same
-    // function, which is what stopped the button lying.
-    wrap_enabled: bool,
+    placement: RackPlacement,
+    // What the engine is running at, for the EQ's response curve: the plot
+    // is the bank's own coefficients evaluated, and coefficients are designed
+    // against a sample rate.
+    sample_rate: u32,
 ) -> EffectSlotRow {
+    let RackPlacement {
+        depth,
+        closing,
+        selected,
+        wrap_enabled,
+    } = placement;
     let kind = slot.kind();
     let preset_options: Vec<slint::SharedString> = effect_presets_of_kind(presets, kind)
         .map(preset_menu_label)
@@ -1628,27 +1814,25 @@ fn effect_slot_row(
         p[8] = if modulation.tempo_sync { 1.0 } else { 0.0 };
         p[9] = modulation.rate_division.to_index() as f32;
     }
+    // The response plot's three arrays. Two of them place handles -- where
+    // a band or a pass filter sits and whether to draw it -- and the third
+    // is the bank's magnitude response, which is the filter the engine is
+    // running, evaluated. The pass filters were appended to the band array
+    // at their own stride until 2026-09-14: one model with two layouts,
+    // written here and read in `device-displays.slint`, with nothing
+    // asserting the two files agreed.
     let mut eq_band_data = Vec::new();
+    let mut eq_pass_data = Vec::new();
+    let mut eq_curve_db = Vec::new();
     if let Some(eq) = slot.params.eq() {
         for band in eq.bands {
-            eq_band_data.extend_from_slice(&[
-                (band.frequency_hz / 20.0).ln() / 1000.0_f32.ln(),
-                (band.gain_db + 18.0) / 36.0,
-                band.q,
-                if band.enabled { 1.0 } else { 0.0 },
-                band.kind.to_index() as f32,
-            ]);
+            eq_band_data
+                .extend_from_slice(&eq_plot_band(band.frequency_hz, band.gain_db, band.enabled));
         }
-        eq_band_data.extend_from_slice(&[
-            (eq.high_pass.frequency_hz / 20.0).ln() / 1000.0_f32.ln(),
-            eq.high_pass.q,
-            if eq.high_pass.enabled { 1.0 } else { 0.0 },
-            eq.high_pass.slope.to_index() as f32,
-            (eq.low_pass.frequency_hz / 20.0).ln() / 1000.0_f32.ln(),
-            eq.low_pass.q,
-            if eq.low_pass.enabled { 1.0 } else { 0.0 },
-            eq.low_pass.slope.to_index() as f32,
-        ]);
+        for pass in [&eq.high_pass, &eq.low_pass] {
+            eq_pass_data.extend_from_slice(&eq_plot_pass(pass.frequency_hz, pass.enabled));
+        }
+        eq_curve_db = mooloop_dsp::effects::eq_response_db(eq, sample_rate, EQ_CURVE_SAMPLES);
     }
     EffectSlotRow {
         kind: effect_kind_index(kind),
@@ -1671,6 +1855,8 @@ fn effect_slot_row(
         modulation_offsets: Vec::<f32>::new().as_slice().into(),
         modulation_route_counts: Vec::<i32>::new().as_slice().into(),
         eq_band_data: eq_band_data.as_slice().into(),
+        eq_pass_data: eq_pass_data.as_slice().into(),
+        eq_curve_db: eq_curve_db.as_slice().into(),
         eq_spectrum_data: Vec::<f32>::new().as_slice().into(),
         eq_analyzer_enabled: slot.params.eq().is_some_and(|eq| eq.analyzer_enabled),
         preamp_deviation: Vec::<f32>::new().as_slice().into(),
@@ -2778,6 +2964,13 @@ struct UiState {
     /// here, consumed on the next tick. See [`meter::MeterBallistics::reset`]
     /// for what an inherited latch looks like.
     bus_meters_stale: bool,
+    /// What the audio driver came up at. Held because the response plots are
+    /// the *coefficients* a device is running, evaluated, and a biquad's
+    /// coefficients are designed against a sample rate -- so a row cannot be
+    /// published without one. The window carries the same number as
+    /// `audio-sample-rate` for the readouts; this is the copy the publishers
+    /// reach, which take `&self` and no window.
+    audio_sample_rate: u32,
 }
 
 /// The browser panel's two halves.
@@ -3231,10 +3424,13 @@ impl UiState {
                     &self.session.effect_presets,
                     self.session
                         .effect_preset_name(self.session.effect_target, effect.id),
-                    depth,
-                    containers_closing_at(chain, slot),
-                    self.session.selected_device_slot() == Some(slot),
-                    wrap_enabled_at(chain, slot),
+                    RackPlacement {
+                        depth,
+                        closing: containers_closing_at(chain, slot),
+                        selected: self.session.selected_device_slot() == Some(slot),
+                        wrap_enabled: wrap_enabled_at(chain, slot),
+                    },
+                    self.audio_sample_rate,
                 ),
             );
         }
@@ -3391,10 +3587,13 @@ impl UiState {
                                     EffectTarget::Channel(channel),
                                     effect.id,
                                 ),
-                                mooloop_core::depth_at(&state.effects, slot) as i32,
-                                containers_closing_at(&state.effects, slot),
-                                selected == Some(slot),
-                                wrap_enabled_at(&state.effects, slot),
+                                RackPlacement {
+                                    depth: mooloop_core::depth_at(&state.effects, slot) as i32,
+                                    closing: containers_closing_at(&state.effects, slot),
+                                    selected: selected == Some(slot),
+                                    wrap_enabled: wrap_enabled_at(&state.effects, slot),
+                                },
+                                self.audio_sample_rate,
                             );
                             let descriptors = effect.kind().descriptors();
                             let address = |param| {
@@ -3446,10 +3645,13 @@ impl UiState {
                                     effect,
                                     &self.session.effect_presets,
                                     self.session.effect_preset_name(target, effect.id),
-                                    mooloop_core::depth_at(effects, slot) as i32,
-                                    containers_closing_at(effects, slot),
-                                    selected == Some(slot),
-                                    wrap_enabled_at(effects, slot),
+                                    RackPlacement {
+                                        depth: mooloop_core::depth_at(effects, slot) as i32,
+                                        closing: containers_closing_at(effects, slot),
+                                        selected: selected == Some(slot),
+                                        wrap_enabled: wrap_enabled_at(effects, slot),
+                                    },
+                                    self.audio_sample_rate,
                                 )
                             })
                             .collect()
@@ -4062,7 +4264,7 @@ impl UiState {
             // told through: what a solo silences is a property of the whole
             // graph, and the strip dims its name rather than looking muted.
             solo_silenced: solo_silenced.get(index).copied().unwrap_or(false),
-            strip: strip_row(&setup.bus.strip),
+            strip: strip_row(&setup.bus.strip, self.audio_sample_rate),
             sends: self.send_rows(index),
             send_allowed: self.allowed_destinations(index),
             feed_count: self.session.bus_feed_count(index) as i32,
@@ -4143,7 +4345,7 @@ impl UiState {
         window.set_editing_bus_color_hex(
             setup.bus.color.map(|color| color.to_hex()).unwrap_or_default().into(),
         );
-        window.set_editing_bus_strip(strip_row(&setup.bus.strip));
+        window.set_editing_bus_strip(strip_row(&setup.bus.strip, self.audio_sample_rate));
         window.set_editing_bus_can_remove(self.session.can_remove_track(index));
         window.set_editing_bus_allowed(self.allowed_destinations(index));
         window.set_editing_bus_send_feed_count(self.session.track_send_count(index) as i32);
@@ -4772,6 +4974,7 @@ impl AppUi {
             bus_meters_stale: false,
             automation_point_model,
             automation_target_model,
+            audio_sample_rate,
         }));
         let starter = Project::starter_kit(fresh_starter_seed());
         let starter_samples = vec![None; starter.channels.len()];
@@ -5398,6 +5601,7 @@ impl AppUi {
         // Once, before anything is drawn: the strip's faces read every range
         // and every parameter id out of this rather than spelling them.
         install_strip_spec(&window);
+        install_eq_spec(&window);
         {
             let settings = ui_settings.borrow();
             apply_appearance(&window, &settings.appearance);

@@ -69,6 +69,36 @@ impl Biquad {
         out
     }
 
+    /// This stage's gain at `frequency_hz`, in decibels.
+    ///
+    /// The **exact** response of the coefficients that are loaded --
+    /// `20 log10 |H(e^{jw})|` for the transfer function this stage is
+    /// running -- rather than an approximation of the shape it was designed
+    /// for. That distinction is the whole reason this exists: a response plot
+    /// that evaluates its own idea of what a bell looks like is a second law
+    /// drawn next to the first, and `mooloop_core::eq_effective_q` already
+    /// carries this codebase's sentence about which copy is the one deciding
+    /// what is heard. A plot fed from here cannot disagree with the filter,
+    /// because it is reading the filter.
+    ///
+    /// It follows `process`'s own normalization -- `a0` is 1 -- so
+    /// [`Self::identity`] answers 0 dB and a bank can sum these.
+    pub fn magnitude_db(&self, frequency_hz: f32, sample_rate: u32) -> f32 {
+        let w = core::f32::consts::TAU * frequency_hz / sample_rate as f32;
+        let (sin1, cos1) = w.sin_cos();
+        let (sin2, cos2) = (2.0 * w).sin_cos();
+        let num_re = self.b0 + self.b1 * cos1 + self.b2 * cos2;
+        let num_im = -(self.b1 * sin1 + self.b2 * sin2);
+        let den_re = 1.0 + self.a1 * cos1 + self.a2 * cos2;
+        let den_im = -(self.a1 * sin1 + self.a2 * sin2);
+        let num = num_re * num_re + num_im * num_im;
+        let den = den_re * den_re + den_im * den_im;
+        // Halved because these are squared magnitudes: 20 log10 |H| is
+        // 10 log10 |H|^2, and taking the two square roots to say it the other
+        // way would be arithmetic for nothing.
+        10.0 * (num.max(1e-24) / den.max(1e-24)).log10()
+    }
+
     /// Store cookbook coefficients normalized by `a0`.
     pub fn set_normalized(&mut self, b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) {
         let inv = a0.max(1e-12).recip();
@@ -256,6 +286,55 @@ mod tests {
             }
         }
         rms(&samples)
+    }
+
+    /// The gain a sine actually came out at, in dB. A unit sine has an RMS of
+    /// `1/sqrt(2)`, so this is the measured amplitude referred to the input's.
+    fn measured_db(filter: Biquad, freq_hz: f32, sample_rate: u32) -> f32 {
+        20.0 * (respond(filter, freq_hz, sample_rate) * core::f32::consts::SQRT_2).log10()
+    }
+
+    /// **`magnitude_db` is held to a sine going through the filter**, not to a
+    /// second derivation of the same formula -- which is the only way to check
+    /// a claim of the form "this is what the stage does". Every shape the
+    /// cookbook gives us, across the audible decades, at the tenth of a
+    /// decibel a plot could show.
+    #[test]
+    fn the_computed_magnitude_is_what_a_sine_measures() {
+        let sr = 48_000;
+        let mut cases: Vec<(&str, Biquad)> = Vec::new();
+        for (name, build) in [
+            ("bell +12", &(|f: &mut Biquad, sr| f.peak(1_000.0, 1.0, 12.0, sr)) as &dyn Fn(&mut Biquad, u32)),
+            ("bell -9 narrow", &|f: &mut Biquad, sr| f.peak(2_500.0, 6.0, -9.0, sr)),
+            ("low shelf +6", &|f: &mut Biquad, sr| f.shelf_slope(200.0, 6.0, 0.8, true, sr)),
+            ("high shelf -6 steep", &|f: &mut Biquad, sr| f.shelf_slope(6_000.0, -6.0, 1.6, false, sr)),
+            ("high pass", &|f: &mut Biquad, sr| f.pass(300.0, 0.707, true, sr)),
+            ("low pass resonant", &|f: &mut Biquad, sr| f.pass(4_000.0, 4.0, false, sr)),
+        ] {
+            let mut filter = Biquad::identity();
+            build(&mut filter, sr);
+            cases.push((name, filter));
+        }
+
+        for (name, filter) in cases {
+            for freq in [50.0, 120.0, 400.0, 1_000.0, 2_500.0, 6_000.0, 12_000.0] {
+                let computed = filter.magnitude_db(freq, sr);
+                let measured = measured_db(filter, freq, sr);
+                assert!(
+                    (computed - measured).abs() < 0.1,
+                    "{name} at {freq} Hz: computed {computed} dB, measured {measured} dB"
+                );
+            }
+        }
+    }
+
+    /// A pass-through stage is 0 dB everywhere, which is what lets a bank sum
+    /// the stages it is not running without a special case.
+    #[test]
+    fn identity_is_flat_at_zero_db() {
+        for freq in [20.0, 1_000.0, 20_000.0] {
+            assert!(Biquad::identity().magnitude_db(freq, 48_000).abs() < 1e-5);
+        }
     }
 
     #[test]
