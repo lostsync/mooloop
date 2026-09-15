@@ -565,21 +565,28 @@ read bus 0 for both, which unifies the latch for free and removes a per-block
 ring push; or keep both and share one `MeterBallistics` pair. Found
 2026-09-13.
 
-**A muted channel that something taps meters silent and freezes its playhead
-while its audio flows.** There are two mute paths for a channel. The one where
-nobody taps it skips the render, so a frozen playhead is honest. The other --
-muted, but an Aux In reads this channel -- runs `strip.process`, so voices
-advance and the audio *is* heard through the Aux In, and then `continue`s
-before both the device-meter publish and the playhead publish. So the source
-rail reads silent, and the sampler playhead stops at the mute and never moves
-again or clears, because `source_silent_frames` is reset every block and the
-sleep branch's zero-publish can never run. Adjacent to the solo entry above
-but the opposite sign: there a silenced track meters live, here an audible one
-meters dead. Options: publish both before the `continue`, matching the comment
-that already says "a muted producer publishes"; or publish only the playhead,
-since a frozen line over a moving voice is indefensible under any reading; or
-rule that the Aux In's own channel is where that signal should be metered.
-Whoever rules on the solo entry should rule on this one too. Found 2026-09-13.
+**A muted channel that something taps meters silent while its audio flows.**
+There are two mute paths for a channel. The one where nobody taps it skips the
+render, so silence is honest. The other -- muted, but an Aux In reads this
+channel -- runs `strip.process`, so the audio *is* heard through the Aux In,
+and then `continue`s before the device-meter publish. The source rail reads
+silent for a signal that is reaching the master. Adjacent to the solo entry
+above but the opposite sign: there a silenced track meters live, here an
+audible one meters dead. Whoever rules on the solo entry should rule on this
+one too.
+
+**The playhead half of this entry was wrong and the reason is worth keeping.**
+It said the sampler playhead stopped at the mute and never moved again,
+because the `continue` skips that publish too. It does -- and the state is
+unreachable. `AudioGraph::produces` is "does any tap name this channel", a tap
+names an *audio outlet*, and the sampler publishes **no outlets at all**
+(`outlet.rs` asserts exactly that for Sampler, DrumSynth, MonoSynth,
+PolySynth and ML-M1). So nothing can subscribe to a sampler channel, a sampler
+channel never reaches this branch, and the only channels that do -- ML-P8 and
+DS-01 -- have an idle `strip.sampler` whose `voice_positions()` are all `NaN`,
+which `PlayheadMeters::read` filters out. Publishing it there is a no-op, and
+it was written and then reverted on 2026-09-14 rather than shipped as one.
+Found 2026-09-13, half of it withdrawn 2026-09-14.
 
 **A track silenced by someone else's solo still meters, and can still latch
 its clip lamp.** `render.rs` computes `let muted = strip.output.muted ||
