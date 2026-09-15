@@ -46,23 +46,31 @@ a stale lane on a retired one lands in a hole rather than on a neighbour), and
 **no change to the face at all** -- which is the finding worth carrying into
 plugin work, and `00-status.md` says why.
 
-`control-plane-seams/` was added 2026-09-15 and is **five steps, none
-started**. It came from an outside architectural review that read the system
-end to end rather than reading a diff, and whose verdict on the layering was
-good: the crate stack is one-way, live and offline rendering share one prepared
-`RenderState`, and device identity survives rack movement. What it faulted was
-the **control-plane boundary** -- the place where logically atomic operations
-are written as sequences of independent mutations and fallible queue writes.
-Five defects, each confirmed against the source the same day. The one worth
-knowing about before anything else touches the sampler: a channel's audio
-buffer and its slice map are documented as one fact and published through two
-`ArcSwap`s, so a note-on can pair a new buffer with old markers -- which after
-a stretch commit means a marker indexing a buffer of a different length. Four
-of the five share one shape, and it is the shape this repository keeps
-producing: **the code knew the right rule and applied it one layer too
-shallow.** The review's sixth item, that the UI/session seam is becoming a god
-layer, is in the plan's `README.md` as a direction rather than a step, for the
-same reason `device-registry/` has no steps.
+`control-plane-seams/` was added 2026-09-15 and **all five steps landed the
+same day**; it is ready to archive. It came from an outside architectural
+review that read the system end to end rather than reading a diff, and whose
+verdict on the layering was good: the crate stack is one-way, live and offline
+rendering share one prepared `RenderState`, and device identity survives rack
+movement. What it faulted was the **control-plane boundary** -- the place where
+logically atomic operations are written as sequences of independent mutations
+and fallible queue writes. Four of the five shared one shape, and it is the
+shape this repository keeps producing: **the code knew the right rule and
+applied it one layer too shallow.**
+
+Three things in `00-status.md` outlive the plan. The **allocation-tracking
+harness** `FOCUS.md` had been asking for since `buffer-implementation/` Stage 1
+turned out to be three lines on an allocator `mooloop-engine` already had, and
+it was validated against the defect it was written for. **Two steps could not
+be given the test they specified**, both because an `EngineHandle` cannot be
+built without opening an audio driver -- which is a gap worth a decision, and
+is recorded as one. And the fix shapes are worth copying: three of the five
+made the defect *unrepresentable* rather than handled -- one publish call
+instead of four, a bank taken by value, a `#[must_use]` delivery result -- so
+the guarantee is carried by the signature rather than by a test.
+
+The review's sixth item, that the UI/session seam is becoming a god layer, is
+in the plan's `README.md` as a direction rather than a step, for the same
+reason `device-registry/` has no steps.
 
 `pattern-bank-floor/` was added 2026-09-08 and is **not started, and not on
 anyone's list**. It fell out of an audio-dropout investigation whose actual
@@ -173,7 +181,8 @@ is worth reading before either.
 | Plan | State |
 | --- | --- |
 | `pane-layout/` | **Done 2026-09-08, including the two pieces first left out** -- the tab's right-click menu and the arrangement persisted into settings. Ready for `archive/`; read `00-status.md` first, which records four Slint constraints and one wrong claim worth not repeating. Adam's split-view request, answered as a set of views and three slots rather than a control per requirement. The work area computes each slot's rectangle instead of nesting layouts, so a view needs one instance wherever it is drawn, and the dock's two stacked toolbars are the one row per view that made possible. The top pane splits, any pane zooms to the window, a tab drags between panes, and `editor-page` is gone -- a page index of the lower dock cannot name a view that has moved out of it. Read its `README.md` before touching the work area, and `00-status.md` for the four Slint constraints step 01 found -- one of which, a nested model index that type-checks and does not evaluate, cost a wrong render. |
-| `buffer-implementation/` | **Stage 1 done, Stage 2 open.** Stage 1's acceptance test 8 (RT allocation hygiene) is still unverified. |
+| `buffer-implementation/` | **Stage 1 done, Stage 2 open.** Stage 1's acceptance test 8 (RT allocation hygiene) is still unverified, but **no longer for want of an instrument**: `control-plane-seams/04` added `CountingAllocator::allocations()` to `mooloop-engine` on 2026-09-15 and proved it against a real defect. What is left is coverage -- one block on the preview path is measured, the Buffer operations are not, and the locks half of the claim is not measured at all. |
+| `control-plane-seams/` | **All five steps landed 2026-09-15; ready to archive.** Five confirmed control-plane defects from that day's architectural review: commands dropped on a full ring while the session's mirrors record them as delivered, a sample and its slice map published separately, a project install that overwrote the shared sample bank before the queued generation switched, two retirement vectors that could allocate in the callback, and sample loads with no per-request token. All five are fixed. `00-status.md` carries what the work found that the steps did not predict -- the allocation harness, a legacy-project defect nobody was looking for, and two tests that could not be written because an `EngineHandle` needs an audio driver. |
 | `mono-synth-v2/` | **Complete and played**, one finding deliberately left open (Acid's cutoff corner). Kept out of the archive only because that finding needs Adam's ear, not because a step is unbuilt. |
 | `session-layer-extraction/` | **Done, 2026-09-03.** Lifted `mooloop-session` -- the model, the edits, undo, and engine command emission -- out of `mooloop-ui/src/lib.rs`, which is down from 14,157 lines to 9,797. `cargo test -p mooloop-session` is 87 tests in under a second, and is the first coverage the edit logic has ever had. Two departures are recorded in `00-status.md`: `UiState::new` is still long (callback *registration*, no longer decisions), and the pump's meter polling stayed in the view on purpose. |
 | `edit-loop/` | **Steps 01 and 02 landed, 03 closed unstarted, 04 waiting on one measurement.** Six of every ten working hours went on `cargo`. `scripts/antibox` now picks incremental compilation for dev builds and sccache for release builds (64% off `cargo test --workspace`), `AGENTS.md` carries a verification ladder, the mockup tool is behind a Cargo feature, and `scripts/mooloop-run` is one command from edit to running application. Splitting device faces was measured and rejected: 79% of face commits also edit `main.slint`. What is left is `main.slint` itself, which no Slint arrangement reaches -- read `04-decide.md` before `egui-view-layer/`. |
@@ -193,7 +202,6 @@ writing steps would presume the answer.
 | `device-registry/` | **A survey, written 2026-09-11, not a work order. Parked 2026-09-12**, except for the face host component, which `FOCUS.md` says to take if a device step already has `main.slint` open. Adam's "we should basically be loading these like plugins we get to have native conversations with", priced. Adding a device kind touches fourteen files, nine of which hold a one-line arm stating one fact; those nine are the registry, spread out. Three findings worth having before anyone tries: the typed `EffectParams` enum is the reason the DSP reads well and should not be flattened into function pointers; a table spanning crates cannot exist, because `mooloop-dsp` depends on `mooloop-core` and so a node constructor is not nameable beside the params it builds from; and Slint has no dynamic component instantiation, so `main.slint` holds one arm per kind under every design short of generating the markup. What *is* reachable is that those arms are 444 lines of which 245 are the same eleven bindings fourteen times -- a face host component would take an arm from twenty-seven lines to eight without a Rust change. |
 | `poly-v1-mono-mode/` | **Done: its one step landed 2026-09-15.** The v1 poly has a mono mode -- a held-note stack, a note priority and a Retrig/Legato switch, on the three ids that were reserved for it -- so `DeviceKind::MonoSynth` is deletable and `MlM1` can take the plain name. Two things the build settled that the step file had not: mono mode is its own toggle rather than `Voices = 1`, because `Voices = 1` already means a pool of one voice in every saved project; and id 18 carries `EnvTrigger` rather than the `GlideMode` the file named, because the behaviour the file describes is envelope retriggering and the two enums are not the same control. The migration of existing `MonoSynth` channels is the next branch and is not in this plan; it wants a listen first. |
 | `preset-system/` | **Done: steps 01-04 ran 2026-09-04 and landed on `main` after Adam confirmed the interface.** A preset's unit is a device, with relative addressing. The effect-level preset exists end to end: one rack row, no routes, no absolute addressing, `contains = ["effect_params"]` in the manifest so a later fragment format can supersede it cleanly, `presets/effects/<kind>/` on disk, an undoable load through the session, and the rack row's rail buttons wired. `PresetSummary` names three preset classes. Every effect kind ships a factory bank, seeded like the ML-M1 one. A second pass fixed the load path — an effect preset is a rack edit, not a document load — and put the preset's name in the device header. `00-status.md` records what the run found. A second entry, 2026-09-05, moves the *generator* half onto the device rail beside the effect half and gives the source device a preset label in its header. The browser, the taxonomy surface, and an updatable factory mechanism are unblocked now that DS-01's bank ships. As of 2026-09-05 the browser has a home: Adam wants preset browsing in the sample browser panel, and `interface-iteration/` step 01 built it on 2026-09-07. |
-| `control-plane-seams/` | **Not parked -- unstarted, and the only entry here that is a defect list rather than a design.** Five confirmed control-plane defects from the 2026-09-15 architectural review: commands dropped on a full ring while the session's mirrors record them as delivered, a sample and its slice map published separately, a project install that overwrites the shared sample bank before the queued generation switches, two retirement vectors that can allocate in the callback, and sample loads with no per-request generation. Four are an afternoon each; the project-install one changes what a structural command carries and is the only one worth thinking about first. Read its `README.md` for what is audible and what is merely wrong -- they are not the same list, and only two of the five would ever be reported. |
 | `extract-mid-level-dsp-blocks/` | The primitives-to-devices ladder has no middle rung on the DSP side, and `device-displays.slint` holds eight visualizers with no shared canvas. |
 | `theming/` | **Parked 2026-09-12**, with the note that it gets cheaper to defer and more expensive to do. Written 2026-09-09 from Adam's question about skins rather than color schemes. `Theme` in `ui/theme.slint` already is the stylesheet -- Slint has no cascade and does not need one -- and the survey in its `README.md` says which axes it is missing: color and radius and motion are tokenized, type and stroke are not at all (313 literal `font-size`, 81 literal `border-width`), and metrics are half-started in `toolbar.slint`'s `ToolbarMetrics`. Queued because it costs more with every device face added, not because it is urgent. **The reason to build it is accessibility rather than the homage**: the working type size is 7-11px and is not adjustable, and nothing checks that a chosen palette is readable. Step 02 (a relief primitive, because a Slint `Rectangle` has one border colour and a bevel needs four) is the only design problem in it; 01 and 03 are a token sweep and a file format, and are worth having on their own. |
 

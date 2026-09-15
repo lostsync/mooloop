@@ -32,6 +32,43 @@ use mooloop_core::{
 
 use arc_swap::ArcSwapOption;
 
+/// What a channel's voices read: its published buffer and the map that
+/// indexes it, as **one** value.
+///
+/// One value and not two slots, and that is the whole reason the type exists.
+/// After a stretch commit the buffer's *length* changes, so a marker from the
+/// old map is a frame index into a buffer of a different size -- past the end,
+/// or landing a bar early. Published as two `ArcSwap`s there were two windows
+/// for a note-on to fall into: between the two stores, and between the two
+/// loads. Published as one, there is no API that sets a sample without its
+/// map, so the half-updated state cannot be constructed at all.
+///
+/// Replaced whole; never edited in place. A `load_slices` that read the
+/// current snapshot and stored a modified copy would reintroduce exactly the
+/// race this removes.
+#[derive(Clone, Default)]
+pub struct ChannelAudioSnapshot {
+    pub sample: Option<Arc<SampleData>>,
+    pub slices: Option<Arc<SliceMap>>,
+}
+
+impl ChannelAudioSnapshot {
+    /// A buffer with no slice map, which is what a freshly loaded file is:
+    /// the markers went with the old audio.
+    pub fn sample(sample: Arc<SampleData>) -> Self {
+        Self {
+            sample: Some(sample),
+            slices: None,
+        }
+    }
+
+    /// Whether this says nothing at all, so an empty channel has one
+    /// representation rather than two.
+    pub fn is_empty(&self) -> bool {
+        self.sample.is_none() && self.slices.is_none()
+    }
+}
+
 /// Minimum envelope stage time, to avoid divide-by-zero and infinite rates.
 const MIN_STAGE_S: f32 = 1.0e-4;
 
@@ -329,10 +366,10 @@ struct VoiceContext {
 
 /// The sampler node.
 pub struct Sampler {
-    sample_slot: Arc<ArcSwapOption<SampleData>>,
-    /// The channel's slice boundaries, published from the control thread the
-    /// same way the sample is. Read only at note-on.
-    slice_slot: Arc<ArcSwapOption<SliceMap>>,
+    /// The channel's published buffer and slice map, as one atomically
+    /// replaced value. Read once at note-on; see [`ChannelAudioSnapshot`] for
+    /// why it is one slot and not two.
+    audio_slot: Arc<ArcSwapOption<ChannelAudioSnapshot>>,
     params: SamplerParams,
     sample_rate: u32,
     voices: [Voice; MAX_SAMPLER_VOICES as usize],
@@ -371,11 +408,10 @@ pub struct Sampler {
 }
 
 impl Sampler {
-    /// Construct with a shared sample slot. The engine publishes samples into
-    /// the same slot from the non-RT thread.
+    /// Construct with a shared channel-audio slot. The engine publishes a
+    /// whole [`ChannelAudioSnapshot`] into it from the non-RT thread.
     pub fn new(
-        sample_slot: Arc<ArcSwapOption<SampleData>>,
-        slice_slot: Arc<ArcSwapOption<SliceMap>>,
+        audio_slot: Arc<ArcSwapOption<ChannelAudioSnapshot>>,
         mut params: SamplerParams,
         sample_rate: u32,
     ) -> Self {
@@ -391,8 +427,7 @@ impl Sampler {
             voice.filter_env.configure(params.resolved_filter_env());
         }
         Self {
-            sample_slot,
-            slice_slot,
+            audio_slot,
             params,
             sample_rate,
             voices,
@@ -631,7 +666,13 @@ impl Sampler {
     }
 
     fn trigger(&mut self, event_id: u64, note: u8, velocity: u8) {
-        let Some(sample) = self.sample_slot.load_full() else {
+        // One load, both fields. The buffer and the map that indexes it are
+        // one fact; reading them separately let a note-on land between two
+        // stores and play new audio against old markers.
+        let Some(audio) = self.audio_slot.load_full() else {
+            return;
+        };
+        let Some(sample) = audio.sample.clone() else {
             return;
         };
         let len = sample.len().max(1);
@@ -653,12 +694,12 @@ impl Sampler {
         // true would mean the choke pre-pass asking a device a question, which
         // is a larger change than this is worth.
         let (slice, key_pitch_ratio) = if self.params.play_mode == PlayMode::Slice {
-            let map = self.slice_slot.load_full();
+            let map = audio.slices.as_ref();
             let (_, region_end) = Self::resolve_playback_bounds(self.params, len, None);
             let index = i32::from(note.min(127)) - i32::from(self.params.slice_base_note.min(127));
             let Some(span) = usize::try_from(index)
                 .ok()
-                .zip(map.as_ref())
+                .zip(map)
                 .and_then(|(index, map)| map.span(index, region_end))
             else {
                 return;
@@ -1140,14 +1181,14 @@ mod tests {
     use crate::event::TimedEvent;
     use mooloop_core::DEFAULT_SLICE_BASE_NOTE;
 
-    fn no_slices() -> Arc<ArcSwapOption<SliceMap>> {
-        Arc::new(ArcSwapOption::empty())
+    /// A slot holding `audio`, which is all `Sampler::new` wants now.
+    fn slot(audio: ChannelAudioSnapshot) -> Arc<ArcSwapOption<ChannelAudioSnapshot>> {
+        Arc::new(ArcSwapOption::from(Some(Arc::new(audio))))
     }
 
     fn make_sampler(sr: u32) -> Sampler {
         let kick = SampleData::default_kick(sr);
-        let slot: Arc<ArcSwapOption<SampleData>> = Arc::new(ArcSwapOption::from(Some(kick)));
-        Sampler::new(slot, no_slices(), SamplerParams::default(), sr)
+        Sampler::new(slot(ChannelAudioSnapshot::sample(kick)), SamplerParams::default(), sr)
     }
 
     fn sampler_with_frames(sr: u32, len: usize, params: SamplerParams) -> Sampler {
@@ -1162,8 +1203,7 @@ mod tests {
             sample_rate: sr,
             root_note: 60,
         });
-        let slot = Arc::new(ArcSwapOption::from(Some(sample)));
-        Sampler::new(slot, no_slices(), params, sr)
+        Sampler::new(slot(ChannelAudioSnapshot::sample(sample)), params, sr)
     }
 
     /// Fit-to-tempo derives the ratio so the region lasts the requested
@@ -1340,8 +1380,10 @@ mod tests {
         let mut map = SliceMap::new();
         map.divide_evenly(SLICE_COUNT, 0, SLICED_LEN as u32);
         Sampler::new(
-            Arc::new(ArcSwapOption::from(Some(sample))),
-            Arc::new(ArcSwapOption::from(Some(Arc::new(map)))),
+            slot(ChannelAudioSnapshot {
+                sample: Some(sample),
+                slices: Some(Arc::new(map)),
+            }),
             SamplerParams {
                 play_mode: PlayMode::Slice,
                 attack: 0.0,
@@ -1405,6 +1447,87 @@ mod tests {
                 "slice {slice} played at rate {}, expected 1.0",
                 (later - played) / 20.0
             );
+        }
+    }
+
+    /// The failure the snapshot exists to prevent, now reachable only by
+    /// constructing it on purpose.
+    ///
+    /// A stretch commit changes the buffer's **length**, so a marker from the
+    /// old map names a frame in a buffer of a different size. Published as
+    /// two `ArcSwap`s, a note-on landing between the two stores got exactly
+    /// this pairing by accident; published as one `ChannelAudioSnapshot`
+    /// there is no API that produces it, so this test has to build the
+    /// mismatched pair by hand.
+    ///
+    /// What it asserts is that the voice stays inside the buffer it actually
+    /// holds. It will play the *wrong material* — nothing can fix that, the
+    /// markers are simply wrong — but it must not read out of range, and the
+    /// block must be finite.
+    #[test]
+    fn a_slice_map_for_a_longer_buffer_is_clamped_rather_than_read_out_of_range() {
+        let sr = 48_000;
+        // A map divided over 800 frames, against a buffer of 200: every
+        // marker from the third slice on is past the end.
+        const SHORT_LEN: usize = 200;
+        let frames = (0..SHORT_LEN)
+            .map(|index| {
+                let value = index as f32 / SHORT_LEN as f32;
+                [value, value]
+            })
+            .collect();
+        let sample = Arc::new(SampleData {
+            frames,
+            sample_rate: sr,
+            root_note: 60,
+        });
+        let mut map = SliceMap::new();
+        map.divide_evenly(SLICE_COUNT, 0, SLICED_LEN as u32);
+        // The fixture has to actually be out of range, or this passes for
+        // the wrong reason. `span` is the same call `trigger` makes.
+        let past_the_end = (0..SLICE_COUNT)
+            .filter_map(|index| map.span(index, SLICED_LEN as f64))
+            .filter(|(start, _)| *start >= SHORT_LEN as f64)
+            .count();
+        assert!(
+            past_the_end >= SLICE_COUNT / 2,
+            "only {past_the_end} of {SLICE_COUNT} markers are past the end of \
+             the buffer; the mismatch is not severe enough to test anything"
+        );
+        let mut sampler = Sampler::new(
+            slot(ChannelAudioSnapshot {
+                sample: Some(sample),
+                slices: Some(Arc::new(map)),
+            }),
+            SamplerParams {
+                play_mode: PlayMode::Slice,
+                attack: 0.0,
+                decay: 8.0,
+                sustain: 1.0,
+                release: 8.0,
+                output_gain: 1.0,
+                ..SamplerParams::default()
+            },
+            sr,
+        );
+
+        for slice in 0..SLICE_COUNT {
+            let note = DEFAULT_SLICE_BASE_NOTE + slice as u8;
+            let bus = render_note(&mut sampler, sr, note, 64);
+            for (index, sample) in bus.l[..64].iter().enumerate() {
+                assert!(
+                    sample.is_finite(),
+                    "slice {slice} produced {sample} at frame {index}"
+                );
+                // The fixture is a `0..1` ramp, so anything the voice can
+                // legitimately read is within the buffer's own value range.
+                // A read past the end would not be.
+                assert!(
+                    (0.0..=1.0).contains(sample),
+                    "slice {slice} read {sample} at frame {index}, which is \
+                     outside the buffer it holds"
+                );
+            }
         }
     }
 
@@ -2547,12 +2670,7 @@ mod tests {
             sample_rate: sr,
             root_note: 60,
         });
-        Sampler::new(
-            Arc::new(ArcSwapOption::from(Some(sample))),
-            no_slices(),
-            params,
-            sr,
-        )
+        Sampler::new(slot(ChannelAudioSnapshot::sample(sample)), params, sr)
     }
 
     fn window_rms(bus: &StereoBus, from: usize, to: usize) -> f32 {

@@ -5,28 +5,37 @@
 //! Makes ~4 s of four-on-the-floor kick noise on system playback.
 
 use mooloop_core::{EngineCommand, EngineEvent};
-use mooloop_dsp::SampleData;
-use mooloop_engine::Engine;
+use mooloop_dsp::{ChannelAudioSnapshot, SampleData};
+use mooloop_engine::{CommandSink, Engine};
 use std::time::{Duration, Instant};
 
 fn main() {
     let (engine, mut handle) =
         Engine::new(mooloop_engine::AudioConfig::default()).expect("failed to open engine");
     let _keep_alive = engine;
-    handle.load_sample(0, SampleData::default_kick(handle.sample_rate()));
+    handle.set_channel_audio(
+        0,
+        ChannelAudioSnapshot::sample(SampleData::default_kick(handle.sample_rate())),
+    );
 
     // Four-on-the-floor so there's no ambiguity about silence-vs-no-steps.
     for step in [0, 4, 8, 12] {
-        handle.send(EngineCommand::SetStep {
-            pattern: 0,
-            channel: 0,
-            step,
-            on: true,
-            note: 60,
-            velocity: 100,
-        });
+        assert!(
+            handle.send(EngineCommand::SetStep {
+                pattern: 0,
+                channel: 0,
+                step,
+                on: true,
+                note: 60,
+                velocity: 100,
+            }),
+            "the command queue refused a step on an idle engine"
+        );
     }
-    handle.send(EngineCommand::Play);
+    assert!(
+        handle.send(EngineCommand::Play),
+        "the command queue refused the transport"
+    );
 
     let mut max_peak = 0.0f32;
     let mut saw_playing = false;

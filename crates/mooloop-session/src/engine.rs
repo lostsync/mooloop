@@ -9,14 +9,14 @@ use crate::channel::ChannelState;
 use crate::project::ProjectEdit;
 use mooloop_core::{
     chain_latency, compensable_send_edges, compile_audio_graph, compile_bus_graph,
-    compile_latency, sends_are_compensable,
+    compile_latency, log_error, sends_are_compensable,
     CompiledAudioGraph,
     CompiledLatency, DeviceKind, EffectTarget, EngineCommand, OutletDescriptor, PublishesOutlets,
-    SliceMap, MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
+    MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
 };
-use mooloop_dsp::{IntegerDelay, SampleData, StereoBus, MAX_BLOCK_SIZE};
+use mooloop_dsp::{ChannelAudioSnapshot, IntegerDelay, StereoBus, MAX_BLOCK_SIZE};
 use crate::session::Session;
-use mooloop_engine::{AudioTapBank, EngineHandle, SendBank, SendSpec, StructuralCommand};
+use mooloop_engine::{AudioTapBank, CommandSink, EngineHandle, SendBank, SendSpec, StructuralCommand};
 use std::sync::Arc;
 
 /// What is *structural* about one send: where it goes and what it waits.
@@ -38,6 +38,57 @@ impl SendRoute {
             producer: spec.producer,
             target: spec.target,
             delay: spec.delay,
+        }
+    }
+}
+
+/// The compensation the engine has *acknowledged*, per target.
+///
+/// Not a [`CompiledLatency`], although it is diffed against one. A plan is
+/// compiled as a whole and is true as a whole; this is a record of sixteen
+/// plus eight independent deliveries, any subset of which the command ring
+/// may have refused. Storing a plan here would force the mirror to advance
+/// all-or-nothing, and `sync_compensation` sends per channel and per bus
+/// inside a loop -- so one refusal in the middle would leave the mirror
+/// claiming a plan that was only partly delivered, and the next tick's diff
+/// would find nothing to resend.
+///
+/// The send entries of a plan are deliberately absent: they travel with the
+/// track graph in [`Session::sync_track_graph`], not here, and a mirror that
+/// held them would diff on a value this reconciler never sends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompensationSent {
+    channels: [u32; MAX_CHANNELS],
+    buses: [u32; MAX_BUSES],
+}
+
+impl CompensationSent {
+    /// What `plan` asks of each target, as this mirror records it.
+    fn of(plan: &CompiledLatency) -> Self {
+        let mut mirror = Self::default();
+        for (channel, frames) in mirror.channels.iter_mut().enumerate() {
+            *frames = plan.channel(channel);
+        }
+        for (bus, frames) in mirror.buses.iter_mut().enumerate() {
+            *frames = plan.bus(bus);
+        }
+        mirror
+    }
+
+    pub fn channel(&self, channel: usize) -> u32 {
+        self.channels.get(channel).copied().unwrap_or(0)
+    }
+
+    pub fn bus(&self, bus: usize) -> u32 {
+        self.buses.get(bus).copied().unwrap_or(0)
+    }
+}
+
+impl Default for CompensationSent {
+    fn default() -> Self {
+        Self {
+            channels: [0; MAX_CHANNELS],
+            buses: [0; MAX_BUSES],
         }
     }
 }
@@ -173,18 +224,20 @@ impl PreviewSender {
 
 /// A channel's audio, on its way to the pump.
 ///
-/// Neither half can ride the command ring: `EngineCommand` is `Copy` and
-/// unboxed by design, and both of these live in `ArcSwap` slots the pump
-/// exclusively owns. Same route the built-in sample reset already takes.
+/// It cannot ride the command ring: `EngineCommand` is `Copy` and unboxed by
+/// design, and this lives in an `ArcSwap` slot the pump exclusively owns.
+/// Same route the built-in sample reset already takes.
 ///
-/// Both are always sent together because they are one fact: after a commit
-/// the published buffer and the map that indexes it change at the same
-/// instant, and delivering one without the other would leave the voice
-/// reading markers that name frames in a buffer it no longer holds.
+/// The buffer and the map that indexes it travel as one
+/// [`ChannelAudioSnapshot`] because they are one fact: after a commit they
+/// change at the same instant, and delivering one without the other would
+/// leave the voice reading markers that name frames in a buffer it no longer
+/// holds. This message always carried both; what changed in
+/// `control-plane-seams/02` is that the pump can no longer take them apart on
+/// the way in, because the engine has no API that accepts one alone.
 pub struct ChannelAudio {
     pub channel: usize,
-    pub sample: Option<Arc<SampleData>>,
-    pub slices: Option<Arc<SliceMap>>,
+    pub audio: ChannelAudioSnapshot,
 }
 
 #[derive(Clone)]
@@ -193,8 +246,10 @@ pub struct ChannelAudioSender(pub std::sync::mpsc::Sender<ChannelAudio>);
 pub fn publish_channel_audio_to(tx: &ChannelAudioSender, channel: usize, state: &ChannelState) {
     let _ = tx.0.send(ChannelAudio {
         channel,
-        sample: state.published_sample().cloned(),
-        slices: (!state.slices.is_empty()).then(|| Arc::new(state.slices.clone())),
+        audio: ChannelAudioSnapshot {
+            sample: state.published_sample().cloned(),
+            slices: (!state.slices.is_empty()).then(|| Arc::new(state.slices.clone())),
+        },
     });
 }
 
@@ -286,17 +341,21 @@ impl Session {
     /// The graph and its sends go as **one** command. A send whose target the
     /// render order has not been told about would arrive a block late, and
     /// two commands leave exactly that window open.
-    pub fn sync_track_graph(&mut self, handle: &mut EngineHandle) {
+    pub fn sync_track_graph(&mut self, handle: &mut impl CommandSink) {
         let graph = compile_bus_graph(&self.buses).unwrap_or_default();
         let specs = self.send_specs(&self.latency_plan());
         let routes: Vec<SendRoute> = specs.iter().map(SendRoute::of).collect();
         if (graph, &routes) == (self.track_graph_sent.0, &self.track_graph_sent.1) {
             return;
         }
-        handle.send_structural(StructuralCommand::SetTrackGraph {
+        let delivered = handle.send_structural(StructuralCommand::SetTrackGraph {
             graph,
             sends: Box::new(SendBank::new(&specs, handle.sample_rate())),
         });
+        if !delivered {
+            self.report_refused_command("track graph and sends");
+            return;
+        }
         self.track_graph_sent = (graph, routes);
     }
 
@@ -315,31 +374,47 @@ impl Session {
     /// Sends nothing when the plan is unchanged, which is every tick but the
     /// few after an edit. Deliberately does **not** mark the document dirty:
     /// this is derived state, not something the user did.
-    pub fn sync_compensation(&mut self, handle: &mut EngineHandle) {
-        let plan = self.latency_plan();
-        if plan == self.compensation_sent {
+    pub fn sync_compensation(&mut self, handle: &mut impl CommandSink) {
+        let wanted = CompensationSent::of(&self.latency_plan());
+        if wanted == self.compensation_sent {
             return;
         }
+        // Per entry, not one assignment at the bottom. Each target is its own
+        // command and its own refusal, so the mirror advances exactly as far
+        // as the ring accepted and the next tick's diff resends the rest.
+        let mut refused = false;
         let channels = self.channels.len().min(MAX_CHANNELS);
         for channel in 0..channels {
-            let frames = plan.channel(channel);
-            if frames != self.compensation_sent.channel(channel) {
-                handle.send_structural(StructuralCommand::SetCompensation {
-                    target: EffectTarget::Channel(channel as u8),
-                    delay: IntegerDelay::new(frames).map(Box::new),
-                });
+            let frames = wanted.channel(channel);
+            if frames == self.compensation_sent.channel(channel) {
+                continue;
+            }
+            if handle.send_structural(StructuralCommand::SetCompensation {
+                target: EffectTarget::Channel(channel as u8),
+                delay: IntegerDelay::new(frames).map(Box::new),
+            }) {
+                self.compensation_sent.channels[channel] = frames;
+            } else {
+                refused = true;
             }
         }
         for bus in 0..MAX_BUSES {
-            let frames = plan.bus(bus);
-            if frames != self.compensation_sent.bus(bus) {
-                handle.send_structural(StructuralCommand::SetCompensation {
-                    target: EffectTarget::Bus(bus as u8),
-                    delay: IntegerDelay::new(frames).map(Box::new),
-                });
+            let frames = wanted.bus(bus);
+            if frames == self.compensation_sent.bus(bus) {
+                continue;
+            }
+            if handle.send_structural(StructuralCommand::SetCompensation {
+                target: EffectTarget::Bus(bus as u8),
+                delay: IntegerDelay::new(frames).map(Box::new),
+            }) {
+                self.compensation_sent.buses[bus] = frames;
+            } else {
+                refused = true;
             }
         }
-        self.compensation_sent = plan;
+        if refused {
+            self.report_refused_command("delay compensation");
+        }
     }
 
     /// Which tracks need a second input accumulator: the ones something
@@ -379,23 +454,28 @@ impl Session {
     /// does not
     /// mark the document dirty -- this is derived state, not something the
     /// user did.
-    pub fn sync_console_sums(&mut self, handle: &mut EngineHandle) {
+    pub fn sync_console_sums(&mut self, handle: &mut impl CommandSink) {
         let plan = self.console_plan();
         if plan == self.console_sums_sent {
             return;
         }
-        for (bus, (&wanted, &sent)) in
-            plan.iter().zip(self.console_sums_sent.iter()).enumerate()
-        {
-            if wanted == sent {
+        let mut refused = false;
+        for (bus, &wanted) in plan.iter().enumerate() {
+            if wanted == self.console_sums_sent[bus] {
                 continue;
             }
-            handle.send_structural(StructuralCommand::SetConsoleSum {
+            if handle.send_structural(StructuralCommand::SetConsoleSum {
                 bus: bus as u8,
                 buffer: wanted.then(|| Box::new(StereoBus::with_capacity(MAX_BLOCK_SIZE))),
-            });
+            }) {
+                self.console_sums_sent[bus] = wanted;
+            } else {
+                refused = true;
+            }
         }
-        self.console_sums_sent = plan;
+        if refused {
+            self.report_refused_command("console accumulators");
+        }
     }
 
     /// Reconcile which tracks the engine is silencing for a solo.
@@ -407,22 +487,28 @@ impl Session {
     /// button. Deliberately does not mark the document dirty: what a solo
     /// silences is derived state, and `MixerBus::solo` is the thing the user
     /// did.
-    pub fn sync_solo(&mut self, handle: &mut EngineHandle) {
+    pub fn sync_solo(&mut self, handle: &mut impl CommandSink) {
         let plan = mooloop_core::mixer::solo_silenced(&self.buses);
         if plan == self.solo_silenced_sent {
             return;
         }
-        for (bus, (&silenced, &sent)) in
-            plan.iter().zip(self.solo_silenced_sent.iter()).enumerate()
-        {
-            if silenced != sent {
-                handle.send(EngineCommand::SetTrackSoloSilenced {
-                    bus: bus as u8,
-                    silenced,
-                });
+        let mut refused = false;
+        for (bus, &silenced) in plan.iter().enumerate() {
+            if silenced == self.solo_silenced_sent[bus] {
+                continue;
+            }
+            if handle.send(EngineCommand::SetTrackSoloSilenced {
+                bus: bus as u8,
+                silenced,
+            }) {
+                self.solo_silenced_sent[bus] = silenced;
+            } else {
+                refused = true;
             }
         }
-        self.solo_silenced_sent = plan;
+        if refused {
+            self.report_refused_command("solo silencing");
+        }
     }
 
     /// The audio edges this project's channels compile to, from the model as
@@ -456,14 +542,17 @@ impl Session {
     /// edge allocates nothing and this sends nothing. Deliberately does not
     /// mark the document dirty -- this is derived state, not something the
     /// user did.
-    pub fn sync_audio_graph(&mut self, handle: &mut EngineHandle) {
+    pub fn sync_audio_graph(&mut self, handle: &mut impl CommandSink) {
         let plan = self.audio_graph_plan();
         if plan == self.audio_graph_sent {
             return;
         }
-        handle.send_structural(StructuralCommand::SetAudioGraph {
+        if !handle.send_structural(StructuralCommand::SetAudioGraph {
             bank: Box::new(AudioTapBank::new(plan)),
-        });
+        }) {
+            self.report_refused_command("audio edges");
+            return;
+        }
         self.audio_graph_sent = plan;
     }
 
@@ -487,7 +576,12 @@ impl Session {
                     command,
                     EngineCommand::Play | EngineCommand::Pause | EngineCommand::Stop
                 );
-                handle.send(command);
+                // A one-shot edit has no mirror to retry from, so a refusal
+                // here is divergence the next tick cannot repair -- which is
+                // precisely why it gets said out loud.
+                if !handle.send(command) {
+                    self.report_refused_command("a parameter change");
+                }
                 edits && self.became_dirty()
             }
             PendingEngineMessage::PreviewGain(gain) => {
@@ -504,11 +598,15 @@ impl Session {
                 false
             }
             PendingEngineMessage::AddChannel { channel, source } => {
-                handle.add_channel(channel, source);
+                if !handle.add_channel(channel, source) {
+                    self.report_refused_command("adding a channel");
+                }
                 self.became_dirty()
             }
             PendingEngineMessage::Structural(command) => {
-                handle.send_structural(command);
+                if !handle.send_structural(command) {
+                    self.report_refused_command("a structural edit");
+                }
                 // Any structural change is an unsaved edit.
                 self.became_dirty()
             }
@@ -524,6 +622,35 @@ impl Session {
             // them. `apply_engine_message` is only reached for the rest.
             PendingEngineMessage::ProjectEdit(_) | PendingEngineMessage::Audio(_) => false,
         }
+    }
+
+    /// Says, once for the life of this session, that the command ring refused
+    /// something.
+    ///
+    /// Once and not per occurrence, because the condition that produces it --
+    /// a burst of edits against a full ring -- produces it many times in a
+    /// row, and a line per refusal would bury the first one. Not reset by a
+    /// project load either: `replace_project` runs on every undo, and
+    /// re-arming there would make the quiet version of this the noisy one.
+    ///
+    /// The sentence has to cover both kinds of caller, which is why it does
+    /// not promise a retry. A **reconciler's** refusal is recoverable by
+    /// construction: its mirror did not advance, so the next tick's diff
+    /// finds the same difference and sends it again. A **one-shot** edit
+    /// arriving through `apply_engine_message` has no mirror behind it, so
+    /// its refusal is divergence that nothing will repair.
+    fn report_refused_command(&mut self, what: &str) {
+        if self.engine_queue_refused {
+            return;
+        }
+        self.engine_queue_refused = true;
+        log_error!(
+            "engine",
+            "the command queue refused {what}. Reconciled state -- routing, \
+             compensation, console sums, solo, audio edges -- is re-derived \
+             and resent on the next pump tick; a one-shot edit is not, and \
+             has diverged from the visible project."
+        );
     }
 
     /// Marks the document edited, reporting whether that was news.

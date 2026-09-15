@@ -695,16 +695,33 @@ again; the setup also has to put the latency-declaring device in the
 and an effect installed afterwards leaves the send with no ring at all --
 which is how the first attempt at this test came to pass without the fix.
 
-**The modulator plan's acceptance test 8 — RT hygiene, no allocations or
-locks in the audio callback — still has no harness that can express it.**
-There are two `#[global_allocator]`s in the tree and neither one does this
-job: `spikes/time-stretch/src/main.rs:52` is outside the workspace, and
-`mooloop-session/src/lib.rs:55` is `#[cfg(test)]`, counts *live bytes* to
-measure undo-history footprint, and lives in the session crate rather than
-in engine or DSP where the callback actually runs. Counting a steady-state
-total is not the same as trapping an allocation on the audio thread. Until
-something is, the test is satisfiable only by reading code — which is the
-thing it exists to replace.
+**Acceptance test 8 — RT hygiene, no allocations or locks in the audio
+callback — has a harness now, and it covers one block.** Amended 2026-09-15 by
+`control-plane-seams/04`; what this entry said before was that no harness in
+the tree could express it, and the reason given was right about every
+allocator it named.
+
+The instrument turned out to be a small addition to `mooloop-engine`'s own
+`#[cfg(test)]` `CountingAllocator`, which the entry above had overlooked
+because it only named the session crate's. It counts *live bytes*, and a net
+byte figure cannot see an allocation paired with a free inside one block —
+which is exactly what a `Vec` growing on the callback thread looks like. It
+now also carries `allocations()`: a count of `alloc` and `realloc` calls that
+never decreases, held in a `const`-initialised thread-local so that reading it
+from inside `alloc` cannot itself allocate, and so that two tests running in
+parallel do not measure each other the way `block_cost`'s module doc records
+happening with `live()`. `realloc` is counted explicitly, because `System`
+implements it with `mremap` rather than alloc-copy-dealloc.
+
+`a_block_that_retires_a_preview_does_not_allocate` uses it, and was validated
+against the defect it was written for: with `preview_retired` put back to a
+`Vec::new()` it reports one allocation and fails.
+
+**What is still open is the coverage, not the instrument.** Test 8 claims no
+allocations *or locks* in the callback under every Buffer operation the plan
+lists. One block on the preview path is a floor. Extending it is now writing
+tests rather than building a harness, and the locks half is not measured at
+all.
 
 ---
 

@@ -66,12 +66,12 @@ use mooloop_core::{
     TICKS_PER_64TH, TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::{
-    buffer_allocation_key, build_effect_at_tempo, Ds01, DrumSynth, IntegerDelay, SampleData,
-    SpectrumAnalyzer, StretchPool,
+    buffer_allocation_key, build_effect_at_tempo, ChannelAudioSnapshot, Ds01, DrumSynth,
+    IntegerDelay, SampleData, SpectrumAnalyzer, StretchPool,
 };
 use mooloop_engine::{
-    ContainerScratch, EffectSlot, EngineHandle, ExportSpec, OfflineRenderer, PreviewCommand,
-    StructuralCommand,
+    CommandSink, ContainerScratch, EffectSlot, EngineHandle, ExportSpec, OfflineRenderer,
+    PreviewCommand, StructuralCommand,
 };
 use mooloop_project::{
     AssetMode, AssetWarning, Issue, LoadReport, LoadedDocument, PresetInfo, PresetKind,
@@ -4882,8 +4882,21 @@ impl AppUi {
         window.set_color_choices(ModelRc::from(Rc::new(VecModel::from(
             channel_colors::color_choices(),
         ))));
-        handle.send(EngineCommand::SetTempo(INITIAL_BPM as f64));
-        handle.send(EngineCommand::SetSwing(DEFAULT_SWING_PERCENT));
+        // Startup, on an engine that has consumed nothing yet: a refusal here
+        // is not a full ring, it is a broken one, and there is no UI up yet to
+        // say so with. Both sends run unconditionally -- the results are
+        // collected first and judged after, because a `&&` would make the
+        // second depend on the first.
+        let tempo_sent = handle.send(EngineCommand::SetTempo(INITIAL_BPM as f64));
+        let swing_sent = handle.send(EngineCommand::SetSwing(DEFAULT_SWING_PERCENT));
+        if !(tempo_sent && swing_sent) {
+            log_error!(
+                "engine",
+                "the command queue refused the opening tempo and swing on an \
+                 engine that has not started: the transport will run at the \
+                 engine's defaults"
+            );
+        }
 
         // --- Channel rack state: start with one empty channel ---
         //
@@ -11553,11 +11566,21 @@ impl AppUi {
             let st = state.clone();
             let load_tx = load_tx.clone();
             window.on_browser_sample_loaded(move |path| {
-                let (channel, source_revision) = {
-                    let st = st.borrow();
-                    (st.session.selected, st.session.source_revision)
+                let (channel, source_revision, request) = {
+                    let mut st = st.borrow_mut();
+                    let channel = st.session.selected;
+                    let revision = st.session.source_revision;
+                    let request = st.session.next_sample_request(channel);
+                    (channel, revision, request)
                 };
-                spawn_browser_sample_load(&path, channel, source_revision, false, &load_tx);
+                spawn_browser_sample_load(
+                    &path,
+                    channel,
+                    source_revision,
+                    request,
+                    false,
+                    &load_tx,
+                );
             });
         }
         {
@@ -11568,16 +11591,25 @@ impl AppUi {
                     let st = st.borrow();
                     (st.session.channels.len(), st.session.source_revision)
                 };
-                spawn_browser_sample_load(&path, channel, source_revision, true, &load_tx);
+                // No token: the channel does not exist yet, so there is
+                // nothing to key one by. This path is already correct for a
+                // different reason -- the pump defers these into a `Vec` and
+                // creates one channel per load -- and the comment there
+                // records that somebody got it wrong once. Forcing one
+                // mechanism over both would make the working case worse.
+                spawn_browser_sample_load(&path, channel, source_revision, 0, true, &load_tx);
             });
         }
         {
             let st = state.clone();
             let load_tx = load_tx.clone();
             window.on_load_sample_clicked(move || {
-                let (channel, source_revision) = {
-                    let st = st.borrow();
-                    (st.session.selected, st.session.source_revision)
+                let (channel, source_revision, request) = {
+                    let mut st = st.borrow_mut();
+                    let channel = st.session.selected;
+                    let revision = st.session.source_revision;
+                    let request = st.session.next_sample_request(channel);
+                    (channel, revision, request)
                 };
                 let tx = load_tx.clone();
                 log_debug!("ui", "loading sample for channel {channel}");
@@ -11586,7 +11618,8 @@ impl AppUi {
                     let _ = tx.send(LoadResult {
                         channel,
                         source_revision,
-                    new_channel: false,
+                        request,
+                        new_channel: false,
                         result,
                     });
                 });
@@ -11599,6 +11632,7 @@ impl AppUi {
                 let Some(target) = st.borrow().session.selected_sample_target() else {
                     return;
                 };
+                let request = st.borrow_mut().session.next_sample_request(target.channel);
                 let tx = load_tx.clone();
                 std::thread::spawn(move || {
                     let result = match adjacent_sample(&target.path, -1) {
@@ -11609,6 +11643,7 @@ impl AppUi {
                     let _ = tx.send(LoadResult {
                         channel: target.channel,
                         source_revision: target.source_revision,
+                        request,
                         new_channel: false,
                         result,
                     });
@@ -11622,6 +11657,7 @@ impl AppUi {
                 let Some(target) = st.borrow().session.selected_sample_target() else {
                     return;
                 };
+                let request = st.borrow_mut().session.next_sample_request(target.channel);
                 let tx = load_tx.clone();
                 std::thread::spawn(move || {
                     let result = match adjacent_sample(&target.path, 1) {
@@ -11632,6 +11668,7 @@ impl AppUi {
                     let _ = tx.send(LoadResult {
                         channel: target.channel,
                         source_revision: target.source_revision,
+                        request,
                         new_channel: false,
                         result,
                     });
@@ -11731,10 +11768,17 @@ impl AppUi {
                             window.set_browser_info_waveform(ModelRc::from(Rc::new(
                                 VecModel::from(inspection.peaks),
                             )));
-                            if window.get_browser_autoplay() {
-                                handle.preview(PreviewCommand::Play {
+                            if window.get_browser_autoplay()
+                                && !handle.preview(PreviewCommand::Play {
                                     sample: inspection.sample,
-                                });
+                                })
+                            {
+                                // A refused preview is silence where the user
+                                // asked to hear something, and nothing else
+                                // will ever mention it.
+                                window.set_status_message(
+                                    "Busy — could not start the preview".into(),
+                                );
                             }
                         }
                         Err((path, error)) => {
@@ -12131,25 +12175,23 @@ impl AppUi {
                 // leaves the slot holding the default while the waveform,
                 // name, and duration on screen all describe the new file.
                 while let Ok(channel) = sample_reset_rx.try_recv() {
-                    if let Some(sample) = default_sample_for_pump.as_ref() {
-                        handle.load_sample(channel, sample.clone());
-                    } else {
-                        handle.clear_sample(channel);
-                    }
+                    // A reset is a channel that has just become a fresh
+                    // sampler, so it has no markers either -- which the two
+                    // separate stores this replaced left standing.
+                    handle.set_channel_audio(
+                        channel,
+                        match default_sample_for_pump.as_ref() {
+                            Some(sample) => ChannelAudioSnapshot::sample(sample.clone()),
+                            None => ChannelAudioSnapshot::default(),
+                        },
+                    );
                 }
                 // After the resets, and both halves together: a slice edit or
                 // a commit is the most specific statement about what a
                 // channel is playing, and its buffer and its map change at
                 // the same instant.
                 while let Ok(update) = channel_audio_rx.try_recv() {
-                    match update.sample {
-                        Some(sample) => handle.load_sample(update.channel, sample),
-                        None => handle.clear_sample(update.channel),
-                    }
-                    match update.slices {
-                        Some(slices) => handle.load_slices(update.channel, slices),
-                        None => handle.clear_slices(update.channel),
-                    }
+                    handle.set_channel_audio(update.channel, update.audio);
                 }
                 // A `Vec`, not an `Option`: two "Load in New Channel"
                 // decodes can land in the same 60 Hz tick, and an `Option`
@@ -12165,7 +12207,21 @@ impl AppUi {
                                     && st
                                         .session.channels
                                         .get(load.channel)
-                                        .is_some_and(|channel| channel.kind == DeviceKind::Sampler))
+                                        .is_some_and(|channel| channel.kind == DeviceKind::Sampler)
+                                    // And it must be the load this channel is
+                                    // still waiting for. `source_revision` is
+                                    // a property of the project, so two
+                                    // in-flight decodes for one channel both
+                                    // pass it and the last to *finish* wins --
+                                    // which is decode time, so a long file
+                                    // chosen first can overwrite the short one
+                                    // chosen after it. A superseded completion
+                                    // is dropped silently: it is not an error,
+                                    // and saying so would be noise.
+                                    && st.session.sample_request_is_current(
+                                        load.channel,
+                                        load.request,
+                                    ))
                     };
                     if !still_current {
                         continue;
@@ -12198,11 +12254,15 @@ impl AppUi {
                         // branch exists to deliver is the last write to the
                         // slot rather than the first.
                         while let Ok(channel) = sample_reset_rx.try_recv() {
-                            if let Some(sample) = default_sample_for_pump.as_ref() {
-                                handle.load_sample(channel, sample.clone());
-                            } else {
-                                handle.clear_sample(channel);
-                            }
+                            handle.set_channel_audio(
+                                channel,
+                                match default_sample_for_pump.as_ref() {
+                                    Some(sample) => {
+                                        ChannelAudioSnapshot::sample(sample.clone())
+                                    }
+                                    None => ChannelAudioSnapshot::default(),
+                                },
+                            );
                         }
                         let channel = st.borrow().session.channels.len().saturating_sub(1);
                         apply_loaded_sample(&handle, &st, &weak, channel, loaded);
@@ -12962,9 +13022,48 @@ fn install_project_in_ui(
 ) -> bool {
     let mut project = project.clone();
     normalize_project_pattern_banks(&mut project);
-    // Queue the complete state first. If the bounded realtime queue is full,
-    // leave both the sample slots and visible project untouched.
-    if !handle.install_project(Arc::new(project.clone())) {
+    // The bank is composed **before** anything is queued, and travels with
+    // the project as one command.
+    //
+    // It used to be sixteen `ArcSwap` stores made *after* the install was
+    // queued, into a bank every generation shared -- so for the block or two
+    // before the audio thread consumed the install, the outgoing project's
+    // graph was reading the incoming project's samples, and mid-loop, a
+    // half-replaced set of them. Composing first means the existing early
+    // return covers the assets too, with no second bail-out path.
+    let audio: Vec<ChannelAudioSnapshot> = (0..MAX_CHANNELS)
+        .map(|index| {
+            let sample = project
+                .channels
+                .get(index)
+                // Asked through the accessor rather than by naming every
+                // generator: this is a question about samples, and the four
+                // synths were only listed here to say "not me".
+                .and_then(|channel| match channel.setup.source.sampler_state() {
+                    Some(sampler) => samples.get(index).cloned().flatten().or_else(|| {
+                        matches!(sampler.sample, SampleReference::Builtin { .. })
+                            .then(|| default_sample.cloned())
+                            .flatten()
+                    }),
+                    None => default_sample.cloned(),
+                });
+            // The markers come from the project being installed, in the same
+            // pass. Published separately they were a second write of half of
+            // one fact, and the half that arrived first indexed the other
+            // half's buffer.
+            let slices = project
+                .channels
+                .get(index)
+                .and_then(|channel| channel.setup.source.sampler_state())
+                .map(|state| state.slices.clone())
+                .filter(|slices| !slices.is_empty())
+                .map(Arc::new);
+            ChannelAudioSnapshot { sample, slices }
+        })
+        .collect();
+    // If the bounded realtime queue is full, leave the sample bank, the
+    // engine and the visible project untouched.
+    if !handle.install_project(Arc::new(project.clone()), audio) {
         return false;
     }
     // A project install is the only thing that can change which track a strip
@@ -12973,35 +13072,32 @@ fn install_project_in_ui(
     // from here they are about a track that may not be the one they were
     // reading. The pump resets them on its next tick.
     state.borrow_mut().bus_meters_stale = true;
-    for index in 0..MAX_CHANNELS {
-        let sample = project
-            .channels
-            .get(index)
-            // Asked through the accessor rather than by naming every
-            // generator: this is a question about samples, and the four
-            // synths were only listed here to say "not me".
-            .and_then(|channel| match channel.setup.source.sampler_state() {
-                Some(sampler) => samples.get(index).cloned().flatten().or_else(|| {
-                    matches!(sampler.sample, SampleReference::Builtin { .. })
-                        .then(|| default_sample.cloned())
-                        .flatten()
-                }),
-                None => default_sample.cloned(),
-            });
-        if let Some(sample) = sample {
-            handle.load_sample(index, sample);
-        } else {
-            handle.clear_sample(index);
-        }
-    }
     state.borrow_mut().replace_project(&project, samples, window);
-    // Republish from the installed state rather than from `samples`: a
-    // channel whose stretch was committed plays the re-rendered buffer, and
-    // its slice map has to arrive with it.
+    // **Still needed, and now only where it says something the bank could
+    // not.** `samples` carries a project's *sources*; `replace_project`
+    // re-renders any committed stretch, and a channel with a commit plays
+    // that render. The re-render happens on the line above and nowhere
+    // earlier, so this is the first moment that buffer exists.
+    //
+    // It is also no longer a race. `install_project` left the handle
+    // addressing the bank it just prepared, so these stores land in the
+    // incoming generation's own slots and are read the instant it goes live
+    // -- where before they landed in a bank the outgoing generation was still
+    // playing from.
+    //
+    // **The `commit` guard is a fix, not a shortcut.** This ran over every
+    // sampler channel, and `published_sample()` is
+    // `committed_sample.or(sample_data)` where `replace_project` fills
+    // `sample_data` from `samples` alone -- it does not apply the legacy
+    // `SampleReference::Builtin` substitution the bank above does. So opening
+    // a project old enough to carry a `Builtin` reference published the
+    // default kick and then immediately cleared it, leaving the channel
+    // silent while its name, waveform and duration all described a kick. A
+    // channel with no commit has nothing to add here by construction.
     {
         let st = state.borrow();
         for (index, channel) in st.session.channels.iter().enumerate() {
-            if channel.kind == DeviceKind::Sampler {
+            if channel.kind == DeviceKind::Sampler && channel.commit.is_some() {
                 publish_channel_audio(handle, index, channel);
             }
         }
@@ -13142,15 +13238,13 @@ fn refresh_preset_menus(state: &Rc<RefCell<UiState>>, window: &MainWindow) {
 /// the render. Both travel out of band through `ArcSwap` slots rather than on
 /// the command ring, so this is wait-free and safe to call from the UI thread.
 fn publish_channel_audio(handle: &EngineHandle, index: usize, channel: &ChannelState) {
-    match channel.published_sample() {
-        Some(sample) => handle.load_sample(index, sample.clone()),
-        None => handle.clear_sample(index),
-    }
-    if channel.slices.is_empty() {
-        handle.clear_slices(index);
-    } else {
-        handle.load_slices(index, Arc::new(channel.slices.clone()));
-    }
+    handle.set_channel_audio(
+        index,
+        ChannelAudioSnapshot {
+            sample: channel.published_sample().cloned(),
+            slices: (!channel.slices.is_empty()).then(|| Arc::new(channel.slices.clone())),
+        },
+    );
 }
 
 /// Publish a finished background load to `channel`: hand the decoded sample
@@ -13173,10 +13267,14 @@ fn apply_loaded_sample(
     let waveform = waveform_peaks(&loaded.sample, WAVEFORM_BINS);
     let description = sample_description(&loaded.sample);
     let duration = sample_duration(&loaded.sample);
-    handle.load_sample(channel, loaded.sample.clone());
-    // The markers went with the old file; the engine must not keep playing a
-    // map that names frames in audio it no longer holds.
-    handle.clear_slices(channel);
+    // The markers went with the old file, so the snapshot carries none: the
+    // engine must not keep playing a map that names frames in audio it no
+    // longer holds, and now it cannot, because the buffer and the map arrive
+    // as one store.
+    handle.set_channel_audio(
+        channel,
+        ChannelAudioSnapshot::sample(loaded.sample.clone()),
+    );
     let mut st = st.borrow_mut();
     if let Some(ch) = st.session.channels.get_mut(channel) {
         ch.sample_name = name;
@@ -13215,6 +13313,7 @@ fn spawn_browser_sample_load(
     path: &str,
     channel: usize,
     source_revision: u64,
+    request: u64,
     new_channel: bool,
     load_tx: &std::sync::mpsc::Sender<LoadResult>,
 ) {
@@ -13224,6 +13323,7 @@ fn spawn_browser_sample_load(
         let _ = tx.send(LoadResult {
             channel,
             source_revision,
+            request,
             new_channel,
             result: Some(load_sample_at_path(&path)),
         });
@@ -14195,10 +14295,11 @@ mod tests {
     #[test]
     fn browser_load_delivery_carries_its_target() {
         let (tx, rx) = std::sync::mpsc::channel();
-        spawn_browser_sample_load("/nonexistent/missing.wav", 3, 7, true, &tx);
+        spawn_browser_sample_load("/nonexistent/missing.wav", 3, 7, 11, true, &tx);
         let load = rx.recv().unwrap();
         assert_eq!(load.channel, 3);
         assert_eq!(load.source_revision, 7);
+        assert_eq!(load.request, 11);
         assert!(load.new_channel);
         // The decode fails off-thread; the pump owns the user-visible handling.
         assert!(matches!(load.result, Some(Err(_))));

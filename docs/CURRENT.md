@@ -339,7 +339,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   model, SAMPLES and PRESETS. **Samples**: persisted locations added through
   a folder picker and removed from a right-click, a tree flattened to one row
   per visible entry, filtering to playable formats, an autoplay arm and a
-  preview-gain trim feeding a dedicated engine preview voice, an info pane
+  preview-gain trim feeding a dedicated engine preview voice -- a preview the
+  command ring refuses says so in the status bar rather than being silence
+  with no explanation -- an info pane
   with waveform, name, and format stats, and loading either into the selected
   channel or into a new one. The sampler face's prev/next-sample arrows step
   through **the folder the sample was browsed from**, which a save does not
@@ -693,6 +695,17 @@ land on its own when it starts to matter:
 - Missing samples are recoverable by loading a replacement audio file, but
   there is no dedicated path-search/relink dialog, autosave, or crash recovery
   yet.
+- **A song old enough to reference the built-in kick opens with it audible.**
+  Projects saved before the sampler stopped auto-loading a kick carry a
+  `SampleReference::Builtin`, which the install substitutes the cached default
+  for. Until 2026-09-15 a second publication four lines later cleared it, so
+  the channel was silent while its name, waveform and duration all described a
+  kick; `control-plane-seams/03` fixed it.
+- **Two sample loads into one channel resolve in the order they were asked
+  for, not the order they finish.** Loading a long file and then changing your
+  mind used to be decided by decode time, so the first choice could land last
+  and win. Each dispatch carries a request token now and a superseded
+  completion is discarded.
 
 ### Mixing, Routing, And Effects
 

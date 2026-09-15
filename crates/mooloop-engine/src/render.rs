@@ -11,7 +11,7 @@ use mooloop_core::{
     LoopRange, ModDestinationDescriptor, PlaybackMode,
     ModRack, MonoSynthParams, MlM1Params, MlP8Params, ParamAddr, ParamOwner, PolySynthParams,
     Project,
-    SamplerParams, SendTap, SliceMap,
+    SamplerParams, SendTap,
     chain_latency, clamp_bus, compensable_send_edges, compile_latency,
     sends_are_compensable, DEFAULT_STEPS, MAX_CONTAINER_DEPTH, MAX_SAMPLER_VOICES, MASTER_BUS, MAX_BUSES, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_LINEAR_GAIN,
     MAX_AUTOMATION_LANES_PER_CHANNEL, MAX_MODULATORS_PER_CHANNEL, STRIP_DESCRIPTORS,
@@ -28,6 +28,7 @@ use mooloop_dsp::{
     DrumSynth,
     AudioTaps, AuxIn, IntegerDelay, Event, EventList, ModulatorRack, MonoSynth, MlM1, MlP8,
     NoteGateEvents, PolySynth,
+    ChannelAudioSnapshot,
     ProcessContext, SampleData, Sampler, SpectrumAnalyzer, StereoBus, StretchPool, TimedEvent,
     CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE, SILENCE_PEAK,
 };
@@ -38,6 +39,116 @@ use crate::meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, P
 use crate::sequencer::Sequencer;
 use crate::transport::Transport;
 use crate::{PreviewCommand, StructuralCommand, StructuralReclaim};
+
+/// How many finished preview samples either side of the reclaim path will
+/// hold while the ring is full.
+///
+/// One answer, shared by the renderer and the executor, because they are two
+/// halves of one queue and two limits would be two things to reason about. A
+/// preview is one auditioned sample and the ring drains every GUI frame, so
+/// reaching this takes a backlog no interaction produces -- but the capacity
+/// is reserved up front regardless, because the alternative is a `Vec`
+/// growing on the realtime thread.
+pub(crate) const MAX_RETIRED_PREVIEWS: usize = 64;
+
+/// Finished preview samples waiting for the reclaim ring, with a ceiling.
+///
+/// A plain `Vec` was used on both sides of this. The renderer's started at
+/// zero capacity, so its **first** push allocated -- audition a sample from
+/// the browser, let it play to the end, and the callback allocated. The
+/// executor's reserved its capacity but pushed past it unconditionally, so a
+/// reclaim ring that stayed full while previews kept retiring grew it and
+/// reallocated.
+///
+/// **A refused push hands the sample back rather than dropping it.** That is
+/// the whole of the policy and it is the only option with no failure mode:
+/// the caller holds the voice one more block and tries again, and the next
+/// block almost certainly has room. Dropping the `Arc` here would be a free
+/// on the audio thread, which is the thing the entire reclaim path exists to
+/// avoid.
+pub(crate) struct RetiredPreviews {
+    samples: Vec<Arc<SampleData>>,
+}
+
+impl RetiredPreviews {
+    pub(crate) fn new() -> Self {
+        Self {
+            samples: Vec::with_capacity(MAX_RETIRED_PREVIEWS),
+        }
+    }
+
+    /// Take `sample`, or hand it straight back when full. Never allocates.
+    #[must_use]
+    pub(crate) fn push(&mut self, sample: Arc<SampleData>) -> Option<Arc<SampleData>> {
+        if self.samples.len() == self.samples.capacity() {
+            return Some(sample);
+        }
+        self.samples.push(sample);
+        None
+    }
+
+    pub(crate) fn pop(&mut self) -> Option<Arc<SampleData>> {
+        self.samples.pop()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.samples.len()
+    }
+
+    pub(crate) fn is_full(&self) -> bool {
+        self.samples.len() == self.samples.capacity()
+    }
+}
+
+/// One channel's published audio, as the control thread writes it and the
+/// channel's voices read it.
+pub type ChannelAudioSlot = Arc<ArcSwapOption<ChannelAudioSnapshot>>;
+
+/// Every addressable channel's audio slot.
+///
+/// **One bank per render generation, and that is the point.** A generation's
+/// strips clone their slot out of the bank they were built from, so a bank
+/// built alongside a prepared project is read only by that project's voices.
+/// A single shared bank -- which is what this replaced -- meant the outgoing
+/// project's graph read the incoming project's samples for the block or two
+/// between queueing an install and the audio thread consuming it.
+///
+/// The slots stay atomic rather than becoming plain values, because they are
+/// still written after the generation is live: loading a sample into an open
+/// song publishes into the live generation's bank. What changed is *which*
+/// bank that is, not how a channel is published.
+pub type ChannelAudioBank = Arc<Vec<ChannelAudioSlot>>;
+
+/// A bank with nothing published in any channel.
+pub fn empty_channel_audio_bank() -> ChannelAudioBank {
+    Arc::new(
+        (0..MAX_CHANNELS)
+            .map(|_| Arc::new(ArcSwapOption::empty()))
+            .collect(),
+    )
+}
+
+/// A **fresh** bank holding `audio`, one entry per addressable channel.
+///
+/// Fresh slots, never a clone of an existing bank, and that is the whole
+/// contract: the generation built from this reads what the caller prepared
+/// and nothing else can reach it until the caller publishes the bank as the
+/// current one. `audio` is by value for the same reason -- there is no way to
+/// hand this the live generation's slots, so the install path cannot
+/// accidentally share them.
+pub fn channel_audio_bank(audio: Vec<ChannelAudioSnapshot>) -> ChannelAudioBank {
+    let mut audio = audio.into_iter();
+    Arc::new(
+        (0..MAX_CHANNELS)
+            .map(|_| {
+                let held = audio.next().unwrap_or_default();
+                Arc::new(ArcSwapOption::from(
+                    (!held.is_empty()).then(|| Arc::new(held)),
+                ))
+            })
+            .collect(),
+    )
+}
 
 /// One generation's audio edges and the buffers they carry.
 ///
@@ -2084,13 +2195,9 @@ pub struct ChannelStrip {
 }
 
 impl ChannelStrip {
-    fn new(
-        sample_slot: Arc<ArcSwapOption<SampleData>>,
-        slice_slot: Arc<ArcSwapOption<SliceMap>>,
-        sample_rate: u32,
-    ) -> Self {
+    fn new(audio_slot: ChannelAudioSlot, sample_rate: u32) -> Self {
         Self {
-            sampler: Sampler::new(sample_slot, slice_slot, SamplerParams::default(), sample_rate),
+            sampler: Sampler::new(audio_slot, SamplerParams::default(), sample_rate),
             drum_synth: DrumSynth::new(DrumSynthParams::default(), sample_rate),
             mono_synth: MonoSynth::new(MonoSynthParams::default(), sample_rate),
             poly_synth: PolySynth::new(PolySynthParams::default(), sample_rate),
@@ -2564,11 +2671,8 @@ pub(crate) struct RenderState {
     /// pointers and grows without ever reallocating on the audio thread.
     strips: Vec<Box<ChannelStrip>>,
     /// Kept so a channel can be materialized after construction: a strip
-    /// needs its channel's sample slot, and the control thread builds them.
-    sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
-    /// The channels' slice maps, published beside their samples and read by
-    /// the sampler voice at note-on.
-    slice_slots: Arc<Vec<Arc<ArcSwapOption<SliceMap>>>>,
+    /// needs its channel's audio slot, and the control thread builds them.
+    audio_slots: ChannelAudioBank,
     /// The full bus bank, master first. Always `MAX_BUSES` long, so assigning
     /// a channel to any bus is a bounded mutation rather than an allocation.
     buses: Vec<BusStrip>,
@@ -2639,7 +2743,7 @@ pub(crate) struct RenderState {
     /// a time: a new preview replaces the old, and the retired sample's
     /// ownership returns to the UI thread through the reclaim ring.
     preview: Option<PreviewVoice>,
-    preview_retired: Vec<Arc<SampleData>>,
+    preview_retired: RetiredPreviews,
     /// Linear preview gain, shared with the GUI so the knob is heard live.
     /// It starts at the operating level rather than unity: an audition is
     /// usually a full-scale commercial file, and the browser should not be
@@ -2704,17 +2808,12 @@ struct PreviewVoice {
 }
 
 impl RenderState {
-    pub fn new(
-        sample_rate: u32,
-        sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
-        slice_slots: Arc<Vec<Arc<ArcSwapOption<SliceMap>>>>,
-    ) -> Self {
+    pub fn new(sample_rate: u32, audio_slots: ChannelAudioBank) -> Self {
         #![allow(clippy::let_and_return)]
         // Deliberately empty. Channels are materialized from a project on
         // this thread, or pushed one at a time through the structural ring.
         let strips = Vec::with_capacity(MAX_CHANNELS);
-        let slots_for_growth = sample_slots.clone();
-        let slice_slots_for_growth = slice_slots.clone();
+        let slots_for_growth = audio_slots;
         let mut state = Self {
             transport: Transport::new(sample_rate),
             strip_pin: STRIP_PIN,
@@ -2722,8 +2821,7 @@ impl RenderState {
             slept_strip_blocks: 0,
             sequencer: Sequencer::new(1, 1, DEFAULT_STEPS as usize, mooloop_core::Ppq::DEFAULT),
             strips,
-            sample_slots: slots_for_growth,
-            slice_slots: slice_slots_for_growth,
+            audio_slots: slots_for_growth,
             // The master alone. Tracks arrive with the project through
             // `grow_buses`, rather than seventeen 64 KB strips being built
             // whether or not a song has them -- `docs/CAPACITY_POLICY.md`:
@@ -2765,7 +2863,7 @@ impl RenderState {
             loop_range: LoopRange::default(),
             seeked: false,
             preview: None,
-            preview_retired: Vec::new(),
+            preview_retired: RetiredPreviews::new(),
             preview_gain: Arc::new(AtomicU32::new(mooloop_core::gain::db_to_linear(mooloop_core::gain::REFERENCE_PEAK_DBFS).to_bits())),
         };
         // The sequencer starts with one channel, so the graph starts with
@@ -2814,6 +2912,7 @@ impl RenderState {
         self.preview_retired.pop()
     }
 
+
     /// Sums the preview voice into the master bus. Deliberately after the
     /// bus walk: the preview bypasses the project's chains, balance, and
     /// mute so the file is heard as the file.
@@ -2838,11 +2937,21 @@ impl RenderState {
             bus.r[index] += frame[1] * gain;
         }
         let played = start + count;
-        if played >= samples.len() {
-            let voice = self.preview.take().expect("preview checked above");
-            self.preview_retired.push(voice.sample);
-        } else {
+        if played < samples.len() {
             self.preview.as_mut().expect("preview checked above").position = played;
+            return;
+        }
+        // Finished. Retire it if there is room, and otherwise leave the voice
+        // where it is and try again next block: `start` will equal the
+        // buffer's length, so `count` is zero and nothing further is summed.
+        // Holding costs a comparison; the alternatives are a `Vec` growing
+        // here or an `Arc` freed here, and this is the realtime callback.
+        let voice = self.preview.take().expect("preview checked above");
+        if let Some(returned) = self.preview_retired.push(voice.sample) {
+            self.preview = Some(PreviewVoice {
+                sample: returned,
+                position: played,
+            });
         }
     }
 
@@ -2864,7 +2973,7 @@ impl RenderState {
         samples: &[Option<Arc<SampleData>>],
     ) -> Self {
         let fallback = SampleData::default_kick(sample_rate);
-        let slots = Arc::new(
+        let slots: ChannelAudioBank = Arc::new(
             (0..MAX_CHANNELS)
                 .map(|index| {
                     let sample = samples.get(index).cloned().flatten().or_else(|| {
@@ -2900,16 +3009,12 @@ impl RenderState {
                             None => sample,
                         }
                     });
-                    Arc::new(ArcSwapOption::from(sample))
-                })
-                .collect(),
-        );
-        // Slice maps travel with the project, not with `samples`. Omitting
-        // them made every note in a sliced channel resolve out of range, so
-        // an exported mix was silent exactly where the app was not.
-        let slice_slots: Arc<Vec<Arc<ArcSwapOption<mooloop_core::SliceMap>>>> = Arc::new(
-            (0..MAX_CHANNELS)
-                .map(|index| {
+                    // Slice maps travel with the project, not with `samples`.
+                    // Omitting them made every note in a sliced channel
+                    // resolve out of range, so an exported mix was silent
+                    // exactly where the app was not. They are built in this
+                    // same pass now, which is what makes that omission
+                    // unrepresentable rather than merely fixed.
                     let slices = project
                         .channels
                         .get(index)
@@ -2917,11 +3022,14 @@ impl RenderState {
                         .map(|state| state.slices.clone())
                         .filter(|slices| !slices.is_empty())
                         .map(Arc::new);
-                    Arc::new(ArcSwapOption::from(slices))
+                    let audio = ChannelAudioSnapshot { sample, slices };
+                    Arc::new(ArcSwapOption::from(
+                        (!audio.is_empty()).then(|| Arc::new(audio)),
+                    ))
                 })
                 .collect(),
         );
-        let mut state = Self::new(sample_rate, slots, slice_slots);
+        let mut state = Self::new(sample_rate, slots);
         state.load_project(project);
         state
     }
@@ -2930,12 +3038,11 @@ impl RenderState {
     /// thread — either here during a project install, or in the `AddChannel`
     /// structural command that carries the result across.
     pub(crate) fn build_channel(
-        sample_slot: Arc<ArcSwapOption<SampleData>>,
-        slice_slot: Arc<ArcSwapOption<SliceMap>>,
+        audio_slot: ChannelAudioSlot,
         sample_rate: u32,
     ) -> Box<ChannelStorage> {
         Box::new(ChannelStorage {
-            strip: Box::new(ChannelStrip::new(sample_slot, slice_slot, sample_rate)),
+            strip: Box::new(ChannelStrip::new(audio_slot, sample_rate)),
             events: Box::new(EventList::empty()),
             control_outputs: Box::new(
                 [[0.0; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK],
@@ -2982,9 +3089,8 @@ impl RenderState {
     fn grow_channels(&mut self, count: usize) {
         let sample_rate = self.sample_rate;
         while self.strips.len() < count.min(MAX_CHANNELS) {
-            let slot = self.sample_slots[self.strips.len()].clone();
-            let slices = self.slice_slots[self.strips.len()].clone();
-            self.push_channel(Self::build_channel(slot, slices, sample_rate));
+            let slot = self.audio_slots[self.strips.len()].clone();
+            self.push_channel(Self::build_channel(slot, sample_rate));
         }
     }
 
@@ -5208,8 +5314,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     use mooloop_core::{NoteEvent, ProjectChannel};
 
     fn test_strip() -> ChannelStrip {
-        let slot = Arc::new(ArcSwapOption::empty());
-        ChannelStrip::new(slot, Arc::new(ArcSwapOption::empty()), 48_000)
+        ChannelStrip::new(Arc::new(ArcSwapOption::empty()), 48_000)
     }
 
     #[test]
@@ -5286,19 +5391,10 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             sample_rate: 48_000,
             root_note: 60,
         });
-        let slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>> = Arc::new(
-            (0..MAX_CHANNELS)
-                .map(|_| Arc::new(ArcSwapOption::empty()))
-                .collect(),
-        );
-        slots[0].store(Some(sample.clone()));
-        slots[1].store(Some(sample));
-        let slice_slots = Arc::new(
-            (0..MAX_CHANNELS)
-                .map(|_| Arc::new(ArcSwapOption::empty()))
-                .collect(),
-        );
-        let mut render = RenderState::new(48_000, slots, slice_slots);
+        let slots = empty_channel_audio_bank();
+        slots[0].store(Some(Arc::new(ChannelAudioSnapshot::sample(sample.clone()))));
+        slots[1].store(Some(Arc::new(ChannelAudioSnapshot::sample(sample))));
+        let mut render = RenderState::new(48_000, slots);
         let mut project = Project::default();
         project.channels.push(ProjectChannel::sampler(1, 1));
         render.load_project(&project);
@@ -5367,18 +5463,9 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             sample_rate: 48_000,
             root_note: 60,
         });
-        let slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>> = Arc::new(
-            (0..MAX_CHANNELS)
-                .map(|_| Arc::new(ArcSwapOption::empty()))
-                .collect(),
-        );
-        slots[0].store(Some(sample));
-        let slice_slots = Arc::new(
-            (0..MAX_CHANNELS)
-                .map(|_| Arc::new(ArcSwapOption::empty()))
-                .collect(),
-        );
-        let mut render = RenderState::new(48_000, slots, slice_slots);
+        let slots = empty_channel_audio_bank();
+        slots[0].store(Some(Arc::new(ChannelAudioSnapshot::sample(sample))));
+        let mut render = RenderState::new(48_000, slots);
         render.load_project(&Project::default());
         assert!(!render.transport.playing);
 
@@ -5462,16 +5549,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         ];
         project.playback_mode = PlaybackMode::Song;
 
-        let slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>> = Arc::new(
-            (0..MAX_CHANNELS)
-                .map(|_| Arc::new(ArcSwapOption::empty()))
-                .collect(),
-        );
-        let slice_slots: Arc<Vec<Arc<ArcSwapOption<SliceMap>>>> = Arc::new(
-            (0..MAX_CHANNELS)
-                .map(|_| Arc::new(ArcSwapOption::empty()))
-                .collect(),
-        );
+        let slots = empty_channel_audio_bank();
 
         // Two bars of elapsed time, in blocks big enough to keep the count
         // down and to make a block that straddles the loop point likely.
@@ -5490,7 +5568,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             hits
         };
 
-        let mut render = RenderState::new(48_000, slots.clone(), slice_slots.clone());
+        let mut render = RenderState::new(48_000, slots.clone());
         render.load_project(&project);
         render.transport.play();
         let straight = two_bars(&mut render);
@@ -5506,7 +5584,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             end_tick: TICKS_PER_BAR,
             enabled: true,
         };
-        let mut render = RenderState::new(48_000, slots, slice_slots);
+        let mut render = RenderState::new(48_000, slots);
         render.load_project(&project);
         render.transport.play();
         let looped = two_bars(&mut render);
@@ -5524,19 +5602,64 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         );
     }
 
+    /// **No allocations in the callback**, measured rather than read.
+    ///
+    /// `control-plane-seams/04`, and `buffer-implementation/`'s Stage 1
+    /// acceptance test 8, which `FOCUS.md` records as having been open since
+    /// it was written because it "needs an allocation-tracking harness rather
+    /// than a reading of the code". The harness turned out to be three lines
+    /// on the counting allocator this crate already installs: a per-thread
+    /// count of `alloc` and `realloc` calls that never decreases, because
+    /// `live()` is a net byte figure and cannot see an allocation paired with
+    /// a free in the same block — which is precisely what a `Vec` growing on
+    /// the audio thread looks like.
+    ///
+    /// The block under the counter is the one that **retires a preview**,
+    /// which is the path that allocated: `preview_retired` was a `Vec::new()`
+    /// and its first push was its first allocation. Audition a sample from
+    /// the browser, let it play to the end, and the callback allocated.
+    ///
+    /// This is a floor, not a ceiling: it proves these paths do not allocate,
+    /// not that no path does. Test 8's full claim — no allocations *or locks*
+    /// anywhere in the callback — is wider than one test, and the locks half
+    /// is not measured here at all.
+    #[test]
+    fn a_block_that_retires_a_preview_does_not_allocate() {
+        let mut render = RenderState::new(48_000, empty_channel_audio_bank());
+        let sample = Arc::new(SampleData {
+            frames: vec![[0.5, -0.5]; 64],
+            sample_rate: 48_000,
+            root_note: 60,
+        });
+        // Everything that can allocate happens before the counter is read:
+        // the preview command is applied on the control thread in the real
+        // engine, and `process_block` is warmed once so no lazy table or
+        // first-touch buffer inside it is counted against the block under
+        // test.
+        render.process_block(512);
+        assert!(render.apply_preview(PreviewCommand::Play { sample }).is_none());
+
+        let before = crate::COUNTING.allocations();
+        // 64 frames into a 512-frame block: the voice finishes and retires
+        // inside this call.
+        render.process_block(512);
+        let allocations = crate::COUNTING.allocations() - before;
+
+        assert!(
+            render.pop_retired_preview().is_some(),
+            "the block has to actually retire a preview, or this measures the \
+             wrong thing"
+        );
+        assert_eq!(
+            allocations, 0,
+            "the callback allocated {allocations} times on the block that \
+             retired a preview"
+        );
+    }
+
     #[test]
     fn preview_voice_plays_replaces_and_retires() {
-        let slots = Arc::new(
-            (0..MAX_CHANNELS)
-                .map(|_| Arc::new(ArcSwapOption::empty()))
-                .collect(),
-        );
-        let slice_slots = Arc::new(
-            (0..MAX_CHANNELS)
-                .map(|_| Arc::new(ArcSwapOption::empty()))
-                .collect(),
-        );
-        let mut render = RenderState::new(48_000, slots, slice_slots);
+        let mut render = RenderState::new(48_000, empty_channel_audio_bank());
         let first = Arc::new(SampleData {
             frames: vec![[0.5, -0.5]; 1_000],
             sample_rate: 48_000,
@@ -5585,17 +5708,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
 
     #[test]
     fn preview_gain_cell_is_heard_live() {
-        let slots = Arc::new(
-            (0..MAX_CHANNELS)
-                .map(|_| Arc::new(ArcSwapOption::empty()))
-                .collect(),
-        );
-        let slice_slots = Arc::new(
-            (0..MAX_CHANNELS)
-                .map(|_| Arc::new(ArcSwapOption::empty()))
-                .collect(),
-        );
-        let mut render = RenderState::new(48_000, slots, slice_slots);
+        let mut render = RenderState::new(48_000, empty_channel_audio_bank());
         let loud = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         render.attach_preview_gain(loud.clone());
         render.apply_preview(PreviewCommand::Play {
@@ -5768,6 +5881,84 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         project
     }
 
+    /// A prepared generation reads the bank it was prepared with, and nothing
+    /// a later generation is given can reach it.
+    ///
+    /// This is `control-plane-seams/03`. `RenderState::new` used to be handed
+    /// a **clone of the engine handle's** bank, so there was one set of slots
+    /// shared by every generation that had ever existed. Opening a song then
+    /// queued the new graph through the command ring and overwrote that
+    /// shared bank immediately, out of band -- so for the block or two before
+    /// the audio thread consumed the install, the outgoing project's graph
+    /// played the incoming project's samples, and mid-loop, a half-replaced
+    /// set of them.
+    ///
+    /// The test that would have caught it directly cannot be written here: it
+    /// wants `EngineHandle::install_project`, and an `EngineHandle` cannot be
+    /// built without opening an audio driver. What is checked instead is the
+    /// property that install now relies on, and the signature carries the
+    /// rest -- `install_project` takes its snapshots **by value** and builds
+    /// its own slots, so handing it the live generation's bank is not
+    /// something a caller can express.
+    #[test]
+    fn a_generation_plays_the_bank_it_was_prepared_with() {
+        use crate::render_test_support::{peak_of, BLOCK, SAMPLE_RATE};
+
+        let quiet = Arc::new(SampleData {
+            frames: (0..8_000).map(|_| [0.1, -0.1]).collect(),
+            sample_rate: 48_000,
+            root_note: 60,
+        });
+        let loud = Arc::new(SampleData {
+            frames: (0..8_000).map(|_| [0.9, -0.9]).collect(),
+            sample_rate: 48_000,
+            root_note: 60,
+        });
+        let project = synth_project(ProjectChannel::sampler(0, 1));
+
+        let mut a = RenderState::new(
+            SAMPLE_RATE,
+            channel_audio_bank(vec![ChannelAudioSnapshot::sample(quiet.clone())]),
+        );
+        a.load_project(&project);
+
+        // Generation B, prepared exactly as `install_project` prepares one:
+        // its own bank, from values rather than from A's slots.
+        let mut b = RenderState::new(
+            SAMPLE_RATE,
+            channel_audio_bank(vec![ChannelAudioSnapshot::sample(loud.clone())]),
+        );
+        b.load_project(&project);
+
+        // B exists and is not yet installed. A is still the live generation
+        // and must still be playing A's sample.
+        a.transport.play();
+        b.transport.play();
+        for _ in 0..4 {
+            a.process_once_block(BLOCK);
+            b.process_once_block(BLOCK);
+        }
+        let heard = peak_of(&a.master().l[..BLOCK]);
+        let prepared = peak_of(&b.master().l[..BLOCK]);
+
+        // The ratio, not the absolute levels: what reaches the master has
+        // been through the sampler's output trim and the pan law, so the
+        // figure to hold is the 9:1 the two buffers differ by. Both must be
+        // sounding, or this passes on two silences.
+        assert!(
+            heard > 0.0 && prepared > 0.0,
+            "both generations must sound for this to test anything; A was \
+             {heard} and B was {prepared}"
+        );
+        let ratio = prepared / heard;
+        assert!(
+            (7.0..=11.0).contains(&ratio),
+            "the two generations played a ratio of {ratio} (A {heard}, B \
+             {prepared}); their buffers differ by 9, so anything else means \
+             they are not reading separate banks"
+        );
+    }
+
     /// The offline renderer builds its own slots from the project, so it is a
     /// second place a channel's audio is assembled. Slice maps travel with the
     /// project rather than with `samples`, and leaving them out made every
@@ -5826,9 +6017,12 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             sampler.slices = mooloop_core::SliceMap::default();
         }
         let render = RenderState::from_project(48_000, &committed, &samples);
-        let published = render.sample_slots[0]
+        let published = render.audio_slots[0]
             .load_full()
-            .expect("the channel should have audio");
+            .expect("the channel should have audio")
+            .sample
+            .clone()
+            .expect("the channel should have a buffer");
         assert_eq!(
             published.frames.len(),
             16_000,
@@ -5873,11 +6067,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     /// Adding a channel allocates, so it goes through the structural ring
     /// with storage built off-thread — the same route an effect node takes.
     fn add_channel(render: &mut RenderState, source: DeviceKind) {
-        let storage = RenderState::build_channel(
-            Arc::new(ArcSwapOption::from(None)),
-            Arc::new(ArcSwapOption::from(None)),
-            48_000,
-        );
+        let storage = RenderState::build_channel(Arc::new(ArcSwapOption::from(None)), 48_000);
         let returned = render.apply_structural(StructuralCommand::AddChannel { storage, source });
         // Reused storage comes straight back rather than being dropped here.
         drop(returned);
@@ -9525,7 +9715,16 @@ mod footprint {
         // voice, and it is worth paying twice over, because it is the only
         // thing keeping `DeviceKind::MonoSynth` alive and that deletion takes
         // a whole generator's state back out of this struct.
-        assert_eq!(size_of::<ChannelStrip>(), 42_224);
+        //
+        // `control-plane-seams/02` took eight back off, and it is the only
+        // entry in this list that subtracts. The sampler held two slot
+        // pointers -- one for the channel's buffer, one for its slice map --
+        // and holds one now, because the two are published as a single
+        // `ChannelAudioSnapshot`. The saving is incidental; the reason was
+        // that two slots meant a note-on could land between the two stores
+        // and play a new buffer against old markers. It is recorded here
+        // because a figure that only ever grows stops being read.
+        assert_eq!(size_of::<ChannelStrip>(), 42_216);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -9550,7 +9749,7 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 60_664);
+        assert_eq!(per_live, 60_656);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved

@@ -2,8 +2,9 @@
 //!
 //! Workflow:
 //! ```no_run
+//! use mooloop_engine::CommandSink;
 //! let (engine, mut handle) = mooloop_engine::Engine::new(Default::default()).unwrap();
-//! handle.send(mooloop_core::EngineCommand::Play);
+//! let _ = handle.send(mooloop_core::EngineCommand::Play);
 //! while let Some(ev) = handle.poll() { /* update UI */ }
 //! # let _ = engine;
 //! ```
@@ -18,11 +19,11 @@ use arc_swap::ArcSwapOption;
 use mooloop_core::{
     BufferParams, EffectKind, EffectParams, EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS,
     modulation::CONTROL_SOURCE_SLOTS,
-    CompiledBusGraph, DeviceKind, SliceMap,
+    CompiledBusGraph, DeviceKind,
 };
 use mooloop_dsp::{
-    buffer_allocation_key, build_effect_at_tempo, AudioNode, IntegerDelay, SampleData,
-    SpectrumAnalyzer, StereoBus, StretchPool, SPECTRUM_BINS,
+    buffer_allocation_key, build_effect_at_tempo, AudioNode, ChannelAudioSnapshot, IntegerDelay,
+    SampleData, SpectrumAnalyzer, StereoBus, StretchPool, SPECTRUM_BINS,
 };
 use rtrb::{Consumer, Producer};
 
@@ -31,9 +32,29 @@ use rtrb::{Consumer, Producer};
 /// Same instrument and same reason as `mooloop-session`'s: `block_cost` asks
 /// what a prepared project *holds*, and resident set size cannot answer it,
 /// because the allocator does not hand freed pages back to the OS.
+///
+/// It answers two different questions and they need different counters.
+/// `live()` is a **process-wide** byte total, which is what "what does this
+/// hold" wants and is why `block_cost` insists on `--test-threads=1`.
+/// `allocations()` is a **per-thread** count of calls that never decreases,
+/// which is what "did this allocate at all" wants: a net-zero figure cannot
+/// see an allocation paired with a free in the same block, and that pair is
+/// exactly what a `Vec` reallocating on the audio callback looks like.
+///
+/// Per thread because the callback is one thread and the assertion is about
+/// what *it* did. A process-wide count would be measuring the test harness.
 #[cfg(test)]
 pub(crate) struct CountingAllocator {
     live: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Allocation calls made on this thread. `const`-initialised so that
+    /// touching it from inside `alloc` cannot itself allocate, and read
+    /// through `try_with` so a late allocation during TLS teardown returns
+    /// rather than panicking.
+    static ALLOCATION_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -41,18 +62,40 @@ impl CountingAllocator {
     pub(crate) fn live(&self) -> usize {
         self.live.load(Ordering::Relaxed)
     }
+
+    /// How many times this thread has called the allocator.
+    pub(crate) fn allocations(&self) -> usize {
+        ALLOCATION_CALLS.try_with(|calls| calls.get()).unwrap_or(0)
+    }
 }
 
 #[cfg(test)]
 unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
         self.live.fetch_add(layout.size(), Ordering::Relaxed);
+        let _ = ALLOCATION_CALLS.try_with(|calls| calls.set(calls.get() + 1));
         unsafe { std::alloc::System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
         self.live.fetch_sub(layout.size(), Ordering::Relaxed);
         unsafe { std::alloc::System.dealloc(ptr, layout) }
+    }
+
+    unsafe fn realloc(
+        &self,
+        ptr: *mut u8,
+        layout: std::alloc::Layout,
+        new_size: usize,
+    ) -> *mut u8 {
+        // Counted explicitly. The default `realloc` is alloc-copy-dealloc and
+        // would be seen, but `System` overrides it with `mremap`, which is
+        // the very thing a growing `Vec` does and would otherwise be
+        // invisible to this counter.
+        self.live.fetch_add(new_size, Ordering::Relaxed);
+        self.live.fetch_sub(layout.size(), Ordering::Relaxed);
+        let _ = ALLOCATION_CALLS.try_with(|calls| calls.set(calls.get() + 1));
+        unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
     }
 }
 
@@ -380,20 +423,12 @@ impl Engine {
             rtrb::RingBuffer::new(QUEUE_CAPACITY);
 
         // Every channel's slot starts empty; a channel is silent until the
-        // user loads a sample or a project assigns one.
-        let sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>> = Arc::new(
-            (0..MAX_CHANNELS)
-                .map(|_| Arc::new(ArcSwapOption::from(None)))
-                .collect(),
-        );
-        // The slice map takes the same route the sample takes, for the same
-        // reason: `EngineCommand` is `Copy` and unboxed by design, so a
-        // `Vec` of markers cannot ride the command ring.
-        let slice_slots: Arc<Vec<Arc<ArcSwapOption<SliceMap>>>> = Arc::new(
-            (0..MAX_CHANNELS)
-                .map(|_| Arc::new(ArcSwapOption::from(None)))
-                .collect(),
-        );
+        // user loads a sample or a project assigns one. Sample and slice map
+        // share one slot because they are one fact -- see
+        // `ChannelAudioSnapshot` -- and they take this route rather than the
+        // command ring because `EngineCommand` is `Copy` and unboxed by
+        // design, so neither a buffer nor a `Vec` of markers can ride it.
+        let audio_slots = render::empty_channel_audio_bank();
 
         let xrun_count = Arc::new(AtomicU64::new(0));
         let load = load::LoadMeters::new();
@@ -406,7 +441,7 @@ impl Engine {
         let buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>> =
             Arc::new(ArcSwapOption::empty());
         let keyboard_channel = Arc::new(AtomicU8::new(render::NO_KEYBOARD_CHANNEL));
-        let mut render = RenderState::new(sample_rate, sample_slots.clone(), slice_slots.clone());
+        let mut render = RenderState::new(sample_rate, audio_slots.clone());
         render.attach_keyboard_channel(keyboard_channel.clone());
         render.attach_meters(bus_meters.clone());
         render.attach_device_meters(device_meters.clone());
@@ -443,8 +478,7 @@ impl Engine {
                 keyboard_channel,
                 playhead_meters,
                 modulator_meters,
-                sample_slots,
-                slice_slots,
+                audio_slots,
                 sample_rate,
                 install_generation: 0,
                 driver,
@@ -453,6 +487,39 @@ impl Engine {
             },
         ))
     }
+}
+
+/// Somewhere to put a command for the audio thread, and an honest answer
+/// about whether it got there.
+///
+/// Every method returns whether the command reached the bounded ring, and
+/// every method is `#[must_use]`, because the failure this exists to prevent
+/// is not "a command was lost" -- it is "a command was lost and the sender
+/// stopped believing anything was wrong". The session's reconcilers are
+/// diff-based: one that advances its `_sent` mirror after a dropped send will
+/// never retry it, because the difference that would have found it has
+/// already been satisfied. `docs/AUDIO_ARCHITECTURE.md` says queue overflow
+/// must be observable to the sender; this is the shape of that.
+///
+/// [`EngineHandle`] is the only implementor that ships. The trait exists
+/// because an `EngineHandle` cannot be built without opening an audio driver,
+/// so a test that wants to see a reconciler *refused* has no other way to
+/// reach one. See `mooloop-session`'s `delivery` tests.
+pub trait CommandSink {
+    /// Queue a POD command. Non-blocking.
+    #[must_use]
+    fn send(&mut self, cmd: EngineCommand) -> bool;
+
+    /// Hand a heap-allocated structural change (effect install/remove) over.
+    /// Non-blocking; on a refusal the command -- and any `Box` it carries --
+    /// is dropped here, on the calling (GUI) thread, which is the whole point
+    /// of refusing rather than blocking. A caller that sees `false` has
+    /// nothing left to reclaim.
+    #[must_use]
+    fn send_structural(&mut self, cmd: StructuralCommand) -> bool;
+
+    /// The rate the prepared nodes a caller builds must be sized for.
+    fn sample_rate(&self) -> u32;
 }
 
 /// The control thread's handle into the engine. Realtime communication is
@@ -469,8 +536,15 @@ pub struct EngineHandle {
     keyboard_channel: Arc<AtomicU8>,
     playhead_meters: Arc<PlayheadMeters>,
     modulator_meters: Arc<ModulatorMeters>,
-    sample_slots: Arc<Vec<Arc<ArcSwapOption<SampleData>>>>,
-    slice_slots: Arc<Vec<Arc<ArcSwapOption<SliceMap>>>>,
+    /// The bank the **most recently prepared** generation reads.
+    ///
+    /// Not "the live generation's": a per-channel publication between queueing
+    /// an install and the audio thread consuming it belongs to the incoming
+    /// project, and lands in its bank so it is heard the instant that
+    /// generation goes live. A refused install leaves this pointing at the
+    /// outgoing generation's bank, which is what makes the caller's early
+    /// return honest.
+    audio_slots: render::ChannelAudioBank,
     sample_rate: u32,
     install_generation: u64,
     driver: Arc<Driver>,
@@ -493,19 +567,6 @@ impl EngineHandle {
     /// timing window.
     pub fn realtime_status(&self) -> load::RealtimeStatus {
         self.load.realtime()
-    }
-
-    /// Queue a command for the audio thread. Non-blocking; drops on overflow
-    /// (which should not happen at sane UI event rates).
-    pub fn send(&mut self, cmd: EngineCommand) {
-        let _ = self.cmd_tx.push(RealtimeCommand::Engine(cmd));
-    }
-
-    /// Hand a heap-allocated structural change (effect install/remove) to the
-    /// audio thread. Non-blocking; on overflow the command is dropped, which
-    /// for `InstallEffect` drops the node back on this (GUI) thread.
-    pub fn send_structural(&mut self, cmd: StructuralCommand) {
-        let _ = self.cmd_tx.push(RealtimeCommand::Structural(cmd));
     }
 
     /// Prepare and publish a replacement for a retained-audio buffer. The
@@ -575,55 +636,51 @@ impl EngineHandle {
         std::iter::from_fn(|| self.poll())
     }
 
-    /// Publish a freshly-decoded sample for `channel`. The realtime sampler
-    /// picks it up on the next note-on. Wait-free; UI-thread safe.
-    pub fn load_sample(&self, channel: usize, sample: Arc<SampleData>) {
-        if let Some(slot) = self.sample_slots.get(channel) {
-            slot.store(Some(sample));
+    /// Publish what `channel` plays: its buffer and the map that indexes it,
+    /// as one store. The realtime sampler picks the pair up on the next
+    /// note-on. Wait-free; UI-thread safe.
+    ///
+    /// **There is deliberately no way to set one without the other.** The
+    /// four methods this replaced -- `load_sample`, `clear_sample`,
+    /// `load_slices`, `clear_slices` -- let a note-on land between two stores
+    /// and play a new buffer against old markers, which after a stretch
+    /// commit means a marker indexing a buffer of a different length. Keeping
+    /// any of them as a convenience, reading the current snapshot and storing
+    /// a modified copy, would reintroduce exactly that.
+    pub fn set_channel_audio(&self, channel: usize, audio: ChannelAudioSnapshot) {
+        if let Some(slot) = self.audio_slots.get(channel) {
+            // An empty snapshot is stored as nothing, so a silent channel has
+            // one representation rather than two.
+            slot.store((!audio.is_empty()).then(|| Arc::new(audio)));
         }
     }
 
-    pub fn clear_sample(&self, channel: usize) {
-        if let Some(slot) = self.sample_slots.get(channel) {
-            slot.store(None);
-        }
+    /// Queue a preview-voice command. Non-blocking; returns whether it
+    /// reached the ring. A refused preview is silence where the user expected
+    /// to hear a file, so the caller is the only place that can say so.
+    #[must_use]
+    pub fn preview(&mut self, command: PreviewCommand) -> bool {
+        self.cmd_tx.push(RealtimeCommand::Preview(command)).is_ok()
     }
 
-    /// Publish a channel's slice map. Same contract as `load_sample`: the
-    /// realtime voice reads it at note-on and never mutates or drops it.
-    pub fn load_slices(&self, channel: usize, slices: Arc<SliceMap>) {
-        if let Some(slot) = self.slice_slots.get(channel) {
-            slot.store(Some(slices));
-        }
-    }
-
-    pub fn clear_slices(&self, channel: usize) {
-        if let Some(slot) = self.slice_slots.get(channel) {
-            slot.store(None);
-        }
-    }
-
-    /// Queue a preview-voice command. Non-blocking; drops on overflow.
-    pub fn preview(&mut self, command: PreviewCommand) {
-        let _ = self.cmd_tx.push(RealtimeCommand::Preview(command));
+    /// Add a channel. Its strip, event list and control-output buffer are
+    /// built here rather than reserved at startup, and travel to the graph
+    /// through the structural ring like any other allocation.
+    ///
+    /// `false` means the channel did not reach the graph -- either its index
+    /// is outside the addressable range, or the ring refused the command and
+    /// dropped the prepared storage here.
+    #[must_use]
+    pub fn add_channel(&mut self, channel: usize, source: DeviceKind) -> bool {
+        let Some(slot) = self.audio_slots.get(channel).cloned() else {
+            return false;
+        };
+        let storage = RenderState::build_channel(slot, self.sample_rate);
+        self.send_structural(StructuralCommand::AddChannel { storage, source })
     }
 
     /// Sets the preview voice's linear output gain. Live: the voice reads
     /// the shared cell every block, so turning the knob is heard at once.
-    /// Add a channel. Its strip, event list and control-output buffer are
-    /// built here rather than reserved at startup, and travel to the graph
-    /// through the structural ring like any other allocation.
-    pub fn add_channel(&mut self, channel: usize, source: DeviceKind) {
-        let Some(slot) = self.sample_slots.get(channel).cloned() else {
-            return;
-        };
-        let Some(slices) = self.slice_slots.get(channel).cloned() else {
-            return;
-        };
-        let storage = RenderState::build_channel(slot, slices, self.sample_rate);
-        self.send_structural(StructuralCommand::AddChannel { storage, source });
-    }
-
     pub fn set_preview_gain(&self, gain: f32) {
         self.preview_gain.store(gain.to_bits(), Ordering::Relaxed);
     }
@@ -633,16 +690,25 @@ impl EngineHandle {
     /// The displaced executor returns through the reclaim ring and is dropped
     /// by `poll`, never by the audio callback.
     #[must_use]
-    pub fn install_project(&mut self, project: Arc<mooloop_core::Project>) -> bool {
+    pub fn install_project(
+        &mut self,
+        project: Arc<mooloop_core::Project>,
+        audio: Vec<ChannelAudioSnapshot>,
+    ) -> bool {
         let generation = self
             .install_generation
             .checked_add(1)
             .expect("project install generation exhausted");
-        let mut render = RenderState::new(
-            self.sample_rate,
-            self.sample_slots.clone(),
-            self.slice_slots.clone(),
-        );
+        // A **fresh** bank, built from values the caller owns. This used to
+        // be `self.audio_slots.clone()` -- one bank shared by every
+        // generation that had ever existed -- so the caller published the new
+        // project's samples into it out of band, and the outgoing project's
+        // graph read them for the block or two before the audio thread
+        // consumed the install. The bank is now part of what the install
+        // carries, and `audio` is taken by value so the live generation's
+        // slots cannot be handed in by mistake.
+        let bank = render::channel_audio_bank(audio);
+        let mut render = RenderState::new(self.sample_rate, bank.clone());
         render.attach_meters(self.bus_meters.clone());
         // A project swap replaces the complete renderer. Reconnect every meter
         // transport before it reaches the audio thread: otherwise the new
@@ -670,8 +736,21 @@ impl EngineHandle {
         {
             self.device_telemetry.clear_spectra();
             self.install_generation = generation;
+            // Per-channel publication now addresses the bank of the
+            // generation that is *about to* be live, which is the right
+            // answer on both sides of the switch: before it, a sample the
+            // user loads belongs to the incoming project and is heard the
+            // instant it arrives; after it, this is simply the live bank. The
+            // outgoing generation keeps its own bank until its `RenderState`
+            // comes back through the reclaim ring and `poll` drops both here,
+            // on this thread.
+            self.audio_slots = bank;
             true
         } else {
+            // `bank` is dropped here with `prepared`, and `self.audio_slots`
+            // still names the live generation's. That is what makes the
+            // caller's "leave everything untouched on a refusal" true of the
+            // samples as well as the project.
             false
         }
     }
@@ -782,16 +861,6 @@ impl EngineHandle {
         self.modulator_meters.read(channel)
     }
 
-    pub fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-
-    /// Clone the currently-published sample pointer for non-realtime display
-    /// work such as waveform peak generation.
-    pub fn sample_snapshot(&self, channel: usize) -> Option<Arc<SampleData>> {
-        self.sample_slots.get(channel)?.load_full()
-    }
-
     /// Candidate output destinations as the driver discovers them -- under
     /// JACK, input ports grouped by owning client. A non-realtime query; call
     /// it when the audio preferences page opens or on an explicit refresh, not
@@ -825,6 +894,20 @@ impl EngineHandle {
             buffer_size: self.driver.buffer_size(),
             current_target: self.driver.current_target(),
         }
+    }
+}
+
+impl CommandSink for EngineHandle {
+    fn send(&mut self, cmd: EngineCommand) -> bool {
+        self.cmd_tx.push(RealtimeCommand::Engine(cmd)).is_ok()
+    }
+
+    fn send_structural(&mut self, cmd: StructuralCommand) -> bool {
+        self.cmd_tx.push(RealtimeCommand::Structural(cmd)).is_ok()
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
     }
 }
 

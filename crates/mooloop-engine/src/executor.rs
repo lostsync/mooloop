@@ -13,22 +13,15 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use mooloop_core::{EngineEvent, MidiMessage};
-use mooloop_dsp::{SampleData, MAX_BLOCK_SIZE};
+use mooloop_dsp::MAX_BLOCK_SIZE;
 use rtrb::Consumer;
 
 use crate::load::LoadMeters;
-use crate::render::RenderState;
+use crate::render::{RenderState, RetiredPreviews};
 use crate::{RealtimeCommand, StructuralReclaim};
 
 /// Per-block MIDI input ceiling. Bounded so the callback never allocates.
 const MAX_MIDI_PER_BLOCK: usize = 256;
-
-/// How many finished preview samples the callback can hold while the reclaim
-/// ring is full. A preview is one auditioned sample and the ring drains every
-/// GUI frame, so reaching this would take a backlog no interaction produces --
-/// but the capacity is reserved up front regardless, because the alternative
-/// is a `Vec` growing on the realtime thread.
-const MAX_RETIRED_PREVIEWS: usize = 64;
 
 pub(crate) struct ExecutorIo {
     pub cmd_rx: Consumer<RealtimeCommand>,
@@ -49,7 +42,8 @@ pub(crate) struct Executor {
     /// backpressured. No later command may pass it.
     pending_command: Option<RealtimeCommand>,
     /// Preview samples whose voice has finished, awaiting reclaim-ring slots.
-    retired_previews: Vec<Arc<SampleData>>,
+    /// Bounded: see [`RetiredPreviews`].
+    retired_previews: RetiredPreviews,
     /// Incremented by the driver, wherever its host reports a dropout.
     xrun_count: Arc<AtomicU64>,
     last_seen_xruns: u64,
@@ -86,7 +80,7 @@ impl Executor {
             evt_tx: io.evt_tx,
             reclaim_tx: io.reclaim_tx,
             pending_command: None,
-            retired_previews: Vec::with_capacity(MAX_RETIRED_PREVIEWS),
+            retired_previews: RetiredPreviews::new(),
             xrun_count,
             last_seen_xruns: 0,
             sample_rate,
@@ -176,10 +170,26 @@ impl Executor {
                     continue;
                 }
                 RealtimeCommand::Preview(command) => {
+                    // Checked *before* applying, the way the reclaim-ring
+                    // check below defers an install rather than dropping it.
+                    // Applying first and then finding nowhere to put the
+                    // replaced sample would leave the callback holding an
+                    // `Arc` it must not free.
+                    if self.retired_previews.is_full() {
+                        self.pending_command = Some(RealtimeCommand::Preview(command));
+                        break;
+                    }
                     if let Some(sample) = self.render.apply_preview(command) {
                         // The replaced sample leaves through the reclaim ring
-                        // with the rest, below.
-                        self.retired_previews.push(sample);
+                        // with the rest, below. The push runs unconditionally
+                        // and is judged afterwards -- inside a `debug_assert!`
+                        // it would not happen at all in a release build, and
+                        // the `Arc` would be freed here, on the audio thread.
+                        let refused = self.retired_previews.push(sample);
+                        debug_assert!(
+                            refused.is_none(),
+                            "retirement refused a sample after a capacity check"
+                        );
                     }
                     continue;
                 }
@@ -222,15 +232,28 @@ impl Executor {
         // the same ownership round trip displaced effect nodes take. The
         // reclaim ring is never the sample's last reference, so a full ring
         // just delays disposal to a later block.
-        while let Some(sample) = self.render.pop_retired_preview() {
-            self.retired_previews.push(sample);
+        while !self.retired_previews.is_full() {
+            let Some(sample) = self.render.pop_retired_preview() else {
+                break;
+            };
+            // Unconditionally, then judged. Same reason as above.
+            let refused = self.retired_previews.push(sample);
+            debug_assert!(
+                refused.is_none(),
+                "retirement refused a sample the loop had checked room for"
+            );
         }
-        if self.reclaim_tx.slots() >= self.retired_previews.len() {
-            for sample in self.retired_previews.drain(..) {
-                let _ = self
-                    .reclaim_tx
-                    .push(StructuralReclaim::PreviewSample { sample });
-            }
+        // Partial rather than all-or-nothing. Waiting for room for every held
+        // sample is what let the backlog build in the first place; draining
+        // as many as the ring has slots for makes the bounded case much
+        // harder to reach and costs nothing when, as usual, there is one.
+        for _ in 0..self.reclaim_tx.slots().min(self.retired_previews.len()) {
+            let Some(sample) = self.retired_previews.pop() else {
+                break;
+            };
+            let _ = self
+                .reclaim_tx
+                .push(StructuralReclaim::PreviewSample { sample });
         }
         let master = self.render.master();
         out_l[..frames].copy_from_slice(&master.l[..frames]);

@@ -175,8 +175,13 @@ insert model, so **do not treat that document as settled when this step
 starts**: ask first, and do not begin the redesign unprompted.
 
 One piece of Stage 1 is still unverified and is not a design question: its
-acceptance test 8 — no allocations or locks in the callback — needs an
-allocation-tracking harness rather than a reading of the code.
+acceptance test 8 — no allocations or locks in the callback. **The harness it
+was waiting for exists as of 2026-09-15** (`control-plane-seams/04`): it is
+`CountingAllocator::allocations()` in `mooloop-engine`, and it was three lines
+on an allocator that crate had installed all along. What is left is coverage —
+one block on the preview path is measured, the Buffer operations are not, and
+the locks half is not measured at all. That is writing tests, not building an
+instrument.
 
 Done when: a project can generate or load sound, capture it continuously at a
 chosen insert point, sequence an audible jump/reverse/repeat transformation,
@@ -224,27 +229,36 @@ rendering the active step; threatens realtime safety or project compatibility;
 or is a small regression in the surface being touched. Record larger adjacent
 work instead of folding it into the current branch.
 
-- **`docs/plans/control-plane-seams/` is five confirmed defects and is the
-  work that is actually available right now.** An outside architectural review
-  on 2026-09-15 read the system end to end and passed the layering; what it
-  faulted was the control-plane boundary. Two of the five meet the bar at the
-  top of this list on their own. **A channel's sample and its slice map are
-  published through two separate `ArcSwap`s** although the code that sends
-  them documents them as one fact -- so a note-on can pair a new buffer with
-  old markers, and after a stretch commit those markers index a buffer of a
-  different length. **Opening a song overwrites the shared sample bank before
-  the queued render generation switches**, so the outgoing project can play
-  the incoming one's samples. A third, preview retirement allocating on the
-  callback thread, is the same unverified claim as
-  `buffer-implementation/`'s Stage 1 acceptance test 8, and one
-  allocation-tracking harness closes both. The other two -- commands dropped
-  on a full ring while the session records them as delivered, and sample loads
-  with no per-request token -- are cheap and are the kind of thing that
-  accumulates into an impression rather than a bug report. Four of the five
-  are an afternoon each. The review's sixth finding, that the UI/session seam
-  is becoming a god layer, is deliberately **not** a step; it is a direction
-  recorded in that plan's `README.md`, and step 01 is a down payment on it
-  either way.
+- **`docs/plans/control-plane-seams/` — all five steps landed 2026-09-15**,
+  and the directory is ready to archive. Five confirmed control-plane defects
+  from an outside architectural review that read the system end to end and
+  passed the layering. `00-status.md` has what each step found; three things
+  belong here rather than there.
+
+  **The allocation harness this document has been asking for since
+  `buffer-implementation/` Stage 1 came out of step 04**, and it was three
+  lines on an allocator `mooloop-engine` already had. See the amended entry
+  above and `LOOSE_ENDS.md`.
+
+  **Two of the five could not be given the test their step specified.** Both
+  wanted to drive an `EngineHandle`, and one cannot be built without opening
+  an audio driver — nothing in the workspace had ever constructed one in a
+  test, which is some of why defects this mechanical survived. Step 01 grew a
+  `CommandSink` trait so a refusal is reachable; step 03 could not, and put
+  the guarantee in the signature instead. **That gap is worth a decision
+  sometime**: a driver-free `EngineHandle` would make the control-plane
+  boundary testable as a whole, and it is the thing standing between these
+  fixes and a test that exercises the actual seam.
+
+  **Step 03 turned up a live defect nobody was looking for.** A project old
+  enough to carry a legacy `Builtin` sample reference opened with that channel
+  silent — the install published the default kick and a republication four
+  lines later cleared it — while its name, waveform and duration all described
+  a kick.
+
+  The review's sixth finding, that the UI/session seam is becoming a god
+  layer, is deliberately **not** a step; it is a direction in that plan's
+  `README.md`, and step 01 is a down payment on it either way.
 - **The sampler's stretching-polyphony cap is not enforced anywhere.**
   `StretchPool::new` builds a reader for all sixteen voices at 100 KB each —
   1.6 MB a stretching channel against 401 KB for four — although the contract

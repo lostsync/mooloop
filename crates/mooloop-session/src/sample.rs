@@ -22,6 +22,18 @@ pub struct LoadedSample {
 pub struct LoadResult {
     pub channel: usize,
     pub source_revision: u64,
+    /// Which *request* this completion answers.
+    ///
+    /// `source_revision` is a property of the project, not of a request, so
+    /// two in-flight loads for one channel both match it and the last one to
+    /// finish wins. Completion order is decode time, which is file size and
+    /// page cache: load a long file, change your mind and load a short one,
+    /// and the short one lands first and is overwritten. The user clicks
+    /// sample B and hears sample A.
+    ///
+    /// Zero for a `new_channel` load, which is not keyed by channel because
+    /// the channel does not exist yet; see `Session::next_sample_request`.
+    pub request: u64,
     /// Load into a sampler channel created on arrival (`channel` is then the
     /// index the new channel will take) rather than an existing one.
     pub new_channel: bool,

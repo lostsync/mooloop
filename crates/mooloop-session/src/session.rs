@@ -112,11 +112,14 @@ pub struct Session {
     /// channels clears both even when the new channel happens to occupy the
     /// same runtime slot.
     pub modulation_ui_channel: Cell<Option<usize>>,
-    /// The compensation plan the engine has been told about, so the pump's
+    /// The compensation the engine has been told about, so the pump's
     /// reconcile can send only what changed. Not document state: it is a
     /// record of what has been said to the audio thread, and a fresh session
     /// has said nothing.
-    pub compensation_sent: mooloop_core::CompiledLatency,
+    ///
+    /// Per target rather than a whole plan, because it advances per target:
+    /// see [`crate::engine::CompensationSent`].
+    pub compensation_sent: crate::engine::CompensationSent,
     /// Which buses the engine has been given a console accumulator for, so
     /// the pump's reconcile sends only what changed. Same status as
     /// [`Self::compensation_sent`]: a record of what has been said to the
@@ -139,6 +142,33 @@ pub struct Session {
     /// [`Self::compensation_sent`]: a record of what has been said to the
     /// audio thread, not document state.
     pub audio_graph_sent: mooloop_core::CompiledAudioGraph,
+    /// The latest sample-load request issued for each channel, parallel to
+    /// [`Self::channels`].
+    ///
+    /// A request token and not a revision: `source_revision` says the project
+    /// has not changed underneath a load, which two concurrent loads for one
+    /// channel both satisfy. This says *which* load, so a completion that has
+    /// been superseded can be recognised and dropped.
+    ///
+    /// Kept in step with the channel list through
+    /// [`Self::rescope_after`], because an index is all a completion has to
+    /// name its channel by and a removal shifts every later one down. A
+    /// channel whose index has moved fails the comparison and its completion
+    /// is dropped, which is the conservative answer and the right one: the
+    /// load was asked for at a seat that now holds somebody else.
+    pub sample_request: Vec<u64>,
+    /// The last token handed out, for any channel. Monotonic across the
+    /// session, so a token is never reused after a removal renumbers things.
+    ///
+    /// `pub` like every other field here because `UiState::new` builds a
+    /// `Session` with a struct literal and `..Session::default()`, which a
+    /// private field forbids outright.
+    pub sample_request_counter: u64,
+    /// Whether a refused engine command has already been reported, for the
+    /// life of this session. See `Session::report_refused_command`: the
+    /// condition is bursty, and one named line beats a hundred identical
+    /// ones.
+    pub engine_queue_refused: bool,
     /// Snapshot captured at the start of a direct knob gesture. Intermediate
     /// control updates still reach audio immediately, while one release
     /// becomes one undoable route edit.
@@ -234,11 +264,14 @@ impl Default for Session {
             modulation_armed_slot: Cell::new(None),
             modulation_outputs: Cell::new([0.0; CONTROL_SOURCE_SLOTS]),
             modulation_ui_channel: Cell::new(None),
-            compensation_sent: mooloop_core::CompiledLatency::default(),
+            compensation_sent: crate::engine::CompensationSent::default(),
             console_sums_sent: [false; MAX_BUSES],
             solo_silenced_sent: [false; MAX_BUSES],
             track_graph_sent: (mooloop_core::CompiledBusGraph::default(), Vec::new()),
             audio_graph_sent: mooloop_core::CompiledAudioGraph::default(),
+            sample_request: Vec::new(),
+            sample_request_counter: 0,
+            engine_queue_refused: false,
             modulation_edit_before: None,
             modulation_edit_changed: false,
             browser_locations: Vec::new(),
@@ -781,6 +814,46 @@ impl Session {
             .drain()
             .filter_map(|(channel, name)| Some((edit.channel(channel)?, name)))
             .collect();
+        // The in-flight load tokens move with their channels. Any completion
+        // whose seat no longer holds the channel it was asked for then fails
+        // the comparison and is dropped, which is what should happen to it.
+        // One longer than the old map: `ChannelEdit::Inserted` shifts indices
+        // *up*, so the last channel's token needs a seat that did not exist
+        // before. Sized short, its in-flight load would have been refused.
+        let mut moved_requests = vec![0u64; self.sample_request.len() + 1];
+        for (old_index, token) in self.sample_request.iter().enumerate() {
+            let Ok(old_index) = u8::try_from(old_index) else {
+                continue;
+            };
+            if let Some(new_index) = edit.channel(old_index) {
+                if let Some(slot) = moved_requests.get_mut(usize::from(new_index)) {
+                    *slot = *token;
+                }
+            }
+        }
+        self.sample_request = moved_requests;
+    }
+
+    /// Mint the token for a fresh sample-load request on `channel`, and
+    /// record it as the only one that channel is still waiting for.
+    ///
+    /// Every completion carries the token it was dispatched with, so an older
+    /// decode finishing after a newer one is recognised as superseded rather
+    /// than being applied because it happened to be last. Dropping it is not
+    /// an error and is deliberately silent.
+    pub fn next_sample_request(&mut self, channel: usize) -> u64 {
+        self.sample_request_counter = self.sample_request_counter.wrapping_add(1).max(1);
+        let token = self.sample_request_counter;
+        if self.sample_request.len() <= channel {
+            self.sample_request.resize(channel + 1, 0);
+        }
+        self.sample_request[channel] = token;
+        token
+    }
+
+    /// Whether `request` is still the load `channel` is waiting for.
+    pub fn sample_request_is_current(&self, channel: usize, request: u64) -> bool {
+        self.sample_request.get(channel).copied() == Some(request)
     }
 
     /// Let go of `device` everywhere on this side that could still be naming
@@ -1258,7 +1331,12 @@ impl Session {
         // `RenderState::load_project` installs its own compensation. Forget
         // what this side thinks was sent so the next reconcile re-derives
         // against the new project rather than trusting a plan for the old one.
-        self.compensation_sent = mooloop_core::CompiledLatency::default();
+        self.compensation_sent = crate::engine::CompensationSent::default();
+        // A load in flight when the document was replaced is answering a
+        // question about a project that is no longer open. `source_revision`
+        // already refuses it; clearing the tokens keeps the two guards from
+        // disagreeing about which channels are waiting.
+        self.sample_request.clear();
         // Same for the console accumulators: `RenderState::load_project`
         // installs its own through `install_console`, so this side must
         // re-derive rather than trust a plan for the document that just left.
