@@ -353,8 +353,10 @@ before any of them existed still loads:
   falls back to the master: a producer with nowhere to go must still be heard,
   and a send with nowhere to go is simply not a send — re-pointing it at the
   master would put a wet path into the mix at full level. A bank whose sends
-  close a loop has its sends cleared along with its outputs, so the file still
-  opens. See `docs/plans/archive/console/05-sends.md`.
+  close a loop gives up **the edges on the loop and no others**, so the file
+  still opens and the sends elsewhere in it survive; a send is given up before
+  an output, for the same reason the paragraph above gives. See
+  `docs/plans/archive/console/05-sends.md`.
 - **Two effects follow the transport, and both persist a division rather
   than its result.** A delay carries `tempo_sync` and `time_division`, and a
   modulation effect carries `tempo_sync` and `rate_division`; all four
@@ -497,10 +499,14 @@ audio file.
 
   Two routing repairs run, and **they do not both run in the same place.** An
   out-of-range destination is repaired to the master by the integrity pass,
-  which reports it. A bank whose routing contains a cycle is flattened to
-  everything-to-master, and a send naming a track that is not there is
-  dropped, by `mooloop_core::mixer::sanitize_bank` -- which `Session` calls
-  after the load, and which reports nothing. See `docs/LOOSE_ENDS.md`.
+  which reports it through `Doctor`. A bank whose routing contains a cycle has
+  the edges on that cycle removed, and a send naming a track that is not there
+  is dropped, by `mooloop_core::mixer::sanitize_bank` -- which `Session` calls
+  after the load. Those repairs are named, one line each, but they go to the
+  **log** rather than to `LoadReport::repairs`: `sanitize_bank` runs on every
+  project install and not only on a load, so folding it into the report means
+  moving it into the integrity pass. That half is still in
+  `docs/LOOSE_ENDS.md`.
 - **No limit on sends.** Nothing in the format, the plan or the face reserves
   for a number of them; a track carries as many as it was given.
   `docs/CAPACITY_POLICY.md` is why.

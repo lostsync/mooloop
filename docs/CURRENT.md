@@ -831,10 +831,13 @@ land on its own when it starts to matter:
   `mooloop_dsp::console` is where the curve lives.
 - Cycles are refused rather than delayed, at the picker (looping destinations
   are shown greyed with the reason), at the command boundary, and on load,
-  where a cyclic file is flattened to everything-to-master so it still opens
-  and plays. Feedback routing would mean reading a bus's previous block, which
-  is a deliberate feature rather than a fallback and needs a latency story this
-  engine does not have.
+  where a cyclic file gives up **the edges that close the loop** so it still
+  opens and plays. A send on the ring goes before an output on it, because a
+  dropped send loses what was added where a re-pointed output still carries
+  the track's audio; routing elsewhere in the bank is untouched, and each
+  removal is named in the log. Feedback routing would mean reading a bus's
+  previous block, which is a deliberate feature rather than a fallback and
+  needs a latency story this engine does not have.
 - A muted bus still processes, so effect tails on it decay rather than freeze,
   but contributes no audio and meters as silent.
 - Per-bus peaks reach the GUI through a shared array of atomics rather than the

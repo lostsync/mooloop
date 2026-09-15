@@ -13,7 +13,7 @@ use crate::notes::ScaleBase;
 use crate::project::ProjectSnapshot;
 use crate::values::descriptor_slots;
 use mooloop_core::{
-    default_buses, sanitize_bank, would_create_cycle, DEFAULT_STEPS,
+    default_buses, log_warn, sanitize_bank, would_create_cycle, DEFAULT_STEPS,
     MAX_BUSES, MAX_PLAYLIST_PLACEMENTS,
     drop_lanes_for_device, strip_descriptor, AutomationLane, BusSetup, Channel, ChannelSetup,
     DeviceId,
@@ -1184,7 +1184,20 @@ impl Session {
             })
             .collect::<Vec<_>>();
 
-        self.buses = sanitize_bank(&project.buses);
+        // The repairs are logged rather than counted into the status bar,
+        // which is the same treatment `document::log_repairs` gives the
+        // integrity pass's: a bank that needed repairing is never expected,
+        // and the useful part is which edge went rather than how many. They
+        // do not reach `LoadReport::repairs`, because this runs on every
+        // project install -- an undo, a channel insert -- and not only on a
+        // load; folding them into the report means moving the sanitise into
+        // `mooloop-project`'s integrity pass, which is the half of this that
+        // is still in `LOOSE_ENDS.md`.
+        let repaired = sanitize_bank(&project.buses);
+        for repair in &repaired.repairs {
+            log_warn!("project", "track bank repaired: {repair}");
+        }
+        self.buses = repaired.buses;
         self.pattern_lengths = project
             .pattern_lengths
             .iter()

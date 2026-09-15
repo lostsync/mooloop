@@ -169,8 +169,10 @@ pub use mixer::{
     compile_bus_graph, compile_latency,
     compile_render_order, default_buses, default_render_order, is_legal_route, is_legal_send,
     sanitize_bank, sanitize_route, send_edges, sends_are_compensable,
-    would_create_cycle, AudioEdge, AudioOrder, AuxSend, BusSetup, CompiledAudioGraph, CompiledBusGraph,
-    CompiledLatency, EdgeRefusal, EffectTarget, MixerBus, RenderOrder, SendEdge, SendTap,
+    would_create_cycle, AudioEdge, AudioOrder, AuxSend, BankRepair, BusSetup, CompiledAudioGraph,
+    CompiledBusGraph,
+    CompiledLatency, EdgeRefusal, EffectTarget, MixerBus, RenderOrder, SanitizedBank, SendEdge,
+    SendTap,
     INSERT_BUSES, MASTER_BUS, MAX_BUSES,
 };
 pub use pattern::{

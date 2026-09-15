@@ -974,37 +974,30 @@ a dependent input out of range on `clear` and map empty-slot references in
 it cannot represent; or decide the slot number is the contract and delete the
 `retarget` remap so the three behaviours at least agree. Found 2026-09-13.
 
-**Half the bus-bank repair happens in `mooloop-core` and reports nothing, and
-one branch of it can delete every send in the project.** `PROJECT_FORMAT.md`
-attributes three repairs to the loader; only the out-of-range destination is
-there. `mixer::sanitize_bank` (`mooloop-core/src/mixer.rs:305`) does the other
-two -- drop a send whose target is gone, flatten a cycle to
-everything-to-master -- and it is called from `Session::load_project`
-(`session.rs:1140`), after the integrity pass, with no `Doctor` in reach.
+**The bus-bank repair is logged, not reported, and `load_bundle` on its own
+still hands back an unsanitised bank.** Two of the four consequences this
+entry described are fixed as of 2026-09-14. The cycle branch no longer clears
+`sends` on every track: `break_cycles` removes only edges that are genuinely
+on a loop, sends before outputs, so one bad `output` edge in a hand-edited
+file costs that edge rather than a whole bank's aux routing. And
+`sanitize_bank` returns a `BankRepair` per correction, which
+`Session::replace_project` writes to the log.
 
-Four consequences, in order of how much they cost a user. The repair is
-**unreported**: `LoadReport::repairs` is empty for it, so the status bar, the
-repair log and the copyable `Diagnosis::report()` all omit it. It is then
-**persisted** -- the sanitized bank becomes `self.buses`, and the next save
-writes it -- so the sends are gone from the file and not just from the running
-document. The cycle branch clears `sends` on **every** track rather than the
-ones in the cycle, so one bad `output` edge in a hand-edited or foreign-build
-file costs a whole bank's aux routing silently. And `load_bundle` on its own
-returns an unsanitised bank, so anything driving the loader directly -- an
-offline render, a headless measurement loop -- gets a graph `compile_bus_graph`
-will refuse.
+What is left is where those repairs *go*. They are not in
+`LoadReport::repairs`, so the status bar's count, the repair log's load line
+and the copyable `Diagnosis::report()` still omit them -- and the sanitized
+bank is still what the next save writes, so a repair is an edit to the user's
+file that only the log mentions. Folding them into the report means moving the
+sanitise into `integrity::check_buses`, which needs `mooloop-project` to call
+`compile_bus_graph` itself and changes *when* it runs relative to what
+`Session::replace_project` assumes about the bank it is handed -- and that
+function runs on every project install, an undo included, not only on a load.
+The narrow alternative is a second entry point used only by the load path.
 
-The fix is not small because the repair needs the whole graph: moving it into
-`integrity::check_buses` means `mooloop-project` calling `compile_bus_graph`
-itself, and it changes *when* the sanitising runs relative to what
-`Session::load_project` assumes about the bank it is handed. Three options,
-and the third is worth doing whichever of the first two wins: move it into the
-integrity pass and report each dropped send and the cycle flatten through
-`Doctor`; or leave it where it is and have it return its issues for `Session`
-to fold into the `LoadReport`; or narrow the cycle branch to break the smallest
-set of edges that makes the graph compile, instead of clearing everything.
-`PROJECT_FORMAT.md`'s limits section now says where these actually happen
-rather than claiming the loader does all three. Found 2026-09-12.
+Separately, `load_bundle` on its own returns an unsanitised bank, so anything
+driving the loader directly -- an offline render, a headless measurement loop
+-- gets a graph `compile_bus_graph` will refuse. Found 2026-09-12, half-fixed
+2026-09-14.
 
 **`from_index` answers out-of-range input two different ways depending on
 which enum you ask, and nothing currently reaches it.** Forty-five enums
