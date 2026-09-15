@@ -7,14 +7,20 @@ is not. Do not read the future tense in the rest of this file as a statement
 that nothing exists. `docs/plans/buffer-implementation/` is the build order;
 `docs/FOCUS.md`'s Buffer step is the remaining product test.
 
-**The insert model below is not settled, as of 2026-08-30.** Adam's position is
-that making Buffer an ordinary insert device was partly the wrong call: he
-designed it as though it had to work unchanged in another DAW, and Buffer is
-not meant to be portable -- it is meant to be part of how audio playback works
-inside mooloop. His stated intent is the **end of a device rack, with its own
-sequencing lane**. The lane design is not worked out. So read what follows as
-what shipped rather than as what the device should be, and raise the shape
-before building on it.
+**The insert model below was not settled as of 2026-08-30.** Adam's position
+then was that making Buffer an ordinary insert device was partly the wrong
+call: he designed it as though it had to work unchanged in another DAW, and
+Buffer is not meant to be portable -- it is meant to be part of how audio
+playback works inside mooloop. His stated intent was the **end of a device
+rack, with its own sequencing lane**, and the lane design was never worked out.
+So read what follows as what shipped rather than as what the device should be.
+
+**Settled 2026-09-15: Buffer stays a device.** Adam, on the realtime-sampler
+framing: *"it puts some of my doubts about a device-based implementation to
+rest."* The rack-end placement and the sequencing lane are not ruled out and
+are not foreclosed -- a lane would drive the published parameters either way.
+`docs/plans/buffer-implementation/03-freeze-and-the-grid.md` is the work order
+that follows from it, and it supersedes this document where they disagree.
 
 ## What shipped
 
