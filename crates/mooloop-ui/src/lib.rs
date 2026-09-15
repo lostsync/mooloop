@@ -12848,7 +12848,11 @@ fn apply_loaded_sample(
         ch.sample_name = name;
         ch.sample_description = description;
         ch.sample_duration = duration;
-        ch.sample_path = Some(loaded.path);
+        ch.sample_path = Some(loaded.path.clone());
+        // Where it came from, which is what "next sample" walks. A load from
+        // the browser or the file dialog is the only thing that sets this;
+        // the save's write-back deliberately does not.
+        ch.sample_browse_path = Some(loaded.path);
         ch.sample_embedded = false;
         ch.sample_data = Some(loaded.sample.clone());
         // A new file retires the old commit and the old markers outright:

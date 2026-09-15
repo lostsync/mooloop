@@ -338,6 +338,7 @@ impl Session {
         channel.sample_description.clear();
         channel.sample_duration = 0.0;
         channel.sample_path = None;
+        channel.sample_browse_path = None;
         channel.sample_embedded = false;
         channel.sample_data = None;
         channel.committed_sample = None;
@@ -1112,7 +1113,13 @@ impl Session {
                             0.0
                         }
                     });
-                let (can_previous, can_next) = sample_path
+                // A song carries only where the bytes are, so a freshly
+                // opened one browses from there. What this must not do is
+                // *overwrite* an origin the session already has, which is why
+                // the save's write-back goes through
+                // `apply_sample_references` and this does not.
+                let browse_path = sample_path.clone();
+                let (can_previous, can_next) = browse_path
                     .as_ref()
                     .and_then(|path| {
                         sample_files_in_directory(path)
@@ -1146,6 +1153,7 @@ impl Session {
                     sample_description: description,
                     sample_duration: duration,
                     sample_path,
+                    sample_browse_path: browse_path,
                     sample_embedded: embedded,
                     sample_data: sample,
                     committed_sample: committed,

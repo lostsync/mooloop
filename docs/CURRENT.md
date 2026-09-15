@@ -326,7 +326,12 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   per visible entry, filtering to playable formats, an autoplay arm and a
   preview-gain trim feeding a dedicated engine preview voice, an info pane
   with waveform, name, and format stats, and loading either into the selected
-  channel or into a new one. **Presets**: every well-known preset directory
+  channel or into a new one. The sampler face's prev/next-sample arrows step
+  through **the folder the sample was browsed from**, which a save does not
+  move: embedding a song rewrites where the bytes are, and before 2026-09-14
+  it took the arrows with it, so "next sample" on a kick loaded the snare out
+  of the song's own bundle. A song opened from disk has no browse folder to
+  remember and steps through its bundle, which is all the document knows. **Presets**: every well-known preset directory
   scanned on entry to the tab and grouped — Channels, then one group per
   device kind, then one per effect kind, empty groups omitted — each group
   expanding to its presets with a count beside it, and a preset's category

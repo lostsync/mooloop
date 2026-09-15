@@ -69,20 +69,6 @@ menu long enough that finding a destination by scrolling stops being pleasant,
 which is an argument for filtering it, not for fewer ids. Recorded so the next
 person to open that popup knows it was foreseen. Found 2026-09-14.
 
-**Saving with embedded assets repoints the sampler's prev/next-sample arrows
-into the song's own bundle.** The app writes the resolved paths back into the
-live session after a save, and `selected_sample_target` lists
-`sample_path.parent()` -- so a kick loaded from a fifty-file drum folder, once
-saved with Embed Assets on (the default), has arrows that walk
-`<song>-assets/samples/` instead. With four sampler channels embedded that
-directory is `00-kick.wav, 01-snare.wav, 02-hat.wav, 03-clap.wav`, so "next
-sample" on the kick loads the snare out of the bundle.
-`can_previous_sample`/`can_next_sample` are computed only in
-`apply_loaded_sample` and never recomputed on save, so the buttons stay lit
-and lie about it. The fix is a second field -- the browse origin, which the
-save's write-back must not overwrite -- rather than a change to what is
-stored, because only `project_snapshot` needs the bundle-relative form. Found
-2026-09-13.
 
 **The oscillator Level knob works in dB; its descriptor is linear 0–1.**
 `device-oscillator.slint:95` drives the knob through `GainMath.linear-to-db`,

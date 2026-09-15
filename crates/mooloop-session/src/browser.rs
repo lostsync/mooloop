@@ -117,7 +117,74 @@ impl Session {
         Some(LoadTarget {
             channel: self.selected,
             source_revision: self.source_revision,
-            path: self.channels.get(self.selected)?.sample_path.clone()?,
+            // The browse origin, not where the bytes are: after an embedded
+            // save `sample_path` names the song's own bundle, and walking
+            // *that* directory is the other three channels of this song.
+            path: self
+                .channels
+                .get(self.selected)
+                .and_then(|channel| {
+                    channel
+                        .sample_browse_path
+                        .clone()
+                        .or_else(|| channel.sample_path.clone())
+                })?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::session::Session;
+    use std::path::PathBuf;
+
+    /// **The arrows walk the folder the sample came from, not the folder it
+    /// ended up in.**
+    ///
+    /// `selected_sample_target` used to read `sample_path`, and the app writes
+    /// the resolved bundle paths back into the live session after an embedded
+    /// save -- so the target became `<song>-assets/samples/`, whose neighbours
+    /// are the *other channels of this song*. `sample_browse_path` is what the
+    /// save leaves alone.
+    #[test]
+    fn the_sample_arrows_walk_the_folder_the_sample_was_browsed_from() {
+        let mut session = Session::default();
+        let browsed = PathBuf::from("/samples/drums/kick.wav");
+        session.channels[0].sample_browse_path = Some(browsed.clone());
+        session.channels[0].sample_path =
+            Some(PathBuf::from("/songs/beat.mooloop-assets/samples/00-kick.wav"));
+
+        let target = session
+            .selected_sample_target()
+            .expect("a channel with a sample has a target");
+        assert_eq!(target.path, browsed);
+        assert_eq!(target.channel, session.selected);
+    }
+
+    /// A channel that has never been browsed -- a song opened from disk --
+    /// falls back to where its bytes are, which is the only thing the
+    /// document knows. Asserted because the fallback is what makes the new
+    /// field additive rather than a second thing every caller has to set.
+    #[test]
+    fn a_channel_that_was_never_browsed_walks_its_own_sample_folder() {
+        let mut session = Session::default();
+        let loaded = PathBuf::from("/songs/beat.mooloop-assets/samples/00-kick.wav");
+        session.channels[0].sample_browse_path = None;
+        session.channels[0].sample_path = Some(loaded.clone());
+
+        assert_eq!(
+            session.selected_sample_target().map(|target| target.path),
+            Some(loaded)
+        );
+    }
+
+    /// No sample, no target -- the arrows have nothing to walk and must not
+    /// be offered one.
+    #[test]
+    fn a_channel_with_no_sample_has_no_target() {
+        let mut session = Session::default();
+        session.channels[0].sample_browse_path = None;
+        session.channels[0].sample_path = None;
+        assert!(session.selected_sample_target().is_none());
     }
 }
