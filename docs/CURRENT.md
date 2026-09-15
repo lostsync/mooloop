@@ -384,7 +384,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   Song documents are inspectable versioned TOML files with
   optional copied WAV assets in a sibling `.mooloop-assets` directory. Older
   directory-style song bundles remain loadable and migrate when resaved.
-  Missing or corrupt samples warn and load as silent slots.
+  Missing or corrupt samples warn and load as silent slots. **Renaming a song
+  and its assets folder together, in a file manager, works**: the document
+  still names the old folder, and the loader reads this song's own instead and
+  says so, which the next save writes back. Until 2026-09-14 that pair of
+  renames made the song permanently unopenable.
 - Offline export of exactly one selected-pattern pass in Pattern mode or one
   derived playlist pass in Song mode, followed by a configurable 0-30 second
   release tail. Outputs are 24-bit PCM WAV, 32-bit float WAV, or 192/256/320

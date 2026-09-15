@@ -458,8 +458,16 @@ For a song file, the corresponding embedded path includes the sidecar name,
 for example `beat.mooloop-assets/samples/00-kick.wav`. Both forms are resolved
 relative to their document container and checked for path traversal.
 
-Embedded paths must remain below the document's `samples/` directory or its
-matching song sidecar; absolute paths and `..` traversal are rejected. Embedded
+Embedded paths must remain below the document's `samples/` directory or a song
+sidecar; absolute paths and `..` traversal are rejected. **The sidecar's name
+is not required to match** -- a song renamed in a file manager, together with
+its sidecar, stores a first component naming the *old* name, and the loader
+substitutes the one this song actually has and reports it as an asset warning.
+The containment property is the `Component::Normal` filter, not the name: a
+path admitting no `..`, no root and no prefix cannot leave the directory it is
+joined to whatever its first component is called. Requiring the name as well
+was what made a renamed song refuse to open at all. The check is **lexical**,
+so a symlink under `samples/` is still followed. Embedded
 saves copy audio files byte-for-byte, preserve their extensions, and deduplicate
 channels that use the same source file. Referenced saves write paths relative
 to the bundle when possible. Relative paths are resolved from the bundle

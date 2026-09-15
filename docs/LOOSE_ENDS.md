@@ -810,34 +810,8 @@ their own passes; nobody has decided whether they should match.
 
 ## One name, two policies
 
-**Renaming a song file makes it permanently unopenable, even when the assets
-sidecar is renamed with it.** `safe_embedded_path` requires a stored relative
-path to begin with *this song's exact file name* followed by `-assets`. Rename
-the pair the only sane way -- in a file manager, both together -- and the song
-refuses to open with "channel 0 has unsafe embedded path
-Untitled.mooloop-assets/samples/00-kick.wav", about a path that is present,
-relative, traversal-free and sitting right beside the file. It is
-`Error::Invalid`, so the whole song is refused rather than one sample warned
-about, and recovery means hand-editing TOML. (Copying the song *without* its
-sidecar is handled correctly: the name matches, the file is missing, you get a
-warning.)
-
-Not small because it is a question about what the check is for. The
-`Component::Normal | CurDir` filter above it already guarantees the path
-cannot escape the song's directory; the name equality only adds "and it is
-*this* song's sidecar", which is exactly what a rename breaks. Options: drop
-the name equality, keeping "first component ends in `-assets`, second is
-`samples`" -- two lines, every traversal property kept, but the stored
-component still names the *old* sidecar so the song then opens with the
-samples missing, turning a brick into a silent loss (pair it with the asset
-warnings now being logged); or repoint on load, substituting the bundle's
-actual assets directory name, so a rename self-repairs -- the behaviour a user
-expects, and the option that makes the product right, but it makes the loader
-a path rewriter and that needs a ruling; or downgrade the mismatch to a
-warning, which is least code and worst outcome. Found 2026-09-13.
-
 **An embedded sample that is a symlink escapes the bundle, is read, and is
-copied into the next bundle saved from it.** `safe_embedded_path` is purely
+copied into the next bundle saved from it.** `embedded_bundle_path` is purely
 lexical and `resolve_setup_asset` then does `is_file()` and reads, so a shared
 `.mooloop-channel` or kit bundle can make the app read an arbitrary local file
 as audio -- and, the part that matters, **re-saving that preset stages the
