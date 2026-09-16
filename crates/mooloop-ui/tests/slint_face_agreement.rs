@@ -613,13 +613,33 @@ fn optional_number(text: &str, key: &str) -> Option<f32> {
 /// knobs therefore state no number here any more and `face_knobs` skips
 /// them; `tests/eq_face.rs` is where that face is held to its table now, in
 /// the stronger `strip_face.rs` shape.
+/// The parameter a face's modulation index names.
+///
+/// The index is a **position** in the kind's descriptor table, because that is
+/// what `lib.rs` fills the overlay arrays from, in order. For most kinds the
+/// position and the id are the same number and this is the identity -- which
+/// is why it used to be written as one, and why it stopped being true without
+/// anything having to change here.
+///
+/// **The Buffer retired `Offset` on 2026-09-16.** Removing a row moves every
+/// row after it down a position while their ids stay put, so its face index 0
+/// is id 2. A retirement is the one edit that can part the two, and there is
+/// no way to keep them together short of reusing a spent id -- which is the
+/// thing the retirement exists to avoid.
 fn face_param_id(kind: EffectKind, index: u32) -> u32 {
-    if kind != EffectKind::Eq {
-        return index;
+    if kind == EffectKind::Eq {
+        // The EQ's seven controls are a view over fifty descriptors, so its
+        // index is not a position at all.
+        let opening = EqParams::default().selected_target();
+        return EqFaceControl::from_face_index(index)
+            .and_then(|control| EqParams::id_for_selected(opening, control))
+            .unwrap_or(index);
     }
-    let opening = EqParams::default().selected_target();
-    EqFaceControl::from_face_index(index)
-        .and_then(|control| EqParams::id_for_selected(opening, control))
+    kind.descriptors()
+        .get(index as usize)
+        .map(|descriptor| descriptor.id)
+        // Past the end of the table, so the caller's "does not describe"
+        // failure is the right one and this must not hide it.
         .unwrap_or(index)
 }
 
