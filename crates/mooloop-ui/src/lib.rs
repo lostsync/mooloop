@@ -2103,6 +2103,24 @@ fn effect_slot_row(
     }
 }
 
+/// What a held Buffer button borrowed and has to put back on release.
+///
+/// Named rather than a tuple because `.0`, `.1` and `.2` over three floats
+/// that all look alike is a swap waiting to happen, and named rather than
+/// inlined because clippy is right that
+/// `Rc<RefCell<HashMap<i32, (f32, f32, f32)>>>` is a type nobody should have
+/// to read twice.
+#[derive(Clone, Copy, Default)]
+struct BorrowedBufferParams {
+    rate: f32,
+    length: f32,
+    looping: f32,
+}
+
+/// Per-slot, because two Buffer faces can be on screen and a release has to
+/// put back what *that* press took.
+type HeldBufferParams = Rc<RefCell<std::collections::HashMap<i32, BorrowedBufferParams>>>;
+
 /// Whether the rack's wrap button on `slot` should be live.
 fn wrap_enabled_at(effects: &[EffectSlotState], slot: usize) -> bool {
     mooloop_core::can_wrap(effects, slot..mooloop_core::run_of(effects, slot).end)
@@ -9953,8 +9971,7 @@ impl AppUi {
             // press knows what that was. It is UI state and nothing else --
             // no project edit, because a momentary button is a performance
             // gesture rather than something the document remembers.
-            let borrowed: Rc<RefCell<std::collections::HashMap<i32, (f32, f32, f32)>>> =
-                Rc::new(RefCell::new(std::collections::HashMap::new()));
+            let borrowed: HeldBufferParams = Rc::new(RefCell::new(Default::default()));
 
             let w = write.clone();
             let held = borrowed.clone();
@@ -9970,7 +9987,7 @@ impl AppUi {
                     return;
                 };
                 let rate = row.p3;
-                held.borrow_mut().entry(slot).or_insert((rate, 0.0, 0.0)).0 = rate;
+                held.borrow_mut().entry(slot).or_default().rate = rate;
                 w(slot, mooloop_core::BUFFER_PARAM_RATE, 1.0 - rate);
             });
             let w = write.clone();
@@ -9979,7 +9996,7 @@ impl AppUi {
                 let Some(prior) = held.borrow_mut().remove(&slot) else {
                     return;
                 };
-                w(slot, mooloop_core::BUFFER_PARAM_RATE, prior.0);
+                w(slot, mooloop_core::BUFFER_PARAM_RATE, prior.rate);
             });
 
             let w = write.clone();
@@ -9990,7 +10007,14 @@ impl AppUi {
                     let Some(row) = rst.borrow().effect_slot_model.row_data(slot as usize) else {
                         return;
                     };
-                    held.borrow_mut().insert(slot, (0.0, row.p4, row.p5));
+                    held.borrow_mut().insert(
+                        slot,
+                        BorrowedBufferParams {
+                            rate: 0.0,
+                            length: row.p4,
+                            looping: row.p5,
+                        },
+                    );
                     // A sixteenth of the shared grid, looped, from where
                     // Position points -- which is the gesture STUT always
                     // was, said in parameters a lane can also say.
@@ -10003,8 +10027,8 @@ impl AppUi {
                     let Some(prior) = held.borrow_mut().remove(&slot) else {
                         return;
                     };
-                    w(slot, mooloop_core::BUFFER_PARAM_LENGTH, prior.1);
-                    w(slot, mooloop_core::BUFFER_PARAM_LOOP, prior.2);
+                    w(slot, mooloop_core::BUFFER_PARAM_LENGTH, prior.length);
+                    w(slot, mooloop_core::BUFFER_PARAM_LOOP, prior.looping);
                 }
             });
 
