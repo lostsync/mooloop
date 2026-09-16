@@ -509,7 +509,7 @@ impl BufferDevice {
         let division =
             mooloop_core::ModTimeDivision::from_index(self.quant_grid_index as i32);
         let grid_beats = f64::from(division.beats());
-        if !(grid_beats > 0.0) || !context.position_ticks.is_finite() {
+        if !grid_beats.is_finite() || grid_beats <= 0.0 || !context.position_ticks.is_finite() {
             return None;
         }
         let ticks_per_beat =
