@@ -798,37 +798,8 @@ impl Session {
     /// re-points it at the project's own selected channel on every install,
     /// and the edit sets that to wherever the moved channel landed.
     pub fn rescope_after(&mut self, edit: mooloop_core::ChannelEdit) {
-        fn moved(edit: mooloop_core::ChannelEdit, target: EffectTarget) -> Option<EffectTarget> {
-            match target {
-                EffectTarget::Channel(channel) => {
-                    edit.channel(channel).map(EffectTarget::Channel)
-                }
-                // A bus exists independently of which channels feed it, and
-                // is untouched for the same reason `ChannelEdit::address`
-                // leaves a bus scope alone.
-                EffectTarget::Bus(_) => Some(target),
-            }
-        }
-
-        self.selected_device = self
-            .selected_device
-            .and_then(|(target, device)| Some((moved(edit, target)?, device)));
-        self.selected_source = self.selected_source.and_then(|target| moved(edit, target));
-        self.automation_target
-            .set(self.automation_target.get().and_then(|addr| edit.address(addr)));
-        self.pending_preset_save = match self.pending_preset_save {
-            Some(PresetSaveTarget::Effect { target, device }) => {
-                moved(edit, target).map(|target| PresetSaveTarget::Effect { target, device })
-            }
-            other => other,
-        };
-        self.effect_preset_names = self
-            .effect_preset_names
-            .drain()
-            .filter_map(|((target, device), name)| {
-                Some(((moved(edit, target)?, device), name))
-            })
-            .collect();
+        self.rescope_targets(mooloop_core::ListEdit::Channel(edit));
+        self.selected_source = self.selected_source.and_then(|target| edit.target(target));
         self.source_preset_names = self
             .source_preset_names
             .drain()
@@ -852,6 +823,50 @@ impl Session {
             }
         }
         self.sample_request = moved_requests;
+    }
+
+    /// Follow a track edit through everything on this side that names a
+    /// track by position: [`Self::rescope_after`]'s twin.
+    ///
+    /// `rack_was` is where the device rack pointed *before* the edited
+    /// document was installed. `replace_project` sends the rack back to a
+    /// channel on every install, which is right for an undo or a load and
+    /// wrong for a move -- somebody who drags the track they are editing
+    /// expects to still be editing it. So a rack that was on a track is put
+    /// back on wherever that track went; the caller captures `rack_was`
+    /// because the install has already overwritten it by the time this runs.
+    pub fn rescope_after_track(&mut self, edit: mooloop_core::TrackEdit, rack_was: EffectTarget) {
+        self.rescope_targets(mooloop_core::ListEdit::Track(edit));
+        if let (EffectTarget::Bus(_), Some(target)) = (rack_was, edit.target(rack_was)) {
+            self.effect_target = target;
+        }
+    }
+
+    /// The four things on this side that can hold a target in *either* list,
+    /// walked once for both. `selected_source`, `source_preset_names` and
+    /// the sample-load tokens are channel-only and stay in
+    /// [`Self::rescope_after`].
+    ///
+    /// Until 2026-09-16 a track removal ran none of this, so a preset label
+    /// on track 3's device landed on track 2's device with the same id --
+    /// and every chain mints its ids from zero, so there usually was one.
+    fn rescope_targets(&mut self, edit: mooloop_core::ListEdit) {
+        self.selected_device = self
+            .selected_device
+            .and_then(|(target, device)| Some((edit.target(target)?, device)));
+        self.automation_target
+            .set(self.automation_target.get().and_then(|addr| edit.address(addr)));
+        self.pending_preset_save = match self.pending_preset_save {
+            Some(PresetSaveTarget::Effect { target, device }) => edit
+                .target(target)
+                .map(|target| PresetSaveTarget::Effect { target, device }),
+            other => other,
+        };
+        self.effect_preset_names = self
+            .effect_preset_names
+            .drain()
+            .filter_map(|((target, device), name)| Some(((edit.target(target)?, device), name)))
+            .collect();
     }
 
     /// Mint the token for a fresh sample-load request on `channel`, and

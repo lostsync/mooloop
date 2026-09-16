@@ -324,6 +324,12 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
         Scope::Track,
         ctrl + alt + "m"
     ),
+    // The keyboard's way to do what dragging a strip's name plate does, one
+    // seat at a time. Unbound by default, like `pattern.clear`: every nearby
+    // Ctrl+Shift and Ctrl+Alt arrow is taken by the roll's nudges or reads as
+    // one, and a move is rare enough to be worth a deliberate binding.
+    scoped_action!("track.move-left", "Move Track Left", "Track", Scope::Track),
+    scoped_action!("track.move-right", "Move Track Right", "Track", Scope::Track),
     // Device clipboard. Kept on their own chords now that the bare ones
     // resolve against focus as well: an unambiguous way to reach the rack's
     // clipboard from the roll is worth four bindings, and rebinding these
@@ -672,6 +678,8 @@ mod tests {
             "device.copy",
             "device.bypass",
             "track.solo",
+            "track.move-left",
+            "track.move-right",
             "browser.activate",
         ] {
             let spec = ACTIONS

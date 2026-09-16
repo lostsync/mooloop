@@ -38,7 +38,7 @@ use mooloop_core::strip::{
 use mooloop_core::{log_debug, log_error, log_info, log_warn};
 use mooloop_core::{
     snap_bars_to_power_of_two,
-    BufferDuration, BufferEvent, BusSetup, ChannelEdit, ENV_MAX_SECONDS, ENV_MIN_SECONDS,
+    BufferDuration, BufferEvent, BusSetup, ChannelEdit, ListEdit, TrackEdit, ENV_MAX_SECONDS, ENV_MIN_SECONDS,
     DeviceKind, DrumMode, DrumSynthParams, EffectKind,
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, EqFaceControl,
     EqParams, EQ_FACE_CONTROLS, FilterModel,
@@ -1049,15 +1049,15 @@ fn queue_project_edit(
     queue_structural_edit(tx, before, after, status, None)
 }
 
-/// [`queue_project_edit`] for an edit that moved the channel list, carrying
-/// the edit so the pump can renumber the session state the snapshot does not
-/// contain. See `ProjectEdit::channel_edit`.
+/// [`queue_project_edit`] for an edit that moved the channel or track list,
+/// carrying the edit so the pump can renumber the session state the snapshot
+/// does not contain. See `ProjectEdit::edit`.
 fn queue_structural_edit(
     tx: &ProjectEditSender,
     before: ProjectSnapshot,
     after: ProjectSnapshot,
     status: &'static str,
-    channel_edit: Option<ChannelEdit>,
+    edit: Option<ListEdit>,
 ) -> bool {
     let entry = HistoryEntry {
         before,
@@ -1070,7 +1070,7 @@ fn queue_structural_edit(
         samples: after.samples,
         status: status.into(),
         history: Some((HistoryMove::Record, entry)),
-        channel_edit,
+        edit,
     })
 }
 
@@ -1096,7 +1096,7 @@ fn queue_history_target(
         history: Some((movement, entry)),
         // An undo restores a whole document rather than applying an edit to
         // one, so there is no edit to follow.
-        channel_edit: None,
+        edit: None,
     })
 }
 
@@ -1453,7 +1453,7 @@ fn queue_channel_insert(
         before,
         ProjectSnapshot { project, samples },
         status,
-        Some(ChannelEdit::Inserted(index as u8)),
+        Some(ListEdit::Channel(ChannelEdit::Inserted(index as u8))),
     )
 }
 
@@ -1486,7 +1486,7 @@ fn queue_channel_delete(
         before,
         ProjectSnapshot { project, samples },
         status,
-        Some(ChannelEdit::Removed(index as u8)),
+        Some(ListEdit::Channel(ChannelEdit::Removed(index as u8))),
     )
 }
 
@@ -1527,7 +1527,13 @@ fn queue_channel_move(
         samples.insert(to, sample);
     }
     project.selected_channel = to as u8;
-    queue_structural_edit(tx, before, ProjectSnapshot { project, samples }, status, Some(edit))
+    queue_structural_edit(
+        tx,
+        before,
+        ProjectSnapshot { project, samples },
+        status,
+        Some(ListEdit::Channel(edit)),
+    )
 }
 
 /// Add a mixer track, undoably.
@@ -1573,7 +1579,46 @@ fn queue_track_remove(
     if project.remove_track(track).is_none() {
         return false;
     }
-    queue_project_edit(tx, before, ProjectSnapshot { project, samples }, "Track removed")
+    // Carried, so the session's own track-keyed state -- the selected device,
+    // the open lane, the preset labels -- is renumbered along with the song.
+    queue_structural_edit(
+        tx,
+        before,
+        ProjectSnapshot { project, samples },
+        "Track removed",
+        Some(ListEdit::Track(TrackEdit::Removed(track as u8))),
+    )
+}
+
+/// Move a mixer track from seat `from` to seat `to`, undoably.
+///
+/// `Project::move_track` refuses the master's seat at either end and carries
+/// everything that named the track. There is no samples sidecar to rotate, as
+/// `queue_channel_move` has to: samples belong to channels. The rack follows
+/// the moved track in the pump, through `Session::rescope_after_track`.
+fn queue_track_move(
+    tx: &ProjectEditSender,
+    state: &Rc<RefCell<UiState>>,
+    window: &MainWindow,
+    from: usize,
+    to: usize,
+) -> bool {
+    let before = {
+        let state = state.borrow();
+        project_snapshot(&state, window)
+    };
+    let mut project = before.project.clone();
+    let samples = before.samples.clone();
+    let Some(edit) = project.move_track(from, to) else {
+        return false;
+    };
+    queue_structural_edit(
+        tx,
+        before,
+        ProjectSnapshot { project, samples },
+        "Track moved",
+        Some(ListEdit::Track(edit)),
+    )
 }
 
 /// Duplicates pattern `index`'s length and every channel's notes for it,
@@ -4662,6 +4707,8 @@ impl UiState {
         );
         window.set_editing_bus_strip(strip_row(&setup.bus.strip, self.audio_sample_rate));
         window.set_editing_bus_can_remove(self.session.can_remove_track(index));
+        window.set_editing_bus_can_move_left(self.session.can_move_track(index, -1));
+        window.set_editing_bus_can_move_right(self.session.can_move_track(index, 1));
         window.set_editing_bus_allowed(self.allowed_destinations(index));
         window.set_editing_bus_send_feed_count(self.session.track_send_count(index) as i32);
         window.set_editing_bus_sends(self.send_rows(index));
@@ -6213,6 +6260,22 @@ impl AppUi {
                         } else {
                             window.invoke_bus_muted(bus);
                         }
+                    }
+                    // The menu rows' own condition, from the one predicate
+                    // `Project::move_track` applies, and the drag's own
+                    // callback: one mutation path whichever surface asked.
+                    "track.move-left" | "track.move-right" => {
+                        if !window.get_editing_bus() {
+                            return false;
+                        }
+                        let bus = window.get_editing_bus_index();
+                        let delta = if action_id == "track.move-left" { -1 } else { 1 };
+                        let movable = usize::try_from(bus)
+                            .is_ok_and(|bus| st.borrow().session.can_move_track(bus, delta));
+                        if !movable {
+                            return false;
+                        }
+                        window.invoke_track_reorder_requested(bus, bus + delta as i32);
                     }
                     "pattern.add" => window.invoke_add_pattern_clicked(),
                     "pattern.clone" => window.invoke_pattern_clone_requested(),
@@ -8633,6 +8696,30 @@ impl AppUi {
                     return;
                 }
                 if queue_track_add(&tx, &st, &window) {
+                    commands.borrow_mut().project_edit_pending = true;
+                    sync_command_availability(&window, &commands.borrow());
+                }
+            });
+        }
+        // Every track move arrives here: the strip's drag and the Track
+        // menu's two rows, which invoke this callback rather than growing a
+        // path of their own.
+        {
+            let tx = project_edit_tx.clone();
+            let commands = command_state.clone();
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_track_reorder_requested(move |from, to| {
+                let Some(window) = weak.upgrade() else { return };
+                // A second drop must not land on a document the first one
+                // has not finished installing.
+                if commands.borrow().project_edit_pending {
+                    return;
+                }
+                let (Ok(from), Ok(to)) = (usize::try_from(from), usize::try_from(to)) else {
+                    return;
+                };
+                if queue_track_move(&tx, &st, &window, from, to) {
                     commands.borrow_mut().project_edit_pending = true;
                     sync_command_availability(&window, &commands.borrow());
                 }
@@ -12966,6 +13053,9 @@ impl AppUi {
                             if edit.history.is_some() {
                                 commands.borrow_mut().project_edit_pending = false;
                             }
+                            // Read before the install, which sends the rack
+                            // back to a channel; a track move puts it back.
+                            let rack_was = st.borrow().session.effect_target;
                             if install_project_in_ui(
                                 &mut handle,
                                 default_sample_for_pump.as_ref(),
@@ -12980,10 +13070,27 @@ impl AppUi {
                                 // the selected device, the open lane, the
                                 // preset labels -- are not in the snapshot
                                 // and are renumbered here.
-                                if let Some(edit) = edit.channel_edit {
-                                    state.session.rescope_after(edit);
+                                match edit.edit {
+                                    Some(ListEdit::Channel(edit)) => {
+                                        state.session.rescope_after(edit);
+                                    }
+                                    Some(ListEdit::Track(edit)) => {
+                                        state.session.rescope_after_track(edit, rack_was);
+                                        // The install left the rack on a
+                                        // channel, so a track here is the
+                                        // rescope putting it back.
+                                        if matches!(
+                                            state.session.effect_target,
+                                            EffectTarget::Bus(_)
+                                        ) {
+                                            state.sync_mixer_selection();
+                                            state.sync_effects();
+                                            state.sync_bus_editor(&window);
+                                        }
+                                    }
+                                    None => {}
                                 }
-                                // An undo carries no `channel_edit`, so
+                                // An undo carries no `edit`, so
                                 // nothing above renumbered the label maps --
                                 // and the snapshot does not restore them
                                 // either, which is what three doc comments

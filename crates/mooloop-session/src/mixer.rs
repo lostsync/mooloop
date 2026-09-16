@@ -44,6 +44,16 @@ impl Session {
         Some(index)
     }
 
+    /// Whether the track at `index` can move `delta` seats: the question the
+    /// Track menu's two move rows and their actions both ask. The rule is
+    /// `Project::move_track`'s own, so a row is never enabled for a move the
+    /// model would refuse.
+    pub fn can_move_track(&self, index: usize, delta: isize) -> bool {
+        index
+            .checked_add_signed(delta)
+            .is_some_and(|to| mooloop_core::track_move_allowed(self.buses.len(), index, to))
+    }
+
     /// Remove the track at `index`, closing the gap.
     ///
     /// Refused on the master, which every route eventually reaches. The

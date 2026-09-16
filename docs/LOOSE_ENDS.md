@@ -41,6 +41,18 @@ a wish belongs in `ENHANCEMENTS.md`; a described behaviour gap belongs in
 
 ## Wrong-looking UI over correct behaviour
 
+**A mixer drag does not scroll the mixer, and a turned strip stays at its
+seat.** Both came in with the track reorder on 2026-09-16. Seventeen strips at
+96px are wider than most panes, so moving a track far takes a drag, a scroll
+and another drag; the channel rack has the same limit and nobody has asked
+for more. Separately, a strip's SENDS/STRIP page is private to the strip
+instance and a `for` reuses instances by seat, so a track dragged off a
+turned strip arrives on its fader face, and whichever track slides into the
+old seat shows that page. Fixing the second means moving the page into
+`MixerStripRow`. The held strip is also drawn under the strip to its right
+while it passes over it, because Slint 1.17 wants `z` as a literal; the
+channel and device racks have the same limit.
+
 **A shelf's Q knob stops steepening above 2 and the face does not say so.**
 `Biquad::shelf_slope` clamps the slope to 0.1..2.0, where the cookbook's
 radicand goes negative; a seven-band EQ band's Q descriptor runs to 18, because
@@ -1063,6 +1075,14 @@ hop to follow. The two clamps the loop carries are now tested once, in
 the reason to do it is sharing those tests, not the line count.
 
 ## Numbers nothing is watching
+
+**Two of the three reorder lists still spell the slide rule inline.**
+`ReorderMath.shift` (`reorder.slint`) is the three-way test that decides which
+slots slide during a drag, written once when the mixer reorder landed on
+2026-09-16, and only `mixer.slint` calls it. The device rack's rows and the
+channel rack's rows in `main.slint` each still carry their own copy, and so
+does `channel_reorder.rs`'s harness. They agree today. Moving the two racks
+over is small, but it is a `main.slint` change and wants its own build.
 
 **Two spellings of the meter floor are kept as literals on purpose, and the
 reason is a guard that wants them that way.** The floor moved into

@@ -24,6 +24,8 @@ use std::rc::Rc;
 const TITLE_Y: f32 = 20.0;
 const FILE_X: f32 = 30.0;
 const EDIT_X: f32 = 64.0;
+const TRACK_X: f32 = 225.0;
+const VIEW_X: f32 = 270.0;
 
 fn harness() -> MainWindow {
     i_slint_backend_testing::init_no_event_loop();
@@ -67,18 +69,77 @@ fn view_menu_reveals_a_view() {
     let ui = harness();
     ui.invoke_show_view(view::DEVICES);
 
-    // "View" is the fifth title, after File, Edit, Pattern and Channel.
-    click(ui.window(), 223.0, TITLE_Y);
+    // "View" is the sixth title, after File, Edit, Pattern, Channel and
+    // Track. Measured off a render of the bar.
+    click(ui.window(), VIEW_X, TITLE_Y);
     // Popup rows are 24px under the popup's 4px padding below the bar, so
     // row N spans y 42 + 24N .. 66 + 24N. The menu is one row per view now --
     // Steps, Mixer, Devices, Notes, Playlist -- rather than the three pages
     // of the lower dock, so Playlist is row 4 and not row 2.
-    click(ui.window(), 220.0, 150.0);
+    click(ui.window(), VIEW_X, 150.0);
 
     assert!(
         ui.get_showing_playlist(),
         "Playlist must reveal the playlist view"
     );
+}
+
+/// The Track menu's two move rows follow the flags Rust computes from
+/// `Session::can_move_track`, and are dead while the rack is on a channel
+/// whatever those flags say.
+#[test]
+fn track_move_rows_fire_only_when_the_edited_track_can_move() {
+    let ui = harness();
+    let moves = Rc::new(std::cell::RefCell::new(Vec::new()));
+    ui.on_track_reorder_requested({
+        let moves = moves.clone();
+        move |from, to| moves.borrow_mut().push((from, to))
+    });
+    // Rows under the popup's padding: Add Track, a separator, then the two
+    // moves.
+    const LEFT_Y: f32 = 87.0;
+    const RIGHT_Y: f32 = 111.0;
+    let pick = |y: f32| {
+        click(ui.window(), TRACK_X, TITLE_Y);
+        click(ui.window(), TRACK_X, y);
+    };
+
+    // The last track: left is allowed, right is not.
+    ui.set_editing_bus(true);
+    ui.set_editing_bus_index(3);
+    ui.set_editing_bus_can_move_left(true);
+    ui.set_editing_bus_can_move_right(false);
+    pick(RIGHT_Y);
+    assert!(moves.borrow().is_empty(), "moved past the last seat");
+    pick(LEFT_Y);
+    assert_eq!(*moves.borrow(), vec![(3, 2)]);
+
+    // The master: neither.
+    moves.borrow_mut().clear();
+    ui.set_editing_bus_index(0);
+    ui.set_editing_bus_can_move_left(false);
+    ui.set_editing_bus_can_move_right(false);
+    pick(LEFT_Y);
+    pick(RIGHT_Y);
+    assert!(moves.borrow().is_empty(), "the master moved");
+
+    // The rack on a channel: neither, even with stale flags.
+    ui.set_editing_bus(false);
+    ui.set_editing_bus_index(2);
+    ui.set_editing_bus_can_move_left(true);
+    ui.set_editing_bus_can_move_right(true);
+    pick(LEFT_Y);
+    pick(RIGHT_Y);
+    assert!(moves.borrow().is_empty(), "a channel's rack moved a track");
+
+    // And a move mid-install is refused too.
+    ui.set_editing_bus(true);
+    ui.set_project_edit_pending(true);
+    pick(RIGHT_Y);
+    assert!(moves.borrow().is_empty(), "moved while an edit was installing");
+    ui.set_project_edit_pending(false);
+    pick(RIGHT_Y);
+    assert_eq!(*moves.borrow(), vec![(2, 3)]);
 }
 
 #[test]

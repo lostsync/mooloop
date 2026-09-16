@@ -1076,6 +1076,9 @@ export component MainWindow inherits Window {
     callback track-added();
     callback track-renamed(int, string);
     callback track-removed(int);
+    // A track dragged by its name plate, or moved a seat by the Track menu:
+    // `(from, to)`, never the master's seat at either end.
+    callback track-reorder-requested(int, int);
     in property <bool> can-add-track: true;
 
     // ---- the bus the device rack is editing, when it is editing one ----
@@ -1106,6 +1109,10 @@ export component MainWindow inherits Window {
     // place the audio does not run it.
     in property <bool> strip-pin-head: true;
     in property <bool> editing-bus-can-remove;
+    // Whether the edited track can move a seat each way. From
+    // `Session::can_move_track`, which is `Project::move_track`'s own rule.
+    in property <bool> editing-bus-can-move-left;
+    in property <bool> editing-bus-can-move-right;
     in property <[bool]> editing-bus-allowed;
     in property <float> editing-bus-left-db: GainMath.min-db;
     in property <float> editing-bus-right-db: GainMath.min-db;
@@ -2560,9 +2567,42 @@ export component MainWindow inherits Window {
                     MenuRow { text: "Paste Channel"; enabled: !root.project-edit-pending && root.channel-clipboard-available && root.channels.length < root.max-channels; selected => { root.edit-command-requested(4, root.selected-channel); } }
                 }
 
+                // The mixer's list, as Channel is the rack's. The move rows
+                // are the named form of dragging a strip's name plate, and
+                // say which track they move rather than "the current one".
+                MenuBarItem {
+                    title: "Track";
+                    menu-id: 4;
+                    open-menu <=> menu-bar.open-menu;
+                    titles: menu-bar.titles;
+                    bar-width: menu-bar.width;
+                    MenuRow {
+                        text: "Add Track";
+                        enabled: !root.project-edit-pending && root.can-add-track;
+                        selected => { root.track-added(); }
+                    }
+                    MenuSeparator {}
+                    MenuRow {
+                        text: "Move " + (root.editing-bus ? root.editing-bus-name : "Track") + " Left";
+                        enabled: !root.project-edit-pending && root.editing-bus
+                            && root.editing-bus-can-move-left;
+                        selected => {
+                            root.track-reorder-requested(root.editing-bus-index, root.editing-bus-index - 1);
+                        }
+                    }
+                    MenuRow {
+                        text: "Move " + (root.editing-bus ? root.editing-bus-name : "Track") + " Right";
+                        enabled: !root.project-edit-pending && root.editing-bus
+                            && root.editing-bus-can-move-right;
+                        selected => {
+                            root.track-reorder-requested(root.editing-bus-index, root.editing-bus-index + 1);
+                        }
+                    }
+                }
+
                 MenuBarItem {
                     title: "View";
-                    menu-id: 4;
+                    menu-id: 5;
                     open-menu <=> menu-bar.open-menu;
                     titles: menu-bar.titles;
                     bar-width: menu-bar.width;
@@ -2661,7 +2701,7 @@ export component MainWindow inherits Window {
 
                 MenuBarItem {
                     title: "Help";
-                    menu-id: 5;
+                    menu-id: 6;
                     open-menu <=> menu-bar.open-menu;
                     titles: menu-bar.titles;
                     bar-width: menu-bar.width;
@@ -3689,6 +3729,8 @@ export component MainWindow inherits Window {
                                 bus-send-enable-toggled(i, send) => { root.send-enable-toggled(i, send); }
                                 can-add-track: root.can-add-track;
                                 track-added => { root.track-added(); }
+                                project-edit-pending: root.project-edit-pending;
+                                track-reorder-requested(from, to) => { root.track-reorder-requested(from, to); }
                             }
                         }
                     }

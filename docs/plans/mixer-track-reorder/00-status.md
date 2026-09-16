@@ -1,6 +1,6 @@
 # Mixer tracks can be reordered — plan status
 
-**Written 2026-09-16. Step 01 has landed.** Adam asked for it directly:
+**Written 2026-09-16. Every step landed the same day.** Adam asked for it directly:
 *"it should be possible to reorder the mixer tracks by dragging them."* It is
 outside the `FOCUS.md` sequence for that reason, the same standing
 `coreaudio-driver/` has.
@@ -25,14 +25,50 @@ it."* A reorder needs a `Moved` variant as well, for the reason
 | Step | What | Rung | State |
 | --- | --- | --- | --- |
 | 01 | `TrackEdit::Moved`, `Project::move_track`, and control bindings follow both kinds of edit | 2 (`mooloop-core`) | landed 2026-09-16 |
-| 02 | The session follows a track edit, and the rack stays on the moved track | 2 (`mooloop-session`) | not started |
-| 03 | The drag: `TrackDrag`, the strip plate, one `main.slint` crossing | `slint-sketch`, then one `mooloop-ui` build on the box | not started |
-| 04 | Two Track actions, so the gesture has a name | 2, then the step 03 build if batched | not started, optional |
+| 02 | The session follows a track edit, and the rack stays on the moved track | 2 (`mooloop-session`) | landed 2026-09-16 |
+| 03 | The drag: `TrackDrag`, the strip plate, one `main.slint` crossing | `slint-sketch`, then one `mooloop-ui` build on the box | landed 2026-09-16 |
+| 04 | Two Track actions, so the gesture has a name | 2, then the step 03 build if batched | landed 2026-09-16, batched into 03 |
 
 Steps 01 and 02 need no UI build and can land on the laptop. Step 03 is the
 only one that crosses the face contract, and `AGENTS.md` wants that done
 once, so **if step 04 is wanted, batch its `main.slint` edits into step
 03's pass**.
+
+## What the doing changed
+
+- **`ListEdit` lives in `mooloop-core`, not in the session's `project.rs`.**
+  Once both edit enums had a `target(EffectTarget)` method, both `address`
+  methods became one line over it, and `ListEdit::address` is where that
+  line lives. `ProjectEdit::edit` carries it, and the session walks four
+  fields once for both lists in `Session::rescope_targets`.
+- **The rack follows the moved track without a new field.** Step 02 had
+  `queue_track_move` pass `Some(to)` as the rack's target. That was not
+  needed: pressing a strip's plate already points the rack at it, so the
+  pump's pre-install `rack_was` is `Bus(from)` and `rescope_after_track` sends
+  it to `Bus(to)`. The same arm keeps the rack on its track through a removal
+  of some *other* track, which the plan did not ask for and costs nothing.
+- **`MixerStripRow.is-master` already existed**, so the grab reads it.
+- **The master's slot is hot, and answers seat 1.** Step 03 said the master
+  is never a landing and the release clamps. With discrete pointer events
+  that left a drop over the master reporting whatever strip was last under
+  the pointer, so the master's slot reports seat 1 and has no left edge, and
+  the `+` button reports the last seat and has no right edge. The release
+  still clamps to `1..count-1`, and the model still refuses seat 0.
+- **No `z`.** Slint 1.17 wants `z` as a literal, so the held strip passes
+  *under* its right-hand neighbour, as it does in both other racks. It wears
+  a shadow and a slight dim instead. Recorded in `LOOSE_ENDS.md`.
+- **`MixerMetrics.row-padding` and `strip-gap`** now name the strip row's
+  8px and 4px, so the slot's pitch, `track_reorder.rs` and
+  `mixer_snapshot.rs` read them instead of each holding a copy.
+- **There was no Track menu**, so step 04 added one between Channel and View:
+  Add Track, and the two moves, named for the track they move. Its enable
+  flags come from `Session::can_move_track`, which calls the same
+  `track_move_allowed` that `Project::move_track` does. `menubar.rs`'s View
+  click moved from x 223 to 270.
+- **The live check through `scripts/mooloop-mcp` was not done** in the session
+  that landed this. The drag is covered by `track_reorder.rs` against the real
+  `MixerPane`, and the model half by the core and session tests; a listen
+  across a drop, and an undo, are still owed.
 
 ## Found while writing the plan
 

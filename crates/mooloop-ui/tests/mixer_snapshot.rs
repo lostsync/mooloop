@@ -600,17 +600,15 @@ fn channel_bus_picker_reports_the_selected_destination() {
 /// used to carry a 26px strip and its 1px rule above the pane, holding only
 /// the Steps/Mixer switcher, which now leads the toolbar row above.
 const NAME_PLATE_Y: f32 = 109.0;
-/// The gap `MixerPane`'s strip row puts between two strips.
-const STRIP_GAP: f32 = 4.0;
-
-/// Strip width plus the layout gap between two strips, read from
+/// Strip width plus the layout gap between two strips, both read from
 /// `MixerMetrics` rather than kept here.
 ///
 /// It was 66 until 2026-09-11, when the strip went to 92px so that three
 /// knobs fit a row and an EQ band could be one -- and a test holding its own
 /// copy of a width is how a passing suite comes to be clicking the gutter.
 fn strip_pitch(ui: &MainWindow) -> f32 {
-    ui.global::<MixerMetrics>().get_strip_width() + STRIP_GAP
+    let metrics = ui.global::<MixerMetrics>();
+    metrics.get_strip_width() + metrics.get_strip_gap()
 }
 
 /// Centre of the first channel row's bus picker in the normal work surface.

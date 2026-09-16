@@ -201,7 +201,7 @@ pub use project::{
     AuxInState, ChannelPreset, ChannelSetup, ChannelSource, Ds01State, DrumSynthState, Kit,
     MonoSynthState,
     MlM1State, MlP8State, PatternMeta, PolySynthState, Project, ProjectChannel, SampleReference,
-    SamplerState, trim_pattern_meta,
+    SamplerState, trim_pattern_meta, track_move_allowed,
     DEFAULT_SWING_PERCENT, MAX_SWING_PERCENT, MIN_SWING_PERCENT,
 };
 pub use sampler::{
@@ -216,7 +216,7 @@ pub use structure::{
     insert_run_beside, mint_device_id, move_sequence, parent_of, run_of, span_of, span_problem,
     unwrap_container, wrap_in_container,
     MAX_CONTAINER_DEPTH, move_effect, move_effect_into_container, remove_effect,
-    replace_run, rescope_lanes, rescope_lanes_for_track, slot_of, ChannelEdit, TrackEdit,
+    replace_run, rescope_lanes, rescope_lanes_for_track, slot_of, ChannelEdit, ListEdit, TrackEdit,
 };
 pub use synth::{
     DrumMode, DrumSynthParams, HatCharacter, KickCharacter, LfoParams, LfoWave, MonoSynthParams,

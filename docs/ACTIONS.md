@@ -43,7 +43,7 @@ the command layer, and applies equally to any future console/MCP command.
 ## What's registered today
 
 `actions.rs`'s `ACTIONS` table is the source of truth; read it rather than
-this document for the current list. **It holds 63 actions in 11 categories**
+this document for the current list. **It holds 65 actions in 11 categories**
 as of 2026-09-14, and a test in `actions.rs` reads that sentence and fails if
 either number stops being true.
 
@@ -61,14 +61,20 @@ tree when the roll is not where you are), Notes (the five pointer tools on
 keys 1-5 and the snap toggle on 6), View (revealing a view, splitting the top pane on Ctrl+\\,
 zooming a pane to the window on Ctrl+Shift+\\, and piano-roll zoom), Channel
 (add, remove, clone, mute), Track (solo on Ctrl+Shift+M and mute on
-Ctrl+Alt+M, both aimed at the track the rack is editing), Device (the
+Ctrl+Alt+M, plus moving the track one seat left or right, all aimed at the
+track the rack is editing), Device (the
 clipboard's four on Ctrl+Shift+C/X/V/D, plus bypass, remove, wrap in a
 container, save a preset, and stepping the selection along the chain),
 Browser (focus it on Ctrl+B, then Enter and Ctrl+Enter), and Pattern
 (including lengthening and shortening the pattern by a beat, on
-Ctrl+Shift+= and Ctrl+Shift+-). One entry, `pattern.clear`, is registered
-with no default chord: every nearby Pattern action already claims a
-Ctrl+modifier combination, and it is still listed so it can be bound.
+Ctrl+Shift+= and Ctrl+Shift+-). Three entries are registered with no
+default chord and are listed so they can be bound. `pattern.clear` has none
+because every nearby Pattern action already claims a Ctrl+modifier
+combination. `track.move-left` and `track.move-right` have none because the
+Ctrl+Shift and Ctrl+Alt arrows sit beside the roll's nudges, and a
+rarely-used move is not worth a chord that close to transposing. They also
+have rows in the Track menu, which greys them from the same predicate
+(`Session::can_move_track`) that decides whether the chord fires.
 
 ## Scope: where a chord applies
 
@@ -80,7 +86,7 @@ not three actions sharing a chord.
 Every `ActionSpec` therefore carries a `Scope`, and Preferences > Shortcuts
 draws it in a Context column beside the chord — blank for the global
 majority, so the column marks the exceptions rather than restating the rule
-sixty-three times. The scopes:
+sixty-five times. The scopes:
 
 | Scope | Column reads | Means |
 | --- | --- | --- |

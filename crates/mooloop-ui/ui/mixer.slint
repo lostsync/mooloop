@@ -4,6 +4,7 @@ import { ConsoleButton, MixerFader, MiniKnob, MuteButton, ParameterFader, Picker
 import { GainMath } from "gain.slint";
 import { ChannelMeter } from "meters.slint";
 import { StripIcons, StripRow, StripSections } from "strip.slint";
+import { ReorderMath } from "reorder.slint";
 
 // The mixer's own numbers, under a name, the way `DeviceRackMetrics` holds
 // the rack's.
@@ -20,9 +21,51 @@ import { StripIcons, StripRow, StripSections } from "strip.slint";
 // The front face, the back face and `tests/mixer_snapshot.rs` all want this
 // number, and a number spelled in four places that drift apart is the fault
 // `AGENTS.md` opens on.
+// Live state of a mixer reorder.
+//
+// The fourth global of this shape: `ChannelDrag` with `x` where its `y` is,
+// which is `RackDrag`'s axis with `ChannelDrag`'s two-index callback. The
+// **grab** is a strip's name plate, which knows which track it is; the
+// **landing** is reported by whichever strip slot the pointer is over, from
+// its own bounds. Its own global rather than `RackDrag` reused, because every
+// device-rack row reads `RackDrag.active`, and with both panes on screen a
+// mixer drag would slide the rack as well.
+//
+// `absolute-position.x + mouse-x`, never `mouse-x - pressed-x`, for the reason
+// `RackDrag.dx` gives: the plate's touch area rides on the strip it slides.
+export global TrackDrag {
+    // Track index being dragged, or -1.
+    in-out property <int> source: -1;
+    // Track index the drop would land on. Never the master's seat: the
+    // master's slot reports seat 1 instead.
+    in-out property <int> target: -1;
+    // Pointer travel since the grab, applied to the dragged strip.
+    in-out property <length> dx: 0px;
+    // Where the grab started and where the pointer is now, in window
+    // coordinates.
+    in-out property <length> grab-x: 0px;
+    in-out property <length> pointer-x: 0px;
+    // Full pitch of the dragged strip -- its width plus the row's spacing --
+    // which is the gap the strips it passes open up. Published by the slot.
+    in-out property <length> source-width: 0px;
+    in-out property <bool> active: false;
+
+    public function end() {
+        active = false;
+        source = -1;
+        target = -1;
+        dx = 0px;
+    }
+}
+
 export global MixerMetrics {
     out property <length> strip-width: 92px;
     out property <length> strip-padding: 4px;
+    /// The strip row's padding and the gap between two strips. Named so the
+    /// reorder's pitch and the tests that click a strip read them rather than
+    /// keep their own copy.
+    out property <length> row-padding: 8px;
+    out property <length> strip-gap: 4px;
     out property <length> meter-width: 22px;
     out property <length> fader-width: 30px;
     /// The fader may be squeezed from the top -- Adam: *"there's room to
@@ -823,6 +866,14 @@ component MixerStrip inherits Rectangle {
     /// Draw everything at once rather than paging. `MixerPane` decides it,
     /// from its own height and nothing else.
     in property <bool> full;
+    /// How many tracks there are, so a drop can be clamped to the last seat.
+    in property <int> count;
+    /// A drop is still installing. A drag started now would be computed
+    /// against the order that drop is about to replace, so the plate only
+    /// selects until it lands.
+    in property <bool> project-edit-pending;
+    /// This strip, held by its name plate, was let go over seat `to`.
+    callback reorder-requested(int);
     callback selected();
     callback mute-toggled();
     callback solo-toggled();
@@ -869,10 +920,12 @@ component MixerStrip inherits Rectangle {
         padding: MixerMetrics.strip-padding;
         spacing: 3px;
 
-        // Name plate. Clicking it is the gesture that points the device rack
+        // Name plate. Pressing it is the gesture that points the device rack
         // below at this track, so it covers the full width of the strip. It
         // is above both faces rather than inside either: whatever the strip
         // is showing, this is the track it belongs to.
+        //
+        // It is also the grab for a reorder, as the channel rack's plate is.
         Rectangle {
             height: 20px;
             border-radius: Theme.radius-sm;
@@ -905,9 +958,42 @@ component MixerStrip inherits Rectangle {
                 width: parent.width - 4px;
                 x: 2px;
             }
+            // Selects on press and reorders on release, the way the channel
+            // plate does. A press that never leaves its own strip ends with
+            // the target still on it, which is already "no move", so there is
+            // no threshold. **The master refuses at the grab**: it selects,
+            // and never starts a drag, because it is first by being bus 0.
             name-touch := TouchArea {
-                mouse-cursor: pointer;
-                clicked => { root.selected(); }
+                mouse-cursor: root.strip.is-master ? MouseCursor.pointer : MouseCursor.move;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                        root.selected();
+                        if (!root.strip.is-master && !root.project-edit-pending) {
+                            TrackDrag.source = root.index;
+                            TrackDrag.target = root.index;
+                            TrackDrag.dx = 0px;
+                            // Seeded here as well as in `moved`, so the slots
+                            // do not decide who is under the pointer from the
+                            // last drag's position.
+                            TrackDrag.grab-x = self.absolute-position.x + self.mouse-x;
+                            TrackDrag.pointer-x = TrackDrag.grab-x;
+                            TrackDrag.active = true;
+                        }
+                    }
+                    if (e.kind == PointerEventKind.up && TrackDrag.active
+                            && TrackDrag.source == root.index) {
+                        if (TrackDrag.target != root.index && TrackDrag.target >= 0) {
+                            root.reorder-requested(clamp(TrackDrag.target, 1, root.count - 1));
+                        }
+                        TrackDrag.end();
+                    }
+                }
+                moved => {
+                    if (TrackDrag.active && TrackDrag.source == root.index) {
+                        TrackDrag.pointer-x = self.absolute-position.x + self.mouse-x;
+                        TrackDrag.dx = TrackDrag.pointer-x - TrackDrag.grab-x;
+                    }
+                }
             }
             Tooltip { text: @markdown("\{root.strip.name}"); }
         }
@@ -1169,6 +1255,11 @@ export component MixerPane inherits Rectangle {
     callback bus-send-enable-toggled(int, int);
     callback track-added();
     in property <bool> can-add-track: true;
+    /// The track at `from` was dragged to seat `to`. Never the master at
+    /// either end; the model refuses that as well, independently.
+    callback track-reorder-requested(int, int);
+    /// See `MixerStrip.project-edit-pending`.
+    in property <bool> project-edit-pending;
 
     /// Whether the pane has the room for a strip to draw everything at once.
     ///
@@ -1177,15 +1268,15 @@ export component MixerPane inherits Rectangle {
     /// the strips ask for. Deriving it from the content would be a loop:
     /// what the content asks for is exactly what this decides.
     ///
-    /// The 16px is the strip row's own padding, the same term the viewport
+    /// The doubled padding is the strip row's own, the same term the viewport
     /// below adds for the same reason.
     private property <bool> full:
-        mixer-scroll.visible-height >= MixerMetrics.full-height + 16px;
+        mixer-scroll.visible-height >= MixerMetrics.full-height + 2 * MixerMetrics.row-padding;
     /// The height the row cannot be squeezed below, and so what the pane
     /// scrolls to. Which face is up decides it: the paged one has a floor of
     /// its own and scrolls *inside* its page past that, while the full one
     /// is only drawn where its whole height already fits.
-    private property <length> strip-floor: 16px + (root.full
+    private property <length> strip-floor: 2 * MixerMetrics.row-padding + (root.full
         ? MixerMetrics.full-height
         : MixerMetrics.strip-min-height);
 
@@ -1208,34 +1299,72 @@ export component MixerPane inherits Rectangle {
             height: max(mixer-scroll.visible-height, root.strip-floor);
 
             strip-row := HorizontalLayout {
-                padding: 8px;
-                spacing: 4px;
+                padding: MixerMetrics.row-padding;
+                spacing: MixerMetrics.strip-gap;
                 alignment: start;
 
-                for strip[i] in root.strips : MixerStrip {
-                    strip: strip;
-                    index: i;
-                    full: root.full;
-                    bus-names: root.bus-names;
-                    selected => { root.bus-selected(i); }
-                    mute-toggled => { root.bus-muted(i); }
-                    polarity-toggled => { root.bus-polarity-toggled(i); }
-                    solo-toggled => { root.bus-solo-toggled(i); }
-                    volume-changed(v) => { root.bus-volume-changed(i, v); }
-                    pan-changed(v) => { root.bus-pan-changed(i, v); }
-                    output-picked(o) => { root.bus-output-changed(i, o); }
-                    console-toggled => { root.bus-console-toggled(i); }
-                    clip-reset => { root.bus-clip-reset(i); }
-                    strip-moved(id, value) => { root.bus-strip-param(i, id, value); }
-                    strip-point-dragged(band, hz, gain) => {
-                        root.bus-strip-point-dragged(i, band, hz, gain);
+                // Each strip sits in a slot that keeps its seat in the row
+                // while the strip inside it slides: an element a layout
+                // places cannot be moved by its own `x`.
+                for strip[i] in root.strips : slot := Rectangle {
+                    width: face.width;
+                    property <bool> dragging: TrackDrag.source == i;
+                    // Whether the drop would land here, answered by the slot
+                    // from its own bounds. The master's slot answers seat 1,
+                    // and has no left edge, so a pointer that leaves the row
+                    // that way still lands next to the master rather than
+                    // wherever it last was.
+                    property <bool> hot: TrackDrag.active
+                        && (i == 0 || TrackDrag.pointer-x >= self.absolute-position.x)
+                        && TrackDrag.pointer-x < self.absolute-position.x + self.width;
+                    changed hot => { if (self.hot) { TrackDrag.target = max(i, 1); } }
+                    changed dragging => {
+                        if (self.dragging) {
+                            TrackDrag.source-width = self.width + strip-row.spacing;
+                        }
                     }
-                    strip-switched(id, on) => { root.bus-strip-param(i, id, on ? 1 : 0); }
-                    voicing-picked(voicing) => { root.bus-voicing-picked(i, voicing); }
-                    send-added(target) => { root.bus-send-added(i, target); }
-                    send-removed(send) => { root.bus-send-removed(i, send); }
-                    send-level-changed(send, level) => { root.bus-send-level-changed(i, send, level); }
-                    send-enable-toggled(send) => { root.bus-send-enable-toggled(i, send); }
+                    property <length> shift: TrackDrag.active
+                        ? ReorderMath.shift(i, TrackDrag.source, TrackDrag.target, TrackDrag.source-width)
+                        : 0px;
+                    animate shift { duration: Motion.duration; easing: Motion.curve; }
+
+                    face := MixerStrip {
+                        // No `z` to lift the held strip over the ones it passes:
+                        // Slint 1.17 wants a literal there. It is marked out by a
+                        // shadow instead, as the channel plate is.
+                        x: slot.shift + (slot.dragging ? TrackDrag.dx : 0px);
+                        height: 100%;
+                        opacity: slot.dragging ? 0.85 : 1.0;
+                        drop-shadow-blur: slot.dragging ? 16px : 0px;
+                        drop-shadow-offset-y: slot.dragging ? 6px : 0px;
+                        drop-shadow-color: #00000099;
+                        strip: strip;
+                        index: i;
+                        count: root.strips.length;
+                        full: root.full;
+                        project-edit-pending: root.project-edit-pending;
+                        bus-names: root.bus-names;
+                        reorder-requested(to) => { root.track-reorder-requested(i, to); }
+                        selected => { root.bus-selected(i); }
+                        mute-toggled => { root.bus-muted(i); }
+                        polarity-toggled => { root.bus-polarity-toggled(i); }
+                        solo-toggled => { root.bus-solo-toggled(i); }
+                        volume-changed(v) => { root.bus-volume-changed(i, v); }
+                        pan-changed(v) => { root.bus-pan-changed(i, v); }
+                        output-picked(o) => { root.bus-output-changed(i, o); }
+                        console-toggled => { root.bus-console-toggled(i); }
+                        clip-reset => { root.bus-clip-reset(i); }
+                        strip-moved(id, value) => { root.bus-strip-param(i, id, value); }
+                        strip-point-dragged(band, hz, gain) => {
+                            root.bus-strip-point-dragged(i, band, hz, gain);
+                        }
+                        strip-switched(id, on) => { root.bus-strip-param(i, id, on ? 1 : 0); }
+                        voicing-picked(voicing) => { root.bus-voicing-picked(i, voicing); }
+                        send-added(target) => { root.bus-send-added(i, target); }
+                        send-removed(send) => { root.bus-send-removed(i, send); }
+                        send-level-changed(send, level) => { root.bus-send-level-changed(i, send, level); }
+                        send-enable-toggled(send) => { root.bus-send-enable-toggled(i, send); }
+                    }
                 }
 
                 // One `+`, one kind of thing. What a track *is* -- an
@@ -1245,6 +1374,13 @@ export component MixerPane inherits Rectangle {
                 // (`docs/TERMINOLOGY.md`).
                 Rectangle {
                     width: 34px;
+                    // Past the last strip is the last seat. No right edge, so
+                    // the empty row beyond this counts too.
+                    property <bool> hot: TrackDrag.active
+                        && TrackDrag.pointer-x >= self.absolute-position.x;
+                    changed hot => {
+                        if (self.hot) { TrackDrag.target = root.strips.length - 1; }
+                    }
                     ToolButton {
                         y: 4px;
                         width: 26px;

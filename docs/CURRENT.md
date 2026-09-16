@@ -128,6 +128,16 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   the session's own state: the selected device, the open automation lane, and
   the preset labels a channel and its rack rows are wearing. The move is one
   undoable edit.
+- Mixer tracks can be reordered the same way, by dragging a strip's name
+  plate; the strips it passes slide aside. The master stays first: its plate
+  selects and never drags, and a drop over it lands in seat 1. Everything that
+  named the track follows it — channels routed to it, other tracks' outputs
+  and sends, automation lanes, modulation routes and MIDI control bindings —
+  the device rack stays on the moved track, and the move is one undoable edit.
+  The Track menu's **Move … Left** and **Move … Right** do the same one seat
+  at a time for the track the rack is editing, and are bindable in
+  Preferences > Shortcuts. A control binding now also follows a channel
+  reorder, insert or delete; before 2026-09-16 it stayed on the old seat.
 - Patterns are created explicitly from a one-pattern project, with up to 256
   addressable pattern IDs and independent logical lengths from 1 to 256 steps.
   Hidden steps survive shortening and re-extending a pattern.

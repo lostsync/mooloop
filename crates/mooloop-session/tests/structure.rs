@@ -438,3 +438,106 @@ fn the_session_follows_a_channel_move_too() {
         "a bus label was dropped by a channel removal"
     );
 }
+
+/// The session half of a track edit: [`the_session_follows_a_channel_move_too`]
+/// one list over.
+///
+/// A track removal carried no edit to the pump until 2026-09-16, so none of
+/// this ran for it, and a preset label on track 3's device landed on track
+/// 2's device with the same id -- which every chain has, because every chain
+/// mints its ids from zero.
+#[test]
+fn the_session_follows_a_track_move_and_a_track_removal() {
+    use mooloop_core::{ListEdit, TrackEdit, STRIP_PARAM_VOLUME};
+    use mooloop_session::session::PresetSaveTarget;
+
+    let mut session = Session::default();
+    let third = EffectTarget::Bus(3);
+    let first_track = EffectTarget::Bus(1);
+    let device = DeviceId(0);
+    session.selected_device = Some((third, device));
+    session
+        .automation_target
+        .set(Some(ParamAddr::strip(third, STRIP_PARAM_VOLUME)));
+    session.pending_preset_save = Some(PresetSaveTarget::Effect { target: third, device });
+    session.set_effect_preset_name(third, device, "Wide Plate");
+    session.set_effect_preset_name(first_track, device, "Glue");
+    // Channel-scoped state, which a track edit must leave alone.
+    let channel = EffectTarget::Channel(3);
+    session.selected_source = Some(channel);
+    session.set_effect_preset_name(channel, device, "Crunch");
+    session.set_source_preset_name(3, "Deep Kick");
+
+    session.rescope_after_track(TrackEdit::Moved { from: 3, to: 1 }, third);
+
+    assert_eq!(session.selected_device, Some((first_track, device)));
+    assert_eq!(
+        session.automation_target.get(),
+        Some(ParamAddr::strip(first_track, STRIP_PARAM_VOLUME)),
+        "the open lane stayed on the seat rather than the track"
+    );
+    assert_eq!(
+        session.pending_preset_save,
+        Some(PresetSaveTarget::Effect { target: first_track, device })
+    );
+    assert_eq!(session.effect_preset_name(first_track, device), Some("Wide Plate"));
+    assert_eq!(
+        session.effect_preset_name(EffectTarget::Bus(2), device),
+        Some("Glue"),
+        "the track the move passed did not shift along"
+    );
+    assert_eq!(session.effect_preset_name(third, device), None);
+    // The rack was on the moved track, so it is on it still.
+    assert_eq!(session.effect_target, first_track);
+    assert_eq!(session.selected_source, Some(channel));
+    assert_eq!(session.effect_preset_name(channel, device), Some("Crunch"));
+    assert_eq!(session.source_preset_name(3), Some("Deep Kick"));
+
+    // Removing track 1 -- the moved one -- drops everything that named it
+    // and brings everything after it down a seat. The rack was on a
+    // channel, so it is left wherever the install put it.
+    session.effect_target = EffectTarget::Channel(0);
+    session.rescope_after_track(TrackEdit::Removed(1), channel);
+    assert_eq!(session.selected_device, None);
+    assert_eq!(session.automation_target.get(), None);
+    assert_eq!(session.pending_preset_save, None);
+    assert_eq!(session.effect_preset_name(first_track, device), Some("Glue"));
+    assert_eq!(session.effect_preset_name(EffectTarget::Bus(2), device), None);
+    assert_eq!(session.effect_target, EffectTarget::Channel(0));
+    assert_eq!(session.effect_preset_name(channel, device), Some("Crunch"));
+
+    // A rack on a removed track is not put back anywhere.
+    session.rescope_after_track(TrackEdit::Removed(1), first_track);
+    assert_eq!(session.effect_target, EffectTarget::Channel(0));
+    assert_eq!(session.effect_preset_name(first_track, device), None);
+
+    // The shared walk, the other way round: a channel edit leaves every track
+    // target where it is.
+    session.set_effect_preset_name(third, device, "Hall");
+    session.selected_device = Some((third, device));
+    session.rescope_after(mooloop_core::ChannelEdit::Removed(0));
+    assert_eq!(session.selected_device, Some((third, device)));
+    assert_eq!(session.effect_preset_name(third, device), Some("Hall"));
+    assert_eq!(
+        ListEdit::Channel(mooloop_core::ChannelEdit::Removed(3)).target(third),
+        Some(third)
+    );
+    assert_eq!(ListEdit::Track(TrackEdit::Removed(3)).target(channel), Some(channel));
+}
+
+/// The predicate the Track menu and its actions grey themselves by, which is
+/// `Project::move_track`'s own refusal.
+#[test]
+fn a_track_can_move_anywhere_but_into_or_out_of_the_masters_seat() {
+    let mut session = Session::default();
+    while session.buses.len() < 4 {
+        session.add_track().expect("room for a track");
+    }
+    assert!(!session.can_move_track(0, 1), "the master moved");
+    assert!(!session.can_move_track(1, -1), "a track displaced the master");
+    assert!(session.can_move_track(1, 1));
+    assert!(session.can_move_track(3, -1));
+    assert!(!session.can_move_track(3, 1), "a track moved past the last seat");
+    assert!(!session.can_move_track(2, 0), "a move that goes nowhere");
+    assert!(!session.can_move_track(9, -1));
+}

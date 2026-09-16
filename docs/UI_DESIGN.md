@@ -644,6 +644,17 @@ decide its shape. Settled 2026-09-10.
   The arrow of the face being shown **becomes a dot** -- the same idle-dot
   idiom as an in-and-out switch -- so the row reads as a position indicator
   rather than as two buttons that might both do something.
+- **The name plate is the grab.** Pressing it selects the track, as it
+  always has, and dragging it reorders the mixer with the channel rack's
+  pattern: the strips between the grab and the landing slide aside and the
+  gap is the drop indicator. **The master refuses at the grab** -- its plate
+  selects and never lifts -- and a drop over it lands next to it, so the
+  master stays first without a second rule to learn. Added 2026-09-16.
+  **A turned strip's face stays at its seat for now**: a strip's page is
+  private to the strip instance and a `for` reuses instances by seat, so a
+  track moved off a turned strip arrives on its fader face and the strip
+  that slides into that seat shows the sends or strip page. Fixing it means
+  the page moving into `MixerStripRow`.
 - **The turn-over controls are per strip, not global.** The reason to look at
   one track's EQ is usually to compare it against what its neighbours are
   doing, and a mixer that turns over all at once takes that away.

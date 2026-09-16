@@ -1,0 +1,35 @@
+// The arithmetic every drag-to-reorder list shares.
+//
+// Four lists reorder by the same pattern -- the device rack (`RackDrag`), the
+// channel rack (`ChannelDrag`), the mixer (`TrackDrag`) and, in its own way,
+// the pane tabs -- and each needs its own global, because a Slint global
+// cannot be instantiated twice and two lists on screen at once must not slide
+// each other's rows. What they do *not* need is their own copy of the rule
+// deciding which slots slide. That three-way test is the part that could
+// drift, so it is written once, here.
+//
+// The mixer uses it. The device rack and the channel rack still spell it
+// inline; moving them over is recorded in `docs/LOOSE_ENDS.md`.
+
+export global ReorderMath {
+    // How far slot `i` slides while the slot at `source` is held over
+    // `target`. Remove-then-insert, which is what the list will do on the
+    // drop: the slots the held one passed close up behind it by one pitch,
+    // and the gap they open is exactly where it will land -- so the gap is
+    // the drop indicator, with nothing to reconcile between a marker and the
+    // result. The held slot itself is not shifted; it follows the pointer.
+    //
+    // A negative `source` or `target` means no drag, and nothing slides.
+    public pure function shift(i: int, source: int, target: int, pitch: length) -> length {
+        if (source < 0 || target < 0 || i == source) {
+            return 0px;
+        }
+        if (source < target && i > source && i <= target) {
+            return -pitch;
+        }
+        if (target < source && i >= target && i < source) {
+            return pitch;
+        }
+        return 0px;
+    }
+}

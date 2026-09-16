@@ -793,17 +793,19 @@ impl ChannelEdit {
         }
     }
 
-    /// Where `address` points after the edit. Bus scopes are untouched: a bus
-    /// exists independently of which channels feed it.
+    /// Where `target` points after the edit, or `None` when its channel went.
+    /// Bus targets are untouched: a bus exists independently of which
+    /// channels feed it.
+    pub fn target(self, target: EffectTarget) -> Option<EffectTarget> {
+        match target {
+            EffectTarget::Channel(channel) => self.channel(channel).map(EffectTarget::Channel),
+            EffectTarget::Bus(_) => Some(target),
+        }
+    }
+
+    /// Where `address` points after the edit.
     pub fn address(self, address: ParamAddr) -> Option<ParamAddr> {
-        let EffectTarget::Channel(channel) = address.scope else {
-            return Some(address);
-        };
-        let channel = self.channel(channel)?;
-        Some(ParamAddr {
-            scope: EffectTarget::Channel(channel),
-            ..address
-        })
+        ListEdit::Channel(self).address(address)
     }
 }
 
@@ -853,15 +855,49 @@ impl TrackEdit {
         self.track(old).unwrap_or(crate::MASTER_BUS)
     }
 
-    /// Where `address` points after the edit. Channel scopes are untouched: a
-    /// channel exists independently of which track it feeds.
+    /// Where `target` points after the edit, or `None` when its track went.
+    /// Channel targets are untouched: a channel exists independently of which
+    /// track it feeds.
+    pub fn target(self, target: EffectTarget) -> Option<EffectTarget> {
+        match target {
+            EffectTarget::Bus(track) => self.track(track).map(EffectTarget::Bus),
+            EffectTarget::Channel(_) => Some(target),
+        }
+    }
+
+    /// Where `address` points after the edit.
     pub fn address(self, address: ParamAddr) -> Option<ParamAddr> {
-        let EffectTarget::Bus(track) = address.scope else {
-            return Some(address);
-        };
-        let track = self.track(track)?;
+        ListEdit::Track(self).address(address)
+    }
+}
+
+/// An edit to either of the two lists an [`EffectTarget`] can name a seat in.
+///
+/// One enum so that anything holding targets -- the session's selection, its
+/// preset labels, a control binding -- is walked by one piece of code for
+/// both lists, rather than by two hand-written copies of which one later
+/// misses a field. No single edit moves a channel and a track at once, so
+/// this cannot say "both".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListEdit {
+    Channel(ChannelEdit),
+    Track(TrackEdit),
+}
+
+impl ListEdit {
+    /// Where `target` points after the edit, or `None` when its seat went.
+    pub fn target(self, target: EffectTarget) -> Option<EffectTarget> {
+        match self {
+            Self::Channel(edit) => edit.target(target),
+            Self::Track(edit) => edit.target(target),
+        }
+    }
+
+    /// Where `address` points after the edit. Only its scope names a seat;
+    /// the device and parameter inside it are identities and do not move.
+    pub fn address(self, address: ParamAddr) -> Option<ParamAddr> {
         Some(ParamAddr {
-            scope: EffectTarget::Bus(track),
+            scope: self.target(address.scope)?,
             ..address
         })
     }

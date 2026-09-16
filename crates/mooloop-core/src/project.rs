@@ -815,6 +815,17 @@ fn is_empty_control_map(map: &crate::control::ControlMap) -> bool {
     map.bindings.is_empty()
 }
 
+/// Whether a bank of `count` tracks can move the one at `from` to `to`.
+///
+/// The one rule [`Project::move_track`] applies and every surface that offers
+/// a move greys itself by, so a menu row cannot be enabled for a move the
+/// model would refuse: both seats exist, they differ, and neither is the
+/// master's.
+pub fn track_move_allowed(count: usize, from: usize, to: usize) -> bool {
+    let master = crate::MASTER_BUS as usize;
+    from < count && to < count && from != to && from != master && to != master
+}
+
 impl Project {
     /// Roughly what one copy of this project occupies, counting the heap it
     /// owns as well as its own bytes.
@@ -1175,9 +1186,7 @@ impl Project {
     /// `None` when either index is out of range, is the master, or they are
     /// the same.
     pub fn move_track(&mut self, from: usize, to: usize) -> Option<TrackEdit> {
-        let count = self.buses.len();
-        let master = crate::MASTER_BUS as usize;
-        if from >= count || to >= count || from == to || from == master || to == master {
+        if !track_move_allowed(self.buses.len(), from, to) {
             return None;
         }
         let track = self.buses.remove(from);
