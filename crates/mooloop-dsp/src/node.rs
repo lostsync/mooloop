@@ -214,6 +214,20 @@ pub trait AudioNode {
         0
     }
 
+    /// Whether this node is holding audio that replacing it would destroy.
+    ///
+    /// Only the buffer device answers yes, and only while frozen: its ring is
+    /// then a sample somebody is playing rather than a moving window nobody
+    /// can hear the contents of. A ring resize builds a replacement
+    /// off-thread and swaps it in, which is right for every other reason a
+    /// buffer is rebuilt and wrong for this one -- an ordinary tempo change
+    /// would silently take the frozen audio away mid-performance. The chain
+    /// refuses the swap instead, and the new node goes back down the reclaim
+    /// ring unused.
+    fn holds_frozen_audio(&self) -> bool {
+        false
+    }
+
     /// What this node's gain computer did over the block just processed, if
     /// it has one. Only the dynamics devices report a value; the host
     /// publishes it as display telemetry, the same way `buffer_collisions`

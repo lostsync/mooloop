@@ -2369,6 +2369,32 @@ pub struct LimiterParams {
 pub struct BufferParams {
     #[serde(default = "default_buffer_bars")]
     pub bars: u8,
+    /// Free-run velocity of the read head, signed, `1.0` = forward at unity.
+    ///
+    /// It is what the head does when nothing else is talking to it. A chase
+    /// armed by [`Self::offset_beats`] overrides it while it is closing, and a
+    /// [`crate::BufferEvent`] gesture overrides it for as long as the gesture
+    /// runs -- the arbitration rule in
+    /// `docs/plans/buffer-implementation/03-freeze-and-the-grid.md`.
+    ///
+    /// The writer used to be the time base: a held offset played forward at
+    /// unity because the target was recomputed against a moving write head.
+    /// Freeze takes the writer away, so the time base has to be stated.
+    #[serde(default = "default_buffer_rate")]
+    pub rate: f32,
+    /// Whether the writer is stopped and the ring is a sample rather than a
+    /// moving window. Nonzero is frozen; the device applies hysteresis around
+    /// the midpoint so a modulator resting near the threshold cannot chatter
+    /// it.
+    ///
+    /// It persists like every other parameter, and a project saved frozen
+    /// reopens frozen -- over an **empty ring**, because the frozen audio
+    /// itself is not saved yet. `BUFFER_ENGINE.md` specifies a project-owned
+    /// WAV snapshot and `03-freeze-and-the-grid.md` scopes it as its own step;
+    /// until then, reopening a frozen document is silence with FREEZE lit,
+    /// which is at least explicable from the face.
+    #[serde(default)]
+    pub freeze: f32,
     /// How far behind the writer the read head sits, in beats. Zero follows
     /// the input. This is the buffer's one continuous control: the device is
     /// otherwise driven by discrete [`crate::BufferEvent`] gestures, and a
@@ -2387,11 +2413,17 @@ const fn default_buffer_crossfade_ms() -> f32 {
     2.5
 }
 
+const fn default_buffer_rate() -> f32 {
+    1.0
+}
+
 impl Default for BufferParams {
     fn default() -> Self {
         Self {
             bars: default_buffer_bars(),
             offset_beats: 0.0,
+            rate: default_buffer_rate(),
+            freeze: 0.0,
             crossfade_ms: default_buffer_crossfade_ms(),
         }
     }
@@ -2405,8 +2437,19 @@ impl Default for BufferParams {
 /// on the audio thread the first time someone drew a curve on it.
 pub const BUFFER_PARAM_OFFSET_BEATS: u32 = 0;
 pub const BUFFER_PARAM_CROSSFADE_MS: u32 = 1;
+pub const BUFFER_PARAM_RATE: u32 = 3;
+pub const BUFFER_PARAM_FREEZE: u32 = 6;
 
-static BUFFER_DESCRIPTORS: [ParamDescriptor; 2] = [
+/// How fast the read head may ever travel, forward or back.
+///
+/// One number, because there were nearly two: `buffer_device`'s scrub clamp
+/// and the `Rate` descriptor's range are the same ceiling on the same head,
+/// and a descriptor whose range exceeded the clamp would draw a knob whose
+/// top travel did nothing. It is a limit on the interpolator -- a wilder spin
+/// outruns four-point Hermite into noise -- not a musical choice.
+pub const MAX_BUFFER_RATE: f32 = 4.0;
+
+static BUFFER_DESCRIPTORS: [ParamDescriptor; 4] = [
     ParamDescriptor {
         id: BUFFER_PARAM_OFFSET_BEATS,
         name: "Offset",
@@ -2424,6 +2467,24 @@ static BUFFER_DESCRIPTORS: [ParamDescriptor; 2] = [
         max: 50.0,
         curve: ParamCurve::Exponential,
         default: 2.5,
+    },
+    ParamDescriptor {
+        id: BUFFER_PARAM_RATE,
+        name: "Rate",
+        unit: "x",
+        min: -MAX_BUFFER_RATE,
+        max: MAX_BUFFER_RATE,
+        curve: ParamCurve::Linear,
+        default: 1.0,
+    },
+    ParamDescriptor {
+        id: BUFFER_PARAM_FREEZE,
+        name: "Freeze",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Linear,
+        default: 0.0,
     },
 ];
 
@@ -2779,6 +2840,8 @@ impl EffectParams {
             Self::Buffer(p) => match id {
                 BUFFER_PARAM_OFFSET_BEATS => Some(p.offset_beats),
                 BUFFER_PARAM_CROSSFADE_MS => Some(p.crossfade_ms),
+                BUFFER_PARAM_RATE => Some(p.rate),
+                BUFFER_PARAM_FREEZE => Some(p.freeze),
                 _ => None,
             },
             Self::Chain(p) => match id {
@@ -2913,6 +2976,8 @@ impl EffectParams {
             Self::Buffer(p) => match id {
                 BUFFER_PARAM_OFFSET_BEATS => p.offset_beats = value,
                 BUFFER_PARAM_CROSSFADE_MS => p.crossfade_ms = value,
+                BUFFER_PARAM_RATE => p.rate = value,
+                BUFFER_PARAM_FREEZE => p.freeze = value,
                 _ => return None,
             },
             Self::Chain(p) => match id {

@@ -1088,7 +1088,15 @@ impl EffectChain {
         let matches = self.slot(slot).is_some_and(|state| {
             state.kind == Some(expected_kind) && state.resource_key == Some(expected_resource_key)
         });
-        if matches {
+        // A frozen buffer's ring is a sample somebody is playing. Replacing
+        // the node would take it away, and the commonest reason to replace one
+        // is an ordinary tempo change -- so the swap is refused and the
+        // replacement travels back down the reclaim ring unused, exactly as a
+        // mismatched kind already does.
+        let frozen = self.nodes[slot]
+            .as_ref()
+            .is_some_and(|node| node.holds_frozen_audio());
+        if matches && !frozen {
             if let Some(state) = self.slot_mut(slot) {
                 state.resource_key = Some(resource_key);
             }
@@ -6224,6 +6232,165 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             allocations, 0,
             "the callback allocated {allocations} times on the block that \
              retired a preview"
+        );
+    }
+
+    /// Acceptance test 8 for the Buffer's own operations, from
+    /// `docs/plans/buffer-implementation/01-the-whole-thing.md`: **no
+    /// allocations in the callback**, measured rather than reasoned.
+    ///
+    /// It lives in this crate because `CountingAllocator` does -- it is the
+    /// global allocator only under `cfg(test)` here -- and it drives the
+    /// device rather than a whole `RenderState`, because the operations under
+    /// test are the device's. The block above it covers the surrounding
+    /// callback.
+    ///
+    /// The list is every state the head can be in: following, a gesture with a
+    /// window and a repeat count, a hand scrub, the `Offset` chase, free-run
+    /// at `Rate`, frozen, and each transition between them. Freeze is the
+    /// interesting one, because it changes whether the writer runs -- an
+    /// implementation that copied the ring to latch it would be caught here
+    /// and nowhere else.
+    ///
+    /// Still a floor rather than a ceiling, exactly as the preview test says:
+    /// it proves these paths do not allocate. **The locks half of test 8 is
+    /// not measured by anything**, and `LOOSE_ENDS.md` says so.
+    #[test]
+    fn no_buffer_operation_allocates_on_the_callback() {
+        use mooloop_core::{BufferDuration, BufferEvent};
+        use mooloop_dsp::{Event, EventList, StereoBus, TimedEvent};
+
+        const FRAMES: usize = 256;
+        let context = mooloop_dsp::ProcessContext {
+            sample_rate: 48_000,
+            frames: FRAMES,
+            playing: true,
+            bpm: 120.0,
+            position_ticks: 0.0,
+            position_frames: 0,
+        };
+        // Everything that allocates happens before the counter is read: the
+        // ring, the bus and the event list are all built here, and the device
+        // is warmed with one block so no first-touch page is counted against
+        // the blocks under test.
+        let mut device = mooloop_dsp::BufferDevice::with_bars(48_000, 120.0, 2);
+        let mut bus = StereoBus::with_capacity(FRAMES);
+        let mut events = EventList::empty();
+        device.process(&context, &mut bus, &[]);
+
+        let param = |id: u32, value: f32| TimedEvent {
+            offset: 0,
+            event: Event::ParamValue { id, value },
+        };
+        let stutter = BufferEvent {
+            offset_beats: -0.25,
+            rate: 1.0,
+            window_beats: Some(0.25),
+            repeat: Some(4),
+            duration: BufferDuration::UntilNextEvent,
+            crossfade_ms: 2.5,
+        };
+
+        // Each entry is one block's worth of control input, named for what it
+        // puts the head into. Held in an array so the count below is the
+        // number of states actually exercised rather than a number somebody
+        // remembered.
+        let blocks: [(&str, &[TimedEvent]); 10] = [
+            ("an offset chase", &[param(mooloop_core::BUFFER_PARAM_OFFSET_BEATS, 1.0)]),
+            ("the chase still closing", &[]),
+            ("back to live", &[param(mooloop_core::BUFFER_PARAM_OFFSET_BEATS, 0.0)]),
+            (
+                "a gesture with a window and repeats",
+                &[TimedEvent { offset: 0, event: Event::Buffer(stutter) }],
+            ),
+            ("the gesture still running", &[]),
+            ("a freeze", &[param(mooloop_core::BUFFER_PARAM_FREEZE, 1.0)]),
+            ("free-run at rate, frozen", &[param(mooloop_core::BUFFER_PARAM_RATE, -2.0)]),
+            ("rate held at zero, frozen", &[param(mooloop_core::BUFFER_PARAM_RATE, 0.0)]),
+            ("a thaw", &[param(mooloop_core::BUFFER_PARAM_FREEZE, 0.0)]),
+            (
+                "a hand scrub",
+                &[TimedEvent { offset: 0, event: Event::BufferScrub { delta_frames: -400.0 } }],
+            ),
+        ];
+
+        let mut exercised = 0;
+        for (what, input) in blocks {
+            events.clear();
+            for event in input {
+                events.push(*event);
+            }
+            for frame in 0..FRAMES {
+                bus.l[frame] = (frame as f32 / FRAMES as f32) - 0.5;
+                bus.r[frame] = 0.5 - (frame as f32 / FRAMES as f32);
+            }
+
+            let before = crate::COUNTING.allocations();
+            // Through the trait, which is the path the host takes: the
+            // inherent `process` is the narrower one the device's own tests
+            // use and would skip the event splitting entirely.
+            mooloop_dsp::AudioNode::process(&mut device, &context, &mut bus, &events, None);
+            let allocations = crate::COUNTING.allocations() - before;
+
+            assert_eq!(
+                allocations, 0,
+                "the callback allocated {allocations} times on the block that \
+                 was {what}"
+            );
+            exercised += 1;
+        }
+        assert_eq!(
+            exercised, 10,
+            "the sweep stopped covering the head's states, so it proved nothing"
+        );
+        assert!(
+            !device.is_frozen(),
+            "the thaw has to have taken, or the last blocks measured the wrong \
+             thing"
+        );
+    }
+
+    /// A frozen buffer's ring is a sample being played, so the node that holds
+    /// it is not replaceable.
+    ///
+    /// The prepared-resource guard above refuses a *stale* key. This refuses a
+    /// current one, because the reason is different: the swap is correct and
+    /// the timing is not. Its trigger in the wild is an ordinary tempo change,
+    /// which calls `resize_buffers` and would otherwise take the frozen audio
+    /// away mid-performance with nothing on screen to explain it.
+    #[test]
+    fn a_frozen_buffer_refuses_to_be_replaced() {
+        let mut chain = EffectChain::new();
+        let mut frozen = Box::new(mooloop_dsp::BufferDevice::with_bars(48_000, 120.0, 1));
+        frozen.set_writing(false);
+        let displaced = chain.install(
+            0,
+            mooloop_core::EffectKind::Buffer,
+            Some(1),
+            frozen,
+            None,
+            Box::new(SpectrumAnalyzer::new()),
+            Box::new(EffectSlot::new()),
+        );
+        assert!(displaced.is_empty());
+
+        let replacement = Box::new(mooloop_dsp::BufferDevice::with_bars(48_000, 90.0, 1));
+        let refused = chain.replace_if_kind(
+            0,
+            mooloop_core::EffectKind::Buffer,
+            1,
+            2,
+            replacement,
+            None,
+        );
+        assert!(
+            refused.node.is_some(),
+            "the replacement must come back for the reclaim ring"
+        );
+        assert_eq!(
+            chain.slot(0).unwrap().resource_key,
+            Some(1),
+            "and the slot must still be describing the ring that is playing"
         );
     }
 
