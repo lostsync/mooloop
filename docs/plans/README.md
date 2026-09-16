@@ -15,6 +15,16 @@ on a Mac as well as on Fedora. It builds a Core Audio driver beside JACK,
 chosen at compile time, and stops short of packaging or a macOS release. Every
 step has landed; the macOS CI job is the one thing that has not yet run.
 
+`mixer-track-reorder/` was added 2026-09-16 and is **not started, outside the
+`FOCUS.md` sequence**, because Adam asked for it directly: a mixer track
+should move by dragging its strip. It repeats the channel rack's reorder one
+list over, in four steps: `TrackEdit::Moved` in the model, the session
+following it, the drag itself with one `main.slint` crossing, and optional
+Track actions. Writing it turned up two existing gaps, and the plan fixes both:
+control-surface bindings follow no structural edit, including the channel
+reorder that shipped, and a track removal leaves the session's track-keyed
+state on the old numbering.
+
 **`FOCUS.md` was rewritten on 2026-09-12 and it decided five of the entries
 below.** The sequence it set was: finish `interface-iteration/` (steps 03 and
 04), then `eq-v2/`, then Buffer. The first of those closed on 2026-09-14 and
