@@ -30,18 +30,23 @@ followed. `device-registry/`,
 piece is exempt: take `device-registry/`'s face host component if a device step
 already has `main.slint` open.
 
-`musical-time/` was added 2026-09-15 and is **not started**. A
-`rust-slint-boundary/` run, written out of `buffer-implementation/03`, whose
-BBT readouts had no shared thing to reuse. The survey is the value: "four beats
-to the bar" is spelled **nine times across six crates**, the comment *"assumes
-4/4 for now"* appears in three of them independently, `frames_per_bar`'s doc
-comment claims a convention the buffer device then spells its own copy of, and
-`project.beats_per_bar` is a persisted field read by nothing but the integrity
-pass that clamps it. `mooloop-core::time::Ticks` has had the three helpers all
-of them needed since the beginning and **no caller outside its own tests**.
-Three steps: one home for the constant, a `BbtPosition`/`BbtDuration` pair
-(two types, because a position counts from one and a duration from zero), and
-the guard. Nothing on screen changes; if something does, the fix is wrong.
+`musical-time/` was added 2026-09-15, **all three steps landed the same day**,
+and it archived. A `rust-slint-boundary/` run, written out of
+`buffer-implementation/03`, whose BBT readouts had no shared thing to reuse.
+"Four beats to the bar" had been spelled **nine times across six crates**;
+`time::BEATS_PER_BAR` is the only place that says so now. `BbtPosition` and
+`BbtDuration` are two types rather than one with a flag, because a position
+counts from one and a duration from zero, and a one-bar length printed through
+the wrong one reads `2:1:0`. `BbtText` in `controls.slint` is the one
+formatter. Nothing on screen changed.
+
+Two things in `00-status.md` outlive it. **The guard was written before the
+fix**, because the plan's mutation table asked for it -- and it then reported
+ten sites where the survey that commissioned it had found eight, including two
+nobody had looked at. A check written after its fix is shaped to report what
+its author already knows. And it shipped **narrower than the plan specified**,
+with the reason in its docstring: the wider sweep had one permanent false
+positive, and a check that is never clean stops being read.
 
 `control-plane-seams/` was added 2026-09-15, **all five steps landed the
 same day**, and it archived the same day. It came from an outside architectural
@@ -78,7 +83,9 @@ is worth a step was a `FOCUS.md` question, and the answer as of 2026-09-12 is
 **not now** -- safely, because the measurements to judge it by are committed
 either way.
 
-Last swept 2026-09-15, and amended four times later the same day: when
+Last swept 2026-09-15, and amended five times later the same day -- the fifth
+when `musical-time/` was worked start to finish and archived, leaving the
+sequence as Buffer alone. The other four: when
 `control-plane-seams/` was written; when Buffer's shape was settled and
 `buffer-implementation/03` and `musical-time/` were added; and when five
 finished plans moved to `archive/` -- `control-plane-seams/` itself,

@@ -162,7 +162,7 @@ suite. `scripts/dupe-audit one-sided-test` automates the one of the six a search
 can reach; the rest need the question asked by hand.
 
 A seventh check, `bar-arithmetic`, was added 2026-09-15 with
-`docs/plans/musical-time/`, and its lesson is about *when* a check gets
+`docs/plans/archive/musical-time/`, and its lesson is about *when* a check gets
 written. The plan's own mutation table opens with "run it before the fix or it
 is decoration", so it was written against the unfixed tree -- and it reported
 **ten** sites where the survey that commissioned it had found eight. Two

@@ -86,7 +86,7 @@ it a search can reach.
 
 ## Runs
 
-**2026-09-15.** `docs/plans/musical-time/`. "Four beats to the bar", spelled
+**2026-09-15.** `docs/plans/archive/musical-time/`. "Four beats to the bar", spelled
 nine times across six crates -- and the note that prompted it guessed three,
 which is [01-find.md](01-find.md)'s rule about sizing a sweep from the tree
 doing its job. One home (`time::BEATS_PER_BAR`), one pair of types

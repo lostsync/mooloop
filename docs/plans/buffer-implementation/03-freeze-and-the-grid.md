@@ -158,17 +158,19 @@ in `mooloop-session/src/engine.rs:712`, and a padded `bar:beat:tick` formatter
 living in `toolbar.slint:483`. That is a value stated in two places, which is
 what `docs/workflows/rust-slint-boundary/` exists for.
 
-**That consolidation is its own plan: `docs/plans/musical-time/`.** Surveying
+**That consolidation is its own plan, and it landed 2026-09-15:
+`docs/plans/archive/musical-time/`.** Surveying
 it properly turned three half-spellings into nine — "four beats to the bar" is
 spelled nine times across six crates, and `mooloop-core::time::Ticks` has the
 helpers they all needed and no caller outside its own tests. It touches six
 crates, which is more than this step should carry, so take it before step 5
 rather than inside it.
 
-What that plan owes this one: a `BbtPosition` and a `BbtDuration` — **two
-types, because positions are one-based and durations are zero-based**, and a
-one-bar Length must read `1:0:0` rather than `2:1:0` — plus a `BbtText`
-component in `controls.slint` for the face to draw.
+What that plan owed this one, and has delivered: a `BbtPosition` and a
+`BbtDuration` — **two types, because positions are one-based and durations are
+zero-based**, and a one-bar Length must read `1:0:0` rather than `2:1:0` — plus
+a `BbtText` component in `controls.slint` for the face to draw. `BbtDuration`
+ships with no caller; step 5 below is it.
 
 ## Quantization
 

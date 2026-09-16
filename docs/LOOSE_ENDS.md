@@ -673,7 +673,7 @@ in the dimmed treatment the name already uses. Found 2026-09-13.
 
 **The project is 4/4 end to end.** Still true, and since 2026-09-15 it is
 true in one place: `time::BEATS_PER_BAR`, where it used to be nine anonymous
-fours across six crates (`docs/plans/musical-time/`). `integrity.rs` still
+fours across six crates (`docs/plans/archive/musical-time/`). `integrity.rs` still
 rewrites any other meter back on load with a doctor message, and
 `Project.beats_per_bar` is still a persisted field the audio thread never
 sees — its doc comment says so now, and `scripts/dupe-audit bar-arithmetic`

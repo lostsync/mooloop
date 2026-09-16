@@ -1,6 +1,9 @@
 # Focus
 
-Status: active working sequence, rewritten 2026-09-12, amended 2026-09-14 when
+Status: active working sequence, rewritten 2026-09-12, amended 2026-09-15 when
+`musical-time/` was worked start to finish and archived -- its section is cut
+back to what outlives it, which is this document's own rule about itself.
+Amended 2026-09-14 when
 `interface-iteration/` closed and its step left the sequence, and amended twice
 on 2026-09-15: first when `eq-v2/` came down to one optional step and its
 section was cut back to what is live, then again when Adam **closed the EQ and
@@ -109,8 +112,8 @@ that was forbidden to start.
 
 **So the sequence is no longer waiting on anybody, for the first time since it
 was written.** It is Buffer, it has a work order rather than a design question,
-and `musical-time/` is the one piece of it that is separable and has to land
-before Buffer can draw a position.
+and `musical-time/`, the one piece of it that was separable, landed the same
+day — so nothing in the sequence is waiting on anything.
 
 ### 1. Turn Buffer into a composition workflow
 
@@ -158,32 +161,22 @@ show what the read head is doing, survive save and reload, and render the same
 result offline. If that workflow is not materially better than bouncing a
 sample and loading it again, record why before expanding the device.
 
-### 2. `docs/plans/musical-time/` — one spelling, and Buffer's readouts need it
+### 2. `musical-time/` — **closed 2026-09-15, and step 5 is unblocked**
 
-**Not started, three steps, and nothing on screen changes when it lands — if
-something does, the fix is wrong.** It is a `rust-slint-boundary/` run rather
-than a feature, and it is in the sequence for one reason: Buffer's step 5 wants
-bars:beats:ticks readouts and there is no such thing to reuse, only pieces of
-one in three crates and a markup file. Take it before that step; the rest of
-Buffer does not wait on it.
+Three steps, one day, archived. `time::BEATS_PER_BAR` is the only place in the
+workspace that says four beats to a bar, where the survey found nine spellings
+across six crates and the note that prompted it guessed three. `BbtPosition`
+and `BbtDuration` exist — two types, because a position counts from one and a
+duration from zero, so a one-bar Length reads `1:0:0` — and `BbtText` in
+`controls.slint` is what Buffer's face draws instead of writing the second copy
+of the transport's formatter. Nothing on screen changed, and a test says so.
 
-It earns its place by what the survey found rather than by tidiness. **"Four
-beats to the bar" is spelled nine times across six crates** — the note that
-prompted it guessed three. The comment *"assumes 4/4 for now"* appears in three
-crates independently, which is three people deciding the same thing and none of
-them finding the others. `frames_per_bar`'s doc comment claims it follows *"the
-convention the buffer device already uses"* while the buffer device spells its
-own copy — a prose comment doing the compiler's job. And
-`project.beats_per_bar` is a **persisted, validated field that nothing reads**
-except the integrity pass clamping it back to 4, so the format promises a time
-signature the code cannot honour. Meanwhile `mooloop-core::time::Ticks` has had
-`beat()`, `beat_in_bar()` and `within_beat()` since the beginning with no
-caller outside its own tests — the `LFO_DESCRIPTORS` shape again, a table with
-no reader while everyone hand-rolls what it does.
-
-Done when: one home for the constant, a `BbtPosition`/`BbtDuration` pair (two
-types, because a position counts from one and a duration from zero), and a
-guard that fails if a tenth spelling appears.
+Two things in it outlive the plan and are in `AGENTS.md`: **a guard written
+before its fix is shaped by the tree** — `dupe-audit bar-arithmetic` reported
+ten sites where the survey had found eight — and **a check that is never clean
+stops being read**, which is why it ships narrower than its plan specified.
+Read `docs/plans/archive/musical-time/00-status.md` before touching bar
+arithmetic or either transport readout.
 
 ## Waiting on Adam, not on work
 
