@@ -35,6 +35,7 @@ table of which document to read for which task. Start there, not here.
 | [CAPACITY_POLICY.md](CAPACITY_POLICY.md) | Why user-facing collections do not get small caps, and why a ceiling is not a reservation. |
 | [ENHANCEMENTS.md](ENHANCEMENTS.md) | Adam's standing wish list, in his words, annotated with what has landed. |
 | [IDEAS.md](IDEAS.md) | Loose notes, design conversation, and recorded directions — the automation/modulator tracker fork, and node-based patching. Nothing scheduled. |
+| [SHORT_NOTES.md](SHORT_NOTES.md) | Adam's one-line notes with no plan or clear home yet. Delete a line when it is done or has moved. |
 
 ## How to build it
 

@@ -1,8 +1,8 @@
 # mooloop
 
 Before editing a repository-tracked file, run `git status --short --branch`.
-`main` is read/merge-only: create a task worktree before every edit unless
-Adam explicitly directs otherwise.
+`main` is read/merge-only for code: create a task worktree before every edit
+unless it touches only Markdown, or Adam explicitly directs otherwise.
 
 Read and obey [AGENTS.md](./AGENTS.md) before starting work; it is the shared,
 authoritative workflow contract for Claude Code, Codex, and opencode, and it

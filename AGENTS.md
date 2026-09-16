@@ -6,9 +6,13 @@ before starting work; `CLAUDE.md` points here rather than repeating it.
 
 ## Git workflow: mandatory
 
-`main` is read/merge-only. Do not edit any repository-tracked file in its
-checkout, including documentation and metadata, unless Adam explicitly
-instructs you to do so.
+`main` is read/merge-only for code. Do not edit any repository-tracked file
+in its checkout unless Adam explicitly instructs you to do so, **with one
+exception: a change that touches only Markdown files** may be made and
+committed directly on `main`. The pre-commit hook enforces the line -- it
+accepts a commit on `main` only when every staged path ends in `.md`. A doc
+update that belongs to a code change still goes with that change, in its
+worktree.
 
 Before every task, run `git status --short --branch`.
 
@@ -16,7 +20,8 @@ Before every task, run `git status --short --branch`.
   discard, or split them before starting another task. Never stash and forget
   them. An untracked Markdown file under `docs/` is the standing exception:
   commit it alongside doc work without asking.
-- If you are on `main`, create a sibling task worktree before editing:
+- If you are on `main` and the task touches anything but Markdown, create a
+  sibling task worktree before editing:
 
   ```sh
   git worktree add ../mooloop-worktrees/<branch-name> -b <type>/<slug> main
@@ -35,7 +40,8 @@ Before every task, run `git status --short --branch`.
   merge to `main`. Do not merge, force-push, reset, or delete a worktree with
   uncommitted or unmerged work without Adam's explicit confirmation.
 
-The tracked pre-commit hook rejects ordinary commits on `main`; activate it
+The tracked pre-commit hook rejects ordinary commits on `main` other than
+Markdown-only ones; activate it
 once per clone with `git config core.hooksPath .githooks`.
 
 ## CodeGraph
