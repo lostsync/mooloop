@@ -35,6 +35,27 @@ mooloop's grid does. One permanent false positive is worse than a narrow
 check, because a check that is never clean stops being read. The docstring
 says so.
 
+**Every row of step 03's mutation table was run and its message read**, and
+two rows needed more than the table said.
+
+- "`STEPS_PER_BAR` back to a literal `16`" **passes on its own**, because 16
+  is still the right answer -- check A asserts the *relationship*, so it only
+  fires once the copies have actually parted. Moving `BEATS_PER_BAR` to 3 as
+  well is what makes it fail (`left: 16, right: 12`). The literal alone is
+  caught by `dupe-audit`, not by the test, and that division of labour is the
+  point: the search finds the copy, the test finds the drift.
+- The same is true of `frames_per_bar` back to `240.0`: `dupe-audit` reports
+  `sampler.rs`, and check A only fails once the constant has moved
+  (`left: 96000, right: 72000`).
+
+The rest fired as written: the tripwire reported `0` against `148` when B's
+sweep was emptied rather than passing in silence; a 1-based `BbtDuration`
+printed `(2, 1, 0)` for one bar; a 0-based `BbtPosition` failed in `time.rs`
+*and* in `session/engine.rs`, which is the session test the plan predicted;
+`BbtText` with a `.` separator failed check D against `Display`; and removing
+its `out property` failed to compile with *"Element 'BbtText' does not have a
+property 'formatted'"*, which the test's own comment says is the check working.
+
 **`transport::beat_in_bar` stopped wrapping negative positions**, and that is
 a deliberate behaviour change on an input nothing can produce: `seek` refuses a
 negative tick and advancing only adds, so the old `rem_euclid` was defending
