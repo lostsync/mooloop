@@ -1,0 +1,70 @@
+# Plan: The channel buffer device
+
+A retained-audio device that is always recording the last N bars, and a set of
+controls for turning that history into an instrument. `docs/BUFFER_ENGINE.md`
+is the hypothesis; the numbered files here are the work order and win where
+they disagree with it.
+
+Added 2026-09-16, late: the plan ran for weeks without one of these, which is
+why `FOCUS.md` had been carrying its state.
+
+## Status
+
+| Step | State |
+|---|---|
+| `01-the-whole-thing.md` | Landed. Acceptance test 8 closed 2026-09-16 |
+| `02-control-and-modulation.md` | Landed |
+| `03-freeze-and-the-grid.md` | In progress — see the build order below |
+
+`03`'s build order has six steps and an "alongside".
+
+| `03` step | State |
+|---|---|
+| 1. Rate, and a head that runs without a writer | Landed 2026-09-16 |
+| 2. Freeze | Landed 2026-09-16 |
+| 3. Position replaces Offset | Not started |
+| 4. Length, Loop and Jump on the shared grid | Not started |
+| 5. Quantized freeze, and BBT everywhere | Not started |
+| 6. The 2U face | Not started |
+| Alongside: acceptance test 8 | Closed for the Buffer operations 2026-09-16 |
+
+`musical-time/`, which step 5 waits on, landed 2026-09-15 and is in
+`archive/`. `BbtDuration` ships with no caller; step 5 is it.
+
+## What the doing has changed about the plan
+
+**Steps 1 and 2 landed as one commit.** The document says so itself —
+*"Freeze and Rate are therefore one decision, not two. Do not take one without
+the other"* — and the reason survives contact: with only step 1, `Rate` is a
+descriptor the lane picker lists and nothing in the running program can make
+audible, because nothing detaches a free-running head until Freeze does. A
+control that lists and does nothing is the defect `ui-consistency-pass/` spent
+six steps removing.
+
+**The clock and the writer were the same number, and Freeze separated them.**
+`expires_at` counted against `write_head`. Stop the writer during a `Steps(n)`
+gesture and it would have repeated forever. `frames_elapsed` is the clock now.
+Nothing in the plan predicted this; it is what "the writer was the time base"
+means in practice, one layer below where the document says it.
+
+**A tempo change would have destroyed frozen audio.** The plan says to lock
+HISTORY while frozen and gives `bars` as the reason. `bars` has no control, so
+that read as theoretical — but `resize_buffers` fires on an ordinary tempo
+change and rebuilds the ring. `AudioNode::holds_frozen_audio` lets the chain
+refuse the swap, down the same reclaim path a mismatched kind already takes.
+**The trigger was the common case, not the documented one.**
+
+**`Freeze` persists and the frozen audio does not.** A project saved frozen
+reopens frozen over an empty ring. That is the honest consequence of "persisting
+frozen content is out of scope", and it is written into `BufferParams`'s doc
+comment and `CURRENT.md` rather than left to be discovered.
+
+## Still open from the earlier steps
+
+- **The locks half of acceptance test 8.** The allocation half closed with ten
+  measured blocks. Nothing in the tree can express "no lock was taken on the
+  callback", and nobody has proposed an instrument. `LOOSE_ENDS.md` carries it.
+- **`BufferMidiMap` on `ParamAddr`** (`02`, step 5). Still a parallel
+  source→destination system beside the general one.
+- **The modulation shelf's source chip and the modulation arc on a knob**
+  (`02`, step 4). Neither is Buffer-specific.

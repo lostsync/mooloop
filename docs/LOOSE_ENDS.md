@@ -761,11 +761,18 @@ implements it with `mremap` rather than alloc-copy-dealloc.
 against the defect it was written for: with `preview_retired` put back to a
 `Vec::new()` it reports one allocation and fails.
 
-**What is still open is the coverage, not the instrument.** Test 8 claims no
-allocations *or locks* in the callback under every Buffer operation the plan
-lists. One block on the preview path is a floor. Extending it is now writing
-tests rather than building a harness, and the locks half is not measured at
-all.
+**The Buffer half closed 2026-09-16.**
+`no_buffer_operation_allocates_on_the_callback` covers ten blocks -- every
+state the head can be in and each transition between them: following, the
+`Offset` chase, a gesture with a window and a repeat count, free-run at
+`Rate`, held at zero, frozen, thawed, and a hand scrub. Zero allocations, and
+validated the same way the preview test was: with a `vec!` put inside
+`freeze` it reports one and names the block.
+
+**What is still open is the locks half**, which is measured by nothing. The
+allocator can only answer the allocation question; a lock taken on the
+callback would pass every test in the tree. Nobody has proposed an instrument
+for it.
 
 ---
 

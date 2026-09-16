@@ -1172,13 +1172,35 @@ land on its own when it starts to matter:
   beside the modules. Device (effect) outlets, cross-channel sources, and
   macros remain planned.
 - The retained-audio buffer is descriptor-addressed: `Offset` places the read
-  head behind the writer in beats and `Crossfade` sets the declick length.
-  Offset is position mode, the same as a hand scrub — the head chases the
-  position and the closing speed *is* the playback rate — so sweeping it is a
-  scrub and holding it is delayed playback at unity. `bars` is deliberately
-  not a parameter: resizing the ring reallocates, which happens off-thread.
-  The JUMP/REV/STUT gestures are unchanged and outrank the offset while they
-  run; the offset re-asserts on the next control tick after one ends.
+  head behind the writer in beats, `Rate` is the head's free-run speed,
+  `Freeze` stops the writer, and `Crossfade` sets the declick length. All four
+  automate and modulate; none of them has a knob on the face yet, so the
+  automation lane's device-grouped picker is where `Rate` and `Freeze` are
+  reachable from. `bars` is deliberately not a parameter: resizing the ring
+  reallocates, which happens off-thread.
+  **Freeze is what makes the device a small realtime sampler rather than an
+  effect with buffer controls.** Audio is always flowing through it and the
+  last N bars are always being recorded; freezing stops the writer and the
+  retained history becomes a sample, which control signals then manipulate.
+  The ring keeps its contents and the head wraps inside it, so a frozen loop
+  plays round and round; unfreezing returns to live. Freezing on a bar line of
+  a loop is what makes it seamless — the head is at the write position when it
+  freezes, so continuing forward lands in the *oldest* retained sample, which
+  only joins up when the material repeats at the buffer length. **Quantized
+  freeze, which would put the transition on that line for you, is not built
+  yet**, so the timing is currently the hand's.
+  Changing tempo while frozen **leaves the frozen audio alone**: a tempo
+  change rebuilds the ring off-thread, and a frozen buffer refuses the
+  replacement rather than losing what is playing.
+  `Freeze` persists, and a project saved frozen reopens frozen over an
+  **empty ring**, because the frozen audio itself is not saved yet.
+  Three controls arbitrate over one head and the rule is fixed: a gesture
+  carries its own rate and keeps it while it runs, a chase armed by `Offset`
+  outranks free-run while it is closing, and otherwise the head runs at
+  `Rate`. `Rate` is signed and spans ±4x; zero is a hold, and a hold is
+  silence rather than one sample repeated. The JUMP/REV/STUT gestures are
+  unchanged, and one running when the writer stops keeps running against the
+  frozen ring and still expires on time.
 - **Every generator is descriptor-addressed** through `GeneratorParams`, so
   their parameters automate and modulate like an effect's. The
   three-oscillator synths reserve ten parameter ids per oscillator, starting
