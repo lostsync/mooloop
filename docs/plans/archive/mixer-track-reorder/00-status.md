@@ -65,10 +65,15 @@ once, so **if step 04 is wanted, batch its `main.slint` edits into step
   flags come from `Session::can_move_track`, which calls the same
   `track_move_allowed` that `Project::move_track` does. `menubar.rs`'s View
   click moved from x 223 to 270.
-- **The live check through `scripts/mooloop-mcp` was not done** in the session
-  that landed this. The drag is covered by `track_reorder.rs` against the real
-  `MixerPane`, and the model half by the core and session tests; a listen
-  across a drop, and an undo, are still owed.
+- **The live check through `scripts/mooloop-mcp` was done, except by ear.**
+  On the starter song, Reverb (track 3) was dragged onto Drums' plate. The
+  mixer read Master, Reverb, Drums, Bass, the rack stayed on Reverb and still
+  showed its two incoming sends, and all four channels' destination chips
+  moved from `→1` to `→2` with Drums. Ctrl+Z put the order and the chips back,
+  with the rack on a channel as `replace_project` intends. Dragging the
+  master's plate onto the last strip did nothing. Nobody has *listened* across
+  a drop; the engine takes the whole-project install path any track add or
+  remove already takes, so a cut tail is the expected cost.
 
 ## Found while writing the plan
 
