@@ -46,6 +46,7 @@ table of which document to read for which task. Start there, not here.
 | [BUFFER_ENGINE.md](BUFFER_ENGINE.md) | The retained-audio thesis, what shipped against it, and the product test still outstanding. |
 | [COMPOSABLE_DEVICE_UNITS.md](COMPOSABLE_DEVICE_UNITS.md) | How a reusable DSP unit presents itself. Mostly a target; its three load-bearing habits are not. |
 | [UI_DESIGN.md](UI_DESIGN.md) | The interface composition language, the rack layout contract, and the acceptance checklist. |
+| [THEMES.md](THEMES.md) | What a theme file is, how to write one, and what a theme cannot do. |
 | [OPERATIONS.md](OPERATIONS.md) | Cargo, git, the remote build box, headless UI checks, the live application, releases, and cleaning up. |
 
 ## Directories

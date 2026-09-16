@@ -1,35 +1,61 @@
+pub(crate) use crate::theme::color::Rgb;
+pub(crate) use crate::theme::ramp::ThemePalette;
+use crate::theme::ramp::Ramp;
+use crate::theme::{
+    builtins, catalog, file, wal, Mode, ThemeColors, ThemeDefinition, ThemeStyle,
+    MIN_ACCENT_CONTRAST, MODES,
+};
 use mooloop_core::{DeviceKind, EffectKind};
 use serde::{Deserialize, Serialize};
-use slint::Color;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const SCHEMA_VERSION: u32 = 1;
-const DEFAULT_BASE: &str = "#18181B";
-const DEFAULT_ACCENT: &str = "#84CC16";
-const DEFAULT_ALERT: &str = "#EAB308";
-const MIN_ACCENT_CONTRAST: f32 = 3.0;
+pub(crate) const DEFAULT_BASE: &str = "#18181B";
+pub(crate) const DEFAULT_ACCENT: &str = "#84CC16";
+pub(crate) const DEFAULT_ALERT: &str = "#EAB308";
+const DEFAULT_MONO: &str = "monospace";
 
 pub(crate) const MIN_CONTRAST: f32 = 0.6;
 pub(crate) const MAX_CONTRAST: f32 = 1.4;
 pub(crate) const MIN_ROUNDNESS: f32 = 0.0;
 pub(crate) const MAX_ROUNDNESS: f32 = 3.0;
 
-/// The whole palette is grown from three seeds, so a scheme is just those
-/// three hex strings under a name. `base` seeds every neutral (background,
-/// panel, surfaces, border, and the three text weights); `accent` is UI state
-/// -- selection, focus, meters in their safe range; `alert` is the attention
-/// color used for warnings, clipping headroom, and out-of-range readouts.
-const BUILTIN_SCHEMES: [(&str, &str, &str, &str); 6] = [
-    ("Mooloop", DEFAULT_BASE, DEFAULT_ACCENT, DEFAULT_ALERT),
-    ("Graphite", "#151617", "#F59E0B", "#38BDF8"),
-    ("High Contrast", "#000000", "#22D3EE", "#FACC15"),
-    ("Ember", "#1A1413", "#F97316", "#38BDF8"),
-    ("Indigo", "#14141F", "#A78BFA", "#F472B6"),
-    ("Daylight", "#EDEDF0", "#3F7D00", "#B45309"),
-];
+/// The accessibility control. The working type size of this interface is
+/// 7-11px, which is small; 2.0 takes it to 14-22px, which is a different
+/// program to sit in front of for an evening. Below 0.75 the 7px step rounds
+/// into illegibility, so that is the floor.
+pub(crate) const MIN_TYPE_SCALE: f32 = 0.75;
+pub(crate) const MAX_TYPE_SCALE: f32 = 2.0;
 
+/// Control heights and the padding ramp. The ceiling is where a 24px control
+/// becomes a 42px one, which is a touch target; the floor is where 2px of
+/// padding becomes 1px and things start to touch.
+pub(crate) const MIN_DENSITY: f32 = 0.75;
+pub(crate) const MAX_DENSITY: f32 = 1.75;
+
+/// Stroke. Zero is a real setting and is the point of the floor being zero: a
+/// theme that wants a borderless interface asks for one here.
+pub(crate) const MIN_HAIRLINE: f32 = 0.0;
+pub(crate) const MAX_HAIRLINE: f32 = 3.0;
+pub(crate) const MIN_STROKE_EMPHASIS: f32 = 0.0;
+pub(crate) const MAX_STROKE_EMPHASIS: f32 = 5.0;
+
+/// CSS weights, and the two that matter are 400 and 500 -- anything heavier at
+/// 9px is a smudge. The range is the full one because a bitmap face compiled
+/// in later may only exist at one weight and refusing to name it would be
+/// arbitrary.
+pub(crate) const MIN_FONT_WEIGHT: i32 = 100;
+pub(crate) const MAX_FONT_WEIGHT: i32 = 900;
+
+/// A scheme as `settings.toml` spelled it before a scheme became a theme:
+/// three seeds under a name.
+///
+/// **Kept only so that saved ones survive.** `UiSettings::load_from` writes
+/// every entry out as a theme file and clears the list, so a config written
+/// today has no `user-schemes` key at all. `docs/plans/theming/00-status.md`
+/// records the migration.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct ThemeScheme {
@@ -40,24 +66,18 @@ pub(crate) struct ThemeScheme {
 }
 
 impl ThemeScheme {
-    fn new(name: &str, base: &str, accent: &str, alert: &str) -> Self {
-        Self {
-            name: name.to_owned(),
-            base: base.to_owned(),
-            accent: accent.to_owned(),
-            alert: alert.to_owned(),
+    /// The theme this scheme becomes: a dark variant of three seeds, and no
+    /// light one -- which the mode control derives rather than refuses.
+    fn definition(&self) -> ThemeDefinition {
+        ThemeDefinition {
+            description: "Saved from the Appearance page.".to_owned(),
+            dark: Some(ThemeColors::Seeds {
+                base: Rgb::parse_or_black(&self.base),
+                accent: Rgb::parse_or_black(&self.accent),
+                alert: Rgb::parse_or_black(&self.alert),
+            }),
+            ..ThemeDefinition::empty(&self.name)
         }
-    }
-
-    pub(crate) fn builtins() -> Vec<Self> {
-        BUILTIN_SCHEMES
-            .iter()
-            .map(|&(name, base, accent, alert)| Self::new(name, base, accent, alert))
-            .collect()
-    }
-
-    pub(crate) fn is_builtin(name: &str) -> bool {
-        BUILTIN_SCHEMES.iter().any(|&(builtin, ..)| builtin == name)
     }
 }
 
@@ -67,23 +87,75 @@ impl ThemeScheme {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct AppearanceSettings {
-    /// Name of the scheme the colors came from, or empty once they have been
-    /// edited away from it. Purely a UI affordance -- the colors below are
-    /// authoritative.
+    /// Name of the theme the colours came from, or empty once they have been
+    /// edited away from it -- which the Appearance page shows as Custom.
+    ///
+    /// **`alias = "scheme"` is the migration.** Every settings file written
+    /// before a scheme became a theme spells this field that way, and the two
+    /// words meant the same thing, so the old key is read and the new one is
+    /// written. One old name does need moving rather than renaming and
+    /// `validated` does it: `Daylight` was light-mode Mooloop before a theme
+    /// had two variants, so it becomes exactly that.
+    #[serde(default, alias = "scheme")]
+    pub theme: String,
+    /// `dark`, `light`, or `system` -- and `system` asks the desktop, which is
+    /// the Linux-first half of this: a shell that flips its own colour scheme
+    /// at dusk should take the DAW with it.
+    #[serde(default = "default_mode")]
+    pub mode: String,
+    /// Set once a colour has been edited away from `theme`.
+    ///
+    /// **`theme` keeps naming the theme the edit started from**, which is the
+    /// point: saving a warmed-up Dracula has to keep Alucard, and it cannot if
+    /// the only record of where the colours came from was thrown away the
+    /// moment somebody touched a picker. The page shows this as Custom and
+    /// highlights nothing in the list; the seeds below are what is drawn.
     #[serde(default)]
-    pub scheme: String,
+    pub customized: bool,
+    /// The three seeds the Appearance page's colour pickers edit.
+    ///
+    /// They are the *Custom* theme when `theme` is empty, and a projection of
+    /// the selected theme's current variant when it is not -- so the pickers
+    /// always show something coherent and editing one starts from what is
+    /// already on screen rather than from the last thing that was typed.
     #[serde(default = "default_base")]
     pub base: String,
     #[serde(default = "default_accent")]
     pub accent: String,
     #[serde(default = "default_alert")]
     pub alert: String,
-    /// Multiplies every neutral's distance from `base`. 1.0 is the tuned ramp.
+    /// Multiplies every neutral's distance from the background. 1.0 is the
+    /// ramp as the theme authored it.
     #[serde(default = "default_unit")]
     pub contrast: f32,
     /// Multiplies the shared corner-radius scale. 0 gives square corners.
     #[serde(default = "default_unit")]
     pub roundness: f32,
+    /// Multiplies the whole type scale. The accessibility control: nothing
+    /// else in this program makes 7px text bigger.
+    #[serde(default = "default_unit")]
+    pub type_scale: f32,
+    /// Multiplies control heights and the padding ramp.
+    #[serde(default = "default_unit")]
+    pub density: f32,
+    /// Font families, CSS-style lists. Empty means the platform default.
+    ///
+    /// **A theme names a font; it cannot ship one.** Slint 1.17.1 has no
+    /// runtime font registration, so a family is resolved from what is
+    /// compiled in or installed, and a name nobody has falls back silently.
+    /// That is why the Appearance page reports what was resolved.
+    #[serde(default)]
+    pub font_family: String,
+    #[serde(default = "default_mono")]
+    pub font_family_mono: String,
+    #[serde(default = "default_font_weight")]
+    pub font_weight: i32,
+    /// The two stroke weights, in pixels. Zero hairline is a borderless
+    /// interface and is a real setting.
+    #[serde(default = "default_hairline")]
+    pub hairline: f32,
+    #[serde(default = "default_stroke_emphasis")]
+    pub stroke_emphasis: f32,
     #[serde(default = "default_true")]
     pub smooth_curves: bool,
     /// UI-motion speed and easing, by option name as shown on the
@@ -100,8 +172,10 @@ pub(crate) struct AppearanceSettings {
     /// what an existing config means.
     #[serde(default = "default_meter_falloff")]
     pub meter_falloff: String,
-    /// Schemes saved from the Appearance page, listed after the built-ins.
-    #[serde(default)]
+    /// Schemes saved from the Appearance page before they were theme files.
+    /// Emptied by the migration in `UiSettings::load_from`, and skipped on
+    /// write, so a config saved today does not carry the key at all.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub user_schemes: Vec<ThemeScheme>,
 }
 
@@ -213,6 +287,26 @@ fn default_unit() -> f32 {
     1.0
 }
 
+fn default_mode() -> String {
+    Mode::default().name().to_owned()
+}
+
+fn default_mono() -> String {
+    DEFAULT_MONO.to_owned()
+}
+
+fn default_font_weight() -> i32 {
+    400
+}
+
+fn default_hairline() -> f32 {
+    1.0
+}
+
+fn default_stroke_emphasis() -> f32 {
+    2.0
+}
+
 fn default_base() -> String {
     DEFAULT_BASE.to_owned()
 }
@@ -317,15 +411,43 @@ impl AudioSettings {
     }
 }
 
+/// A variant as the three colour pickers can express it.
+///
+/// A ramp has no seeds, so this is lossy on purpose: its background, its
+/// accent and its slot 0A are exactly the three things the pickers mean. What
+/// it buys is that touching a picker while Nord is selected starts you from
+/// Nord rather than from whatever was typed there last.
+fn project(colors: ThemeColors) -> (String, String, String) {
+    match colors {
+        ThemeColors::Seeds { base, accent, alert } => {
+            (base.to_hex(), accent.to_hex(), alert.to_hex())
+        }
+        ThemeColors::Ramp(ramp) => (
+            ramp.slot(0).to_hex(),
+            ramp.accent().to_hex(),
+            ramp.slot(0x0A).to_hex(),
+        ),
+    }
+}
+
 impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
-            scheme: BUILTIN_SCHEMES[0].0.to_owned(),
+            theme: builtins::DEFAULT_THEME.to_owned(),
+            customized: false,
+            mode: default_mode(),
             base: DEFAULT_BASE.to_owned(),
             accent: DEFAULT_ACCENT.to_owned(),
             alert: DEFAULT_ALERT.to_owned(),
             contrast: 1.0,
             roundness: 1.0,
+            type_scale: 1.0,
+            density: 1.0,
+            font_family: String::new(),
+            font_family_mono: DEFAULT_MONO.to_owned(),
+            font_weight: default_font_weight(),
+            hairline: default_hairline(),
+            stroke_emphasis: default_stroke_emphasis(),
             smooth_curves: true,
             motion_speed: default_motion_speed(),
             motion_easing: default_motion_easing(),
@@ -336,25 +458,69 @@ impl Default for AppearanceSettings {
 }
 
 impl AppearanceSettings {
-    /// Normalizes the seeds (hex casing, clamped scalars) and rejects an
-    /// accent that would be unreadable against the surface it derives.
+    /// Normalizes the seeds (hex casing, clamped scalars), moves the one
+    /// renamed theme, and rejects an accent that would be unreadable against
+    /// the surface it derives.
+    ///
+    /// **Only a Custom accent is rejected.** A theme's own accent is checked
+    /// where the theme is written -- `builtins.rs` has a test for every
+    /// variant of every built-in, and a file that ships an illegible one is
+    /// its author's business. What must not happen is that a bad *seed* the
+    /// user typed makes the settings file unloadable, and that is what this
+    /// has always been for.
     pub(crate) fn validated(&self) -> Result<Self, ValidationError> {
         let base = Rgb::parse(&self.base).ok_or(ValidationError::InvalidBase)?;
         let accent = Rgb::parse(&self.accent).ok_or(ValidationError::InvalidAccent)?;
         let alert = Rgb::parse(&self.alert).ok_or(ValidationError::InvalidAlert)?;
         let contrast = self.contrast.clamp(MIN_CONTRAST, MAX_CONTRAST);
-        let roundness = self.roundness.clamp(MIN_ROUNDNESS, MAX_ROUNDNESS);
-        let surface = derive_palette(base, accent, alert, contrast).surface;
-        if contrast_ratio(accent, surface) < MIN_ACCENT_CONTRAST {
+        let mut theme = self.theme.clone();
+        let mut mode = if MODES.contains(&self.mode.as_str()) {
+            self.mode.clone()
+        } else {
+            default_mode()
+        };
+        // `Daylight` was a scheme when a scheme was three seeds and a theme
+        // had one variant. It is light-mode Mooloop and always was, so it
+        // becomes that -- unless somebody has since saved a theme of their own
+        // under the name, in which case theirs wins and nothing moves.
+        if theme == "Daylight" && catalog::find("Daylight").is_none() {
+            theme = builtins::DEFAULT_THEME.to_owned();
+            mode = Mode::Light.name().to_owned();
+        }
+        if !theme.is_empty() && catalog::find(&theme).is_none() {
+            // A theme file the user deleted by hand. Keep the colours, drop
+            // the name: that is what the page shows as Custom, and it is
+            // better than starting them over on the default.
+            theme = String::new();
+        }
+        let customized = self.customized || theme.is_empty();
+        if customized
+            && Ramp::from_seeds(base, accent, alert).accent_contrast(contrast)
+                < MIN_ACCENT_CONTRAST
+        {
             return Err(ValidationError::LowContrast);
         }
         Ok(Self {
-            scheme: self.scheme.clone(),
+            theme,
+            customized,
+            mode,
             base: base.to_hex(),
             accent: accent.to_hex(),
             alert: alert.to_hex(),
             contrast,
-            roundness,
+            roundness: self.roundness.clamp(MIN_ROUNDNESS, MAX_ROUNDNESS),
+            type_scale: self.type_scale.clamp(MIN_TYPE_SCALE, MAX_TYPE_SCALE),
+            density: self.density.clamp(MIN_DENSITY, MAX_DENSITY),
+            font_family: self.font_family.trim().to_owned(),
+            font_family_mono: {
+                let mono = self.font_family_mono.trim();
+                if mono.is_empty() { DEFAULT_MONO.to_owned() } else { mono.to_owned() }
+            },
+            font_weight: self.font_weight.clamp(MIN_FONT_WEIGHT, MAX_FONT_WEIGHT),
+            hairline: self.hairline.clamp(MIN_HAIRLINE, MAX_HAIRLINE),
+            stroke_emphasis: self
+                .stroke_emphasis
+                .clamp(MIN_STROKE_EMPHASIS, MAX_STROKE_EMPHASIS),
             smooth_curves: self.smooth_curves,
             motion_speed: if MOTION_SPEEDS.contains(&self.motion_speed.as_str()) {
                 self.motion_speed.clone()
@@ -375,85 +541,231 @@ impl AppearanceSettings {
         })
     }
 
-    pub(crate) fn palette(&self) -> ThemePalette {
+    pub(crate) fn mode(&self) -> Mode {
+        Mode::from_name(&self.mode)
+    }
+
+    /// Whether the dark variant is the one in force. `system` asks the
+    /// desktop, so this is not a pure function of the settings.
+    pub(crate) fn wants_dark(&self) -> bool {
+        self.mode().wants_dark()
+    }
+
+    /// The theme named by the page, whether or not its colours have been
+    /// edited. `None` only when nothing is named.
+    pub(crate) fn definition(&self) -> Option<ThemeDefinition> {
+        if self.theme.is_empty() {
+            None
+        } else {
+            catalog::find(&self.theme)
+        }
+    }
+
+    /// The theme whose colours are actually being drawn, which is nothing once
+    /// they have been edited.
+    fn active_definition(&self) -> Option<ThemeDefinition> {
+        if self.customized {
+            None
+        } else {
+            self.definition()
+        }
+    }
+
+    /// The three seed pickers, as colours.
+    fn seeds(&self) -> ThemeColors {
         let seed = |value: &str, fallback: &str| {
             Rgb::parse(value).unwrap_or_else(|| Rgb::parse(fallback).expect("valid default"))
         };
-        derive_palette(
-            seed(&self.base, DEFAULT_BASE),
-            seed(&self.accent, DEFAULT_ACCENT),
-            seed(&self.alert, DEFAULT_ALERT),
-            self.contrast,
-        )
+        ThemeColors::Seeds {
+            base: seed(&self.base, DEFAULT_BASE),
+            accent: seed(&self.accent, DEFAULT_ACCENT),
+            alert: seed(&self.alert, DEFAULT_ALERT),
+        }
     }
 
-    /// Built-in schemes first, then the user's own, in save order.
-    pub(crate) fn schemes(&self) -> Vec<ThemeScheme> {
-        let mut schemes = ThemeScheme::builtins();
-        schemes.extend(self.user_schemes.iter().cloned());
-        schemes
+    /// The colours in force: the selected theme's variant for whichever side
+    /// of the light/dark line the mode resolves to, or the three seeds when
+    /// the theme is Custom.
+    pub(crate) fn colors(&self) -> ThemeColors {
+        self.active_definition()
+            .map(|theme| theme.variant(self.wants_dark()))
+            .unwrap_or_else(|| self.seeds())
     }
 
-    /// Name of the scheme whose three seeds match the current colors, or
-    /// empty once they have been edited away from every one of them.
-    pub(crate) fn matching_scheme_name(&self) -> String {
-        let matches = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
-        self.schemes()
-            .into_iter()
-            .find(|scheme| {
-                matches(&scheme.base, &self.base)
-                    && matches(&scheme.accent, &self.accent)
-                    && matches(&scheme.alert, &self.alert)
-            })
-            .map(|scheme| scheme.name)
-            .unwrap_or_default()
+    pub(crate) fn ramp(&self) -> Ramp {
+        self.colors().ramp()
     }
 
-    pub(crate) fn scheme(&self, name: &str) -> Option<ThemeScheme> {
-        self.schemes()
-            .into_iter()
-            .find(|scheme| scheme.name == name)
+    pub(crate) fn palette(&self) -> ThemePalette {
+        self.ramp().palette(self.contrast)
     }
 
-    /// Applies a scheme's three seeds, leaving contrast, roundness, and the
-    /// graphics preferences alone -- those are independent of color.
-    pub(crate) fn apply_scheme(&mut self, scheme: &ThemeScheme) {
-        self.scheme = scheme.name.clone();
-        self.base = scheme.base.clone();
-        self.accent = scheme.accent.clone();
-        self.alert = scheme.alert.clone();
+    /// The colours the channel, track and pattern pickers offer, which is
+    /// what "the swatch palette follows the colourscheme" means in code.
+    pub(crate) fn swatches(&self) -> Vec<Rgb> {
+        self.ramp().swatches()
     }
 
-    /// Saves the current colors under `name`, replacing a user scheme of the
-    /// same name. Built-in names are reserved.
-    pub(crate) fn save_user_scheme(&mut self, name: &str) -> Result<(), ValidationError> {
+    /// Every theme, built-in and user, in list order.
+    pub(crate) fn themes(&self) -> Vec<ThemeDefinition> {
+        catalog::all()
+    }
+
+    /// Selects a theme: its variant becomes what the seed pickers show, and
+    /// whatever style it states replaces the matching control.
+    ///
+    /// A theme that states no style leaves every scalar alone, which is what
+    /// makes the eleven colour-only themes switchable without losing a type
+    /// scale somebody set for their eyes.
+    pub(crate) fn apply_theme(&mut self, theme: &ThemeDefinition) {
+        self.theme = theme.name.clone();
+        self.customized = false;
+        self.sync_seeds();
+        let style = &theme.style;
+        if let Some(value) = style.contrast {
+            self.contrast = value.clamp(MIN_CONTRAST, MAX_CONTRAST);
+        }
+        if let Some(value) = style.roundness {
+            self.roundness = value.clamp(MIN_ROUNDNESS, MAX_ROUNDNESS);
+        }
+        if let Some(value) = style.type_scale {
+            self.type_scale = value.clamp(MIN_TYPE_SCALE, MAX_TYPE_SCALE);
+        }
+        if let Some(value) = style.density {
+            self.density = value.clamp(MIN_DENSITY, MAX_DENSITY);
+        }
+        if let Some(value) = style.hairline {
+            self.hairline = value.clamp(MIN_HAIRLINE, MAX_HAIRLINE);
+        }
+        if let Some(value) = style.stroke_emphasis {
+            self.stroke_emphasis = value.clamp(MIN_STROKE_EMPHASIS, MAX_STROKE_EMPHASIS);
+        }
+        if let Some(value) = &style.font_family {
+            self.font_family = value.trim().to_owned();
+        }
+        if let Some(value) = &style.font_family_mono {
+            self.font_family_mono = value.trim().to_owned();
+        }
+        if let Some(value) = style.font_weight {
+            self.font_weight = value.clamp(MIN_FONT_WEIGHT, MAX_FONT_WEIGHT);
+        }
+    }
+
+    /// Whether the three seed pickers still say what the selected theme's
+    /// current variant projects onto them.
+    ///
+    /// This is what decides "edited away from the theme", and it works for a
+    /// ramp as well as for three seeds because it compares the *projection*
+    /// rather than the storage: the background, the accent and slot 0A are
+    /// exactly the three things the pickers can express about either form.
+    pub(crate) fn seeds_match_theme(&self) -> bool {
+        let Some(theme) = self.definition() else {
+            return false;
+        };
+        let (base, accent, alert) = project(theme.variant(self.wants_dark()));
+        let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+        same(&base, &self.base) && same(&accent, &self.accent) && same(&alert, &self.alert)
+    }
+
+    /// Projects the colours in force back onto the three seed pickers.
+    pub(crate) fn sync_seeds(&mut self) {
+        let (base, accent, alert) = project(self.colors());
+        self.base = base;
+        self.accent = accent;
+        self.alert = alert;
+    }
+
+    /// Writes the current appearance out as a theme file under `name`.
+    ///
+    /// The variant being edited replaces the one on that side of the light/
+    /// dark line; **the other side is carried over from whatever theme was
+    /// selected**, so "pick Dracula, warm the accent, save as Mine" keeps
+    /// Alucard for light rather than throwing it away and deriving a worse
+    /// one. Every scalar on the page goes into the file, which is what makes
+    /// a theme a font and a density as well as a palette.
+    pub(crate) fn save_theme(&mut self, name: &str) -> Result<(), ValidationError> {
+        self.save_theme_in(&file::themes_dir(), name)
+    }
+
+    /// The directory is a parameter for the reason `file::write_to` states:
+    /// `themes_dir()` reads an environment variable and a test that sets one
+    /// races every other test in the binary.
+    pub(crate) fn save_theme_in(
+        &mut self,
+        directory: &Path,
+        name: &str,
+    ) -> Result<(), ValidationError> {
         let name = name.trim();
         if name.is_empty() {
-            return Err(ValidationError::EmptySchemeName);
+            return Err(ValidationError::EmptyThemeName);
         }
-        if ThemeScheme::is_builtin(name) {
-            return Err(ValidationError::ReservedSchemeName);
+        if builtins::is_builtin(name) || name == wal::WALLPAPER_THEME {
+            return Err(ValidationError::ReservedThemeName);
         }
-        let scheme = ThemeScheme::new(name, &self.base, &self.accent, &self.alert);
-        match self
-            .user_schemes
-            .iter_mut()
-            .find(|existing| existing.name == name)
-        {
-            Some(existing) => *existing = scheme,
-            None => self.user_schemes.push(scheme),
+        let base = self.definition();
+        let colors = self.colors();
+        let dark_side = self.wants_dark();
+        let mut definition = ThemeDefinition {
+            name: name.to_owned(),
+            description: base
+                .as_ref()
+                .map(|theme| theme.description.clone())
+                .unwrap_or_default(),
+            dark: base.as_ref().and_then(|theme| theme.dark),
+            light: base.as_ref().and_then(|theme| theme.light),
+            style: ThemeStyle {
+                roundness: Some(self.roundness),
+                hairline: Some(self.hairline),
+                stroke_emphasis: Some(self.stroke_emphasis),
+                font_family: Some(self.font_family.clone()),
+                font_family_mono: Some(self.font_family_mono.clone()),
+                type_scale: Some(self.type_scale),
+                font_weight: Some(self.font_weight),
+                density: Some(self.density),
+                contrast: Some(self.contrast),
+            },
+        };
+        if dark_side {
+            definition.dark = Some(colors);
+        } else {
+            definition.light = Some(colors);
         }
-        self.scheme = name.to_owned();
+        file::write_to(directory, &definition)
+            .map_err(|error| ValidationError::ThemeNotWritten(error.to_string()))?;
+        catalog::refresh();
+        self.theme = name.to_owned();
+        // The file now says what the pickers say, so the edit is no longer an
+        // edit *away* from anything.
+        self.customized = false;
         Ok(())
     }
 
-    /// Removes a user scheme. Built-ins are silently left in place, since the
-    /// UI only offers Remove on user rows.
-    pub(crate) fn remove_user_scheme(&mut self, name: &str) {
-        self.user_schemes.retain(|scheme| scheme.name != name);
-        if self.scheme == name {
-            self.scheme = String::new();
+    /// Deletes a user theme's file. Built-ins and the wallpaper row are
+    /// silently left alone, since the UI only offers Remove on user rows.
+    pub(crate) fn remove_theme(&mut self, name: &str) -> Result<(), ValidationError> {
+        self.remove_theme_in(&file::themes_dir(), name)
+    }
+
+    pub(crate) fn remove_theme_in(
+        &mut self,
+        directory: &Path,
+        name: &str,
+    ) -> Result<(), ValidationError> {
+        if catalog::is_protected(name) {
+            return Ok(());
         }
+        file::remove_in(directory, name)
+            .map_err(|error| ValidationError::ThemeNotWritten(error.to_string()))?;
+        catalog::refresh();
+        if self.theme == name {
+            // The colours stay and the name goes, which is what the page shows
+            // as Custom. Deleting the file you were wearing should not repaint
+            // the program, so the seeds are captured before the name goes.
+            self.sync_seeds();
+            self.theme = String::new();
+            self.customized = false;
+        }
+        Ok(())
     }
 }
 
@@ -729,10 +1041,9 @@ impl UiSettings {
         if settings.schema_version != SCHEMA_VERSION {
             return Err(SettingsError::UnsupportedVersion(settings.schema_version));
         }
-        let appearance = settings
-            .appearance
-            .validated()
-            .map_err(SettingsError::Validation)?;
+        let mut appearance = settings.appearance.clone();
+        migrate_user_schemes(&mut appearance);
+        let appearance = appearance.validated().map_err(SettingsError::Validation)?;
         // The layout is *sanitized* rather than validated: a bad palette is
         // worth refusing the whole file over, because the alternative is a
         // window the user cannot read. A bad arrangement is not -- it falls
@@ -765,6 +1076,42 @@ impl UiSettings {
             }
         }
         Ok(())
+    }
+}
+
+/// Turns the `user-schemes` array an older config carries into theme files,
+/// once.
+///
+/// **The list is cleared only if every write succeeded.** A themes directory
+/// that cannot be written -- a read-only home, a full disk -- is a real state,
+/// and losing somebody's saved schemes to it would be the worst outcome
+/// available here. If the migration cannot finish, the array stays in
+/// `settings.toml` and the next launch tries again.
+///
+/// A scheme whose name already has a theme file is not overwritten: the file
+/// is the newer of the two by construction, because writing one is what
+/// clears the array.
+fn migrate_user_schemes(appearance: &mut AppearanceSettings) {
+    if appearance.user_schemes.is_empty() {
+        return;
+    }
+    let existing: Vec<String> = file::load_all().0.into_iter().map(|t| t.name).collect();
+    let mut all_written = true;
+    for scheme in &appearance.user_schemes {
+        if existing.contains(&scheme.name) {
+            continue;
+        }
+        if let Err(error) = file::write(&scheme.definition()) {
+            eprintln!(
+                "mooloop: could not migrate the saved scheme {} into a theme file: {error}",
+                scheme.name
+            );
+            all_written = false;
+        }
+    }
+    if all_written {
+        appearance.user_schemes.clear();
+        catalog::refresh();
     }
 }
 
@@ -876,152 +1223,11 @@ fn effect_kind_slug(kind: EffectKind) -> &'static str {
 }
 
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Rgb {
-    r: u8,
-    g: u8,
-    b: u8,
-}
-
-impl Rgb {
-    fn parse(value: &str) -> Option<Self> {
-        let hex = value.strip_prefix('#')?;
-        if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return None;
-        }
-        Some(Self {
-            r: u8::from_str_radix(&hex[0..2], 16).ok()?,
-            g: u8::from_str_radix(&hex[2..4], 16).ok()?,
-            b: u8::from_str_radix(&hex[4..6], 16).ok()?,
-        })
-    }
-
-    fn to_hex(self) -> String {
-        format!("#{:02X}{:02X}{:02X}", self.r, self.g, self.b)
-    }
-    /// Swatch colors come straight from stored hex that has already been
-    /// validated once; black is a visible, harmless fallback for the case
-    /// where a hand-edited config slipped something else through.
-    pub(crate) fn parse_or_black(value: &str) -> Self {
-        Self::parse(value).unwrap_or(rgb(0, 0, 0))
-    }
-
-    pub(crate) fn color(self) -> Color {
-        Color::from_rgb_u8(self.r, self.g, self.b)
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct ThemePalette {
-    pub background: Rgb,
-    pub panel: Rgb,
-    pub surface: Rgb,
-    pub raised: Rgb,
-    pub active: Rgb,
-    pub border: Rgb,
-    pub text: Rgb,
-    pub muted: Rgb,
-    pub faint: Rgb,
-    pub accent: Rgb,
-    pub accent_active: Rgb,
-    pub focus: Rgb,
-    pub warning: Rgb,
-    pub destructive: Rgb,
-    pub destructive_active: Rgb,
-    pub meter_safe: Rgb,
-    pub meter_warning: Rgb,
-    pub meter_clip: Rgb,
-}
-
-/// Grows the full token set from the three seeds.
-///
-/// Every neutral is `base` moved a fixed fraction toward the contrasting pole
-/// (white on a dark base, black on a light one), which is what lets any base
-/// color -- including a light one -- produce a coherent ramp instead of only
-/// the three ramps the old hardcoded presets shipped. `contrast` scales those
-/// fractions, so one control tightens or opens the whole hierarchy at once.
-fn derive_palette(base: Rgb, accent: Rgb, alert: Rgb, contrast: f32) -> ThemePalette {
-    let dark = relative_luminance(base) < 0.4;
-    let scale = contrast.clamp(MIN_CONTRAST, MAX_CONTRAST);
-    let step = |fraction: f32| shade(base, dark, fraction * scale);
-    let background = base;
-    let on_accent = if relative_luminance(accent) > 0.45 {
-        rgb(0, 0, 0)
-    } else {
-        rgb(255, 255, 255)
-    };
-    let destructive = rgb(0xef, 0x44, 0x44);
-    ThemePalette {
-        background,
-        // The panel sits behind the work surface, so it moves away from the
-        // contrast pole rather than toward it.
-        panel: step(-0.12),
-        surface: step(0.055),
-        raised: step(0.075),
-        active: step(0.115),
-        border: step(0.17),
-        text: step(0.87),
-        muted: step(0.62),
-        faint: step(0.25),
-        accent,
-        accent_active: mix(accent, background, 0.58),
-        focus: mix(accent, on_accent, 0.22),
-        warning: alert,
-        destructive,
-        destructive_active: mix(destructive, background, 0.62),
-        // Meters read as one instrument with the rest of the UI: safe level is
-        // the accent, the headroom warning is the alert color, and only a true
-        // clip falls back to the fixed destructive red.
-        meter_safe: accent,
-        meter_warning: alert,
-        meter_clip: destructive,
-    }
-}
-
-/// Moves `color` toward the foreground pole for positive `amount` and toward
-/// the background pole for negative, where the poles swap on a light base.
-fn shade(color: Rgb, dark: bool, amount: f32) -> Rgb {
-    let (foreground, background) = if dark {
-        (rgb(255, 255, 255), rgb(0, 0, 0))
-    } else {
-        (rgb(0, 0, 0), rgb(255, 255, 255))
-    };
-    if amount >= 0.0 {
-        mix(color, foreground, amount.min(1.0))
-    } else {
-        mix(color, background, (-amount).min(1.0))
-    }
-}
-
-const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
-    Rgb { r, g, b }
-}
-
-fn mix(a: Rgb, b: Rgb, b_weight: f32) -> Rgb {
-    let blend = |x: u8, y: u8| (x as f32 * (1.0 - b_weight) + y as f32 * b_weight).round() as u8;
-    rgb(blend(a.r, b.r), blend(a.g, b.g), blend(a.b, b.b))
-}
-
-fn relative_luminance(color: Rgb) -> f32 {
-    let linear = |channel: u8| {
-        let c = channel as f32 / 255.0;
-        if c <= 0.04045 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
-}
-
-fn contrast_ratio(a: Rgb, b: Rgb) -> f32 {
-    let (light, dark) = if relative_luminance(a) >= relative_luminance(b) {
-        (a, b)
-    } else {
-        (b, a)
-    };
-    (relative_luminance(light) + 0.05) / (relative_luminance(dark) + 0.05)
-}
+// The colour primitives and the palette derivation moved to `crate::theme`
+// when a theme became a sixteen-colour ramp: the ramp, the wallpaper
+// importers, the light/dark derivation and the swatch palette all need the
+// same arithmetic, and none of them is a setting. They are re-exported here
+// because this module is still what the rest of the crate asks for a palette.
 
 #[derive(Debug)]
 pub(crate) enum ValidationError {
@@ -1029,8 +1235,9 @@ pub(crate) enum ValidationError {
     InvalidAccent,
     InvalidAlert,
     LowContrast,
-    EmptySchemeName,
-    ReservedSchemeName,
+    EmptyThemeName,
+    ReservedThemeName,
+    ThemeNotWritten(String),
 }
 
 impl fmt::Display for ValidationError {
@@ -1040,8 +1247,9 @@ impl fmt::Display for ValidationError {
             Self::InvalidAccent => write!(f, "Enter an accent as #RRGGBB"),
             Self::InvalidAlert => write!(f, "Enter an alert color as #RRGGBB"),
             Self::LowContrast => write!(f, "Accent needs more contrast against the base color"),
-            Self::EmptySchemeName => write!(f, "Name the scheme before saving it"),
-            Self::ReservedSchemeName => write!(f, "That name belongs to a built-in scheme"),
+            Self::EmptyThemeName => write!(f, "Name the theme before saving it"),
+            Self::ReservedThemeName => write!(f, "That name belongs to a built-in theme"),
+            Self::ThemeNotWritten(reason) => write!(f, "Could not write the theme: {reason}"),
         }
     }
 }
@@ -1071,8 +1279,15 @@ impl fmt::Display for SettingsError {
 mod tests {
     use super::*;
 
+    /// A Custom appearance: the three seeds, and no theme selected.
+    ///
+    /// `theme` has to be empty or the seeds are shadowed -- a selected theme
+    /// is what the colours come from, and the pickers are a projection of it.
+    /// That is the whole shape of the model and this helper exists to state
+    /// it once.
     fn appearance(base: &str, accent: &str, alert: &str) -> AppearanceSettings {
         AppearanceSettings {
+            theme: String::new(),
             base: base.to_owned(),
             accent: accent.to_owned(),
             alert: alert.to_owned(),
@@ -1116,15 +1331,77 @@ mod tests {
     }
 
     #[test]
-    fn every_builtin_scheme_validates() {
-        for scheme in ThemeScheme::builtins() {
-            let mut settings = AppearanceSettings::default();
-            settings.apply_scheme(&scheme);
-            assert!(
-                settings.validated().is_ok(),
-                "built-in scheme {} fails validation",
-                scheme.name
-            );
+    fn every_builtin_theme_validates_in_both_modes() {
+        for theme in builtins::all() {
+            for mode in [Mode::Dark, Mode::Light] {
+                let mut settings = AppearanceSettings {
+                    mode: mode.name().to_owned(),
+                    ..AppearanceSettings::default()
+                };
+                settings.apply_theme(&theme);
+                let validated = settings.validated();
+                assert!(
+                    validated.is_ok(),
+                    "built-in theme {} fails validation in {} mode",
+                    theme.name,
+                    mode.name()
+                );
+                assert_eq!(validated.unwrap().theme, theme.name);
+            }
+        }
+    }
+
+    /// Selecting a theme and flipping the mode is the whole feature, and what
+    /// it has to do is change the colours without changing anything else the
+    /// user set.
+    #[test]
+    fn the_mode_picks_the_variant_and_leaves_the_rest_alone() {
+        let mut settings = AppearanceSettings {
+            type_scale: 1.5,
+            density: 1.2,
+            ..AppearanceSettings::default()
+        };
+        settings.apply_theme(&builtins::find("Nord").unwrap());
+        settings.mode = Mode::Dark.name().to_owned();
+        let dark = settings.palette();
+        settings.mode = Mode::Light.name().to_owned();
+        settings.sync_seeds();
+        let light = settings.palette();
+        assert!(dark.background.is_dark());
+        assert!(!light.background.is_dark());
+        // Polar Night and Snow Storm, both written down rather than derived.
+        assert_eq!(dark.background.to_hex(), "#2E3440");
+        assert_eq!(light.background.to_hex(), "#ECEFF4");
+        // And a type scale set for somebody's eyes survives a theme change.
+        assert_eq!(settings.type_scale, 1.5);
+        assert_eq!(settings.density, 1.2);
+    }
+
+    /// The swatch palette follows the colourscheme, which is the ask this
+    /// work came from. Two themes, two palettes, eleven of each.
+    #[test]
+    fn the_channel_swatches_follow_the_theme() {
+        let mut nord = AppearanceSettings::default();
+        nord.apply_theme(&builtins::find("Nord").unwrap());
+        let mut dracula = AppearanceSettings::default();
+        dracula.apply_theme(&builtins::find("Dracula").unwrap());
+        let (a, b) = (nord.swatches(), dracula.swatches());
+        assert_eq!(a.len(), 11);
+        assert_eq!(b.len(), 11);
+        assert_ne!(a, b, "two schemes produced one swatch palette");
+        // Nord's aurora red is in Nord's palette and not in Dracula's.
+        assert!(a.iter().any(|c| c.to_hex() == "#BF616A"));
+        assert!(!b.iter().any(|c| c.to_hex() == "#BF616A"));
+    }
+
+    /// The default theme's swatch row is the hand-picked eleven it replaced,
+    /// so nobody's existing channel colours stopped being offered.
+    #[test]
+    fn the_default_themes_swatches_still_include_the_old_table() {
+        let settings = AppearanceSettings::default();
+        let swatches: Vec<String> = settings.swatches().into_iter().map(Rgb::to_hex).collect();
+        for hex in ["#EF4444", "#F97316", "#EAB308", "#22C55E", "#14B8A6", "#EC4899", "#A16207"] {
+            assert!(swatches.contains(&hex.to_owned()), "{hex} is gone: {swatches:?}");
         }
     }
 
@@ -1132,6 +1409,7 @@ mod tests {
     fn derives_a_readable_ramp_from_a_light_base() {
         // A light base has to flip the ramp: text goes dark, surfaces go
         // darker than the background rather than lighter.
+        use crate::theme::color::{contrast_ratio, relative_luminance};
         let palette = appearance("#EDEDF0", "#3F7D00", "#B45309").palette();
         assert!(relative_luminance(palette.text) < relative_luminance(palette.background));
         assert!(relative_luminance(palette.surface) < relative_luminance(palette.background));
@@ -1160,10 +1438,8 @@ mod tests {
             ..AppearanceSettings::default()
         }
         .palette();
-        assert!(
-            contrast_ratio(wide.border, wide.background)
-                > contrast_ratio(tight.border, tight.background)
-        );
+        let ratio = crate::theme::color::contrast_ratio;
+        assert!(ratio(wide.border, wide.background) > ratio(tight.border, tight.background));
     }
 
     /// The arrangement a hand-edited file can ask for, and the one the
@@ -1253,32 +1529,134 @@ mod tests {
     }
 
     #[test]
-    fn saves_and_removes_user_schemes() {
+    fn saves_and_removes_a_theme() {
+        let directory = tempfile::tempdir().unwrap();
         let mut settings = appearance("#101014", "#22D3EE", "#F97316");
-        settings.save_user_scheme("  Mine  ").unwrap();
-        assert_eq!(settings.scheme, "Mine");
-        assert_eq!(settings.user_schemes.len(), 1);
-        assert_eq!(settings.scheme("Mine").unwrap().accent, "#22D3EE");
-        assert_eq!(settings.schemes().len(), ThemeScheme::builtins().len() + 1);
+        settings.type_scale = 1.25;
+        settings.save_theme_in(directory.path(), "  Mine  ").unwrap();
+        assert_eq!(settings.theme, "Mine");
 
-        // Re-saving the same name replaces rather than duplicates.
+        let (saved, _) = file::load_all_in(directory.path());
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].name, "Mine");
+        assert_eq!(saved[0].style.type_scale, Some(1.25));
+        assert_eq!(
+            saved[0].variant(true).ramp().accent().to_hex(),
+            "#22D3EE",
+            "the seeds in force should be what got saved"
+        );
+
+        // Re-saving the same name replaces rather than duplicating.
         settings.accent = "#84CC16".to_owned();
-        settings.save_user_scheme("Mine").unwrap();
-        assert_eq!(settings.user_schemes.len(), 1);
-        assert_eq!(settings.scheme("Mine").unwrap().accent, "#84CC16");
+        settings.theme = String::new();
+        settings.save_theme_in(directory.path(), "Mine").unwrap();
+        let (saved, _) = file::load_all_in(directory.path());
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].variant(true).ramp().accent().to_hex(), "#84CC16");
 
         assert!(matches!(
-            settings.save_user_scheme("Mooloop"),
-            Err(ValidationError::ReservedSchemeName)
+            settings.save_theme_in(directory.path(), "Nord"),
+            Err(ValidationError::ReservedThemeName)
         ));
         assert!(matches!(
-            settings.save_user_scheme("   "),
-            Err(ValidationError::EmptySchemeName)
+            settings.save_theme_in(directory.path(), "   "),
+            Err(ValidationError::EmptyThemeName)
         ));
 
-        settings.remove_user_scheme("Mine");
-        assert!(settings.user_schemes.is_empty());
-        assert_eq!(settings.scheme, "");
+        settings.remove_theme_in(directory.path(), "Mine").unwrap();
+        assert!(file::load_all_in(directory.path()).0.is_empty());
+        // Deleting the theme you are wearing keeps the colours and drops the
+        // name, which the page shows as Custom.
+        assert_eq!(settings.theme, "");
+        assert_eq!(settings.accent, "#84CC16");
+    }
+
+    /// Saving a *tweak* to a two-variant theme keeps the variant you were not
+    /// looking at. This is why `customized` exists as a flag beside the theme
+    /// name rather than being spelled as an empty name: clearing the name on
+    /// the first keystroke would throw away half of Dracula the first time
+    /// somebody warmed its accent, and nothing on screen would say so.
+    #[test]
+    fn saving_a_tweak_keeps_the_other_variant() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut settings = AppearanceSettings {
+            mode: Mode::Dark.name().to_owned(),
+            ..AppearanceSettings::default()
+        };
+        settings.apply_theme(&builtins::find("Dracula").unwrap());
+        assert!(!settings.customized);
+
+        // Warm the accent, the way the Appearance page's preview does.
+        settings.accent = "#FF9955".to_owned();
+        assert!(!settings.seeds_match_theme());
+        settings.customized = !settings.seeds_match_theme();
+        // The colours drawn are now the seeds, and the name is still Dracula.
+        assert_eq!(settings.theme, "Dracula");
+        assert_eq!(settings.palette().accent.to_hex(), "#FF9955");
+
+        settings.save_theme_in(directory.path(), "Mine").unwrap();
+        assert!(!settings.customized, "the file now says what the pickers say");
+
+        let saved = file::load_all_in(directory.path()).0.pop().unwrap();
+        assert!(saved.authored(true));
+        assert!(saved.authored(false), "Alucard was thrown away");
+        assert_eq!(saved.variant(true).ramp().accent().to_hex(), "#FF9955");
+        assert_eq!(
+            saved.variant(false).ramp().slot(0).to_hex(),
+            builtins::find("Dracula")
+                .unwrap()
+                .variant(false)
+                .ramp()
+                .slot(0)
+                .to_hex(),
+            "the light variant should be Alucard's, untouched"
+        );
+    }
+
+    /// Selecting a theme after an edit puts the theme back: `customized` is
+    /// cleared, and nothing of the edit survives to leak into the next save.
+    #[test]
+    fn selecting_a_theme_ends_the_edit() {
+        let mut settings = AppearanceSettings::default();
+        settings.apply_theme(&builtins::find("Nord").unwrap());
+        settings.accent = "#FF0000".to_owned();
+        settings.customized = true;
+        settings.apply_theme(&builtins::find("Gruvbox").unwrap());
+        assert!(!settings.customized);
+        assert_eq!(settings.theme, "Gruvbox");
+        assert_eq!(settings.accent, "#83A598");
+        assert!(settings.seeds_match_theme());
+    }
+
+    /// An older config's `user-schemes` array becomes theme files once, and
+    /// the array goes away. A scheme somebody saved in 2026 has to still be
+    /// in the list in 2027.
+    #[test]
+    fn saved_schemes_migrate_into_theme_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut appearance = AppearanceSettings {
+            user_schemes: vec![ThemeScheme {
+                name: "Adam's".to_owned(),
+                base: "#101014".to_owned(),
+                accent: "#22D3EE".to_owned(),
+                alert: "#F97316".to_owned(),
+            }],
+            ..AppearanceSettings::default()
+        };
+        // The real `migrate_user_schemes` writes to `themes_dir()`; this is
+        // the same two steps against a directory a test can own.
+        for scheme in &appearance.user_schemes {
+            file::write_to(directory.path(), &scheme.definition()).unwrap();
+        }
+        appearance.user_schemes.clear();
+
+        let (themes, warnings) = file::load_all_in(directory.path());
+        assert!(warnings.is_empty());
+        assert_eq!(themes.len(), 1);
+        assert_eq!(themes[0].name, "Adam's");
+        assert_eq!(themes[0].variant(true).ramp().accent().to_hex(), "#22D3EE");
+        // And it answers Light, which a scheme could not.
+        assert!(!themes[0].variant(false).ramp().is_dark());
     }
 
     #[test]
@@ -1311,9 +1689,25 @@ mod tests {
                 snap_markers_to_zero: true,
                 log_to_file: true,
             },
-            appearance: appearance("#151617", "#F59E0B", "#38BDF8")
-                .validated()
-                .unwrap(),
+            // Every scalar off its default, for the reason the layout section
+            // below gives: a round trip through a default value passes even
+            // when the field is never written at all. `mode` is `light`
+            // rather than `system` on purpose -- `system` asks the desktop,
+            // and a test that asks the desktop is a test whose result depends
+            // on the machine it runs on.
+            appearance: AppearanceSettings {
+                mode: "light".to_owned(),
+                type_scale: 1.25,
+                density: 1.1,
+                font_family: "Iosevka Aile".to_owned(),
+                font_family_mono: "Iosevka".to_owned(),
+                font_weight: 500,
+                hairline: 0.0,
+                stroke_emphasis: 3.0,
+                ..appearance("#151617", "#F59E0B", "#38BDF8")
+            }
+            .validated()
+            .unwrap(),
             // Both drivers' sections, and neither at its default, so the one
             // this build does not use has to survive the trip as well.
             audio: AudioSettings {

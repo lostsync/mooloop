@@ -1,19 +1,28 @@
 import { ComboBox, HorizontalBox, LineEdit, ScrollView, VerticalBox } from "std-widgets.slint";
-import { Theme, Motion } from "theme.slint";
+import { Theme, Motion, StatusHint } from "theme.slint";
 import { MeterPrefs } from "meters.slint";
 import { AudioOrientation, IconButton, ParameterFader, SectionLabel, SegmentedControl, ToggleButton, ToolButton } from "controls.slint";
 import { AudioDriverCopy, DriverControlSurface, OutputTargetRow } from "audio-preferences.slint";
 export { AudioDriverCopy, OutputTargetRow }
 
-// One selectable palette in Preferences > Appearance. `tint` fields carry the
-// parsed seed colors because Slint cannot turn a hex string into a color --
-// Rust sends both the text it round-trips and the swatch color to draw.
+// One selectable theme in Preferences > Appearance. The three colours are the
+// variant the current mode resolves to, so the list repaints when Light/Dark/
+// Auto moves and a row shows what choosing it would actually do.
+//
+// They are colours rather than hex strings because Slint cannot turn a hex
+// string into a colour -- Rust sends the text it round-trips and the swatch
+// colour to draw, and this struct is where the two meet.
 export struct AppearanceSchemeRow {
     name: string,
+    description: string,
     base: color,
     accent: color,
     alert: color,
     is-user: bool,
+    // The variant on this side of the light/dark line was worked out rather
+    // than written down. Said out loud because a derived Snow Storm is not
+    // Snow Storm.
+    derived: bool,
 }
 
 struct ColorChoice {
@@ -393,25 +402,44 @@ export component ShortcutRowView inherits Rectangle {
 // snapshot test. The dialog only ever shows it through a ScrollView, which
 // crops it to the fixed dialog height.
 export component AppearancePage inherits VerticalLayout {
-    in-out property <string> scheme;
+    in-out property <string> theme;
+    in-out property <bool> customized;
+    // 0 dark, 1 light, 2 follow the desktop.
+    in-out property <int> mode;
     in-out property <[AppearanceSchemeRow]> schemes;
+    in-out property <[color]> ramp;
+    in-out property <bool> variant-derived;
+    in-out property <float> text-ratio: 1.0;
+    in-out property <float> accent-ratio: 1.0;
     in-out property <string> base;
     in-out property <string> accent;
     in-out property <string> alert;
     in-out property <float> contrast;
     in-out property <float> roundness;
-    in-out property <string> scheme-name;
+    in-out property <float> type-scale;
+    in-out property <float> density;
+    in-out property <string> font-family;
+    in-out property <string> font-family-mono;
+    in-out property <int> font-weight;
+    in-out property <float> hairline;
+    in-out property <float> stroke-emphasis;
+    in-out property <string> theme-name;
     in-out property <bool> smooth-curves;
     /// The meter falloff rows, passed straight down from the dialog. See the
     /// note on its copy of this property.
     in property <[string]> meter-falloff-options;
     in property <string> validation-error;
     callback preview-changed();
-    callback select-scheme(string);
-    callback save-scheme(string);
-    callback remove-scheme(string);
+    // Its own callback rather than another `preview-changed`: flipping the
+    // variant has to re-project the three colour pickers onto the new one,
+    // and a generic preview cannot tell that apart from somebody having
+    // edited a colour -- which means Custom.
+    callback mode-changed(int);
+    callback select-theme(string);
+    callback save-theme(string);
+    callback remove-theme(string);
 
-    spacing: 8px;
+    spacing: Theme.pad-lg;
     // Children keep their preferred heights and stack from the top, so any
     // slack collects at the bottom rather than inflating the ColorFields,
     // which inherit VerticalBox and would otherwise absorb it as layouts do.
@@ -419,30 +447,57 @@ export component AppearancePage inherits VerticalLayout {
 
     Text { text: "Appearance"; color: Theme.text; font-size: Theme.text-3xl; height: 20px; }
 
-    SectionLabel { text: "SCHEME"; }
+    SectionLabel { text: "THEME"; }
+    HorizontalBox {
+        height: 30px;
+        padding: 0px;
+        spacing: Theme.pad-lg;
+        Text {
+            text: "Variant";
+            color: Theme.text;
+            font-size: Theme.text-xl;
+            vertical-alignment: center;
+            width: 54px;
+        }
+        SegmentedControl {
+            options: ["Dark", "Light", "Auto"];
+            max-width: 240px;
+            hint: "Auto follows the desktop's own light/dark setting.";
+            selected-index <=> root.mode;
+            changed selected-index => { root.mode-changed(self.selected-index); }
+        }
+        Rectangle { horizontal-stretch: 1; }
+    }
     Rectangle {
-        height: 108px;
+        height: 132px;
         background: Theme.background;
         border-width: Theme.hairline;
         border-color: Theme.border;
         border-radius: Theme.radius-md;
         ScrollView {
             VerticalLayout {
-                padding: 4px;
-                spacing: 2px;
+                padding: Theme.pad-sm;
+                spacing: Theme.pad-xs;
                 for scheme in root.schemes : Rectangle {
                     height: 26px;
                     border-radius: Theme.radius-sm;
-                    background: scheme.name == root.scheme
+                    // Highlighted only while the theme is what is actually
+                    // being drawn. An edited palette is Custom, and a row
+                    // still marked selected would be claiming otherwise.
+                    background: scheme.name == root.theme && !root.customized
                         ? Theme.surface-raised
                         : scheme-tap.has-hover ? Theme.surface : transparent;
                     scheme-tap := TouchArea {
                         mouse-cursor: pointer;
-                        clicked => { root.select-scheme(scheme.name); }
+                        clicked => { root.select-theme(scheme.name); }
+                        changed has-hover => {
+                            if (self.has-hover) { StatusHint.show(scheme.description); }
+                            else { StatusHint.clear(scheme.description); }
+                        }
                     }
                     HorizontalBox {
-                        padding: 4px;
-                        spacing: 6px;
+                        padding: Theme.pad-sm;
+                        spacing: Theme.pad-md;
                         for tint in [scheme.base, scheme.accent, scheme.alert] : Rectangle {
                             width: 14px;
                             height: 14px;
@@ -454,36 +509,68 @@ export component AppearancePage inherits VerticalLayout {
                         }
                         Text {
                             text: scheme.name;
-                            color: scheme.name == root.scheme ? Theme.text : Theme.text-muted;
+                            color: scheme.name == root.theme && !root.customized
+                                ? Theme.text
+                                : Theme.text-muted;
                             font-size: Theme.text-xl;
                             vertical-alignment: center;
                             horizontal-stretch: 1;
                         }
+                        if scheme.derived : Text {
+                            text: "derived";
+                            color: Theme.text-faint;
+                            font-size: Theme.text-md;
+                            vertical-alignment: center;
+                        }
                         if scheme.is-user : ToolButton {
                             text: "Remove";
-                            tooltip: "Delete"; hint: "Delete the " + scheme.name + " scheme";
+                            tooltip: "Delete"; hint: "Delete the " + scheme.name + " theme";
                             min-width: 56px;
                             min-height: 20px;
-                            clicked => { root.remove-scheme(scheme.name); }
+                            clicked => { root.remove-theme(scheme.name); }
                         }
                     }
                 }
             }
         }
     }
+    // The ramp in force, all sixteen slots. Read-only on purpose: a ramp is
+    // edited by editing its file, and the three pickers below are the in-app
+    // way to change colours.
+    HorizontalLayout {
+        height: 14px;
+        spacing: 1px;
+        for slot in root.ramp : Rectangle {
+            background: slot;
+            border-radius: Theme.radius-xs;
+        }
+    }
+    Text {
+        text: root.customized && root.theme != ""
+            ? "Custom, from " + root.theme + " — save it to keep it."
+            : root.theme == ""
+                ? "Custom — save it to keep it."
+                : root.variant-derived
+                    ? root.theme + " does not ship this variant; it is derived from the other one."
+                    : root.theme;
+        color: Theme.text-muted;
+        font-size: Theme.text-lg;
+        height: 14px;
+    }
     HorizontalBox {
         padding: 0px;
-        spacing: 6px;
+        spacing: Theme.pad-md;
         LineEdit {
             horizontal-stretch: 1;
-            text <=> root.scheme-name;
-            placeholder-text: "New scheme name";
+            text <=> root.theme-name;
+            placeholder-text: "New theme name";
         }
         ToolButton {
-            text: "Save Scheme";
-            tooltip: "Save"; hint: "Save the current colors as a scheme";
+            text: "Save Theme";
+            tooltip: "Save";
+            hint: "Write the current colours, type and metrics out as a theme file";
             min-width: 88px;
-            clicked => { root.save-scheme(root.scheme-name); }
+            clicked => { root.save-theme(root.theme-name); }
         }
     }
 
@@ -535,6 +622,38 @@ export component AppearancePage inherits VerticalLayout {
     }
     Text { text: root.validation-error; color: Theme.destructive; font-size: Theme.text-lg; height: 18px; }
 
+    // The contrast report. `derive_palette` has been able to compute this
+    // since it was written and nothing ever asked it, so a user could pick
+    // seeds that produced an unreadable interface and this page would show it
+    // to them without comment. 4.5 is WCAG AA for small text; 3.0 is its bar
+    // for a non-text interface element, which is what an accent is.
+    HorizontalBox {
+        height: 16px;
+        padding: 0px;
+        spacing: Theme.pad-md;
+        Text {
+            text: "Text " + round(root.text-ratio * 10) / 10 + ":1";
+            color: root.text-ratio >= 4.5 ? Theme.text-muted : Theme.warning;
+            font-size: Theme.text-lg;
+            vertical-alignment: center;
+        }
+        Text {
+            text: "Accent " + round(root.accent-ratio * 10) / 10 + ":1";
+            color: root.accent-ratio >= 3.0 ? Theme.text-muted : Theme.warning;
+            font-size: Theme.text-lg;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.text-ratio >= 4.5 && root.accent-ratio >= 3.0
+                ? "Clears WCAG AA."
+                : "Below WCAG AA — raise Contrast, or pick a stronger colour.";
+            color: Theme.text-faint;
+            font-size: Theme.text-md;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+
     SectionLabel { text: "INTERFACE"; }
     ParameterFader {
         label: "Roundness";
@@ -557,6 +676,114 @@ export component AppearancePage inherits VerticalLayout {
         value <=> root.contrast;
         value-text: round(root.contrast * 100) + "%";
         changed(v) => { root.preview-changed(); }
+    }
+    // The accessibility control. The working range of this interface is
+    // 7-11px, and before the type tokens existed turning it up meant editing
+    // three hundred literals.
+    ParameterFader {
+        label: "Text size";
+        tooltip: "Scales every label, readout and heading together";
+        label-width: 54px;
+        minimum: 0.75;
+        maximum: 2.0;
+        step: 0.05;
+        value <=> root.type-scale;
+        value-text: round(root.type-scale * 100) + "%";
+        changed(v) => { root.preview-changed(); }
+    }
+    ParameterFader {
+        label: "Density";
+        tooltip: "Control heights, padding and spacing";
+        label-width: 54px;
+        minimum: 0.75;
+        maximum: 1.75;
+        step: 0.05;
+        value <=> root.density;
+        value-text: round(root.density * 100) + "%";
+        changed(v) => { root.preview-changed(); }
+    }
+    ParameterFader {
+        label: "Borders";
+        tooltip: "Hairline width. Zero gives a borderless interface.";
+        label-width: 54px;
+        minimum: 0;
+        maximum: 3;
+        step: 0.5;
+        value <=> root.hairline;
+        value-text: root.hairline == 0 ? "None" : root.hairline + " px";
+        changed(v) => { root.preview-changed(); }
+    }
+    ParameterFader {
+        label: "Emphasis";
+        tooltip: "The heavier stroke: selection, focus and the active border";
+        label-width: 54px;
+        minimum: 0;
+        maximum: 5;
+        step: 0.5;
+        value <=> root.stroke-emphasis;
+        value-text: root.stroke-emphasis + " px";
+        changed(v) => { root.preview-changed(); }
+    }
+
+    // A theme names a font; it cannot ship one. Slint 1.17.1 has no runtime
+    // font registration, so a family is resolved from what is installed and a
+    // name nobody has falls back to the platform default without a word --
+    // which is why the hint says so rather than the interface pretending.
+    SectionLabel { text: "TYPE"; }
+    HorizontalBox {
+        height: 26px;
+        padding: 0px;
+        spacing: Theme.pad-md;
+        Text {
+            text: "Interface";
+            color: Theme.text;
+            font-size: Theme.text-xl;
+            vertical-alignment: center;
+            width: 54px;
+        }
+        LineEdit {
+            horizontal-stretch: 1;
+            text <=> root.font-family;
+            placeholder-text: "System default";
+            edited => { root.preview-changed(); }
+        }
+    }
+    HorizontalBox {
+        height: 26px;
+        padding: 0px;
+        spacing: Theme.pad-md;
+        Text {
+            text: "Readouts";
+            color: Theme.text;
+            font-size: Theme.text-xl;
+            vertical-alignment: center;
+            width: 54px;
+        }
+        LineEdit {
+            horizontal-stretch: 1;
+            text <=> root.font-family-mono;
+            placeholder-text: "monospace";
+            edited => { root.preview-changed(); }
+        }
+    }
+    Text {
+        text: "A font that is not installed falls back to the platform default.";
+        color: Theme.text-muted;
+        font-size: Theme.text-lg;
+        height: 14px;
+    }
+    ParameterFader {
+        label: "Weight";
+        tooltip: "Body weight. Anything above 500 at 9px is a smudge.";
+        label-width: 54px;
+        minimum: 100;
+        maximum: 900;
+        step: 100;
+        // One-way, because the weight is an `int` and a fader is a `float`;
+        // the round trip happens in `changed` instead of in a binding.
+        value: root.font-weight;
+        value-text: root.font-weight;
+        changed(v) => { root.font-weight = round(v); root.preview-changed(); }
     }
 
     SectionLabel { text: "GRAPHICS"; }
@@ -938,14 +1165,27 @@ export component MidiPage inherits VerticalLayout {
 
 export component PreferencesDialog inherits Rectangle {
     in-out property <bool> open;
-    in-out property <string> appearance-scheme;
+    in-out property <string> appearance-theme;
+    in-out property <bool> appearance-customized;
+    in-out property <int> appearance-mode;
     in-out property <[AppearanceSchemeRow]> appearance-schemes;
+    in-out property <[color]> appearance-ramp;
+    in-out property <bool> appearance-variant-derived;
+    in-out property <float> appearance-text-ratio: 1.0;
+    in-out property <float> appearance-accent-ratio: 1.0;
     in-out property <string> appearance-base;
     in-out property <string> appearance-accent;
     in-out property <string> appearance-alert;
     in-out property <float> appearance-contrast;
     in-out property <float> appearance-roundness;
-    in-out property <string> appearance-scheme-name;
+    in-out property <float> appearance-type-scale: 1.0;
+    in-out property <float> appearance-density: 1.0;
+    in-out property <string> appearance-font-family;
+    in-out property <string> appearance-font-family-mono: "monospace";
+    in-out property <int> appearance-font-weight: 400;
+    in-out property <float> appearance-hairline: 1.0;
+    in-out property <float> appearance-stroke-emphasis: 2.0;
+    in-out property <string> appearance-theme-name;
     in-out property <bool> developer-mode;
     in-out property <bool> smooth-curves;
     // Applied the moment it is toggled rather than on OK, like the audio page:
@@ -981,13 +1221,16 @@ export component PreferencesDialog inherits Rectangle {
     callback midi-binding-inverted-toggled(int);
     callback midi-binding-relearn(int);
     callback midi-transport-learn(int);
-    // base, accent, alert, contrast, roundness
-    callback appearance-preview(string, string, string, float, float);
-    callback appearance-select-scheme(string);
-    callback appearance-save-scheme(string);
-    callback appearance-remove-scheme(string);
-    // base, accent, alert, contrast, roundness, developer-mode, smooth-curves
-    callback save(string, string, string, float, float, bool, bool) -> bool;
+    // No arguments. Every value either callback needs is one of the two-way
+    // bound properties above, and Rust reads them back through
+    // `window_appearance`; passing fourteen of them positionally would be
+    // fourteen chances to swap two.
+    callback appearance-preview();
+    callback appearance-mode-changed(int);
+    callback appearance-select-theme(string);
+    callback appearance-save-theme(string);
+    callback appearance-remove-theme(string);
+    callback save() -> bool;
     callback cancelled;
     callback audio-refresh-targets();
     callback audio-select-output(string, string, string);
@@ -1007,13 +1250,7 @@ export component PreferencesDialog inherits Rectangle {
     // Every appearance edit funnels through here so the live preview and the
     // Apply/OK payload can never drift apart.
     function preview-appearance() {
-        root.appearance-preview(
-            root.appearance-base,
-            root.appearance-accent,
-            root.appearance-alert,
-            root.appearance-contrast,
-            root.appearance-roundness,
-        );
+        root.appearance-preview();
     }
     visible: root.open;
     background: #00000099;
@@ -1178,21 +1415,35 @@ export component PreferencesDialog inherits Rectangle {
                             viewport-height: 684px;
                             appearance-page := AppearancePage {
                                 width: parent.visible-width - 8px;
-                                scheme <=> root.appearance-scheme;
+                                theme <=> root.appearance-theme;
+                                customized <=> root.appearance-customized;
+                                mode <=> root.appearance-mode;
                                 schemes <=> root.appearance-schemes;
+                                ramp <=> root.appearance-ramp;
+                                variant-derived <=> root.appearance-variant-derived;
+                                text-ratio <=> root.appearance-text-ratio;
+                                accent-ratio <=> root.appearance-accent-ratio;
                                 base <=> root.appearance-base;
                                 accent <=> root.appearance-accent;
                                 alert <=> root.appearance-alert;
                                 contrast <=> root.appearance-contrast;
                                 roundness <=> root.appearance-roundness;
-                                scheme-name <=> root.appearance-scheme-name;
+                                type-scale <=> root.appearance-type-scale;
+                                density <=> root.appearance-density;
+                                font-family <=> root.appearance-font-family;
+                                font-family-mono <=> root.appearance-font-family-mono;
+                                font-weight <=> root.appearance-font-weight;
+                                hairline <=> root.appearance-hairline;
+                                stroke-emphasis <=> root.appearance-stroke-emphasis;
+                                theme-name <=> root.appearance-theme-name;
                                 smooth-curves <=> root.smooth-curves;
                                 meter-falloff-options: root.meter-falloff-options;
                                 validation-error: root.validation-error;
                                 preview-changed => { root.preview-appearance(); }
-                                select-scheme(name) => { root.appearance-select-scheme(name); }
-                                save-scheme(name) => { root.appearance-save-scheme(name); }
-                                remove-scheme(name) => { root.appearance-remove-scheme(name); }
+                                mode-changed(m) => { root.appearance-mode-changed(m); }
+                                select-theme(name) => { root.appearance-select-theme(name); }
+                                save-theme(name) => { root.appearance-save-theme(name); }
+                                remove-theme(name) => { root.appearance-remove-theme(name); }
                             }
                         }
                         if root.page == 4 : VerticalBox {
@@ -1322,18 +1573,14 @@ export component PreferencesDialog inherits Rectangle {
                     ToolButton {
                         text: "Apply";
                         clicked => {
-                            root.save(root.appearance-base, root.appearance-accent, root.appearance-alert,
-                                root.appearance-contrast, root.appearance-roundness,
-                                root.developer-mode, root.smooth-curves);
+                            root.save();
                         }
                     }
                     ToolButton {
                         text: "OK";
                         active: true;
                         clicked => {
-                            if (root.save(root.appearance-base, root.appearance-accent, root.appearance-alert,
-                                    root.appearance-contrast, root.appearance-roundness,
-                                    root.developer-mode, root.smooth-curves)) {
+                            if (root.save()) {
                                 root.open = false;
                             }
                         }

@@ -13,6 +13,7 @@ mod meter;
 #[cfg(feature = "mockup")]
 mod mockup;
 mod settings;
+mod theme;
 
 slint::include_modules!();
 
@@ -122,7 +123,7 @@ use mooloop_session::values::{
 pub use mockup::{load_mockup_layout, wire_mockup};
 #[cfg(feature = "mockup")]
 pub use mockup_ui::MockupCanvas;
-use settings::{AppearanceSettings, LayoutSettings, ThemePalette, ThemeScheme, UiSettings};
+use settings::{AppearanceSettings, LayoutSettings, ThemePalette, UiSettings};
 use slint::{
     CloseRequestResponse, ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode,
     VecModel,
@@ -555,7 +556,22 @@ fn set_midi_learn_armed(window: &MainWindow, armed: bool) {
 /// so what the user sees while dragging is exactly what Apply persists.
 fn apply_appearance(window: &MainWindow, appearance: &AppearanceSettings) {
     apply_theme(window, appearance.palette());
-    window.global::<Theme>().set_roundness(appearance.roundness);
+    let theme = window.global::<Theme>();
+    theme.set_roundness(appearance.roundness);
+    theme.set_type_scale(appearance.type_scale);
+    theme.set_density(appearance.density);
+    theme.set_font_family(appearance.font_family.as_str().into());
+    theme.set_font_family_mono(appearance.font_family_mono.as_str().into());
+    theme.set_font_weight(appearance.font_weight);
+    theme.set_hairline(appearance.hairline);
+    theme.set_stroke_emphasis(appearance.stroke_emphasis);
+    // The swatch palette follows the colourscheme, so it is pushed from the
+    // same funnel the palette is: selecting Nord has to change the channel
+    // pickers in the same frame it changes everything else, and a live preview
+    // has to show it.
+    window.set_color_choices(ModelRc::from(Rc::new(VecModel::from(
+        channel_colors::color_choices(&appearance.swatches()),
+    ))));
     window
         .global::<DisplayPrefs>()
         .set_smooth_curves(appearance.smooth_curves);
@@ -566,17 +582,28 @@ fn apply_appearance(window: &MainWindow, appearance: &AppearanceSettings) {
 }
 
 /// Reads back the Appearance page's live, uncommitted state. The dialog holds
-/// the edit in its properties until Apply, so this is what preview, scheme
-/// selection, and Save Scheme all have to work from.
+/// the edit in its properties until Apply, so this is what preview, theme
+/// selection, and Save Theme all have to work from.
 fn window_appearance(window: &MainWindow, stored: &AppearanceSettings) -> AppearanceSettings {
     let motion = window.global::<Motion>();
     AppearanceSettings {
-        scheme: window.get_preferences_appearance_scheme().into(),
+        theme: window.get_preferences_appearance_theme().into(),
+        customized: window.get_preferences_appearance_customized(),
+        mode: crate::theme::Mode::from_index(window.get_preferences_appearance_mode())
+            .name()
+            .to_owned(),
         base: window.get_preferences_appearance_base().into(),
         accent: window.get_preferences_appearance_accent().into(),
         alert: window.get_preferences_appearance_alert().into(),
         contrast: window.get_preferences_appearance_contrast(),
         roundness: window.get_preferences_appearance_roundness(),
+        type_scale: window.get_preferences_appearance_type_scale(),
+        density: window.get_preferences_appearance_density(),
+        font_family: window.get_preferences_appearance_font_family().into(),
+        font_family_mono: window.get_preferences_appearance_font_family_mono().into(),
+        font_weight: window.get_preferences_appearance_font_weight(),
+        hairline: window.get_preferences_appearance_hairline(),
+        stroke_emphasis: window.get_preferences_appearance_stroke_emphasis(),
         smooth_curves: window.get_preferences_smooth_curves(),
         motion_speed: settings::motion_speed_name(motion.get_speed()).to_owned(),
         motion_easing: settings::motion_easing_name(motion.get_easing()).to_owned(),
@@ -592,31 +619,116 @@ fn window_appearance(window: &MainWindow, stored: &AppearanceSettings) -> Appear
     }
 }
 
-fn scheme_rows(appearance: &AppearanceSettings) -> ModelRc<AppearanceSchemeRow> {
-    let swatch = |hex: &str| settings::Rgb::parse_or_black(hex).color();
+/// One row per theme, with the swatches drawn from the variant the mode
+/// resolves to -- so the list repaints when Light/Dark/Auto moves, and a theme
+/// shows what choosing it would actually do.
+fn theme_rows(appearance: &AppearanceSettings) -> ModelRc<AppearanceSchemeRow> {
+    let dark = appearance.wants_dark();
     let rows: Vec<AppearanceSchemeRow> = appearance
-        .schemes()
+        .themes()
         .into_iter()
-        .map(|scheme| AppearanceSchemeRow {
-            base: swatch(&scheme.base),
-            accent: swatch(&scheme.accent),
-            alert: swatch(&scheme.alert),
-            is_user: !ThemeScheme::is_builtin(&scheme.name),
-            name: scheme.name.into(),
+        .map(|theme| {
+            let ramp = theme.variant(dark).ramp();
+            AppearanceSchemeRow {
+                base: ramp.slot(0).color(),
+                accent: ramp.accent().color(),
+                alert: ramp.slot(0x0A).color(),
+                is_user: !crate::theme::catalog::is_protected(&theme.name),
+                // A derived variant is not the scheme's own, and somebody
+                // comparing it against a screenshot deserves to know which
+                // one they are looking at.
+                derived: !theme.authored(dark),
+                description: theme.description.as_str().into(),
+                name: theme.name.into(),
+            }
         })
         .collect();
     ModelRc::from(Rc::new(VecModel::from(rows)))
 }
 
+/// The sixteen slots of the ramp in force, for the strip the Appearance page
+/// draws under the theme list. Read-only: a ramp is edited by editing its
+/// file, and the three seed pickers are the in-app way to change colours.
+fn ramp_swatches(appearance: &AppearanceSettings) -> ModelRc<slint::Color> {
+    let ramp = appearance.ramp();
+    let colors: Vec<slint::Color> = (0..16).map(|slot| ramp.slot(slot).color()).collect();
+    ModelRc::from(Rc::new(VecModel::from(colors)))
+}
+
+/// The three colour pickers, the ramp strip and the theme name: everything
+/// that moves when the *colours* change but not when a fader does.
+fn push_appearance_colors(window: &MainWindow, appearance: &AppearanceSettings) {
+    window.set_preferences_appearance_theme(appearance.theme.as_str().into());
+    window.set_preferences_appearance_customized(appearance.customized);
+    window.set_preferences_appearance_mode(appearance.mode().index());
+    window.set_preferences_appearance_base(appearance.base.as_str().into());
+    window.set_preferences_appearance_accent(appearance.accent.as_str().into());
+    window.set_preferences_appearance_alert(appearance.alert.as_str().into());
+    window.set_preferences_appearance_schemes(theme_rows(appearance));
+    window.set_preferences_appearance_ramp(ramp_swatches(appearance));
+    window.set_preferences_appearance_variant_derived(variant_is_derived(appearance));
+    push_appearance_contrast(window, appearance);
+}
+
+/// The two WCAG ratios the Appearance page reports.
+///
+/// **`derive_palette` has been able to compute this since it was written and
+/// nothing ever asked it.** A user could pick seeds that produce an
+/// unreadable interface and the page would show it to them without comment,
+/// which is `04-accessibility.md`'s first item. It costs two divisions.
+fn push_appearance_contrast(window: &MainWindow, appearance: &AppearanceSettings) {
+    let ramp = appearance.ramp();
+    window.set_preferences_appearance_text_ratio(ramp.text_contrast(appearance.contrast));
+    window.set_preferences_appearance_accent_ratio(ramp.accent_contrast(appearance.contrast));
+}
+
+/// Whether the variant on screen was worked out rather than written down.
+/// Only meaningful while a theme is actually being worn: a Custom palette is
+/// three colours somebody typed and is not derived from anything.
+fn variant_is_derived(appearance: &AppearanceSettings) -> bool {
+    !appearance.customized
+        && appearance
+            .definition()
+            .is_some_and(|theme| !theme.authored(appearance.wants_dark()))
+}
+
+/// The scalars a theme may carry. Pushed only when a theme is *selected*,
+/// never on an ordinary preview: these are the controls the user is dragging,
+/// and writing them back mid-drag is how a slider fights the pointer.
+fn push_appearance_scalars(window: &MainWindow, appearance: &AppearanceSettings) {
+    window.set_preferences_appearance_contrast(appearance.contrast);
+    window.set_preferences_appearance_roundness(appearance.roundness);
+    window.set_preferences_appearance_type_scale(appearance.type_scale);
+    window.set_preferences_appearance_density(appearance.density);
+    window.set_preferences_appearance_font_family(appearance.font_family.as_str().into());
+    window.set_preferences_appearance_font_family_mono(appearance.font_family_mono.as_str().into());
+    window.set_preferences_appearance_font_weight(appearance.font_weight);
+    window.set_preferences_appearance_hairline(appearance.hairline);
+    window.set_preferences_appearance_stroke_emphasis(appearance.stroke_emphasis);
+}
+
 fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
     let appearance = &settings.appearance;
-    window.set_preferences_appearance_scheme(appearance.scheme.as_str().into());
-    window.set_preferences_appearance_schemes(scheme_rows(appearance));
+    window.set_preferences_appearance_theme(appearance.theme.as_str().into());
+    window.set_preferences_appearance_customized(appearance.customized);
+    window.set_preferences_appearance_mode(appearance.mode().index());
+    window.set_preferences_appearance_schemes(theme_rows(appearance));
+    window.set_preferences_appearance_ramp(ramp_swatches(appearance));
     window.set_preferences_appearance_base(appearance.base.as_str().into());
     window.set_preferences_appearance_accent(appearance.accent.as_str().into());
     window.set_preferences_appearance_alert(appearance.alert.as_str().into());
     window.set_preferences_appearance_contrast(appearance.contrast);
     window.set_preferences_appearance_roundness(appearance.roundness);
+    window.set_preferences_appearance_type_scale(appearance.type_scale);
+    window.set_preferences_appearance_density(appearance.density);
+    window.set_preferences_appearance_font_family(appearance.font_family.as_str().into());
+    window
+        .set_preferences_appearance_font_family_mono(appearance.font_family_mono.as_str().into());
+    window.set_preferences_appearance_font_weight(appearance.font_weight);
+    window.set_preferences_appearance_hairline(appearance.hairline);
+    window.set_preferences_appearance_stroke_emphasis(appearance.stroke_emphasis);
+    window.set_preferences_appearance_variant_derived(variant_is_derived(appearance));
+    push_appearance_contrast(window, appearance);
     window.set_preferences_developer_mode(settings.general.developer_mode);
     window.set_preferences_log_to_file(settings.general.log_to_file);
     window.set_preferences_log_path(settings::log_path().display().to_string().into());
@@ -5077,13 +5189,11 @@ impl AppUi {
         // Two lists the device declares once; nothing about a patch moves
         // them, so they are installed here rather than on every refresh.
         install_mlp8_route_vocabularies(&window);
-        // The channel sidebar's swatches. A property of the application, not
-        // of any song: a project stores the colour it was given, never which
-        // swatch was clicked, so this list can change without touching a
-        // single saved file.
-        window.set_color_choices(ModelRc::from(Rc::new(VecModel::from(
-            channel_colors::color_choices(),
-        ))));
+        // The channel sidebar's swatches are pushed by `apply_appearance`
+        // now, because they follow the colourscheme: choosing Nord has to
+        // change the pickers in the same frame it changes everything else.
+        // A project stores the colour it was given rather than which swatch
+        // was clicked, so the list can change without touching a saved file.
         // Startup, on an engine that has consumed nothing yet: a refusal here
         // is not a full ring, it is a broken one, and there is no UI up yet to
         // say so with. Both sends run unconditionally -- the results are
@@ -5820,6 +5930,14 @@ impl AppUi {
         //     the engine through the pump below, the only place that owns
         //     `EngineHandle`. ---
         let ui_settings = Rc::new(RefCell::new(UiSettings::load_or_default()));
+        // A theme file that will not parse is skipped, and saying so is the
+        // whole of what "skipped with a message" means -- a themes directory
+        // somebody has been editing by hand is the ordinary case, and a file
+        // that silently does not appear is indistinguishable from one that was
+        // never saved.
+        for warning in crate::theme::catalog::warnings() {
+            eprintln!("mooloop: ignoring theme {warning}");
+        }
         // Kept alive here for as long as the app runs so the window survives
         // after this constructor returns; re-opening while it is already up
         // just refocuses it instead of spawning a second one.
@@ -6298,6 +6416,11 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_preferences_opened(move || {
                 let Some(window) = weak.upgrade() else { return };
+                // A hand-edited theme file, a fresh `wal` run and a desktop
+                // that changed its mind since launch all show up here, which
+                // is the one moment somebody is looking at the theme list.
+                crate::theme::catalog::refresh();
+                crate::theme::system::forget();
                 let settings = settings.borrow();
                 apply_appearance(&window, &settings.appearance);
                 sync_preferences_properties(&window, &settings);
@@ -6326,52 +6449,29 @@ impl AppUi {
         {
             let settings = ui_settings.clone();
             let weak = window.as_weak();
-            window.on_preferences_appearance_preview(
-                move |base, accent, alert, contrast, roundness| {
-                    let Some(window) = weak.upgrade() else { return };
-                    let candidate = AppearanceSettings {
-                        base: base.into(),
-                        accent: accent.into(),
-                        alert: alert.into(),
-                        contrast,
-                        roundness,
-                        smooth_curves: window.get_preferences_smooth_curves(),
-                        ..settings.borrow().appearance.clone()
-                    };
-                    // A hand-typed hex is invalid for the few keystrokes it takes
-                    // to finish typing it, so a rejected preview reports the
-                    // reason and leaves the last good theme on screen.
-                    match candidate.validated() {
-                        Ok(appearance) => {
-                            window.set_preferences_appearance_scheme(
-                                appearance.matching_scheme_name().into(),
-                            );
-                            apply_appearance(&window, &appearance);
-                            window.set_preferences_error("".into());
-                        }
-                        Err(error) => window.set_preferences_error(error.to_string().into()),
-                    }
-                },
-            );
-        }
-        {
-            let settings = ui_settings.clone();
-            let weak = window.as_weak();
-            window.on_preferences_appearance_select_scheme(move |name| {
+            window.on_preferences_appearance_preview(move || {
                 let Some(window) = weak.upgrade() else { return };
                 let mut candidate = window_appearance(&window, &settings.borrow().appearance);
-                let Some(scheme) = candidate.scheme(name.as_str()) else {
-                    return;
-                };
-                candidate.apply_scheme(&scheme);
-                // Selecting a scheme is a preview like any other: it only
-                // reaches settings.toml through Apply or OK.
+                // A colour edited away from the theme it came from is Custom,
+                // which is the rule the `scheme` field has always followed --
+                // it just has a ramp to compare against now as well as three
+                // seeds. The *name* is kept either way, because saving a
+                // warmed-up Dracula has to keep Alucard.
+                candidate.customized =
+                    !candidate.theme.is_empty() && !candidate.seeds_match_theme();
+                // A hand-typed hex is invalid for the few keystrokes it takes
+                // to finish typing it, so a rejected preview reports the
+                // reason and leaves the last good theme on screen.
                 match candidate.validated() {
                     Ok(appearance) => {
-                        window.set_preferences_appearance_base(appearance.base.as_str().into());
-                        window.set_preferences_appearance_accent(appearance.accent.as_str().into());
-                        window.set_preferences_appearance_alert(appearance.alert.as_str().into());
-                        window.set_preferences_appearance_scheme(appearance.scheme.as_str().into());
+                        window
+                            .set_preferences_appearance_theme(appearance.theme.as_str().into());
+                        window.set_preferences_appearance_customized(appearance.customized);
+                        window.set_preferences_appearance_ramp(ramp_swatches(&appearance));
+                        window.set_preferences_appearance_variant_derived(
+                            variant_is_derived(&appearance),
+                        );
+                        push_appearance_contrast(&window, &appearance);
                         apply_appearance(&window, &appearance);
                         window.set_preferences_error("".into());
                     }
@@ -6382,10 +6482,55 @@ impl AppUi {
         {
             let settings = ui_settings.clone();
             let weak = window.as_weak();
-            window.on_preferences_appearance_save_scheme(move |name| {
+            window.on_preferences_appearance_mode_changed(move |index| {
+                let Some(window) = weak.upgrade() else { return };
+                let mut candidate = window_appearance(&window, &settings.borrow().appearance);
+                candidate.mode = crate::theme::Mode::from_index(index).name().to_owned();
+                // Asking the desktop again rather than trusting a cached
+                // answer: picking Auto is exactly the moment somebody wants to
+                // know what the desktop currently says.
+                crate::theme::system::forget();
+                candidate.sync_seeds();
+                match candidate.validated() {
+                    Ok(appearance) => {
+                        push_appearance_colors(&window, &appearance);
+                        apply_appearance(&window, &appearance);
+                        window.set_preferences_error("".into());
+                    }
+                    Err(error) => window.set_preferences_error(error.to_string().into()),
+                }
+            });
+        }
+        {
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_preferences_appearance_select_theme(move |name| {
+                let Some(window) = weak.upgrade() else { return };
+                let mut candidate = window_appearance(&window, &settings.borrow().appearance);
+                let Some(theme) = crate::theme::catalog::find(name.as_str()) else {
+                    return;
+                };
+                candidate.apply_theme(&theme);
+                // Selecting a theme is a preview like any other: it only
+                // reaches settings.toml through Apply or OK.
+                match candidate.validated() {
+                    Ok(appearance) => {
+                        push_appearance_colors(&window, &appearance);
+                        push_appearance_scalars(&window, &appearance);
+                        apply_appearance(&window, &appearance);
+                        window.set_preferences_error("".into());
+                    }
+                    Err(error) => window.set_preferences_error(error.to_string().into()),
+                }
+            });
+        }
+        {
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_preferences_appearance_save_theme(move |name| {
                 let Some(window) = weak.upgrade() else { return };
                 let mut settings = settings.borrow_mut();
-                let mut candidate = window_appearance(&window, &settings.appearance);
+                let candidate = window_appearance(&window, &settings.appearance);
                 let mut appearance = match candidate.validated() {
                     Ok(appearance) => appearance,
                     Err(error) => {
@@ -6393,31 +6538,10 @@ impl AppUi {
                         return;
                     }
                 };
-                if let Err(error) = appearance.save_user_scheme(name.as_str()) {
+                if let Err(error) = appearance.save_theme(name.as_str()) {
                     window.set_preferences_error(error.to_string().into());
                     return;
                 }
-                candidate = appearance;
-                let previous = std::mem::replace(&mut settings.appearance, candidate);
-                if let Err(error) = settings.save() {
-                    settings.appearance = previous;
-                    window
-                        .set_preferences_error(format!("Could not save settings: {error}").into());
-                    return;
-                }
-                window.set_preferences_appearance_scheme_name("".into());
-                apply_appearance(&window, &settings.appearance);
-                sync_preferences_properties(&window, &settings);
-            });
-        }
-        {
-            let settings = ui_settings.clone();
-            let weak = window.as_weak();
-            window.on_preferences_appearance_remove_scheme(move |name| {
-                let Some(window) = weak.upgrade() else { return };
-                let mut settings = settings.borrow_mut();
-                let mut appearance = settings.appearance.clone();
-                appearance.remove_user_scheme(name.as_str());
                 let previous = std::mem::replace(&mut settings.appearance, appearance);
                 if let Err(error) = settings.save() {
                     settings.appearance = previous;
@@ -6425,69 +6549,69 @@ impl AppUi {
                         .set_preferences_error(format!("Could not save settings: {error}").into());
                     return;
                 }
-                // Removing a scheme drops the stored name but keeps the colors
-                // on screen, so the list refreshes without the theme flickering.
-                let scheme = window.get_preferences_appearance_scheme();
-                window.set_preferences_appearance_schemes(scheme_rows(&settings.appearance));
-                if scheme == name {
-                    window.set_preferences_appearance_scheme("".into());
-                }
+                window.set_preferences_appearance_theme_name("".into());
+                apply_appearance(&window, &settings.appearance);
+                sync_preferences_properties(&window, &settings);
             });
         }
         {
             let settings = ui_settings.clone();
             let weak = window.as_weak();
-            window.on_preferences_save(
-                move |base, accent, alert, contrast, roundness, developer_mode, smooth_curves| {
-                    let Some(window) = weak.upgrade() else {
-                        return false;
-                    };
-                    let mut settings = settings.borrow_mut();
-                    // Motion reads straight out of the global the Appearance
-                    // page writes into, so its segment selections apply live
-                    // and persist together with the palette.
-                    let motion = window.global::<Motion>();
-                    let candidate = AppearanceSettings {
-                        base: base.into(),
-                        accent: accent.into(),
-                        alert: alert.into(),
-                        contrast,
-                        roundness,
-                        smooth_curves,
-                        motion_speed: settings::motion_speed_name(motion.get_speed())
-                            .to_owned(),
-                        motion_easing: settings::motion_easing_name(motion.get_easing())
-                            .to_owned(),
-                        meter_falloff: settings::meter_falloff_name(
-                            window.global::<MeterPrefs>().get_falloff(),
-                        )
-                        .to_owned(),
-                        ..settings.appearance.clone()
-                    };
-                    let mut appearance = match candidate.validated() {
-                        Ok(appearance) => appearance,
-                        Err(error) => {
-                            window.set_preferences_error(error.to_string().into());
-                            return false;
-                        }
-                    };
-                    appearance.scheme = appearance.matching_scheme_name();
-                    apply_appearance(&window, &appearance);
-                    let previous = std::mem::replace(&mut settings.appearance, appearance);
-                    let previous_developer_mode = settings.general.developer_mode;
-                    settings.general.developer_mode = developer_mode;
-                    if let Err(error) = settings.save() {
-                        settings.appearance = previous;
-                        settings.general.developer_mode = previous_developer_mode;
-                        window.set_preferences_error(
-                            format!("Could not save settings: {error}").into(),
-                        );
+            window.on_preferences_appearance_remove_theme(move |name| {
+                let Some(window) = weak.upgrade() else { return };
+                let mut settings = settings.borrow_mut();
+                let mut appearance = settings.appearance.clone();
+                if let Err(error) = appearance.remove_theme(name.as_str()) {
+                    window.set_preferences_error(error.to_string().into());
+                    return;
+                }
+                let previous = std::mem::replace(&mut settings.appearance, appearance);
+                if let Err(error) = settings.save() {
+                    settings.appearance = previous;
+                    window
+                        .set_preferences_error(format!("Could not save settings: {error}").into());
+                    return;
+                }
+                // Removing a theme drops the stored name but keeps the colours
+                // on screen, so the list refreshes without the interface
+                // flickering through somebody else's palette.
+                push_appearance_colors(&window, &settings.appearance);
+            });
+        }
+        {
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_preferences_save(move || {
+                let Some(window) = weak.upgrade() else {
+                    return false;
+                };
+                let mut settings = settings.borrow_mut();
+                // Every value comes back off the window, which is where the
+                // page has been writing it all along -- `window_appearance`
+                // already reads motion and metering straight out of their
+                // globals for the same reason.
+                let candidate = window_appearance(&window, &settings.appearance);
+                let appearance = match candidate.validated() {
+                    Ok(appearance) => appearance,
+                    Err(error) => {
+                        window.set_preferences_error(error.to_string().into());
                         return false;
                     }
-                    sync_preferences_properties(&window, &settings);
-                    true
-                },
-            );
+                };
+                apply_appearance(&window, &appearance);
+                let previous = std::mem::replace(&mut settings.appearance, appearance);
+                let previous_developer_mode = settings.general.developer_mode;
+                settings.general.developer_mode = window.get_preferences_developer_mode();
+                if let Err(error) = settings.save() {
+                    settings.appearance = previous;
+                    settings.general.developer_mode = previous_developer_mode;
+                    window
+                        .set_preferences_error(format!("Could not save settings: {error}").into());
+                    return false;
+                }
+                sync_preferences_properties(&window, &settings);
+                true
+            });
         }
         {
             let settings = ui_settings.clone();

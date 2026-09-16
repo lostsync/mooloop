@@ -1,6 +1,7 @@
 //! Headless render of the Preferences dialog's Appearance page, so a change to
-//! the scheme list, the three color seeds, or the interface scalars can be
-//! checked visually without the live app.
+//! the theme list, the variant control, the three colour seeds, the type
+//! fields or the interface scalars can be checked visually without the live
+//! app.
 
 use mooloop_ui::AppearanceSchemeRow as MainAppearanceSchemeRow;
 use mooloop_ui::MainWindow;
@@ -17,17 +18,28 @@ slint::slint! {
 
     export component AppearancePageHarness inherits Window {
         width: 620px;
-        height: 660px;
+        height: 1080px;
         background: #232328;
         in property <[AppearanceSchemeRow]> rows;
+        in property <[color]> slots;
         AppearancePage {
             schemes: root.rows;
-            scheme: "Mooloop";
-            base: "#18181B";
-            accent: "#84CC16";
-            alert: "#EAB308";
+            ramp: root.slots;
+            theme: "Nord";
+            mode: 0;
+            base: "#2E3440";
+            accent: "#88C0D0";
+            alert: "#EBCB8B";
             contrast: 1.0;
             roundness: 1.0;
+            type-scale: 1.0;
+            density: 1.0;
+            font-family-mono: "monospace";
+            font-weight: 400;
+            hairline: 1.0;
+            stroke-emphasis: 2.0;
+            text-ratio: 7.45;
+            accent-ratio: 5.03;
             smooth-curves: true;
         }
     }
@@ -69,17 +81,25 @@ fn color(rgb: u32) -> Color {
     )
 }
 
-/// The built-ins plus one user scheme, so the Remove affordance that only user
-/// rows carry is in frame. `MainWindow` and the standalone page harness each
-/// generate their own row struct, so the fixture is built per type.
-const FIXTURE: [(&str, u32, u32, u32, bool); 7] = [
-    ("Mooloop", 0x18181b, 0x84cc16, 0xeab308, false),
-    ("Graphite", 0x151617, 0xf59e0b, 0x38bdf8, false),
-    ("High Contrast", 0x000000, 0x22d3ee, 0xfacc15, false),
-    ("Ember", 0x1a1413, 0xf97316, 0x38bdf8, false),
-    ("Indigo", 0x14141f, 0xa78bfa, 0xf472b6, false),
-    ("Daylight", 0xededf0, 0x3f7d00, 0xb45309, false),
-    ("My Scheme", 0x101014, 0x22d3ee, 0xf97316, true),
+/// Built-ins, one theme whose variant on this side is derived rather than
+/// authored, and one user theme -- so the "derived" note and the Remove
+/// affordance are both in frame. `MainWindow` and the standalone page harness
+/// each generate their own row struct, so the fixture is built per type.
+const FIXTURE: [(&str, u32, u32, u32, bool, bool); 7] = [
+    ("Mooloop", 0x18181b, 0x84cc16, 0xeab308, false, false),
+    ("Dracula", 0x282a36, 0xbd93f9, 0xf1fa8c, false, false),
+    ("Nord", 0x2e3440, 0x88c0d0, 0xebcb8b, false, false),
+    ("Gruvbox", 0x282828, 0x83a598, 0xfabd2f, false, false),
+    ("Monokai", 0x272822, 0xa6e22e, 0xf4bf75, false, true),
+    ("Wallpaper", 0x1d1f21, 0x81a2be, 0xf0c674, false, false),
+    ("My Theme", 0x101014, 0x22d3ee, 0xf97316, true, false),
+];
+
+/// One ramp for the read-only strip under the list. Nord's, which is what the
+/// harness above says it is wearing.
+const NORD: [u32; 16] = [
+    0x2e3440, 0x3b4252, 0x434c5e, 0x4c566a, 0x9ba6ba, 0xd8dee9, 0xe5e9f0, 0xeceff4, 0xbf616a,
+    0xd08770, 0xebcb8b, 0xa3be8c, 0x88c0d0, 0x81a1c1, 0xb48ead, 0x976a5f,
 ];
 
 #[test]
@@ -93,22 +113,30 @@ fn render_preferences_appearance_snapshot() {
         FIXTURE
             .iter()
             .map(
-                |&(name, base, accent, alert, is_user)| MainAppearanceSchemeRow {
+                |&(name, base, accent, alert, is_user, derived)| MainAppearanceSchemeRow {
                     name: SharedString::from(name),
+                    description: SharedString::new(),
                     base: color(base),
                     accent: color(accent),
                     alert: color(alert),
                     is_user,
+                    derived,
                 },
             )
             .collect::<Vec<_>>(),
     ))));
-    ui.set_preferences_appearance_scheme(SharedString::from("Mooloop"));
-    ui.set_preferences_appearance_base(SharedString::from("#18181B"));
-    ui.set_preferences_appearance_accent(SharedString::from("#84CC16"));
-    ui.set_preferences_appearance_alert(SharedString::from("#EAB308"));
+    ui.set_preferences_appearance_ramp(ModelRc::from(Rc::new(VecModel::from(
+        NORD.iter().map(|&slot| color(slot)).collect::<Vec<_>>(),
+    ))));
+    ui.set_preferences_appearance_theme(SharedString::from("Nord"));
+    ui.set_preferences_appearance_mode(2);
+    ui.set_preferences_appearance_base(SharedString::from("#2E3440"));
+    ui.set_preferences_appearance_accent(SharedString::from("#88C0D0"));
+    ui.set_preferences_appearance_alert(SharedString::from("#EBCB8B"));
     ui.set_preferences_appearance_contrast(1.0);
     ui.set_preferences_appearance_roundness(1.0);
+    ui.set_preferences_appearance_text_ratio(7.45);
+    ui.set_preferences_appearance_accent_ratio(5.03);
 
     // The Appearance page only becomes visible after clicking its nav item;
     // `page` is private to `PreferencesDialog` and not exposed to Rust.
@@ -122,16 +150,21 @@ fn render_preferences_appearance_snapshot() {
     // the color fields, the interface scalars, and the preview strip -- are
     // checkable too.
     let harness = AppearancePageHarness::new().unwrap();
+    harness.set_slots(ModelRc::from(Rc::new(VecModel::from(
+        NORD.iter().map(|&slot| color(slot)).collect::<Vec<_>>(),
+    ))));
     harness.set_rows(ModelRc::from(Rc::new(VecModel::from(
         FIXTURE
             .iter()
             .map(
-                |&(name, base, accent, alert, is_user)| AppearanceSchemeRow {
+                |&(name, base, accent, alert, is_user, derived)| AppearanceSchemeRow {
                     name: SharedString::from(name),
+                    description: SharedString::new(),
                     base: color(base),
                     accent: color(accent),
                     alert: color(alert),
                     is_user,
+                    derived,
                 },
             )
             .collect::<Vec<_>>(),

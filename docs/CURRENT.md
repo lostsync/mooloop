@@ -377,11 +377,30 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   is learned from its own row, since it has no on-screen control to press. One
   preference lives there, *bind to the controller it hears*, which is off by
   default and decides whether a learned mapping listens to one controller or
-  to any. Appearance is seeded by three colors -- base (every
-  neutral), accent (state), and alert (attention) -- with six built-in
-  schemes, user schemes that can be saved and removed, and roundness and
-  contrast scalars that retune the whole UI. All of it previews live and
-  persists on Apply or OK. Shared audio controls, tooltips, and master
+  to any. **Appearance is a theme, a variant, and a set of scalars.** A theme
+  is a sixteen-colour ramp -- the interchange form base16, pywal and wallust
+  all publish -- or, equivalently, the three seeds (base, accent, alert) the
+  page's colour pickers write, which synthesize one. Thirteen ship:
+  **Mooloop, Dracula, Nord, Gruvbox, Everforest, Solarized, Catppuccin, Tokyo
+  Night, Rosé Pine, Monokai, Graphite, High Contrast, Ember, Indigo**, most
+  with both of their published light and dark variants. A fourteenth row,
+  **Wallpaper**, appears whenever pywal or wallust has left a palette in
+  `~/.cache/wal/` or `~/.cache/wallust/`, and is that palette. A variant the
+  scheme does not publish is derived from the one it does and says so in the
+  list. A **Dark / Light / Auto** control picks the side, where Auto follows
+  the desktop's own `org.freedesktop.appearance color-scheme`.
+  **The channel, track and pattern swatch palette follows the theme**: eleven
+  colours taken from the ramp's eight hues plus a midpoint in each of its
+  three widest gaps. A song stores the colour it was given rather than a
+  palette index, so changing themes never repaints anybody's channels.
+  Beside the colours: roundness, contrast, **text size**, **density**,
+  **border and emphasis widths**, and **two font families** -- one for the
+  interface and one for readouts. A font that is not installed falls back to
+  the platform default, because Slint has no runtime font registration and a
+  theme can only name a family. Themes save to
+  `<config>/mooloop/themes/<name>.toml`, one file per theme, and a malformed
+  one is skipped with a message rather than stopping startup. All of it
+  previews live and persists on Apply or OK. Shared audio controls, tooltips, and master
   peak-meter ballistics. A fresh install requests a 256-frame buffer by
   default (Preferences > Audio picks from 64/128/256/512/1024/2048) --
   server-wide under JACK, the output device's own under Core Audio; a saved

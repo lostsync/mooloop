@@ -55,8 +55,146 @@ between a control and its own edge are the same decision.
 `device-concepts.slint` and the mockup files are untouched — they are not
 shipped interface.
 
+### 03 — the theme file — **landed, widened**
+
+Taken against the brief above rather than as written, which means one thing:
+**a theme is a sixteen-colour ramp with two variants**, not three seeds. The
+rest of `03-the-theme-file.md` stands and was followed -- TOML beside
+`settings.toml`, every field optional, a malformed file skipped with a message,
+a theme that names a font nobody has still loading.
+
+The new Rust lives in `crates/mooloop-ui/src/theme/`:
+
+| | |
+| --- | --- |
+| `color.rs` | `Rgb`, `Hsl`, mixing, shading, WCAG contrast. Moved out of `settings.rs`, which is no longer the only thing that needs them. |
+| `ramp.rs` | The sixteen slots, the palette derivation, the swatch palette, the light/dark derivation, and `from_seeds`/`from_ansi`. |
+| `builtins.rs` | The schemes, as data. |
+| `wal.rs` | pywal and wallust cache reading. |
+| `system.rs` | The desktop's own light/dark setting. |
+| `file.rs` | The TOML format. |
+| `catalog.rs` | Built-ins + user files + the wallpaper row, cached. |
+
+**The seed form did not become a legacy path.** It synthesizes a ramp, so
+there is one derivation downstream rather than two, and the synthesis is tuned
+so that the palette it produces matches the one the three seeds produced
+before -- **to within one byte per channel**, at every contrast setting, on a
+light base as well as a dark one.
+`a_seed_ramp_reproduces_the_palette_the_seeds_used_to_produce` holds a copy of
+the old arithmetic and compares against it, because comparing the new code
+against itself would pass whatever it did.
+
+That tolerance is the one place this is not a pure widening, and it is worth
+knowing why rather than waving at. The old derivation went from the seed to
+the contrast pole in one interpolation; this one stops at a ramp slot on the
+way, and a slot is eight bits per channel. One byte is what the extra rounding
+costs. It was measured before the tolerance was picked -- five schemes, eight
+contrast settings, twelve tokens, worst case one -- rather than chosen and
+then justified.
+
+**A first attempt at it was wrong in a way the tolerance would have hidden.**
+Applying contrast as a *clamped* blend from the background toward the slot
+reproduced the old palette below 1.0 and quietly broke it above: at contrast
+1.4, text used to reach `#FFFFFF` and stopped at the colour the theme had
+authored, so the widen-the-hierarchy control did nothing at its own maximum.
+`Ramp::palette` uses `color::extend`, which lets the factor past 1 and clamps
+per channel at the end; `contrast_at_its_maximum_still_reaches_the_pole` is
+the test that says so. The numbers were run against a model of the arithmetic
+before the build, which is how it was caught at all.
+
+**Thirteen built-in themes**, most with both published variants: Mooloop,
+Dracula/Alucard, Nord/Snow Storm, Gruvbox, Everforest, Solarized, Catppuccin
+Mocha/Latte, Tokyo Night/Day, Rosé Pine/Dawn, Monokai, plus the four seed
+schemes that were already there. A fourteenth row, **Wallpaper**, appears when
+pywal or wallust has cached a palette.
+
+**Two migrations**, both in `settings.rs` and both one-way:
+
+- `scheme` is read as `theme` through a serde alias, and written as `theme`.
+- `Daylight` was light-mode Mooloop before a theme had two variants, so it
+  becomes exactly that -- unless the user has since saved a theme under the
+  name, in which case theirs wins.
+- `user-schemes` is written out as theme files on first load and the array is
+  cleared. **Only if every write succeeded**: a read-only home must not cost
+  somebody their saved schemes, so a failed migration leaves the array alone
+  and the next launch tries again.
+
+`SCHEMA_VERSION` deliberately did **not** bump. `UiSettings::load_from` rejects
+any version it does not recognise and `load_or_default` then discards the whole
+file, so bumping would have wiped every existing configuration -- every new
+field is `#[serde(default)]` instead, which is what the format was already
+shaped for.
+
+### 04 — accessibility — **landed in part**
+
+- **`type-scale` is on the Appearance page**, 75% to 200% over the eight type
+  steps. This was the whole reason the plan was written down as accessibility
+  rather than homage, and it is the half that could not exist before step 01.
+- **`density`** likewise, over control heights and the padding ramp: the
+  answer when the interface is too tight to hit rather than too small to read.
+- **Contrast is checked in two places.** `builtins.rs` fails if any variant of
+  any built-in has body text under 4.5:1 or an accent under 3:1 -- including
+  the *derived* variants, because a theme that only authored a dark ramp still
+  answers Light and the answer has to be readable or the mode switch is a
+  trap. `legible_against` is what makes that hold: mooloop's own lime is 2.1:1
+  on a near-white background, so a Mooloop flipped to light without it would
+  ship an accent the program's own validator rejects.
+
+  And the **Appearance page reports both ratios live**, amber below the bar,
+  which is the half the plan actually asked for: a user could pick seeds that
+  produced an unreadable interface and the page would show it to them without
+  comment. The arithmetic had been sitting in `relative_luminance` since the
+  palette was first derived and nothing ever called it.
+- **Not done:** reduced motion is still not *labelled* as an accessibility
+  setting, and screen-reader coverage is untouched. The plan already says the
+  second is its own work and no amount of theming touches it.
+
+### What the build found that the reasoning did not
+
+Three defects in this work were caught by modelling the arithmetic in Python
+before compiling it, and two by the suite. Worth keeping because they are the
+same shape -- **a rule that was right about the case in front of it and wrong
+one step out**:
+
+- **A clamped contrast blend** reproduced the old palette below 1.0 and broke
+  it above: at 1.4 text stopped at the colour the theme authored instead of
+  reaching white, so the widen-the-hierarchy control did nothing at its own
+  maximum. `color::extend` lets the factor past 1.
+- **Five of the twenty-six shipped variants** failed the contrast bar they are
+  now held to. Three published accents are darkened a step with the reason
+  recorded beside them, and the derivation holds an accent to 3:1 against the
+  *surface* rather than just retargeting its lightness.
+- **`r#"..."#` ends at the first `"#`**, and every `"#RRGGBB"` in a JSON or
+  TOML fixture is one. This is a *lexer* error, so two `#[cfg(test)]` fixtures
+  took the non-test build down with them.
+- **The wallpaper scanner paired a container key with the first key inside
+  it.** `"special": { "background": ... }` became `("special", "background")`
+  and shifted every pair after it, which lost `color0` and the background --
+  and then produced sixteen plausible colours anyway through the positional
+  fallback. A scanner that is wrong this quietly needs a test that names the
+  shape rather than one that checks the output looks reasonable.
+- **ANSI's bright black is not always the comment colour.** Taking it whenever
+  it sat between background and foreground put slot 03 *lighter* than slot 04
+  on one real palette: faint text drawn brighter than muted text. It is taken
+  only when it sits between the two slots it would go between.
+
 ## What is still ahead
 
-`02-relief.md` is unchanged and still the only design problem here. `03`, `04`
-and `05` are being taken against the wider brief above rather than as written:
-a theme is a ramp with two variants, not three seeds.
+- **`02-relief.md` is unchanged and is still the only design problem here.**
+  A Slint `Rectangle` has one border colour, so a bevel needs a shared
+  `Surface` component rather than a token. Nothing landed here forecloses it:
+  a theme file can carry a `relief` field that nothing reads yet, and adding
+  the reader later is a no-op.
+- **`05-authoring-a-theme.md`'s guide landed as `docs/THEMES.md`**; its two
+  worked homages did not, because both of them are step 02.
+- **The desktop is asked, not watched.** `system.rs` probes at startup and
+  whenever Preferences opens. Following a desktop that changes its mind while
+  mooloop is running means subscribing to the portal's `SettingChanged`
+  signal, which means a D-Bus client, which is a dependency this crate does
+  not have. Worth doing; not worth guessing at here.
+- **The remaining literals.** The type and stroke sweep is complete. Metrics
+  are not: `density` reaches `Theme.control-height` and the padding ramp, and
+  the great majority of paddings in the device faces are still literals. That
+  is the honest position and it is the one step 01 asked for -- an untokenized
+  metric is a theme that has less effect, and a wrongly tokenized one is a
+  layout that breaks at a setting nobody tested.

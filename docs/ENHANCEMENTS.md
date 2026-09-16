@@ -176,15 +176,25 @@ i want to do a text label -> icon pass at some point
   moving, so doing it first means doing it twice.
 
 i think i want to expand our use of color. some of the app is ide-inspired so maybe we should build toward colorscheme support. imo it would be dope as hell to have a music app that had dracula, monokai, everforest, nord, etc built in. base16? mmm. this idea holds hands with pywal/wallust support
-  DELIBERATELY NOT YET, same reason, and there is somewhere real for it to
-  land: Appearance already derives the entire palette from three seeds (base,
-  accent, alert) plus roundness and contrast scalars, with six built-in schemes
-  and user schemes that save and remove. The open design question is whether a
-  named scheme like Nord is *three seeds* — in which case this is content, and
-  cheap — or a full sixteen-colour ramp, in which case the seed model has to
-  grow a second form and the shading-pattern item further up this file wants
-  the same thing. base16 and pywal/wallust both answer "full ramp", so they
-  decide it. That question is worth answering before any of it is built.
+  LANDED 2026-09-15, as `docs/plans/theming/` steps 01, 03 and most of 04.
+  The design question this entry states — whether a named scheme is three
+  seeds or a full sixteen-colour ramp — was answered by Adam asking for
+  pywal/wallust in the same breath: **they hand over a ramp, so the seed model
+  grew a second form.** It grew it without becoming a second code path: three
+  seeds *synthesize* a ramp, tuned so the palette they produce is
+  byte-identical to the one they produced before, so nobody's stored scheme
+  moved.
+  Thirteen themes ship, most with both of their published light and dark
+  variants, and a Wallpaper row appears whenever pywal or wallust has left a
+  palette in its cache. A Dark/Light/Auto control picks the side and Auto
+  follows the desktop. The channel and pattern swatch palette follows the
+  scheme. Type, stroke and metric tokens landed with it — 313 literal font
+  sizes and 106 literal border widths — so a theme is also a font, a text size
+  and a density, which is the accessibility half the plan was written for.
+  `docs/THEMES.md` is the authoring guide. What is still out is the *shape*
+  half: a bevel needs a relief primitive (`02-relief.md`), and without it an
+  homage reads as mooloop wearing somebody else's colours rather than as the
+  thing across a room.
 
 ---
 

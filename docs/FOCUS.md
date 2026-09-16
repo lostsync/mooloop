@@ -278,9 +278,10 @@ named.
 
 ## Deliberately not now
 
-**All four queued plans, by Adam's call on 2026-09-12.** Each has a written
-argument and none of them produces a musical decision, which is the rule at the
-top of this document doing its job:
+**Three of the four queued plans, by Adam's call on 2026-09-12.** Each has a
+written argument and none of them produces a musical decision, which is the
+rule at the top of this document doing its job. The fourth, `theming/`, was
+unparked by Adam on 2026-09-15 and is struck through below:
 
 - **`device-registry/`** — a survey, not a work order. Adding a device kind
   touches fourteen files, nine of which hold a one-line arm stating one fact.
@@ -292,14 +293,15 @@ top of this document doing its job:
   — a face host component would take an arm from twenty-seven lines to eight
   with no Rust change at all. Take that piece if a device step is already open
   in `main.slint`; do not open one for it.
-- **`theming/`** — `Theme` already is the stylesheet, and the survey says
-  which axes it is missing: colour, radius and motion are tokenized, type and
-  stroke are not at all (313 literal `font-size`, 81 literal `border-width`).
-  The reason to build it is **accessibility rather than the homage** — the
-  working type size is 7–11px and is not adjustable — and that reason does not
-  expire. It also costs more with every device face added, so it gets cheaper
-  to defer and more expensive to do, which is a fact to re-read rather than
-  forget.
+- ~~**`theming/`**~~ **Unparked and largely taken, 2026-09-15**, on Adam's
+  own instruction rather than by anyone deciding the parking had expired. Its
+  steps 01, 03 and most of 04 landed: type, stroke and metric tokens; a theme
+  as a sixteen-colour ramp with light and dark variants; thirteen built-in
+  schemes; pywal and wallust; a Dark/Light/Auto control that follows the
+  desktop; the swatch palette following the scheme; and the type scale, which
+  is the accessibility reason this was written down. `02-relief.md` is still
+  open and is still the only design problem in the directory —
+  `00-status.md` has what landed and what did not.
 - **`pattern-bank-floor/`** — every project reserves 1.00 GiB of pattern
   storage before it holds anything, and an ordinary edit rebuilds it at 20 ms
   a time. The measurements are committed either way, which is what makes this

@@ -172,25 +172,66 @@ look like several cards dropped into the center of a page.
 
 ## Theme Tokens
 
-The palette has three user-set seeds, and every token is derived from them in
-`settings::derive_palette`:
+Everything the interface draws with comes off the `Theme` global in
+`ui/theme.slint`, and everything on `Theme` is derived in Rust from **one
+sixteen-colour ramp plus six scalars**. `crate::theme` owns the derivation;
+`settings::AppearanceSettings` owns the choice.
 
-- **Base** seeds all neutrals: background, panel, the three surface levels,
-  border, and the three text weights. A light base flips the ramp, so light
-  schemes work without a second code path.
-- **Accent** is state: selection, focus, and meters in their safe range.
-- **Alert** is attention: warnings, meter headroom, out-of-range readouts.
+### Colour
 
-Only a true clip uses the fixed destructive red; it is not user-set, because a
-clip must never blend into a chosen palette.
+The ramp uses base16's slot names, because that is the interchange format and
+renaming what everyone else publishes helps nobody. `theme::ramp` maps it:
 
-Two scalars retune the derived result live: **contrast** scales every neutral's
-distance from the base, and **roundness** scales the shared corner radii.
+| Token | From |
+| --- | --- |
+| `background` | slot 00 |
+| `panel` | slot 00, a step *away* from the contrast pole -- base16 has no slot below the background |
+| `surface`, `surface-raised` | slots 01, 02 |
+| `surface-active`, `border` | between slots 02 and 03 |
+| `text-faint`, `text-muted`, `text` | slots 03, 04, 05 |
+| `accent` | the theme's own accent, or slot 0D |
+| `warning`, `destructive` | slots 0A, 08 |
+| `meter-safe`, `meter-warning`, `meter-clip` | the accent, slot 0A, slot 08 |
 
-A component must not write its own hex color or literal corner radius. Use
-`Theme.*` colors and the `Theme.radius-xs/sm/md/lg` tokens; anything hardcoded
-is invisible to Preferences > Appearance. Pill shapes stay local geometry
-(`height / 2`), since they track their own bounds rather than the radius scale.
+The meters read as one instrument with the rest of the interface, which is why
+the safe band is the accent rather than a fixed green.
+
+**Three seeds are a second spelling of a ramp, not a second code path.**
+`Ramp::from_seeds` synthesizes one from base/accent/alert, tuned so that the
+palette it produces is byte-identical to the one the seeds produced before the
+ramp existed -- at every contrast setting. That equality is a test, and it is
+what makes the ramp a widening rather than a change.
+
+### Scale
+
+- **contrast** scales every neutral's distance from the background. Hues are
+  left alone: an accent is a colour somebody chose.
+- **roundness** scales `Theme.radius-xs/sm/md/lg`.
+- **type-scale** scales `Theme.text-xs` … `text-4xl`, eight steps over a
+  7-22px range. This is the accessibility control and nothing else in the
+  program makes 7px text bigger.
+- **density** scales `Theme.control-height`, `control-min-width` and the
+  `pad-xs/sm/md/lg` ramp, which is padding and spacing both.
+- **hairline** and **stroke-emphasis** are the two stroke weights. A zero
+  hairline is a real setting: a theme asks for a borderless interface there.
+- **font-family**, **font-family-mono** and **font-weight**. `MainWindow`
+  binds the first and last to `default-font-family` / `default-font-weight`,
+  which is what makes them reach the several hundred `Text` elements that
+  never name a family.
+
+### The rule
+
+A component must not write its own hex colour, font size, border width or
+corner radius. Use the tokens; anything hardcoded is invisible to Preferences
+> Appearance and to the accessibility scalars. Three exceptions, all of them
+about drawing rather than chrome:
+
+- Pill shapes stay local geometry (`height / 2`) -- they track their own
+  bounds, not the radius scale.
+- The DS-01 and EQ faces keep the hex colours of their *instrument graphics*.
+  Their chrome, and all of their type, takes tokens.
+- A face names `Theme.font-family-mono` only where the content demands it: a
+  readout whose digits must not reflow as the value changes.
 
 ## Device Rack Layout
 
