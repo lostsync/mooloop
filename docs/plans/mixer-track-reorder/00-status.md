@@ -1,6 +1,6 @@
 # Mixer tracks can be reordered — plan status
 
-**Written 2026-09-16. Nothing has landed.** Adam asked for it directly:
+**Written 2026-09-16. Step 01 has landed.** Adam asked for it directly:
 *"it should be possible to reorder the mixer tracks by dragging them."* It is
 outside the `FOCUS.md` sequence for that reason, the same standing
 `coreaudio-driver/` has.
@@ -24,7 +24,7 @@ it."* A reorder needs a `Moved` variant as well, for the reason
 
 | Step | What | Rung | State |
 | --- | --- | --- | --- |
-| 01 | `TrackEdit::Moved`, `Project::move_track`, and control bindings follow both kinds of edit | 2 (`mooloop-core`) | not started |
+| 01 | `TrackEdit::Moved`, `Project::move_track`, and control bindings follow both kinds of edit | 2 (`mooloop-core`) | landed 2026-09-16 |
 | 02 | The session follows a track edit, and the rack stays on the moved track | 2 (`mooloop-session`) | not started |
 | 03 | The drag: `TrackDrag`, the strip plate, one `main.slint` crossing | `slint-sketch`, then one `mooloop-ui` build on the box | not started |
 | 04 | Two Track actions, so the gesture has a name | 2, then the step 03 build if batched | not started, optional |

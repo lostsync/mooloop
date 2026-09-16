@@ -730,6 +730,48 @@ impl ControlMap {
         before - self.bindings.len()
     }
 
+    /// Re-scope every parameter binding after a channel edit, dropping those
+    /// whose channel is gone. Returns whether anything changed.
+    ///
+    /// A binding names its channel by position, as a lane does, and is
+    /// dropped for the reason a lane is: one left on a vacated seat would
+    /// start moving whatever slid into it. Until 2026-09-16 nothing called
+    /// this, so a desk fader learned onto channel 3 moved channel 4's once
+    /// channel 1 was deleted, or once channel 3 was dragged.
+    pub fn rescope_channels(&mut self, edit: crate::structure::ChannelEdit) -> bool {
+        self.rescope_params(|address| edit.address(address))
+    }
+
+    /// Re-scope every parameter binding after a track edit. The twin of
+    /// [`Self::rescope_channels`].
+    pub fn rescope_tracks(&mut self, edit: crate::structure::TrackEdit) -> bool {
+        self.rescope_params(|address| edit.address(address))
+    }
+
+    /// The one walk both rescopes share, so a binding kind added later is
+    /// followed by both lists or by neither. A transport binding names no
+    /// seat and is untouched.
+    fn rescope_params(&mut self, address: impl Fn(ParamAddr) -> Option<ParamAddr>) -> bool {
+        let mut changed = false;
+        self.bindings.retain_mut(|binding| {
+            let ControlTarget::Param(old) = binding.target else {
+                return true;
+            };
+            match address(old) {
+                Some(new) => {
+                    changed |= new != old;
+                    binding.target = ControlTarget::Param(new);
+                    true
+                }
+                None => {
+                    changed = true;
+                    false
+                }
+            }
+        });
+        changed
+    }
+
     /// The binding onto `target`, for an interface that wants to draw what a
     /// control is mapped to.
     pub fn binding_for(&self, target: &ControlTarget) -> Option<&ControlBinding> {

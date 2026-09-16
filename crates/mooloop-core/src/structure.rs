@@ -743,6 +743,25 @@ pub fn drop_lanes_for_device(
     lanes.len() != before
 }
 
+/// Where the item that was at `old` sits after the one at `from` is lifted out
+/// of its list and put back down at `to`.
+///
+/// Remove-then-insert renumbering, which is what the `Vec` does: the mover
+/// lands on `to`, everything it passed shifts one seat the other way, and
+/// everything outside the span is untouched. Shared by [`ChannelEdit`] and
+/// [`TrackEdit`] so the two lists cannot come to disagree about a move.
+fn moved_index(from: u8, to: u8, old: u8) -> u8 {
+    if old == from {
+        to
+    } else if from < to && old > from && old <= to {
+        old - 1
+    } else if from > to && old >= to && old < from {
+        old + 1
+    } else {
+        old
+    }
+}
+
 /// One edit to the channel list, and where every channel index lands after
 /// it. Channels are addressed by position exactly as effect slots are, so a
 /// route or lane scoped to channel 4 has to become channel 3 when channel 1
@@ -769,12 +788,7 @@ impl ChannelEdit {
             Self::Removed(at) if old == at => None,
             Self::Removed(at) if old > at => Some(old - 1),
             Self::Inserted(at) if old >= at => old.checked_add(1),
-            // Remove-then-insert renumbering, which is what the `Vec` does:
-            // the mover lands on `to`, everything it passed shifts one seat
-            // the other way, and everything outside the span is untouched.
-            Self::Moved { from, to } if old == from => Some(to),
-            Self::Moved { from, to } if from < to && old > from && old <= to => Some(old - 1),
-            Self::Moved { from, to } if from > to && old >= to && old < from => Some(old + 1),
+            Self::Moved { from, to } => Some(moved_index(from, to, old)),
             _ => Some(old),
         }
     }
@@ -805,6 +819,16 @@ impl ChannelEdit {
 pub enum TrackEdit {
     Removed(u8),
     Inserted(u8),
+    /// The track at `from` was lifted out and put back down at `to`, carrying
+    /// everything that named it -- a channel routed to it, another track's
+    /// output or send, and every lane, route and binding on its strip.
+    ///
+    /// Not composable from [`Self::Removed`] plus [`Self::Inserted`], for the
+    /// reason [`ChannelEdit::Moved`] gives: `Removed` drops the moved track's
+    /// own lanes and falls its feeders back to the master. This is the only
+    /// variant that never returns `None`, so [`Self::destination`] never falls
+    /// back on its account.
+    Moved { from: u8, to: u8 },
 }
 
 impl TrackEdit {
@@ -815,6 +839,7 @@ impl TrackEdit {
             Self::Removed(at) if old == at => None,
             Self::Removed(at) if old > at => Some(old - 1),
             Self::Inserted(at) if old >= at => old.checked_add(1),
+            Self::Moved { from, to } => Some(moved_index(from, to, old)),
             _ => Some(old),
         }
     }

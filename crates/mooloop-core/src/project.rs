@@ -1120,9 +1120,8 @@ impl Project {
 
     /// Add a track, returning where it landed. Refused when the bank is full.
     ///
-    /// Appends rather than inserting, because appending renumbers nothing and
-    /// a mixer's order is not yet something a user arranges. When it becomes
-    /// one, `TrackEdit::Inserted` is already the edit for it.
+    /// Appends rather than inserting, because appending renumbers nothing. A
+    /// user arranges the order afterwards with [`Self::move_track`].
     pub fn add_track(&mut self) -> Option<usize> {
         if self.buses.len() >= crate::MAX_BUSES {
             return None;
@@ -1164,13 +1163,41 @@ impl Project {
         Some(removed)
     }
 
+    /// Move the track at `from` to `to`, carrying everything that named it.
+    ///
+    /// [`Self::move_channel`]'s twin, with one more refusal: **neither index
+    /// may be the master.** The master is first by being bus 0 --
+    /// `MixerBus::new` names it from its index and `is_legal_route` refuses it
+    /// as a source by index -- so moving a track *into* seat 0 would displace
+    /// it just as surely as moving the master out. Seat 0 is refused rather
+    /// than clamped; clamping a drop is the interface's job.
+    ///
+    /// `None` when either index is out of range, is the master, or they are
+    /// the same.
+    pub fn move_track(&mut self, from: usize, to: usize) -> Option<TrackEdit> {
+        let count = self.buses.len();
+        let master = crate::MASTER_BUS as usize;
+        if from >= count || to >= count || from == to || from == master || to == master {
+            return None;
+        }
+        let track = self.buses.remove(from);
+        self.buses.insert(to, track);
+        let edit = TrackEdit::Moved {
+            from: from as u8,
+            to: to as u8,
+        };
+        self.rescope_tracks_after(edit);
+        Some(edit)
+    }
+
     /// Re-scope every track-addressed thing in the song after a track edit.
     ///
     /// Four kinds of address name a track: a channel's destination, a track's
     /// own destination, a track's **sends**, and anything scoped to a track's
     /// effect chain -- which is automation lanes and modulation routes, in any
     /// channel, because a track's chain can be automated from any channel's
-    /// clip.
+    /// clip. A control binding on a track's strip or chain is a fifth, and
+    /// follows too.
     fn rescope_tracks_after(&mut self, edit: TrackEdit) {
         for setup in &mut self.buses {
             setup.bus.output = edit.destination(setup.bus.output);
@@ -1195,17 +1222,18 @@ impl Project {
                 rescope_lanes_for_track(lanes, edit);
             }
         }
+        self.control_map.rescope_tracks(edit);
         // A track that fed the removed one, or the removed one itself, may
         // have left the graph in a shape that no longer sorts.
         //
         // The repairs are dropped here and not logged, which is deliberate
         // rather than the omission it looks like: a removal only ever
-        // *removes* edges, so it cannot introduce a cycle, and the rescope
-        // above has already re-pointed or dropped everything that named the
-        // departed track. Anything this finds is a bug in `TrackEdit`, and
-        // the place that reports a repaired bank to the user is the load
-        // path, where the bank came from a file rather than from this
-        // program.
+        // *removes* edges and a move only *relabels* them, so neither can
+        // introduce a cycle, and the rescope above has already re-pointed or
+        // dropped everything that named a track. Anything this finds is a bug
+        // in `TrackEdit`, and the place that reports a repaired bank to the
+        // user is the load path, where the bank came from a file rather than
+        // from this program.
         self.buses = crate::sanitize_bank(&self.buses).buses;
     }
 
@@ -1239,6 +1267,7 @@ impl Project {
                 rescope_lanes(lanes, edit);
             }
         }
+        self.control_map.rescope_channels(edit);
     }
 
     /// Creates a concise, deterministic four-piece drum kit ready for sequencing.
@@ -1567,7 +1596,32 @@ mod tests {
                 .unwrap();
             channel.automation[0].push(AutomationLane::new(strip(index)));
             channel.automation[0].push(AutomationLane::new(bus));
+            // A desk fader per channel, told apart by its controller number,
+            // which is the channel it was learned on.
+            channel.setup.channel.name = format!("ch{index}");
+            project.control_map.bind(fader_on(index, strip(index)));
         }
+        // Each binding still moves the channel it was learned on, by name, and
+        // the one learned on a removed channel is gone.
+        let bindings_follow = |project: &Project, gone: &[u8]| {
+            let mut learned = Vec::new();
+            for binding in &project.control_map.bindings {
+                let (controller, crate::EffectTarget::Channel(seat)) =
+                    (controller_of(binding), bound_scope(binding))
+                else {
+                    panic!("a channel binding became {:?}", binding.target);
+                };
+                assert_eq!(
+                    project.channels[seat as usize].setup.channel.name,
+                    format!("ch{controller}"),
+                    "the fader learned on ch{controller} now moves seat {seat}"
+                );
+                learned.push(controller);
+            }
+            learned.sort_unstable();
+            let expected: Vec<u8> = (0..4).filter(|index| !gone.contains(index)).collect();
+            assert_eq!(learned, expected);
+        };
 
         let removed = project.remove_channel(1).expect("channel 1 exists");
         assert_eq!(project.channels.len(), 3);
@@ -1582,6 +1636,7 @@ mod tests {
             assert_eq!(channel.automation[0][0].target, strip(index), "lane on channel {index}");
             assert_eq!(channel.automation[0][1].target, bus, "bus lane on channel {index}");
         }
+        bindings_follow(&project, &[1]);
 
         // Putting it back at the front renumbers everyone again, and the
         // newcomer's addresses point at its new seat rather than its old one.
@@ -1595,6 +1650,7 @@ mod tests {
             );
             assert_eq!(channel.automation[0][0].target, strip(index));
         }
+        bindings_follow(&project, &[1]);
         assert!(project.remove_channel(9).is_none());
 
         // And a move, which is the edit neither of the two above can
@@ -1625,6 +1681,7 @@ mod tests {
             assert_eq!(channel.automation[0][0].target, strip(index));
             assert_eq!(channel.automation[0][1].target, bus);
         }
+        bindings_follow(&project, &[1]);
         // The subscription followed the channel it named, which is now in
         // seat 1 -- not seat 3, where a stranger is sitting.
         assert_eq!(
@@ -1643,6 +1700,170 @@ mod tests {
         assert!(project.move_channel(2, 2).is_none());
         assert!(project.move_channel(0, 9).is_none());
         assert!(project.move_channel(9, 0).is_none());
+    }
+
+    fn fader_on(controller: u8, address: crate::ParamAddr) -> crate::ControlBinding {
+        crate::ControlBinding::new(
+            crate::ControlSource::Cc {
+                port: Default::default(),
+                channel: Default::default(),
+                controller,
+            },
+            crate::ControlTarget::Param(address),
+        )
+    }
+
+    fn controller_of(binding: &crate::ControlBinding) -> u8 {
+        match binding.source {
+            crate::ControlSource::Cc { controller, .. } => controller,
+            ref other => panic!("not a test fader: {other:?}"),
+        }
+    }
+
+    fn bound_scope(binding: &crate::ControlBinding) -> crate::EffectTarget {
+        match binding.target {
+            crate::ControlTarget::Param(address) => address.scope,
+            other => panic!("not a parameter binding: {other:?}"),
+        }
+    }
+
+    /// Every address that names a track has to follow it through a move, and
+    /// fall back or go through a removal -- the track list's twin of the test
+    /// above, and the first test `remove_track` has had.
+    ///
+    /// Addresses are checked by the *name* of the track they reach, because a
+    /// name is carried by the track and a seat is not.
+    #[test]
+    fn track_edits_renumber_every_address_that_named_a_track() {
+        let mut project = Project::default();
+        project.channels.push(ProjectChannel::mlm1(1, 1));
+        project.buses.truncate(1);
+        assert_eq!(project.ensure_tracks(5), 5);
+        let names: Vec<String> = project.buses.iter().map(|setup| setup.bus.name.clone()).collect();
+        assert_eq!(names[3], "Bus 3");
+        let name_of = |project: &Project, seat: u8| project.buses[seat as usize].bus.name.clone();
+        let volume = |track: u8| {
+            crate::ParamAddr::strip(crate::EffectTarget::Bus(track), crate::STRIP_PARAM_VOLUME)
+        };
+
+        // Track 3 is named by every kind of address there is.
+        project.channels[0].setup.channel.bus = 3;
+        project.channels[1].setup.channel.bus = 1;
+        project.buses[4].bus.output = 3;
+        project.buses[2].sends.push(crate::AuxSend::new(3));
+        project.buses[4].sends.push(crate::AuxSend::new(2));
+        project.channels[0].automation[0].push(AutomationLane::new(volume(3)));
+        project.channels[1].automation[0].push(AutomationLane::new(volume(1)));
+        let rack = &mut project.channels[0].setup.modulation;
+        rack.install(0, crate::ModulatorParams::Lfo(Default::default()));
+        rack.add_route(crate::ModRoute::to_slot(0, volume(3), 0.5, Default::default()))
+            .unwrap();
+        project.control_map.bind(fader_on(3, volume(3)));
+        project.control_map.bind(fader_on(1, volume(1)));
+        project.control_map.bind(fader_on(
+            100,
+            crate::ParamAddr::strip(crate::EffectTarget::Channel(0), crate::STRIP_PARAM_VOLUME),
+        ));
+
+        let edges = |project: &Project| {
+            let mut edges: Vec<(String, String)> = Vec::new();
+            for setup in project.buses.iter().skip(1) {
+                let from = setup.bus.name.clone();
+                edges.push((from.clone(), name_of(project, setup.bus.output)));
+                for send in &setup.sends {
+                    edges.push((from.clone(), name_of(project, send.target)));
+                }
+            }
+            edges.sort();
+            edges
+        };
+        let before = edges(&project);
+        assert!(crate::compile_bus_graph(&project.buses).is_some());
+
+        assert_eq!(project.move_track(3, 1), Some(TrackEdit::Moved { from: 3, to: 1 }));
+        let seats: Vec<String> = project.buses.iter().map(|setup| setup.bus.name.clone()).collect();
+        assert_eq!(seats, ["Master", "Bus 3", "Bus 1", "Bus 2", "Bus 4"]);
+        let bus_3 = |seat: u8| name_of(&project, seat) == "Bus 3";
+
+        assert!(bus_3(project.channels[0].setup.channel.bus), "a channel routed to it");
+        assert_eq!(name_of(&project, project.channels[1].setup.channel.bus), "Bus 1");
+        assert!(bus_3(project.buses[4].bus.output), "a track outputting to it");
+        assert!(bus_3(project.buses[3].sends[0].target), "a send to it");
+        assert_eq!(name_of(&project, project.buses[4].sends[0].target), "Bus 2");
+        let scope_of = |address: crate::ParamAddr| match address.scope {
+            crate::EffectTarget::Bus(seat) => seat,
+            other => panic!("a track address became {other:?}"),
+        };
+        assert!(bus_3(scope_of(project.channels[0].automation[0][0].target)), "a lane on it");
+        assert_eq!(
+            name_of(&project, scope_of(project.channels[1].automation[0][0].target)),
+            "Bus 1"
+        );
+        assert!(
+            bus_3(scope_of(project.channels[0].setup.modulation.routes[0].unwrap().destination)),
+            "a route on it"
+        );
+        for binding in &project.control_map.bindings {
+            match (controller_of(binding), bound_scope(binding)) {
+                (100, scope) => assert_eq!(scope, crate::EffectTarget::Channel(0)),
+                (controller, crate::EffectTarget::Bus(seat)) => {
+                    assert_eq!(name_of(&project, seat), format!("Bus {controller}"), "a binding")
+                }
+                (_, other) => panic!("a track binding became {other:?}"),
+            }
+        }
+
+        // A move relabels edges and neither adds nor removes one, so the graph
+        // still sorts and there is nothing to repair.
+        assert_eq!(edges(&project), before);
+        assert!(crate::compile_bus_graph(&project.buses).is_some());
+        assert!(crate::sanitize_bank(&project.buses).repairs.is_empty());
+
+        // Now remove it, from its new seat. Everything that named it falls
+        // back or goes, as `remove_track` documents, and everything that
+        // named a later track follows it down.
+        let removed = project.remove_track(1).expect("track 1 exists");
+        assert_eq!(removed.bus.name, "Bus 3");
+        assert_eq!(project.channels[0].setup.channel.bus, crate::MASTER_BUS, "falls back");
+        assert_eq!(name_of(&project, project.channels[1].setup.channel.bus), "Bus 1");
+        assert_eq!(project.buses[3].bus.output, crate::MASTER_BUS, "falls back");
+        assert!(project.buses[2].sends.is_empty(), "a send to it is dropped");
+        assert_eq!(name_of(&project, project.buses[3].sends[0].target), "Bus 2");
+        assert_eq!(project.channels[0].automation[0].len(), 0, "its lane goes");
+        assert_eq!(
+            name_of(&project, scope_of(project.channels[1].automation[0][0].target)),
+            "Bus 1"
+        );
+        assert!(project.channels[0].setup.modulation.routes[0].is_none(), "its route goes");
+        let mut learned: Vec<u8> = project.control_map.bindings.iter().map(controller_of).collect();
+        learned.sort_unstable();
+        assert_eq!(learned, [1, 100], "its binding goes");
+        for binding in &project.control_map.bindings {
+            if let crate::EffectTarget::Bus(seat) = bound_scope(binding) {
+                assert_eq!(name_of(&project, seat), "Bus 1");
+            }
+        }
+        assert!(crate::sanitize_bank(&project.buses).repairs.is_empty());
+        assert!(project.remove_track(0).is_none(), "the master stays");
+        assert!(project.remove_track(9).is_none());
+    }
+
+    /// The master is first by being bus 0, so a move may neither take it out
+    /// of seat 0 nor put anything else in. A refused move is not an edit: the
+    /// project is exactly as it was.
+    #[test]
+    fn a_track_move_that_would_displace_the_master_is_refused() {
+        let mut project = Project::default();
+        project.buses.truncate(1);
+        project.ensure_tracks(4);
+        project.buses[2].sends.push(crate::AuxSend::new(3));
+        let before = project.clone();
+        for (from, to) in [(0, 2), (2, 0), (2, 2), (9, 1), (1, 9), (0, 0)] {
+            assert_eq!(project.move_track(from, to), None, "move {from} -> {to}");
+            assert_eq!(project, before, "move {from} -> {to} changed the song");
+        }
+        // The last seat is a legal landing.
+        assert!(project.move_track(1, 3).is_some());
     }
 
     #[test]
