@@ -249,14 +249,19 @@ struct EffectSlotRow {
     p7: float,
     p8: float,
     p9: float,
-    // Past the ten a descriptor table fills. These carry what a device keeps
-    // *beside* its parameters: the delay and the modulation effect each hold
-    // a tempo-sync flag and a musical division, which are not continuous
+    p10: float,
+    p11: float,
+    // Past the fifteen a descriptor table fills. These carry what a device
+    // keeps *beside* its parameters: the delay and the modulation effect each
+    // hold a tempo-sync flag and a musical division, which are not continuous
     // values and are not addressable, so they are not descriptors. The delay
     // fits inside its own ids; the modulation effect has eight of them and
     // does not.
-    p10: float,
-    p11: float,
+    p12: float,
+    p13: float,
+    p14: float,
+    p15: float,
+    p16: float,
     // One entry per descriptor, in descriptor order: the armed source's
     // route depth, and whether that parameter accepts modulation at all.
     // Indexed rather than named so a face exposes every eligible control.
@@ -294,7 +299,10 @@ struct EffectSlotRow {
     input-right-db: float,
     output-left-db: float,
     output-right-db: float,
-    // Buffer-only: forced returns to live counted by the inserted device.
+    // Buffer-only: wraps and cuts counted by the inserted device. It was a
+    // count of forced *returns to live*, which is a failure the turntable
+    // model could have and this one cannot: every head wraps instead, so what
+    // is worth reporting is how often it did.
     buffer-collisions: int,
     // Buffer-only: the picture its face draws. Peaks over the retained
     // history and the marks on top of them, published as display telemetry
@@ -307,13 +315,11 @@ struct EffectSlotRow {
     buffer-window-end: float,
     buffer-frozen: bool,
     buffer-armed-freeze: int,
+    buffer-armed-gesture: bool,
     buffer-history-bars: int,
     buffer-position-bar: int,
     buffer-position-beat: int,
     buffer-position-tick: int,
-    buffer-length-bars: int,
-    buffer-length-beats: int,
-    buffer-length-ticks: int,
     // Dynamics-only: the level this device's sidechain detector reached and
     // the gain reduction it applied. Both are the device's own state, not a
     // difference of the meters above -- the meters are block peaks, these
@@ -1592,20 +1598,15 @@ export component MainWindow inherits Window {
     callback modulation-tempo-sync-changed(int, bool);
     callback modulation-rate-division-changed(int, int);
     callback delay-time-division-changed(int, int);
-    // Slot, and whether the buffer face's held control is down. The debug
-    // event table these once addressed is gone: every one of them writes a
-    // published parameter now.
-    callback effect-buffer-jump(int, bool);
-    callback effect-buffer-stutter(int, bool);
-    callback effect-buffer-loop(int, bool);
+    // Slot, the gate parameter's descriptor id, and whether it is down. One
+    // callback for all three gestures, because a gate is a gate: what the
+    // face knows is which id it is holding, and a fourth gesture would need
+    // no new wiring at all.
+    callback effect-buffer-gate(int, int, bool);
     callback effect-buffer-quantize(int, bool);
     callback effect-buffer-freeze(int, bool);
-    callback effect-buffer-window(int, float, float);
     // Slot and bars. Not a parameter write: the ring is reallocated for it.
     callback effect-buffer-history-bars(int, int);
-    // Press/release of the buffer face's held reverse control.
-    callback effect-buffer-reverse-pressed(int);
-    callback effect-buffer-reverse-released(int);
     callback eq-analyzer-changed(int, bool);
     callback preamp-display-changed(int, bool);
     callback reorder-effect(int, int);              // from slot, to slot
@@ -4852,8 +4853,8 @@ export component MainWindow inherits Window {
                                                     tone: slot.p4;
                                                     mix: slot.p5;
                                                     bpm: root.bpm;
-                                                    tempo-sync: slot.p10 >= 0.5;
-                                                    time-division: round(slot.p11);
+                                                    tempo-sync: slot.p15 >= 0.5;
+                                                    time-division: round(slot.p16);
                                                     time-changed(v) => { root.effect-param-changed(index, 0, v); }
                                                     tempo-sync-changed(enabled) => {
                                                         root.delay-tempo-sync-changed(index, enabled);
@@ -5065,8 +5066,8 @@ export component MainWindow inherits Window {
                                                     spread: slot.p5;
                                                     tone: slot.p6;
                                                     stages: slot.p7;
-                                                    tempo-sync: slot.p10 >= 0.5;
-                                                    rate-division: round(slot.p11);
+                                                    tempo-sync: slot.p15 >= 0.5;
+                                                    rate-division: round(slot.p16);
                                                     bpm: root.bpm;
                                                     wet-dry: slot.wet-dry;
                                                     mode-changed(i) => { root.effect-param-changed(index, 0, i * 1.0 / 4.0); }
@@ -5134,45 +5135,42 @@ export component MainWindow inherits Window {
                                                     slot-count: root.effect-slots.length;
                                                     bypassed: slot.bypassed;
                                                     preset-name: slot.preset-name;
-                                                    collisions: slot.buffer-collisions;
+                                                    seams: slot.buffer-collisions;
                                                     peaks: slot.buffer-peaks;
                                                     head-fraction: slot.buffer-head;
                                                     write-fraction: slot.buffer-write;
-                                                    window-start: slot.buffer-window-start;
-                                                    window-end: slot.buffer-window-end;
+                                                    region-start: slot.buffer-window-start;
+                                                    region-end: slot.buffer-window-end;
                                                     frozen: slot.buffer-frozen;
                                                     armed-freeze: slot.buffer-armed-freeze;
+                                                    armed-gesture: slot.buffer-armed-gesture;
                                                     history-bars: slot.buffer-history-bars;
                                                     position-bar: slot.buffer-position-bar;
                                                     position-beat: slot.buffer-position-beat;
                                                     position-tick: slot.buffer-position-tick;
-                                                    length-bars: slot.buffer-length-bars;
-                                                    length-beats: slot.buffer-length-beats;
-                                                    length-ticks: slot.buffer-length-ticks;
                                                     // Normalized, and addressed by descriptor id.
-                                                    position: slot.p2;
                                                     crossfade: slot.p1;
-                                                    rate: slot.p3;
-                                                    length: slot.p4;
-                                                    quant-grid: slot.p9;
-                                                    looping: slot.p5 > 0.5;
+                                                    position: slot.p2;
+                                                    quant-start: slot.p9;
+                                                    jump-back: slot.p10;
+                                                    stutter-length: slot.p13;
+                                                    position-span: slot.p14;
                                                     quantize: slot.p8 > 0.5;
-                                                    position-changed(v) => { root.effect-param-changed(index, 2, v); }
                                                     crossfade-changed(v) => { root.effect-param-changed(index, 1, v); }
-                                                    rate-changed(v) => { root.effect-param-changed(index, 3, v); }
-                                                    length-changed(v) => { root.effect-param-changed(index, 4, v); }
-                                                    quant-grid-changed(v) => { root.effect-param-changed(index, 9, v); }
-                                                    loop-toggled(on) => { root.effect-buffer-loop(index, on); }
+                                                    position-changed(v) => { root.effect-param-changed(index, 2, v); }
+                                                    quant-start-changed(v) => { root.effect-param-changed(index, 9, v); }
+                                                    jump-back-changed(v) => { root.effect-param-changed(index, 10, v); }
+                                                    stutter-length-changed(v) => { root.effect-param-changed(index, 13, v); }
+                                                    position-span-changed(v) => { root.effect-param-changed(index, 14, v); }
                                                     quantize-toggled(on) => { root.effect-buffer-quantize(index, on); }
                                                     freeze-toggled(on) => { root.effect-buffer-freeze(index, on); }
-                                                    window-dragged(a, b) => { root.effect-buffer-window(index, a, b); }
                                                     history-bars-changed(bars) => { root.effect-buffer-history-bars(index, bars); }
-                                                    jump-pressed() => { root.effect-buffer-jump(index, true); }
-                                                    jump-released() => { root.effect-buffer-jump(index, false); }
-                                                    reverse-pressed() => { root.effect-buffer-reverse-pressed(index); }
-                                                    reverse-released() => { root.effect-buffer-reverse-released(index); }
-                                                    stutter-pressed() => { root.effect-buffer-stutter(index, true); }
-                                                    stutter-released() => { root.effect-buffer-stutter(index, false); }
+                                                    // Gates, so each is one callback carrying whether
+                                                    // the button is down rather than a press and a
+                                                    // release that have to be paired up.
+                                                    jump-held(down) => { root.effect-buffer-gate(index, 7, down); }
+                                                    reverse-held(down) => { root.effect-buffer-gate(index, 11, down); }
+                                                    stutter-held(down) => { root.effect-buffer-gate(index, 12, down); }
                                                     reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     select-requested => { root.device-selected(index); }
                                                 }

@@ -128,6 +128,10 @@ const BUFFER_MARKS: usize = 5;
 const BUFFER_FLAG_FROZEN: u32 = 1;
 const BUFFER_FLAG_ARMED: u32 = 2;
 const BUFFER_FLAG_ARMED_FREEZE: u32 = 4;
+/// A gesture press waiting for its boundary. Its own bit rather than a third
+/// state of the freeze pair: the two can be pending at once, and the face
+/// says different things about them.
+const BUFFER_FLAG_ARMED_GESTURE: u32 = 8;
 
 /// What a Buffer face draws, read back out of the bank.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -136,9 +140,13 @@ pub struct BufferMarks {
     /// device is following and there is no detached head to draw.
     pub head: Option<f32>,
     pub write: f32,
-    pub window: Option<(f32, f32)>,
+    /// The region a gesture is confined to, when that is less than the whole
+    /// ring. A band drawn round everything says nothing, so the device sends
+    /// `None` for that rather than `(0, 1)`.
+    pub region: Option<(f32, f32)>,
     pub frozen: bool,
     pub armed_freeze: Option<bool>,
+    pub armed_gesture: bool,
 }
 
 impl DeviceTelemetry {
@@ -337,7 +345,10 @@ impl DeviceTelemetry {
             }
             // `-1` for absent, which a fraction of a ring can never be.
             let head = display.head.unwrap_or(-1.0);
-            let (start, end) = display.window.unwrap_or((-1.0, -1.0));
+            if display.armed_gesture {
+                flags |= BUFFER_FLAG_ARMED_GESTURE;
+            }
+            let (start, end) = display.region.unwrap_or((-1.0, -1.0));
             self.buffer_marks[base].store(head.to_bits(), Ordering::Relaxed);
             self.buffer_marks[base + 1].store(display.write.to_bits(), Ordering::Relaxed);
             self.buffer_marks[base + 2].store(start.to_bits(), Ordering::Relaxed);
@@ -372,7 +383,7 @@ impl DeviceTelemetry {
         peaks
     }
 
-    /// Latest head, writer, window and state for a Buffer stage.
+    /// Latest head, writer, region and state for a Buffer stage.
     pub fn read_buffer_marks(&self, target: usize, stage: usize) -> BufferMarks {
         let Some(index) = Self::enabled_index(target, stage) else {
             return BufferMarks::default();
@@ -388,10 +399,11 @@ impl DeviceTelemetry {
         BufferMarks {
             head: (head >= 0.0).then_some(head),
             write: read(1),
-            window: (start >= 0.0 && end >= 0.0).then_some((start, end)),
+            region: (start >= 0.0 && end >= 0.0).then_some((start, end)),
             frozen: flags & BUFFER_FLAG_FROZEN != 0,
             armed_freeze: (flags & BUFFER_FLAG_ARMED != 0)
                 .then_some(flags & BUFFER_FLAG_ARMED_FREEZE != 0),
+            armed_gesture: flags & BUFFER_FLAG_ARMED_GESTURE != 0,
         }
     }
 

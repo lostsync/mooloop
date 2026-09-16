@@ -209,16 +209,27 @@ const FROZEN: &[(Owner, &[(u32, &str)])] = &[
     // after it moves down a position, which is safe only because a position
     // is read at runtime while an id is read off disk.
     //
+    // Ids 3, 4 and 5 are spent too. `Rate`, `Length` and `Loop` went later
+    // the same day with the turntable model that needed them, and a document
+    // saved in between names them. What replaced them is new ids from 10 up,
+    // never a reuse -- the same rule, applied three more times.
+    //
+    // `Quant Grid` became `Quant Start` in the same change, on the same id:
+    // it is the same number answering the same question, now governing a
+    // gesture's start as well as a freeze's. A rename is not a renumber, and
+    // the name is recorded here because a lane picker shows it.
     (Effect(EffectKind::Buffer), &[
         (2, "Position"),
+        (14, "Span"),
+        (10, "Jump Back"),
+        (13, "Stutter"),
         (1, "Crossfade"),
-        (3, "Rate"),
         (6, "Freeze"),
-        (4, "Length"),
-        (5, "Loop"),
         (7, "Jump"),
+        (11, "Reverse"),
+        (12, "Stutter Gate"),
         (8, "Quantize"),
-        (9, "Quant Grid"),
+        (9, "Quant Start"),
     ]),
     (Effect(EffectKind::Chain), &[
         (0, "Mix"),

@@ -2360,113 +2360,134 @@ pub struct LimiterParams {
     /// Input gain driven into the ceiling: this is the loudness control.
     pub gain_db: f32,
 }
-
-/// Persistent allocation configuration for the retained-audio insert.
+/// Persistent state of the retained-audio insert.
 ///
-/// Changing this requires constructing and structurally replacing the node
-/// off the audio thread; Stage 1 exposes it as saved device state only.
+/// **The device is three momentary gestures over a rolling ring, plus a
+/// playhead you can draw.** Each gesture computes its own start and end index
+/// when it fires and owns its own settings; none of them borrows another
+/// control's. That is a deliberate retreat from the turntable model this
+/// device carried until 2026-09-16, in which one read head was fought over by
+/// `Position`, `Rate` and `Loop` under an arbitration rule, and the buttons
+/// were macros writing those shared knobs. Adam, having played it: *"i dont
+/// understand what is difficult. its a buffer."*
+///
+/// [`Self::bars`] needs the node constructing and structurally replacing off
+/// the audio thread, which is why it is not a descriptor-addressed parameter.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(from = "BufferParamsOnDisk")]
 pub struct BufferParams {
     #[serde(default = "default_buffer_bars")]
     pub bars: u8,
-    /// Free-run velocity of the read head, signed, `1.0` = forward at unity.
-    ///
-    /// It is what the head does when nothing else is talking to it. A chase
-    /// armed by [`Self::position`] overrides it while it is closing, and a
-    /// [`crate::BufferEvent`] gesture overrides it for as long as the gesture
-    /// runs -- the arbitration rule in
-    /// `docs/plans/buffer-implementation/03-freeze-and-the-grid.md`.
-    ///
-    /// The writer used to be the time base: a held offset played forward at
-    /// unity because the target was recomputed against a moving write head.
-    /// Freeze takes the writer away, so the time base has to be stated.
-    #[serde(default = "default_buffer_rate")]
-    pub rate: f32,
     /// Whether the writer is stopped and the ring is a sample rather than a
     /// moving window. Nonzero is frozen; the device applies hysteresis around
     /// the midpoint so a modulator resting near the threshold cannot chatter
     /// it.
     ///
+    /// Frozen with nothing else driving the head, the ring **plays** -- round
+    /// and round, forward, at unity. That is what makes the retained history
+    /// a loop rather than a still: Adam, asked what a freeze should leave you
+    /// holding, *"the frozen audio should be a musically loopable chunk"*.
+    /// Quantizing the freeze to a bar line is what makes the chunk join up.
+    ///
     /// It persists like every other parameter, and a project saved frozen
     /// reopens frozen -- over an **empty ring**, because the frozen audio
-    /// itself is not saved yet. `BUFFER_ENGINE.md` specifies a project-owned
-    /// WAV snapshot and `03-freeze-and-the-grid.md` scopes it as its own step;
-    /// until then, reopening a frozen document is silence with FREEZE lit,
-    /// which is at least explicable from the face.
+    /// itself is not saved yet.
     #[serde(default)]
     pub freeze: f32,
-    /// Length of the active window, as a [`crate::ModTimeDivision`] index.
+    /// Held while the JUMP gesture is down. A **gate**, not a trigger: the
+    /// gesture lasts exactly as long as this is nonzero, so a lane, a MIDI
+    /// note and a finger on the button all say the same thing the same way.
     ///
-    /// **Always on the grid, never free.** A free length and a grid length
-    /// behind one automatable id would be one id standing for two settings of
-    /// different semantics, which is the `eq-v2` step 01 fault, and there is
-    /// no lamp on this control to say which one is live. Being stepped is
-    /// also what makes modulating it mean something: an envelope sweeps
-    /// `1/4 -> 1/8 -> 1/16`, where a continuous length in beats would smear.
-    #[serde(default = "default_buffer_length")]
-    pub length: f32,
-    /// Whether the head wraps inside the active window instead of running
-    /// past it. Nonzero is on.
-    #[serde(default)]
-    pub looping: f32,
-    /// Rising edge relocates the head to [`Self::position`] with no chase,
-    /// crossfaded by [`Self::crossfade_ms`].
-    ///
-    /// It persists like every other parameter, and a document saved with it
-    /// held down does **not** fire one on load: the device takes its resting
-    /// value as the edge detector's starting point, so only a transition
-    /// after that is an edge.
+    /// Press freezes the ring, puts the head [`Self::jump_back`] behind the
+    /// write position and plays forward from there, wrapping the ring. Release
+    /// restarts the writer and returns to live.
     #[serde(default)]
     pub jump: f32,
-    /// Whether freezing and unfreezing wait for the next grid boundary.
-    /// Nonzero is on, and **on is the default**.
+    /// How far back JUMP lands, as a [`crate::ModTimeDivision`] index.
+    #[serde(default = "default_buffer_jump_back")]
+    pub jump_back: f32,
+    /// Held while the REVERSE gesture is down. Press freezes the ring and
+    /// plays backward from the write position, wrapping. It takes no distance:
+    /// backward from *here* is the whole of what it means.
+    #[serde(default)]
+    pub reverse: f32,
+    /// Held while the STUTTER gesture is down. Press freezes the ring and
+    /// loops the last [`Self::stutter_length`] of it.
     ///
-    /// It is not a nicety. "Pressing Freeze sounds like almost nothing
-    /// happened" is only true when it is true: at the freeze instant the head
-    /// sits at the write position, so continuing forward wraps straight into
-    /// the *oldest* retained sample -- you hear N bars ago, not now. That is
-    /// seamless exactly when the material is periodic at the buffer length,
-    /// which is what freezing on a loop's bar line gives you.
+    /// It is JUMP with a repeat, which is why the two differ in one field.
+    #[serde(default)]
+    pub stutter: f32,
+    /// How long STUTTER's repeat is, as a [`crate::ModTimeDivision`] index.
+    ///
+    /// **Its own setting, not a shared one.** It was `Length` -- the same knob
+    /// the loop window used -- until 2026-09-16, and the question that ended
+    /// that was Adam's: *"how does one set the stutter length?"* Nothing on
+    /// the face was it, because the gesture overrode the knob on press and put
+    /// it back on release.
+    #[serde(default = "default_buffer_stutter_length")]
+    pub stutter_length: f32,
+    /// Where in retained memory the playhead is, normalized over
+    /// [`Self::position_span`]: `0` is the old end of the span and `1` is the
+    /// new end, so a rising ramp is forward playback.
+    ///
+    /// **It is heard only while it is moving.** A static Position is not a
+    /// position, it is a setting nobody is playing, and the device falls
+    /// through to live audio -- which is what makes one automatable id mean
+    /// one thing whether or not anybody is driving it. Adam: *"this is the
+    /// kind of thing you'd put a 1 measure sawtooth lfo on via modulator rack
+    /// and it would loop through the buffer... if it is moving, thats what we
+    /// should hear, otherwise its just live audio."*
+    ///
+    /// The head **is** the position rather than chasing it, so the playback
+    /// rate is the position's own speed and needs no control: a one-bar saw
+    /// over a one-bar span plays at unity, a half-bar saw plays it up an
+    /// octave, and a descending ramp plays it backwards. The chase this
+    /// replaced needed a time constant, an arrival test and a stillness test
+    /// to decide when an edit was over, and all three are gone with it.
+    #[serde(default = "default_buffer_position")]
+    pub position: f32,
+    /// How much of the ring [`Self::position`] spans, as a
+    /// [`crate::ModTimeDivision`] index, or [`BUFFER_SPAN_FULL`] for all of
+    /// it -- which is the default, because the freeze length is the obvious
+    /// thing for a playhead to run over until somebody says otherwise.
+    ///
+    /// The span ends at the write position and extends backward, so it is
+    /// always the *most recent* that much; frozen, the write position is
+    /// static and the span is a fixed region of the sample.
+    #[serde(default = "default_buffer_position_span")]
+    pub position_span: f32,
+    /// Whether a gesture and a freeze wait for the next musical boundary
+    /// before they land. Nonzero is on, and **on is the default**.
+    ///
+    /// It buys playability at the price of latency: up to one
+    /// [`Self::quant_start`] between the finger and the sound, which is the
+    /// usual trade on a beat repeat and is what lets a sloppy press still
+    /// land in time. Releases are never quantized -- a gesture ends when the
+    /// hand says so.
     #[serde(default = "default_buffer_quantize")]
     pub quantize: f32,
     /// Which boundary [`Self::quantize`] waits for, as a
-    /// [`crate::ModTimeDivision`] index. One bar by default.
-    #[serde(default = "default_buffer_quant_grid")]
-    pub quant_grid: f32,
-    /// Where in retained memory the read head is, normalized over the ring:
-    /// `0` is the oldest sample it still holds and `1` is now. Freeze latches
-    /// what "now" means.
+    /// [`crate::ModTimeDivision`] index.
     ///
-    /// **It replaced `Offset`, which was beats behind a moving writer, and
-    /// the coordinate change is the point rather than the rename.** An
-    /// `AutomationLane` is a normalized curve against a `ParamAddr`, so an id
-    /// whose meaning changed with freeze state would mean two different things
-    /// depending on a control the lane cannot see -- the `eq-v2` step 01
-    /// defect in a new costume. Normalized over the buffer, the definition
-    /// holds in both states, and the direction is inverted relative to
-    /// `Offset` on purpose: `0` is the old end, so a rising ramp is forward
-    /// playback.
-    ///
-    /// Writing it is an *edit*: it arms a chase, the head closes on it at the
-    /// turntable behaviour, and the target is released once reached, after
-    /// which the head free-runs at [`Self::rate`]. A continuous stream of
-    /// writes is therefore a scrub, and a static value leaves `Rate` in charge
-    /// rather than yanking the head back to a stale target.
-    #[serde(default = "default_buffer_position")]
-    pub position: f32,
+    /// Independent of every length on the device, which is the whole of what
+    /// it is for: Adam, on quantizing gestures, *"yes but you can set start
+    /// and length independently"*. Starting on the quarter while stuttering a
+    /// thirty-second is the ordinary case, not an exotic one.
+    #[serde(default = "default_buffer_quant_start")]
+    pub quant_start: f32,
+    /// Declick length in milliseconds, applied wherever the head moves or the
+    /// device hands back to live.
     #[serde(default = "default_buffer_crossfade_ms")]
     pub crossfade_ms: f32,
 }
 
 /// How much history a fresh Buffer keeps, in bars.
 ///
-/// **Two, not eight.** `Position` is normalized over the whole ring, so the
-/// ring's length is the knob's resolution: eight bars put 50% four bars ago
-/// and made every small move a leap. Two bars is the loop somebody is playing
-/// over, a sixteenth of it is a tenth of the knob's travel, and it is what
-/// `bars` being adjustable is for -- a pad that wants eight can still say so,
-/// and now has a control that says it.
+/// **Two, not eight.** `Position` is normalized over the ring, so the ring's
+/// length is the playhead's resolution: eight bars put 50% four bars ago and
+/// made every small move a leap. Two bars is the loop somebody is playing
+/// over, and it is what `bars` being adjustable is for -- a pad that wants
+/// eight can still say so, and now has a control that says it.
 const fn default_buffer_bars() -> u8 {
     2
 }
@@ -2475,64 +2496,89 @@ const fn default_buffer_crossfade_ms() -> f32 {
     2.5
 }
 
-const fn default_buffer_rate() -> f32 {
-    1.0
-}
-
+/// Live: the playhead rests at the new end of its span, which is also where a
+/// span of zero length would put it.
 const fn default_buffer_position() -> f32 {
     1.0
 }
 
-/// `ModTimeDivision::Whole`, which is one bar. Index 2 of the shared grid.
-const fn default_buffer_length() -> f32 {
-    2.0
+/// The whole ring. See [`BUFFER_SPAN_FULL`].
+const fn default_buffer_position_span() -> f32 {
+    BUFFER_SPAN_FULL
+}
+
+/// One beat back. A jump wants to be short enough to be a stumble rather than
+/// a section change, and long enough to carry a whole drum figure.
+const fn default_buffer_jump_back() -> f32 {
+    7.0
+}
+
+/// A sixteenth, which is what a stutter is before anybody adjusts it.
+const fn default_buffer_stutter_length() -> f32 {
+    13.0
 }
 
 const fn default_buffer_quantize() -> f32 {
     1.0
 }
 
-/// One bar, the same index [`default_buffer_length`] uses and for the same
-/// reason: a loop and the boundary it starts on are the same musical unit
+/// One bar. A gesture and the freeze that holds it land on the same boundary
 /// until somebody says otherwise.
-const fn default_buffer_quant_grid() -> f32 {
+const fn default_buffer_quant_start() -> f32 {
     2.0
 }
 
+/// [`BufferParams::position_span`]'s "the whole ring" position.
+///
+/// One past the top of the grid, so the parameter is `ModTimeDivision::ALL`
+/// plus one value rather than two settings behind one id: every position on
+/// it answers the same question, *how much of the buffer does the playhead
+/// run over*, and the top answer is "all of it". The range is derived from
+/// the grid's own length, so a twenty-second division moves this with it.
+pub const BUFFER_SPAN_FULL: f32 = crate::ModTimeDivision::ALL.len() as f32;
+
 /// [`BufferParams`] as documents on disk spell it.
 ///
-/// It exists for one field. Projects written before 2026-09-16 hold
-/// `offset_beats`, which is beats behind the writer, where this one holds
-/// `position`, which is normalized over the ring and points the other way.
-/// The two cannot share a key or a `serde(alias)`, because the *number* means
-/// something different -- an alias would read `2.0` as "two beats back" where
-/// it was written and as "twice the length of the ring" here, and nothing
-/// would report it.
+/// Every field is optional and defaulted, because this struct has now
+/// outlived two control models. Projects written before 2026-09-16 hold
+/// `offset_beats` (beats behind the writer); ones written that day hold
+/// `position` (normalized, pointing the other way) plus `rate`, `length` and
+/// `looping` from the turntable model. `offset_beats` still converts, because
+/// the coordinate is recoverable; the other three are **dropped**, because
+/// nothing in the device they configured survives to be given their value.
 ///
-/// Serialization stays derived, so `offset_beats` is read and never written:
-/// a song opened and saved leaves the old key behind for good.
+/// Serialization stays derived, so the retired keys are read and never
+/// written: a song opened and saved leaves them behind for good.
 #[derive(serde::Deserialize)]
 struct BufferParamsOnDisk {
     #[serde(default = "default_buffer_bars")]
     bars: u8,
-    #[serde(default = "default_buffer_rate")]
-    rate: f32,
     #[serde(default)]
     freeze: f32,
-    #[serde(default = "default_buffer_length")]
-    length: f32,
-    #[serde(default)]
-    looping: f32,
     #[serde(default)]
     jump: f32,
-    #[serde(default = "default_buffer_quantize")]
-    quantize: f32,
-    #[serde(default = "default_buffer_quant_grid")]
-    quant_grid: f32,
+    #[serde(default = "default_buffer_jump_back")]
+    jump_back: f32,
+    #[serde(default)]
+    reverse: f32,
+    #[serde(default)]
+    stutter: f32,
+    #[serde(default = "default_buffer_stutter_length")]
+    stutter_length: f32,
     #[serde(default)]
     position: Option<f32>,
     #[serde(default)]
+    position_span: Option<f32>,
+    #[serde(default)]
     offset_beats: Option<f32>,
+    #[serde(default = "default_buffer_quantize")]
+    quantize: f32,
+    /// The 2026-09-16 spelling of [`BufferParams::quant_start`]. Renamed
+    /// rather than retired: it is the same number answering the same
+    /// question, and it now governs a gesture's start as well as a freeze's,
+    /// which is a widening rather than a change of meaning.
+    #[serde(default = "default_buffer_quant_start", alias = "quant_grid")]
+    quant_start: f32,
     #[serde(default = "default_buffer_crossfade_ms")]
     crossfade_ms: f32,
 }
@@ -2554,14 +2600,19 @@ impl From<BufferParamsOnDisk> for BufferParams {
         });
         Self {
             bars,
-            rate: disk.rate,
             freeze: disk.freeze,
-            length: disk.length,
-            looping: disk.looping,
             jump: disk.jump,
-            quantize: disk.quantize,
-            quant_grid: disk.quant_grid,
+            jump_back: disk.jump_back,
+            reverse: disk.reverse,
+            stutter: disk.stutter,
+            stutter_length: disk.stutter_length,
             position: position.clamp(0.0, 1.0),
+            // A document from the turntable model has no span to restore, and
+            // the whole ring is the reading that changes least about what it
+            // sounded like.
+            position_span: disk.position_span.unwrap_or_else(default_buffer_position_span),
+            quantize: disk.quantize,
+            quant_start: disk.quant_start,
             crossfade_ms: disk.crossfade_ms,
         }
     }
@@ -2571,14 +2622,16 @@ impl Default for BufferParams {
     fn default() -> Self {
         Self {
             bars: default_buffer_bars(),
-            position: default_buffer_position(),
-            rate: default_buffer_rate(),
             freeze: 0.0,
-            length: default_buffer_length(),
-            looping: 0.0,
             jump: 0.0,
+            jump_back: default_buffer_jump_back(),
+            reverse: 0.0,
+            stutter: 0.0,
+            stutter_length: default_buffer_stutter_length(),
+            position: default_buffer_position(),
+            position_span: default_buffer_position_span(),
             quantize: default_buffer_quantize(),
-            quant_grid: default_buffer_quant_grid(),
+            quant_start: default_buffer_quant_start(),
             crossfade_ms: default_buffer_crossfade_ms(),
         }
     }
@@ -2590,34 +2643,39 @@ impl Default for BufferParams {
 /// engine does off-thread through a prepared replacement; a control-rate
 /// parameter cannot do that, and pretending otherwise would put an allocation
 /// on the audio thread the first time someone drew a curve on it.
-/// **Retired 2026-09-16.** `Offset` was beats behind a moving writer;
-/// [`BUFFER_PARAM_POSITION`] is where in the ring the head is, and the two are
-/// different coordinates rather than different names for one. The id is kept
-/// here, out of the descriptor table, so the loader can recognise a lane that
-/// still names it -- and it is **spent**: nothing may ever be given id 0
-/// again, because a project saved before the change still says 0 and means
-/// beats.
+///
+/// **Four ids are retired and none of them may ever be reused**, because a
+/// project saved before the change still names them and still means what they
+/// meant then. `Offset` went on 2026-09-16 when `Position` replaced beats-
+/// behind-the-writer with a normalized coordinate. `Rate`, `Length` and `Loop`
+/// went later the same day with the turntable model itself: one read head
+/// fought over by three standing knobs under an arbitration rule, with the
+/// face's buttons as macros writing them. What replaced it is three gestures
+/// that each own their settings, and a playhead that is heard while it moves.
+/// None of the three has a value to inherit from a knob that no longer
+/// describes anything.
 pub const BUFFER_PARAM_OFFSET_BEATS: u32 = 0;
 pub const BUFFER_PARAM_CROSSFADE_MS: u32 = 1;
 pub const BUFFER_PARAM_POSITION: u32 = 2;
+/// Retired 2026-09-16 with the turntable model. Spent.
 pub const BUFFER_PARAM_RATE: u32 = 3;
+/// Retired 2026-09-16 with the turntable model. Spent. The stutter's length
+/// is [`BUFFER_PARAM_STUTTER_LENGTH`], which is its own setting rather than
+/// this one borrowed.
 pub const BUFFER_PARAM_LENGTH: u32 = 4;
+/// Retired 2026-09-16 with the turntable model. Spent.
 pub const BUFFER_PARAM_LOOP: u32 = 5;
 pub const BUFFER_PARAM_FREEZE: u32 = 6;
 pub const BUFFER_PARAM_JUMP: u32 = 7;
 pub const BUFFER_PARAM_QUANTIZE: u32 = 8;
-pub const BUFFER_PARAM_QUANT_GRID: u32 = 9;
+pub const BUFFER_PARAM_QUANT_START: u32 = 9;
+pub const BUFFER_PARAM_JUMP_BACK: u32 = 10;
+pub const BUFFER_PARAM_REVERSE: u32 = 11;
+pub const BUFFER_PARAM_STUTTER: u32 = 12;
+pub const BUFFER_PARAM_STUTTER_LENGTH: u32 = 13;
+pub const BUFFER_PARAM_POSITION_SPAN: u32 = 14;
 
-/// How fast the read head may ever travel, forward or back.
-///
-/// One number, because there were nearly two: `buffer_device`'s scrub clamp
-/// and the `Rate` descriptor's range are the same ceiling on the same head,
-/// and a descriptor whose range exceeded the clamp would draw a knob whose
-/// top travel did nothing. It is a limit on the interpolator -- a wilder spin
-/// outruns four-point Hermite into noise -- not a musical choice.
-pub const MAX_BUFFER_RATE: f32 = 4.0;
-
-static BUFFER_DESCRIPTORS: [ParamDescriptor; 9] = [
+static BUFFER_DESCRIPTORS: [ParamDescriptor; 11] = [
     ParamDescriptor {
         id: BUFFER_PARAM_POSITION,
         name: "Position",
@@ -2626,6 +2684,34 @@ static BUFFER_DESCRIPTORS: [ParamDescriptor; 9] = [
         max: 1.0,
         curve: ParamCurve::Linear,
         default: 1.0,
+    },
+    ParamDescriptor {
+        id: BUFFER_PARAM_POSITION_SPAN,
+        name: "Span",
+        unit: "",
+        min: 0.0,
+        max: BUFFER_SPAN_FULL,
+        // One step per division plus the "whole ring" position on the end.
+        curve: ParamCurve::Stepped(crate::ModTimeDivision::ALL.len() as u16 + 1),
+        default: BUFFER_SPAN_FULL,
+    },
+    ParamDescriptor {
+        id: BUFFER_PARAM_JUMP_BACK,
+        name: "Jump Back",
+        unit: "",
+        min: 0.0,
+        max: MOD_TIME_DIVISION_TOP,
+        curve: ParamCurve::Stepped(crate::ModTimeDivision::ALL.len() as u16),
+        default: 7.0,
+    },
+    ParamDescriptor {
+        id: BUFFER_PARAM_STUTTER_LENGTH,
+        name: "Stutter",
+        unit: "",
+        min: 0.0,
+        max: MOD_TIME_DIVISION_TOP,
+        curve: ParamCurve::Stepped(crate::ModTimeDivision::ALL.len() as u16),
+        default: 13.0,
     },
     ParamDescriptor {
         id: BUFFER_PARAM_CROSSFADE_MS,
@@ -2637,52 +2723,43 @@ static BUFFER_DESCRIPTORS: [ParamDescriptor; 9] = [
         default: 2.5,
     },
     ParamDescriptor {
-        id: BUFFER_PARAM_RATE,
-        name: "Rate",
-        unit: "x",
-        min: -MAX_BUFFER_RATE,
-        max: MAX_BUFFER_RATE,
-        curve: ParamCurve::Linear,
-        default: 1.0,
-    },
-    ParamDescriptor {
         id: BUFFER_PARAM_FREEZE,
         name: "Freeze",
         unit: "",
-        // A switch, so `Stepped(2)`, which is what every other switch in the
-        // tables declares. It shipped as `Linear` on 2026-09-16 and that was
-        // an oversight rather than a choice: a lane drawn on it would have
-        // carried values the device could only round.
         curve: ParamCurve::Stepped(2),
         min: 0.0,
         max: 1.0,
         default: 0.0,
     },
-    ParamDescriptor {
-        id: BUFFER_PARAM_LENGTH,
-        name: "Length",
-        unit: "",
-        min: 0.0,
-        max: MOD_TIME_DIVISION_TOP,
-        curve: ParamCurve::Stepped(crate::ModTimeDivision::ALL.len() as u16),
-        default: 2.0,
-    },
-    ParamDescriptor {
-        id: BUFFER_PARAM_LOOP,
-        name: "Loop",
-        unit: "",
-        min: 0.0,
-        max: 1.0,
-        curve: ParamCurve::Stepped(2),
-        default: 0.0,
-    },
+    // The three gestures are **gates**, not triggers: the sound lasts exactly
+    // as long as the value is high, so a lane drawing a block, a MIDI note
+    // held down and a finger on the button are one mechanism rather than
+    // three. A trigger would need a second id to say when to stop.
     ParamDescriptor {
         id: BUFFER_PARAM_JUMP,
         name: "Jump",
         unit: "",
+        curve: ParamCurve::Stepped(2),
         min: 0.0,
         max: 1.0,
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: BUFFER_PARAM_REVERSE,
+        name: "Reverse",
+        unit: "",
         curve: ParamCurve::Stepped(2),
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: BUFFER_PARAM_STUTTER,
+        name: "Stutter Gate",
+        unit: "",
+        curve: ParamCurve::Stepped(2),
+        min: 0.0,
+        max: 1.0,
         default: 0.0,
     },
     ParamDescriptor {
@@ -2695,8 +2772,8 @@ static BUFFER_DESCRIPTORS: [ParamDescriptor; 9] = [
         default: 1.0,
     },
     ParamDescriptor {
-        id: BUFFER_PARAM_QUANT_GRID,
-        name: "Quant Grid",
+        id: BUFFER_PARAM_QUANT_START,
+        name: "Quant Start",
         unit: "",
         min: 0.0,
         max: MOD_TIME_DIVISION_TOP,
@@ -3069,14 +3146,16 @@ impl EffectParams {
             },
             Self::Buffer(p) => match id {
                 BUFFER_PARAM_POSITION => Some(p.position),
+                BUFFER_PARAM_POSITION_SPAN => Some(p.position_span),
                 BUFFER_PARAM_CROSSFADE_MS => Some(p.crossfade_ms),
-                BUFFER_PARAM_RATE => Some(p.rate),
                 BUFFER_PARAM_FREEZE => Some(p.freeze),
-                BUFFER_PARAM_LENGTH => Some(p.length),
-                BUFFER_PARAM_LOOP => Some(p.looping),
                 BUFFER_PARAM_JUMP => Some(p.jump),
+                BUFFER_PARAM_JUMP_BACK => Some(p.jump_back),
+                BUFFER_PARAM_REVERSE => Some(p.reverse),
+                BUFFER_PARAM_STUTTER => Some(p.stutter),
+                BUFFER_PARAM_STUTTER_LENGTH => Some(p.stutter_length),
                 BUFFER_PARAM_QUANTIZE => Some(p.quantize),
-                BUFFER_PARAM_QUANT_GRID => Some(p.quant_grid),
+                BUFFER_PARAM_QUANT_START => Some(p.quant_start),
                 _ => None,
             },
             Self::Chain(p) => match id {
@@ -3210,14 +3289,16 @@ impl EffectParams {
             },
             Self::Buffer(p) => match id {
                 BUFFER_PARAM_POSITION => p.position = value,
+                BUFFER_PARAM_POSITION_SPAN => p.position_span = value,
                 BUFFER_PARAM_CROSSFADE_MS => p.crossfade_ms = value,
-                BUFFER_PARAM_RATE => p.rate = value,
                 BUFFER_PARAM_FREEZE => p.freeze = value,
-                BUFFER_PARAM_LENGTH => p.length = value,
-                BUFFER_PARAM_LOOP => p.looping = value,
                 BUFFER_PARAM_JUMP => p.jump = value,
+                BUFFER_PARAM_JUMP_BACK => p.jump_back = value,
+                BUFFER_PARAM_REVERSE => p.reverse = value,
+                BUFFER_PARAM_STUTTER => p.stutter = value,
+                BUFFER_PARAM_STUTTER_LENGTH => p.stutter_length = value,
                 BUFFER_PARAM_QUANTIZE => p.quantize = value,
-                BUFFER_PARAM_QUANT_GRID => p.quant_grid = value,
+                BUFFER_PARAM_QUANT_START => p.quant_start = value,
                 _ => return None,
             },
             Self::Chain(p) => match id {

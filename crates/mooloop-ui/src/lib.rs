@@ -1768,7 +1768,7 @@ fn envelope_seconds(t: f32) -> f32 {
 
 /// Number of parameter fields `EffectSlotRow` carries. Raising it means
 /// adding matching `pN` fields to the Slint struct too.
-const EFFECT_ROW_PARAMS: usize = 12;
+const EFFECT_ROW_PARAMS: usize = 17;
 
 /// How many of those a descriptor table may fill, **indexed by descriptor
 /// id**. The last two are reserved for what a device keeps beside its
@@ -1784,6 +1784,12 @@ const EFFECT_ROW_PARAMS: usize = 12;
 /// happened to agree. The Buffer retiring `Offset` parted them: its table
 /// starts at id 1 and reaches id 9 with a hole at 0. One scheme, and it is
 /// the one an on-disk identifier already uses.
+///
+/// It reached fifteen on 2026-09-16, when the Buffer became three gestures
+/// with settings of their own: eleven live parameters over four retired ids,
+/// topping out at 14. A retired id is a hole here forever, which is the cost
+/// of ids that outlive the control model that minted them and is cheaper than
+/// the alternative -- a saved lane that silently means something else.
 const EFFECT_ROW_DESCRIPTOR_PARAMS: usize = EFFECT_ROW_PARAMS - 2;
 
 /// The number that binds a kind to its face, and the only thing that does.
@@ -2094,6 +2100,11 @@ fn effect_slot_row(
         p9: p[9],
         p10: p[10],
         p11: p[11],
+        p12: p[12],
+        p13: p[13],
+        p14: p[14],
+        p15: p[15],
+        p16: p[16],
         modulation_depths: Vec::<f32>::new().as_slice().into(),
         modulation_allowed: Vec::<bool>::new().as_slice().into(),
         modulation_offsets: Vec::<f32>::new().as_slice().into(),
@@ -2125,6 +2136,7 @@ fn effect_slot_row(
         buffer_window_end: -1.0,
         buffer_frozen: false,
         buffer_armed_freeze: 0,
+        buffer_armed_gesture: false,
         buffer_history_bars: slot
             .params
             .buffer()
@@ -2132,9 +2144,6 @@ fn effect_slot_row(
         buffer_position_bar: 1,
         buffer_position_beat: 1,
         buffer_position_tick: 0,
-        buffer_length_bars: 0,
-        buffer_length_beats: 0,
-        buffer_length_ticks: 0,
         detector_db: METER_FLOOR_DB,
         gain_reduction_db: 0.0,
         children: match slot.params {
@@ -2148,36 +2157,11 @@ fn effect_slot_row(
     }
 }
 
-/// What a held Buffer button borrowed and has to put back on release.
-///
-/// Named rather than a tuple because `.0` and `.1` over two floats that look
-/// alike is a swap waiting to happen, and named rather than inlined because
-/// clippy is right that `Rc<RefCell<HashMap<(i32, BufferHold), (f32, f32)>>>`
-/// is a type nobody should have to read twice.
-///
-/// One `Option` per borrowable parameter, and keyed by *which* control took
-/// it: **REV and STUT can be down at the same time**, and with one entry per
-/// slot the second press overwrote the first's record and the first release
-/// threw the whole entry away. Holding STUT, tapping REV and letting go left
-/// the device looping for good, because STUT's release found nothing to put
-/// back.
-#[derive(Clone, Copy, Default)]
-struct BorrowedBufferParams {
-    rate: Option<f32>,
-    looping: Option<f32>,
-}
-
-/// Which held control borrowed it. Keyed with the slot, because two Buffer
-/// faces can be on screen and a release has to put back what *that* press
-/// took.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum BufferHold {
-    Reverse,
-    Stutter,
-}
-
-type HeldBufferParams =
-    Rc<RefCell<std::collections::HashMap<(i32, BufferHold), BorrowedBufferParams>>>;
+// The Buffer's held buttons borrow nothing and therefore have nothing to put
+// back: each is one gate parameter that is high while the button is down.
+// `BorrowedBufferParams` and its per-slot map are gone with the macros that
+// needed them -- REV writing `1 - rate` and STUT overriding `Length` were the
+// only reason a press had to remember anything.
 
 /// Whether the rack's wrap button on `slot` should be live.
 fn wrap_enabled_at(effects: &[EffectSlotState], slot: usize) -> bool {
@@ -10020,19 +10004,20 @@ impl AppUi {
         }
 
 
-        // The Buffer face's buttons, as **macros over published parameters**.
+        // The Buffer face's buttons.
         //
-        // They used to fire debug `BufferEvent` tuples, which the face's own
-        // comment called a debug surface standing in for the real control
-        // layer. Everything they do now is a parameter write, so nothing the
-        // mouse can reach is unreachable from an automation lane or a
-        // modulator -- which is what makes the face a control surface rather
-        // than a second way of doing things.
+        // Every one of them is a write to a published parameter, so nothing
+        // the mouse can reach is unreachable from an automation lane or a
+        // modulator. They used to be *macros* over shared parameters -- REV
+        // wrote `1 - rate`, STUT overrode `Length` and restored it on release
+        // -- which meant each press had to remember what it had borrowed, and
+        // two of them down at once lost the record. A gesture owns its own
+        // settings now, so a press is one value going high.
         {
             let st = state.clone();
             let tx = cmd_tx.clone();
-            // One place that writes a Buffer parameter, so the six handlers
-            // below cannot each invent their own way of doing it.
+            // One place that writes a Buffer parameter, so the handlers below
+            // cannot each invent their own way of doing it.
             let write = move |slot: i32, id: u32, normalized: f32| {
                 let mut st = st.borrow_mut();
                 let EffectParamWrite::Applied(command) =
@@ -10047,10 +10032,6 @@ impl AppUi {
             };
 
             let w = write.clone();
-            window.on_effect_buffer_loop(move |slot, on| {
-                w(slot, mooloop_core::BUFFER_PARAM_LOOP, if on { 1.0 } else { 0.0 });
-            });
-            let w = write.clone();
             window.on_effect_buffer_quantize(move |slot, on| {
                 w(slot, mooloop_core::BUFFER_PARAM_QUANTIZE, if on { 1.0 } else { 0.0 });
             });
@@ -10059,118 +10040,12 @@ impl AppUi {
                 w(slot, mooloop_core::BUFFER_PARAM_FREEZE, if on { 1.0 } else { 0.0 });
             });
             let w = write.clone();
-            window.on_effect_buffer_jump(move |slot, down| {
-                // Press and release separately, because the parameter is a
-                // trigger and only a rising edge fires: holding the button is
-                // one gesture, and letting go is what arms the next one.
-                w(slot, mooloop_core::BUFFER_PARAM_JUMP, if down { 1.0 } else { 0.0 });
-            });
-            // What REV and STUT put back when they are let go.
-            //
-            // A held gesture has to restore what it borrowed, and only the
-            // press knows what that was. It is UI state and nothing else --
-            // no project edit, because a momentary button is a performance
-            // gesture rather than something the document remembers.
-            let borrowed: HeldBufferParams = Rc::new(RefCell::new(Default::default()));
-
-            let w = write.clone();
-            let held = borrowed.clone();
-            let rst = state.clone();
-            window.on_effect_buffer_reverse_pressed(move |slot| {
-                // Rate the other way round. It is linear over -4..4, so
-                // negating the natural value is `1 - normalized` -- and
-                // because it is one parameter write, a lane can do it too.
-                // Read back out of the row the face is drawing, which is
-                // already normalized and already the id-indexed scheme the
-                // write below uses.
-                let Some(row) = rst.borrow().effect_slot_model.row_data(slot as usize) else {
-                    return;
-                };
-                let rate = row.p3;
-                held.borrow_mut().insert(
-                    (slot, BufferHold::Reverse),
-                    BorrowedBufferParams {
-                        rate: Some(rate),
-                        looping: None,
-                    },
-                );
-                w(slot, mooloop_core::BUFFER_PARAM_RATE, 1.0 - rate);
-            });
-            let w = write.clone();
-            let held = borrowed.clone();
-            window.on_effect_buffer_reverse_released(move |slot| {
-                let Some(prior) = held.borrow_mut().remove(&(slot, BufferHold::Reverse)) else {
-                    return;
-                };
-                if let Some(rate) = prior.rate {
-                    w(slot, mooloop_core::BUFFER_PARAM_RATE, rate);
-                }
-            });
-
-            let w = write.clone();
-            let held = borrowed.clone();
-            let rst = state.clone();
-            window.on_effect_buffer_stutter(move |slot, down| {
-                if down {
-                    let Some(row) = rst.borrow().effect_slot_model.row_data(slot as usize) else {
-                        return;
-                    };
-                    held.borrow_mut().insert(
-                        (slot, BufferHold::Stutter),
-                        BorrowedBufferParams {
-                            rate: None,
-                            looping: Some(row.p5),
-                        },
-                    );
-                    // **Length is the stutter length, and STUT leaves it
-                    // alone.** It used to force a sixteenth and put the knob
-                    // back on release, which made the one control named for
-                    // the size of the repeat the one thing the gesture
-                    // ignored -- "how does one set the stutter length?" had no
-                    // answer, because nothing on the face was it. The gesture
-                    // is Loop plus a Jump to Position; how long the repeat is
-                    // was always a setting rather than part of the press.
-                    w(slot, mooloop_core::BUFFER_PARAM_LOOP, 1.0);
-                    w(slot, mooloop_core::BUFFER_PARAM_JUMP, 1.0);
-                    w(slot, mooloop_core::BUFFER_PARAM_JUMP, 0.0);
-                } else {
-                    let Some(prior) = held.borrow_mut().remove(&(slot, BufferHold::Stutter)) else {
-                        return;
-                    };
-                    if let Some(looping) = prior.looping {
-                        w(slot, mooloop_core::BUFFER_PARAM_LOOP, looping);
-                    }
-                }
-            });
-
-            let w = write.clone();
-            let rst = state.clone();
-            window.on_effect_buffer_window(move |slot, from, to| {
-                // A drag across the history is Position plus Length: where it
-                // started, and how long it is on the nearest grid step. Both
-                // are published, so the same drag is expressible as two lane
-                // points.
-                //
-                // The length half used to be dropped on the floor -- `to` went
-                // into a `let _` while the comment above claimed otherwise --
-                // so every drag set the window's *start* and left its size at
-                // whatever the knob said.
-                let bars = rst
-                    .borrow()
-                    .effect_slot_model
-                    .row_data(slot as usize)
-                    .map_or(0, |row| row.buffer_history_bars)
-                    .max(1);
-                let beats =
-                    (to - from).abs() * bars as f32 * mooloop_core::BEATS_PER_BAR as f32;
-                let division = mooloop_core::ModTimeDivision::nearest(beats);
-                w(slot, mooloop_core::BUFFER_PARAM_POSITION, from.clamp(0.0, 1.0));
-                w(
-                    slot,
-                    mooloop_core::BUFFER_PARAM_LENGTH,
-                    division.to_index() as f32 / mooloop_core::MOD_TIME_DIVISION_TOP,
-                );
-                w(slot, mooloop_core::BUFFER_PARAM_LOOP, 1.0);
+            window.on_effect_buffer_gate(move |slot, id, down| {
+                // A gate, so the press and the release are the same write
+                // with different values and the device needs no edge
+                // detector. The face sends the descriptor id, which is the
+                // same number a lane drawn on that gesture stores.
+                w(slot, id as u32, if down { 1.0 } else { 0.0 });
             });
 
             let st = state.clone();
@@ -13875,7 +13750,7 @@ impl AppUi {
                                     row.buffer_peaks = peaks.as_slice().into();
                                     row.buffer_head = marks.head.unwrap_or(-1.0);
                                     row.buffer_write = marks.write;
-                                    let (start, end) = marks.window.unwrap_or((-1.0, -1.0));
+                                    let (start, end) = marks.region.unwrap_or((-1.0, -1.0));
                                     row.buffer_window_start = start;
                                     row.buffer_window_end = end;
                                     row.buffer_frozen = marks.frozen;
@@ -13884,6 +13759,7 @@ impl AppUi {
                                         Some(false) => 2,
                                         None => 0,
                                     };
+                                    row.buffer_armed_gesture = marks.armed_gesture;
                                     let bars = row.buffer_history_bars.max(1) as f64;
                                     let ppq = mooloop_core::Ppq::DEFAULT;
                                     let history_ticks = bars
@@ -13897,22 +13773,6 @@ impl AppUi {
                                     row.buffer_position_bar = at.bar as i32;
                                     row.buffer_position_beat = at.beat as i32;
                                     row.buffer_position_tick = at.tick as i32;
-                                    // A *duration*, so a one-bar window reads
-                                    // 1:0:0 rather than 2:1:0 -- which is the
-                                    // whole reason there are two types.
-                                    let division = mooloop_core::ModTimeDivision::from_index(
-                                        (row.p4 * mooloop_core::MOD_TIME_DIVISION_TOP).round()
-                                            as i32,
-                                    );
-                                    let length_ticks = f64::from(division.beats())
-                                        * f64::from(ppq.ticks_per_beat());
-                                    let long = mooloop_core::BbtDuration::from_ticks(
-                                        mooloop_core::Ticks(length_ticks as u64),
-                                        ppq,
-                                    );
-                                    row.buffer_length_bars = long.bars as i32;
-                                    row.buffer_length_beats = long.beats as i32;
-                                    row.buffer_length_ticks = long.ticks as i32;
                                 }
                                 if meter_changed
                                     || dynamics_changed

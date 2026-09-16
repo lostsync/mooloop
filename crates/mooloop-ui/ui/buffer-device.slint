@@ -58,23 +58,22 @@ component HistoryView inherits Rectangle {
     // -1 when the device is following and there is no detached head.
     in property <float> head: -1;
     in property <float> write;
-    in property <float> window-start: -1;
-    in property <float> window-end: -1;
+    in property <float> region-start: -1;
+    in property <float> region-end: -1;
     in property <bool> frozen;
     callback position-picked(float);
-    callback window-dragged(float, float);
 
     background: Theme.background;
     border-radius: Theme.radius-sm;
     clip: true;
 
-    // The window, behind the bars so the audio inside it stays readable, and
-    // edged so it is legible when it is narrow -- a `1/64` window is two
-    // pixels wide and a wash alone would be invisible at exactly the setting
-    // somebody most wants to see.
-    if root.window-start >= 0 && root.window-end >= 0 : Rectangle {
-        x: min(root.window-start, root.window-end) * parent.width;
-        width: max(1px, abs(root.window-end - root.window-start) * parent.width);
+    // The region a gesture is confined to, behind the bars so the audio
+    // inside it stays readable, and edged so it is legible when it is narrow
+    // -- a `1/64` stutter is two pixels wide and a wash alone would be
+    // invisible at exactly the setting somebody most wants to see.
+    if root.region-start >= 0 && root.region-end >= 0 : Rectangle {
+        x: min(root.region-start, root.region-end) * parent.width;
+        width: max(1px, abs(root.region-end - root.region-start) * parent.width);
         height: 100%;
         background: Theme.accent;
         opacity: 0.22;
@@ -114,23 +113,21 @@ component HistoryView inherits Rectangle {
         background: Theme.accent;
     }
 
-    // Click sets Position; drag sets the window. Both write published
-    // parameters and nothing else -- there are no UI-only operations on this
-    // face, which is what keeps a lane able to do everything a mouse can.
+    // Dragging scrubs Position, which is the only thing there is to do here
+    // now: the playhead is heard while it moves, so a drag across the history
+    // *is* a scrub and a click that goes nowhere is silence. It writes a
+    // published parameter and nothing else, which is what keeps a lane able
+    // to do everything a mouse can.
     touch := TouchArea {
         mouse-cursor: pointer;
-        private property <float> from: 0;
+        moved => {
+            if (self.pressed) {
+                root.position-picked(clamp(self.mouse-x / max(1px, parent.width), 0, 1));
+            }
+        }
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down) {
-                self.from = clamp(self.mouse-x / max(1px, parent.width), 0, 1);
-            }
-            if (e.kind == PointerEventKind.up) {
-                let to = clamp(self.mouse-x / max(1px, parent.width), 0, 1);
-                if (abs(to - self.from) < 0.01) {
-                    root.position-picked(to);
-                } else {
-                    root.window-dragged(min(self.from, to), max(self.from, to));
-                }
+                root.position-picked(clamp(self.mouse-x / max(1px, parent.width), 0, 1));
             }
         }
     }
@@ -140,23 +137,27 @@ component HistoryView inherits Rectangle {
 //
 // **The device is a small realtime sampler lurking behind the live audio**,
 // not an effect with buffer-related controls. Audio is always flowing through
-// it and the last N bars are always being recorded; FREEZE turns that history
-// into a sample, control signals manipulate it, and releasing FREEZE returns
-// to live. There is no arm, no record gesture and no file dialog, which is
-// the whole success test.
+// it and the last N bars are always being recorded; the three held buttons
+// each cut to a piece of that history for as long as they are down, FREEZE
+// latches it, and the playhead scrubs it. There is no arm, no record gesture
+// and no file dialog, which is the whole success test.
 //
-// It outgrew 1U at nine parameters and took another unit rather than
-// compressing, per `UI_DESIGN.md`. Every control here writes a **published
-// parameter** -- including the clicks and drags on the history, and including
-// the three buttons that used to fire debug event tuples. Nothing the mouse
-// can reach is unreachable from an automation lane or a modulator, which is
-// what makes the face a control surface rather than a second way of doing
-// things.
+// **Every gesture owns its settings and borrows none.** JUMP has a distance,
+// STUT has a length, REV needs neither, and the playhead has a span. That is
+// the 2026-09-16 rebuild: the face used to drive one shared `Length`/`Loop`
+// pair through three buttons, so setting the stutter's length was impossible
+// -- the gesture overrode the knob on press and put it back on release.
+//
+// Every control here writes a **published parameter**, including the scrub on
+// the history. Nothing the mouse can reach is unreachable from an automation
+// lane or a modulator, which is what makes the face a control surface rather
+// than a second way of doing things.
 //
 // Modulation indices are descriptor **ids**, which is what `lib.rs` fills the
-// overlay vectors by: Position 2, Crossfade 1, Rate 3, Length 4, Quant Grid 9.
-// Id 0 is retired and its slot is a hole nothing writes, so a face that
-// counted knobs from zero would draw an arc that never moves.
+// overlay vectors by: Crossfade 1, Position 2, Quant Start 9, Jump Back 10,
+// Stutter 13, Span 14. Ids 0, 3, 4 and 5 are retired and their slots are
+// holes nothing writes, so a face that counted knobs from zero would draw an
+// arc that never moves.
 export component BufferDeviceFace inherits EffectDeviceShell {
     name: "Buffer";
     kind: "BUFFER / 2U";
@@ -165,26 +166,32 @@ export component BufferDeviceFace inherits EffectDeviceShell {
     in property <[float]> peaks;
     in property <float> head-fraction: -1;
     in property <float> write-fraction;
-    in property <float> window-start: -1;
-    in property <float> window-end: -1;
+    // The region a held gesture is confined to. -1 when there is none, or
+    // when it is the whole ring: a band drawn round everything says nothing.
+    in property <float> region-start: -1;
+    in property <float> region-end: -1;
     in property <bool> frozen;
     /// 0 none, 1 a freeze waiting for its boundary, 2 a thaw waiting.
     in property <int> armed-freeze;
+    /// A gesture press waiting for its boundary. Until it lands nothing has
+    /// happened, and a button that looked inert would be the gesture failing
+    /// silently.
+    in property <bool> armed-gesture;
     /// How much history the ring holds, in bars. Not a descriptor parameter
     /// -- changing it reallocates, which the audio callback may not do -- so
     /// it has its own callback rather than an id, and the engine rebuilds the
-    /// ring off-thread. It is still the number that decides what `Position`
-    /// means, which is why it is a control and not a caption.
+    /// ring off-thread.
     ///
-    /// `in-out` for the reason `looping` and `quantize` are, one section
-    /// down: `StepperField.value` is `in-out` and an arrow click assigns to
-    /// it, which drops whatever binding it had. Bound one way the stepper
-    /// would follow the engine until the first press and then stop.
+    /// `in-out` for the reason the switches below are: `StepperField.value`
+    /// is `in-out` and an arrow click assigns to it, which drops whatever
+    /// binding it had. Bound one way the stepper would follow the engine
+    /// until the first press and then stop.
     in-out property <int> history-bars: 2;
-    // Running count of forced returns to live: the writer overtaking a
-    // detached head. Demoted from the headline it used to be -- it is
-    // live-mode information, and Freeze removes most of what it reported.
-    in property <int> collisions;
+    // Wraps and cuts since the device was installed: a stutter's repeats, a
+    // reverse head lapping the ring, a playhead sweep too fast to sweep.
+    // Not an error count -- it is the number that says whether the head is
+    // doing what the picture claims.
+    in property <int> seams;
     // Bar, beat and tick are computed in Rust and printed here. The markup
     // formats and never derives: `time::BEATS_PER_BAR` is the only place that
     // says four, and a second one on this side is the fault `BbtText` exists
@@ -192,47 +199,44 @@ export component BufferDeviceFace inherits EffectDeviceShell {
     in property <int> position-bar: 1;
     in property <int> position-beat: 1;
     in property <int> position-tick;
-    in property <int> length-bars;
-    in property <int> length-beats;
-    in property <int> length-ticks;
 
     // --- published parameters, normalized 0..1 ----------------------------
     in-out property <float> position;
+    in-out property <float> position-span;
+    in-out property <float> jump-back;
+    in-out property <float> stutter-length;
     in-out property <float> crossfade;
-    in-out property <float> rate;
-    in-out property <float> length;
-    in-out property <float> quant-grid;
+    in-out property <float> quant-start;
     // `in-out`, because `ToggleButton.checked` is: a click assigns to it, and
     // assigning to a property drops whatever binding it had. Bound one way
     // these would follow the engine until the first press and then stop,
     // which is a control that lies after exactly one use.
-    in-out property <bool> looping;
     in-out property <bool> quantize;
 
     callback position-changed(float);
+    callback position-span-changed(float);
+    callback jump-back-changed(float);
+    callback stutter-length-changed(float);
     callback crossfade-changed(float);
-    callback rate-changed(float);
-    callback length-changed(float);
-    callback quant-grid-changed(float);
-    callback loop-toggled(bool);
+    callback quant-start-changed(float);
     callback quantize-toggled(bool);
-    callback history-bars-changed(int);
     callback freeze-toggled(bool);
-    callback window-dragged(float, float);
-    // Momentary, because the gesture lasts as long as the control is down.
-    // Each one writes parameters and restores them on release; the face keeps
-    // no state a lane could not also reach.
-    callback jump-pressed();
-    callback jump-released();
-    callback reverse-pressed();
-    callback reverse-released();
-    callback stutter-pressed();
-    callback stutter-released();
+    callback history-bars-changed(int);
+    // The three gestures are **gates**: press and release are reported
+    // separately and the sound lasts exactly as long as the button is down,
+    // which is the same thing a held MIDI note and a lane drawing a block
+    // say. A trigger would need a second control to say when to stop.
+    callback jump-held(bool);
+    callback reverse-held(bool);
+    callback stutter-held(bool);
 
-    private property <float> rate-value: (root.rate * 8) - 4;
     private property <float> crossfade-ms: 0.5 * pow(100, root.crossfade);
-    private property <int> length-index: round(root.length * Divisions.top);
-    private property <int> quant-index: round(root.quant-grid * Divisions.top);
+    private property <int> jump-index: round(root.jump-back * Divisions.top);
+    private property <int> stutter-index: round(root.stutter-length * Divisions.top);
+    private property <int> quant-index: round(root.quant-start * Divisions.top);
+    // The span knob is the grid plus one position on the end for the whole
+    // ring, so its travel is one step longer than every other grid knob.
+    private property <int> span-index: round(root.position-span * (Divisions.top + 1));
 
     VerticalLayout {
         padding: 6px;
@@ -241,9 +245,8 @@ export component BufferDeviceFace inherits EffectDeviceShell {
 
         // --- state, history length, and the freeze --------------------------
         HorizontalLayout {
-            // The row's height is the stepper's, rather than the 20px it was
-            // when everything in it was a caption: a control with arrows to
-            // hit cannot be squeezed to fit a label's row.
+            // The row's height is the stepper's, rather than a caption's: a
+            // control with arrows to hit cannot be squeezed into a label row.
             height: Theme.control-height;
             spacing: 6px;
             Rectangle {
@@ -261,7 +264,7 @@ export component BufferDeviceFace inherits EffectDeviceShell {
             StepperField {
                 label: "HISTORY";
                 tooltip: "History";
-                hint: "How many bars of audio the buffer keeps. Position is measured over the whole of it, so a shorter history is a finer control.";
+                hint: "How many bars of audio the buffer keeps. The playhead's span defaults to all of it, so a shorter history is a finer scrub.";
                 value <=> root.history-bars;
                 minimum: 1;
                 maximum: 64;
@@ -271,20 +274,21 @@ export component BufferDeviceFace inherits EffectDeviceShell {
                 changed(bars) => { root.history-bars-changed(bars); }
             }
             Rectangle { horizontal-stretch: 1; }
-            // A pending freeze is the one state the face must not stay quiet
-            // about: until the boundary the device is still live, and a
-            // control that looked as though nothing had happened would be the
-            // gesture failing silently.
+            // A pending freeze or a pending gesture is the one state the face
+            // must not stay quiet about: until the boundary nothing has
+            // happened, and a control that looked inert would be the gesture
+            // failing silently.
             Text {
-                text: root.armed-freeze == 1 ? "ARMED" : root.armed-freeze == 2 ? "RELEASING" : "";
+                text: root.armed-gesture
+                    ? "ARMED"
+                    : root.armed-freeze == 1 ? "FREEZING" : root.armed-freeze == 2 ? "RELEASING" : "";
                 color: Theme.warning;
                 font-size: 9px;
                 vertical-alignment: center;
             }
             // A `ToolButton` rather than a `ToggleButton`, because what it
             // shows is not one boolean: a freeze that is armed but has not
-            // landed is lit while `frozen` is still false, and that state is
-            // the one the face must not stay quiet about.
+            // landed is lit while `frozen` is still false.
             ToolButton {
                 width: 62px;
                 text: "FREEZE";
@@ -301,11 +305,10 @@ export component BufferDeviceFace inherits EffectDeviceShell {
             peaks: root.peaks;
             head: root.head-fraction;
             write: root.write-fraction;
-            window-start: root.window-start;
-            window-end: root.window-end;
+            region-start: root.region-start;
+            region-end: root.region-end;
             frozen: root.frozen;
             position-picked(p) => { root.position = p; root.position-changed(p); }
-            window-dragged(a, b) => { root.window-dragged(a, b); }
         }
 
         // --- the standing parameters ---------------------------------------
@@ -315,12 +318,10 @@ export component BufferDeviceFace inherits EffectDeviceShell {
                 width: 54px;
                 diameter: 34px;
                 label: "Position";
-                tooltip: "Where in the retained history the read head is";
+                tooltip: "Playhead over the buffer";
                 value <=> root.position;
                 default-value: 1;
-                value-text: root.position > 0.9995
-                    ? "live"
-                    : round(root.position * 1000) / 10 + " %";
+                value-text: round(root.position * 1000) / 10 + " %";
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[2];
                 modulation-depth: root.modulation-depths[2];
@@ -334,44 +335,82 @@ export component BufferDeviceFace inherits EffectDeviceShell {
             ParameterKnob {
                 width: 54px;
                 diameter: 34px;
-                label: "Length";
-                tooltip: "Length of the active window, on the shared grid";
-                value <=> root.length;
-                default-value: 0.1;
-                value-text: Divisions.label(root.length-index);
+                label: "Span";
+                tooltip: "How much of the buffer the playhead covers";
+                value <=> root.position-span;
+                default-value: 1;
+                value-text: root.span-index > Divisions.top
+                    ? "full"
+                    : Divisions.label(root.span-index);
                 modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[4];
-                modulation-depth: root.modulation-depths[4];
-                modulation-offset: root.modulation-offsets[4];
-                modulation-route-count: root.modulation-route-counts[4];
-                changed(v) => { root.length-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); }
-                modulation-edit-started => { root.modulation-edit-started(4); }
-                modulation-edit-finished => { root.modulation-edit-finished(4); }
+                modulation-allowed: root.modulation-allowed[14];
+                modulation-depth: root.modulation-depths[14];
+                modulation-offset: root.modulation-offsets[14];
+                modulation-route-count: root.modulation-route-counts[14];
+                changed(v) => { root.position-span-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(14, v); }
+                modulation-edit-started => { root.modulation-edit-started(14); }
+                modulation-edit-finished => { root.modulation-edit-finished(14); }
             }
             ParameterKnob {
                 width: 54px;
                 diameter: 34px;
-                label: "Rate";
-                tooltip: "Free-run speed of the read head";
-                value <=> root.rate;
-                default-value: 0.625;
-                value-text: round(root.rate-value * 100) / 100 + "x";
+                label: "Jump";
+                tooltip: "How far back JUMP lands";
+                value <=> root.jump-back;
+                default-value: 0.35;
+                value-text: Divisions.label(root.jump-index);
                 modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[3];
-                modulation-depth: root.modulation-depths[3];
-                modulation-offset: root.modulation-offsets[3];
-                modulation-route-count: root.modulation-route-counts[3];
-                changed(v) => { root.rate-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
-                modulation-edit-started => { root.modulation-edit-started(3); }
-                modulation-edit-finished => { root.modulation-edit-finished(3); }
+                modulation-allowed: root.modulation-allowed[10];
+                modulation-depth: root.modulation-depths[10];
+                modulation-offset: root.modulation-offsets[10];
+                modulation-route-count: root.modulation-route-counts[10];
+                changed(v) => { root.jump-back-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(10, v); }
+                modulation-edit-started => { root.modulation-edit-started(10); }
+                modulation-edit-finished => { root.modulation-edit-finished(10); }
+            }
+            ParameterKnob {
+                width: 54px;
+                diameter: 34px;
+                label: "Stutter";
+                tooltip: "How long STUT's repeat is";
+                value <=> root.stutter-length;
+                default-value: 0.65;
+                value-text: Divisions.label(root.stutter-index);
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[13];
+                modulation-depth: root.modulation-depths[13];
+                modulation-offset: root.modulation-offsets[13];
+                modulation-route-count: root.modulation-route-counts[13];
+                changed(v) => { root.stutter-length-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(13, v); }
+                modulation-edit-started => { root.modulation-edit-started(13); }
+                modulation-edit-finished => { root.modulation-edit-finished(13); }
+            }
+            ParameterKnob {
+                width: 54px;
+                diameter: 34px;
+                label: "Quant";
+                tooltip: "Which boundary a press waits for";
+                value <=> root.quant-start;
+                default-value: 0.1;
+                value-text: root.quantize ? Divisions.label(root.quant-index) : "off";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[9];
+                modulation-depth: root.modulation-depths[9];
+                modulation-offset: root.modulation-offsets[9];
+                modulation-route-count: root.modulation-route-counts[9];
+                changed(v) => { root.quant-start-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(9, v); }
+                modulation-edit-started => { root.modulation-edit-started(9); }
+                modulation-edit-finished => { root.modulation-edit-finished(9); }
             }
             ParameterKnob {
                 width: 54px;
                 diameter: 34px;
                 label: "Xfade";
-                tooltip: "Crossfade applied when the head moves or returns";
+                tooltip: "Declick applied wherever the head moves";
                 value <=> root.crossfade;
                 default-value: 0.349485;
                 value-text: round(root.crossfade-ms * 10) / 10 + " ms";
@@ -385,32 +424,13 @@ export component BufferDeviceFace inherits EffectDeviceShell {
                 modulation-edit-started => { root.modulation-edit-started(1); }
                 modulation-edit-finished => { root.modulation-edit-finished(1); }
             }
-            ParameterKnob {
-                width: 54px;
-                diameter: 34px;
-                label: "Quant";
-                tooltip: "Which boundary a freeze waits for";
-                value <=> root.quant-grid;
-                default-value: 0.1;
-                value-text: root.quantize ? Divisions.label(root.quant-index) : "off";
-                modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[9];
-                modulation-depth: root.modulation-depths[9];
-                modulation-offset: root.modulation-offsets[9];
-                modulation-route-count: root.modulation-route-counts[9];
-                changed(v) => { root.quant-grid-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(9, v); }
-                modulation-edit-started => { root.modulation-edit-started(9); }
-                modulation-edit-finished => { root.modulation-edit-finished(9); }
-            }
             VerticalLayout {
                 padding-top: 6px;
                 spacing: 3px;
                 horizontal-stretch: 1;
                 // Bars:beats:ticks, from the same component the transport
-                // draws. The head's place is a *position* and counts from
-                // one; the window's length is a *duration* and counts from
-                // zero, so a one-bar window reads 1:0:0 rather than 2:1:0.
+                // draws, counting from one because the head's place is a
+                // *position* rather than a duration.
                 HorizontalLayout {
                     spacing: 4px;
                     SectionLabel { text: "HEAD"; }
@@ -426,23 +446,10 @@ export component BufferDeviceFace inherits EffectDeviceShell {
                 }
                 HorizontalLayout {
                     spacing: 4px;
-                    SectionLabel { text: "WINDOW"; }
-                    BbtText {
-                        bar: root.length-bars;
-                        beat: root.length-beats;
-                        tick: root.length-ticks;
-                        bar-digits: 1;
-                        tick-digits: 2;
-                        color: Theme.text-muted;
-                        font-size: 10px;
-                    }
-                }
-                HorizontalLayout {
-                    spacing: 4px;
-                    SectionLabel { text: "RETURNS"; }
+                    SectionLabel { text: "SEAMS"; }
                     Text {
-                        text: root.collisions;
-                        color: root.collisions > 0 ? Theme.warning : Theme.text-faint;
+                        text: root.seams;
+                        color: Theme.text-faint;
                         font-size: 10px;
                         font-family: "monospace";
                         vertical-alignment: center;
@@ -455,29 +462,23 @@ export component BufferDeviceFace inherits EffectDeviceShell {
         HorizontalLayout {
             height: 22px;
             spacing: 4px;
-            ToggleButton {
-                width: 58px;
-                text: "LOOP";
-                checked <=> root.looping;
-                toggled(on) => { root.loop-toggled(on); }
-            }
             HeldButton {
                 text: "JUMP";
-                tooltip: "Relocate the head to Position, with no chase";
-                pressed => { root.jump-pressed(); }
-                released => { root.jump-released(); }
+                tooltip: "hold: play from Jump back";
+                pressed => { root.jump-held(true); }
+                released => { root.jump-held(false); }
             }
             HeldButton {
                 text: "REV";
-                tooltip: "hold: Rate the other way round";
-                pressed => { root.reverse-pressed(); }
-                released => { root.reverse-released(); }
+                tooltip: "hold: play backward from now";
+                pressed => { root.reverse-held(true); }
+                released => { root.reverse-held(false); }
             }
             HeldButton {
                 text: "STUT";
-                tooltip: "hold: loop one Length from Position";
-                pressed => { root.stutter-pressed(); }
-                released => { root.stutter-released(); }
+                tooltip: "hold: repeat the last Stutter";
+                pressed => { root.stutter-held(true); }
+                released => { root.stutter-held(false); }
             }
             ToggleButton {
                 width: 58px;

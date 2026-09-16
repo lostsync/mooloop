@@ -1203,96 +1203,75 @@ land on its own when it starts to matter:
   A published generator outlet is a source in the same shelf, in its own pane
   beside the modules. Device (effect) outlets, cross-channel sources, and
   macros remain planned.
-- The retained-audio buffer is descriptor-addressed: `Position` says where in
-  the retained history the read head is, `Rate` is its free-run speed,
-  `Length` and `Loop` are the window it repeats, `Jump` relocates it, `Freeze`
-  stops the writer, `Quantize` and `Quant Grid` decide when a freeze lands, and
-  `Crossfade` sets the declick length. All nine automate and modulate, and the
-  2U face carries all nine — including the clicks and drags on the history,
-  and including the LOOP/JUMP/REV/STUT/QUANT buttons, which are macros over
-  published parameters rather than a second way of doing things.
-  **`Length` is always on the shared musical grid** -- the same twenty-one
-  `ModTimeDivision` entries the modulator racks and the delay use, from `4/1`
-  down to `1/64T`, with dotted and triplet interleaved in pitch order. It is
-  never a free length in beats: one id standing for both would mean two
-  settings of different semantics behind one automatable address, and a
-  stepped index is also what makes modulating it musical -- an envelope on
-  Length sweeps `1/4 → 1/8 → 1/16` where a continuous length would smear. A
-  fresh Buffer loops one bar. **`Length` is also the stutter length**: STUT is
-  LOOP plus a JUMP to `Position`, and it leaves the knob alone. It used to
-  force a sixteenth and put the knob back on release, which made the one
-  control named for the size of the repeat the one thing the gesture ignored.
-  **Freezing and unfreezing wait for a musical boundary**, on by default at
-  one bar, on a `Quant Grid` of its own. That is not a nicety: at the freeze
-  instant the head sits at the write position, so continuing forward wraps
-  straight into the *oldest* retained sample — you hear N bars ago, not now —
-  and that only joins up when the material repeats at the buffer length, which
-  is what freezing on a loop's bar line gives you. While a freeze is waiting
-  the device is **still live**, and a second press before the line takes the
-  request back. With the transport stopped there is no grid to wait for, so it
-  happens at once. A saved freeze is restored rather than quantized: it is a
-  state the document was in, not a gesture somebody just made.
-  `Loop` wraps the head inside that window. The window opens where `Position`
-  points, extends **forward from its anchor for a forward head and backward
-  for a reverse one**, and stays put while the position is held; moving the
-  position moves the loop. It is then **slid back to lie inside retained
-  history**: `Position` at live *is* the write head, so a forward window drawn
-  from it would cover samples the writer has not reached, and a head faster
-  than the writer would walk straight into it. A window longer than the ring
-  is shortened to the ring. Dragging across the history sets the position and
-  the length together, the length snapped to the nearest grid step. `Jump` is the hard edit: a rising edge relocates
-  the head to `Position` with no chase, crossfaded, so a sequenced
-  `0% / 50% / 25% / 75%` with a trigger per step slices exactly rather than
-  arriving a few milliseconds late and at a pitch. A held trigger is one
-  gesture, and a document saved with it down does not fire one on load.
-  **Position is normalized over the ring**: `0` is the oldest sample it still
-  holds and `1` is now, so a rising ramp is forward playback and the knob's
-  top is live. Writing it is an *edit* rather than a standing value -- it aims
-  the head, the head closes on it at the turntable behaviour, and once it has
-  arrived and the request has stopped moving the chase lets go and `Rate`
-  carries the head from there. A moving curve is therefore a scrub and a held
-  one is a position; both are what they look like.
-  It replaced `Offset`, which was beats behind the writer and pointed the
-  other way. **A project saved before 2026-09-16 opens where it was**: the
-  device's saved offset, its automation lanes and its modulation routes are
-  all converted on load, and the old id is retired rather than reused.
+- **The retained-audio Buffer is a ring that is always recording, and four
+  ways to hear it instead of the input.** Rebuilt 2026-09-16, the day it was
+  first played; what it replaced was a turntable model, described at the end
+  of this entry.
+  **Three held gestures, each owning its own settings.** JUMP plays forward
+  from `Jump Back` behind now; REVERSE plays backward from now; STUTTER
+  repeats the last `Stutter` length. Each holds the ring still while it is
+  down — the press is a freeze — and letting go returns to live audio and
+  restarts the writer. JUMP and REVERSE wrap round the ring rather than
+  running out, so a held button never lets go on its own. None of them
+  borrows another's setting: the stutter's length is its own knob, which is
+  the question the rebuild started from. The three are **gates** rather than
+  triggers — `Jump`, `Reverse` and `Stutter Gate` are high for exactly as long
+  as the gesture lasts — so a finger on the button, a held MIDI note and a
+  block drawn in a lane are one mechanism. Last one pressed wins.
+  **`Position` is a playhead, heard only while it moves.** A static Position is
+  a setting nobody is playing, and the device falls through to live audio.
+  The head *is* the position rather than chasing it, so the playback speed is
+  the position's own speed: a one-bar saw from the modulator rack over a
+  one-bar ring plays at unity, half the period is an octave up, and a
+  descending ramp is reverse. Nothing on the face names a rate. A move too
+  large to sweep (past four times speed — a saw's wrap) cuts under the
+  crossfade instead of zipping. At the default full `Span` it addresses **the
+  ring in the ring's own coordinates**, the same map the waveform is drawn in,
+  so dragging across the picture scrubs exactly what is under the pointer; a
+  shortened `Span` is the most recent that much and follows the writer.
+  **Frozen with nothing else playing, the ring plays** — forward, round and
+  round — so a freeze leaves a loop rather than a still. Priority is fixed and
+  short: a held gesture, then a moving playhead, then a frozen ring, then the
+  input. Every change of source crossfades by `Crossfade`.
+  **`Quantize` delays presses, never releases.** A gesture and a freeze wait
+  for the next `Quant Start` boundary (one bar by default); letting go before
+  it lands takes the press back, and the face shows ARMED meanwhile. `Quant
+  Start` is independent of every length on the device — starting on the
+  quarter while stuttering a thirty-second is the ordinary case. With the
+  transport stopped there is no grid, so a press lands at once. A saved
+  freeze is restored rather than quantized.
+  **Every length is on the shared musical grid** — the twenty-one
+  `ModTimeDivision` entries the modulator racks and the delay use — and `Span`
+  adds one position past them for the whole ring, which is its default.
   **A fresh Buffer keeps two bars of history**, adjustable from 1 to 64 on the
-  face's HISTORY stepper. `bars` is deliberately not a descriptor parameter
-  and cannot become one: resizing the ring reallocates, so the replacement is
-  built on the control thread and swapped in at a block boundary, down the
-  same road a tempo change already travels. The length is not decoration —
-  `Position` is normalized over the whole ring, so the ring's length is the
-  position knob's resolution. It defaulted to eight bars until 2026-09-16,
-  which put 50% four bars ago.
-  **Freeze is what makes the device a small realtime sampler rather than an
-  effect with buffer controls.** Audio is always flowing through it and the
-  last N bars are always being recorded; freezing stops the writer and the
-  retained history becomes a sample, which control signals then manipulate.
-  The ring keeps its contents and the head wraps inside it, so a frozen loop
-  plays round and round; unfreezing returns to live. Freezing on a bar line of
-  a loop is what makes it seamless — the head is at the write position when it
-  freezes, so continuing forward lands in the *oldest* retained sample, which
-  only joins up when the material repeats at the buffer length. Quantized
-  freeze puts the transition on that line for you, and is on by default.
-  Changing tempo while frozen **leaves the frozen audio alone**: a tempo
-  change rebuilds the ring off-thread, and a frozen buffer refuses the
-  replacement rather than losing what is playing.
+  face's HISTORY stepper. `bars` is not a descriptor parameter and cannot
+  become one: resizing reallocates, so the replacement is built on the control
+  thread and swapped in at a block boundary, down the road a tempo change
+  travels. A frozen buffer refuses that swap rather than losing what is
+  playing, which also means **changing HISTORY while frozen does nothing to
+  the running ring** until it thaws and something resizes it again.
   `Freeze` persists, and a project saved frozen reopens frozen over an
-  **empty ring**, because the frozen audio itself is not saved yet.
-  Three controls arbitrate over one head and the rule is fixed: a gesture
-  carries its own rate and keeps it while it runs, a chase armed by `Position`
-  outranks free-run while it is closing, and otherwise the head runs at
-  `Rate`. `Rate` is signed and spans ±4x; zero is a hold, and a hold is
-  silence rather than one sample repeated. **A `Rate` that is not unity
-  detaches a head of its own**, which is what makes the knob and the REV
-  button audible over a live buffer: at unity the device follows its input
-  directly, and nothing else was detaching a free-running head except Freeze,
-  a `Position` write or a gesture. Unity takes the head back. A head `Rate`
-  created keeps its direction when it runs out of history — it wraps round the
-  ring rather than handing back, so a held REV keeps reversing — unless it is
-  looping, in which case the writer catching its window returns it to live and
-  says so in `RETURNS`. A gesture running when the writer stops keeps running
-  against the frozen ring and still expires on time.
+  **empty ring**, because the frozen audio itself is not saved yet. A
+  document saved with a gesture held reopens holding it.
+  The face's SEAMS readout counts wraps and cuts — a stutter's repeats, a
+  reverse head lapping the ring — which is the number that says whether the
+  head is doing what the picture claims. It replaced RETURNS, a count of
+  forced returns to live, which is a failure this design cannot have.
+  **What it replaced, and what that leaves behind.** The turntable model had
+  one read head fought over by `Position` (which armed a *chase* whose closing
+  speed was the playback rate), `Rate`, and a `Length`/`Loop` window, under
+  an arbitration rule with arrival and stillness tests; the face's buttons
+  were macros writing those shared knobs, so STUT could not have a length of
+  its own. `Rate`, `Length` and `Loop` are retired, and ids 3, 4 and 5 are
+  spent alongside `Offset`'s 0. Their saved values are dropped on load, and
+  **an automation lane or modulation route that names one of them stays in
+  the document but drives nothing**. `Quant Grid` is now `Quant Start` on the
+  same id, and a saved `quant_grid` key loads into it. A project saved before
+  either change still opens with its `Offset` converted to `Position`, lanes
+  and routes included.
+  The `BufferMidiMap` event path still builds its own head from a
+  `BufferEvent`'s geometry, and is the one path that can ask for a speed other
+  than ±1; it still has no caller outside its own tests.
 - **Every generator is descriptor-addressed** through `GeneratorParams`, so
   their parameters automate and modulate like an effect's. The
   three-oscillator synths reserve ten parameter ids per oscillator, starting

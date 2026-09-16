@@ -1,9 +1,23 @@
 //! Retained-audio buffer device core.
 //!
-//! The device is deliberately independent of project and UI plumbing: its
-//! public event tuple is the contract that the sequencer, parameter locks, and
-//! debug triggers will share. Construction allocates the ring; [`process`] is
-//! allocation-free and operates in place on an existing [`StereoBus`].
+//! **A ring that is always recording, and four ways to hear it instead of the
+//! input.** The device is deliberately independent of project and UI plumbing:
+//! construction allocates the ring, [`process`] is allocation-free and works
+//! in place on an existing [`StereoBus`].
+//!
+//! Rewritten 2026-09-16, the day it was first played. What it replaced was a
+//! turntable: one read head that `Position`, `Rate` and `Loop` fought over
+//! under an arbitration rule, `Position` aiming a *chase* whose closing speed
+//! became the playback rate, and the face's buttons implemented as macros
+//! writing those shared knobs. It needed a chase time constant, an arrival
+//! test and a stillness test to work out when an edit had finished, and the
+//! buttons could not be given settings of their own without taking them from
+//! each other. Adam, having played it: *"i dont understand what is difficult.
+//! its a buffer."*
+//!
+//! So: a gesture computes two sample indices when it fires and plays between
+//! them. Nothing chases anything. The whole arbitration rule is
+//! [`BufferDevice::head`]'s match, in priority order, and it is eleven lines.
 
 use mooloop_core::{BufferDuration, BufferEvent, BufferParams};
 
@@ -27,145 +41,115 @@ pub struct TimedBufferEvent {
     pub event: BufferEvent,
 }
 
-/// What decides the head's velocity on a given frame.
-///
-/// The controls that can move the head would otherwise fight over it, and
-/// this is the arbitration rule from
-/// `docs/plans/buffer-implementation/03-freeze-and-the-grid.md` written down
-/// as a type: a chase outranks free-run while it is closing, and a gesture
-/// outranks both for as long as it runs.
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum Drive {
-    /// A [`BufferEvent`] set a fixed rate when it fired. JUMP, REV and STUT.
-    /// The rate is part of the gesture and does not move under it, and it is
-    /// the one drive that outranks a `Position` write.
-    Event,
-    /// The `Position` parameter armed this head.
-    ///
-    /// Its chase is **released once reached**, after which the head free-runs
-    /// at `Rate` from there. That is what makes a static Position leave `Rate`
-    /// in charge instead of pinning the head to a stale target, while a
-    /// continuous stream of writes stays a scrub -- each one re-arms.
-    Position,
-    /// Freeze, or a hand on the platter. Neither is a standing value, so a
-    /// `Position` write is free to take the head from them; and a hand's
-    /// chase is *not* released on arrival, because a hand that has stopped
-    /// moving is still a hand holding the platter.
-    Free,
-}
-
-impl Drive {
-    /// Whether the head's speed comes from the `Rate` parameter when no chase
-    /// is armed -- and therefore whether the mute law applies to it. A
-    /// gesture's rate is part of the gesture.
-    fn follows_rate(self) -> bool {
-        !matches!(self, Self::Event)
-    }
-}
-
-#[derive(Clone, Copy)]
-struct ReadHead {
-    position: f64,
-    rate: f32,
-    drive: Drive,
-    window_start: f64,
-    window_end: Option<f64>,
-    repeats_remaining: Option<u32>,
-    expires_at: Option<u64>,
-    crossfade_frames: u32,
-    /// Set when the event's duration is `Gate`: the head holds until an
-    /// explicit release rather than until it expires or collides.
-    gated: bool,
-}
-
-#[derive(Clone, Copy)]
-enum FadeSource {
-    Live,
-    Detached { position: f64, rate: f32 },
-}
-
-/// A platter under the hand. The read head chases `target`, and the speed it
-/// closes the gap at *is* the playback rate — so spinning fast plays fast,
-/// and letting go coasts to a stop. Position is the input; rate is derived.
-/// Driving rate directly instead would be a jog shuttle, not a turntable.
-#[derive(Clone, Copy)]
-struct Scrub {
-    /// Absolute target, for a hand on the platter: a hand aims at a point.
-    target: f64,
-    /// Time constant of the chase, in frames. Roughly one control-message
-    /// interval: long enough that per-message steps read as continuous
-    /// motion, short enough that the head does not lag the hand.
-    chase_frames: f64,
-    /// Set when `Position` armed the chase. The target is then
-    /// `write_head - offset_frames`, recomputed every frame rather than
-    /// pushed in per control message.
-    ///
-    /// **It has to travel with the writer, and the reason is audible.** A
-    /// target that only moved when a control message arrived would sag
-    /// between messages: 32 frames of ripple against a 240-frame time
-    /// constant is about 6% of pitch at 1.5 kHz, and a held position would
-    /// warble. Measured, on the way to this: a lane holding one position read
-    /// 1.06 where it had to read 1.00.
-    ///
-    /// Frozen, the write head is static and the same expression is absolute,
-    /// which is what "Freeze latches what *now* means" is in code.
-    offset_frames: Option<f64>,
-    /// Frames since the requested position last changed.
-    ///
-    /// This is what tells a *static* position from a *sweep*, and the two need
-    /// opposite answers. A static position hands the head to `Rate` once the
-    /// chase has arrived; a sweep must keep chasing, because releasing
-    /// mid-sweep lets the head free-run past the target and be dragged back on
-    /// the next tick -- measured at +1.00 alternating with -0.07 every 32
-    /// frames, which is a warble rather than a scrub.
-    ///
-    /// Arrival alone cannot tell them apart: during a slow sweep the head is
-    /// always within a frame of the target. Stillness can.
-    still_frames: u32,
-}
-
-/// A stopped platter must go silent. Holding at rate zero would repeat one
-/// sample forever, which is a DC step, not silence.
-const SCRUB_MUTE_RATE: f32 = 0.02;
 /// How many peaks the face draws the retained history as.
 ///
 /// The memory *is* the instrument here, which is why the Buffer gets a
 /// waveform where a synth does not -- but the ring is megabytes and the face
 /// is a few hundred pixels, so what crosses to the GUI is a downsample rather
-/// than PCM. Two hundred and fifty-six is a little over one peak per pixel at
-/// the width a 2U face gives it.
+/// than PCM.
 pub const WAVEFORM_BINS: usize = 256;
 
-/// How far either side of the midpoint the `Freeze` parameter has to travel
-/// before it changes anything.
-const FREEZE_HYSTERESIS: f32 = 0.05;
+/// How far either side of the midpoint a switch has to travel before it
+/// changes anything. A modulator resting on the threshold would otherwise
+/// chatter the writer once per control tick, and every one of those is a
+/// crossfade.
+const SWITCH_HYSTERESIS: f32 = 0.05;
 
-/// Ceiling on how fast anything may drive the head, so a wild spin cannot
-/// outrun the interpolator into noise. The `Rate` descriptor's range is this
-/// same number, from the same place: a knob whose top travel the clamp threw
-/// away would be a control lying about its own span.
-const MAX_SCRUB_RATE: f32 = mooloop_core::MAX_BUFFER_RATE;
-
-/// How far from unity `Rate` has to be before the device stops following its
-/// input and hands the head over.
+/// How much `Position` has to move between control ticks to count as moving.
 ///
-/// Following is a direct assignment from the input sample -- bit-identical and
-/// zero latency -- where a detached head at exactly unity is a delay line
-/// instead: one interpolation and a fixed lag behind, for nothing audible. So
-/// unity means follow and anything else means play the memory. A thousandth
-/// of a unit rate is an eight-thousandth of the knob's travel, which is under
-/// a pixel and well outside what a descriptor round-trip can drift by.
-const RATE_FOLLOW_EPSILON: f32 = 1e-3;
+/// **This is the whole of what makes `Position` an instrument rather than a
+/// setting**: a playhead that is being driven is what you hear, and one
+/// sitting still is somebody who has stopped playing, so the device falls
+/// through to live audio. Adam: *"if it is moving, thats what we should hear,
+/// otherwise its just live audio."*
+///
+/// Sixteen ulps at the top of the range, which is comfortably under the
+/// slowest thing anybody would drive it with -- a sixteen-bar ramp moves
+/// twenty times this per control tick -- and comfortably over the noise a
+/// normalized round-trip through a descriptor leaves behind.
+const POSITION_MOVED: f32 = 1e-6;
 
-/// A freeze or a thaw waiting for its boundary.
+/// How long `Position` may sit still before the device hands back to live.
+///
+/// Four control ticks at the engine's rate. Long enough that a lane's
+/// resolution cannot stutter it, short enough to be inaudible as a tail.
+const POSITION_STILL_FRAMES: u32 = 128;
+
+/// How fast `Position` may sweep before the device treats the move as an edit
+/// and cuts instead.
+///
+/// The head *is* the position, so a control tick that asks it to travel a
+/// long way is asking for a very fast sweep, and past a few times speed a
+/// sweep stops sounding like one -- it is a zip, and then a click. A saw's
+/// wrap is exactly this case and wants to be a seam. Above the limit the head
+/// cuts to the new position under the crossfade instead of racing to it.
+const MAX_SWEEP_RATE: f64 = 4.0;
+
+/// Which gesture is holding the head.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Gesture {
+    Jump,
+    Reverse,
+    Stutter,
+    /// A [`BufferEvent`] from the MIDI map, which carries its own geometry.
+    Event,
+}
+
+/// What the head is following, in priority order. A later variant never
+/// displaces an earlier one; that is the entire arbitration rule.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Source {
+    /// A held gesture: JUMP, REVERSE, STUTTER, or a mapped event.
+    Gesture(Gesture),
+    /// `Position`, while it is moving.
+    Position,
+    /// Frozen with nothing else playing: the ring goes round.
+    Frozen,
+}
+
+/// A read head, and the region it stays inside.
+///
+/// One shape for all four sources, because they differ only in where they
+/// start, which way they go and how far they may wander -- which is what
+/// "play the samples between two numbers" means once it is written down.
 #[derive(Clone, Copy)]
-struct ArmedFreeze {
-    /// `true` to freeze when it lands, `false` to return to live.
-    freeze: bool,
-    /// Frames still to wait. Counted down rather than compared against a
-    /// transport position, because the position is only given at block start
-    /// and the boundary can fall inside a block.
-    frames_remaining: f64,
+struct Head {
+    source: Source,
+    /// Absolute ring position, in frames. Fractional: the interpolator reads
+    /// between samples.
+    position: f64,
+    /// Frames travelled per frame. `±1` for a gesture; for `Position` it is
+    /// whatever the playhead's own motion implies, which is why nothing on
+    /// the face has to name a rate.
+    step: f64,
+    /// The region the head wraps inside, as absolute positions. A gesture
+    /// that repeats sets this to its own length; everything else gets the
+    /// whole ring, which is what makes a held JUMP lap rather than stop.
+    region: (f64, f64),
+}
+
+impl Head {
+    /// Wrap back inside the region. `rem_euclid` rather than a loop, because
+    /// at four times speed over a four-frame ring one subtraction is not
+    /// enough and a loop on the audio thread is not a thing to reason about
+    /// later.
+    fn wrapped(mut self) -> (Self, bool) {
+        let (start, end) = self.region;
+        let span = end - start;
+        if span <= 0.0 {
+            return (self, false);
+        }
+        let before = self.position;
+        self.position = start + (self.position - start).rem_euclid(span);
+        // A wrap of less than half a frame is rounding, not a seam.
+        (self, (self.position - before).abs() > 0.5)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FadeSource {
+    Live,
+    Detached { position: f64, step: f64 },
 }
 
 #[derive(Clone, Copy)]
@@ -175,6 +159,25 @@ struct Fade {
     frames: u32,
 }
 
+/// What a press is waiting for, when `Quantize` says it has to wait.
+#[derive(Clone, Copy)]
+struct Armed {
+    what: ArmedWhat,
+    /// Frames still to wait. Counted down rather than compared against a
+    /// transport position, because the position is only given at block start
+    /// and the boundary can fall inside a block.
+    frames_remaining: f64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArmedWhat {
+    Gesture(Gesture),
+    Freeze(bool),
+}
+
+/// The three gates, in the order [`BufferDevice::gates`] holds them.
+const GATES: [Gesture; 3] = [Gesture::Jump, Gesture::Reverse, Gesture::Stutter];
+
 /// One opt-in stereo rolling history. `capacity_frames` is fixed after
 /// construction; replacing it on a tempo/config change is a control-plane
 /// operation, never something [`process`] attempts.
@@ -182,134 +185,85 @@ pub struct BufferDevice {
     left: Vec<f32>,
     right: Vec<f32>,
     write_head: u64,
-    head: Option<ReadHead>,
-    fade: Option<Fade>,
-    scrub: Option<Scrub>,
-    /// Amplitude the head is currently entitled to, from its speed. Held
-    /// across frames so the mute fades rather than steps, and applied to any
-    /// head whose velocity comes from a control rather than from a gesture --
-    /// a stopped platter and a `Rate` of zero are the same DC step.
-    head_gain: f32,
-    /// Free-run velocity, from `BUFFER_PARAM_RATE`. What a detached head does
-    /// when nothing else is talking to it.
-    rate: f32,
-    /// Where `Position` last asked the head to be, normalized over the ring.
+    /// Whether the writer is running. A gesture stops it for as long as it is
+    /// held, and `Freeze` stops it until it is turned off.
     ///
-    /// Held rather than derived, because `Jump` samples it: a trigger has to
-    /// know where to go without a chase having been armed, and the parameter
-    /// may have been written blocks ago.
-    position: f32,
-    /// The active window's length, as a [`mooloop_core::ModTimeDivision`]
-    /// index. Stepped, always -- see `BufferParams::length`.
-    length_index: f32,
-    /// Whether the head wraps inside the active window.
-    looping: bool,
-    /// The last `Jump` value seen, so a rising edge can be told from a held
-    /// one. Seeded from the saved parameter set, so a document stored with
-    /// the trigger down does not fire one on load.
-    last_jump: f32,
-    /// Whether freezing and unfreezing wait for a musical boundary.
-    quantize: bool,
-    /// Which boundary, as a [`mooloop_core::ModTimeDivision`] index.
-    quant_grid_index: f32,
-    /// Peak magnitude per bin over the retained history, for the face to
-    /// draw.
-    ///
-    /// Accumulated **as the writer goes**, one `max` per frame into the bin
-    /// the write head is in, and reset when the writer first enters a bin.
-    /// Recomputing it from the ring would be ninety-six thousand operations a
-    /// block for a picture that changes by one pixel; this is one comparison,
-    /// and it is the only shape that is honest about a ring nobody reads in
-    /// order.
-    ///
-    /// Frozen, the writer stops and so does this -- which is right: the
-    /// picture should stop moving when the sample does.
-    peaks: [f32; WAVEFORM_BINS],
-    /// A freeze or a thaw waiting for the boundary, and how many frames are
-    /// left to wait.
-    ///
-    /// The device is still live while this is pending, and the face has to
-    /// say so -- see [`Self::armed_freeze`]. A second request of the same kind
-    /// before the boundary cancels it, because the control that armed it is
-    /// the control that takes it back.
-    armed_freeze: Option<ArmedFreeze>,
-    /// Whether the writer is running. Freeze is what turns it off.
-    ///
-    /// It is a `bool` rather than an absent writer because the ring must keep
-    /// its contents: freezing is latching the history, not discarding it.
+    /// A `bool` rather than an absent writer because the ring must keep its
+    /// contents: freezing is latching the history, not discarding it.
     writing: bool,
-    /// Frames processed, whatever the writer is doing.
-    ///
-    /// `write_head` used to be both the writer's position and the clock, and
-    /// Freeze separates them: a gesture with a `Steps` duration must still
-    /// expire while the writer is stopped, or freezing during a STUT would
-    /// leave it repeating forever.
-    frames_elapsed: u64,
-    /// A freeze carried in from the saved parameter set, applied on the first
-    /// block for the same reason [`Self::pending_offset_beats`] is:
-    /// construction has no [`ProcessContext`], so it cannot know how long the
-    /// crossfade is.
-    pending_freeze: bool,
-    /// Incremented when the writer catches a detached head. This is a cheap
-    /// observable diagnostic for the host/tests without logging on the RT
-    /// thread.
-    collision_count: u64,
-    /// Standing crossfade length, set by `BUFFER_PARAM_CROSSFADE_MS`. Gesture
-    /// events carry their own and are unaffected.
+    /// Whether the latching `Freeze` is on, as distinct from a gesture having
+    /// stopped the writer for the moment. Releasing a gesture restarts the
+    /// writer only if this is off.
+    frozen: bool,
+    head: Option<Head>,
+    fade: Option<Fade>,
+    armed: Option<Armed>,
+
+    // --- standing settings, in the units the descriptors publish ----------
     crossfade_ms: f32,
-    /// The offset the last `Position` write asked for, in frames behind the
-    /// write head.
-    ///
-    /// Held so that a *repeated* write can be told from a *changed* one. A
-    /// lane repeating one value is a static position and must not re-arm the
-    /// chase it has already released into, or the head oscillates between
-    /// free-running at `Rate` and being dragged back -- which reads as a small
-    /// backward step every control tick. A lane whose value is moving is a
-    /// scrub and re-arms on every tick, which is the same thing said the other
-    /// way round.
-    armed_offset_frames: Option<f64>,
-    /// A position carried in from the saved parameter set, applied on the
-    /// first block. Construction has no `ProcessContext`, so it cannot arrange
-    /// a crossfade, and a loaded project must still come up with its head
-    /// where the document says it was.
-    pending_position: Option<f32>,
-    /// A non-unity `Rate` carried in from the saved parameter set, applied on
-    /// the first block for the same reason [`Self::pending_position`] is. A
-    /// document saved at half speed has to reopen at half speed without
-    /// anybody touching the knob.
-    ///
-    /// One-shot rather than checked every block: a windowed rate head that
-    /// collides is *meant* to end, and a standing reconcile would retrigger
-    /// it once a block forever.
-    pending_rate: bool,
+    /// Where `Position` last asked the playhead to be, normalized over its
+    /// span.
+    position: f32,
+    /// The last `Position` the device *acted* on, so a repeat can be told
+    /// from a change.
+    position_was: f32,
+    /// Frames since `Position` last changed. What tells a playhead somebody
+    /// is driving from one somebody has left alone.
+    position_still: u32,
+    /// Frames since the last `Position` write, so a move can be turned into
+    /// a speed without anybody declaring the control rate.
+    position_age: u32,
+    position_span_index: f32,
+    jump_back_index: f32,
+    stutter_length_index: f32,
+    quantize: bool,
+    quant_start_index: f32,
+    /// Which gestures are currently held, in [`GATES`] order.
+    gates: [bool; 3],
+
+    /// Peak magnitude per bin over the retained history, for the face to
+    /// draw. Accumulated as the writer goes, one `max` per frame into the bin
+    /// the write head is in, and reset when the writer first enters a bin.
+    peaks: [f32; WAVEFORM_BINS],
+    /// Frames processed, whatever the writer is doing.
+    frames_elapsed: u64,
+    /// Seams: a head wrapping its region, or a `Position` that moved too far
+    /// to sweep and had to cut. Cheap observable diagnostics for tests and
+    /// the face without logging on the RT thread.
+    seam_count: u64,
+    /// Settings carried in from the saved parameter set and applied on the
+    /// first block, because construction has no [`ProcessContext`] and cannot
+    /// work out how long a crossfade is.
+    pending_freeze: bool,
+    pending_gates: [bool; 3],
 }
 
 impl BufferDevice {
     pub fn new(params: BufferParams, sample_rate: u32, bpm: f64) -> Self {
         let mut device = Self::with_bars(sample_rate, bpm, u32::from(params.bars.max(1)));
         device.crossfade_ms = params.crossfade_ms.clamp(0.0, 50.0);
-        device.rate = params.rate.clamp(-MAX_SCRUB_RATE, MAX_SCRUB_RATE);
-        device.pending_freeze = params.freeze >= 0.5;
         device.position = params.position.clamp(0.0, 1.0);
-        device.length_index = params.length;
-        device.looping = params.looping >= 0.5;
-        device.last_jump = params.jump;
+        device.position_was = device.position;
+        device.position_span_index = params.position_span;
+        device.jump_back_index = params.jump_back;
+        device.stutter_length_index = params.stutter_length;
         device.quantize = params.quantize >= 0.5;
-        device.quant_grid_index = params.quant_grid;
-        // Only a position that is not already live is worth arming: `1.0` is
-        // the writer, and following is what a fresh device does anyway.
-        device.pending_position = (params.position < 1.0).then_some(params.position);
-        device.pending_rate = (device.rate - 1.0).abs() > RATE_FOLLOW_EPSILON;
+        device.quant_start_index = params.quant_start;
+        device.pending_freeze = params.freeze >= 0.5;
+        device.pending_gates = [
+            params.jump >= 0.5,
+            params.reverse >= 0.5,
+            params.stutter >= 0.5,
+        ];
         device
     }
+
     /// Allocate a ring for `bars` bars at the supplied tempo.
     ///
     /// The bar length is [`mooloop_core::frames_per_bar`], which the sampler
-    /// uses too -- the comment there used to claim it followed this device
-    /// while this device spelled its own copy. `ceil` and the floor of four
-    /// frames stay: the ring must not shrink on a rounding change, and
-    /// [`Self::with_capacity`] has a floor for a reason. Construction time,
-    /// not `process`, so the float is free.
+    /// uses too. `ceil` and the floor of four frames stay: the ring must not
+    /// shrink on a rounding change, and [`Self::with_capacity`] has a floor
+    /// for a reason. Construction time, not `process`, so the float is free.
     pub fn with_bars(sample_rate: u32, bpm: f64, bars: u32) -> Self {
         let frames_per_bar = mooloop_core::frames_per_bar(sample_rate, bpm).ceil() as usize;
         Self::with_capacity((frames_per_bar * bars.max(1) as usize).max(4))
@@ -319,31 +273,32 @@ impl BufferDevice {
     /// prepared engine allocations.
     pub fn with_capacity(capacity_frames: usize) -> Self {
         let capacity_frames = capacity_frames.max(4);
+        let defaults = BufferParams::default();
         Self {
             left: vec![0.0; capacity_frames],
             right: vec![0.0; capacity_frames],
             write_head: 0,
+            writing: true,
+            frozen: false,
             head: None,
             fade: None,
-            scrub: None,
-            head_gain: 0.0,
-            rate: 1.0,
-            position: 1.0,
-            length_index: 2.0,
-            looping: false,
-            last_jump: 0.0,
-            quantize: true,
-            quant_grid_index: 2.0,
+            armed: None,
+            crossfade_ms: defaults.crossfade_ms,
+            position: defaults.position,
+            position_was: defaults.position,
+            position_still: POSITION_STILL_FRAMES,
+            position_age: 1,
+            position_span_index: defaults.position_span,
+            jump_back_index: defaults.jump_back,
+            stutter_length_index: defaults.stutter_length,
+            quantize: defaults.quantize >= 0.5,
+            quant_start_index: defaults.quant_start,
+            gates: [false; 3],
             peaks: [0.0; WAVEFORM_BINS],
-            armed_freeze: None,
-            writing: true,
             frames_elapsed: 0,
+            seam_count: 0,
             pending_freeze: false,
-            collision_count: 0,
-            crossfade_ms: 2.5,
-            armed_offset_frames: None,
-            pending_position: None,
-            pending_rate: false,
+            pending_gates: [false; 3],
         }
     }
 
@@ -355,18 +310,29 @@ impl BufferDevice {
         self.capacity_frames() * 2 * std::mem::size_of::<f32>()
     }
 
-    pub fn collision_count(&self) -> u64 {
-        self.collision_count
+    /// Wraps and cuts since construction. Not an error count -- a stutter
+    /// makes one per repeat by design -- but it is the number that says
+    /// whether the head is doing what the face is drawing.
+    pub fn seam_count(&self) -> u64 {
+        self.seam_count
     }
 
+    /// Whether the device is passing its input through untouched. A direct
+    /// assignment from the input sample, so it is bit-identical and zero
+    /// latency even at startup and across wraparound.
     pub fn is_following(&self) -> bool {
         self.head.is_none()
     }
 
+    pub fn is_frozen(&self) -> bool {
+        self.frozen
+    }
+
+    pub fn is_writing(&self) -> bool {
+        self.writing
+    }
+
     /// Process one block. Events must be in ascending sample-offset order.
-    /// Follow is intentionally a direct assignment from the input sample,
-    /// rather than a read from the ring: that makes it bit-identical and zero
-    /// latency even at startup and across wraparound.
     pub fn process(
         &mut self,
         context: &ProcessContext,
@@ -386,22 +352,23 @@ impl BufferDevice {
         params: &[TimedBufferParam],
     ) {
         debug_assert!(context.frames <= bus.capacity());
-        if let Some(position) = self.pending_position.take() {
-            self.set_position(position, context);
-        }
         if std::mem::take(&mut self.pending_freeze) {
             // A saved freeze is a state the document was in, not a gesture
             // somebody just made, so it is restored rather than quantized.
-            self.freeze(context);
+            self.apply_freeze(true);
         }
-        if std::mem::take(&mut self.pending_rate) {
-            self.reconcile_rate(context);
+        for (index, held) in std::mem::take(&mut self.pending_gates).into_iter().enumerate() {
+            if held {
+                self.gates[index] = true;
+                self.start(GATES[index], context);
+            }
         }
+
         let mut event_index = 0;
         let mut param_index = 0;
         for frame in 0..context.frames {
-            // Parameters first: a gesture arriving on the same frame as an
-            // offset change should see the new crossfade, and a gesture owns
+            // Parameters first: a gesture arriving on the same frame as a
+            // setting change should see the new setting, and a gesture owns
             // the head afterwards either way.
             while let Some(timed) = params.get(param_index) {
                 if timed.offset as usize != frame {
@@ -421,8 +388,7 @@ impl BufferDevice {
             let input_l = bus.l[frame];
             let input_r = bus.r[frame];
             // The writer stores the device input, never its output, and does
-            // it whatever the read head is doing. `writing` is the one thing
-            // that stops it, and Freeze is the only thing that sets it.
+            // it whatever the read head is doing.
             if self.writing {
                 let write_index = self.index(self.write_head as f64);
                 self.left[write_index] = input_l;
@@ -431,18 +397,7 @@ impl BufferDevice {
             }
 
             let (mut output_l, mut output_r) = match self.head {
-                Some(head) => {
-                    let (left, right) = self.read_stereo(head.position);
-                    // A gesture's rate is part of the gesture and is left
-                    // alone; a control-driven head follows its own speed down
-                    // to silence, because holding at zero repeats one sample
-                    // forever and that is a DC step rather than a hold.
-                    if self.scrub.is_some() || head.drive.follows_rate() {
-                        (left * self.head_gain, right * self.head_gain)
-                    } else {
-                        (left, right)
-                    }
-                }
+                Some(head) => self.read_stereo(head.position),
                 None => (input_l, input_r),
             };
 
@@ -456,8 +411,8 @@ impl BufferDevice {
                 let to_gain = (phase * core::f32::consts::FRAC_PI_2).sin();
                 output_l = from_l * from_gain + output_l * to_gain;
                 output_r = from_r * from_gain + output_r * to_gain;
-                if let FadeSource::Detached { position, rate } = &mut fade.source {
-                    *position += f64::from(*rate);
+                if let FadeSource::Detached { position, step } = &mut fade.source {
+                    *position += *step;
                 }
                 fade.frame += 1;
                 self.fade = (fade.frame < fade.frames).then_some(fade);
@@ -465,150 +420,572 @@ impl BufferDevice {
 
             bus.l[frame] = output_l;
             bus.r[frame] = output_r;
-            if let Some(mut armed) = self.armed_freeze {
+
+            if let Some(mut armed) = self.armed {
                 armed.frames_remaining -= 1.0;
                 if armed.frames_remaining <= 0.0 {
-                    self.apply_freeze(armed.freeze, context);
+                    self.land(armed.what, context);
                 } else {
-                    self.armed_freeze = Some(armed);
+                    self.armed = Some(armed);
                 }
             }
             self.frames_elapsed += 1;
             if self.writing {
                 self.write_head += 1;
             }
-            self.advance_head();
+            self.advance(context);
         }
     }
 
-    /// Ask to freeze or to return to live, on the boundary if `Quantize` says
-    /// so.
-    ///
-    /// Unquantized, or with the transport stopped -- there is no grid running
-    /// to wait for -- it happens now. Otherwise it is armed and the device
-    /// stays live until the boundary.
-    ///
-    /// **Asking for the opposite of what is waiting takes the request back.**
-    /// A musician who changed their mind should not have to wait out a bar to
-    /// find out, and since the device is still in that state there is nothing
-    /// else to do.
-    ///
-    /// **Asking again for what is already waiting is not a second press.**
-    /// `Freeze` is a latching value rather than a trigger, so a lane holding
-    /// it writes the same 1.0 every control tick; treating each of those as a
-    /// press would arm, cancel, arm, cancel and never land on anything. That
-    /// is the shape this got wrong first time round, and the test named for
-    /// the cancel was passing on it.
-    fn request_freeze(&mut self, freeze: bool, frame: usize, context: &ProcessContext) {
-        if let Some(armed) = self.armed_freeze {
-            if armed.freeze != freeze {
-                self.armed_freeze = None;
-            }
-            return;
-        }
-        if freeze == !self.writing {
-            // Already where it was asked to be.
-            return;
-        }
-        if !self.quantize || !context.playing {
-            self.apply_freeze(freeze, context);
-            return;
-        }
-        let Some(from_block_start) = self.frames_to_boundary(context) else {
-            self.apply_freeze(freeze, context);
-            return;
-        };
-        // `position_ticks` is the block's start, and this request arrived
-        // `frame` frames into it.
-        let frames = from_block_start - frame as f64;
-        if frames <= 0.0 {
-            self.apply_freeze(freeze, context);
-            return;
-        }
-        self.armed_freeze = Some(ArmedFreeze {
-            freeze,
-            frames_remaining: frames,
-        });
-    }
+    // --- the arbitration rule, entire --------------------------------------
 
-    fn apply_freeze(&mut self, freeze: bool, context: &ProcessContext) {
-        self.armed_freeze = None;
-        if freeze {
-            self.freeze(context);
+    /// Install whichever head the device's state calls for, or none.
+    ///
+    /// **This is the whole arbitration rule.** A held gesture outranks a
+    /// moving playhead, which outranks a frozen ring going round, which
+    /// outranks the input. It is re-evaluated whenever one of those facts
+    /// changes -- never per frame -- and each source, once installed, is left
+    /// alone to advance.
+    fn reconsider(&mut self, context: &ProcessContext) {
+        let wanted = if let Some(gesture) = self.held_gesture() {
+            Some(Source::Gesture(gesture))
+        } else if self.position_still < POSITION_STILL_FRAMES {
+            Some(Source::Position)
+        } else if self.frozen {
+            Some(Source::Frozen)
         } else {
-            self.thaw();
-            // Live again, and a `Rate` that is not unity still wants a head
-            // of its own: thawing returns a free-running one to following,
-            // which would silently undo the knob.
-            self.reconcile_rate(context);
+            None
+        };
+        let current = self.head.map(|head| head.source);
+        if current == wanted {
+            return;
+        }
+        // An event head is a gesture the gates know nothing about, so it is
+        // only ever displaced by its own release.
+        if matches!(current, Some(Source::Gesture(Gesture::Event))) {
+            return;
+        }
+        match wanted {
+            Some(Source::Gesture(gesture)) => self.begin(gesture, context),
+            Some(Source::Position) => self.begin_position(context),
+            Some(Source::Frozen) => self.begin_frozen(context),
+            None => self.return_live(),
         }
     }
 
-    /// Whether a freeze or a thaw is waiting for its boundary, and which.
-    ///
-    /// The face needs it: while this is `Some` the device is still live, and a
-    /// control that looked as though nothing had happened would be the whole
-    /// gesture failing silently.
-    pub fn armed_freeze(&self) -> Option<bool> {
-        self.armed_freeze.map(|armed| armed.freeze)
+    /// The gesture currently holding the head. Last one pressed wins, which
+    /// is what a hand expects: reaching for STUTTER while JUMP is still down
+    /// is a stutter, not a refusal.
+    fn held_gesture(&self) -> Option<Gesture> {
+        GATES
+            .iter()
+            .zip(self.gates)
+            .rev()
+            .find_map(|(gesture, held)| held.then_some(*gesture))
     }
 
-    /// Frames from this point in the block to the next `Quant Grid` boundary.
-    ///
-    /// `None` when the transport gives nothing to measure against -- a
-    /// non-finite position, or a grid of no length -- in which case the caller
-    /// acts at once rather than waiting for a boundary that will not come.
-    fn frames_to_boundary(&self, context: &ProcessContext) -> Option<f64> {
-        let division =
-            mooloop_core::ModTimeDivision::from_index(self.quant_grid_index as i32);
+    /// Start a gesture, waiting for the boundary if `Quantize` says so.
+    fn start(&mut self, gesture: Gesture, context: &ProcessContext) {
+        match self.boundary_wait(context, 0) {
+            Some(frames) => {
+                self.armed = Some(Armed {
+                    what: ArmedWhat::Gesture(gesture),
+                    frames_remaining: frames,
+                })
+            }
+            None => self.reconsider(context),
+        }
+    }
+
+    /// A gesture's press has reached its boundary, or a freeze has.
+    fn land(&mut self, what: ArmedWhat, context: &ProcessContext) {
+        self.armed = None;
+        match what {
+            ArmedWhat::Gesture(_) => self.reconsider(context),
+            ArmedWhat::Freeze(freeze) => {
+                self.apply_freeze(freeze);
+                self.reconsider(context);
+            }
+        }
+    }
+
+    /// Frames from `frame` in this block to the next `Quant Start` boundary,
+    /// or `None` when there is nothing to wait for -- quantize off, the
+    /// transport stopped, a grid of no length, or a boundary already reached.
+    fn boundary_wait(&self, context: &ProcessContext, frame: usize) -> Option<f64> {
+        if !self.quantize || !context.playing {
+            return None;
+        }
+        let division = mooloop_core::ModTimeDivision::from_index(self.quant_start_index as i32);
         let grid_beats = f64::from(division.beats());
         if !grid_beats.is_finite() || grid_beats <= 0.0 || !context.position_ticks.is_finite() {
             return None;
         }
-        let ticks_per_beat =
-            f64::from(mooloop_core::Ppq::DEFAULT.ticks_per_beat());
+        let ticks_per_beat = f64::from(mooloop_core::Ppq::DEFAULT.ticks_per_beat());
         let beats_now = context.position_ticks / ticks_per_beat;
-        // The block's *start*, so this is measured from there; the caller is
-        // some frames into the block and subtracts them.
+        // `position_ticks` is the block's *start*, and the request arrived
+        // `frame` frames into it.
         let next = (beats_now / grid_beats).floor() * grid_beats + grid_beats;
-        let frames_per_beat = context.sample_rate as f64 * 60.0 / context.bpm.max(1.0);
-        Some((next - beats_now) * frames_per_beat)
+        let frames_per_beat = frames_per_beat(context);
+        let frames = (next - beats_now) * frames_per_beat - frame as f64;
+        (frames > 0.0).then_some(frames)
     }
 
-    /// Stop the writer and make the retained history a sample.
+    // --- the four heads ----------------------------------------------------
+
+    /// JUMP, REVERSE and STUTTER, as two indices and a direction.
     ///
-    /// The head is handed to `Rate` if nothing else owns it, so it keeps
-    /// moving with the time base the writer was providing. A gesture running
-    /// at this moment keeps running, against the frozen ring: its window and
-    /// repeat count are about the material, and the material is still there.
-    pub fn freeze(&mut self, context: &ProcessContext) {
-        if !self.writing {
-            return;
-        }
+    /// Each owns its own settings and borrows nothing. JUMP lands
+    /// `Jump Back` behind the write position and runs forward over the whole
+    /// ring; REVERSE starts at the write position and runs backward over the
+    /// whole ring; STUTTER is JUMP with its region closed to one
+    /// `Stutter Length`, which is the only difference between the two.
+    fn begin(&mut self, gesture: Gesture, context: &ProcessContext) {
+        let now = self.write_head as f64;
+        let span = self.capacity_frames() as f64;
+        let whole_ring = (now - span, now);
+        let (position, step, region) = match gesture {
+            Gesture::Jump => {
+                let back = self.division_frames(self.jump_back_index, context);
+                (now - back, 1.0, whole_ring)
+            }
+            // `now` is where the writer is *about* to put a frame, so the
+            // newest one it has actually written is one behind it. Starting
+            // on `now` reads the oldest sample in the ring instead of the
+            // newest, which is a whole buffer's worth of wrong.
+            Gesture::Reverse => (now - 1.0, -1.0, whole_ring),
+            Gesture::Stutter => {
+                let length = self.division_frames(self.stutter_length_index, context);
+                (now - length, 1.0, (now - length, now))
+            }
+            // Only ever reached through `fire`, which builds its own head.
+            Gesture::Event => return,
+        };
+        // A gesture holds the ring still for as long as it is down: the press
+        // is a freeze, which is what makes what you hear a fixed sample
+        // rather than a moving window.
         self.writing = false;
-        if self.head.is_none() {
-            self.detach_at_rate(context);
+        self.install(
+            Head {
+                source: Source::Gesture(gesture),
+                position,
+                step,
+                region,
+            },
+            context,
+        );
+    }
+
+    /// The playhead, while somebody is driving it. It starts where `Position`
+    /// points and is then moved by `Position` rather than by a rate.
+    fn begin_position(&mut self, context: &ProcessContext) {
+        self.install(
+            Head {
+                source: Source::Position,
+                position: self.position_target(self.position, context),
+                step: 0.0,
+                // Its own span, so a saw over a shortened one loops that much
+                // rather than running out into the rest of the ring.
+                region: self.position_region(context),
+            },
+            context,
+        );
+    }
+
+    /// Frozen and left alone: the ring goes round, forward, at unity.
+    ///
+    /// That is what makes a freeze leave you holding a loop rather than a
+    /// still, and it is why the freeze is quantized -- the chunk only joins
+    /// up when its ends are on the same grid the music is.
+    fn begin_frozen(&mut self, context: &ProcessContext) {
+        // `now - span`, not `now`. They are the same ring index -- the frame
+        // after the newest is the oldest -- but the region is half-open and
+        // excludes `now`, so installing there wraps on the very first frame
+        // and reports a seam that nothing audible happened at.
+        let (start, _) = self.whole_ring();
+        self.install(
+            Head {
+                source: Source::Frozen,
+                position: start,
+                step: 1.0,
+                region: self.whole_ring(),
+            },
+            context,
+        );
+    }
+
+    /// Put a head in, crossfading from whatever was playing.
+    fn install(&mut self, head: Head, context: &ProcessContext) {
+        let frames = ms_to_frames(self.crossfade_ms, context.sample_rate);
+        self.fade = (frames > 0).then_some(Fade {
+            source: match self.head {
+                Some(old) => FadeSource::Detached {
+                    position: old.position,
+                    step: old.step,
+                },
+                None => FadeSource::Live,
+            },
+            frame: 0,
+            frames,
+        });
+        self.head = Some(head);
+    }
+
+    /// Hand the output back to the input, crossfading out of whatever was
+    /// playing. The writer restarts unless the latching `Freeze` is on.
+    fn return_live(&mut self) {
+        if let Some(head) = self.head {
+            let frames = self.fade.map_or(0, |fade| fade.frames);
+            let frames = frames.max(self.crossfade_frames_hint());
+            if frames > 0 {
+                self.fade = Some(Fade {
+                    source: FadeSource::Detached {
+                        position: head.position,
+                        step: head.step,
+                    },
+                    frame: 0,
+                    frames,
+                });
+            }
+        }
+        self.head = None;
+        if !self.frozen {
+            self.writing = true;
         }
     }
 
-    /// Restart the writer and return to live.
-    ///
-    /// A free-running head goes back to following; a gesture is left alone,
-    /// exactly as a gesture outranks the offset parameter, and returns by its
-    /// own duration or collision.
-    pub fn thaw(&mut self) {
-        if self.writing {
+    /// The crossfade length in frames at the sample rate the last head was
+    /// built with. Held rather than recomputed because `return_live` is
+    /// reachable from [`Self::release`], which has no `ProcessContext`.
+    fn crossfade_frames_hint(&self) -> u32 {
+        // 48 kHz is the only rate the engine runs at; a wrong guess here
+        // costs a millisecond of fade length, never a click.
+        ms_to_frames(self.crossfade_ms, 48_000)
+    }
+
+    // --- advancing ---------------------------------------------------------
+
+    fn advance(&mut self, context: &ProcessContext) {
+        // `Position`'s stillness is counted in frames rather than in writes,
+        // so a lane that has stopped changing is still even while it keeps
+        // arriving.
+        self.position_still = self.position_still.saturating_add(1);
+        self.position_age = self.position_age.saturating_add(1);
+        if self.position_still == POSITION_STILL_FRAMES
+            && matches!(self.head.map(|head| head.source), Some(Source::Position))
+        {
+            // The playhead has been let go of. Whatever is underneath it --
+            // a frozen ring, or the input -- takes over.
+            self.reconsider(context);
+        }
+        let Some(head) = &mut self.head else { return };
+        head.position += head.step;
+        let (wrapped, seam) = head.wrapped();
+        *head = wrapped;
+        if seam {
+            let old = head.position - head.step;
+            let step = head.step;
+            self.seam_count += 1;
+            self.crossfade_from(old, step);
+        }
+    }
+
+    /// Crossfade from a position the head has just left. A stutter's repeat
+    /// and a reverse head lapping the ring are both this.
+    fn crossfade_from(&mut self, position: f64, step: f64) {
+        let frames = self.crossfade_frames_hint();
+        if frames == 0 {
             return;
         }
-        self.writing = true;
-        if let Some(head) = self.head.filter(|head| head.drive.follows_rate()) {
-            self.return_live(head, head.position);
+        self.fade = Some(Fade {
+            source: FadeSource::Detached { position, step },
+            frame: 0,
+            frames,
+        });
+    }
+
+    // --- settings ----------------------------------------------------------
+
+    fn set_param(&mut self, id: u32, value: f32, frame: usize, context: &ProcessContext) {
+        match id {
+            mooloop_core::BUFFER_PARAM_POSITION => self.set_position(value, context),
+            mooloop_core::BUFFER_PARAM_POSITION_SPAN => self.position_span_index = value,
+            mooloop_core::BUFFER_PARAM_CROSSFADE_MS => {
+                self.crossfade_ms = value.clamp(0.0, 50.0)
+            }
+            mooloop_core::BUFFER_PARAM_JUMP_BACK => self.jump_back_index = value,
+            mooloop_core::BUFFER_PARAM_STUTTER_LENGTH => self.stutter_length_index = value,
+            mooloop_core::BUFFER_PARAM_QUANTIZE => self.quantize = value >= 0.5,
+            mooloop_core::BUFFER_PARAM_QUANT_START => self.quant_start_index = value,
+            mooloop_core::BUFFER_PARAM_FREEZE => {
+                if value >= 0.5 + SWITCH_HYSTERESIS {
+                    self.request_freeze(true, frame, context);
+                } else if value <= 0.5 - SWITCH_HYSTERESIS {
+                    self.request_freeze(false, frame, context);
+                }
+            }
+            mooloop_core::BUFFER_PARAM_JUMP => self.set_gate(0, value, context),
+            mooloop_core::BUFFER_PARAM_REVERSE => self.set_gate(1, value, context),
+            mooloop_core::BUFFER_PARAM_STUTTER => self.set_gate(2, value, context),
+            _ => {}
         }
     }
 
-    pub fn is_frozen(&self) -> bool {
-        !self.writing
+    /// A gesture gate, with hysteresis for the same reason `Freeze` has it.
+    fn set_gate(&mut self, index: usize, value: f32, context: &ProcessContext) {
+        let held = if value >= 0.5 + SWITCH_HYSTERESIS {
+            true
+        } else if value <= 0.5 - SWITCH_HYSTERESIS {
+            false
+        } else {
+            return;
+        };
+        if self.gates[index] == held {
+            return;
+        }
+        self.gates[index] = held;
+        if held {
+            self.start(GATES[index], context);
+            return;
+        }
+        // Releases are never quantized: a gesture ends when the hand says so,
+        // and a press still waiting for its boundary is taken back rather
+        // than fired late.
+        if matches!(
+            self.armed.map(|armed| armed.what),
+            Some(ArmedWhat::Gesture(gesture)) if gesture == GATES[index]
+        ) {
+            self.armed = None;
+        }
+        self.reconsider(context);
     }
+
+    /// Move the playhead.
+    ///
+    /// The head **is** the position: the step is whatever it takes to get
+    /// there by the time the next write arrives, which makes the playback
+    /// rate the position's own speed and means nothing on the face has to
+    /// name one. A one-bar ramp over a one-bar span plays at unity.
+    fn set_position(&mut self, value: f32, context: &ProcessContext) {
+        let value = value.clamp(0.0, 1.0);
+        let moved = (value - self.position_was).abs() > POSITION_MOVED;
+        self.position = value;
+        let age = self.position_age.max(1);
+        self.position_age = 0;
+        if !moved {
+            return;
+        }
+        self.position_was = value;
+        let was_still = self.position_still >= POSITION_STILL_FRAMES;
+        self.position_still = 0;
+        if self.held_gesture().is_some()
+            || matches!(self.head.map(|head| head.source), Some(Source::Gesture(_)))
+        {
+            // A gesture outranks the playhead. The position re-asserts itself
+            // on the next write after the gesture ends.
+            return;
+        }
+        if was_still {
+            self.reconsider(context);
+            return;
+        }
+        let Some(head) = self.head.filter(|head| head.source == Source::Position) else {
+            return;
+        };
+        let target = self.position_target(value, context);
+        let step = (target - head.position) / f64::from(age);
+        if step.abs() > MAX_SWEEP_RATE {
+            // Too far to sweep, so it is an edit: cut, and let the crossfade
+            // make it a seam. A saw's wrap is exactly this.
+            self.seam_count += 1;
+            self.crossfade_from(head.position, head.step);
+            self.head = Some(Head {
+                position: target,
+                // Carry the speed across the seam rather than restarting from
+                // nothing, so a saw's playback rate is continuous through its
+                // own wrap instead of stalling for one control tick.
+                step: head.step,
+                ..head
+            });
+            return;
+        }
+        self.head = Some(Head {
+            position: head.position,
+            step,
+            ..head
+        });
+    }
+
+    /// Ask to freeze or return to live, on the boundary if `Quantize` says
+    /// so.
+    ///
+    /// **Asking for the opposite of what is waiting takes the request back.**
+    /// A musician who changed their mind should not have to wait out a bar to
+    /// find out. **Asking again for what is already waiting is not a second
+    /// press**: `Freeze` is a latching value rather than a trigger, so a lane
+    /// holding it writes the same 1.0 every control tick, and treating each
+    /// of those as a press would arm, cancel, arm, cancel and never land.
+    fn request_freeze(&mut self, freeze: bool, frame: usize, context: &ProcessContext) {
+        if let Some(armed) = self.armed {
+            if let ArmedWhat::Freeze(pending) = armed.what {
+                if pending != freeze {
+                    self.armed = None;
+                }
+                return;
+            }
+        }
+        if freeze == self.frozen {
+            return;
+        }
+        match self.boundary_wait(context, frame) {
+            Some(frames) => {
+                self.armed = Some(Armed {
+                    what: ArmedWhat::Freeze(freeze),
+                    frames_remaining: frames,
+                })
+            }
+            None => {
+                self.apply_freeze(freeze);
+                self.reconsider(context);
+            }
+        }
+    }
+
+    fn apply_freeze(&mut self, freeze: bool) {
+        self.frozen = freeze;
+        // A gesture is holding the writer down on its own account; freezing
+        // and thawing under one must not restart it.
+        if self.held_gesture().is_none() {
+            self.writing = !freeze;
+        }
+    }
+
+    /// Latch the ring, or let it go, without the boundary a parameter write
+    /// waits for. The control plane and tests; nothing in the audio path,
+    /// which goes through `Freeze` like everything else.
+    pub fn set_frozen(&mut self, frozen: bool) {
+        self.apply_freeze(frozen);
+    }
+
+    /// Whether a freeze or a thaw is waiting for its boundary, and which.
+    ///
+    /// The face needs it: while this is `Some` the device is still in the
+    /// state it was, and a control that looked as though nothing had happened
+    /// would be the whole gesture failing silently.
+    pub fn armed_freeze(&self) -> Option<bool> {
+        match self.armed.map(|armed| armed.what) {
+            Some(ArmedWhat::Freeze(freeze)) => Some(freeze),
+            _ => None,
+        }
+    }
+
+    /// Whether a gesture press is waiting for its boundary.
+    pub fn armed_gesture(&self) -> bool {
+        matches!(self.armed.map(|armed| armed.what), Some(ArmedWhat::Gesture(_)))
+    }
+
+    // --- geometry ----------------------------------------------------------
+
+    fn whole_ring(&self) -> (f64, f64) {
+        let now = self.write_head as f64;
+        (now - self.capacity_frames() as f64, now)
+    }
+
+    /// How long a `ModTimeDivision` index is in frames, never longer than the
+    /// ring: a window longer than the ring is not a window, it is the ring.
+    fn division_frames(&self, index: f32, context: &ProcessContext) -> f64 {
+        let division = mooloop_core::ModTimeDivision::from_index(index as i32);
+        let frames = f64::from(division.beats()) * frames_per_beat(context);
+        frames.clamp(1.0, self.capacity_frames() as f64)
+    }
+
+    /// The region `Position` addresses.
+    ///
+    /// At the full span -- the default -- this is **the ring itself, in the
+    /// ring's own coordinates**, which is the same map the waveform is drawn
+    /// in: bin zero is ring index zero, so pointing at a peak on the face and
+    /// hearing that peak are the same act.
+    ///
+    /// It matters more than it looks. A region anchored to the write head
+    /// travels at a frame per frame, so a playhead sweeping it is moving at
+    /// its own speed *plus* the writer's -- a one-bar ramp over a one-bar ring
+    /// would play at double speed, and there would be no setting that gave
+    /// unity. Addressing the ring, a one-bar ramp over a one-bar ring is
+    /// unity exactly, which is what makes "put a one-measure saw on it"
+    /// behave the way anybody would expect.
+    ///
+    /// A *shortened* span is the other case and wants the other anchor: "the
+    /// last quarter" has to follow the writer or it stops being the last
+    /// quarter within a bar.
+    fn position_region(&self, context: &ProcessContext) -> (f64, f64) {
+        if self.position_span_index >= mooloop_core::BUFFER_SPAN_FULL - 0.5 {
+            return (0.0, self.capacity_frames() as f64);
+        }
+        let now = self.write_head as f64;
+        (now - self.division_frames(self.position_span_index, context), now)
+    }
+
+    /// Where a normalized playhead points, in absolute frames.
+    ///
+    /// The top of the span is the newest frame in it, which is one behind the
+    /// write head -- `now` itself is where the next frame goes, and reading it
+    /// gets whatever was there a whole ring ago.
+    fn position_target(&self, position: f32, context: &ProcessContext) -> f64 {
+        let (start, end) = self.position_region(context);
+        start + f64::from(position.clamp(0.0, 1.0)) * (end - 1.0 - start)
+    }
+
+    // --- the mapped-event path --------------------------------------------
+
+    /// One [`BufferEvent`] from the MIDI map.
+    ///
+    /// The map is a parallel control surface that predates the gestures and
+    /// still carries its own geometry, so an event builds its own head rather
+    /// than borrowing a gate's settings. It is the one path that can ask for
+    /// a playback speed other than `±1`, because `BufferEvent::rate` is a
+    /// field it has always had.
+    fn fire(&mut self, event: BufferEvent, context: &ProcessContext) {
+        let frames_per_beat = frames_per_beat(context);
+        let position = self.write_head as f64 + f64::from(event.offset_beats) * frames_per_beat;
+        // A window always covers material the head is about to play, so it
+        // extends backward from the entry point for a reverse head and
+        // forward for a forward one.
+        let region = match event
+            .window_beats
+            .filter(|beats| *beats > 0.0)
+            .map(|beats| f64::from(beats) * frames_per_beat)
+        {
+            Some(length) if event.rate < 0.0 => (position - length, position),
+            Some(length) => (position, position + length),
+            None => self.whole_ring(),
+        };
+        self.writing = false;
+        self.crossfade_ms = event.crossfade_ms.clamp(0.0, 50.0);
+        self.install(
+            Head {
+                source: Source::Gesture(Gesture::Event),
+                position,
+                step: f64::from(event.rate),
+                region,
+            },
+            context,
+        );
+        let _ = BufferDuration::Gate;
+    }
+
+    /// End a mapped event's gesture. A gate the device is holding on its own
+    /// account is left alone: a held control sends this on release without
+    /// knowing whether its own event is still the one running.
+    pub fn release(&mut self) {
+        if matches!(
+            self.head.map(|head| head.source),
+            Some(Source::Gesture(Gesture::Event))
+        ) {
+            self.return_live();
+        }
+    }
+
+    // --- telemetry ---------------------------------------------------------
 
     /// Fold one frame's magnitude into the bin it belongs to.
     ///
@@ -617,11 +994,10 @@ impl BufferDevice {
     /// envelope. Integer arithmetic and one branch: this runs once a frame.
     fn accumulate_peak(&mut self, write_index: usize, magnitude: f32) {
         let capacity = self.capacity_frames();
-        let bin = write_index * WAVEFORM_BINS / capacity.max(1);
-        let bin = bin.min(WAVEFORM_BINS - 1);
+        let bin = (write_index * WAVEFORM_BINS / capacity.max(1)).min(WAVEFORM_BINS - 1);
         // Entering the bin resets it, and inside it the peak only rises --
-        // which is one condition rather than two, because "start again" and
-        // "this is louder" both mean "take this sample".
+        // one condition rather than two, because "start again" and "this is
+        // louder" both mean "take this sample".
         let first_frame_in_bin = write_index * WAVEFORM_BINS % capacity.max(1) < WAVEFORM_BINS;
         if first_frame_in_bin || magnitude > self.peaks[bin] {
             self.peaks[bin] = magnitude;
@@ -639,7 +1015,7 @@ impl BufferDevice {
     }
 
     /// Where the read head is, as a fraction of the ring. `None` when the
-    /// device is following, because there is no detached head to draw.
+    /// device is following, because there is no head to draw.
     pub fn head_fraction(&self) -> Option<f32> {
         let capacity = self.capacity_frames() as f64;
         self.head
@@ -647,682 +1023,29 @@ impl BufferDevice {
     }
 
     /// Where the writer is, as a fraction of the ring. This is "now", and it
-    /// stops moving when the device freezes.
+    /// stops moving whenever the writer does.
     pub fn write_fraction(&self) -> f32 {
         let capacity = self.capacity_frames() as f64;
         (self.index(self.write_head as f64) as f64 / capacity) as f32
     }
 
-    /// The active window as fractions of the ring, or `None` when the head is
-    /// not looping inside one.
-    pub fn window_fractions(&self) -> Option<(f32, f32)> {
+    /// The region the head is confined to, as fractions of the ring, or
+    /// `None` when that is the whole of it -- a band drawn round everything
+    /// says nothing.
+    pub fn region_fractions(&self) -> Option<(f32, f32)> {
         let capacity = self.capacity_frames() as f64;
         let head = self.head?;
-        let end = head.window_end?;
+        let (start, end) = head.region;
+        if end - start >= capacity - 1.0 {
+            return None;
+        }
         Some((
-            (self.index(head.window_start) as f64 / capacity) as f32,
+            (self.index(start) as f64 / capacity) as f32,
             (self.index(end) as f64 / capacity) as f32,
         ))
     }
 
-    /// Where `Position` currently points, in absolute ring frames.
-    ///
-    /// Live the write head is moving, so this travels with it; frozen it is
-    /// static, which is the same sentence as everywhere else in this file.
-    fn position_target(&self) -> f64 {
-        let capacity = self.capacity_frames() as f64;
-        self.write_head as f64 - (1.0 - f64::from(self.position)) * capacity
-    }
-
-    /// The active window's length in frames, from the shared musical grid.
-    fn window_frames(&self, context: &ProcessContext) -> f64 {
-        let division = mooloop_core::ModTimeDivision::from_index(self.length_index as i32);
-        let frames_per_beat = context.sample_rate as f64 * 60.0 / context.bpm.max(1.0);
-        f64::from(division.beats()) * frames_per_beat
-    }
-
-    /// Put the active window around the head, or take it away.
-    ///
-    /// **A window extends forward from its anchor for a forward head and
-    /// backward for a reverse one.** Extending it forward in both cases points
-    /// a reverse window at samples the writer has not reached, and the gesture
-    /// plays silence -- `02-control-and-modulation.md` records that as the
-    /// gotcha that is easy to reintroduce, and this is the second place that
-    /// can reintroduce it.
-    ///
-    /// The direction comes from `Rate` rather than from the head's current
-    /// speed: a head part-way through a chase is travelling wherever the chase
-    /// sends it, which is not what the loop is about.
-    ///
-    /// A gesture's window is its own. `fire` sets one from the event tuple and
-    /// a repeat count to go with it, and a `Loop` parameter arriving underneath
-    /// must not redraw it.
-    fn refresh_window(&mut self, context: &ProcessContext) {
-        // A window longer than the ring is not a window, it is the ring.
-        // `Length` reaches four whole notes and `bars` can be one, so the two
-        // controls can ask for that between them without either being wrong.
-        let frames = self
-            .window_frames(context)
-            .min(self.capacity_frames() as f64);
-        let target = self.position_target();
-        let looping = self.looping;
-        let rate = self.rate;
-        let writer = self.write_head as f64;
-        let Some(head) = &mut self.head else { return };
-        if head.drive == Drive::Event {
-            return;
-        }
-        if !looping || frames < 1.0 {
-            head.window_end = None;
-            head.window_start = head.position;
-            return;
-        }
-        let anchor = if head.window_end.is_some() {
-            // Already looping: keep the anchor and only restate the length, so
-            // sweeping Length shortens the loop in place instead of walking it
-            // along the ring.
-            if rate < 0.0 {
-                head.window_end.unwrap_or(head.position)
-            } else {
-                head.window_start
-            }
-        } else if head.drive == Drive::Position {
-            // Opening one: the loop starts where `Position` points, not where
-            // the head happens to be. A chase may not have arrived yet, and
-            // "a 1/16 loop at Position 50%" has to mean the sixteenth at 50%.
-            target
-        } else {
-            // Freeze, or a hand: there is no requested position to honour, so
-            // the loop opens where the head already is.
-            head.position
-        };
-        let (mut start, mut end) = if rate < 0.0 {
-            (anchor - frames, anchor)
-        } else {
-            (anchor, anchor + frames)
-        };
-        // **The window has to lie inside retained history.** `fire` says this
-        // about a gesture's entry point and this is the case one level up
-        // from it: there the anchor is already in the past because
-        // `offset_beats` put it there, while here `Position` at live *is* the
-        // write head -- so a forward window opened from it points at samples
-        // the writer has not reached and the loop plays silence. That is the
-        // gotcha `02-control-and-modulation.md` names, arriving through the
-        // one door nobody had shut.
-        //
-        // Slide it back rather than refuse it: "loop the last 1/16" is what
-        // the control is asking for either way, and a window that quietly did
-        // nothing is worse than one an eighth of a beat from where a purist
-        // would put it.
-        let overshoot = end - writer;
-        if overshoot > 0.0 {
-            start -= overshoot;
-            end -= overshoot;
-        }
-        head.window_start = start;
-        head.window_end = Some(end);
-        head.repeats_remaining = None;
-    }
-
-    /// Relocate the head to `Position` at once, with no chase.
-    ///
-    /// The hard edit, and the one that makes a sequenced slice deterministic:
-    /// `Position: 0% / 50% / 25% / 75%` with a trigger on each step lands
-    /// exactly there, where a chase would arrive a few milliseconds later and
-    /// at a pitch. Playback carries on normally in between, because a jump
-    /// leaves `Rate` in charge rather than holding anything.
-    pub fn jump(&mut self, context: &ProcessContext) {
-        let target = self.position_target();
-        let crossfade_frames = ms_to_frames(self.crossfade_ms, context.sample_rate);
-        let from = match self.head {
-            Some(head) => FadeSource::Detached {
-                position: head.position,
-                rate: head.rate,
-            },
-            None => FadeSource::Live,
-        };
-        self.fade = (crossfade_frames > 0).then_some(Fade {
-            source: from,
-            frame: 0,
-            frames: crossfade_frames,
-        });
-        // No chase: that is the whole difference between this and writing
-        // `Position`.
-        self.scrub = None;
-        self.armed_offset_frames = None;
-        match &mut self.head {
-            Some(head) => {
-                head.position = target;
-                head.drive = Drive::Position;
-                head.crossfade_frames = crossfade_frames;
-                head.window_end = None;
-                head.window_start = target;
-                head.repeats_remaining = None;
-                head.expires_at = None;
-                head.gated = false;
-            }
-            None => {
-                self.head_gain = 0.0;
-                self.head = Some(ReadHead {
-                    position: target,
-                    rate: self.rate,
-                    drive: Drive::Position,
-                    window_start: target,
-                    window_end: None,
-                    repeats_remaining: None,
-                    expires_at: None,
-                    crossfade_frames,
-                    gated: false,
-                });
-            }
-        }
-        self.refresh_window(context);
-    }
-
-    fn set_param(&mut self, id: u32, value: f32, frame: usize, context: &ProcessContext) {
-        match id {
-            mooloop_core::BUFFER_PARAM_POSITION => self.set_position(value, context),
-            mooloop_core::BUFFER_PARAM_CROSSFADE_MS => {
-                self.crossfade_ms = value.clamp(0.0, 50.0)
-            }
-            mooloop_core::BUFFER_PARAM_RATE => {
-                self.rate = value.clamp(-MAX_SCRUB_RATE, MAX_SCRUB_RATE);
-                // `Rate` is the one standing parameter that has to create the
-                // head it drives; see [`Self::reconcile_rate`].
-                self.reconcile_rate(context);
-                // Its sign decides which way a window extends from its
-                // anchor, so a loop already open follows the knob across
-                // zero instead of keeping the direction it opened with.
-                self.refresh_window(context);
-            }
-            mooloop_core::BUFFER_PARAM_LENGTH => {
-                self.length_index = value;
-                // A window already open follows the grid rather than waiting
-                // for the next thing to re-open it, which is what makes
-                // `envelope -> Length` a gesture instead of a setting.
-                self.refresh_window(context);
-            }
-            mooloop_core::BUFFER_PARAM_LOOP => {
-                let looping = value >= 0.5;
-                if looping != self.looping {
-                    self.looping = looping;
-                    self.refresh_window(context);
-                }
-            }
-            mooloop_core::BUFFER_PARAM_JUMP => {
-                // Rising edge. A held trigger is one gesture, not one per
-                // control tick, and a document saved with it down seeds
-                // `last_jump` rather than firing on its first block.
-                if value >= 0.5 && self.last_jump < 0.5 {
-                    self.jump(context);
-                }
-                self.last_jump = value;
-            }
-            // Hysteresis, not a threshold. A modulator resting near the
-            // midpoint would otherwise chatter the writer once per control
-            // tick, and every one of those is a crossfade.
-            mooloop_core::BUFFER_PARAM_FREEZE => {
-                if value >= 0.5 + FREEZE_HYSTERESIS {
-                    self.request_freeze(true, frame, context);
-                } else if value <= 0.5 - FREEZE_HYSTERESIS {
-                    self.request_freeze(false, frame, context);
-                }
-            }
-            mooloop_core::BUFFER_PARAM_QUANTIZE => self.quantize = value >= 0.5,
-            mooloop_core::BUFFER_PARAM_QUANT_GRID => self.quant_grid_index = value,
-            _ => {}
-        }
-    }
-
-    /// Aim the read head at a point in retained memory, or return it to live
-    /// at `1.0`.
-    ///
-    /// `position` is normalized over the ring: `0` is the oldest sample it
-    /// still holds and `1` is the write head. **Writing it is an edit rather
-    /// than a standing value.** It arms a chase, the head closes on the target
-    /// at the turntable behaviour -- the speed it closes at *is* the playback
-    /// rate -- and the chase is released once the head arrives, after which
-    /// the head free-runs at `Rate` from there. So a continuous stream of
-    /// writes is a scrub, and a static value leaves `Rate` in charge instead
-    /// of pinning the head to a target the writer has since left behind.
-    ///
-    /// While the writer runs, the target is taken from where the writer is
-    /// *now*, so the coordinate travels with it. Freeze stops the writer and
-    /// the same expression becomes absolute, which is what "Freeze latches
-    /// what now means" is in code.
-    ///
-    /// A gesture head outranks this. Automation does not fight a JUMP/REV/STUT
-    /// that is already running; the position re-asserts itself on the next
-    /// control tick after that gesture ends, which for a lane is within 32
-    /// frames. A frozen or hand-held head does *not* outrank it: neither is a
-    /// standing value, and while frozen this is the only way to move the head
-    /// at all.
-    fn set_position(&mut self, position: f32, context: &ProcessContext) {
-        self.position = position.clamp(0.0, 1.0);
-        let capacity = self.capacity_frames() as f64;
-        let offset_frames = (1.0 - f64::from(self.position)) * capacity;
-        let ours = self
-            .head
-            .is_some_and(|head| head.drive == Drive::Position);
-        // Within a frame of the writer there is no offset to speak of, and
-        // asking the head to sit zero frames behind the writer is a collision
-        // by definition.
-        if offset_frames < 1.0 {
-            if ours {
-                if let Some(head) = self.head {
-                    self.return_live(head, head.position);
-                }
-            }
-            self.armed_offset_frames = None;
-            return;
-        }
-        if self.head.is_some_and(|head| head.drive == Drive::Event) {
-            return;
-        }
-        // The sub-frame guard, carried across from the offset this replaces:
-        // a write that moves the target less than a frame arms nothing, so a
-        // lane sampled at 32-frame ticks does not re-arm on rounding noise.
-        // It is now also what tells a static position from a sweep.
-        let changed = self
-            .armed_offset_frames
-            .is_none_or(|held| (held - offset_frames).abs() >= 1.0);
-        self.armed_offset_frames = Some(offset_frames);
-        if !changed && ours && self.scrub.is_none() {
-            // Arrived, released, and nobody has asked for anywhere else.
-            // `Rate` has the head.
-            return;
-        }
-        if self.head.is_none() {
-            self.scrub_begin(context, self.crossfade_ms);
-        }
-        let Some(head) = &mut self.head else { return };
-        head.drive = Drive::Position;
-        let target = self.write_head as f64 - offset_frames;
-        match &mut self.scrub {
-            Some(scrub) => {
-                scrub.offset_frames = Some(offset_frames);
-                scrub.target = target;
-                if changed {
-                    scrub.still_frames = 0;
-                }
-            }
-            None => {
-                self.scrub = Some(Scrub {
-                    target,
-                    chase_frames: chase_frames(context),
-                    offset_frames: Some(offset_frames),
-                    still_frames: 0,
-                });
-            }
-        }
-        if changed && self.looping {
-            // An edit moves the loop; a repeated value does not. Same rule as
-            // the chase's, and for the same reason: a lane holding one value
-            // is a setting, and a lane on the move is a gesture.
-            if let Some(head) = &mut self.head {
-                head.window_end = None;
-            }
-            self.refresh_window(context);
-        }
-    }
-
-    fn fire(&mut self, event: BufferEvent, context: &ProcessContext) {
-        let frames_per_beat = context.sample_rate as f64 * 60.0 / context.bpm.max(1.0);
-        let position = self.write_head as f64 + f64::from(event.offset_beats) * frames_per_beat;
-        // A window always covers material the head is about to play, so it
-        // extends backward from the entry point for a reverse head and
-        // forward for a forward one. Extending forward in both cases would
-        // point a reverse window at samples the writer has not reached.
-        let window = event
-            .window_beats
-            .filter(|beats| *beats > 0.0)
-            .map(|beats| f64::from(beats) * frames_per_beat);
-        let (window_start, window_end) = match window {
-            Some(length) if event.rate < 0.0 => (position - length, Some(position)),
-            Some(length) => (position, Some(position + length)),
-            None => (position, None),
-        };
-        let duration_frames = match event.duration {
-            // Current patterns are a sixteenth-note grid: four steps/beat.
-            BufferDuration::Steps(steps) => {
-                Some((f64::from(steps) * frames_per_beat / 4.0).round() as u64)
-            }
-            BufferDuration::UntilNextEvent | BufferDuration::Gate => None,
-        };
-        let head = ReadHead {
-            position,
-            rate: event.rate,
-            drive: Drive::Event,
-            window_start,
-            window_end,
-            repeats_remaining: event.repeat,
-            expires_at: duration_frames.map(|frames| self.frames_elapsed + frames),
-            crossfade_frames: ms_to_frames(event.crossfade_ms, context.sample_rate),
-            gated: matches!(event.duration, BufferDuration::Gate),
-        };
-        self.fade = (head.crossfade_frames > 0).then_some(Fade {
-            source: FadeSource::Live,
-            frame: 0,
-            frames: head.crossfade_frames,
-        });
-        self.head = Some(head);
-        // A gesture takes the head, so whatever `Position` had armed is over;
-        // the lane's next write re-arms from scratch once the gesture ends.
-        self.scrub = None;
-        self.armed_offset_frames = None;
-    }
-
-    /// Put the head on the platter, holding at the live position. Idempotent:
-    /// a scrub already under way keeps its target rather than snapping back
-    /// to live, since control messages arrive as a stream with no press.
-    pub fn scrub_begin(&mut self, context: &ProcessContext, crossfade_ms: f32) {
-        if self.scrub.is_some() {
-            return;
-        }
-        let position = self.write_head as f64;
-        let crossfade_frames = ms_to_frames(crossfade_ms, context.sample_rate);
-        self.fade = (crossfade_frames > 0).then_some(Fade {
-            source: FadeSource::Live,
-            frame: 0,
-            frames: crossfade_frames,
-        });
-        self.head = Some(ReadHead {
-            position,
-            rate: 0.0,
-            drive: Drive::Free,
-            window_start: position,
-            window_end: None,
-            repeats_remaining: None,
-            expires_at: None,
-            crossfade_frames,
-            // Gated, so the same release that ends a held note ends a scrub.
-            gated: true,
-        });
-        self.scrub = Some(Scrub {
-            target: position,
-            chase_frames: chase_frames(context),
-            offset_frames: None,
-            still_frames: 0,
-        });
-        self.head_gain = 0.0;
-    }
-
-    /// Move the platter. `delta_frames` is signed; negative is back in time.
-    pub fn scrub_move(&mut self, delta_frames: f64) {
-        if let Some(scrub) = &mut self.scrub {
-            scrub.target += delta_frames;
-        }
-    }
-
-    pub fn is_scrubbing(&self) -> bool {
-        self.scrub.is_some()
-    }
-
-    /// Free-run velocity the head takes when nothing else is driving it.
-    pub fn rate(&self) -> f32 {
-        self.rate
-    }
-
-    /// Stop or restart the writer without the crossfade [`Self::freeze`]
-    /// arranges. Tests, and [`Self::freeze`] itself; nothing else.
-    pub fn set_writing(&mut self, writing: bool) {
-        self.writing = writing;
-    }
-
-    pub fn is_writing(&self) -> bool {
-        self.writing
-    }
-
-    /// Detach the head at the live position and let it free-run at `Rate`.
-    ///
-    /// No chase and no window: the head is handed over to the `Rate`
-    /// parameter and stays there until a gesture takes it, a chase is armed,
-    /// or it collides with the writer. This is the head Freeze creates.
-    ///
-    /// Note what freezing does *not* do on its own. With the writer stopped
-    /// the target `offset_beats` computes goes static, the chase closes on it,
-    /// the speed falls to zero and [`SCRUB_MUTE_RATE`] mutes the result -- a
-    /// tape stop into silence. That is why `Rate` exists and why the two are
-    /// one decision: take the writer away and something has to supply the time
-    /// base it was providing.
-    pub fn detach_at_rate(&mut self, context: &ProcessContext) {
-        let position = self.write_head as f64;
-        let crossfade_frames = ms_to_frames(self.crossfade_ms, context.sample_rate);
-        self.fade = (crossfade_frames > 0).then_some(Fade {
-            source: FadeSource::Live,
-            frame: 0,
-            frames: crossfade_frames,
-        });
-        self.scrub = None;
-        self.head_gain = 0.0;
-        self.head = Some(ReadHead {
-            position,
-            rate: self.rate,
-            drive: Drive::Free,
-            window_start: position,
-            window_end: None,
-            repeats_remaining: None,
-            expires_at: None,
-            crossfade_frames,
-            // Latching: a free-running head is not a held gesture, so a stray
-            // release from some other control must not cancel it.
-            gated: false,
-        });
-        self.refresh_window(context);
-    }
-
-    /// Give `Rate` a head to drive, or take it back when the knob returns to
-    /// unity.
-    ///
-    /// **This is what makes the `Rate` knob and the REV button audible at
-    /// all.** Nothing detached a free-running head except Freeze, a
-    /// `Position` write or a gesture, so over a live buffer at the default
-    /// Position -- which is the state the device comes up in -- turning Rate
-    /// wrote a number the running program had no way to reach. Reported as
-    /// "reverse doesn't seem to work at all", and it did not: REV is one
-    /// `Rate` write and there was nothing for it to move.
-    ///
-    /// Frozen, a head already exists and Freeze owns it, so this stands
-    /// aside. So do a gesture, a chase and a hand on the platter, exactly as
-    /// they outrank each other in [`Drive`].
-    fn reconcile_rate(&mut self, context: &ProcessContext) {
-        if !self.writing {
-            return;
-        }
-        let unity = (self.rate - 1.0).abs() <= RATE_FOLLOW_EPSILON;
-        match self.head {
-            None if !unity => self.detach_at_rate(context),
-            // Unity again with nothing else holding the head: following is
-            // the input itself, so it is both cheaper and cleaner than a head
-            // reading back the sample the writer just stored.
-            Some(head) if unity && self.rate_owns(&head) => {
-                self.return_live(head, head.position)
-            }
-            _ => {}
-        }
-    }
-
-    /// Whether `Rate` alone is driving this head: detached by the knob or by
-    /// Freeze, with no gesture, no chase and no hand on it.
-    ///
-    /// A head like that is a standing state rather than an edit, and that
-    /// settles both questions asked of it -- whether the knob returning to
-    /// unity may take it back, and whether running out of history wraps it or
-    /// ends it.
-    fn rate_owns(&self, head: &ReadHead) -> bool {
-        head.drive == Drive::Free && !head.gated && self.scrub.is_none()
-    }
-
-    /// End a gated edit. A latching head is left alone: a held control sends
-    /// this on release without knowing whether its own event is still the
-    /// one running, and it must not cancel whatever superseded it.
-    pub fn release(&mut self) {
-        if let Some(head) = self.head.filter(|head| head.gated) {
-            self.return_live(head, head.position);
-        }
-    }
-
-    fn advance_head(&mut self) {
-        let Some(mut head) = self.head else { return };
-        if let Some(scrub) = self.scrub {
-            // Speed is whatever it takes to close the remaining gap, so the
-            // hand's motion sets the pitch without ever being asked for a
-            // rate.
-            let target = match scrub.offset_frames {
-                Some(offset) => self.write_head as f64 - offset,
-                None => scrub.target,
-            };
-            let rate = ((target - head.position) / scrub.chase_frames) as f32;
-            head.rate = rate.clamp(-MAX_SCRUB_RATE, MAX_SCRUB_RATE);
-            self.head_gain = (head.rate.abs() / SCRUB_MUTE_RATE).min(1.0);
-            // A `Position` write is an edit and an edit finishes: once the
-            // head has arrived *and the request has stopped moving*, the chase
-            // is released and `Rate` takes over from there. Both halves are
-            // needed -- during a slow sweep the head is always within a frame
-            // of the target, so arrival alone would release on every tick and
-            // the head would alternate between free-running and being dragged
-            // back. Stillness longer than the chase's own time constant is
-            // what says the edit is over.
-            //
-            // A hand on the platter is still a hand, so its chase never
-            // releases; that is what keeps a stopped scrub silent rather than
-            // setting it playing.
-            //
-            // While the writer runs and `Rate` is unity the head then stays
-            // exactly where the release left it, because it travels at the
-            // speed the target does; frozen, or at any other rate, it drifts,
-            // and that difference *is* the arbitration rule.
-            if let Some(scrub) = &mut self.scrub {
-                scrub.still_frames = scrub.still_frames.saturating_add(1);
-                let settled = f64::from(scrub.still_frames) > scrub.chase_frames * 2.0;
-                if head.drive == Drive::Position
-                    && settled
-                    && (target - head.position).abs() < 1.0
-                {
-                    self.scrub = None;
-                }
-            }
-        } else if head.drive.follows_rate() {
-            // Re-read every frame, so a lane drawn on `Rate` moves the head
-            // within a control tick rather than at the next gesture.
-            head.rate = self.rate.clamp(-MAX_SCRUB_RATE, MAX_SCRUB_RATE);
-            self.head_gain = (head.rate.abs() / SCRUB_MUTE_RATE).min(1.0);
-        }
-        let old_position = head.position;
-        head.position += f64::from(head.rate);
-
-        if let Some(end) = head.window_end {
-            let passed_end = head.rate >= 0.0 && head.position >= end;
-            let passed_start = head.rate < 0.0 && head.position < head.window_start;
-            if passed_end || passed_start {
-                match head.repeats_remaining {
-                    Some(1) => {
-                        self.return_live(head, old_position);
-                        return;
-                    }
-                    Some(remaining) => head.repeats_remaining = Some(remaining - 1),
-                    None => {}
-                }
-                let destination = if head.rate < 0.0 {
-                    end
-                } else {
-                    head.window_start
-                };
-                if head.crossfade_frames > 0 {
-                    self.fade = Some(Fade {
-                        source: FadeSource::Detached {
-                            position: old_position,
-                            rate: head.rate,
-                        },
-                        frame: 0,
-                        frames: head.crossfade_frames,
-                    });
-                }
-                head.position = destination;
-            }
-        }
-
-        let writer = self.write_head as f64;
-        let span = self.capacity_frames() as f64;
-        let oldest = writer - span;
-        let expired = head
-            .expires_at
-            .is_some_and(|frame| self.frames_elapsed >= frame);
-        if !self.writing {
-            // Frozen, so there is no writer to collide with: the ring is a
-            // sample and the head wraps inside it. Running off the end into
-            // the oldest retained sample is *why* quantized freeze matters --
-            // it is seamless exactly when the material is periodic at the
-            // buffer length, which is what freezing on a loop's bar line
-            // gives you.
-            //
-            // `rem_euclid` rather than a loop, because at four times speed
-            // over a four-frame ring a single subtraction is not enough, and a
-            // loop on the audio thread is not a thing to reason about later.
-            head.position = oldest + (head.position - oldest).rem_euclid(span);
-            if expired {
-                self.return_live(head, old_position);
-            } else {
-                self.head = Some(head);
-            }
-            return;
-        }
-        // A forward head entering unwritten future samples or any head falling
-        // out of retained history has collided with the writer. Return rather
-        // than wrapping into unrelated audio or silently clamping.
-        let collision = head.position >= writer || head.position <= oldest;
-        if collision {
-            self.collision_count += 1;
-        }
-        // A head `Rate` created is a standing state, not a gesture, so when it
-        // runs out of history it wraps round the ring the way a frozen head
-        // does instead of ending. Holding REV over a live buffer otherwise
-        // reverses for one ring's worth of history and then snaps forward on
-        // its own -- which is the control failing, a few seconds late.
-        //
-        // Only an unwindowed one. A loop that the writer has caught up with
-        // is a loop over material about to be overwritten, and sliding it
-        // along would be a different gesture from the one that was asked for;
-        // that returns to live and says so in `RETURNS`.
-        if collision && !expired && head.window_end.is_none() && self.rate_owns(&head) {
-            if head.crossfade_frames > 0 {
-                self.fade = Some(Fade {
-                    source: FadeSource::Detached {
-                        position: old_position,
-                        rate: head.rate,
-                    },
-                    frame: 0,
-                    frames: head.crossfade_frames,
-                });
-            }
-            head.position = oldest + (head.position - oldest).rem_euclid(span);
-            self.head = Some(head);
-            return;
-        }
-        if expired || collision {
-            self.return_live(head, old_position);
-        } else {
-            self.head = Some(head);
-        }
-    }
-
-    fn return_live(&mut self, head: ReadHead, position: f64) {
-        self.scrub = None;
-        self.head_gain = 0.0;
-        // The next `Position` write starts a new edit, whatever it asks for.
-        self.armed_offset_frames = None;
-        if head.crossfade_frames > 0 {
-            self.fade = Some(Fade {
-                source: FadeSource::Detached {
-                    position,
-                    rate: head.rate,
-                },
-                frame: 0,
-                frames: head.crossfade_frames,
-            });
-        }
-        self.head = None;
-    }
+    // --- reading -----------------------------------------------------------
 
     fn index(&self, position: f64) -> usize {
         position.floor().rem_euclid(self.capacity_frames() as f64) as usize
@@ -1361,16 +1084,19 @@ impl BufferDevice {
 pub struct BufferDisplay<'a> {
     pub peaks: &'a [f32; WAVEFORM_BINS],
     /// Where the read head is, as a fraction of the ring. `None` while
-    /// following, because there is no detached head to draw.
+    /// following, because there is no head to draw.
     pub head: Option<f32>,
     pub write: f32,
-    pub window: Option<(f32, f32)>,
+    /// The region a gesture is confined to, when that is less than the ring.
+    pub region: Option<(f32, f32)>,
     pub frozen: bool,
     /// `Some(true)` when a freeze is waiting for its boundary, `Some(false)`
-    /// for a thaw. The face has to show this: until it lands the device is
-    /// still live, and a control that looked as though nothing had happened
-    /// would be the gesture failing silently.
+    /// for a thaw.
     pub armed_freeze: Option<bool>,
+    /// Whether a gesture press is waiting for its boundary. The face has to
+    /// show this: until it lands nothing has happened, and a button that
+    /// looked inert would be the gesture failing silently.
+    pub armed_gesture: bool,
 }
 
 /// Stable identity for a buffer allocation configuration. The tempo is
@@ -1380,11 +1106,8 @@ pub fn buffer_allocation_key(params: BufferParams) -> u64 {
     u64::from(params.bars.max(1))
 }
 
-/// Time constant of the chase, in frames. Roughly one control-message
-/// interval: long enough that per-message steps read as continuous motion,
-/// short enough that the head does not lag the hand.
-fn chase_frames(context: &ProcessContext) -> f64 {
-    (context.sample_rate as f64 / 200.0).max(1.0)
+fn frames_per_beat(context: &ProcessContext) -> f64 {
+    context.sample_rate as f64 * 60.0 / context.bpm.max(1.0)
 }
 
 fn ms_to_frames(ms: f32, sample_rate: u32) -> u32 {
@@ -1396,8 +1119,12 @@ fn ms_to_frames(ms: f32, sample_rate: u32) -> u32 {
 /// makes sound out of a silent input by design. It keeps the default — never
 /// skipped — and that is a decision rather than an omission.
 impl AudioNode for BufferDevice {
+    /// Seams rather than collisions. The old number counted a detached head
+    /// being overtaken by its writer, which was a failure the turntable model
+    /// could have; every head here wraps instead, so what is worth reporting
+    /// is how often it did.
     fn buffer_collisions(&self) -> u64 {
-        self.collision_count
+        self.seam_count
     }
 
     fn holds_frozen_audio(&self) -> bool {
@@ -1409,9 +1136,10 @@ impl AudioNode for BufferDevice {
             peaks: self.waveform_peaks(),
             head: self.head_fraction(),
             write: self.write_fraction(),
-            window: self.window_fractions(),
+            region: self.region_fractions(),
             frozen: self.is_frozen(),
             armed_freeze: self.armed_freeze(),
+            armed_gesture: self.armed_gesture(),
         })
     }
 
@@ -1461,10 +1189,6 @@ impl AudioNode for BufferDevice {
                 // applied at the block edge rather than threaded through the
                 // sample loop as a second timed stream.
                 Event::BufferRelease => self.release(),
-                Event::BufferScrub { delta_frames } => {
-                    self.scrub_begin(context, self.crossfade_ms);
-                    self.scrub_move(f64::from(delta_frames));
-                }
                 _ => {}
             }
         }
@@ -1480,1563 +1204,444 @@ impl AudioNode for BufferDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mooloop_core::{
+        BUFFER_PARAM_CROSSFADE_MS, BUFFER_PARAM_FREEZE, BUFFER_PARAM_JUMP,
+        BUFFER_PARAM_POSITION, BUFFER_PARAM_POSITION_SPAN,
+        BUFFER_PARAM_QUANTIZE, BUFFER_PARAM_REVERSE, BUFFER_PARAM_STUTTER,
+        BUFFER_PARAM_STUTTER_LENGTH,
+    };
 
+    /// At 120 BPM and 48 kHz: a beat is 24 000 frames, a bar is 96 000, and a
+    /// sixteenth is 6 000. Every number below is one of those.
+    const BEAT: usize = 24_000;
+    const BAR: usize = 96_000;
+    const SIXTEENTH: usize = 6_000;
+
+    /// The transport is **stopped**, so there is no grid for a press to wait
+    /// for and it lands at once. The quantize tests use [`playing`] and say
+    /// so; every other test here is about geometry, not timing.
     fn context(frames: usize) -> ProcessContext {
         ProcessContext {
             sample_rate: 48_000,
             frames,
-            playing: true,
+            playing: false,
             bpm: 120.0,
             position_ticks: 0.0,
             position_frames: 0,
         }
     }
 
-    fn fill_ramp(bus: &mut StereoBus, first: usize, frames: usize) {
-        for frame in 0..frames {
-            bus.l[frame] = (first + frame) as f32;
-            bus.r[frame] = -(first as f32 + frame as f32);
+    fn playing(frames: usize, ticks: f64) -> ProcessContext {
+        ProcessContext {
+            playing: true,
+            position_ticks: ticks,
+            ..context(frames)
         }
-    }
-
-    fn position_param(offset: u32, position: f32) -> TimedBufferParam {
-        TimedBufferParam {
-            offset,
-            id: mooloop_core::BUFFER_PARAM_POSITION,
-            value: position,
-        }
-    }
-
-    /// `primed` builds a 96 000-frame ring, so a beat behind the writer at
-    /// 120 BPM and 48 kHz -- 24 000 frames -- is three quarters of the way
-    /// along it. Spelled once, because every test below that used to say
-    /// "one beat of offset" now has to say it in the new coordinate.
-    const A_BEAT_BEHIND: f32 = 0.75;
-
-    /// What a lane does: one write per control tick, which is what keeps a
-    /// held position tracking the writer rather than settling wherever the
-    /// chase happened to arrive.
-    fn held_position(frames: usize, position: f32) -> Vec<TimedBufferParam> {
-        (0..frames as u32 / 32)
-            .map(|tick| position_param(tick * 32, position))
-            .collect()
-    }
-
-    /// Fill the ring with a ramp so a read position can be identified from the
-    /// sample value alone.
-    fn primed(frames: usize) -> (BufferDevice, StereoBus) {
-        let mut device = BufferDevice::with_capacity(frames * 2);
-        let mut bus = StereoBus::with_capacity(frames);
-        fill_ramp(&mut bus, 0, frames);
-        device.process(&context(frames), &mut bus, &[]);
-        (device, bus)
-    }
-
-    #[test]
-    fn a_lane_holding_one_position_plays_at_unity_a_beat_behind() {
-        let (mut device, mut bus) = primed(48_000);
-        fill_ramp(&mut bus, 48_000, 48_000);
-        device.process_with_params(
-            &context(48_000),
-            &mut bus,
-            &[],
-            &held_position(48_000, A_BEAT_BEHIND),
-        );
-        assert!(!device.is_following());
-
-        // After the chase has converged, consecutive output samples must
-        // advance by one, which is unity rate rather than a sagging chase.
-        fill_ramp(&mut bus, 96_000, 48_000);
-        device.process_with_params(
-            &context(48_000),
-            &mut bus,
-            &[],
-            &held_position(48_000, A_BEAT_BEHIND),
-        );
-        let tail = &bus.l[40_000..40_010];
-        for pair in tail.windows(2) {
-            assert!(
-                (pair[1] - pair[0] - 1.0).abs() < 0.05,
-                "held playback is not running at unity: {tail:?}"
-            );
-        }
-        // ...and it must be reading roughly a beat behind the writer. Each
-        // tick re-arms the target against where the writer is *now*, which is
-        // what makes a held lane track it: a single write instead of a lane
-        // settles wherever the chase arrived, and the test below is that.
-        let lag = (96_000 + 40_000) as f32 - tail[0];
-        assert!(
-            (lag - 24_000.0).abs() < 1_500.0,
-            "expected about one beat of lag, got {lag}"
-        );
-    }
-
-    /// The other half of "Position is an edit": written once, it arms a chase
-    /// and then **gets out of the way**.
-    ///
-    /// The head closes on the target, the chase is released when it arrives,
-    /// and `Rate` carries it from there. This is what a knob does, where the
-    /// test above is what a lane does, and the difference is deliberate --
-    /// pinning the head to a target the writer has since left behind is the
-    /// thing the release exists to stop.
-    #[test]
-    fn a_single_position_write_hands_the_head_to_rate_when_it_arrives() {
-        let (mut device, mut bus) = primed(48_000);
-        fill_ramp(&mut bus, 48_000, 48_000);
-        device.process_with_params(
-            &context(48_000),
-            &mut bus,
-            &[],
-            &[position_param(0, A_BEAT_BEHIND)],
-        );
-        assert!(!device.is_following(), "the head is detached");
-        assert!(
-            !device.is_scrubbing(),
-            "and the chase has been released: an edit that has arrived is over"
-        );
-
-        // Nothing is written to it any more, so what happens next is `Rate`.
-        fill_ramp(&mut bus, 96_000, 48_000);
-        device.process(&context(48_000), &mut bus, &[]);
-        let tail = &bus.l[40_000..40_010];
-        for pair in tail.windows(2) {
-            assert!(
-                (pair[1] - pair[0] - 1.0).abs() < 0.05,
-                "the released head should free-run at Rate, which is 1.0: {tail:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn returning_the_position_to_one_returns_the_head_to_live() {
-        let (mut device, mut bus) = primed(48_000);
-        fill_ramp(&mut bus, 48_000, 48_000);
-        device.process_with_params(
-            &context(48_000),
-            &mut bus,
-            &[],
-            &[position_param(0, A_BEAT_BEHIND)],
-        );
-        assert!(!device.is_following());
-
-        // `1.0` is the writer, and the writer is live. The direction is the
-        // opposite way round from the `Offset` this replaced, which is the
-        // point: a rising ramp is forward playback.
-        fill_ramp(&mut bus, 96_000, 48_000);
-        device.process_with_params(&context(48_000), &mut bus, &[], &[position_param(0, 1.0)]);
-        assert!(device.is_following());
-        assert!(!device.is_scrubbing());
-    }
-
-    #[test]
-    fn sweeping_the_position_moves_the_head_rather_than_jumping_it() {
-        let (mut device, mut bus) = primed(48_000);
-        // Ramp the position across the block the way a lane would, one message
-        // per 32 frames: from live back to a beat behind.
-        let params: Vec<TimedBufferParam> = (0..48_000 / 32)
-            .map(|tick| {
-                let travelled = tick as f32 / (48_000.0 / 32.0);
-                position_param(tick * 32, 1.0 - travelled * (1.0 - A_BEAT_BEHIND))
-            })
-            .collect();
-        fill_ramp(&mut bus, 48_000, 48_000);
-        device.process_with_params(&context(48_000), &mut bus, &[], &params);
-
-        // `fill_ramp` writes the absolute frame number, so an output sample
-        // *is* the position it was read from. Read the second half, past the
-        // scrub's fade-in from silence — a head at rate zero is deliberately
-        // muted, so early samples report gain, not position.
-        let travel = &bus.l[24_000..48_000];
-        for pair in travel.windows(2) {
-            let step = pair[1] - pair[0];
-            assert!(
-                (0.0..1.0).contains(&step),
-                "the head should crawl forward, slower than the writer: {step}"
-            );
-        }
-        // Half a beat of lag opens across the second half of the block, so
-        // the head must fall behind by about that much and no more.
-        let fell_behind = (travel[0] - travel[travel.len() - 1]) + travel.len() as f32;
-        assert!(
-            (fell_behind - 12_000.0).abs() < 1_000.0,
-            "expected to lose about half a beat over the sweep, lost {fell_behind}"
-        );
-    }
-
-    #[test]
-    fn a_gesture_outranks_the_position_parameter_while_it_runs() {
-        let (mut device, mut bus) = primed(48_000);
-        fill_ramp(&mut bus, 48_000, 48_000);
-        let jump = TimedBufferEvent {
-            offset: 0,
-            event: BufferEvent {
-                offset_beats: -2.0,
-                duration: BufferDuration::Gate,
-                ..BufferEvent::live()
-            },
-        };
-        device.process_with_params(
-            &context(48_000),
-            &mut bus,
-            &[jump],
-            &[position_param(24_000, A_BEAT_BEHIND)],
-        );
-        // The parameter arrived mid-block while the gesture owned the head; it
-        // must not have converted that head into a position chase.
-        assert!(!device.is_scrubbing());
-        assert!(!device.is_following());
-
-        // Once the gesture releases, the next control tick takes the position.
-        device.release();
-        fill_ramp(&mut bus, 96_000, 48_000);
-        device.process_with_params(
-            &context(48_000),
-            &mut bus,
-            &[],
-            &[position_param(0, A_BEAT_BEHIND)],
-        );
-        assert!(!device.is_following(), "the position took the head");
-        // Not `is_scrubbing`: the chase has arrived and released inside this
-        // block, which is what a single write is supposed to do. Where the
-        // head *is* says the position took it.
-        let lag = (96_000 + 48_000) as f32 - bus.l[47_999];
-        assert!(
-            (lag - 24_000.0).abs() < 1_500.0,
-            "expected the head about a beat behind, and it is {lag}"
-        );
-    }
-
-    #[test]
-    fn a_saved_position_is_applied_on_the_first_block() {
-        let mut device = BufferDevice::new(
-            mooloop_core::BufferParams {
-                bars: 1,
-                position: A_BEAT_BEHIND,
-                crossfade_ms: 2.5,
-                ..Default::default()
-            },
-            48_000,
-            120.0,
-        );
-        let mut bus = StereoBus::with_capacity(1_000);
-        fill_ramp(&mut bus, 0, 1_000);
-        device.process(&context(1_000), &mut bus, &[]);
-        assert!(device.is_scrubbing());
-    }
-
-    #[test]
-    fn follow_is_bit_transparent_and_zero_latency() {
-        let mut device = BufferDevice::with_capacity(256);
-        let mut bus = StereoBus::with_capacity(64);
-        fill_ramp(&mut bus, 0, 64);
-        let expected_l = bus.l.clone();
-        let expected_r = bus.r.clone();
-        device.process(&context(64), &mut bus, &[]);
-        assert_eq!(bus.l, expected_l);
-        assert_eq!(bus.r, expected_r);
-        assert!(device.is_following());
-    }
-
-    #[test]
-    fn jump_one_beat_is_an_exact_constant_delay() {
-        let mut device = BufferDevice::with_capacity(100_000);
-        let mut bus = StereoBus::with_capacity(48_000);
-        fill_ramp(&mut bus, 0, 48_000);
-        device.process(&context(48_000), &mut bus, &[]);
-        fill_ramp(&mut bus, 48_000, 48_000);
-        let event = TimedBufferEvent {
-            offset: 0,
-            event: BufferEvent {
-                offset_beats: -1.0,
-                rate: 1.0,
-                window_beats: None,
-                repeat: None,
-                duration: BufferDuration::UntilNextEvent,
-                crossfade_ms: 0.0,
-            },
-        };
-        device.process(&context(48_000), &mut bus, &[event]);
-        assert_eq!(bus.l[0], 24_000.0);
-        assert_eq!(bus.l[12_345], 36_345.0);
-        assert_eq!(bus.r[12_345], -36_345.0);
-    }
-
-    #[test]
-    fn reverse_collides_then_returns_to_live() {
-        let mut device = BufferDevice::with_capacity(1_000);
-        let mut bus = StereoBus::with_capacity(100);
-        for block in 0..10 {
-            fill_ramp(&mut bus, block * 100, 100);
-            device.process(&context(100), &mut bus, &[]);
-        }
-        fill_ramp(&mut bus, 1_000, 100);
-        let event = TimedBufferEvent {
-            offset: 0,
-            event: BufferEvent {
-                offset_beats: -0.01,
-                rate: -1.0,
-                window_beats: None,
-                repeat: None,
-                duration: BufferDuration::UntilNextEvent,
-                crossfade_ms: 0.0,
-            },
-        };
-        device.process(&context(100), &mut bus, &[event]);
-        fill_ramp(&mut bus, 1_100, 100);
-        device.process(&context(100), &mut bus, &[]);
-        fill_ramp(&mut bus, 1_200, 100);
-        device.process(&context(100), &mut bus, &[]);
-        fill_ramp(&mut bus, 1_300, 100);
-        device.process(&context(100), &mut bus, &[]);
-        assert!(device.collision_count() > 0);
-        assert!(device.is_following());
-        assert_eq!(bus.l[99], 1_399.0);
-    }
-
-    #[test]
-    fn stutter_repeats_a_beat_relative_window_then_returns_live() {
-        let mut device = BufferDevice::with_capacity(100_000);
-        let mut bus = StereoBus::with_capacity(48_000);
-        fill_ramp(&mut bus, 0, 48_000);
-        device.process(&context(48_000), &mut bus, &[]);
-        fill_ramp(&mut bus, 48_000, 48_000);
-        let event = TimedBufferEvent {
-            offset: 0,
-            event: BufferEvent {
-                offset_beats: -0.0625,
-                rate: 1.0,
-                window_beats: Some(0.0625),
-                repeat: Some(8),
-                duration: BufferDuration::UntilNextEvent,
-                crossfade_ms: 0.0,
-            },
-        };
-        device.process(&context(48_000), &mut bus, &[event]);
-        for repeat in 0..8 {
-            let start = repeat * 1_500;
-            assert_eq!(bus.l[start], 46_500.0);
-            assert_eq!(bus.l[start + 1_499], 47_999.0);
-        }
-        assert_eq!(bus.l[12_000], 60_000.0);
-        assert!(device.is_following());
-    }
-
-    fn rate_param(offset: u32, rate: f32) -> TimedBufferParam {
-        TimedBufferParam {
-            offset,
-            id: mooloop_core::BUFFER_PARAM_RATE,
-            value: rate,
-        }
-    }
-
-    fn freeze_param(offset: u32, value: f32) -> TimedBufferParam {
-        TimedBufferParam {
-            offset,
-            id: mooloop_core::BUFFER_PARAM_FREEZE,
-            value,
-        }
-    }
-
-    /// Quantize is **on** by default, so a freeze written by a test that is
-    /// not about quantization waits for the next bar line and the test
-    /// measures a device that is still live. Turning it off is how those tests
-    /// say "now" -- and the four that needed it all failed the day quantized
-    /// freeze landed, which is the default doing its job.
-    fn unquantized(offset: u32) -> TimedBufferParam {
-        TimedBufferParam {
-            offset,
-            id: mooloop_core::BUFFER_PARAM_QUANTIZE,
-            value: 0.0,
-        }
-    }
-
-    /// The claim `Rate` exists to make: with the writer stopped, the head
-    /// still moves, and it moves at the commanded speed.
-    ///
-    /// Before this, the writer *was* the time base -- a held offset played
-    /// forward at unity because the target was recomputed against a moving
-    /// write head. Stop the writer and that head coasts to a stop and mutes,
-    /// which is what makes Freeze and Rate one decision rather than two.
-    #[test]
-    fn a_detached_head_plays_at_the_commanded_rate_with_the_writer_stopped() {
-        let (mut device, mut bus) = primed(48_000);
-        device.detach_at_rate(&context(48_000));
-        device.set_writing(false);
-        let frozen_write_head = 48_000.0_f32;
-
-        // Half speed, backwards. The ring holds a ramp whose value is its own
-        // frame number, so consecutive output samples say what the head did.
-        fill_ramp(&mut bus, 48_000, 4_000);
-        device.process_with_params(&context(4_000), &mut bus, &[], &[rate_param(0, -0.5)]);
-        // Past the crossfade and past the gain ramp, where the read is the
-        // whole output.
-        let tail = &bus.l[2_000..2_010];
-        for pair in tail.windows(2) {
-            assert!(
-                (pair[1] - pair[0] + 0.5).abs() < 0.01,
-                "the head is not running at -0.5x: {tail:?}"
-            );
-        }
-        assert!(
-            tail[0] < frozen_write_head && tail[0] > frozen_write_head - 4_000.0,
-            "the head should be a little way back into the frozen history, not \
-             at {}",
-            tail[0]
-        );
-        assert!(
-            !device.is_writing(),
-            "the writer must still be stopped: nothing here restarts it"
-        );
-        assert_eq!(
-            device.collision_count(),
-            0,
-            "a head running away from a stopped writer cannot collide with it"
-        );
-    }
-
-    /// `Rate = 0` is a hold, and a hold is silence.
-    ///
-    /// Repeating one sample forever is a DC step, not a held note, so the gain
-    /// follows the speed down -- the same law a stopped platter already runs.
-    #[test]
-    fn rate_zero_holds_silently_rather_than_repeating_one_sample() {
-        let (mut device, mut bus) = primed(48_000);
-        device.detach_at_rate(&context(48_000));
-        device.set_writing(false);
-
-        fill_ramp(&mut bus, 48_000, 4_000);
-        device.process_with_params(&context(4_000), &mut bus, &[], &[rate_param(0, 0.0)]);
-
-        let tail = &bus.l[2_000..4_000];
-        let peak = tail.iter().fold(0.0_f32, |peak, s| peak.max(s.abs()));
-        assert!(
-            peak < 1.0e-3,
-            "a held head should be silent, and its peak is {peak}"
-        );
-    }
-
-    /// The arbitration rule, both halves, in one block.
-    ///
-    /// A `Position` write sends the head backwards while `Rate` is asking for
-    /// double speed forwards; the chase wins, because it is closing. When it
-    /// arrives and the request stops moving, it lets go, and `Rate` takes the
-    /// head from exactly where the edit left it. **Free-run is alongside the
-    /// chase, not instead of it**, and which one is talking decides.
-    #[test]
-    fn the_chase_owns_the_head_until_it_arrives_and_then_rate_does() {
-        let (mut device, mut bus) = primed(48_000);
-        fill_ramp(&mut bus, 48_000, 48_000);
-        device.process_with_params(
-            &context(48_000),
-            &mut bus,
-            &[],
-            &[position_param(0, A_BEAT_BEHIND), rate_param(0, 2.0)],
-        );
-
-        // Past the crossfade, deep in the chase: the head is travelling
-        // *backwards* at the clamp, which is the opposite direction from the
-        // rate underneath it.
-        let closing = &bus.l[2_000..2_010];
-        for pair in closing.windows(2) {
-            assert!(
-                (pair[1] - pair[0] + MAX_SCRUB_RATE).abs() < 0.05,
-                "the chase should own the head while it closes: {closing:?}"
-            );
-        }
-
-        // 24 000 frames back, closing at 5 a frame against a writer moving at
-        // 1, is about 4 800 frames of travel, and the release waits for the
-        // request to be still for twice the chase constant after that. By
-        // 20 000 it is long over.
-        let freed = &bus.l[20_000..20_010];
-        for pair in freed.windows(2) {
-            assert!(
-                (pair[1] - pair[0] - 2.0).abs() < 0.05,
-                "once the edit is over the head runs at Rate: {freed:?}"
-            );
-        }
-        assert!(
-            !device.is_scrubbing(),
-            "and the chase has let go rather than still holding on"
-        );
-    }
-
-    /// The `Rate` descriptor's range and the head's clamp are one number.
-    ///
-    /// A descriptor whose range ran past the clamp would draw a knob whose
-    /// top travel did nothing, which is the defect `eq-v2` found on a shelf's
-    /// Q and `LOOSE_ENDS.md` still carries.
-    #[test]
-    fn the_rate_descriptor_stops_where_the_head_clamp_does() {
-        let descriptor = mooloop_core::EffectKind::Buffer
-            .descriptors()
-            .iter()
-            .find(|d| d.id == mooloop_core::BUFFER_PARAM_RATE)
-            .expect("Buffer publishes a Rate descriptor");
-        assert_eq!(descriptor.max, MAX_SCRUB_RATE);
-        assert_eq!(descriptor.min, -MAX_SCRUB_RATE);
-
-        // And the clamp is real: asking for more than the descriptor allows
-        // does not produce more than the descriptor allows.
-        let (mut device, mut bus) = primed(1_000);
-        device.process_with_params(&context(1_000), &mut bus, &[], &[rate_param(0, 99.0)]);
-        assert_eq!(device.rate(), MAX_SCRUB_RATE);
-    }
-
-    /// The headline behaviour: freezing a periodic loop and doing nothing
-    /// else is inaudible.
-    ///
-    /// It is only true when it is true, which is the whole reason quantized
-    /// freeze is a step of its own. At the freeze instant the head sits at the
-    /// write position, so continuing forward wraps immediately into the
-    /// *oldest* retained sample -- you hear N bars ago, not now. That is
-    /// seamless exactly when the material repeats at the buffer length, so
-    /// this test gives it material that does.
-    #[test]
-    fn freezing_a_periodic_loop_is_inaudible() {
-        // 1 200 frames of a 40-frame cycle: 30 whole cycles in the ring.
-        //
-        // A sine rather than a ramp, and that is the test's own trap: a
-        // sawtooth's largest step is its cycle wrap, so it would report the
-        // material's discontinuity as the device's and fail for the wrong
-        // reason. A periodic signal has to be continuous across its own period
-        // for "seamless" to mean anything. The first draft used a ramp and
-        // failed at 1.95 against 0.05, which is the sawtooth's own tooth.
-        const CYCLE: usize = 40;
-        const RING: usize = 1_200;
-        let cycle = |frame: usize| (frame as f32 / CYCLE as f32 * core::f32::consts::TAU).sin();
-
-        let mut device = BufferDevice::with_capacity(RING);
-        let mut bus = StereoBus::with_capacity(RING);
-        for frame in 0..RING {
-            bus.l[frame] = cycle(frame);
-            bus.r[frame] = cycle(frame);
-        }
-        device.process(&context(RING), &mut bus, &[]);
-
-        // Freeze with no crossfade, so nothing is hidden by a fade.
-        device.crossfade_ms = 0.0;
-        for frame in 0..RING {
-            bus.l[frame] = 0.0;
-            bus.r[frame] = 0.0;
-        }
-        device.process_with_params(
-            &context(RING),
-            &mut bus,
-            &[],
-            &[unquantized(0), freeze_param(0, 1.0)],
-        );
-        assert!(device.is_frozen(), "the writer must have stopped");
-
-        let step = max_step(&bus.l[1..RING]);
-        // The sine's own largest step between adjacent frames.
-        let cycle_step = core::f32::consts::TAU / CYCLE as f32;
-        assert!(
-            step < cycle_step * 1.5,
-            "the wrap should be no bigger a step than any other sample of the \
-             waveform, and it is {step} against {cycle_step}"
-        );
-        assert_eq!(
-            device.collision_count(),
-            0,
-            "a frozen ring has no writer to collide with"
-        );
-    }
-
-    /// Unfreezing returns to live, and the writer picks up where it stopped.
-    #[test]
-    fn unfreezing_returns_to_live_and_restarts_the_writer() {
-        let (mut device, mut bus) = primed(4_000);
-        fill_ramp(&mut bus, 4_000, 4_000);
-        device.process_with_params(
-            &context(4_000),
-            &mut bus,
-            &[],
-            &[unquantized(0), freeze_param(0, 1.0)],
-        );
-        assert!(device.is_frozen());
-        assert!(!device.is_following(), "freezing detaches the head");
-
-        fill_ramp(&mut bus, 8_000, 4_000);
-        device.process_with_params(&context(4_000), &mut bus, &[], &[freeze_param(0, 0.0)]);
-        assert!(!device.is_frozen(), "the writer must be running again");
-        assert!(device.is_following(), "and the head must be back on live");
-
-        // Live means live: the tail of the block is the input, sample for
-        // sample, not a delayed stream catching up.
-        for frame in 2_000..2_010 {
-            assert!(
-                (bus.l[frame] - (8_000 + frame) as f32).abs() < 0.001,
-                "frame {frame} is {} and the input was {}",
-                bus.l[frame],
-                (8_000 + frame) as f32
-            );
-        }
-    }
-
-    /// Hysteresis, not a threshold. A modulator resting on the midpoint is
-    /// the case this exists for: without it, every control tick would toggle
-    /// the writer and every toggle is a crossfade.
-    #[test]
-    fn freeze_ignores_a_modulator_resting_on_the_threshold() {
-        let (mut device, mut bus) = primed(1_000);
-        let mut nudges = vec![unquantized(0)];
-        for tick in 0..8u32 {
-            // Either side of 0.5 by less than the hysteresis band.
-            let value = if tick % 2 == 0 { 0.52 } else { 0.48 };
-            nudges.push(freeze_param(tick * 32, value));
-        }
-        fill_ramp(&mut bus, 1_000, 1_000);
-        device.process_with_params(&context(1_000), &mut bus, &[], &nudges);
-        assert!(
-            !device.is_frozen(),
-            "nothing inside the hysteresis band may move the writer"
-        );
-
-        // And the band is not a refusal: past it, it freezes.
-        device.process_with_params(&context(1_000), &mut bus, &[], &[freeze_param(0, 0.56)]);
-        assert!(device.is_frozen());
-    }
-
-    /// A gesture running at the moment of freeze keeps running, against the
-    /// frozen ring -- and its `Steps` duration still expires, because the
-    /// clock is no longer the writer.
-    #[test]
-    fn a_gesture_survives_a_freeze_and_still_expires() {
-        let (mut device, mut bus) = primed(48_000);
-        let stutter = BufferEvent {
-            offset_beats: -0.25,
-            rate: 1.0,
-            window_beats: Some(0.25),
-            repeat: None,
-            duration: BufferDuration::Steps(2),
-            crossfade_ms: 0.0,
-        };
-        // A `Steps(2)` duration at 120 BPM is two sixteenths: 12 000 frames.
-        // The blocks below are short enough to land either side of that.
-        fill_ramp(&mut bus, 48_000, 4_000);
-        device.process(
-            &context(4_000),
-            &mut bus,
-            &[TimedBufferEvent { offset: 0, event: stutter }],
-        );
-        assert!(!device.is_following(), "the stutter is running");
-
-        fill_ramp(&mut bus, 52_000, 4_000);
-        device.process_with_params(
-            &context(4_000),
-            &mut bus,
-            &[],
-            &[unquantized(0), freeze_param(0, 1.0)],
-        );
-        assert!(device.is_frozen());
-        assert!(
-            !device.is_following(),
-            "the gesture keeps running against the frozen ring"
-        );
-        assert_eq!(
-            device.collision_count(),
-            0,
-            "and it does not collide with a writer that is not moving"
-        );
-
-        // Past 12 000 frames from the event. The writer has not moved since
-        // the freeze, so an expiry measured against the write head would never
-        // arrive.
-        fill_ramp(&mut bus, 56_000, 8_000);
-        device.process(&context(8_000), &mut bus, &[]);
-        assert!(
-            device.is_following(),
-            "the gesture's duration must still expire with the writer stopped: \
-             the clock is frames elapsed, not the write head"
-        );
-    }
-
-    /// Freeze is persisted, and a project saved frozen reopens frozen.
-    ///
-    /// Over an empty ring, because the frozen audio itself is not saved yet.
-    /// That is a scoped gap rather than an oversight -- see `BufferParams`.
-    #[test]
-    fn a_saved_freeze_is_applied_on_the_first_block() {
-        let mut device = BufferDevice::new(
-            mooloop_core::BufferParams {
-                bars: 1,
-                freeze: 1.0,
-                ..Default::default()
-            },
-            48_000,
-            120.0,
-        );
-        assert!(
-            device.is_writing(),
-            "construction has no context, so the freeze waits for a block"
-        );
-        let mut bus = StereoBus::with_capacity(1_000);
-        fill_ramp(&mut bus, 0, 1_000);
-        device.process(&context(1_000), &mut bus, &[]);
-        assert!(device.is_frozen());
-        assert!(!device.is_following());
     }
 
     fn param(offset: u32, id: u32, value: f32) -> TimedBufferParam {
         TimedBufferParam { offset, id, value }
     }
 
-    /// A `1/16` loop at Position 50% stutters in time, and the sixteenth it
-    /// repeats is the one at 50%.
-    ///
-    /// `fill_ramp` writes each frame's absolute number, so an output sample
-    /// *is* the position it came from, and the loop shows up as the output
-    /// running over one span again and again.
+    /// No crossfade, so a test that asserts *where* the head is reads the
+    /// sample it is on rather than a blend of two. `fill_ramp` writes each
+    /// frame's own number, which makes the "audio" enormous DC -- an
+    /// equal-power fade between 30 000 and 24 000 peaks at 38 000, higher
+    /// than either, and the first loop test this device ever had read that as
+    /// the window escaping.
+    fn hard(id: u32, value: f32) -> [TimedBufferParam; 2] {
+        [
+            param(0, BUFFER_PARAM_CROSSFADE_MS, 0.0),
+            param(0, id, value),
+        ]
+    }
+
+    fn fill_ramp(bus: &mut StereoBus, first: usize, frames: usize) {
+        for frame in 0..frames {
+            bus.l[frame] = (first + frame) as f32;
+            bus.r[frame] = -((first + frame) as f32);
+        }
+    }
+
+    /// A one-bar ring, filled with a ramp so a read position can be named
+    /// from the sample value alone. The writer ends on frame 96 000.
+    fn primed() -> (BufferDevice, StereoBus) {
+        let mut device = BufferDevice::with_capacity(BAR);
+        // A bus a whole ring wide, so a test can render a full lap in one
+        // block and see the wrap.
+        let mut bus = StereoBus::with_capacity(BAR);
+        for block in 0..2 {
+            fill_ramp(&mut bus, block * BAR / 2, BAR / 2);
+            device.process(&context(BAR / 2), &mut bus, &[]);
+        }
+        (device, bus)
+    }
+
     #[test]
-    fn a_sixteenth_loop_at_half_way_stutters_in_time() {
-        // `primed` leaves a 96 000-frame ring with its first 48 000 frames
-        // written and the writer at 48 000. A sixteenth at 120 BPM and 48 kHz
-        // is 6 000 frames, and `0.75` is a quarter of the ring back from the
-        // writer -- frame 24 000, which is written material with room either
-        // side.
-        let (mut device, mut bus) = primed(48_000);
-        // No crossfade, so an output sample *is* the position it was read
-        // from. It matters here more than elsewhere: `fill_ramp` writes each
-        // frame's own number, so the "audio" is enormous DC, and an
-        // equal-power fade between 30 000 and 24 000 sums to 38 000 -- higher
-        // than either end. That is the fixture, not the device, and the first
-        // draft of this test read it as the loop escaping its window.
-        device.crossfade_ms = 0.0;
-        fill_ramp(&mut bus, 48_000, 48_000);
+    fn a_fresh_device_passes_its_input_through() {
+        let (mut device, mut bus) = primed();
+        assert!(device.is_following());
+        fill_ramp(&mut bus, BAR, 1_000);
+        device.process(&context(1_000), &mut bus, &[]);
+        assert_eq!(bus.l[999], (BAR + 999) as f32, "following is the input itself");
+    }
+
+    /// JUMP lands its own distance back and plays forward from there.
+    #[test]
+    fn jump_plays_forward_from_its_own_distance_back() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, BEAT);
+        // The default Jump Back is a quarter: one beat, 24 000 frames.
         device.process_with_params(
-            &context(48_000),
+            &context(BEAT),
+            &mut bus,
+            &[],
+            &hard(BUFFER_PARAM_JUMP, 1.0),
+        );
+        assert_eq!(bus.l[0], (BAR - BEAT) as f32, "a beat back, exactly");
+        assert_eq!(bus.l[1_000], (BAR - BEAT + 1_000) as f32, "and forward at unity");
+        assert!(!device.is_writing(), "a held gesture holds the ring still");
+    }
+
+    /// REVERSE runs backward from the newest frame and **keeps going**: it
+    /// wraps the ring rather than ending, so a held button does not let go on
+    /// its own a few seconds later.
+    #[test]
+    fn reverse_runs_backward_from_now_and_wraps_rather_than_stopping() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, BAR);
+        device.process_with_params(
+            &context(BAR),
+            &mut bus,
+            &[],
+            &hard(BUFFER_PARAM_REVERSE, 1.0),
+        );
+        assert_eq!(bus.l[0], (BAR - 1) as f32, "backward from the newest frame");
+        assert_eq!(bus.l[1_000], (BAR - 1 - 1_000) as f32);
+        // A whole ring later it has lapped and is still going.
+        assert!(device.seam_count() > 0, "the test never reached the end of the ring");
+        assert!(!device.is_following(), "a held REV has to keep reversing");
+    }
+
+    /// STUTTER repeats **its own** length.
+    ///
+    /// This is the question that started the rebuild -- Adam, of the version
+    /// where the gesture overrode a shared `Length` knob and put it back on
+    /// release: *"how does one set the stutter length?"*
+    #[test]
+    fn stutter_repeats_its_own_length() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, BAR / 2);
+        device.process_with_params(
+            &context(BAR / 2),
+            &mut bus,
+            &[],
+            &hard(BUFFER_PARAM_STUTTER, 1.0),
+        );
+        // The default is a sixteenth: the last 6 000 frames, over and over.
+        assert_eq!(bus.l[0], (BAR - SIXTEENTH) as f32);
+        assert_eq!(bus.l[SIXTEENTH - 1], (BAR - 1) as f32, "to the end of it");
+        assert_eq!(bus.l[SIXTEENTH], (BAR - SIXTEENTH) as f32, "and round again");
+        assert_eq!(bus.l[SIXTEENTH * 3], (BAR - SIXTEENTH) as f32);
+        let _ = device;
+    }
+
+    /// And the two knobs are independent: moving the stutter's length does
+    /// not move the jump's distance, which is the whole of what "they dont
+    /// share any length settings" asks for.
+    #[test]
+    fn the_stutter_length_and_the_jump_distance_are_separate_settings() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, BAR / 2);
+        device.process_with_params(
+            &context(BAR / 2),
             &mut bus,
             &[],
             &[
-                param(0, mooloop_core::BUFFER_PARAM_LENGTH, 13.0), // 1/16
-                param(0, mooloop_core::BUFFER_PARAM_LOOP, 1.0),
-                param(0, mooloop_core::BUFFER_PARAM_POSITION, 0.75),
-                param(0, mooloop_core::BUFFER_PARAM_JUMP, 1.0),
+                param(0, BUFFER_PARAM_CROSSFADE_MS, 0.0),
+                // An eighth, 12 000 frames -- not the sixteenth it defaults to.
+                param(0, BUFFER_PARAM_STUTTER_LENGTH, 10.0),
+                param(0, BUFFER_PARAM_STUTTER, 1.0),
             ],
         );
-        assert!(!device.is_following(), "the jump detached the head");
+        assert_eq!(bus.l[0], (BAR - 2 * SIXTEENTH) as f32, "an eighth back");
+        assert_eq!(bus.l[2 * SIXTEENTH], (BAR - 2 * SIXTEENTH) as f32, "repeating an eighth");
+        assert_ne!(bus.l[SIXTEENTH], bus.l[0], "and not a sixteenth");
 
-        // Past the crossfade. Every sample must sit inside the sixteenth the
-        // loop opened on, and the span must be walked more than once -- that
-        // is the difference between a loop and a window the head simply
-        // happens to be inside.
-        let span = &bus.l[1_000..40_000];
-        let low = span.iter().fold(f32::MAX, |low, s| low.min(*s));
-        let high = span.iter().fold(f32::MIN, |high, s| high.max(*s));
-        assert!(
-            low >= 23_000.0 && high <= 30_100.0,
-            "the loop wandered outside its sixteenth: {low}..{high}"
+        // The jump is where its own knob left it, untouched by any of that.
+        // The release gets a block of its own: it restarts the writer, and a
+        // press in the same block would measure its distance from a write
+        // head that had moved on by however many frames were between them.
+        fill_ramp(&mut bus, BAR, 1_000);
+        device.process_with_params(
+            &context(1_000),
+            &mut bus,
+            &[],
+            &[param(0, BUFFER_PARAM_STUTTER, 0.0)],
         );
-        let wraps = span
-            .windows(2)
-            .filter(|pair| pair[1] < pair[0] - 1_000.0)
-            .count();
-        assert!(
-            wraps >= 5,
-            "39 000 frames over a 6 000-frame loop is six passes, and it \
-             wrapped {wraps} times"
+        let now = BAR + 1_000;
+        fill_ramp(&mut bus, now, 1_000);
+        device.process_with_params(
+            &context(1_000),
+            &mut bus,
+            &[],
+            &hard(BUFFER_PARAM_JUMP, 1.0),
+        );
+        assert_eq!(bus.l[0], (now - BEAT) as f32, "still a quarter back");
+    }
+
+    /// Releasing hands the output back to the input and restarts the writer.
+    #[test]
+    fn releasing_a_gesture_returns_to_live_and_restarts_the_writer() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, 1_000);
+        device.process_with_params(
+            &context(1_000),
+            &mut bus,
+            &[],
+            &hard(BUFFER_PARAM_JUMP, 1.0),
+        );
+        assert!(!device.is_following() && !device.is_writing());
+        fill_ramp(&mut bus, BAR, 1_000);
+        device.process_with_params(
+            &context(1_000),
+            &mut bus,
+            &[],
+            &[param(0, BUFFER_PARAM_JUMP, 0.0)],
+        );
+        assert!(device.is_following(), "the button is up; the audio is live");
+        assert!(device.is_writing(), "and the ring is recording again");
+        assert_eq!(bus.l[999], (BAR + 999) as f32);
+    }
+
+    /// **A playhead nobody is moving is not a performance.** A held Position
+    /// is a setting, and the device falls through to live audio -- Adam: *"if
+    /// it is moving, thats what we should hear, otherwise its just live
+    /// audio."*
+    #[test]
+    fn a_still_position_is_live_audio() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, BAR / 2);
+        // What a lane holding one value does: one write per control tick.
+        let held: Vec<_> = (0..(BAR / 2) as u32 / 32)
+            .map(|tick| param(tick * 32, BUFFER_PARAM_POSITION, 0.5))
+            .collect();
+        device.process_with_params(&context(BAR / 2), &mut bus, &[], &held);
+        assert!(device.is_following(), "a position that stopped moving lets go");
+        assert_eq!(
+            bus.l[BAR / 2 - 1],
+            (BAR + BAR / 2 - 1) as f32,
+            "and what comes out is what went in"
         );
     }
 
-    /// A reverse loop extends **backward** from its anchor.
+    /// A moving one is the buffer, at whatever speed it is being moved.
     ///
-    /// Pointing it forward aims a reverse head at samples the writer has not
-    /// reached, and the gesture plays silence.
-    /// `02-control-and-modulation.md` records that as the gotcha that is easy
-    /// to reintroduce, and `Loop` is the second place that can reintroduce it.
+    /// **A one-bar ramp over a one-bar ring plays at unity**, which is why
+    /// nothing on the face names a rate: the head *is* the position, so the
+    /// playback speed is the position's own speed. Half the period would be
+    /// an octave up, and a descending ramp is reverse.
     #[test]
-    fn a_reverse_loop_extends_backward_from_its_anchor() {
-        let (mut device, mut bus) = primed(48_000);
-        device.crossfade_ms = 0.0;
-        fill_ramp(&mut bus, 48_000, 48_000);
-        device.process_with_params(
-            &context(48_000),
-            &mut bus,
-            &[],
-            &[
-                param(0, mooloop_core::BUFFER_PARAM_RATE, -1.0),
-                param(0, mooloop_core::BUFFER_PARAM_LENGTH, 13.0),
-                param(0, mooloop_core::BUFFER_PARAM_LOOP, 1.0),
-                param(0, mooloop_core::BUFFER_PARAM_POSITION, 0.75),
-                param(0, mooloop_core::BUFFER_PARAM_JUMP, 1.0),
-            ],
-        );
-
-        let span = &bus.l[1_000..40_000];
-        let low = span.iter().fold(f32::MAX, |low, s| low.min(*s));
-        let high = span.iter().fold(f32::MIN, |high, s| high.max(*s));
-        assert!(
-            high <= 24_100.0,
-            "a reverse loop must sit behind its anchor at 24 000, and it \
-             reached {high}"
-        );
-        assert!(
-            low >= 17_900.0,
-            "and only one sixteenth behind it, not further: {low}"
-        );
-        // Written history, so it is not silence -- which is what pointing the
-        // window the wrong way would have produced.
-        let peak = span.iter().fold(0.0_f32, |peak, s| peak.max(s.abs()));
-        assert!(peak > 1_000.0, "a reverse loop over written history is audible");
-    }
-
-    /// A `Rate` that is not unity has to create the head it drives.
-    ///
-    /// **This is the bug behind "reverse doesn't seem to work at all".** Over
-    /// a live buffer at the default Position the device is following, which
-    /// means there is no detached head for a velocity to apply to -- so REV,
-    /// which is one `Rate` write, moved a number and made no sound. It worked
-    /// only frozen, because Freeze was the only thing that detached a head.
-    #[test]
-    fn a_reverse_rate_detaches_the_head_over_a_live_buffer() {
-        let (mut device, mut bus) = primed(48_000);
-        device.crossfade_ms = 0.0;
-        fill_ramp(&mut bus, 48_000, 48_000);
-        device.process_with_params(
-            &context(48_000),
-            &mut bus,
-            &[],
-            &[param(0, mooloop_core::BUFFER_PARAM_RATE, -1.0)],
-        );
-        assert!(
-            !device.is_following(),
-            "a reverse Rate has to take the head; following plays the input"
-        );
-        // The ramp writes each frame's own number, so running backward is
-        // consecutive output samples falling by one where the input rises.
-        let span = &bus.l[1_000..1_010];
+    fn a_one_bar_ramp_over_a_one_bar_ring_plays_at_unity() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, BAR / 2);
+        let swept: Vec<_> = (0..(BAR / 2) as u32 / 32)
+            .map(|tick| {
+                param(
+                    tick * 32,
+                    BUFFER_PARAM_POSITION,
+                    (tick * 32) as f32 / BAR as f32,
+                )
+            })
+            .collect();
+        device.process_with_params(&context(BAR / 2), &mut bus, &[], &swept);
+        assert!(!device.is_following(), "somebody is driving it");
+        let span = &bus.l[20_000..20_010];
         for pair in span.windows(2) {
             assert!(
-                (pair[1] - pair[0] + 1.0).abs() < 0.05,
-                "the head is not running backward: {span:?}"
-            );
-        }
-    }
-
-    /// A held REV keeps reversing. The head `Rate` created is a standing
-    /// state, so running out of history wraps it round the ring rather than
-    /// ending it -- otherwise the button works for one ring's worth of
-    /// history and then lets go on its own, which is a control failing a few
-    /// seconds late.
-    #[test]
-    fn a_reverse_rate_wraps_rather_than_snapping_forward() {
-        // A small ring, so the head reaches the end of history inside the
-        // test: reverse closes on it at two frames a frame.
-        let mut device = BufferDevice::with_capacity(1_000);
-        device.crossfade_ms = 0.0;
-        let mut bus = StereoBus::with_capacity(100);
-        for block in 0..10 {
-            fill_ramp(&mut bus, block * 100, 100);
-            device.process(&context(100), &mut bus, &[]);
-        }
-        fill_ramp(&mut bus, 1_000, 100);
-        device.process_with_params(
-            &context(100),
-            &mut bus,
-            &[],
-            &[param(0, mooloop_core::BUFFER_PARAM_RATE, -1.0)],
-        );
-        for block in 11..20 {
-            fill_ramp(&mut bus, block * 100, 100);
-            device.process(&context(100), &mut bus, &[]);
-        }
-        assert!(
-            device.collision_count() > 0,
-            "the test never reached the end of history, so it proves nothing"
-        );
-        assert!(
-            !device.is_following(),
-            "a held REV has to keep reversing, not hand the head back"
-        );
-    }
-
-    /// And unity takes it back. Following is a direct assignment from the
-    /// input; a detached head at exactly unity would be a delay line with a
-    /// lag and an interpolator, for nothing audible.
-    #[test]
-    fn returning_the_rate_to_unity_returns_the_head_to_following() {
-        let (mut device, mut bus) = primed(48_000);
-        device.crossfade_ms = 0.0;
-        fill_ramp(&mut bus, 48_000, 48_000);
-        device.process_with_params(
-            &context(48_000),
-            &mut bus,
-            &[],
-            &[param(0, mooloop_core::BUFFER_PARAM_RATE, -1.0)],
-        );
-        assert!(!device.is_following());
-        fill_ramp(&mut bus, 96_000, 48_000);
-        device.process_with_params(
-            &context(48_000),
-            &mut bus,
-            &[],
-            &[param(0, mooloop_core::BUFFER_PARAM_RATE, 1.0)],
-        );
-        assert!(device.is_following(), "unity is following, not a delay line");
-        assert_eq!(bus.l[47_999], (96_000 + 47_999) as f32);
-    }
-
-    /// A loop whose anchor is the write head extends *backward* from it,
-    /// whichever way the head is travelling.
-    ///
-    /// `fire` documents this for a gesture, where the anchor is already in
-    /// the past because `offset_beats` put it there. The parameter path is
-    /// the case one level up: `Position` at live **is** the write head, so a
-    /// window drawn forward from it covers samples nobody has written, and a
-    /// head faster than the writer walks straight into it.
-    #[test]
-    fn a_loop_opened_at_the_write_head_sits_behind_it_not_in_the_future() {
-        let (mut device, mut bus) = primed(48_000);
-        device.crossfade_ms = 0.0;
-        fill_ramp(&mut bus, 48_000, 48_000);
-        device.process_with_params(
-            &context(48_000),
-            &mut bus,
-            &[],
-            &[
-                param(0, mooloop_core::BUFFER_PARAM_RATE, 2.0),
-                param(0, mooloop_core::BUFFER_PARAM_LENGTH, 13.0),
-                param(0, mooloop_core::BUFFER_PARAM_LOOP, 1.0),
-            ],
-        );
-        assert_eq!(
-            device.collision_count(),
-            0,
-            "a window in front of the writer is a head walking into it"
-        );
-        let span = &bus.l[1_000..40_000];
-        let peak = span.iter().fold(0.0_f32, |peak, s| peak.max(s.abs()));
-        assert!(peak > 1_000.0, "it has to play written history, not silence");
-        let high = span.iter().fold(f32::MIN, |high, s| high.max(*s));
-        assert!(
-            high <= 48_100.0,
-            "and history is behind the writer, not in front of it: {high}"
-        );
-    }
-
-    /// A sequenced Position plus a Jump per step slices deterministically.
-    ///
-    /// This is what the trigger exists for: the chase would arrive a few
-    /// milliseconds late and at a pitch, where a slice has to land exactly
-    /// where it was told, every time.
-    #[test]
-    fn a_position_and_a_jump_per_step_slice_deterministically() {
-        // A ring written end to end, so every position names a real sample,
-        // and frozen, so `Position` is absolute: `0.25` is a quarter of the
-        // way along the sample rather than a quarter of the way back from a
-        // write head that has moved on since. Slicing a frozen buffer is the
-        // case this trigger is for.
-        const RING: usize = 96_000;
-        let mut device = BufferDevice::with_capacity(RING);
-        let mut bus = StereoBus::with_capacity(48_000);
-        for half in 0..2 {
-            fill_ramp(&mut bus, half * 48_000, 48_000);
-            device.process(&context(48_000), &mut bus, &[]);
-        }
-        device.crossfade_ms = 0.0;
-        device.freeze(&context(48_000));
-
-        let mut landed = Vec::new();
-        for step in [0.0_f32, 0.5, 0.25, 0.75] {
-            for frame in 0..64 {
-                bus.l[frame] = 0.0;
-                bus.r[frame] = 0.0;
-            }
-            device.process_with_params(
-                &context(64),
-                &mut bus,
-                &[],
-                &[
-                    param(0, mooloop_core::BUFFER_PARAM_POSITION, step),
-                    param(1, mooloop_core::BUFFER_PARAM_JUMP, 1.0),
-                    // Released, so the next step is another rising edge.
-                    param(2, mooloop_core::BUFFER_PARAM_JUMP, 0.0),
-                ],
-            );
-            landed.push(bus.l[3]);
-        }
-
-        // `fill_ramp` writes each frame's own number, so a landed sample *is*
-        // the frame the head jumped to, give or take the two frames of
-        // free-run between the trigger and where it is read.
-        let expected = [0.0_f32, 48_000.0, 24_000.0, 72_000.0];
-        for (index, (got, want)) in landed.iter().zip(expected).enumerate() {
-            assert!(
-                (got - want).abs() < 4.0,
-                "slice {index} landed at {got}, expected {want}: {landed:?}"
-            );
-        }
-    }
-
-    /// A held trigger is one gesture, not one per control tick.
-    #[test]
-    fn jump_fires_on_the_rising_edge_and_not_while_it_is_held() {
-        let (mut device, mut bus) = primed(48_000);
-        device.crossfade_ms = 0.0;
-        fill_ramp(&mut bus, 96_000, 4_000);
-        // Held down for the whole block, at the control rate.
-        let held: Vec<TimedBufferParam> = (0..4_000 / 32)
-            .map(|tick| param(tick * 32, mooloop_core::BUFFER_PARAM_JUMP, 1.0))
-            .collect();
-        let mut params = vec![param(0, mooloop_core::BUFFER_PARAM_POSITION, 0.5)];
-        params.extend(held);
-        params.sort_by_key(|param| param.offset);
-        device.process_with_params(&context(4_000), &mut bus, &[], &params);
-
-        // One jump, then free-run at Rate: every sample after the first
-        // advances by one, which a re-fire every 32 frames would break.
-        let tail = &bus.l[1_000..1_010];
-        for pair in tail.windows(2) {
-            assert!(
                 (pair[1] - pair[0] - 1.0).abs() < 0.05,
-                "the trigger re-fired while held: {tail:?}"
+                "a one-bar ramp over a one-bar ring is not unity: {span:?}"
             );
         }
     }
 
-    /// A document saved with the trigger down does not fire one on load.
+    /// The playhead addresses the ring, so pointing at a place on the drawn
+    /// waveform and hearing that place are the same act.
     #[test]
-    fn a_saved_jump_does_not_fire_on_the_first_block() {
-        let mut device = BufferDevice::new(
-            mooloop_core::BufferParams {
-                bars: 1,
-                jump: 1.0,
-                ..Default::default()
-            },
-            48_000,
-            120.0,
-        );
-        let mut bus = StereoBus::with_capacity(1_000);
-        fill_ramp(&mut bus, 0, 1_000);
-        device.process_with_params(
-            &context(1_000),
-            &mut bus,
-            &[],
-            &[param(0, mooloop_core::BUFFER_PARAM_JUMP, 1.0)],
-        );
+    fn the_playhead_addresses_the_ring_the_waveform_is_drawn_in() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, 8_000);
+        // Driven throughout: a playhead has to keep moving to be heard, so a
+        // couple of writes and then silence would correctly let go. A slow
+        // creep across a quarter of the way along is the shape of the claim.
+        let mut params = vec![param(0, BUFFER_PARAM_CROSSFADE_MS, 0.0)];
+        params.extend((0..8_000u32 / 32).map(|tick| {
+            param(
+                tick * 32,
+                BUFFER_PARAM_POSITION,
+                0.24 + 0.02 * (tick * 32) as f32 / 8_000.0,
+            )
+        }));
+        params.sort_by_key(|entry| entry.offset);
+        device.process_with_params(&context(8_000), &mut bus, &[], &params);
+        let heard = bus.l[4_000];
+        let want = 0.25 * BAR as f32;
         assert!(
-            device.is_following(),
-            "the resting value seeds the edge detector rather than being an edge"
+            (heard - want).abs() < 2_000.0,
+            "a quarter of the way along a ring holding its own frame numbers \
+             should read about {want}, and it read {heard}"
         );
     }
 
-    /// `Length` is a grid index, so modulating it steps through the grid.
-    ///
-    /// The whole reason it is not a free length in beats: a stepped index
-    /// makes `envelope -> Length` sweep `1/4 -> 1/8 -> 1/16`, which is the
-    /// gesture anyone wants.
+    /// A gesture outranks the playhead for as long as it is held, and the
+    /// playhead takes over again on its next move.
     #[test]
-    fn length_reads_the_shared_grid_rather_than_a_length_of_its_own() {
-        use mooloop_core::ModTimeDivision;
-        let descriptor = mooloop_core::EffectKind::Buffer
-            .descriptors()
-            .iter()
-            .find(|d| d.id == mooloop_core::BUFFER_PARAM_LENGTH)
-            .expect("Buffer publishes a Length descriptor");
-        assert_eq!(
-            descriptor.curve,
-            mooloop_core::ParamCurve::Stepped(ModTimeDivision::ALL.len() as u16),
-            "one position per division, so the knob cannot land between two"
-        );
-        assert_eq!(descriptor.max, ModTimeDivision::ALL.len() as f32 - 1.0);
-        assert_eq!(
-            ModTimeDivision::from_index(descriptor.default as i32),
-            ModTimeDivision::Whole,
-            "a fresh Buffer loops one bar"
-        );
-
-        // And the device measures the window with that table rather than one
-        // of its own: a whole note at 120 BPM and 48 kHz is 96 000 frames.
-        let (mut device, mut bus) = primed(1_000);
-        device.process_with_params(
-            &context(1_000),
-            &mut bus,
-            &[],
-            &[param(0, mooloop_core::BUFFER_PARAM_LENGTH, 2.0)],
-        );
-        assert_eq!(device.window_frames(&context(1_000)), 96_000.0);
+    fn a_gesture_outranks_a_moving_position() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, BAR / 2);
+        let mut params = vec![param(0, BUFFER_PARAM_CROSSFADE_MS, 0.0)];
+        params.extend((0..(BAR / 2) as u32 / 32).map(|tick| {
+            param(tick * 32, BUFFER_PARAM_POSITION, (tick * 32) as f32 / BAR as f32)
+        }));
+        params.push(param(10_000, BUFFER_PARAM_STUTTER, 1.0));
+        params.sort_by_key(|p| p.offset);
+        device.process_with_params(&context(BAR / 2), &mut bus, &[], &params);
+        // Past the press it is the stutter's region, not the sweep's.
+        assert_eq!(bus.l[20_000], bus.l[20_000 + SIXTEENTH], "the stutter has it");
     }
 
-    /// A block starting `ticks` into the song, so a boundary can be put where
-    /// the test wants it.
-    fn context_at(frames: usize, ticks: f64) -> ProcessContext {
-        ProcessContext {
-            position_ticks: ticks,
-            ..context(frames)
-        }
-    }
-
-    /// Freeze fires on the boundary rather than on the mouse.
-    ///
-    /// The device stays **live** until then, which is the half a face has to
-    /// show: a control that looked as though nothing had happened would be the
-    /// gesture failing silently.
+    /// Frozen and left alone, the ring **plays** -- round and round, forward,
+    /// at unity. Adam: *"the frozen audio should be a musically loopable
+    /// chunk."* A freeze that left you holding a still would be a different
+    /// device.
     #[test]
-    fn a_quantized_freeze_waits_for_the_bar_line() {
-        let (mut device, mut bus) = primed(48_000);
-        // One bar is four beats, which is 384 ticks at 96 PPQ. Start the block
-        // three and a half beats in, so the line is half a beat away --
-        // 12 000 frames at 120 BPM and 48 kHz.
-        let ticks = 3.5 * 96.0;
-        fill_ramp(&mut bus, 48_000, 48_000);
+    fn freezing_leaves_a_loop_running() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, BAR);
         device.process_with_params(
-            &context_at(48_000, ticks),
+            &context(BAR),
             &mut bus,
             &[],
-            &[freeze_param(0, 1.0)],
+            &hard(BUFFER_PARAM_FREEZE, 1.0),
         );
-        // The block is long enough to cross it, so by the end it has landed.
-        assert!(device.is_frozen(), "the freeze must have landed by the line");
-        assert_eq!(device.armed_freeze(), None, "and stopped being armed");
-
-        // Now the same request in a block that ends before the line.
-        let (mut device, mut bus) = primed(48_000);
-        fill_ramp(&mut bus, 48_000, 4_000);
-        device.process_with_params(
-            &context_at(4_000, ticks),
-            &mut bus,
-            &[],
-            &[freeze_param(0, 1.0)],
-        );
-        assert!(
-            !device.is_frozen(),
-            "4 000 frames short of a boundary 12 000 away is still live"
-        );
-        assert_eq!(
-            device.armed_freeze(),
-            Some(true),
-            "and the face has to be able to say a freeze is armed"
-        );
+        assert!(device.is_frozen() && !device.is_writing());
+        assert!(!device.is_following(), "a frozen buffer plays");
+        // Forward at unity from the freeze point, which is the oldest sample.
+        assert_eq!(bus.l[1_000], 1_000.0);
+        // And it comes round: a whole ring later it is back where it started.
+        assert_eq!(bus.l[BAR - 1], (BAR - 1) as f32);
+        // A ring's worth of frames is a ring's worth of advances, so it wraps
+        // exactly once -- on the step after the last sample, which is the
+        // seam the loop is made of.
+        assert_eq!(device.seam_count(), 1, "one ring rendered is one lap");
     }
 
-    /// A second press before the boundary cancels it.
+    /// A quantized press waits for the boundary, and the face is told so.
     #[test]
-    fn a_second_press_before_the_boundary_cancels_the_armed_freeze() {
-        let (mut device, mut bus) = primed(48_000);
-        let ticks = 3.5 * 96.0;
-        fill_ramp(&mut bus, 48_000, 4_000);
+    fn a_quantized_press_waits_for_its_boundary() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, BAR / 2);
+        // Half a bar in, with a one-bar Quant Start: half a bar to wait.
+        let half_bar_ticks = f64::from(mooloop_core::Ppq::DEFAULT.ticks_per_beat()) * 2.0;
         device.process_with_params(
-            &context_at(4_000, ticks),
-            &mut bus,
-            &[],
-            &[freeze_param(0, 1.0)],
-        );
-        assert_eq!(device.armed_freeze(), Some(true));
-
-        // Holding it is not a second press: a lane writes the same value
-        // every control tick, and arming and cancelling in turn would never
-        // land on anything.
-        let held: Vec<TimedBufferParam> = (0..4_000 / 32)
-            .map(|tick| freeze_param(tick * 32, 1.0))
-            .collect();
-        device.process_with_params(&context_at(4_000, ticks), &mut bus, &[], &held);
-        assert_eq!(
-            device.armed_freeze(),
-            Some(true),
-            "a held Freeze is one request, not one per control tick"
-        );
-
-        // Letting go before the line is what takes it back.
-        device.process_with_params(
-            &context_at(4_000, ticks),
-            &mut bus,
-            &[],
-            &[freeze_param(0, 0.0)],
-        );
-        assert_eq!(
-            device.armed_freeze(),
-            None,
-            "asking for the opposite before the line takes the request back"
-        );
-        assert!(!device.is_frozen(), "and leaves the device where it was");
-    }
-
-    /// With the transport stopped there is no grid to wait for, so a freeze
-    /// happens now. Waiting for a bar line that is not coming would be the
-    /// control doing nothing.
-    #[test]
-    fn a_quantized_freeze_with_the_transport_stopped_happens_now() {
-        let (mut device, mut bus) = primed(4_000);
-        let stopped = ProcessContext {
-            playing: false,
-            ..context(4_000)
-        };
-        fill_ramp(&mut bus, 4_000, 4_000);
-        device.process_with_params(&stopped, &mut bus, &[], &[freeze_param(0, 1.0)]);
-        assert!(device.is_frozen());
-        assert_eq!(device.armed_freeze(), None);
-    }
-
-    /// Unfreezing quantizes the same way.
-    #[test]
-    fn unfreezing_waits_for_the_boundary_too() {
-        let (mut device, mut bus) = primed(4_000);
-        fill_ramp(&mut bus, 4_000, 4_000);
-        device.process_with_params(
-            &context(4_000),
-            &mut bus,
-            &[],
-            &[unquantized(0), freeze_param(0, 1.0)],
-        );
-        assert!(device.is_frozen());
-
-        // Quantize back on, then ask for live a long way from the line.
-        fill_ramp(&mut bus, 8_000, 4_000);
-        device.process_with_params(
-            &context_at(4_000, 0.0),
+            &playing(BAR / 2, half_bar_ticks),
             &mut bus,
             &[],
             &[
-                TimedBufferParam {
-                    offset: 0,
-                    id: mooloop_core::BUFFER_PARAM_QUANTIZE,
-                    value: 1.0,
-                },
-                freeze_param(1, 0.0),
+                param(0, BUFFER_PARAM_CROSSFADE_MS, 0.0),
+                param(0, BUFFER_PARAM_QUANTIZE, 1.0),
+                param(0, BUFFER_PARAM_JUMP, 1.0),
             ],
         );
-        assert!(device.is_frozen(), "still frozen until the line");
-        assert_eq!(device.armed_freeze(), Some(false), "with a thaw armed");
+        // It lands at the bar line, which is 48 000 frames from the block's
+        // start -- the last frame of this block.
+        assert_eq!(bus.l[1_000], (BAR + 1_000) as f32, "still live before the line");
+        assert!(!device.is_following(), "and playing after it");
     }
 
-    /// The grid is the shared one, and a one-bar window reads `1:0:0`.
-    ///
-    /// **A duration, not a position.** One bar printed through `BbtPosition`
-    /// reads `2:1:0`, which is the mistake the two types exist to stop, and
-    /// the Buffer's Length is the first caller `BbtDuration` has ever had.
+    /// Letting go before the boundary takes the press back. A musician who
+    /// changed their mind should not have to wait out a bar to find out.
     #[test]
-    fn a_one_bar_length_reads_as_a_duration() {
-        use mooloop_core::{BbtDuration, ModTimeDivision, Ppq, Ticks};
-
-        let ppq = Ppq::DEFAULT;
-        let ticks_for = |division: ModTimeDivision| {
-            Ticks((f64::from(division.beats()) * f64::from(ppq.ticks_per_beat())) as u64)
-        };
-
-        assert_eq!(
-            BbtDuration::from_ticks(ticks_for(ModTimeDivision::Whole), ppq).to_string(),
-            "1:0:0",
-            "one bar is one bar and no beats"
+    fn a_release_before_the_boundary_takes_the_press_back() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, 4_000);
+        device.process_with_params(
+            &playing(4_000, 0.0),
+            &mut bus,
+            &[],
+            &[
+                param(0, BUFFER_PARAM_QUANTIZE, 1.0),
+                param(0, BUFFER_PARAM_JUMP, 1.0),
+                param(2_000, BUFFER_PARAM_JUMP, 0.0),
+            ],
         );
-        assert_eq!(
-            BbtDuration::from_ticks(ticks_for(ModTimeDivision::Quarter), ppq).to_string(),
-            "0:1:0",
-        );
-        assert_eq!(
-            BbtDuration::from_ticks(ticks_for(ModTimeDivision::Sixteenth), ppq).to_string(),
-            "0:0:24",
-        );
-        assert_eq!(
-            BbtDuration::from_ticks(ticks_for(ModTimeDivision::DoubleWhole), ppq).to_string(),
-            "2:0:0",
-        );
-
-        // And a fresh Buffer's Length is that one bar.
-        let default_length =
-            mooloop_core::BufferParams::default().length as i32;
-        assert_eq!(
-            ModTimeDivision::from_index(default_length),
-            ModTimeDivision::Whole
-        );
+        assert!(!device.armed_gesture(), "the press was taken back");
+        assert!(device.is_following(), "and nothing ever fired");
+        assert_eq!(bus.l[3_999], (BAR + 3_999) as f32);
     }
 
+    /// A shortened span is the most recent that much, and a playhead loops
+    /// inside it rather than running out into the rest of the ring.
     #[test]
-    fn ring_size_and_memory_are_explicit() {
-        let device = BufferDevice::with_bars(48_000, 120.0, 8);
-        assert_eq!(device.capacity_frames(), 768_000);
-        assert_eq!(device.memory_bytes(), 6_144_000);
+    fn a_shortened_span_is_the_most_recent_that_much() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, 8_000);
+        device.process_with_params(
+            &context(8_000),
+            &mut bus,
+            &[],
+            &[
+                param(0, BUFFER_PARAM_CROSSFADE_MS, 0.0),
+                // A sixteenth of span: the last 6 000 frames.
+                param(0, BUFFER_PARAM_POSITION_SPAN, 13.0),
+                param(0, BUFFER_PARAM_POSITION, 0.0),
+                param(32, BUFFER_PARAM_POSITION, 0.02),
+            ],
+        );
+        let heard = bus.l[100];
+        assert!(
+            heard >= (BAR - SIXTEENTH) as f32 - 100.0 && heard <= BAR as f32,
+            "a sixteenth of span has to sit in the last sixteenth of history, \
+             and it read {heard}"
+        );
     }
 
-    /// A 100 Hz tone as a pure function of the absolute frame. Unlike the
-    /// ramp, it is centred on zero, so an equal-power crossfade behaves the
-    /// way it does on real audio rather than on a large DC offset.
-    fn tone(frame: usize) -> f32 {
-        (frame as f32 * core::f32::consts::TAU * 100.0 / 48_000.0).sin()
-    }
-
-    /// Drive `total_frames` of `tone` through a device in `block` sized
-    /// chunks, firing `event` at absolute frame `event_frame`, and return the
-    /// left output. Blocking is the only thing that varies between calls.
-    fn render_blocked(
-        block: usize,
-        total_frames: usize,
-        event_frame: usize,
-        event: BufferEvent,
-    ) -> Vec<f32> {
-        let mut device = BufferDevice::with_capacity(100_000);
-        let mut bus = StereoBus::with_capacity(block);
-        let mut out = Vec::with_capacity(total_frames);
-        let mut first = 0;
-        while first < total_frames {
-            let frames = block.min(total_frames - first);
-            for frame in 0..frames {
-                bus.l[frame] = tone(first + frame);
-                bus.r[frame] = -tone(first + frame);
-            }
-            // The event carries an in-block offset, so the same absolute
-            // frame is addressable no matter where the block boundaries fall.
-            let events: &[TimedBufferEvent] = if (first..first + frames).contains(&event_frame) {
-                &[TimedBufferEvent {
-                    offset: (event_frame - first) as u32,
-                    event,
-                }]
-            } else {
-                &[]
-            };
-            device.process(&context(frames), &mut bus, events);
-            out.extend_from_slice(&bus.l[..frames]);
-            first += frames;
-        }
-        out
-    }
-
-    fn max_step(samples: &[f32]) -> f32 {
-        samples
-            .windows(2)
-            .map(|pair| (pair[1] - pair[0]).abs())
-            .fold(0.0, f32::max)
-    }
-
-    /// The head is driven in absolute ring frames, never in per-block ones, so
-    /// the period the host happens to run at must not be audible. A stutter
-    /// with a crossfade exercises the event, the window wrap, and the return
-    /// in a single render.
+    /// Output is identical however the block is cut up, which is the property
+    /// every timed-parameter path has to have and the one a sample loop is
+    /// easiest to get wrong.
     #[test]
     fn output_is_identical_across_block_sizes() {
-        const TOTAL: usize = 24_000;
-        const EVENT_FRAME: usize = 8_192;
-        let event = BufferEvent {
-            offset_beats: -0.0625,
-            rate: 1.0,
-            window_beats: Some(0.0625),
-            repeat: Some(8),
-            duration: BufferDuration::UntilNextEvent,
-            crossfade_ms: 2.5,
+        let render = |block: usize| {
+            let mut device = BufferDevice::with_capacity(BAR);
+            let mut bus = StereoBus::with_capacity(block);
+            let mut out = Vec::new();
+            for start in (0..BAR * 2).step_by(block) {
+                fill_ramp(&mut bus, start, block);
+                let params: Vec<_> = (0..block as u32 / 32)
+                    .map(|tick| {
+                        param(
+                            tick * 32,
+                            BUFFER_PARAM_POSITION,
+                            ((start as u32 + tick * 32) % BAR as u32) as f32 / BAR as f32,
+                        )
+                    })
+                    .collect();
+                device.process_with_params(&context(block), &mut bus, &[], &params);
+                out.extend_from_slice(&bus.l[..block]);
+            }
+            out
         };
-
-        let reference = render_blocked(64, TOTAL, EVENT_FRAME, event);
-        assert!(
-            reference.iter().any(|sample| *sample != 0.0),
-            "reference render was silent"
-        );
-        for block in [128, 256, 1024] {
-            let rendered = render_blocked(block, TOTAL, EVENT_FRAME, event);
-            assert_eq!(
-                reference, rendered,
-                "block size {block} changed the rendered output"
+        // Both divide the run exactly. A block size that did not would leave
+        // a short final block, and the test would be comparing two different
+        // amounts of audio rather than two cuts of the same audio.
+        let small = render(64);
+        let large = render(1_600);
+        assert_eq!(small.len(), large.len());
+        for (index, (a, b)) in small.iter().zip(&large).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-3,
+                "frame {index} differs by block size: {a} vs {b}"
             );
         }
-    }
-
-    /// Both halves of the crossfade contract: 2 ms must smooth the jump's
-    /// discontinuity, and zero must leave it intact. A click is a legitimate
-    /// result to ask for, so the second half matters as much as the first.
-    #[test]
-    fn crossfade_declicks_a_jump_and_zero_leaves_the_click() {
-        const TOTAL: usize = 24_000;
-        // Fire on a peak of the tone, and jump back to a trough: half a beat
-        // is 25 whole periods, so the extra hundredth of a beat lands the read
-        // head half a period out of phase — the worst-case step.
-        const EVENT_FRAME: usize = 18_120;
-        let jump = |crossfade_ms| BufferEvent {
-            offset_beats: -0.51,
-            rate: 1.0,
-            window_beats: None,
-            repeat: None,
-            duration: BufferDuration::UntilNextEvent,
-            crossfade_ms,
-        };
-
-        let abrupt = render_blocked(256, TOTAL, EVENT_FRAME, jump(0.0));
-        let declicked = render_blocked(256, TOTAL, EVENT_FRAME, jump(2.0));
-
-        // The tone's own slope is under 0.02 per frame, so anything near the
-        // full 2.0 peak-to-peak step is the discontinuity itself.
-        assert!(
-            max_step(&abrupt) > 1.5,
-            "zero crossfade must leave the discontinuity: step {}",
-            max_step(&abrupt)
-        );
-        assert!(
-            max_step(&declicked) < 0.2,
-            "2 ms crossfade must smooth the discontinuity: step {}",
-            max_step(&declicked)
-        );
-    }
-
-    fn gated_reverse(window_beats: Option<f32>) -> BufferEvent {
-        BufferEvent {
-            offset_beats: 0.0,
-            rate: -1.0,
-            window_beats,
-            repeat: None,
-            duration: BufferDuration::Gate,
-            crossfade_ms: 0.0,
-        }
-    }
-
-    /// A held reverse is the gate case: it runs for exactly as long as the
-    /// control is down and returns to live the moment it comes up, rather
-    /// than latching until it runs out of retained history.
-    #[test]
-    fn a_gated_head_runs_until_released() {
-        let mut device = BufferDevice::with_capacity(100_000);
-        let mut bus = StereoBus::with_capacity(1_000);
-        for block in 0..10 {
-            fill_ramp(&mut bus, block * 1_000, 1_000);
-            device.process(&context(1_000), &mut bus, &[]);
-        }
-
-        fill_ramp(&mut bus, 10_000, 1_000);
-        let event = TimedBufferEvent {
-            offset: 0,
-            event: gated_reverse(None),
-        };
-        device.process(&context(1_000), &mut bus, &[event]);
-        assert!(!device.is_following(), "a gated head must hold while down");
-
-        fill_ramp(&mut bus, 11_000, 1_000);
-        device.process(&context(1_000), &mut bus, &[]);
-        assert!(!device.is_following(), "still down, so still detached");
-
-        device.release();
-        assert!(device.is_following(), "release must return to live");
-
-        fill_ramp(&mut bus, 12_000, 1_000);
-        device.process(&context(1_000), &mut bus, &[]);
-        // Genuinely live, not a delayed stream catching up.
-        assert_eq!(bus.l[999], 12_999.0);
-    }
-
-    /// Releasing is unconditional at the call site, so it must be inert
-    /// against a latching head: a held control coming up cannot be allowed to
-    /// cancel an unrelated event that superseded its own.
-    #[test]
-    fn release_leaves_a_latching_head_alone() {
-        let mut device = BufferDevice::with_capacity(100_000);
-        let mut bus = StereoBus::with_capacity(1_000);
-        for block in 0..10 {
-            fill_ramp(&mut bus, block * 1_000, 1_000);
-            device.process(&context(1_000), &mut bus, &[]);
-        }
-        fill_ramp(&mut bus, 10_000, 1_000);
-        let latching = TimedBufferEvent {
-            offset: 0,
-            event: BufferEvent {
-                offset_beats: -0.05,
-                ..BufferEvent::live()
-            },
-        };
-        device.process(&context(1_000), &mut bus, &[latching]);
-        assert!(!device.is_following());
-
-        device.release();
-        assert!(
-            !device.is_following(),
-            "a latching head must ignore a gate release"
-        );
-    }
-
-    /// A reverse window has to cover material behind the entry point. Pointed
-    /// forward it would loop over samples the writer has not reached yet, so
-    /// a held reverse would play silence instead of repeating the last bars.
-    #[test]
-    fn a_reverse_window_loops_backward_over_written_history() {
-        let mut device = BufferDevice::with_capacity(200_000);
-        let mut bus = StereoBus::with_capacity(1_000);
-        for block in 0..100 {
-            fill_ramp(&mut bus, block * 1_000, 1_000);
-            device.process(&context(1_000), &mut bus, &[]);
-        }
-
-        // One beat is 24_000 frames at 120 bpm, so the window covers
-        // [76_000, 100_000) — all of it long since written.
-        fill_ramp(&mut bus, 100_000, 1_000);
-        let event = TimedBufferEvent {
-            offset: 0,
-            event: gated_reverse(Some(1.0)),
-        };
-        device.process(&context(1_000), &mut bus, &[event]);
-        // Reverse from the entry point: the first frame reads the entry
-        // sample, and it walks backward from there.
-        assert_eq!(bus.l[0], 100_000.0);
-        assert_eq!(bus.l[500], 99_500.0);
-
-        // Run past the window's far edge and confirm it wrapped forward to
-        // the entry point rather than running off into unwritten samples.
-        for block in 101..126 {
-            fill_ramp(&mut bus, block * 1_000, 1_000);
-            device.process(&context(1_000), &mut bus, &[]);
-        }
-        assert!(!device.is_following(), "a gated window must keep looping");
-        assert!(
-            bus.l[..1_000]
-                .iter()
-                .all(|sample| *sample >= 76_000.0 && *sample <= 100_000.0),
-            "reverse window left its retained range"
-        );
-    }
-
-    /// The defining property of position mode: the platter's speed sets the
-    /// pitch, and letting go goes silent rather than holding a sample as DC.
-    #[test]
-    fn a_stopped_scrub_goes_silent_rather_than_holding_dc() {
-        let mut device = BufferDevice::with_capacity(100_000);
-        let mut bus = StereoBus::with_capacity(1_000);
-        for block in 0..20 {
-            fill_ramp(&mut bus, block * 1_000, 1_000);
-            device.process(&context(1_000), &mut bus, &[]);
-        }
-
-        // Spin: a large target displacement, so the head has ground to cover.
-        device.scrub_begin(&context(1_000), 0.0);
-        device.scrub_move(-4_000.0);
-        assert!(device.is_scrubbing());
-        fill_ramp(&mut bus, 20_000, 1_000);
-        device.process(&context(1_000), &mut bus, &[]);
-        let moving = bus.l[..1_000].iter().map(|s| s.abs()).fold(0.0, f32::max);
-        assert!(moving > 0.0, "a moving platter must make sound");
-
-        // Let go: no further movement, so the head coasts to a stop and the
-        // gain follows it down.
-        for _ in 0..20 {
-            fill_ramp(&mut bus, 21_000, 1_000);
-            device.process(&context(1_000), &mut bus, &[]);
-        }
-        let resting = bus.l[..1_000].iter().map(|s| s.abs()).fold(0.0, f32::max);
-        assert!(
-            resting < 1e-3,
-            "a stopped platter must be silent, got {resting}"
-        );
-    }
-
-    /// Scrub is driven by a stream of deltas with no press, so the first one
-    /// has to detach the head and later ones must not snap it back to live.
-    #[test]
-    fn scrub_begin_is_idempotent_and_release_returns_live() {
-        let mut device = BufferDevice::with_capacity(100_000);
-        let mut bus = StereoBus::with_capacity(1_000);
-        for block in 0..20 {
-            fill_ramp(&mut bus, block * 1_000, 1_000);
-            device.process(&context(1_000), &mut bus, &[]);
-        }
-
-        device.scrub_begin(&context(1_000), 0.0);
-        device.scrub_move(-2_000.0);
-        fill_ramp(&mut bus, 20_000, 1_000);
-        device.process(&context(1_000), &mut bus, &[]);
-        let drifted = device.head.expect("scrub head").position;
-
-        // A second begin must be inert rather than re-detaching at live.
-        device.scrub_begin(&context(1_000), 0.0);
-        assert_eq!(device.head.expect("scrub head").position, drifted);
-
-        device.release();
-        assert!(device.is_following(), "release must end a scrub");
-        assert!(!device.is_scrubbing());
-        fill_ramp(&mut bus, 21_000, 1_000);
-        device.process(&context(1_000), &mut bus, &[]);
-        assert_eq!(bus.l[999], 21_999.0, "must land on genuinely live audio");
     }
 }

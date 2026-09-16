@@ -26,7 +26,8 @@ why `FOCUS.md` had been carrying its state.
 | 4. Length, Loop and Jump on the shared grid | Landed 2026-09-16 |
 | 5. Quantized freeze, and BBT everywhere | Landed 2026-09-16 |
 | 6. The 2U face | Landed 2026-09-16 |
-| Playability pass, after the first play-through | Landed 2026-09-16 |
+| Playability pass, after the first play-through | Landed 2026-09-16, and superseded the same day |
+| Gesture rebuild: the turntable model retired | Landed 2026-09-16 |
 | Alongside: acceptance test 8 | Closed for the Buffer operations 2026-09-16 |
 
 `musical-time/`, which step 5 waits on, landed 2026-09-15 and is in
@@ -191,6 +192,52 @@ params as both, which is right for a tempo change because a tempo change leaves
 `Position` and `Loop` and put `to` in a `let _`, under a comment saying it set
 the length too. `ModTimeDivision::nearest` is the missing half, snapping by
 *ratio* rather than by difference because the grid is geometric.
+
+## The gesture rebuild, 2026-09-16
+
+**The playability pass above was the wrong fix, and Adam said so within the
+hour: *"it's possibly actually worse now."*** It found real defects and
+repaired them inside a model that was itself the problem. The concrete harm:
+STUT was pointed at the shared `Length` knob, whose default is a whole bar, so
+the stutter button started repeating bars. The repair made a symptom go away
+by tightening the coupling that caused it.
+
+What he asked for instead, nearly verbatim: *"its a buffer... if a button is
+pushed, sample addresses... are calculated, and then we play the samples
+between those two numbers."* JUMP has its own distance knob, REVERSE plays
+backward from now, STUTTER is JUMP that repeats by its own length, and *"they
+dont share any length settings really EXCEPT... quantizing start and length
+device-wide."* And, of `Position`, which was nearly retired along with the
+rest: *"the idea behind position was that you could manually draw in
+automation of the playhead... you'd put a 1 measure sawtooth lfo on via
+modulator rack and it would loop through the buffer... if it is moving, thats
+what we should hear, otherwise its just live audio."*
+
+So the device is now four sources in a fixed priority -- a held gesture, a
+moving playhead, a frozen ring, the input -- and one head shape for all of
+them: a position, a step and a region to wrap in. `reconsider` is the whole
+arbitration rule. The chase, its time constant, the arrival and stillness
+tests, `Drive`, `Scrub`, `armed_offset_frames`, the window's anchor rules and
+the held-parameter bookkeeping in the UI are all gone. `Rate`, `Length` and
+`Loop` are retired and their ids spent.
+
+**The lesson is about which layer to fix.** Every defect the first pass found
+was real, and every fix was locally correct, and the result was worse,
+because each one added a rule to a model whose rules were the complaint. When
+the report is "I don't understand what is difficult", the answer is not a
+better explanation of the difficulty.
+
+Two things the rebuild turned up that the old model had hidden:
+
+- **A playhead anchored to the writer cannot play at unity.** The span moves
+  a frame per frame, so a ramp over it moves at its own speed *plus* the
+  writer's -- a one-bar saw over a one-bar ring played at double speed and no
+  setting gave unity. At the full span `Position` now addresses the ring in
+  its own coordinates, which is also the coordinate the waveform is drawn in.
+  The old model never met this because the chase absorbed it.
+- **`now` is where the next frame goes, not the newest one.** Reverse started
+  there first, and read the *oldest* sample in the ring. Everything that
+  places a head "at now" now places it one frame behind.
 
 ## Still open from the earlier steps
 

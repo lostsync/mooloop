@@ -31,37 +31,37 @@ every other effect, capturing whatever reaches its position in the chain.
   default** and adjustable from the face's HISTORY stepper. Construction
   allocates; `process` does not. Resizing the ring is an off-thread structural
   edit, which is why `bars` is deliberately not a descriptor-addressed
-  parameter -- the control edits the document and the pump swaps a prepared
-  replacement in, down the road a tempo change already travels.
+  parameter.
+- **Rebuilt 2026-09-16 around gestures that each own their settings.** JUMP
+  (forward from `Jump Back`), REVERSE (backward from now) and STUTTER
+  (repeating `Stutter`) are gate parameters: each holds the ring still while
+  high and hands back to live when it drops. `Position` is a playhead heard
+  only while it moves, addressing the ring directly, so its own speed is the
+  playback rate; `Span` narrows what it addresses. Frozen and otherwise idle,
+  the ring plays as a loop. `Quantize` and `Quant Start` delay presses and
+  freezes to the grid, never releases. `CURRENT.md` has the whole behaviour.
 
-  It defaulted to eight until 2026-09-16 and that was too long to play.
-  `Position` is normalized over the *ring*, so the ring's length is the
-  position knob's resolution: at eight bars, halfway along the knob was four
-  bars ago and every small move was a leap. Two bars is the loop somebody is
-  playing over.
-- Four parameters are addressable and therefore automatable and modulatable:
-  `Position`, `Rate`, `Freeze` and `Crossfade` (declick length in ms).
-  Position is normalized over the ring -- `0` is the oldest retained sample
-  and `1` is the write head -- and it is a position control rather than a rate
-  control: the head chases it and the closing speed *is* the playback rate, so
-  sweeping it scrubs. **It replaced `Offset`, which was beats behind the
-  writer**, on 2026-09-16; id 0 is retired and spent, and a project that names
-  it is migrated on load. Rate is the head's free-run velocity, which the
-  writer used to supply implicitly -- and which **detaches a head of its
-  own** when it is not unity, because at unity the device follows its input
-  directly and there is otherwise nothing for a velocity to apply to. That
-  was missing until 2026-09-16, which is why REV appeared to do nothing at
-  all over a live buffer: it is one `Rate` write, and there was no head.
-- `BufferEvent` is the gesture contract in `mooloop-core`: offset, rate,
-  optional window, optional repeat count, a `BufferDuration` of steps /
-  until-next-event / gate, and a crossfade. The face's JUMP, REV and STUT are
-  **no longer debug triggers**: each is a write to a published parameter, so
-  nothing the mouse can reach is unreachable from a lane or a modulator. REV
-  is `Rate := 1 - rate`; STUT is LOOP plus a JUMP to `Position`, and the
-  stutter's length is the `Length` knob. A running gesture outranks the
-  position; the position re-asserts on the next control tick after one ends.
-- Read/write collisions are counted and published as device telemetry, so a
-  head overtaken by its writer is visible rather than merely audible.
+  What it replaced is worth recording because this document specified it: a
+  turntable, where `Position` aimed a chase whose closing speed was the
+  playback rate, `Rate` supplied free-run speed, `Length`/`Loop` drew a
+  window, and an arbitration rule decided which of them owned the one head.
+  The face's buttons were macros over those shared knobs. It needed a chase
+  time constant, an arrival test and a stillness test to know when an edit
+  was over; REV was inaudible over a live buffer because nothing detached a
+  head for `Rate` to drive; and STUT could not have a length of its own
+  without taking the loop's. Adam, having played it: *"i dont understand what
+  is difficult. its a buffer."* `Rate`, `Length` and `Loop` are retired, and
+  their ids are spent with `Offset`'s.
+- `BufferEvent` is the MIDI map's gesture contract in `mooloop-core`: offset,
+  rate, optional window, optional repeat count, a `BufferDuration`, and a
+  crossfade. An event still builds its own head from that geometry -- it is
+  the one path that can ask for a speed other than ±1 -- and it still has no
+  caller outside its tests. Its relative-scrub CC does nothing now: the
+  platter it drove is gone, and `Position` is the scrub.
+- Seams -- a head wrapping its region, or a playhead move too fast to sweep
+  -- are counted and published as device telemetry. The count used to be of
+  collisions, a head overtaken by its writer; every head wraps now, so that
+  failure cannot happen and the number reports laps instead.
 - The device is built on the shared `mooloop_dsp::delayline` primitive rather
   than a private ring, as this document required.
 

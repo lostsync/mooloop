@@ -6296,48 +6296,43 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             crossfade_ms: 2.5,
         };
 
-        // Each entry is one block's worth of control input, named for what it
-        // puts the head into. Held in an array so the count below is the
-        // number of states actually exercised rather than a number somebody
-        // remembered.
-        let blocks: [(&str, &[TimedEvent]); 17] = [
-            ("an offset chase", &[param(mooloop_core::BUFFER_PARAM_OFFSET_BEATS, 1.0)]),
-            ("the chase still closing", &[]),
-            ("back to live", &[param(mooloop_core::BUFFER_PARAM_OFFSET_BEATS, 0.0)]),
+        // Each entry is one block's worth of control input, named for the
+        // state it puts the head into. Held in an array so the count below is
+        // the number of states actually exercised rather than a number
+        // somebody remembered.
+        //
+        // Rewritten with the device on 2026-09-16. The states it used to
+        // sweep -- a chase closing, a free-run at `Rate`, a hand on the
+        // platter -- were the turntable model's and no longer exist; what is
+        // here is the four sources `reconsider` arbitrates between, and each
+        // transition between them.
+        let blocks: [(&str, &[TimedEvent]); 15] = [
+            ("the playhead moving", &[param(mooloop_core::BUFFER_PARAM_POSITION, 0.5)]),
+            ("the playhead moving again", &[param(mooloop_core::BUFFER_PARAM_POSITION, 0.6)]),
+            ("the playhead let go of", &[]),
+            ("a jump held", &[param(mooloop_core::BUFFER_PARAM_JUMP, 1.0)]),
+            ("the jump still held", &[]),
+            ("the jump released", &[param(mooloop_core::BUFFER_PARAM_JUMP, 0.0)]),
+            ("a reverse held", &[param(mooloop_core::BUFFER_PARAM_REVERSE, 1.0)]),
+            ("the reverse released", &[param(mooloop_core::BUFFER_PARAM_REVERSE, 0.0)]),
             (
-                "a gesture with a window and repeats",
+                "a stutter held, at its own length",
+                &[
+                    param(mooloop_core::BUFFER_PARAM_STUTTER_LENGTH, 16.0),
+                    param(mooloop_core::BUFFER_PARAM_STUTTER, 1.0),
+                ],
+            ),
+            ("the stutter repeating", &[]),
+            ("the stutter released", &[param(mooloop_core::BUFFER_PARAM_STUTTER, 0.0)]),
+            (
+                "a mapped event, which carries its own geometry",
                 &[TimedEvent { offset: 0, event: Event::Buffer(stutter) }],
             ),
-            ("the gesture still running", &[]),
-            ("a freeze", &[param(mooloop_core::BUFFER_PARAM_FREEZE, 1.0)]),
-            ("free-run at rate, frozen", &[param(mooloop_core::BUFFER_PARAM_RATE, -2.0)]),
-            ("rate held at zero, frozen", &[param(mooloop_core::BUFFER_PARAM_RATE, 0.0)]),
-            ("a thaw", &[param(mooloop_core::BUFFER_PARAM_FREEZE, 0.0)]),
-            (
-                "a hand scrub",
-                &[TimedEvent { offset: 0, event: Event::BufferScrub { delta_frames: -400.0 } }],
-            ),
-            (
-                "a loop opening on the grid",
-                &[
-                    param(mooloop_core::BUFFER_PARAM_LENGTH, 13.0),
-                    param(mooloop_core::BUFFER_PARAM_LOOP, 1.0),
-                ],
-            ),
-            ("the loop running", &[]),
-            ("a length swept under a running loop", &[param(mooloop_core::BUFFER_PARAM_LENGTH, 16.0)]),
-            (
-                "a jump",
-                &[
-                    param(mooloop_core::BUFFER_PARAM_POSITION, 0.25),
-                    param(mooloop_core::BUFFER_PARAM_JUMP, 1.0),
-                ],
-            ),
-            ("the trigger released", &[param(mooloop_core::BUFFER_PARAM_JUMP, 0.0)]),
+            ("the mapped event released", &[TimedEvent { offset: 0, event: Event::BufferRelease }]),
             (
                 "a quantized freeze arming",
                 &[
-                    param(mooloop_core::BUFFER_PARAM_QUANT_GRID, 2.0),
+                    param(mooloop_core::BUFFER_PARAM_QUANT_START, 2.0),
                     param(mooloop_core::BUFFER_PARAM_FREEZE, 1.0),
                 ],
             ),
@@ -6370,13 +6365,8 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             exercised += 1;
         }
         assert_eq!(
-            exercised, 17,
+            exercised, 15,
             "the sweep stopped covering the head's states, so it proved nothing"
-        );
-        assert!(
-            !device.is_frozen(),
-            "the thaw has to have taken, or the last blocks measured the wrong \
-             thing"
         );
     }
 
@@ -6430,12 +6420,26 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         let write = display.write;
         assert!((0.0..1.0).contains(&write), "the writer is somewhere: {write}");
 
-        // Detach the head and freeze, and the picture has to follow.
-        device.detach_at_rate(&context);
-        device.freeze(&context);
-        device.process(&context, &mut bus, &[]);
+        // Freeze, and the picture has to follow: a frozen ring plays, so the
+        // head becomes drawable and the writer's mark stops moving.
+        //
+        // Unquantized. The transport is running and `Quantize` defaults on,
+        // so a plain freeze would correctly *arm* for the next bar line and
+        // this block would end before it landed -- which is a test of the
+        // wait, not of the picture.
+        let mut events = mooloop_dsp::EventList::empty();
+        for (id, value) in [
+            (mooloop_core::BUFFER_PARAM_QUANTIZE, 0.0),
+            (mooloop_core::BUFFER_PARAM_FREEZE, 1.0),
+        ] {
+            events.push(mooloop_dsp::TimedEvent {
+                offset: 0,
+                event: mooloop_dsp::Event::ParamValue { id, value },
+            });
+        }
+        mooloop_dsp::AudioNode::process(&mut device, &context, &mut bus, &events, None);
         let display = device.buffer_waveform().expect("a buffer draws itself");
-        assert!(display.head.is_some(), "a detached head has to be drawable");
+        assert!(display.head.is_some(), "a frozen ring plays, so it has a head");
         assert!(display.frozen, "and the face has to know the writer stopped");
         assert_eq!(
             display.write, write,
@@ -6456,9 +6460,10 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             peaks: &peaks,
             head: Some(0.25),
             write: 0.5,
-            window: Some((0.1, 0.2)),
+            region: Some((0.1, 0.2)),
             frozen: true,
             armed_freeze: Some(false),
+            armed_gesture: true,
         };
 
         telemetry.publish_buffer_display(0, 1, &display);
@@ -6471,9 +6476,10 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         let marks = telemetry.read_buffer_marks(0, 1);
         assert_eq!(marks.head, Some(0.25));
         assert_eq!(marks.write, 0.5);
-        assert_eq!(marks.window, Some((0.1, 0.2)));
+        assert_eq!(marks.region, Some((0.1, 0.2)));
         assert!(marks.frozen);
         assert_eq!(marks.armed_freeze, Some(false));
+        assert!(marks.armed_gesture, "a press waiting for its boundary crosses too");
 
         assert!(telemetry.set_waveform_enabled(0, 1, true));
         telemetry.publish_buffer_display(0, 1, &display);
@@ -6492,16 +6498,18 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         // zero, which is a real place in the ring.
         let following = mooloop_dsp::BufferDisplay {
             head: None,
-            window: None,
+            region: None,
             frozen: false,
             armed_freeze: None,
+            armed_gesture: false,
             ..display
         };
         telemetry.publish_buffer_display(0, 1, &following);
         let marks = telemetry.read_buffer_marks(0, 1);
         assert_eq!(marks.head, None);
-        assert_eq!(marks.window, None);
+        assert_eq!(marks.region, None);
         assert_eq!(marks.armed_freeze, None);
+        assert!(!marks.armed_gesture);
     }
 
     /// A frozen buffer's ring is a sample being played, so the node that holds
@@ -6516,7 +6524,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     fn a_frozen_buffer_refuses_to_be_replaced() {
         let mut chain = EffectChain::new();
         let mut frozen = Box::new(mooloop_dsp::BufferDevice::with_bars(48_000, 120.0, 1));
-        frozen.set_writing(false);
+        frozen.set_frozen(true);
         let displaced = chain.install(
             0,
             mooloop_core::EffectKind::Buffer,
@@ -10176,13 +10184,19 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         );
     }
 
-    /// A reverse head and the ring's trailing edge close on each other at 2x,
-    /// so a backward jump must force a return to live and surface as device
-    /// telemetry — the only trace a forced return leaves, since the audio
-    /// thread cannot log. The ring is deliberately tiny here so the collision
-    /// lands inside a short render instead of eight retained bars later.
+    /// A head wrapping the ring surfaces as device telemetry -- the only trace
+    /// a seam leaves, since the audio thread cannot log.
+    ///
+    /// The number is the same one this test asserted when it was about a
+    /// *collision*: a reverse head overtaken by its writer and forced back to
+    /// live. That failure is gone with the turntable model -- a mapped event
+    /// holds the ring still and wraps instead -- and the count now reports
+    /// laps. The arithmetic happens to land on one either way: the head
+    /// starts 480 frames behind now on a 4 096-frame ring, reaches the oldest
+    /// sample 3 616 frames later, and wraps once before the render ends. The
+    /// ring is deliberately tiny so that happens inside a short render.
     #[test]
-    fn writer_collision_surfaces_as_device_telemetry() {
+    fn a_buffer_seam_surfaces_as_device_telemetry() {
         const BLOCKS: usize = 8;
         const FRAMES: usize = 1024;
         const TRIGGER_BLOCK: usize = 4;
@@ -10202,7 +10216,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         // Stage 0 is the source; the insert in slot 0 publishes as stage 1.
         assert_eq!(telemetry.read_buffer_collisions(0, 1), 1);
 
-        // Follow never detaches, so it can never be overtaken.
+        // Following has no head, so it has nothing to wrap.
         let quiet = DeviceTelemetry::new();
         let _ = render_with_buffer(
             &project,
