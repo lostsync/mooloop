@@ -2459,8 +2459,16 @@ pub struct BufferParams {
     pub crossfade_ms: f32,
 }
 
+/// How much history a fresh Buffer keeps, in bars.
+///
+/// **Two, not eight.** `Position` is normalized over the whole ring, so the
+/// ring's length is the knob's resolution: eight bars put 50% four bars ago
+/// and made every small move a leap. Two bars is the loop somebody is playing
+/// over, a sixteenth of it is a tenth of the knob's travel, and it is what
+/// `bars` being adjustable is for -- a pad that wants eight can still say so,
+/// and now has a control that says it.
 const fn default_buffer_bars() -> u8 {
-    8
+    2
 }
 
 const fn default_buffer_crossfade_ms() -> f32 {
@@ -2702,7 +2710,13 @@ static BUFFER_DESCRIPTORS: [ParamDescriptor; 9] = [
 /// Derived rather than spelled, because `ModTimeDivision::ALL` is the grid and
 /// a descriptor that said `20.0` would be a second copy of its length --
 /// exactly the shape `scripts/dupe-audit` exists to find.
-const MOD_TIME_DIVISION_TOP: f32 = crate::ModTimeDivision::ALL.len() as f32 - 1.0;
+///
+/// Public, because it is also the divisor every caller needs to turn a
+/// normalized stepped parameter back into a grid index, and three of them had
+/// written `20` by hand: two in `buffer-device.slint` and one in the Buffer's
+/// telemetry. `Divisions.top` in `controls.slint` is the markup's single copy
+/// and `the_slint_division_table_matches_mod_time_division` now guards it.
+pub const MOD_TIME_DIVISION_TOP: f32 = crate::ModTimeDivision::ALL.len() as f32 - 1.0;
 
 /// A container's own state.
 ///

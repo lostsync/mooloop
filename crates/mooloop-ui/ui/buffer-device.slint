@@ -1,5 +1,6 @@
 import { Theme } from "theme.slint";
 import { BbtText, Divisions, ParameterKnob, SectionLabel, ToggleButton, ToolButton } from "controls.slint";
+import { StepperField } from "toolbar.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
 // A momentary trigger: it reports press and release separately rather than
@@ -169,7 +170,17 @@ export component BufferDeviceFace inherits EffectDeviceShell {
     in property <bool> frozen;
     /// 0 none, 1 a freeze waiting for its boundary, 2 a thaw waiting.
     in property <int> armed-freeze;
-    in property <int> history-bars: 8;
+    /// How much history the ring holds, in bars. Not a descriptor parameter
+    /// -- changing it reallocates, which the audio callback may not do -- so
+    /// it has its own callback rather than an id, and the engine rebuilds the
+    /// ring off-thread. It is still the number that decides what `Position`
+    /// means, which is why it is a control and not a caption.
+    ///
+    /// `in-out` for the reason `looping` and `quantize` are, one section
+    /// down: `StepperField.value` is `in-out` and an arrow click assigns to
+    /// it, which drops whatever binding it had. Bound one way the stepper
+    /// would follow the engine until the first press and then stop.
+    in-out property <int> history-bars: 2;
     // Running count of forced returns to live: the writer overtaking a
     // detached head. Demoted from the headline it used to be -- it is
     // live-mode information, and Freeze removes most of what it reported.
@@ -205,6 +216,7 @@ export component BufferDeviceFace inherits EffectDeviceShell {
     callback quant-grid-changed(float);
     callback loop-toggled(bool);
     callback quantize-toggled(bool);
+    callback history-bars-changed(int);
     callback freeze-toggled(bool);
     callback window-dragged(float, float);
     // Momentary, because the gesture lasts as long as the control is down.
@@ -219,8 +231,8 @@ export component BufferDeviceFace inherits EffectDeviceShell {
 
     private property <float> rate-value: (root.rate * 8) - 4;
     private property <float> crossfade-ms: 0.5 * pow(100, root.crossfade);
-    private property <int> length-index: round(root.length * 20);
-    private property <int> quant-index: round(root.quant-grid * 20);
+    private property <int> length-index: round(root.length * Divisions.top);
+    private property <int> quant-index: round(root.quant-grid * Divisions.top);
 
     VerticalLayout {
         padding: 6px;
@@ -229,7 +241,10 @@ export component BufferDeviceFace inherits EffectDeviceShell {
 
         // --- state, history length, and the freeze --------------------------
         HorizontalLayout {
-            height: 20px;
+            // The row's height is the stepper's, rather than the 20px it was
+            // when everything in it was a caption: a control with arrows to
+            // hit cannot be squeezed to fit a label's row.
+            height: Theme.control-height;
             spacing: 6px;
             Rectangle {
                 width: 58px;
@@ -243,13 +258,19 @@ export component BufferDeviceFace inherits EffectDeviceShell {
                     vertical-alignment: center;
                 }
             }
-            Text {
-                text: "HISTORY " + root.history-bars + (root.history-bars == 1 ? " BAR" : " BARS");
-                color: Theme.text-faint;
-                font-size: 9px;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
+            StepperField {
+                label: "HISTORY";
+                tooltip: "History";
+                hint: "How many bars of audio the buffer keeps. Position is measured over the whole of it, so a shorter history is a finer control.";
+                value <=> root.history-bars;
+                minimum: 1;
+                maximum: 64;
+                coarse-step: 4;
+                value-width: 44px;
+                display-text: root.history-bars + (root.history-bars == 1 ? " BAR" : " BARS");
+                changed(bars) => { root.history-bars-changed(bars); }
             }
+            Rectangle { horizontal-stretch: 1; }
             // A pending freeze is the one state the face must not stay quiet
             // about: until the boundary the device is still live, and a
             // control that looked as though nothing had happened would be the
@@ -454,7 +475,7 @@ export component BufferDeviceFace inherits EffectDeviceShell {
             }
             HeldButton {
                 text: "STUT";
-                tooltip: "hold: loop the window from Position";
+                tooltip: "hold: loop one Length from Position";
                 pressed => { root.stutter-pressed(); }
                 released => { root.stutter-released(); }
             }

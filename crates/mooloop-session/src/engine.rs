@@ -110,6 +110,16 @@ pub enum PendingEngineMessage {
     ResizeBuffers {
         bpm: f64,
     },
+    /// One Buffer's ring replaced because its `bars` changed.
+    ///
+    /// Distinct from [`Self::ResizeBuffers`], which rebuilds every ring at a
+    /// new tempo and passes one params value as both the expectation and the
+    /// replacement -- correct there, because a tempo change leaves `bars`
+    /// alone and the allocation key with it. Here the key is precisely what
+    /// moved, and the document already says the new number by the time this
+    /// is drained, so the expectation has to travel with the message or the
+    /// realtime side refuses the swap it was asked for.
+    ResizeBuffer(BufferResize, f64),
     Structural(StructuralCommand),
     /// Adding a channel allocates its strip, event list and control-output
     /// buffer, so it is structural rather than POD. The pump expands it: the
@@ -160,6 +170,21 @@ pub enum AudioAction {
     SetAutoReconnect(bool),
 }
 
+/// A Buffer's ring about to be rebuilt at a new length: which device, what it
+/// was built as, and what it is to become.
+///
+/// `bars` is the one Buffer setting that is not a descriptor parameter,
+/// because changing it allocates and the audio callback may not. So it takes
+/// this path instead -- the ring is built on the pump thread and swapped at a
+/// block boundary, down the same road a tempo change already travels.
+#[derive(Clone, Copy)]
+pub struct BufferResize {
+    pub target: EffectTarget,
+    pub slot: u8,
+    pub expected: mooloop_core::BufferParams,
+    pub next: mooloop_core::BufferParams,
+}
+
 #[derive(Clone)]
 pub struct EngineCommandSender(pub std::sync::mpsc::Sender<PendingEngineMessage>);
 
@@ -171,6 +196,13 @@ impl EngineCommandSender {
     pub fn resize_buffers(&self, bpm: f64) -> bool {
         self.0
             .send(PendingEngineMessage::ResizeBuffers { bpm })
+            .is_ok()
+    }
+
+    /// Rebuild one Buffer's ring at the length its document now says.
+    pub fn resize_buffer(&self, resize: BufferResize, bpm: f64) -> bool {
+        self.0
+            .send(PendingEngineMessage::ResizeBuffer(resize, bpm))
             .is_ok()
     }
 
@@ -616,6 +648,20 @@ impl Session {
                 for (target, slot, params) in self.buffer_effects() {
                     let _ = handle.replace_buffer(target, slot, params, params, bpm);
                 }
+                false
+            }
+            PendingEngineMessage::ResizeBuffer(resize, bpm) => {
+                if !handle.replace_buffer(
+                    resize.target,
+                    resize.slot,
+                    resize.expected,
+                    resize.next,
+                    bpm,
+                ) {
+                    self.report_refused_command("a buffer resize");
+                }
+                // The document recorded the new length when the control was
+                // moved; this is the engine catching up, not a second edit.
                 false
             }
             PendingEngineMessage::AddChannel { channel, source } => {

@@ -1585,13 +1585,17 @@ export component MainWindow inherits Window {
     callback modulation-tempo-sync-changed(int, bool);
     callback modulation-rate-division-changed(int, int);
     callback delay-time-division-changed(int, int);
-    // Slot index and an index into the buffer face's fixed debug event table.
+    // Slot, and whether the buffer face's held control is down. The debug
+    // event table these once addressed is gone: every one of them writes a
+    // published parameter now.
     callback effect-buffer-jump(int, bool);
     callback effect-buffer-stutter(int, bool);
     callback effect-buffer-loop(int, bool);
     callback effect-buffer-quantize(int, bool);
     callback effect-buffer-freeze(int, bool);
     callback effect-buffer-window(int, float, float);
+    // Slot and bars. Not a parameter write: the ring is reallocated for it.
+    callback effect-buffer-history-bars(int, int);
     // Press/release of the buffer face's held reverse control.
     callback effect-buffer-reverse-pressed(int);
     callback effect-buffer-reverse-released(int);
@@ -5121,6 +5125,7 @@ export component MainWindow inherits Window {
                                                     quantize-toggled(on) => { root.effect-buffer-quantize(index, on); }
                                                     freeze-toggled(on) => { root.effect-buffer-freeze(index, on); }
                                                     window-dragged(a, b) => { root.effect-buffer-window(index, a, b); }
+                                                    history-bars-changed(bars) => { root.effect-buffer-history-bars(index, bars); }
                                                     jump-pressed() => { root.effect-buffer-jump(index, true); }
                                                     jump-released() => { root.effect-buffer-jump(index, false); }
                                                     reverse-pressed() => { root.effect-buffer-reverse-pressed(index); }

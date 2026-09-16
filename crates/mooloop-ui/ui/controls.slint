@@ -1913,6 +1913,12 @@ export global TimeFormat {
 // sequencer's rate, the ML-P8's own LFO -- reads its names from here, so
 // none of them gets to invent a second spelling.
 export global Divisions {
+    /// The top index of the grid, which is what a stepped parameter's
+    /// normalized 0..1 spans. Spelled here once rather than at each knob that
+    /// decodes one, and checked against `MOD_TIME_DIVISION_TOP` by
+    /// `the_slint_division_table_matches_mod_time_division`.
+    out property <int> top: 20;
+
     /// Duration in quarter-note beats. The same table as
     /// `ModTimeDivision::beats`, and the reason a delay and an LFO cannot
     /// disagree about what "1/2" is worth -- which they did, by a factor of

@@ -2105,21 +2105,34 @@ fn effect_slot_row(
 
 /// What a held Buffer button borrowed and has to put back on release.
 ///
-/// Named rather than a tuple because `.0`, `.1` and `.2` over three floats
-/// that all look alike is a swap waiting to happen, and named rather than
-/// inlined because clippy is right that
-/// `Rc<RefCell<HashMap<i32, (f32, f32, f32)>>>` is a type nobody should have
-/// to read twice.
+/// Named rather than a tuple because `.0` and `.1` over two floats that look
+/// alike is a swap waiting to happen, and named rather than inlined because
+/// clippy is right that `Rc<RefCell<HashMap<(i32, BufferHold), (f32, f32)>>>`
+/// is a type nobody should have to read twice.
+///
+/// One `Option` per borrowable parameter, and keyed by *which* control took
+/// it: **REV and STUT can be down at the same time**, and with one entry per
+/// slot the second press overwrote the first's record and the first release
+/// threw the whole entry away. Holding STUT, tapping REV and letting go left
+/// the device looping for good, because STUT's release found nothing to put
+/// back.
 #[derive(Clone, Copy, Default)]
 struct BorrowedBufferParams {
-    rate: f32,
-    length: f32,
-    looping: f32,
+    rate: Option<f32>,
+    looping: Option<f32>,
 }
 
-/// Per-slot, because two Buffer faces can be on screen and a release has to
-/// put back what *that* press took.
-type HeldBufferParams = Rc<RefCell<std::collections::HashMap<i32, BorrowedBufferParams>>>;
+/// Which held control borrowed it. Keyed with the slot, because two Buffer
+/// faces can be on screen and a release has to put back what *that* press
+/// took.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum BufferHold {
+    Reverse,
+    Stutter,
+}
+
+type HeldBufferParams =
+    Rc<RefCell<std::collections::HashMap<(i32, BufferHold), BorrowedBufferParams>>>;
 
 /// Whether the rack's wrap button on `slot` should be live.
 fn wrap_enabled_at(effects: &[EffectSlotState], slot: usize) -> bool {
@@ -9987,16 +10000,24 @@ impl AppUi {
                     return;
                 };
                 let rate = row.p3;
-                held.borrow_mut().entry(slot).or_default().rate = rate;
+                held.borrow_mut().insert(
+                    (slot, BufferHold::Reverse),
+                    BorrowedBufferParams {
+                        rate: Some(rate),
+                        looping: None,
+                    },
+                );
                 w(slot, mooloop_core::BUFFER_PARAM_RATE, 1.0 - rate);
             });
             let w = write.clone();
             let held = borrowed.clone();
             window.on_effect_buffer_reverse_released(move |slot| {
-                let Some(prior) = held.borrow_mut().remove(&slot) else {
+                let Some(prior) = held.borrow_mut().remove(&(slot, BufferHold::Reverse)) else {
                     return;
                 };
-                w(slot, mooloop_core::BUFFER_PARAM_RATE, prior.rate);
+                if let Some(rate) = prior.rate {
+                    w(slot, mooloop_core::BUFFER_PARAM_RATE, rate);
+                }
             });
 
             let w = write.clone();
@@ -10008,39 +10029,79 @@ impl AppUi {
                         return;
                     };
                     held.borrow_mut().insert(
-                        slot,
+                        (slot, BufferHold::Stutter),
                         BorrowedBufferParams {
-                            rate: 0.0,
-                            length: row.p4,
-                            looping: row.p5,
+                            rate: None,
+                            looping: Some(row.p5),
                         },
                     );
-                    // A sixteenth of the shared grid, looped, from where
-                    // Position points -- which is the gesture STUT always
-                    // was, said in parameters a lane can also say.
-                    let sixteenth = 13.0 / (mooloop_core::ModTimeDivision::ALL.len() as f32 - 1.0);
-                    w(slot, mooloop_core::BUFFER_PARAM_LENGTH, sixteenth);
+                    // **Length is the stutter length, and STUT leaves it
+                    // alone.** It used to force a sixteenth and put the knob
+                    // back on release, which made the one control named for
+                    // the size of the repeat the one thing the gesture
+                    // ignored -- "how does one set the stutter length?" had no
+                    // answer, because nothing on the face was it. The gesture
+                    // is Loop plus a Jump to Position; how long the repeat is
+                    // was always a setting rather than part of the press.
                     w(slot, mooloop_core::BUFFER_PARAM_LOOP, 1.0);
                     w(slot, mooloop_core::BUFFER_PARAM_JUMP, 1.0);
                     w(slot, mooloop_core::BUFFER_PARAM_JUMP, 0.0);
                 } else {
-                    let Some(prior) = held.borrow_mut().remove(&slot) else {
+                    let Some(prior) = held.borrow_mut().remove(&(slot, BufferHold::Stutter)) else {
                         return;
                     };
-                    w(slot, mooloop_core::BUFFER_PARAM_LENGTH, prior.length);
-                    w(slot, mooloop_core::BUFFER_PARAM_LOOP, prior.looping);
+                    if let Some(looping) = prior.looping {
+                        w(slot, mooloop_core::BUFFER_PARAM_LOOP, looping);
+                    }
                 }
             });
 
             let w = write.clone();
+            let rst = state.clone();
             window.on_effect_buffer_window(move |slot, from, to| {
                 // A drag across the history is Position plus Length: where it
                 // started, and how long it is on the nearest grid step. Both
                 // are published, so the same drag is expressible as two lane
                 // points.
+                //
+                // The length half used to be dropped on the floor -- `to` went
+                // into a `let _` while the comment above claimed otherwise --
+                // so every drag set the window's *start* and left its size at
+                // whatever the knob said.
+                let bars = rst
+                    .borrow()
+                    .effect_slot_model
+                    .row_data(slot as usize)
+                    .map_or(0, |row| row.buffer_history_bars)
+                    .max(1);
+                let beats =
+                    (to - from).abs() * bars as f32 * mooloop_core::BEATS_PER_BAR as f32;
+                let division = mooloop_core::ModTimeDivision::nearest(beats);
                 w(slot, mooloop_core::BUFFER_PARAM_POSITION, from.clamp(0.0, 1.0));
+                w(
+                    slot,
+                    mooloop_core::BUFFER_PARAM_LENGTH,
+                    division.to_index() as f32 / mooloop_core::MOD_TIME_DIVISION_TOP,
+                );
                 w(slot, mooloop_core::BUFFER_PARAM_LOOP, 1.0);
-                let _ = to;
+            });
+
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_effect_buffer_history_bars(move |slot, bars| {
+                // Not a parameter write: the ring is reallocated for it, off
+                // the audio thread, and swapped in at a block boundary. See
+                // `Session::set_buffer_bars`.
+                let Some(window) = weak.upgrade() else { return };
+                let bpm = f64::from(window.get_bpm());
+                let mut st = st.borrow_mut();
+                let Some(resize) = st.session.set_buffer_bars(slot, bars.clamp(1, 255) as u8) else {
+                    return;
+                };
+                st.refresh_effect_row(slot as usize);
+                let _ = tx.resize_buffer(resize, bpm);
+                st.update_document_title(&window);
             });
         }
         {
@@ -13733,7 +13794,8 @@ impl AppUi {
                                     // 1:0:0 rather than 2:1:0 -- which is the
                                     // whole reason there are two types.
                                     let division = mooloop_core::ModTimeDivision::from_index(
-                                        (row.p4 * 20.0).round() as i32,
+                                        (row.p4 * mooloop_core::MOD_TIME_DIVISION_TOP).round()
+                                            as i32,
                                     );
                                     let length_ticks = f64::from(division.beats())
                                         * f64::from(ppq.ticks_per_beat());
@@ -15238,6 +15300,26 @@ mod tests {
                 division.beats()
             );
         }
+
+        // And the top index beside the table, which is the divisor every
+        // stepped grid knob decodes its normalized value through. It was
+        // written `20` by hand at three call sites before it was one value.
+        // The table above checks the *entries*; nothing checked the count, so
+        // a twenty-second division would have left every stepped grid knob in
+        // the markup decoding one step short, silently.
+        let top = CONTROLS_SLINT
+            .split("out property <int> top:")
+            .nth(1)
+            .and_then(|rest| rest.split(';').next())
+            .expect("Divisions.top in controls.slint")
+            .trim()
+            .parse::<f32>()
+            .expect("a grid top index");
+        assert!(
+            (top - mooloop_core::MOD_TIME_DIVISION_TOP).abs() < 1e-6,
+            "controls.slint's Divisions.top is {top}, MOD_TIME_DIVISION_TOP is {}",
+            mooloop_core::MOD_TIME_DIVISION_TOP
+        );
     }
 
     #[test]

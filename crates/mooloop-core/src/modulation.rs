@@ -274,6 +274,29 @@ impl ModTimeDivision {
         self.seconds(bpm) * 1_000.0
     }
 
+    /// The grid step closest to a free duration in beats, by ratio.
+    ///
+    /// By ratio rather than by difference, because the grid is geometric and
+    /// an absolute gap means nothing without knowing where on it you are:
+    /// 0.25 beats is invisible between `4/1` and `2/1`, and six whole steps
+    /// at `1/64T`. A difference rule also *ties* where the ratio rule is
+    /// clear -- 6 beats is two from `2/1` and two from `1/1`, and it is
+    /// plainly the former.
+    ///
+    /// Dragging a window across the Buffer's history is the caller: a drag
+    /// lands on a free length, the parameter is stepped, and rounding it in
+    /// the markup would be a second copy of this table.
+    pub fn nearest(beats: f32) -> Self {
+        let beats = beats.max(f32::MIN_POSITIVE);
+        Self::ALL
+            .into_iter()
+            .min_by(|a, b| {
+                let error = |d: Self| (d.beats() / beats).max(beats / d.beats());
+                error(*a).total_cmp(&error(*b))
+            })
+            .unwrap_or_default()
+    }
+
     pub fn from_index(index: i32) -> Self {
         Self::ALL
             .get(index.clamp(0, Self::ALL.len() as i32 - 1) as usize)
@@ -2137,6 +2160,33 @@ mod tests {
 
     fn addr(param: u32) -> ParamAddr {
         ParamAddr::effect(EffectTarget::Channel(0), DeviceId(0), param)
+    }
+
+    /// `nearest` snaps by ratio, which is the only thing that reads right on a
+    /// geometric grid.
+    ///
+    /// Six beats is the case that separates the two rules: it is two beats
+    /// from `2/1` and two beats from `1/1`, so a difference rule ties and
+    /// takes whichever it met first, while by ratio it is 1.33x of `2/1`
+    /// against 1.50x of `1/1` and the answer is not close.
+    #[test]
+    fn the_nearest_division_is_the_nearest_ratio_not_the_nearest_difference() {
+        use ModTimeDivision as D;
+        // Exact entries come back as themselves, top to bottom.
+        for division in D::ALL {
+            assert_eq!(
+                D::nearest(division.beats()),
+                division,
+                "{division:?} is {} beats and did not round to itself",
+                division.beats()
+            );
+        }
+        assert_eq!(D::nearest(6.0), D::DoubleWhole);
+        // Past either end it clamps to the end rather than wrapping or
+        // defaulting: a drag of two frames is the shortest thing on the grid,
+        // and a drag of a whole arrangement is the longest.
+        assert_eq!(D::nearest(0.0), D::SixtyFourthTriplet);
+        assert_eq!(D::nearest(1_000.0), D::FourWhole);
     }
 
     /// A rack with `count` modules installed. Routes need a real source to

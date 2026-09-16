@@ -146,6 +146,17 @@ const FREEZE_HYSTERESIS: f32 = 0.05;
 /// away would be a control lying about its own span.
 const MAX_SCRUB_RATE: f32 = mooloop_core::MAX_BUFFER_RATE;
 
+/// How far from unity `Rate` has to be before the device stops following its
+/// input and hands the head over.
+///
+/// Following is a direct assignment from the input sample -- bit-identical and
+/// zero latency -- where a detached head at exactly unity is a delay line
+/// instead: one interpolation and a fixed lag behind, for nothing audible. So
+/// unity means follow and anything else means play the memory. A thousandth
+/// of a unit rate is an eight-thousandth of the knob's travel, which is under
+/// a pixel and well outside what a descriptor round-trip can drift by.
+const RATE_FOLLOW_EPSILON: f32 = 1e-3;
+
 /// A freeze or a thaw waiting for its boundary.
 #[derive(Clone, Copy)]
 struct ArmedFreeze {
@@ -262,6 +273,15 @@ pub struct BufferDevice {
     /// a crossfade, and a loaded project must still come up with its head
     /// where the document says it was.
     pending_position: Option<f32>,
+    /// A non-unity `Rate` carried in from the saved parameter set, applied on
+    /// the first block for the same reason [`Self::pending_position`] is. A
+    /// document saved at half speed has to reopen at half speed without
+    /// anybody touching the knob.
+    ///
+    /// One-shot rather than checked every block: a windowed rate head that
+    /// collides is *meant* to end, and a standing reconcile would retrigger
+    /// it once a block forever.
+    pending_rate: bool,
 }
 
 impl BufferDevice {
@@ -279,6 +299,7 @@ impl BufferDevice {
         // Only a position that is not already live is worth arming: `1.0` is
         // the writer, and following is what a fresh device does anyway.
         device.pending_position = (params.position < 1.0).then_some(params.position);
+        device.pending_rate = (device.rate - 1.0).abs() > RATE_FOLLOW_EPSILON;
         device
     }
     /// Allocate a ring for `bars` bars at the supplied tempo.
@@ -322,6 +343,7 @@ impl BufferDevice {
             crossfade_ms: 2.5,
             armed_offset_frames: None,
             pending_position: None,
+            pending_rate: false,
         }
     }
 
@@ -371,6 +393,9 @@ impl BufferDevice {
             // A saved freeze is a state the document was in, not a gesture
             // somebody just made, so it is restored rather than quantized.
             self.freeze(context);
+        }
+        if std::mem::take(&mut self.pending_rate) {
+            self.reconcile_rate(context);
         }
         let mut event_index = 0;
         let mut param_index = 0;
@@ -512,6 +537,10 @@ impl BufferDevice {
             self.freeze(context);
         } else {
             self.thaw();
+            // Live again, and a `Rate` that is not unity still wants a head
+            // of its own: thawing returns a free-running one to following,
+            // which would silently undo the knob.
+            self.reconcile_rate(context);
         }
     }
 
@@ -669,10 +698,16 @@ impl BufferDevice {
     /// a repeat count to go with it, and a `Loop` parameter arriving underneath
     /// must not redraw it.
     fn refresh_window(&mut self, context: &ProcessContext) {
-        let frames = self.window_frames(context);
+        // A window longer than the ring is not a window, it is the ring.
+        // `Length` reaches four whole notes and `bars` can be one, so the two
+        // controls can ask for that between them without either being wrong.
+        let frames = self
+            .window_frames(context)
+            .min(self.capacity_frames() as f64);
         let target = self.position_target();
         let looping = self.looping;
         let rate = self.rate;
+        let writer = self.write_head as f64;
         let Some(head) = &mut self.head else { return };
         if head.drive == Drive::Event {
             return;
@@ -701,13 +736,31 @@ impl BufferDevice {
             // the loop opens where the head already is.
             head.position
         };
-        if rate < 0.0 {
-            head.window_start = anchor - frames;
-            head.window_end = Some(anchor);
+        let (mut start, mut end) = if rate < 0.0 {
+            (anchor - frames, anchor)
         } else {
-            head.window_start = anchor;
-            head.window_end = Some(anchor + frames);
+            (anchor, anchor + frames)
+        };
+        // **The window has to lie inside retained history.** `fire` says this
+        // about a gesture's entry point and this is the case one level up
+        // from it: there the anchor is already in the past because
+        // `offset_beats` put it there, while here `Position` at live *is* the
+        // write head -- so a forward window opened from it points at samples
+        // the writer has not reached and the loop plays silence. That is the
+        // gotcha `02-control-and-modulation.md` names, arriving through the
+        // one door nobody had shut.
+        //
+        // Slide it back rather than refuse it: "loop the last 1/16" is what
+        // the control is asking for either way, and a window that quietly did
+        // nothing is worse than one an eighth of a beat from where a purist
+        // would put it.
+        let overshoot = end - writer;
+        if overshoot > 0.0 {
+            start -= overshoot;
+            end -= overshoot;
         }
+        head.window_start = start;
+        head.window_end = Some(end);
         head.repeats_remaining = None;
     }
 
@@ -773,7 +826,14 @@ impl BufferDevice {
                 self.crossfade_ms = value.clamp(0.0, 50.0)
             }
             mooloop_core::BUFFER_PARAM_RATE => {
-                self.rate = value.clamp(-MAX_SCRUB_RATE, MAX_SCRUB_RATE)
+                self.rate = value.clamp(-MAX_SCRUB_RATE, MAX_SCRUB_RATE);
+                // `Rate` is the one standing parameter that has to create the
+                // head it drives; see [`Self::reconcile_rate`].
+                self.reconcile_rate(context);
+                // Its sign decides which way a window extends from its
+                // anchor, so a loop already open follows the knob across
+                // zero instead of keeping the direction it opened with.
+                self.refresh_window(context);
             }
             mooloop_core::BUFFER_PARAM_LENGTH => {
                 self.length_index = value;
@@ -1051,6 +1111,48 @@ impl BufferDevice {
         self.refresh_window(context);
     }
 
+    /// Give `Rate` a head to drive, or take it back when the knob returns to
+    /// unity.
+    ///
+    /// **This is what makes the `Rate` knob and the REV button audible at
+    /// all.** Nothing detached a free-running head except Freeze, a
+    /// `Position` write or a gesture, so over a live buffer at the default
+    /// Position -- which is the state the device comes up in -- turning Rate
+    /// wrote a number the running program had no way to reach. Reported as
+    /// "reverse doesn't seem to work at all", and it did not: REV is one
+    /// `Rate` write and there was nothing for it to move.
+    ///
+    /// Frozen, a head already exists and Freeze owns it, so this stands
+    /// aside. So do a gesture, a chase and a hand on the platter, exactly as
+    /// they outrank each other in [`Drive`].
+    fn reconcile_rate(&mut self, context: &ProcessContext) {
+        if !self.writing {
+            return;
+        }
+        let unity = (self.rate - 1.0).abs() <= RATE_FOLLOW_EPSILON;
+        match self.head {
+            None if !unity => self.detach_at_rate(context),
+            // Unity again with nothing else holding the head: following is
+            // the input itself, so it is both cheaper and cleaner than a head
+            // reading back the sample the writer just stored.
+            Some(head) if unity && self.rate_owns(&head) => {
+                self.return_live(head, head.position)
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether `Rate` alone is driving this head: detached by the knob or by
+    /// Freeze, with no gesture, no chase and no hand on it.
+    ///
+    /// A head like that is a standing state rather than an edit, and that
+    /// settles both questions asked of it -- whether the knob returning to
+    /// unity may take it back, and whether running out of history wraps it or
+    /// ends it.
+    fn rate_owns(&self, head: &ReadHead) -> bool {
+        head.drive == Drive::Free && !head.gated && self.scrub.is_none()
+    }
+
     /// End a gated edit. A latching head is left alone: a held control sends
     /// this on release without knowing whether its own event is still the
     /// one running, and it must not cancel whatever superseded it.
@@ -1169,10 +1271,35 @@ impl BufferDevice {
         // out of retained history has collided with the writer. Return rather
         // than wrapping into unrelated audio or silently clamping.
         let collision = head.position >= writer || head.position <= oldest;
-        if expired || collision {
-            if collision {
-                self.collision_count += 1;
+        if collision {
+            self.collision_count += 1;
+        }
+        // A head `Rate` created is a standing state, not a gesture, so when it
+        // runs out of history it wraps round the ring the way a frozen head
+        // does instead of ending. Holding REV over a live buffer otherwise
+        // reverses for one ring's worth of history and then snaps forward on
+        // its own -- which is the control failing, a few seconds late.
+        //
+        // Only an unwindowed one. A loop that the writer has caught up with
+        // is a loop over material about to be overwritten, and sliding it
+        // along would be a different gesture from the one that was asked for;
+        // that returns to live and says so in `RETURNS`.
+        if collision && !expired && head.window_end.is_none() && self.rate_owns(&head) {
+            if head.crossfade_frames > 0 {
+                self.fade = Some(Fade {
+                    source: FadeSource::Detached {
+                        position: old_position,
+                        rate: head.rate,
+                    },
+                    frame: 0,
+                    frames: head.crossfade_frames,
+                });
             }
+            head.position = oldest + (head.position - oldest).rem_euclid(span);
+            self.head = Some(head);
+            return;
+        }
+        if expired || collision {
             self.return_live(head, old_position);
         } else {
             self.head = Some(head);
@@ -2152,6 +2279,140 @@ mod tests {
         // window the wrong way would have produced.
         let peak = span.iter().fold(0.0_f32, |peak, s| peak.max(s.abs()));
         assert!(peak > 1_000.0, "a reverse loop over written history is audible");
+    }
+
+    /// A `Rate` that is not unity has to create the head it drives.
+    ///
+    /// **This is the bug behind "reverse doesn't seem to work at all".** Over
+    /// a live buffer at the default Position the device is following, which
+    /// means there is no detached head for a velocity to apply to -- so REV,
+    /// which is one `Rate` write, moved a number and made no sound. It worked
+    /// only frozen, because Freeze was the only thing that detached a head.
+    #[test]
+    fn a_reverse_rate_detaches_the_head_over_a_live_buffer() {
+        let (mut device, mut bus) = primed(48_000);
+        device.crossfade_ms = 0.0;
+        fill_ramp(&mut bus, 48_000, 48_000);
+        device.process_with_params(
+            &context(48_000),
+            &mut bus,
+            &[],
+            &[param(0, mooloop_core::BUFFER_PARAM_RATE, -1.0)],
+        );
+        assert!(
+            !device.is_following(),
+            "a reverse Rate has to take the head; following plays the input"
+        );
+        // The ramp writes each frame's own number, so running backward is
+        // consecutive output samples falling by one where the input rises.
+        let span = &bus.l[1_000..1_010];
+        for pair in span.windows(2) {
+            assert!(
+                (pair[1] - pair[0] + 1.0).abs() < 0.05,
+                "the head is not running backward: {span:?}"
+            );
+        }
+    }
+
+    /// A held REV keeps reversing. The head `Rate` created is a standing
+    /// state, so running out of history wraps it round the ring rather than
+    /// ending it -- otherwise the button works for one ring's worth of
+    /// history and then lets go on its own, which is a control failing a few
+    /// seconds late.
+    #[test]
+    fn a_reverse_rate_wraps_rather_than_snapping_forward() {
+        // A small ring, so the head reaches the end of history inside the
+        // test: reverse closes on it at two frames a frame.
+        let mut device = BufferDevice::with_capacity(1_000);
+        device.crossfade_ms = 0.0;
+        let mut bus = StereoBus::with_capacity(100);
+        for block in 0..10 {
+            fill_ramp(&mut bus, block * 100, 100);
+            device.process(&context(100), &mut bus, &[]);
+        }
+        fill_ramp(&mut bus, 1_000, 100);
+        device.process_with_params(
+            &context(100),
+            &mut bus,
+            &[],
+            &[param(0, mooloop_core::BUFFER_PARAM_RATE, -1.0)],
+        );
+        for block in 11..20 {
+            fill_ramp(&mut bus, block * 100, 100);
+            device.process(&context(100), &mut bus, &[]);
+        }
+        assert!(
+            device.collision_count() > 0,
+            "the test never reached the end of history, so it proves nothing"
+        );
+        assert!(
+            !device.is_following(),
+            "a held REV has to keep reversing, not hand the head back"
+        );
+    }
+
+    /// And unity takes it back. Following is a direct assignment from the
+    /// input; a detached head at exactly unity would be a delay line with a
+    /// lag and an interpolator, for nothing audible.
+    #[test]
+    fn returning_the_rate_to_unity_returns_the_head_to_following() {
+        let (mut device, mut bus) = primed(48_000);
+        device.crossfade_ms = 0.0;
+        fill_ramp(&mut bus, 48_000, 48_000);
+        device.process_with_params(
+            &context(48_000),
+            &mut bus,
+            &[],
+            &[param(0, mooloop_core::BUFFER_PARAM_RATE, -1.0)],
+        );
+        assert!(!device.is_following());
+        fill_ramp(&mut bus, 96_000, 48_000);
+        device.process_with_params(
+            &context(48_000),
+            &mut bus,
+            &[],
+            &[param(0, mooloop_core::BUFFER_PARAM_RATE, 1.0)],
+        );
+        assert!(device.is_following(), "unity is following, not a delay line");
+        assert_eq!(bus.l[47_999], (96_000 + 47_999) as f32);
+    }
+
+    /// A loop whose anchor is the write head extends *backward* from it,
+    /// whichever way the head is travelling.
+    ///
+    /// `fire` documents this for a gesture, where the anchor is already in
+    /// the past because `offset_beats` put it there. The parameter path is
+    /// the case one level up: `Position` at live **is** the write head, so a
+    /// window drawn forward from it covers samples nobody has written, and a
+    /// head faster than the writer walks straight into it.
+    #[test]
+    fn a_loop_opened_at_the_write_head_sits_behind_it_not_in_the_future() {
+        let (mut device, mut bus) = primed(48_000);
+        device.crossfade_ms = 0.0;
+        fill_ramp(&mut bus, 48_000, 48_000);
+        device.process_with_params(
+            &context(48_000),
+            &mut bus,
+            &[],
+            &[
+                param(0, mooloop_core::BUFFER_PARAM_RATE, 2.0),
+                param(0, mooloop_core::BUFFER_PARAM_LENGTH, 13.0),
+                param(0, mooloop_core::BUFFER_PARAM_LOOP, 1.0),
+            ],
+        );
+        assert_eq!(
+            device.collision_count(),
+            0,
+            "a window in front of the writer is a head walking into it"
+        );
+        let span = &bus.l[1_000..40_000];
+        let peak = span.iter().fold(0.0_f32, |peak, s| peak.max(s.abs()));
+        assert!(peak > 1_000.0, "it has to play written history, not silence");
+        let high = span.iter().fold(f32::MIN, |high, s| high.max(*s));
+        assert!(
+            high <= 48_100.0,
+            "and history is behind the writer, not in front of it: {high}"
+        );
     }
 
     /// A sequenced Position plus a Jump per step slices deterministically.

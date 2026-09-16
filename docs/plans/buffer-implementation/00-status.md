@@ -26,6 +26,7 @@ why `FOCUS.md` had been carrying its state.
 | 4. Length, Loop and Jump on the shared grid | Landed 2026-09-16 |
 | 5. Quantized freeze, and BBT everywhere | Landed 2026-09-16 |
 | 6. The 2U face | Landed 2026-09-16 |
+| Playability pass, after the first play-through | Landed 2026-09-16 |
 | Alongside: acceptance test 8 | Closed for the Buffer operations 2026-09-16 |
 
 `musical-time/`, which step 5 waits on, landed 2026-09-15 and is in
@@ -132,6 +133,64 @@ fading between 30 000 and 24 000 peaks at 38 000, higher than either. The
 first loop test read that as the window escaping. Tests that assert *where*
 the head is have to set `crossfade_ms` to zero, and the two that do now say
 so.
+
+## The playability pass, 2026-09-16
+
+The whole of `03` had landed and the device was played for the first time. Three
+of the four things Adam reported were one defect each, and one of them was the
+device's headline control.
+
+**`Rate` had no head to drive, so REV did nothing at all.** The device follows
+its input -- a direct assignment, bit-identical and zero latency -- until
+something detaches a read head, and the only things that did were Freeze, a
+`Position` write and a gesture. `Rate` was read *by* a detached head and could
+not create one. So over a live buffer at the default Position, the knob and the
+REV button wrote a number the running program had no way to reach. It worked
+frozen, which is where every test of it ran.
+
+The plan's own note predicted the shape and stopped one step short: *"with only
+step 1, `Rate` is a descriptor the lane picker lists and nothing in the running
+program can make audible, because nothing detaches a free-running head until
+Freeze does."* Freeze arrived, that sentence read as answered, and the live
+case was never asked about. **A control that needs another control switched on
+to do anything is only half built, and the half that is missing is invisible
+from the tests of the other half.**
+
+Rate now detaches at anything but unity and hands the head back at unity, and a
+head it created *wraps* round the ring when it runs out of history rather than
+returning to live -- otherwise a held REV reverses for one ring's worth of
+history and then lets go on its own, which is the same failure a few seconds
+later.
+
+**The window could be drawn in front of the writer.** `fire` documents this for
+a gesture and the parameter path reintroduced it exactly as
+`02-control-and-modulation.md` said it would, through the one door nobody had
+shut: a gesture's anchor is in the past because `offset_beats` put it there,
+while `Position` at live **is** the write head, so a forward window opened from
+it covered samples the writer had not reached. The window is slid back into
+retained history now, and clamped to the ring's own length.
+
+**STUT overrode the one control named for what it does.** It forced `Length` to
+a sixteenth and restored the knob on release, so "how does one set the stutter
+length?" had no answer: nothing on the face was it. STUT is LOOP plus a JUMP
+now and leaves `Length` alone. Related, two rows down: the held-parameter map
+was keyed by slot, so holding STUT and tapping REV threw away STUT's record and
+left Loop on for good.
+
+**Eight bars of history was a specification nobody had played.** `Position` is
+normalized over the ring, so the ring's length *is* the position knob's
+resolution -- at eight bars, halfway along the knob was four bars ago. Two bars
+by default, and `bars` finally has a control: it cannot be a descriptor
+parameter, because changing it reallocates, so it takes the road a tempo resize
+already travels. The realtime side matches the occupant's allocation key before
+it swaps, so the message has to carry the *old* configuration -- passing the new
+params as both, which is right for a tempo change because a tempo change leaves
+`bars` alone, would have had the swap silently refused.
+
+**The drag across the history dropped half of itself.** `window-dragged` wrote
+`Position` and `Loop` and put `to` in a `let _`, under a comment saying it set
+the length too. `ModTimeDivision::nearest` is the missing half, snapping by
+*ratio* rather than by difference because the grid is geometric.
 
 ## Still open from the earlier steps
 
