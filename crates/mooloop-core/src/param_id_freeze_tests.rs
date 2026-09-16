@@ -204,6 +204,13 @@ const FROZEN: &[(Owner, &[(u32, &str)])] = &[
     (Effect(EffectKind::Buffer), &[
         (0, "Offset"),
         (1, "Crossfade"),
+        // Appended 2026-09-16 with Freeze. The gap at 2, 4 and 5 is not a
+        // hole to fill: `03-freeze-and-the-grid.md` reserves 2 for Position,
+        // 4 for Length and 5 for Loop, and 7 to 9 for Jump, Quantize and
+        // Quant Grid. Spending one of them on something else is a renumber
+        // wearing an append's clothes.
+        (3, "Rate"),
+        (6, "Freeze"),
     ]),
     (Effect(EffectKind::Chain), &[
         (0, "Mix"),
