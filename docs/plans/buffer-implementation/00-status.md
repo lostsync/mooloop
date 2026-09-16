@@ -25,7 +25,7 @@ why `FOCUS.md` had been carrying its state.
 | 3. Position replaces Offset | Landed 2026-09-16 |
 | 4. Length, Loop and Jump on the shared grid | Landed 2026-09-16 |
 | 5. Quantized freeze, and BBT everywhere | Landed 2026-09-16 |
-| 6. The 2U face | Not started |
+| 6. The 2U face | Landed 2026-09-16 |
 | Alongside: acceptance test 8 | Closed for the Buffer operations 2026-09-16 |
 
 `musical-time/`, which step 5 waits on, landed 2026-09-15 and is in
@@ -93,14 +93,37 @@ request cancels and a repeat is a held value. **The test named for the cancel
 passed on the broken version**, because it pressed twice by writing 1.0 twice
 -- which is exactly what a lane does and exactly what must not cancel.
 
-**The face is three steps behind the table, on purpose.** `Rate`, `Freeze`,
-`Length`, `Loop` and `Jump` are all published, automatable and tested, and
-none of them has a knob. Step 6 is the 2U face that gives them one, and
-crossing into `main.slint` once for all of them is what
-`AGENTS.md`'s cost table asks for -- the alternative was five eight-minute
-builds for five knobs that are about to be rearranged anyway. Until then they
-are reachable from the automation lane's picker, which is a real surface
-rather than a debug one.
+**The face waited three steps and crossed once**, which is what `AGENTS.md`'s
+cost table asks for: five eight-minute builds for five knobs that were about
+to be rearranged anyway was the alternative. `Rate`, `Freeze`, `Length`,
+`Loop`, `Jump`, `Quantize` and `Quant Grid` were reachable from the automation
+lane's picker in the meantime, which is a real surface rather than a debug one.
+
+**The row carried two indexing schemes and they had always agreed.**
+`EffectSlotRow.pN` was filled by descriptor *position*; `modulation_allowed`
+and `destination_depths` are filled by descriptor *id*, which
+`descriptor_slots` sizes as `max(id) + 1`. Every kind had dense ids from zero,
+so the two were the same number and the markup could read `p2` and
+`modulation-allowed[2]` and mean one thing. Retiring `Offset` parted them: the
+Buffer's table starts at id 1, reaches 9, and has a hole at 0. The row is
+id-indexed now, which is the scheme an on-disk identifier already uses.
+
+**That parting had already produced a live defect, and a test caught it, and
+the fix went in the wrong place.** In step 3 `slint_face_agreement` reported
+"a knob routes modulation to parameter 0, which Buffer does not describe" --
+correctly, because the face still said `[0]` for the knob that had become id
+2. Rewriting `face_param_id` to index by position made the test pass and left
+Position's modulation overlay reading a slot nothing writes: an arc that would
+never have drawn, on the one control the whole device is about. The guard was
+right and the markup was wrong. **When a guard fails, work out which side
+moved before deciding which side to change.**
+
+**The buttons are macros over published parameters and the debug events are
+gone.** `debug_buffer_event` and `held_reverse_event` are deleted:
+`REV` is `Rate := 1 - rate`, which is negation in normalized units;
+`STUT` is Length to a sixteenth, Loop on, and a Jump, restored on release.
+Nothing the mouse can reach is unreachable from a lane or a modulator, which
+was the point rather than the tidiness.
 
 **A ramp fixture makes an equal-power crossfade overshoot both its ends.**
 `fill_ramp` writes each frame's own number so a read position can be
