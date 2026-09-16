@@ -143,8 +143,10 @@ Use contrast and spacing to show hierarchy, not floating cards within cards.
   sends area his own mockup had drawn as four bars: *"i drew 4 sends bc that's
   how many fit in my drawing. if there are no sends, we wouldnt show any. we're
   not limiting to 4… if we gain more than will fit, that area should scroll."*
-  A track with no sends draws a line saying so, which is smaller than one empty
-  bay would be. Note that a scroll bar drawn *over* the viewport's right edge
+  A track with no sends draws a line saying so in the sidebar, which is smaller
+  than one empty bay would be; the mixer strip draws nothing, because its
+  `SENDS` header already says it and explanatory sentences do not belong on
+  the surface you play on. Note that a scroll bar drawn *over* the viewport's right edge
   will swallow the rightmost control in a row -- reserve for it in the row's
   padding, and test the reachability with a click rather than an invoke.
 
@@ -782,9 +784,11 @@ Two panels flank the work area, and they are deliberately one mechanism: the
   function, `sidebar-ceiling`, and not a constant.
 - **A panel that is always on screen owns setting things up; the surface you
   play on keeps the controls you play with.** A track's sends are edited in
-  the sidebar, where there is room for a destination, a tap point and an
-  enable per send with labels; the mixer strip keeps the send levels, because
-  riding one with its meter beside it is a different job. One model, two
+  the sidebar, where there is room for a destination, a tap point, an enable
+  and a remove per send with labels; the mixer strip keeps one level bar per
+  send, because riding one with its meter beside it is a different job. The
+  bar's switch and remove are modifier clicks (Shift, Alt) rather than
+  buttons, so the strip spends its width on the level. One model, two
   views, and neither holds a second copy of the rows.
 - **What a panel shows is the selection, not a copy of it.** The channel
   sidebar edits whatever `selected-channel` names and holds no selection of

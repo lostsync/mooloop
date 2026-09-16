@@ -3686,7 +3686,6 @@ export component MainWindow inherits Window {
                                 bus-send-added(i, t) => { root.send-added(i, t); }
                                 bus-send-removed(i, send) => { root.send-removed(i, send); }
                                 bus-send-level-changed(i, send, v) => { root.send-level-changed(i, send, v); }
-                                bus-send-tap-picked(i, send, tap) => { root.send-tap-picked(i, send, tap); }
                                 bus-send-enable-toggled(i, send) => { root.send-enable-toggled(i, send); }
                                 can-add-track: root.can-add-track;
                                 track-added => { root.track-added(); }

@@ -30,7 +30,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   remove, plus a picker that routes a copy to another track. They were an area
   of the track's device face until 2026-09-13, and moving them put the editor
   somewhere always to hand rather than behind whichever view the bottom pane
-  was showing; the mixer strip keeps its send levels for riding them live. It resizes
+  was showing. The mixer strip keeps only the levels, as one bar per send
+  reading `3 REVERB  -6.0`: drag it (relatively; Ctrl for fine), double-click
+  for unity, Shift+click to switch the send off or on, Alt+click to remove it.
+  The tap point and the remove button are the sidebar's alone. It resizes
   by its right edge between 180 and 400px, remembers its width, and edits
   whatever channel is selected rather than holding a selection of its own.
   The `reference/img/mooloop-1.0-mockup.png` panel also draws PLUGINS and

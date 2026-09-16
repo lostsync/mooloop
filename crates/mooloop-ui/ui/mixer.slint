@@ -1,4 +1,4 @@
-import { Theme, Motion } from "theme.slint";
+import { Theme, Motion, StatusHint } from "theme.slint";
 import { ScrollView } from "std-widgets.slint";
 import { ConsoleButton, MixerFader, MiniKnob, MuteButton, ParameterFader, PickerChip, SectionLabel, SoloButton, ToolButton } from "controls.slint";
 import { GainMath } from "gain.slint";
@@ -91,33 +91,31 @@ export global MixerMetrics {
     /// rather than while mixing, and the track's rack face says it in words.
     out property <length> front-height: 22px + 3px + 18px;
 
-    /// A send row and the gap under it. Three places want it -- the row, the
-    /// viewport that has to be tall enough to scroll to the last of them,
-    /// and the height the page asks for when the strip is drawing
-    /// everything -- and it used to be written twice, as 42 here and as 41
-    /// in the viewport. The viewport was the copy that was wrong: four sends
-    /// measure 171px inside the 164px it asked for, so the last row could
-    /// not be scrolled to.
+    /// A send row in the sidebar, where it has two lines: the target, its tap
+    /// point, its switch and remove on one, and its fader on the other.
     out property <length> send-row: 42px;
-    out property <length> send-row-gap: 1px;
+    /// One send on the mixer strip, which is a single bar rather than a
+    /// `SendRow`: the strip rides levels, and the sidebar sets sends up. The
+    /// bar, the viewport that scrolls to the last of them, and the height the
+    /// full strip asks for all read these two, which were once written twice
+    /// and disagreed by enough that the last send could not be scrolled to.
+    out property <length> send-bar: 22px;
+    out property <length> send-bar-gap: 2px;
     /// The sends page's header: the count, and the `+` that routes a copy of
     /// this track somewhere.
     out property <length> sends-head: 16px;
-    /// Room kept under the last send row on the paged face, where the
-    /// strip's turn-over arrows are the next thing down and a remove button
-    /// should not be sitting on top of the control that turns the strip
-    /// back. The page asks for it and the card has to allow for it, so it is
+    /// Room kept under the last send bar on the paged face, where the
+    /// strip's turn-over arrows are the next thing down and a send should not
+    /// be sitting on top of the control that turns the strip back. The page asks for it and the card has to allow for it, so it is
     /// a name rather than an 18 in both.
     out property <length> sends-foot: 18px;
 
-    /// The rows alone, without the header above them.
+    /// The strip's send bars alone, without the header above them.
     public pure function send-rows-height(sends: int) -> length {
-        return max(sends, 1) * (root.send-row + root.send-row-gap) - root.send-row-gap;
+        return max(sends, 1) * (root.send-bar + root.send-bar-gap) - root.send-bar-gap;
     }
-    /// The sends page at its natural height. Never less than one row, which
-    /// is also what the sentence an empty page carries needs -- three lines
-    /// at 8px in an 84px column, measured, and the reason the floor is
-    /// stated as a row rather than as a second number.
+    /// The strip's sends page at its natural height. Never less than one
+    /// bar, so a track that gains its first send does not move the fader.
     public pure function sends-height(sends: int) -> length {
         return root.sends-head + 3px + root.send-rows-height(sends);
     }
@@ -312,6 +310,118 @@ export component SendRow inherits Rectangle {
             value-text: GainMath.format-db(GainMath.linear-to-db(root.send.level));
             changed(v) => { root.level-changed(v); }
         }
+    }
+}
+
+// One send on the mixer strip: a bar whose fill is the level, with the
+// target and the level written across it. Adam, 2026-09-16, from a mockup of
+// "3 REVERB" over a green bar with "50" at its end.
+//
+// **It rides the level and nothing else.** The tap point and the remove
+// button are the sidebar's, where `SendRow` has room to label them; here
+// shift+click switches the send off and on and alt+click removes it, so the
+// strip stays one bar per send.
+//
+// The drag is relative -- pressing does not jump the level to the pointer --
+// because this is the control a send is ridden with while it plays. The bar
+// uses the channel fader's taper, so a send reads like the fader beside it.
+export component SendBar inherits Rectangle {
+    in property <MixerSendRow> send;
+    callback level-changed(float);
+    callback enable-toggled();
+    callback removed();
+
+    private property <float> position:
+        GainMath.fader-db-to-position(GainMath.linear-to-db(root.send.level));
+    private property <float> pressed-position;
+    private property <bool> dragging;
+    private property <bool> fine-drag;
+    private property <color> ink: root.send.enabled ? Theme.accent : Theme.text-faint;
+
+    function set-position(p: float) {
+        let next = GainMath.db-to-linear(GainMath.fader-position-to-db(clamp(p, 0, 1)));
+        if (next != root.send.level) { root.level-changed(next); }
+    }
+
+    height: MixerMetrics.send-bar;
+    border-radius: Theme.radius-sm;
+    border-width: Theme.hairline;
+    border-color: root.send.enabled ? root.ink : Theme.border;
+    background: Theme.surface;
+    clip: true;
+    accessible-role: slider;
+    accessible-label: "Send to " + root.send.target-name;
+    accessible-value: GainMath.format-db(GainMath.linear-to-db(root.send.level));
+
+    Rectangle {
+        x: 0px;
+        width: parent.width * root.position;
+        background: root.ink;
+        opacity: touch.has-hover ? 0.4 : 0.3;
+    }
+    Rectangle {
+        x: clamp(parent.width * root.position - 1px, 0px, parent.width - 2px);
+        width: 1px;
+        background: root.ink;
+    }
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 4px;
+        spacing: 3px;
+        Text {
+            horizontal-stretch: 1;
+            text: root.send.target + " " + root.send.target-name.to-uppercase();
+            color: root.send.enabled ? Theme.accent : Theme.text-faint;
+            font-size: Theme.text-md;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            text: GainMath.format-db-value(GainMath.linear-to-db(root.send.level));
+            color: root.send.enabled ? Theme.text : Theme.text-faint;
+            font-size: Theme.text-md;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: ew-resize;
+        changed has-hover => {
+            if (self.has-hover) { StatusHint.show(root.tooltip-text()); }
+            else { StatusHint.clear(root.tooltip-text()); }
+        }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.dragging = false;
+                if (e.modifiers.alt) {
+                    root.removed();
+                } else if (e.modifiers.shift) {
+                    root.enable-toggled();
+                } else {
+                    root.dragging = true;
+                    root.pressed-position = root.position;
+                    root.fine-drag = e.modifiers.control;
+                }
+            } else if (e.kind == PointerEventKind.up) {
+                root.dragging = false;
+            } else if (e.kind == PointerEventKind.move && self.pressed && root.dragging) {
+                root.set-position(root.pressed-position
+                    + (self.mouse-x - self.pressed-x) / (root.fine-drag ? 5000px : self.width));
+            }
+        }
+        double-clicked => { root.level-changed(1.0); }
+        scroll-event(e) => {
+            root.set-position(root.position
+                - e.delta-y / (e.modifiers.control ? 5000px : 600px));
+            accept
+        }
+    }
+
+    pure function tooltip-text() -> string {
+        return "Send to " + root.send.target-name
+            + (root.send.enabled ? "" : " (off)")
+            + ". Drag for level, shift+click to switch off or on, alt+click to remove.";
     }
 }
 
@@ -612,7 +722,6 @@ component StripSendsPage inherits VerticalLayout {
     callback send-added(int);
     callback send-removed(int);
     callback send-level-changed(int, float);
-    callback send-tap-picked(int, int);
     callback send-enable-toggled(int);
 
     spacing: 3px;
@@ -642,26 +751,22 @@ component StripSendsPage inherits VerticalLayout {
             picked(target) => { root.send-added(target); }
         }
     }
-    if root.strip.sends.length == 0 : Text {
-        text: root.strip.is-master
-            ? "Every track reaches the master, so it sends to nothing."
-            : "Route this track to another and it gains a fader here.";
-        color: Theme.text-faint;
-        font-size: Theme.text-sm;
-        wrap: word-wrap;
-        vertical-stretch: 1;
-    }
+    // Nothing drawn for a track with no sends: the empty header says it.
+    if root.strip.sends.length == 0 : Rectangle { vertical-stretch: 1; }
     if root.strip.sends.length > 0 : ScrollView {
+        property <length> rows-height: MixerMetrics.send-rows-height(root.strip.sends.length);
         vertical-stretch: 1;
-        viewport-width: self.visible-width;
-        viewport-height: max(self.visible-height,
-            MixerMetrics.send-rows-height(root.strip.sends.length));
+        // The scroll bar is drawn over the viewport's right edge, so the bars
+        // give it room only while there is something to scroll.
+        viewport-width: self.visible-width
+            - (self.rows-height > self.visible-height ? MixerMetrics.scroll-bar : 0px);
+        viewport-height: max(self.visible-height, self.rows-height);
         VerticalLayout {
-            spacing: MixerMetrics.send-row-gap;
-            for send[index] in root.strip.sends : SendRow {
+            alignment: start;
+            spacing: MixerMetrics.send-bar-gap;
+            for send[index] in root.strip.sends : SendBar {
                 send: send;
                 level-changed(v) => { root.send-level-changed(index, v); }
-                tap-picked(tap) => { root.send-tap-picked(index, tap); }
                 enable-toggled => { root.send-enable-toggled(index); }
                 removed => { root.send-removed(index); }
             }
@@ -734,7 +839,6 @@ component MixerStrip inherits Rectangle {
     callback send-added(int);
     callback send-removed(int);
     callback send-level-changed(int, float);
-    callback send-tap-picked(int, int);
     callback send-enable-toggled(int);
 
     /// 0 sends, 1 the fader, 2 the strip. The fader is the middle one in the
@@ -898,7 +1002,6 @@ component MixerStrip inherits Rectangle {
                             send-added(target) => { root.send-added(target); }
                             send-removed(send) => { root.send-removed(send); }
                             send-level-changed(send, v) => { root.send-level-changed(send, v); }
-                            send-tap-picked(send, tap) => { root.send-tap-picked(send, tap); }
                             send-enable-toggled(send) => { root.send-enable-toggled(send); }
                         }
 
@@ -1015,7 +1118,6 @@ component MixerStrip inherits Rectangle {
                 send-added(target) => { root.send-added(target); }
                 send-removed(send) => { root.send-removed(send); }
                 send-level-changed(send, v) => { root.send-level-changed(send, v); }
-                send-tap-picked(send, tap) => { root.send-tap-picked(send, tap); }
                 send-enable-toggled(send) => { root.send-enable-toggled(send); }
             }
 
@@ -1064,7 +1166,6 @@ export component MixerPane inherits Rectangle {
     callback bus-send-added(int, int);
     callback bus-send-removed(int, int);
     callback bus-send-level-changed(int, int, float);
-    callback bus-send-tap-picked(int, int, int);
     callback bus-send-enable-toggled(int, int);
     callback track-added();
     in property <bool> can-add-track: true;
@@ -1134,7 +1235,6 @@ export component MixerPane inherits Rectangle {
                     send-added(target) => { root.bus-send-added(i, target); }
                     send-removed(send) => { root.bus-send-removed(i, send); }
                     send-level-changed(send, level) => { root.bus-send-level-changed(i, send, level); }
-                    send-tap-picked(send, tap) => { root.bus-send-tap-picked(i, send, tap); }
                     send-enable-toggled(send) => { root.bus-send-enable-toggled(i, send); }
                 }
 
