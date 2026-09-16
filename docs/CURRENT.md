@@ -1193,8 +1193,8 @@ land on its own when it starts to matter:
 - The retained-audio buffer is descriptor-addressed: `Position` says where in
   the retained history the read head is, `Rate` is its free-run speed,
   `Length` and `Loop` are the window it repeats, `Jump` relocates it, `Freeze`
-  stops the writer, and `Crossfade` sets the declick length. All seven
-  automate and modulate; the face carries Position and Crossfade, and the rest
+  stops the writer, `Quantize` and `Quant Grid` decide when a freeze lands, and
+  `Crossfade` sets the declick length. All nine automate and modulate; the face carries Position and Crossfade, and the rest
   are reachable from the automation lane's device-grouped picker until the 2U
   face arrives.
   **`Length` is always on the shared musical grid** -- the same twenty-one
@@ -1205,6 +1205,16 @@ land on its own when it starts to matter:
   stepped index is also what makes modulating it musical -- an envelope on
   Length sweeps `1/4 → 1/8 → 1/16` where a continuous length would smear. A
   fresh Buffer loops one bar.
+  **Freezing and unfreezing wait for a musical boundary**, on by default at
+  one bar, on a `Quant Grid` of its own. That is not a nicety: at the freeze
+  instant the head sits at the write position, so continuing forward wraps
+  straight into the *oldest* retained sample — you hear N bars ago, not now —
+  and that only joins up when the material repeats at the buffer length, which
+  is what freezing on a loop's bar line gives you. While a freeze is waiting
+  the device is **still live**, and a second press before the line takes the
+  request back. With the transport stopped there is no grid to wait for, so it
+  happens at once. A saved freeze is restored rather than quantized: it is a
+  state the document was in, not a gesture somebody just made.
   `Loop` wraps the head inside that window. The window opens where `Position`
   points, extends **forward from its anchor for a forward head and backward
   for a reverse one**, and stays put while the position is held; moving the

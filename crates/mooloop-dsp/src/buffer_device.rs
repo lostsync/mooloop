@@ -137,6 +137,17 @@ const FREEZE_HYSTERESIS: f32 = 0.05;
 /// away would be a control lying about its own span.
 const MAX_SCRUB_RATE: f32 = mooloop_core::MAX_BUFFER_RATE;
 
+/// A freeze or a thaw waiting for its boundary.
+#[derive(Clone, Copy)]
+struct ArmedFreeze {
+    /// `true` to freeze when it lands, `false` to return to live.
+    freeze: bool,
+    /// Frames still to wait. Counted down rather than compared against a
+    /// transport position, because the position is only given at block start
+    /// and the boundary can fall inside a block.
+    frames_remaining: f64,
+}
+
 #[derive(Clone, Copy)]
 struct Fade {
     source: FadeSource,
@@ -177,6 +188,18 @@ pub struct BufferDevice {
     /// one. Seeded from the saved parameter set, so a document stored with
     /// the trigger down does not fire one on load.
     last_jump: f32,
+    /// Whether freezing and unfreezing wait for a musical boundary.
+    quantize: bool,
+    /// Which boundary, as a [`mooloop_core::ModTimeDivision`] index.
+    quant_grid_index: f32,
+    /// A freeze or a thaw waiting for the boundary, and how many frames are
+    /// left to wait.
+    ///
+    /// The device is still live while this is pending, and the face has to
+    /// say so -- see [`Self::armed_freeze`]. A second request of the same kind
+    /// before the boundary cancels it, because the control that armed it is
+    /// the control that takes it back.
+    armed_freeze: Option<ArmedFreeze>,
     /// Whether the writer is running. Freeze is what turns it off.
     ///
     /// It is a `bool` rather than an absent writer because the ring must keep
@@ -229,6 +252,8 @@ impl BufferDevice {
         device.length_index = params.length;
         device.looping = params.looping >= 0.5;
         device.last_jump = params.jump;
+        device.quantize = params.quantize >= 0.5;
+        device.quant_grid_index = params.quant_grid;
         // Only a position that is not already live is worth arming: `1.0` is
         // the writer, and following is what a fresh device does anyway.
         device.pending_position = (params.position < 1.0).then_some(params.position);
@@ -264,6 +289,9 @@ impl BufferDevice {
             length_index: 2.0,
             looping: false,
             last_jump: 0.0,
+            quantize: true,
+            quant_grid_index: 2.0,
+            armed_freeze: None,
             writing: true,
             frames_elapsed: 0,
             pending_freeze: false,
@@ -317,6 +345,8 @@ impl BufferDevice {
             self.set_position(position, context);
         }
         if std::mem::take(&mut self.pending_freeze) {
+            // A saved freeze is a state the document was in, not a gesture
+            // somebody just made, so it is restored rather than quantized.
             self.freeze(context);
         }
         let mut event_index = 0;
@@ -329,7 +359,7 @@ impl BufferDevice {
                 if timed.offset as usize != frame {
                     break;
                 }
-                self.set_param(timed.id, timed.value, context);
+                self.set_param(timed.id, timed.value, frame, context);
                 param_index += 1;
             }
             while let Some(timed) = events.get(event_index) {
@@ -386,12 +416,110 @@ impl BufferDevice {
 
             bus.l[frame] = output_l;
             bus.r[frame] = output_r;
+            if let Some(mut armed) = self.armed_freeze {
+                armed.frames_remaining -= 1.0;
+                if armed.frames_remaining <= 0.0 {
+                    self.apply_freeze(armed.freeze, context);
+                } else {
+                    self.armed_freeze = Some(armed);
+                }
+            }
             self.frames_elapsed += 1;
             if self.writing {
                 self.write_head += 1;
             }
             self.advance_head();
         }
+    }
+
+    /// Ask to freeze or to return to live, on the boundary if `Quantize` says
+    /// so.
+    ///
+    /// Unquantized, or with the transport stopped -- there is no grid running
+    /// to wait for -- it happens now. Otherwise it is armed and the device
+    /// stays live until the boundary.
+    ///
+    /// **Asking for the opposite of what is waiting takes the request back.**
+    /// A musician who changed their mind should not have to wait out a bar to
+    /// find out, and since the device is still in that state there is nothing
+    /// else to do.
+    ///
+    /// **Asking again for what is already waiting is not a second press.**
+    /// `Freeze` is a latching value rather than a trigger, so a lane holding
+    /// it writes the same 1.0 every control tick; treating each of those as a
+    /// press would arm, cancel, arm, cancel and never land on anything. That
+    /// is the shape this got wrong first time round, and the test named for
+    /// the cancel was passing on it.
+    fn request_freeze(&mut self, freeze: bool, frame: usize, context: &ProcessContext) {
+        if let Some(armed) = self.armed_freeze {
+            if armed.freeze != freeze {
+                self.armed_freeze = None;
+            }
+            return;
+        }
+        if freeze == !self.writing {
+            // Already where it was asked to be.
+            return;
+        }
+        if !self.quantize || !context.playing {
+            self.apply_freeze(freeze, context);
+            return;
+        }
+        let Some(from_block_start) = self.frames_to_boundary(context) else {
+            self.apply_freeze(freeze, context);
+            return;
+        };
+        // `position_ticks` is the block's start, and this request arrived
+        // `frame` frames into it.
+        let frames = from_block_start - frame as f64;
+        if frames <= 0.0 {
+            self.apply_freeze(freeze, context);
+            return;
+        }
+        self.armed_freeze = Some(ArmedFreeze {
+            freeze,
+            frames_remaining: frames,
+        });
+    }
+
+    fn apply_freeze(&mut self, freeze: bool, context: &ProcessContext) {
+        self.armed_freeze = None;
+        if freeze {
+            self.freeze(context);
+        } else {
+            self.thaw();
+        }
+    }
+
+    /// Whether a freeze or a thaw is waiting for its boundary, and which.
+    ///
+    /// The face needs it: while this is `Some` the device is still live, and a
+    /// control that looked as though nothing had happened would be the whole
+    /// gesture failing silently.
+    pub fn armed_freeze(&self) -> Option<bool> {
+        self.armed_freeze.map(|armed| armed.freeze)
+    }
+
+    /// Frames from this point in the block to the next `Quant Grid` boundary.
+    ///
+    /// `None` when the transport gives nothing to measure against -- a
+    /// non-finite position, or a grid of no length -- in which case the caller
+    /// acts at once rather than waiting for a boundary that will not come.
+    fn frames_to_boundary(&self, context: &ProcessContext) -> Option<f64> {
+        let division =
+            mooloop_core::ModTimeDivision::from_index(self.quant_grid_index as i32);
+        let grid_beats = f64::from(division.beats());
+        if !(grid_beats > 0.0) || !context.position_ticks.is_finite() {
+            return None;
+        }
+        let ticks_per_beat =
+            f64::from(mooloop_core::Ppq::DEFAULT.ticks_per_beat());
+        let beats_now = context.position_ticks / ticks_per_beat;
+        // The block's *start*, so this is measured from there; the caller is
+        // some frames into the block and subtracts them.
+        let next = (beats_now / grid_beats).floor() * grid_beats + grid_beats;
+        let frames_per_beat = context.sample_rate as f64 * 60.0 / context.bpm.max(1.0);
+        Some((next - beats_now) * frames_per_beat)
     }
 
     /// Stop the writer and make the retained history a sample.
@@ -559,7 +687,7 @@ impl BufferDevice {
         self.refresh_window(context);
     }
 
-    fn set_param(&mut self, id: u32, value: f32, context: &ProcessContext) {
+    fn set_param(&mut self, id: u32, value: f32, frame: usize, context: &ProcessContext) {
         match id {
             mooloop_core::BUFFER_PARAM_POSITION => self.set_position(value, context),
             mooloop_core::BUFFER_PARAM_CROSSFADE_MS => {
@@ -596,11 +724,13 @@ impl BufferDevice {
             // tick, and every one of those is a crossfade.
             mooloop_core::BUFFER_PARAM_FREEZE => {
                 if value >= 0.5 + FREEZE_HYSTERESIS {
-                    self.freeze(context);
+                    self.request_freeze(true, frame, context);
                 } else if value <= 0.5 - FREEZE_HYSTERESIS {
-                    self.thaw();
+                    self.request_freeze(false, frame, context);
                 }
             }
+            mooloop_core::BUFFER_PARAM_QUANTIZE => self.quantize = value >= 0.5,
+            mooloop_core::BUFFER_PARAM_QUANT_GRID => self.quant_grid_index = value,
             _ => {}
         }
     }
@@ -1469,6 +1599,19 @@ mod tests {
         }
     }
 
+    /// Quantize is **on** by default, so a freeze written by a test that is
+    /// not about quantization waits for the next bar line and the test
+    /// measures a device that is still live. Turning it off is how those tests
+    /// say "now" -- and the four that needed it all failed the day quantized
+    /// freeze landed, which is the default doing its job.
+    fn unquantized(offset: u32) -> TimedBufferParam {
+        TimedBufferParam {
+            offset,
+            id: mooloop_core::BUFFER_PARAM_QUANTIZE,
+            value: 0.0,
+        }
+    }
+
     /// The claim `Rate` exists to make: with the writer stopped, the head
     /// still moves, and it moves at the commanded speed.
     ///
@@ -1639,7 +1782,12 @@ mod tests {
             bus.l[frame] = 0.0;
             bus.r[frame] = 0.0;
         }
-        device.process_with_params(&context(RING), &mut bus, &[], &[freeze_param(0, 1.0)]);
+        device.process_with_params(
+            &context(RING),
+            &mut bus,
+            &[],
+            &[unquantized(0), freeze_param(0, 1.0)],
+        );
         assert!(device.is_frozen(), "the writer must have stopped");
 
         let step = max_step(&bus.l[1..RING]);
@@ -1662,7 +1810,12 @@ mod tests {
     fn unfreezing_returns_to_live_and_restarts_the_writer() {
         let (mut device, mut bus) = primed(4_000);
         fill_ramp(&mut bus, 4_000, 4_000);
-        device.process_with_params(&context(4_000), &mut bus, &[], &[freeze_param(0, 1.0)]);
+        device.process_with_params(
+            &context(4_000),
+            &mut bus,
+            &[],
+            &[unquantized(0), freeze_param(0, 1.0)],
+        );
         assert!(device.is_frozen());
         assert!(!device.is_following(), "freezing detaches the head");
 
@@ -1689,7 +1842,7 @@ mod tests {
     #[test]
     fn freeze_ignores_a_modulator_resting_on_the_threshold() {
         let (mut device, mut bus) = primed(1_000);
-        let mut nudges = Vec::new();
+        let mut nudges = vec![unquantized(0)];
         for tick in 0..8u32 {
             // Either side of 0.5 by less than the hysteresis band.
             let value = if tick % 2 == 0 { 0.52 } else { 0.48 };
@@ -1732,7 +1885,12 @@ mod tests {
         assert!(!device.is_following(), "the stutter is running");
 
         fill_ramp(&mut bus, 52_000, 4_000);
-        device.process_with_params(&context(4_000), &mut bus, &[], &[freeze_param(0, 1.0)]);
+        device.process_with_params(
+            &context(4_000),
+            &mut bus,
+            &[],
+            &[unquantized(0), freeze_param(0, 1.0)],
+        );
         assert!(device.is_frozen());
         assert!(
             !device.is_following(),
@@ -2026,6 +2184,189 @@ mod tests {
             &[param(0, mooloop_core::BUFFER_PARAM_LENGTH, 2.0)],
         );
         assert_eq!(device.window_frames(&context(1_000)), 96_000.0);
+    }
+
+    /// A block starting `ticks` into the song, so a boundary can be put where
+    /// the test wants it.
+    fn context_at(frames: usize, ticks: f64) -> ProcessContext {
+        ProcessContext {
+            position_ticks: ticks,
+            ..context(frames)
+        }
+    }
+
+    /// Freeze fires on the boundary rather than on the mouse.
+    ///
+    /// The device stays **live** until then, which is the half a face has to
+    /// show: a control that looked as though nothing had happened would be the
+    /// gesture failing silently.
+    #[test]
+    fn a_quantized_freeze_waits_for_the_bar_line() {
+        let (mut device, mut bus) = primed(48_000);
+        // One bar is four beats, which is 384 ticks at 96 PPQ. Start the block
+        // three and a half beats in, so the line is half a beat away --
+        // 12 000 frames at 120 BPM and 48 kHz.
+        let ticks = 3.5 * 96.0;
+        fill_ramp(&mut bus, 48_000, 48_000);
+        device.process_with_params(
+            &context_at(48_000, ticks),
+            &mut bus,
+            &[],
+            &[freeze_param(0, 1.0)],
+        );
+        // The block is long enough to cross it, so by the end it has landed.
+        assert!(device.is_frozen(), "the freeze must have landed by the line");
+        assert_eq!(device.armed_freeze(), None, "and stopped being armed");
+
+        // Now the same request in a block that ends before the line.
+        let (mut device, mut bus) = primed(48_000);
+        fill_ramp(&mut bus, 48_000, 4_000);
+        device.process_with_params(
+            &context_at(4_000, ticks),
+            &mut bus,
+            &[],
+            &[freeze_param(0, 1.0)],
+        );
+        assert!(
+            !device.is_frozen(),
+            "4 000 frames short of a boundary 12 000 away is still live"
+        );
+        assert_eq!(
+            device.armed_freeze(),
+            Some(true),
+            "and the face has to be able to say a freeze is armed"
+        );
+    }
+
+    /// A second press before the boundary cancels it.
+    #[test]
+    fn a_second_press_before_the_boundary_cancels_the_armed_freeze() {
+        let (mut device, mut bus) = primed(48_000);
+        let ticks = 3.5 * 96.0;
+        fill_ramp(&mut bus, 48_000, 4_000);
+        device.process_with_params(
+            &context_at(4_000, ticks),
+            &mut bus,
+            &[],
+            &[freeze_param(0, 1.0)],
+        );
+        assert_eq!(device.armed_freeze(), Some(true));
+
+        // Holding it is not a second press: a lane writes the same value
+        // every control tick, and arming and cancelling in turn would never
+        // land on anything.
+        let held: Vec<TimedBufferParam> = (0..4_000 / 32)
+            .map(|tick| freeze_param(tick * 32, 1.0))
+            .collect();
+        device.process_with_params(&context_at(4_000, ticks), &mut bus, &[], &held);
+        assert_eq!(
+            device.armed_freeze(),
+            Some(true),
+            "a held Freeze is one request, not one per control tick"
+        );
+
+        // Letting go before the line is what takes it back.
+        device.process_with_params(
+            &context_at(4_000, ticks),
+            &mut bus,
+            &[],
+            &[freeze_param(0, 0.0)],
+        );
+        assert_eq!(
+            device.armed_freeze(),
+            None,
+            "asking for the opposite before the line takes the request back"
+        );
+        assert!(!device.is_frozen(), "and leaves the device where it was");
+    }
+
+    /// With the transport stopped there is no grid to wait for, so a freeze
+    /// happens now. Waiting for a bar line that is not coming would be the
+    /// control doing nothing.
+    #[test]
+    fn a_quantized_freeze_with_the_transport_stopped_happens_now() {
+        let (mut device, mut bus) = primed(4_000);
+        let stopped = ProcessContext {
+            playing: false,
+            ..context(4_000)
+        };
+        fill_ramp(&mut bus, 4_000, 4_000);
+        device.process_with_params(&stopped, &mut bus, &[], &[freeze_param(0, 1.0)]);
+        assert!(device.is_frozen());
+        assert_eq!(device.armed_freeze(), None);
+    }
+
+    /// Unfreezing quantizes the same way.
+    #[test]
+    fn unfreezing_waits_for_the_boundary_too() {
+        let (mut device, mut bus) = primed(4_000);
+        fill_ramp(&mut bus, 4_000, 4_000);
+        device.process_with_params(
+            &context(4_000),
+            &mut bus,
+            &[],
+            &[unquantized(0), freeze_param(0, 1.0)],
+        );
+        assert!(device.is_frozen());
+
+        // Quantize back on, then ask for live a long way from the line.
+        fill_ramp(&mut bus, 8_000, 4_000);
+        device.process_with_params(
+            &context_at(4_000, 0.0),
+            &mut bus,
+            &[],
+            &[
+                TimedBufferParam {
+                    offset: 0,
+                    id: mooloop_core::BUFFER_PARAM_QUANTIZE,
+                    value: 1.0,
+                },
+                freeze_param(1, 0.0),
+            ],
+        );
+        assert!(device.is_frozen(), "still frozen until the line");
+        assert_eq!(device.armed_freeze(), Some(false), "with a thaw armed");
+    }
+
+    /// The grid is the shared one, and a one-bar window reads `1:0:0`.
+    ///
+    /// **A duration, not a position.** One bar printed through `BbtPosition`
+    /// reads `2:1:0`, which is the mistake the two types exist to stop, and
+    /// the Buffer's Length is the first caller `BbtDuration` has ever had.
+    #[test]
+    fn a_one_bar_length_reads_as_a_duration() {
+        use mooloop_core::{BbtDuration, ModTimeDivision, Ppq, Ticks};
+
+        let ppq = Ppq::DEFAULT;
+        let ticks_for = |division: ModTimeDivision| {
+            Ticks((f64::from(division.beats()) * f64::from(ppq.ticks_per_beat())) as u64)
+        };
+
+        assert_eq!(
+            BbtDuration::from_ticks(ticks_for(ModTimeDivision::Whole), ppq).to_string(),
+            "1:0:0",
+            "one bar is one bar and no beats"
+        );
+        assert_eq!(
+            BbtDuration::from_ticks(ticks_for(ModTimeDivision::Quarter), ppq).to_string(),
+            "0:1:0",
+        );
+        assert_eq!(
+            BbtDuration::from_ticks(ticks_for(ModTimeDivision::Sixteenth), ppq).to_string(),
+            "0:0:24",
+        );
+        assert_eq!(
+            BbtDuration::from_ticks(ticks_for(ModTimeDivision::DoubleWhole), ppq).to_string(),
+            "2:0:0",
+        );
+
+        // And a fresh Buffer's Length is that one bar.
+        let default_length =
+            mooloop_core::BufferParams::default().length as i32;
+        assert_eq!(
+            ModTimeDivision::from_index(default_length),
+            ModTimeDivision::Whole
+        );
     }
 
     #[test]

@@ -2419,6 +2419,21 @@ pub struct BufferParams {
     /// after that is an edge.
     #[serde(default)]
     pub jump: f32,
+    /// Whether freezing and unfreezing wait for the next grid boundary.
+    /// Nonzero is on, and **on is the default**.
+    ///
+    /// It is not a nicety. "Pressing Freeze sounds like almost nothing
+    /// happened" is only true when it is true: at the freeze instant the head
+    /// sits at the write position, so continuing forward wraps straight into
+    /// the *oldest* retained sample -- you hear N bars ago, not now. That is
+    /// seamless exactly when the material is periodic at the buffer length,
+    /// which is what freezing on a loop's bar line gives you.
+    #[serde(default = "default_buffer_quantize")]
+    pub quantize: f32,
+    /// Which boundary [`Self::quantize`] waits for, as a
+    /// [`crate::ModTimeDivision`] index. One bar by default.
+    #[serde(default = "default_buffer_quant_grid")]
+    pub quant_grid: f32,
     /// Where in retained memory the read head is, normalized over the ring:
     /// `0` is the oldest sample it still holds and `1` is now. Freeze latches
     /// what "now" means.
@@ -2465,6 +2480,17 @@ const fn default_buffer_length() -> f32 {
     2.0
 }
 
+const fn default_buffer_quantize() -> f32 {
+    1.0
+}
+
+/// One bar, the same index [`default_buffer_length`] uses and for the same
+/// reason: a loop and the boundary it starts on are the same musical unit
+/// until somebody says otherwise.
+const fn default_buffer_quant_grid() -> f32 {
+    2.0
+}
+
 /// [`BufferParams`] as documents on disk spell it.
 ///
 /// It exists for one field. Projects written before 2026-09-16 hold
@@ -2491,6 +2517,10 @@ struct BufferParamsOnDisk {
     looping: f32,
     #[serde(default)]
     jump: f32,
+    #[serde(default = "default_buffer_quantize")]
+    quantize: f32,
+    #[serde(default = "default_buffer_quant_grid")]
+    quant_grid: f32,
     #[serde(default)]
     position: Option<f32>,
     #[serde(default)]
@@ -2521,6 +2551,8 @@ impl From<BufferParamsOnDisk> for BufferParams {
             length: disk.length,
             looping: disk.looping,
             jump: disk.jump,
+            quantize: disk.quantize,
+            quant_grid: disk.quant_grid,
             position: position.clamp(0.0, 1.0),
             crossfade_ms: disk.crossfade_ms,
         }
@@ -2537,6 +2569,8 @@ impl Default for BufferParams {
             length: default_buffer_length(),
             looping: 0.0,
             jump: 0.0,
+            quantize: default_buffer_quantize(),
+            quant_grid: default_buffer_quant_grid(),
             crossfade_ms: default_buffer_crossfade_ms(),
         }
     }
@@ -2563,6 +2597,8 @@ pub const BUFFER_PARAM_LENGTH: u32 = 4;
 pub const BUFFER_PARAM_LOOP: u32 = 5;
 pub const BUFFER_PARAM_FREEZE: u32 = 6;
 pub const BUFFER_PARAM_JUMP: u32 = 7;
+pub const BUFFER_PARAM_QUANTIZE: u32 = 8;
+pub const BUFFER_PARAM_QUANT_GRID: u32 = 9;
 
 /// How fast the read head may ever travel, forward or back.
 ///
@@ -2573,7 +2609,7 @@ pub const BUFFER_PARAM_JUMP: u32 = 7;
 /// outruns four-point Hermite into noise -- not a musical choice.
 pub const MAX_BUFFER_RATE: f32 = 4.0;
 
-static BUFFER_DESCRIPTORS: [ParamDescriptor; 7] = [
+static BUFFER_DESCRIPTORS: [ParamDescriptor; 9] = [
     ParamDescriptor {
         id: BUFFER_PARAM_POSITION,
         name: "Position",
@@ -2640,6 +2676,24 @@ static BUFFER_DESCRIPTORS: [ParamDescriptor; 7] = [
         max: 1.0,
         curve: ParamCurve::Stepped(2),
         default: 0.0,
+    },
+    ParamDescriptor {
+        id: BUFFER_PARAM_QUANTIZE,
+        name: "Quantize",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Stepped(2),
+        default: 1.0,
+    },
+    ParamDescriptor {
+        id: BUFFER_PARAM_QUANT_GRID,
+        name: "Quant Grid",
+        unit: "",
+        min: 0.0,
+        max: MOD_TIME_DIVISION_TOP,
+        curve: ParamCurve::Stepped(crate::ModTimeDivision::ALL.len() as u16),
+        default: 2.0,
     },
 ];
 
@@ -3007,6 +3061,8 @@ impl EffectParams {
                 BUFFER_PARAM_LENGTH => Some(p.length),
                 BUFFER_PARAM_LOOP => Some(p.looping),
                 BUFFER_PARAM_JUMP => Some(p.jump),
+                BUFFER_PARAM_QUANTIZE => Some(p.quantize),
+                BUFFER_PARAM_QUANT_GRID => Some(p.quant_grid),
                 _ => None,
             },
             Self::Chain(p) => match id {
@@ -3146,6 +3202,8 @@ impl EffectParams {
                 BUFFER_PARAM_LENGTH => p.length = value,
                 BUFFER_PARAM_LOOP => p.looping = value,
                 BUFFER_PARAM_JUMP => p.jump = value,
+                BUFFER_PARAM_QUANTIZE => p.quantize = value,
+                BUFFER_PARAM_QUANT_GRID => p.quant_grid = value,
                 _ => return None,
             },
             Self::Chain(p) => match id {

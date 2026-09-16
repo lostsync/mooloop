@@ -24,7 +24,7 @@ why `FOCUS.md` had been carrying its state.
 | 2. Freeze | Landed 2026-09-16 |
 | 3. Position replaces Offset | Landed 2026-09-16 |
 | 4. Length, Loop and Jump on the shared grid | Landed 2026-09-16 |
-| 5. Quantized freeze, and BBT everywhere | Not started |
+| 5. Quantized freeze, and BBT everywhere | Landed 2026-09-16 |
 | 6. The 2U face | Not started |
 | Alongside: acceptance test 8 | Closed for the Buffer operations 2026-09-16 |
 
@@ -76,6 +76,22 @@ what "Freeze latches what *now* means" turns out to mean in code.
 reopens frozen over an empty ring. That is the honest consequence of "persisting
 frozen content is out of scope", and it is written into `BufferParams`'s doc
 comment and `CURRENT.md` rather than left to be discovered.
+
+**Most of step 5's "BBT everywhere" had already landed with
+`musical-time/`.** `PositionReadout` draws a `BbtText`, `transport_position`
+goes through `BbtPosition`, and the duration/position distinction has its
+test. What was left was the *caller*: a one-bar Length reads `1:0:0`, which is
+`BbtDuration`'s first use anywhere and the reason there are two types. Printed
+through `BbtPosition` the same bar reads `2:1:0`.
+
+**A latching parameter is not a trigger, and the arm/cancel rule got that
+wrong first.** "A second press cancels the armed freeze" was written as "a
+repeated request cancels", which is right for a button and wrong for a
+`Freeze` that a lane writes every control tick: it armed, cancelled, armed and
+cancelled, and would never have landed. The rule is that *the opposite*
+request cancels and a repeat is a held value. **The test named for the cancel
+passed on the broken version**, because it pressed twice by writing 1.0 twice
+-- which is exactly what a lane does and exactly what must not cancel.
 
 **The face is three steps behind the table, on purpose.** `Rate`, `Freeze`,
 `Length`, `Loop` and `Jump` are all published, automatable and tested, and

@@ -6295,7 +6295,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         // puts the head into. Held in an array so the count below is the
         // number of states actually exercised rather than a number somebody
         // remembered.
-        let blocks: [(&str, &[TimedEvent]); 15] = [
+        let blocks: [(&str, &[TimedEvent]); 17] = [
             ("an offset chase", &[param(mooloop_core::BUFFER_PARAM_OFFSET_BEATS, 1.0)]),
             ("the chase still closing", &[]),
             ("back to live", &[param(mooloop_core::BUFFER_PARAM_OFFSET_BEATS, 0.0)]),
@@ -6329,6 +6329,14 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 ],
             ),
             ("the trigger released", &[param(mooloop_core::BUFFER_PARAM_JUMP, 0.0)]),
+            (
+                "a quantized freeze arming",
+                &[
+                    param(mooloop_core::BUFFER_PARAM_QUANT_GRID, 2.0),
+                    param(mooloop_core::BUFFER_PARAM_FREEZE, 1.0),
+                ],
+            ),
+            ("the armed freeze counting down", &[]),
         ];
 
         let mut exercised = 0;
@@ -6357,7 +6365,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             exercised += 1;
         }
         assert_eq!(
-            exercised, 15,
+            exercised, 17,
             "the sweep stopped covering the head's states, so it proved nothing"
         );
         assert!(
