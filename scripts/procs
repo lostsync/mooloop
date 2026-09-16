@@ -1,0 +1,282 @@
+#!/usr/bin/env bash
+# Find -- or stop -- processes by pattern, without ever matching yourself.
+#
+#   scripts/procs mooloop                 # list matching processes
+#   scripts/procs --regex 'mooloop(-ui)?' # ERE instead of a substring
+#   scripts/procs --kill mooloop          # SIGTERM the matches, then report
+#   scripts/procs --kill --force mooloop  # SIGKILL whatever survived SIGTERM
+#   scripts/procs --any-user jackd        # include other users' processes
+#   scripts/procs --threads data-loop     # match THREAD names, with policy
+#
+# Use it instead of `pgrep -f`, `ps aux | grep`, and `pkill -f`, all three of
+# which match the very command line you are typing. In this harness that is
+# not a curiosity, it is the normal case: the shell runs
+#
+#   bash -c "pgrep -f mooloop"
+#
+# so the pattern is inside an ancestor's own `/proc/<pid>/cmdline`, and `pgrep
+# -f` reports it as a hit. A search says the app is running when it is not; a
+# `pkill -f` kills the shell it is running in, which is the agent's own
+# session. The greybeard fix is a character class -- `[m]ooloop` -- and it is
+# exactly the kind of cleverness that is forgotten under load.
+#
+# So this never filters itself out after the fact. It scans `/proc` from bash
+# builtins -- no `grep`, no `$(...)`, nothing forked while the scan runs, so
+# no second copy of this command line can exist to be found -- and it skips
+# any process in its own tree: itself, every ancestor up to init, and any
+# descendant. Those are the only processes that can carry the pattern by
+# virtue of the search itself, and they are excluded by identity rather than
+# by a pattern that has to be written correctly each time.
+#
+# `--threads` matches `/proc/<pid>/task/<tid>/comm` instead of command lines,
+# and prints each thread's scheduling policy and priority. That is there
+# because a realtime thread is not a process and `pgrep -f` cannot see one at
+# all: `docs/OPERATIONS.md` carried `chrt -p $(pgrep -f data-loop)` as the way
+# to check whether rtkit had demoted PipeWire, and it was wrong twice over --
+# `data-loop` is a thread inside `pipewire`, whose command line never contains
+# it, so the substitution returned the pid of the shell doing the asking, and
+# `chrt` duly reported SCHED_OTHER. Which is the exact symptom being
+# investigated, arriving as the answer.
+#
+# It also stays inside your own uid unless told otherwise, so a broad pattern
+# cannot reach a system daemon, and it refuses to `--kill` on a pattern of
+# fewer than three characters.
+#
+# Exit status: 0 if anything matched, 1 if nothing did (as `pgrep` does), 2 for
+# a usage error, 3 if `--kill` left a match alive.
+set -euo pipefail
+
+KILL=0
+FORCE=0
+REGEX=0
+ANY_USER=0
+THREADS=0
+WAIT=5
+PATTERN=""
+
+usage() {
+  awk 'NR>1 && !/^#/ { exit } NR>1 { sub(/^# ?/, ""); print }' "$0"
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --kill|-k) KILL=1; shift ;;
+    --force|-9) FORCE=1; shift ;;
+    --regex|-r) REGEX=1; shift ;;
+    --any-user|-a) ANY_USER=1; shift ;;
+    --threads|-t) THREADS=1; shift ;;
+    --wait) WAIT="${2:?--wait needs seconds}"; shift 2 ;;
+    --wait=*) WAIT="${1#--wait=}"; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; PATTERN="${1:-}"; break ;;
+    -*) echo "procs: unknown option $1" >&2; exit 2 ;;
+    *) PATTERN="$1"; shift; break ;;
+  esac
+done
+
+if [ -z "$PATTERN" ] || [ $# -gt 0 ]; then
+  echo "procs: expected exactly one pattern" >&2
+  usage >&2
+  exit 2
+fi
+
+case "$WAIT" in
+  ''|*[!0-9]*) echo "procs: --wait wants whole seconds, got '$WAIT'" >&2; exit 2 ;;
+esac
+
+if [ "$KILL" = 1 ] && [ "$THREADS" = 1 ]; then
+  echo "procs: --kill is for processes; a thread is not something to signal" >&2
+  exit 2
+fi
+
+if [ "$KILL" = 1 ] && [ ${#PATTERN} -lt 3 ]; then
+  echo "procs: refusing to --kill on a pattern shorter than three characters" >&2
+  exit 2
+fi
+
+# The parent of a pid, read straight out of /proc with no subprocess. The
+# comm field is parenthesised and may itself contain spaces and brackets, so
+# cut past the last ')' before splitting.
+ppid_of() {
+  local stat rest
+  [ -r "/proc/$1/stat" ] || return 1
+  stat=$(</proc/"$1"/stat)
+  rest=${stat##*') '}
+  # shellcheck disable=SC2086
+  set -- $rest
+  printf '%s' "${2:-0}"
+}
+
+# Every process this search could find by virtue of being this search: this
+# script, the shell that invoked it, that shell's shell, and so on.
+declare -A MINE=()
+MINE[$$]=1
+pid=$$
+while :; do
+  parent=$(ppid_of "$pid") || break
+  [ -n "$parent" ] && [ "$parent" != 0 ] || break
+  [ -z "${MINE[$parent]:-}" ] || break
+  MINE[$parent]=1
+  pid=$parent
+done
+
+# ...and anything forked underneath this script while it runs.
+descends_from_me() {
+  local p=$1 hops=0
+  while [ "$p" != 0 ] && [ "$p" != 1 ] && [ "$hops" -lt 64 ]; do
+    p=$(ppid_of "$p") || return 1
+    [ "$p" != "$$" ] || return 0
+    hops=$((hops + 1))
+  done
+  return 1
+}
+
+# The scheduling policy and realtime priority of a task, from fields 41 and 40
+# of its stat line -- the two numbers `chrt -p` prints, without the pid
+# round-trip that made the old recipe wrong.
+sched_of() {
+  local stat rest f policy prio
+  [ -r "/proc/$1/stat" ] || return 1
+  stat=$(</proc/"$1"/stat)
+  rest=${stat##*') '}
+  read -ra f <<<"$rest"
+  # After the comm field is cut away the first token is stat field 3, so
+  # field N sits at index N-3: rt_priority is 40 and policy is 41.
+  prio=${f[37]:-0}
+  policy=${f[38]:-0}
+  case "$policy" in
+    0) policy=SCHED_OTHER ;;
+    1) policy=SCHED_FIFO ;;
+    2) policy=SCHED_RR ;;
+    3) policy=SCHED_BATCH ;;
+    5) policy=SCHED_IDLE ;;
+    6) policy=SCHED_DEADLINE ;;
+    *) policy="policy $policy" ;;
+  esac
+  printf '%s %s' "$policy" "$prio"
+}
+
+if [ "$THREADS" = 1 ]; then
+  found=0
+  printf '%-8s %-8s %-15s %-5s %-18s %s\n' TID PID POLICY PRIO THREAD COMMAND
+  for proc in /proc/[0-9]*; do
+    pid=${proc#/proc/}
+    [ -d "$proc/task" ] || continue
+    [ "$ANY_USER" = 1 ] || [ -O "$proc" ] || continue
+    [ -n "${MINE[$pid]:-}" ] && continue
+    cmdline=()
+    mapfile -d '' -t cmdline <"$proc/cmdline" 2>/dev/null || true
+    command_line="${cmdline[*]:-}"
+    for task in "$proc"/task/[0-9]*; do
+      tid=${task#"$proc"/task/}
+      [ -r "$task/comm" ] || continue
+      comm=$(<"$task/comm")
+      if [ "$REGEX" = 1 ]; then
+        [[ $comm =~ $PATTERN ]] || continue
+      else
+        [[ $comm == *"$PATTERN"* ]] || continue
+      fi
+      found=$((found + 1))
+      # shellcheck disable=SC2046
+      printf '%-8s %-8s %-15s %-5s %-18s %s\n' "$tid" "$pid" $(sched_of "$tid") "$comm" "${command_line:-[kernel]}"
+    done
+  done
+  if [ "$found" -eq 0 ]; then
+    printf 'procs: no thread name matches %s\n' "$PATTERN"
+    exit 1
+  fi
+  exit 0
+fi
+
+matches=()
+lines=()
+skipped_own=0
+
+for proc in /proc/[0-9]*; do
+  pid=${proc#/proc/}
+  [ -r "$proc/cmdline" ] || continue
+  cmdline=()
+  mapfile -d '' -t cmdline <"$proc/cmdline" 2>/dev/null || continue
+  [ "${#cmdline[@]}" -gt 0 ] || continue   # kernel thread or zombie
+  joined="${cmdline[*]}"
+  [ -n "$joined" ] || continue
+
+  if [ "$REGEX" = 1 ]; then
+    [[ $joined =~ $PATTERN ]] || continue
+  else
+    [[ $joined == *"$PATTERN"* ]] || continue
+  fi
+
+  if [ -n "${MINE[$pid]:-}" ] || descends_from_me "$pid"; then
+    skipped_own=$((skipped_own + 1))
+    continue
+  fi
+  [ "$pid" != 1 ] || continue
+  [ "$ANY_USER" = 1 ] || [ -O "$proc" ] || continue
+
+  matches+=("$pid")
+  lines+=("$pid $joined")
+done
+
+if [ "$skipped_own" -gt 0 ]; then
+  printf 'procs: ignored %s process(es) in my own tree (this search)\n' "$skipped_own" >&2
+fi
+
+if [ "${#matches[@]}" -eq 0 ]; then
+  printf 'procs: no process matches %s\n' "$PATTERN"
+  exit 1
+fi
+
+if command -v ps >/dev/null 2>&1; then
+  ps -o pid=,ppid=,etime=,args= -p "$(IFS=,; printf '%s' "${matches[*]}")" || printf '%s\n' "${lines[@]}"
+else
+  printf '%s\n' "${lines[@]}"
+fi
+
+[ "$KILL" = 1 ] || exit 0
+
+printf 'procs: sending SIGTERM to %s process(es)\n' "${#matches[@]}" >&2
+for pid in "${matches[@]}"; do
+  kill -TERM "$pid" 2>/dev/null || printf 'procs: could not signal %s\n' "$pid" >&2
+done
+
+deadline=$((SECONDS + WAIT))
+while [ "$SECONDS" -lt "$deadline" ]; do
+  alive=0
+  for pid in "${matches[@]}"; do
+    [ ! -d "/proc/$pid" ] || alive=1
+  done
+  [ "$alive" = 1 ] || break
+  sleep 0.2
+done
+
+survivors=()
+for pid in "${matches[@]}"; do
+  [ ! -d "/proc/$pid" ] || survivors+=("$pid")
+done
+
+if [ "${#survivors[@]}" -eq 0 ]; then
+  printf 'procs: all %s gone\n' "${#matches[@]}"
+  exit 0
+fi
+
+if [ "$FORCE" = 1 ]; then
+  printf 'procs: SIGKILL to %s survivor(s): %s\n' "${#survivors[@]}" "${survivors[*]}" >&2
+  for pid in "${survivors[@]}"; do
+    kill -KILL "$pid" 2>/dev/null || true
+  done
+  sleep 0.3
+  still=()
+  for pid in "${survivors[@]}"; do
+    [ ! -d "/proc/$pid" ] || still+=("$pid")
+  done
+  if [ "${#still[@]}" -eq 0 ]; then
+    printf 'procs: all %s gone\n' "${#matches[@]}"
+    exit 0
+  fi
+  printf 'procs: still alive after SIGKILL: %s\n' "${still[*]}"
+  exit 3
+fi
+
+printf 'procs: still alive after %ss: %s (add --force for SIGKILL)\n' "$WAIT" "${survivors[*]}"
+exit 3

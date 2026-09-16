@@ -62,6 +62,21 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -j 2 -- -D warnings
 ```
 
+When the answer you need from a command is whether it passed, put
+`scripts/exit-code` in front of it. It logs the output, captures the status
+with nothing in between, prints the failure lines, and exits with the
+command's own code:
+
+```sh
+scripts/exit-code cargo test -p mooloop-dsp
+scripts/exit-code --tail 100 cargo clippy --workspace --all-targets -- -D warnings
+```
+
+`AGENTS.md` explains why a bare pipe or a trailing `echo` answers for cargo
+instead. It composes with the wrappers below -- `scripts/exit-code
+scripts/cargo-capped test -p mooloop-ui` is one command with one honest
+status.
+
 For a narrow change, test the crate you touched. `mooloop-ui` is the heavy
 one, so retain its explicit job cap:
 
@@ -593,7 +608,16 @@ Under PipeWire this is usually `rtkit` having demoted every realtime thread on
 the machine after its canary starved — which a heavy local build is enough to
 cause, and which nothing undoes automatically. `journalctl -b -u rtkit-daemon`
 shows it as "Demoting known real-time threads", and
-`chrt -p $(pgrep -f data-loop)` confirms the current policy.
+`scripts/procs --threads data-loop` confirms the current policy: it prints
+each matching thread's policy and realtime priority beside the process that
+owns it, and agrees with `chrt -p` because it reads the same two stat fields.
+
+This file carried `chrt -p $(pgrep -f data-loop)` for that check until
+2026-09-15, and it could never have worked. `data-loop` is a *thread* inside
+`pipewire`, and a thread name is not in any command line, so `pgrep -f` never
+matched the thread -- it matched the shell asking the question, whose command
+line contains the pattern. `chrt` then reported that shell's SCHED_OTHER,
+which is exactly the symptom under investigation, arriving as the answer.
 `systemctl --user restart pipewire pipewire-pulse wireplumber` asks again.
 Putting the user in the `pipewire` group is the durable fix: Fedora's
 `/etc/security/limits.d/25-pw-rlimits.conf` grants that group `rtprio 70`
@@ -707,6 +731,18 @@ Delete a remote branch only after the merged/local state is understood:
 
 ```sh
 git push origin --delete <type>/<short-name>
+```
+
+A leftover *process* -- an application left running from an earlier check, a
+stuck `mooloop-mcp`, an orphaned test binary -- is found and stopped with
+`scripts/procs`, never with `pgrep -f`/`pkill -f`, which match the command
+line you are typing and, in the `pkill` case, kill the agent's own shell:
+
+```sh
+scripts/procs mooloop            # what is actually running
+scripts/procs --kill mooloop     # SIGTERM, wait, report survivors
+scripts/procs --kill --force mooloop
+scripts/procs --threads data-loop  # thread names, with scheduling policy
 ```
 
 Finally, clean untracked build output only after looking at it:

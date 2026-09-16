@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Run a command and report the exit status of THAT command, never of a pipe.
+#
+#   scripts/exit-code cargo test -p mooloop-dsp
+#   scripts/exit-code cargo clippy --workspace --all-targets -- -D warnings
+#   scripts/exit-code --tail 100 cargo test --workspace --exclude mooloop-ui
+#   scripts/exit-code --log /tmp/ui.log cargo test -p mooloop-ui
+#
+# The output goes to a log file, the status is captured the instant the
+# command returns, and the report is printed afterwards -- so nothing between
+# you and the answer can overwrite `$?`. The script then exits with the same
+# status, so the harness's own "[exited with code N]" is the command's too.
+#
+# It exists because two readings of `$?` keep being made and both look like
+# answers:
+#
+#   cargo test ... | tail -40          # tail's 0, printed over every failure
+#   cargo test ... > log 2>&1          # then a second command, then `echo $?`,
+#                                      # which by now is the second command's
+#
+# AGENTS.md has warned about the first since 2026-09-07 and the mistake went on
+# being made, in both shapes, by every agent in rotation. A warning you have to
+# remember at the moment of writing a pipe is not a control; a command that
+# cannot report the wrong number is.
+#
+# The report also greps the log for the failure markers AGENTS.md names --
+# `test result: FAILED`, `panicked at`, a non-zero `N failed`, and any
+# `error`/`error[EXXXX]` line -- because those are robust against the
+# interleaved `test result:` lines a parallel workspace run can splice, where
+# arithmetic on the counts is not.
+set -euo pipefail
+
+TAIL=40
+LOG=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --tail) TAIL="${2:?--tail needs a line count}"; shift 2 ;;
+    --tail=*) TAIL="${1#--tail=}"; shift ;;
+    --log) LOG="${2:?--log needs a path}"; shift 2 ;;
+    --log=*) LOG="${1#--log=}"; shift ;;
+    -h|--help)
+      awk 'NR>1 && !/^#/ { exit } NR>1 { sub(/^# ?/, ""); print }' "$0"
+      exit 0
+      ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+
+if [ $# -eq 0 ]; then
+  echo "exit-code: nothing to run (try --help)" >&2
+  exit 2
+fi
+
+case "$TAIL" in
+  ''|*[!0-9]*) echo "exit-code: --tail wants a number, got '$TAIL'" >&2; exit 2 ;;
+esac
+
+if [ -z "$LOG" ]; then
+  dir="${TMPDIR:-/tmp}/mooloop-exit-code"
+  mkdir -p "$dir"
+  slug=$(printf '%s' "$*" | tr -cs 'A-Za-z0-9' '-' | cut -c1-48)
+  slug="${slug%-}"
+  LOG="$dir/${slug:-command}.$$.log"
+else
+  mkdir -p "$(dirname "$LOG")"
+fi
+
+printf 'exit-code: running: %s\n' "$*" >&2
+printf 'exit-code: log: %s\n' "$LOG" >&2
+
+started=$SECONDS
+
+# The whole point of the script is these three lines: no pipe, no second
+# command, and the status in a variable before anything else runs.
+set +e
+"$@" >"$LOG" 2>&1
+status=$?
+set -e
+
+elapsed=$((SECONDS - started))
+
+if [ "$TAIL" -gt 0 ] && [ -s "$LOG" ]; then
+  printf -- '--- last %s lines of %s ---\n' "$TAIL" "$LOG"
+  tail -n "$TAIL" "$LOG"
+  printf -- '--- end of log ---\n'
+fi
+
+markers='test result: FAILED|panicked at|^error(\[[A-Z0-9]+\])?:|test result:.*[1-9][0-9]* failed|^failures:$'
+if grep -Eq "$markers" "$LOG"; then
+  printf 'exit-code: failure lines in the log:\n'
+  grep -En "$markers" "$LOG" | head -n 20 | sed 's/^/    /'
+  hits=$(grep -Ec "$markers" "$LOG")
+  [ "$hits" -gt 20 ] && printf '    ... %s more\n' "$((hits - 20))"
+fi
+
+printf 'exit-code: EXIT %s after %ss -- %s\n' "$status" "$elapsed" "$*"
+printf 'exit-code: full log: %s\n' "$LOG"
+
+exit "$status"

@@ -300,15 +300,32 @@ green on a piped exit code and had to be re-run before anyone could say
 whether it was. It was -- which is the point: the claim was true and had not
 been checked, and the same reading would have been made either way.
 
-So when the answer matters, redirect and check:
+**Run it through `scripts/exit-code` and the question cannot be got wrong.**
+It sends the output to a log, captures `$?` the instant the command returns,
+prints the tail of the log and any failure lines in it, and exits with that
+same status -- so the harness's own `[exited with code N]` is the command's too:
+
+```sh
+scripts/exit-code cargo test -p mooloop-ui
+scripts/exit-code cargo clippy --workspace --all-targets -- -D warnings
+scripts/exit-code --tail 100 cargo test --workspace --exclude mooloop-ui
+```
+
+Background it exactly as you would background the bare command; the log path
+is printed before the run starts.
+
+By hand it is a redirect, and nothing at all between the run and the read:
 
 ```sh
 cargo test -p mooloop-ui > /tmp/t.log 2>&1; echo "EXIT: $?"
 grep -E '^test result' /tmp/t.log
 ```
 
-Reading the `test result:` lines, or clippy's own summary, is just as good and
-does not depend on remembering this at all. What is never good enough is a
+The pipe is only half of it. The other half is that `$?` is whatever ran
+*last*, so an `echo`, a `cd`, a `grep`, or a second cargo command written
+between the run and the read answers in its place -- and an `echo` always
+succeeded. Reading the `test result:` lines or clippy's own summary is just as
+good and needs nothing remembered. What is never good enough is a
 `[exited with code 0]` from a run with a pipe anywhere in it.
 
 **Read those lines for failures; do not do arithmetic on them.** A workspace
@@ -331,8 +348,48 @@ invent a failure. A *sum* is not robust, and the exit code is better than a sum
 -- this run was redirected rather than piped, so its `0` was cargo's own and was
 right while the arithmetic was wrong.
 
-`set -o pipefail` fixes it too, but only where a script owns the whole shell;
-it is not on by default in the harness's shell, so do not assume it.
+`scripts/exit-code` greps the log for exactly those three markers, so its
+report is splice-proof for the same reason.
+
+`set -o pipefail` fixes the pipe half too, but only where a script owns the
+whole shell; it is not on by default in the harness's shell, so do not assume
+it.
+
+### Never search for a process with the pattern you are typing
+
+**`pgrep -f mooloop` matches the shell that is running `pgrep -f mooloop`.**
+The harness runs each command as `zsh -c "<the whole command>"`, so the
+pattern is sitting in an ancestor's `/proc/<pid>/cmdline` and `pgrep -f` finds
+it there. Demonstrated on 2026-09-15 with a string that matched nothing on the
+machine: `pgrep -af zzz-selftest-pattern` printed a process and exited 0. The
+process was the harness's own shell.
+
+Two failures come out of that, and the second is not recoverable. A search
+reports the application running when it is not, so a stale window is chased
+that does not exist -- and `pkill -f` on the same pattern kills the shell the
+agent is running in, which ends the session. `ps aux | grep mooloop` has the
+identical fault plus a piped exit code.
+
+So use `scripts/procs`, which scans `/proc` from bash builtins and skips
+everything in its own process tree by pid rather than by a pattern that has to
+be written correctly each time:
+
+```sh
+scripts/procs mooloop                 # list; exit 1 when nothing matches
+scripts/procs --kill mooloop          # SIGTERM the matches, report survivors
+scripts/procs --kill --force mooloop  # SIGKILL whatever ignored SIGTERM
+```
+
+`scripts/procs --threads data-loop` matches thread names instead, and prints
+each thread's scheduling policy and realtime priority -- the rtkit check in
+`docs/OPERATIONS.md`, which was written as `chrt -p $(pgrep -f data-loop)` and
+could never have worked, because a thread name appears in no command line and
+the only thing `pgrep -f` could match was the shell asking.
+
+It stays inside your own uid unless given `--any-user`, so a broad pattern
+cannot reach a system daemon, and it refuses to `--kill` on a pattern shorter
+than three characters. The `[m]ooloop` character-class trick works too, and is
+forgotten under load; that is what makes it the wrong control.
 
 ### Order device work so the face contract comes last
 
