@@ -41,6 +41,39 @@ a wish belongs in `ENHANCEMENTS.md`; a described behaviour gap belongs in
 
 ## Wrong-looking UI over correct behaviour
 
+**Every structural edit stops the song.** Found 2026-09-16, while answering
+why a mixer reorder should touch audio at all. Adding, removing, pasting,
+cloning or moving a channel; adding, removing or moving a track; cloning,
+clearing or removing a pattern; loading an effect preset; and any undo or
+redo -- all go through `ProjectEdit` and `EngineHandle::install_project`,
+which builds a **new** `RenderState` and swaps it in whole
+(`executor.rs`, `RealtimeCommand::InstallProject`). `RenderState::load_project`
+calls `transport.stop()`, every effect node is rebuilt from scratch by
+`EffectRack::load` whether or not its chain changed, and
+`install_project_in_ui` sets `playing` false and the playhead to zero. So
+during playback the song stops and rewinds, and every voice, tail, delay line
+and compensation ring in the project is emptied -- including on tracks the
+edit never touched. Read from the code, not yet heard; the live check of the
+track reorder was made with the transport stopped.
+
+A reorder makes it conspicuous because a reorder is **presentation**: the
+audio graph is the same graph with different labels. The engine cannot tell,
+because it matches `project.buses[i]` and `project.channels[i]` to its own
+strips **by position**, and so do the sequencer, the meter cells, the audio
+tap plan and `EngineHandle::sample_slots` / `slice_slots`.
+`docs/plans/archive/console/01-a-channel-can-be-moved.md` found this and
+chose the snapshot path for consistency, recording an incremental rotate as
+a separate improvement; nobody wrote down then that the snapshot path stops
+the transport.
+
+The real fix is identity, not a rotate: strips keyed by a durable channel and
+track id, so an install that finds the same id with the same chain keeps its
+node, and a move is a relabel the audio thread never sees. That is the
+`EffectTarget` unification both `ChannelEdit` and `TrackEdit` defer to. A
+cheaper interim step is to carry the transport state and position across an
+install, which would stop the rewind and leave the cut tails.
+
+
 **A mixer drag does not scroll the mixer, and a turned strip stays at its
 seat.** Both came in with the track reorder on 2026-09-16. Seventeen strips at
 96px are wider than most panes, so moving a track far takes a drag, a scroll
@@ -51,7 +84,11 @@ turned strip arrives on its fader face, and whichever track slides into the
 old seat shows that page. Fixing the second means moving the page into
 `MixerStripRow`. The held strip is also drawn under the strip to its right
 while it passes over it, because Slint 1.17 wants `z` as a literal; the
-channel and device racks have the same limit.
+channel and device racks have the same limit. That limit has a workaround
+nobody has used for a reorder yet: an overlay declared *after* the row, which
+Slint draws on top by declaration order, holding a copy of the held strip
+while the real one goes transparent -- the layer-promotion idiom, and the
+same trick the pane drop tint in `main.slint` already relies on.
 
 **A shelf's Q knob stops steepening above 2 and the face does not say so.**
 `Biquad::shelf_slope` clamps the slope to 0.1..2.0, where the cookbook's

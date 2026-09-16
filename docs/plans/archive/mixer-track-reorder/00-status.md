@@ -72,8 +72,11 @@ once, so **if step 04 is wanted, batch its `main.slint` edits into step
   moved from `→1` to `→2` with Drums. Ctrl+Z put the order and the chips back,
   with the rack on a channel as `replace_project` intends. Dragging the
   master's plate onto the last strip did nothing. Nobody has *listened* across
-  a drop; the engine takes the whole-project install path any track add or
-  remove already takes, so a cut tail is the expected cost.
+  a drop -- and the song was stopped during the check, which hid the real
+  cost. **Corrected the same day:** a move goes through the whole-project
+  install, and that install replaces the renderer with a fresh one that
+  starts *stopped*, so a drop during playback stops the song and rewinds it,
+  not merely cuts tails. See `LOOSE_ENDS.md`.
 
 ## Found while writing the plan
 
@@ -107,7 +110,8 @@ covers it as a side effect.
 - **An incremental engine rotate.** Track edits go through the whole-project
   snapshot path, as channel edits do, and the console plan's step 01 explains
   why a rotate is its own piece of work. The cost is the same as for any
-  track add or remove today: tails on the mixer are cut when the drop lands.
+  track add or remove today, and it is larger than this line first said: the
+  install stops the transport (see `LOOSE_ENDS.md`).
 - **Scrolling the mixer during a drag.** Seventeen strips at 96px are wider
   than most panes, so a far move takes a drag, a scroll and another drag. The
   channel rack has the same limit and nobody has asked for more. Write it in
