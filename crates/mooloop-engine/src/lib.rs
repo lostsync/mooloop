@@ -155,6 +155,7 @@ mod audio_edge_tests;
 #[cfg(test)]
 mod block_cost;
 #[cfg(test)]
+mod buffer_workflow_tests;
 mod container_tests;
 #[cfg(test)]
 mod console_tests;

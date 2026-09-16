@@ -30,6 +30,21 @@ why `FOCUS.md` had been carrying its state.
 | Gesture rebuild: the turntable model retired | Landed 2026-09-16 |
 | Alongside: acceptance test 8 | Closed for the Buffer operations 2026-09-16 |
 
+**All six steps and the gesture rebuild have landed.** What is left is not
+construction: it is the judgement the plan exists to make, and it needs ears
+and a screen.
+`buffer_workflow_tests.rs` carries six of `FOCUS.md`'s seven acceptance
+clauses -- generate sound, capture it at a chosen insert point, sequence an
+audible transformation, survive save and reload, render the same offline, and
+render the same twice. The seventh, *show what the read head is doing*, has
+its telemetry tested and its face screenshotted, and whether a person can read
+it is not a thing a test can answer.
+
+**So the plan does not archive yet.** `FOCUS.md`'s step 2 ends "if that
+workflow is not materially better than bouncing a sample and loading it again,
+record why before expanding the device", and that sentence is addressed to
+Adam. Listening is a step, not a formality.
+
 `musical-time/`, which step 5 waits on, landed 2026-09-15 and is in
 `archive/`. `BbtDuration` ships with no caller; step 5 is it.
 
@@ -257,6 +272,23 @@ Two things the rebuild turned up that the old model had hidden:
 - **`now` is where the next frame goes, not the newest one.** Reverse started
   there first, and read the *oldest* sample in the ring. Everything that
   places a head "at now" now places it one frame behind.
+
+## The acceptance suite, 2026-09-16
+
+**"Freezing sounds like almost nothing happened" cannot be asserted end to
+end, and finding out why was worth the detour.** It is true exactly when the
+material is periodic at the buffer length, and nothing at project level can
+produce such material: `RenderState` runs the transport but does not loop the
+pattern, so a fixture is either one pass of a pattern or a held note whose
+period has no relation to the ring's. A held tone frozen mid-cycle differs
+from the live one by *more than either amplitude* -- which is phase, not a
+defect. The device's own test makes the claim against a ring holding a whole
+number of cycles, which is the only honest place for it today. The end-to-end
+version wants a looping transport.
+
+Two fixtures came out of that: a drum bar for the tests about *where the head
+is*, and a held tone for the freeze tests, which need a full ring and audio
+still playing at the same moment. A drum pattern cannot give both.
 
 ## Still open from the earlier steps
 
