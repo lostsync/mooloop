@@ -114,9 +114,16 @@ impl BufferDevice {
         device.pending_offset_beats = (params.offset_beats > 0.0).then_some(params.offset_beats);
         device
     }
-    /// Allocate a ring for `bars` 4/4 bars at the supplied tempo.
+    /// Allocate a ring for `bars` bars at the supplied tempo.
+    ///
+    /// The bar length is [`mooloop_core::frames_per_bar`], which the sampler
+    /// uses too -- the comment there used to claim it followed this device
+    /// while this device spelled its own copy. `ceil` and the floor of four
+    /// frames stay: the ring must not shrink on a rounding change, and
+    /// [`Self::with_capacity`] has a floor for a reason. Construction time,
+    /// not `process`, so the float is free.
     pub fn with_bars(sample_rate: u32, bpm: f64, bars: u32) -> Self {
-        let frames_per_bar = (sample_rate as f64 * 240.0 / bpm.max(1.0)).ceil() as usize;
+        let frames_per_bar = mooloop_core::frames_per_bar(sample_rate, bpm).ceil() as usize;
         Self::with_capacity((frames_per_bar * bars.max(1) as usize).max(4))
     }
 

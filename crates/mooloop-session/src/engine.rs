@@ -738,7 +738,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mooloop_core::{PatternPlacement, TICKS_PER_BAR, TICKS_PER_STEP};
+    use mooloop_core::{PatternPlacement, BEATS_PER_BAR, TICKS_PER_BAR, TICKS_PER_STEP};
 
     /// Pattern mode wraps inside the pattern on screen; song mode runs along
     /// the arrangement. The two cannot share one modulus, which is the whole
@@ -777,7 +777,7 @@ mod tests {
         let at_start = session.transport_position(0);
         assert_eq!((at_start.bar, at_start.beat, at_start.tick), (1, 1, 0));
 
-        let ticks_per_beat = u64::from(TICKS_PER_BAR) / 4;
+        let ticks_per_beat = u64::from(TICKS_PER_BAR) / u64::from(BEATS_PER_BAR);
         let second_beat = session.transport_position(ticks_per_beat + 3);
         assert_eq!(
             (second_beat.bar, second_beat.beat, second_beat.tick),

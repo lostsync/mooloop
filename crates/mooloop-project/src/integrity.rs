@@ -26,7 +26,7 @@ use mooloop_core::{
     MlP8Params, ModRack,
     ModulatorKind, MonoSynthParams, NoteId, ParamAddr, ParamOwner, PolySynthParams, Project,
     ProjectChannel,
-    SamplerParams, DEFAULT_STEPS, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL,
+    SamplerParams, BEATS_PER_BAR, DEFAULT_STEPS, MASTER_BUS, MAX_AUTOMATION_LANES_PER_CHANNEL,
     MAX_AUTOMATION_POINTS_PER_LANE, MAX_BUSES, MAX_CHANNELS, MAX_CHOKE_GROUP,
     MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERNS, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS,
     MAX_PLAYLIST_TICKS, MAX_POLY_VOICES, MAX_SAMPLER_VOICES, TICKS_PER_STEP,
@@ -523,15 +523,19 @@ fn check_project(doctor: &mut Doctor, project: &mut Project) {
             project.ppq = 96;
         }
     }
-    if project.beats_per_bar != 4 {
+    // The field is metadata the engine does not read -- bar arithmetic goes
+    // through `time::BEATS_PER_BAR` -- so this repair is what keeps the two
+    // from disagreeing in a saved document.
+    let meter = BEATS_PER_BAR as u8;
+    if project.beats_per_bar != meter {
         let found = project.beats_per_bar;
         if doctor.correct(
             "song.meter",
             SONG,
-            format!("the meter is {found}/4; this format stores only 4/4"),
-            "set the meter to 4/4".into(),
+            format!("the meter is {found}/4; this format stores only {meter}/4"),
+            format!("set the meter to {meter}/4"),
         ) {
-            project.beats_per_bar = 4;
+            project.beats_per_bar = meter;
         }
     }
     doctor.fit_int("song.bpm", SONG, "the tempo", &mut project.bpm, 1, 999);

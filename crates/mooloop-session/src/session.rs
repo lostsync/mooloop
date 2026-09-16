@@ -472,7 +472,7 @@ impl Session {
             swing_percent: swing_percent.clamp(MIN_SWING_PERCENT.into(), MAX_SWING_PERCENT.into())
                 as u8,
             ppq: 96,
-            beats_per_bar: 4,
+            beats_per_bar: mooloop_core::BEATS_PER_BAR as u8,
             playback_mode: if self.song_mode {
                 PlaybackMode::Song
             } else {

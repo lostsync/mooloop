@@ -2739,9 +2739,6 @@ fn release_all_voices(offset: u32, channels: usize, events: &mut [Box<EventList>
     }
 }
 
-/// 4/4 throughout, matching the sequencer's grid.
-const BEATS_PER_BAR: f32 = 4.0;
-
 /// Tuple fields a control change has retuned, waiting for the next note to
 /// fire. Held rather than applied immediately so turning a knob mid-gesture
 /// bends the *next* edit instead of restarting the current one.
@@ -4621,7 +4618,7 @@ impl RenderState {
                         BufferCcTarget::WindowBars { bars } => {
                             let bucket = mooloop_core::cc_bucket(value, bars.max(1));
                             self.buffer_cc.window_beats =
-                                Some(f32::from(bucket + 1) * BEATS_PER_BAR);
+                                Some(f32::from(bucket + 1) * mooloop_core::BEATS_PER_BAR as f32);
                         }
                         BufferCcTarget::OffsetBeats { beats } => {
                             let bucket = mooloop_core::cc_bucket(value, beats.max(1));

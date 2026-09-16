@@ -741,6 +741,13 @@ pub struct Project {
     #[serde(default = "default_swing_percent")]
     pub swing_percent: u8,
     pub ppq: u16,
+    /// Time signature numerator, persisted and validated. **The engine does
+    /// not read this.** Bar arithmetic everywhere uses
+    /// [`time::BEATS_PER_BAR`]; this field exists so the format does not have
+    /// to change when a signature can actually be honoured, and
+    /// `integrity.rs` holds the two to the same value meanwhile.
+    ///
+    /// [`time::BEATS_PER_BAR`]: crate::time::BEATS_PER_BAR
     pub beats_per_bar: u8,
     pub playback_mode: PlaybackMode,
     pub current_pattern: u16,
@@ -893,7 +900,7 @@ impl Default for Project {
             bpm: 120,
             swing_percent: DEFAULT_SWING_PERCENT,
             ppq: 96,
-            beats_per_bar: 4,
+            beats_per_bar: crate::time::BEATS_PER_BAR as u8,
             playback_mode: PlaybackMode::Pattern,
             current_pattern: 0,
             selected_channel: 0,

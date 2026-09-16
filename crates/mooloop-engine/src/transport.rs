@@ -25,7 +25,7 @@
 //! point, so a block is no longer one stretch of musical time but a short
 //! ordered list of them.
 
-use mooloop_core::{ticks_per_sample, Ppq};
+use mooloop_core::{ticks_per_sample, Ppq, BEATS_PER_BAR};
 
 /// How many stretches of musical time one process block may be cut into.
 ///
@@ -93,11 +93,11 @@ impl Transport {
         self.frames_played
     }
 
-    /// Current beat index within the bar (0-based). Assumes 4/4 for now.
+    /// Current beat index within the bar (0-based).
     pub fn beat_in_bar(&self) -> u8 {
         let tpb = self.ppq.ticks_per_beat() as f64;
         let beat = (self.position_ticks / tpb) as i64;
-        beat.rem_euclid(4) as u8
+        beat.rem_euclid(i64::from(BEATS_PER_BAR)) as u8
     }
 
     /// Advance the clock by `frames` samples with no loop installed,

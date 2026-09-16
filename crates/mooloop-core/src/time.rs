@@ -7,6 +7,22 @@
 /// denominators (4, 6, 8, 12, 16, 24, 32) without floating point.
 pub const DEFAULT_PPQ: u32 = 96;
 
+/// Beats to the bar. Four, everywhere, and this is the only place that says
+/// so.
+///
+/// [`Project::beats_per_bar`] is persisted metadata and is **not** this
+/// value: the audio thread is never given the project, so a signature it
+/// could not read would be a signature it could not honour. Until that
+/// changes, the format field is documentation and this constant is the
+/// behaviour, and `integrity.rs` holds the two to the same number.
+///
+/// It was nine anonymous fours before `docs/plans/musical-time/`, in six
+/// crates, three of which carried the comment "assumes 4/4 for now"
+/// independently of the other two.
+///
+/// [`Project::beats_per_bar`]: crate::project::Project::beats_per_bar
+pub const BEATS_PER_BAR: u32 = 4;
+
 /// A PPQ setting. Stored as a value type to discourage ad-hoc mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ppq(pub u32);
@@ -45,9 +61,9 @@ impl Ticks {
         self.0 / u64::from(ppq.ticks_per_beat())
     }
 
-    /// Beat offset within the containing bar (assumes 4/4 for now).
+    /// Beat offset within the containing bar (0-based).
     pub fn beat_in_bar(self, ppq: Ppq) -> u8 {
-        (self.beat(ppq) % 4) as u8
+        (self.beat(ppq) % u64::from(BEATS_PER_BAR)) as u8
     }
 }
 

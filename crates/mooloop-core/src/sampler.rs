@@ -1,5 +1,7 @@
 //! Sampler device parameters. Pure data so the bridge can carry them.
 
+use crate::time::BEATS_PER_BAR;
+
 pub const MAX_SAMPLER_VOICES: u8 = 16;
 pub const MAX_CHOKE_GROUP: u8 = 16;
 
@@ -371,12 +373,16 @@ pub fn snap_bars_to_power_of_two(bars: f32) -> f32 {
     snapped.clamp(MIN_STRETCH_BARS, MAX_STRETCH_BARS)
 }
 
-/// Frames in one bar at a tempo. Four beats to the bar, matching the
-/// convention the buffer device already uses -- `beats_per_bar` is project
-/// metadata the audio thread is not given, and inventing a second answer here
-/// would put two devices on different grids.
+/// Frames in one bar at a tempo.
+///
+/// [`BEATS_PER_BAR`] beats to the bar, and the buffer device calls this
+/// rather than spelling its own: the two being on one grid is now true by
+/// construction, where it used to be asserted by this comment and contradicted
+/// by `buffer_device.rs`. `Project::beats_per_bar` is project metadata the
+/// audio thread is not given, which is why the constant and not the field.
 pub fn frames_per_bar(sample_rate: u32, bpm: f64) -> f64 {
-    f64::from(sample_rate) * 240.0 / bpm.max(1.0)
+    let seconds_per_bar = 60.0 * f64::from(BEATS_PER_BAR) / bpm.max(1.0);
+    f64::from(sample_rate) * seconds_per_bar
 }
 
 /// Stretch ratio bounds. Output frames per input frame, so above 1.0 is

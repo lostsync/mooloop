@@ -397,6 +397,94 @@ def one_sided_test():
     return hits
 
 
+# --- 7 -----------------------------------------------------------------
+def bar_arithmetic():
+    """Lines that mean "four beats to a bar" outside the one file allowed to.
+
+    Written for `docs/plans/musical-time/`, whose survey found the fact
+    spelled nine times across six crates and the comment *"assumes 4/4 for
+    now"* written independently in three of them. `frames_per_bar`'s doc
+    comment claimed it followed "the convention the buffer device already
+    uses" while the buffer device spelled its own `240.0` -- prose doing the
+    compiler's job. Run it against the tree at `b97561d` and it reports every
+    site the plan lists; that is what it was validated on.
+
+    Excluded by name, with the reason:
+
+    - `crates/mooloop-core/src/time.rs` -- the home. `BEATS_PER_BAR` lives
+      there and `Ticks::beat_in_bar` divides by it, so "this file may say
+      four" stays a claim about one file rather than a category others can
+      join.
+
+    What it deliberately misses, because every check here misses something:
+
+    - **Lines that say `% 4` or `/ 4` about a beat or a tick without saying
+      `bar`.** The plan asked for those too; sweeping them reports
+      `MidiMessage::song_position_ticks`, whose `ppq / 4` is the MIDI spec's
+      sixteenth-note beat and is a *different* four -- it must not move if
+      mooloop's grid does. One permanent false positive is worse than a
+      narrow check, because a check that is never clean stops being read.
+    - `Project::beats_per_bar`'s declaration. A field is not arithmetic; what
+      makes it honest is its doc comment, which no search can judge.
+    - A four reached by multiplying two other numbers, a renamed local, and
+      `f64::from(BEATS_PER_BAR)` written out as `f64::from(4)`.
+    - Anything inside a multi-line raw string. This reads a line at a time, so
+      it strips `"..."` and `//` and cannot see that a line belongs to an
+      `r#"..."#` fixture -- which is why the `beats_per_bar` rule matches Rust
+      syntax rather than the bare TOML assignment those fixtures contain.
+    """
+    home = "crates/mooloop-core/src/time.rs"
+    # A line's meaning lives in its code. Strings carry labels like "1/4 bar"
+    # and comments carry "a bar of 4/4", and neither is arithmetic.
+    strings = re.compile(r'"(?:[^"\\]|\\.)*"')
+    comment = re.compile(r"//.*$")
+    bar_word = re.compile(r"bar", re.I)
+    by_four = re.compile(r"[%/]\s*4(?![0-9._])")
+    magic = re.compile(r"(?<![0-9._])240(?:\.0*|_f\d+)?(?![0-9_])")
+    tempo_word = re.compile(r"bpm|tempo|bar", re.I)
+    per_bar_const = re.compile(
+        r"const\s+([A-Z][A-Z0-9_]*_PER_BAR)\s*:[^=]+=\s*([0-9][0-9_]*(?:\.[0-9]*)?)\s*;"
+    )
+    named_const = re.compile(r"const\s+[A-Z0-9_]*BEATS_PER_BAR\b")
+    # `.beats_per_bar != 4` is Rust holding the field to a number; a bare
+    # `beats_per_bar = 4` is TOML in a format fixture, which is the contract
+    # itself and is supposed to be spelled out.
+    field_literal = re.compile(
+        r"(?:\.beats_per_bar\s*(?:!=|==|=)|beats_per_bar\s*:)\s*4(?![0-9._])"
+    )
+
+    hits = []
+    for path in list(rust_sources()) + list(rust_tests()):
+        where = rel(path)
+        if where == home:
+            continue
+        for number, raw in enumerate(path.read_text().splitlines(), 1):
+            line = comment.sub("", strings.sub('""', raw)).strip()
+            if not line:
+                continue
+            why = None
+            if magic.search(line) and tempo_word.search(line):
+                why = "240 is 60 * 4 beats; call mooloop_core::frames_per_bar"
+            elif "rem_euclid(4)" in line:
+                why = "rem_euclid(4) over beats; use BEATS_PER_BAR"
+            elif by_four.search(line) and bar_word.search(line):
+                why = "divides or wraps by a literal 4 on a line about bars"
+            elif named_const.search(line):
+                why = f"BEATS_PER_BAR is declared here; {home} owns it"
+            elif field_literal.search(line):
+                why = "project.beats_per_bar held to a literal 4; hold it to BEATS_PER_BAR"
+            else:
+                match = per_bar_const.search(line)
+                if match:
+                    why = (
+                        f"{match.group(1)} is spelled {match.group(2)}; "
+                        "derive it from BEATS_PER_BAR"
+                    )
+            if why:
+                hits.append((f"{where}:{number}", why))
+    return hits
+
+
 def _brace_body(text: str, after: int) -> str | None:
     """The `{ ... }` that follows `after`, brace-matched."""
     start = text.find("{", after)
@@ -432,6 +520,7 @@ CHECKS = {
     "twin-names": twin_names,
     "unchecked-face": unchecked_face,
     "one-sided-test": one_sided_test,
+    "bar-arithmetic": bar_arithmetic,
 }
 
 

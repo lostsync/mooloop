@@ -1,11 +1,12 @@
 //! Bounded song arrangement data shared by the UI and realtime engine.
 
-use crate::TICKS_PER_STEP;
+use crate::time::BEATS_PER_BAR;
+use crate::{STEPS_PER_BEAT, TICKS_PER_STEP};
 
 /// The playlist opens on a 64-bar canvas. Placement starts retain absolute PPQ
 /// ticks; the active musical snap belongs to the editor, not stored data.
 pub const MAX_PLAYLIST_BARS: u32 = 64;
-pub const STEPS_PER_BAR: u32 = 16;
+pub const STEPS_PER_BAR: u32 = STEPS_PER_BEAT as u32 * BEATS_PER_BAR;
 pub const TICKS_PER_BAR: u32 = STEPS_PER_BAR * TICKS_PER_STEP;
 /// Exclusive end of the editable placement-start grid. Long clips may extend
 /// past this point and still contribute to the derived song length.
