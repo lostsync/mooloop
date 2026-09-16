@@ -26,19 +26,22 @@ a finding. Read, in this order, before drafting a report:
 The useful report is the delta: what those documents claim that the source no
 longer supports, and what the source does that no document has noticed.
 
-## Git history starts on 2026-09-13
+## The remote container's clone is shallow; unshallow it first
 
-Confirmed 2026-09-16. The root commit (`30ba940`, 841 files, 1.89 M lines) is
-a squash dated 2026-09-13, and every commit since carries a Claude Opus 5
-co-author trailer bar one Sonnet commit. `CONTRIBUTORS.md` lists ten
-model+harness pairs working from 2026-08-21, so **the multi-agent divergence
-the review is asked to trace is almost entirely before the reachable
-history.** `git blame` and `git log -S` reach three days.
+Confirmed 2026-09-16. The container clones with a grafted root at
+2026-09-13 (`30ba940`, 114 commits visible), so `git blame` and `git log -S`
+reach three days and everything older blames to that root. It is not a
+squash: `git fetch --unshallow origin` works through the proxy, takes under a
+minute, and yields the full 811 commits back to 2026-08-11. Do it before any
+history question, and check `git rev-parse --is-shallow-repository` before
+believing a "this all landed in one commit" story.
 
-What survives from before the squash is `docs/JOURNAL.md`: a reconstructed
-narrative with dated sections from Aug 11 and the original short hashes
-(`b8a3fd1`, `7e58b4b`, …), which no longer resolve in this clone. Use it as
-the archaeology; cite it as prose, not as commits.
+Two things about the history once it is there. About 260 of the 811 commits
+carry no `Co-Authored-By` trailer; those are the non-Claude harnesses in
+`CONTRIBUTORS.md` (Codex, opencode, Kimi, Zed), so a trailer census
+under-counts them and the journal is the better witness for who built what.
+And `docs/JOURNAL.md`'s early short hashes (`b8a3fd1`, `7e58b4b`, …) resolve
+only after the unshallow.
 
 ## Building and testing in the remote container
 
