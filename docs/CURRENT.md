@@ -1192,10 +1192,27 @@ land on its own when it starts to matter:
   macros remain planned.
 - The retained-audio buffer is descriptor-addressed: `Position` says where in
   the retained history the read head is, `Rate` is its free-run speed,
-  `Freeze` stops the writer, and `Crossfade` sets the declick length. All four
-  automate and modulate; the face carries Position and Crossfade, and `Rate`
-  and `Freeze` are reachable from the automation lane's device-grouped picker
-  until the 2U face arrives.
+  `Length` and `Loop` are the window it repeats, `Jump` relocates it, `Freeze`
+  stops the writer, and `Crossfade` sets the declick length. All seven
+  automate and modulate; the face carries Position and Crossfade, and the rest
+  are reachable from the automation lane's device-grouped picker until the 2U
+  face arrives.
+  **`Length` is always on the shared musical grid** -- the same twenty-one
+  `ModTimeDivision` entries the modulator racks and the delay use, from `4/1`
+  down to `1/64T`, with dotted and triplet interleaved in pitch order. It is
+  never a free length in beats: one id standing for both would mean two
+  settings of different semantics behind one automatable address, and a
+  stepped index is also what makes modulating it musical -- an envelope on
+  Length sweeps `1/4 → 1/8 → 1/16` where a continuous length would smear. A
+  fresh Buffer loops one bar.
+  `Loop` wraps the head inside that window. The window opens where `Position`
+  points, extends **forward from its anchor for a forward head and backward
+  for a reverse one**, and stays put while the position is held; moving the
+  position moves the loop. `Jump` is the hard edit: a rising edge relocates
+  the head to `Position` with no chase, crossfaded, so a sequenced
+  `0% / 50% / 25% / 75%` with a trigger per step slices exactly rather than
+  arriving a few milliseconds late and at a pitch. A held trigger is one
+  gesture, and a document saved with it down does not fire one on load.
   **Position is normalized over the ring**: `0` is the oldest sample it still
   holds and `1` is now, so a rising ramp is forward playback and the knob's
   top is live. Writing it is an *edit* rather than a standing value -- it aims

@@ -23,7 +23,7 @@ why `FOCUS.md` had been carrying its state.
 | 1. Rate, and a head that runs without a writer | Landed 2026-09-16 |
 | 2. Freeze | Landed 2026-09-16 |
 | 3. Position replaces Offset | Landed 2026-09-16 |
-| 4. Length, Loop and Jump on the shared grid | Not started |
+| 4. Length, Loop and Jump on the shared grid | Landed 2026-09-16 |
 | 5. Quantized freeze, and BBT everywhere | Not started |
 | 6. The 2U face | Not started |
 | Alongside: acceptance test 8 | Closed for the Buffer operations 2026-09-16 |
@@ -76,6 +76,23 @@ what "Freeze latches what *now* means" turns out to mean in code.
 reopens frozen over an empty ring. That is the honest consequence of "persisting
 frozen content is out of scope", and it is written into `BufferParams`'s doc
 comment and `CURRENT.md` rather than left to be discovered.
+
+**The face is three steps behind the table, on purpose.** `Rate`, `Freeze`,
+`Length`, `Loop` and `Jump` are all published, automatable and tested, and
+none of them has a knob. Step 6 is the 2U face that gives them one, and
+crossing into `main.slint` once for all of them is what
+`AGENTS.md`'s cost table asks for -- the alternative was five eight-minute
+builds for five knobs that are about to be rearranged anyway. Until then they
+are reachable from the automation lane's picker, which is a real surface
+rather than a debug one.
+
+**A ramp fixture makes an equal-power crossfade overshoot both its ends.**
+`fill_ramp` writes each frame's own number so a read position can be
+identified from the sample value, which means the "audio" is enormous DC:
+fading between 30 000 and 24 000 peaks at 38 000, higher than either. The
+first loop test read that as the window escaping. Tests that assert *where*
+the head is have to set `crossfade_ms` to zero, and the two that do now say
+so.
 
 ## Still open from the earlier steps
 

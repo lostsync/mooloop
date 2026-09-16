@@ -6295,7 +6295,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         // puts the head into. Held in an array so the count below is the
         // number of states actually exercised rather than a number somebody
         // remembered.
-        let blocks: [(&str, &[TimedEvent]); 10] = [
+        let blocks: [(&str, &[TimedEvent]); 15] = [
             ("an offset chase", &[param(mooloop_core::BUFFER_PARAM_OFFSET_BEATS, 1.0)]),
             ("the chase still closing", &[]),
             ("back to live", &[param(mooloop_core::BUFFER_PARAM_OFFSET_BEATS, 0.0)]),
@@ -6312,6 +6312,23 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 "a hand scrub",
                 &[TimedEvent { offset: 0, event: Event::BufferScrub { delta_frames: -400.0 } }],
             ),
+            (
+                "a loop opening on the grid",
+                &[
+                    param(mooloop_core::BUFFER_PARAM_LENGTH, 13.0),
+                    param(mooloop_core::BUFFER_PARAM_LOOP, 1.0),
+                ],
+            ),
+            ("the loop running", &[]),
+            ("a length swept under a running loop", &[param(mooloop_core::BUFFER_PARAM_LENGTH, 16.0)]),
+            (
+                "a jump",
+                &[
+                    param(mooloop_core::BUFFER_PARAM_POSITION, 0.25),
+                    param(mooloop_core::BUFFER_PARAM_JUMP, 1.0),
+                ],
+            ),
+            ("the trigger released", &[param(mooloop_core::BUFFER_PARAM_JUMP, 0.0)]),
         ];
 
         let mut exercised = 0;
@@ -6340,7 +6357,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             exercised += 1;
         }
         assert_eq!(
-            exercised, 10,
+            exercised, 15,
             "the sweep stopped covering the head's states, so it proved nothing"
         );
         assert!(
