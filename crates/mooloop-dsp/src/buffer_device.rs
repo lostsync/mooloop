@@ -590,10 +590,11 @@ impl BufferDevice {
         let capacity = self.capacity_frames();
         let bin = write_index * WAVEFORM_BINS / capacity.max(1);
         let bin = bin.min(WAVEFORM_BINS - 1);
+        // Entering the bin resets it, and inside it the peak only rises --
+        // which is one condition rather than two, because "start again" and
+        // "this is louder" both mean "take this sample".
         let first_frame_in_bin = write_index * WAVEFORM_BINS % capacity.max(1) < WAVEFORM_BINS;
-        if first_frame_in_bin {
-            self.peaks[bin] = magnitude;
-        } else if magnitude > self.peaks[bin] {
+        if first_frame_in_bin || magnitude > self.peaks[bin] {
             self.peaks[bin] = magnitude;
         }
     }
