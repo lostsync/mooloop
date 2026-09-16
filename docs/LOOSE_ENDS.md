@@ -1186,6 +1186,40 @@ finding that three had "no slack anywhere". Correcting the source formula
 widens every three-unit source face by 4px and every four-unit one by 8px,
 against faces that were sized by eye and signed off. Found 2026-09-10.
 
+**The desktop entry describes an app that cannot be launched from a file
+manager.** The window's app id is set as of 2026-09-15 (`AppUi::new`), which
+was the loud half -- Hyprland reported `class: ""` until then, so no window
+rule, taskbar grouping or icon lookup could match it. What is left is quieter
+and mostly one shape: `packaging/mooloop.desktop` claims less than it could,
+and one of its omissions is not the desktop file's fault.
+
+- **`.mooloop` has no MIME type and `Exec=mooloop` has no `%F`**, so
+  double-clicking a song opens nothing and a song file has no icon. The
+  prerequisite is the real item: `crates/mooloop-app/src/main.rs` parses no
+  arguments at all, so the binary cannot open a path it is handed. Registering
+  the type before that is worse than not registering it -- the file manager
+  would hand mooloop a song and mooloop would open empty.
+- **No AppStream metainfo**, so KDE Discover and GNOME Software show a name
+  and nothing else, and Flathub would refuse the submission.
+- **No `StartupNotify`, deliberately.** winit consumes an activation token
+  only when asked (`with_activation_token`), and Slint's winit backend never
+  asks -- there is no mention of it in `i-slint-backend-winit 1.17.1`. Setting
+  the key advertises support that is not there, which costs a launcher
+  spinner that never resolves. This one wants the backend to grow the feature,
+  not the desktop file to grow a line.
+- **One 256x256 icon**, already flagged as a placeholder wordmark in
+  `packaging/README.md`. Worth reading that note before adding sizes: a
+  scalable entry and the small hicolor sizes are what a 24px taskbar wants,
+  and the wordmark will not survive the downscale whatever sizes exist.
+
+**Nothing inhibits idle while the transport is playing**, so the screen can
+blank and the lock screen can take the display in the middle of a take.
+`hyprctl clients` reports `inhibitingIdle: false` for the mooloop window and
+no crate mentions idle inhibition. The policy question is what counts as busy:
+transport running is the obvious answer, and an armed recording or a held note
+is the one that would actually annoy somebody if it were missed. Found
+2026-09-15.
+
 **Four unmerged spikes**, re-counted 2026-09-14. `spike/slint-split-build`
 (5 commits), `spike/egui-view-layer` (3), `spike/pattern-bank-cost` (1) and
 `spike/song-from-scratch` (1) are answers rather than candidates — none is

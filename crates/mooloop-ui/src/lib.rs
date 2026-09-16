@@ -5003,6 +5003,17 @@ impl AppUi {
     pub fn new(mut handle: EngineHandle) -> Result<Self, slint::PlatformError> {
         let window = MainWindow::new()?;
 
+        // A Wayland compositor identifies a window by its xdg app id, and
+        // Slint sends none unless it is set: Hyprland reported `class: ""`,
+        // which is every window rule, every taskbar grouping, and the icon
+        // lookup into `mooloop.desktop` failing at once. The string has to
+        // match that file's basename. It is set here rather than in `main`
+        // because the call needs a platform, which creating the window
+        // established, and the id is read when the window is first shown.
+        if let Err(error) = slint::set_xdg_app_id("mooloop") {
+            log_warn!("app", "could not set the xdg app id: {error}");
+        }
+
         // The shipped patches become ordinary user presets the first time
         // the app runs, and are not touched again. A failure here is not
         // worth refusing to start over: the bank is content, not
