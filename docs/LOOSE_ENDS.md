@@ -1177,6 +1177,22 @@ nowhere else to live.
 
 ## Housekeeping
 
+**Tempo and swing live only in the Slint window, and a few flags are read
+back from it.** Found 2026-09-16, checking what a Qt or egui view would still
+have to take over after `session-layer-extraction/`. BPM and swing are song
+data, but `Session` has no field for either: `Session::project_snapshot`
+takes them as arguments, and `lib.rs` reads `get_bpm` 19 times and
+`get_swing_percent` 9. Smaller, and the same shape: `editing-bus` and
+`editing-bus-index` duplicate `Session::effect_target` (the track move and
+solo/mute shortcuts read the window copy), and `playing`, `pattern-length`
+and `selected-channel` are also read back rather than asked of the session.
+Each is a property a new view would have to reproduce instead of query.
+Moving tempo and swing onto `Session` is the one worth doing before any view
+rewrite. Pane layout and appearance preferences are read from the window too,
+which is fine: that is view state. The full list is in
+`docs/plans/egui-view-layer/00-status.md`.
+
+
 **Two EQ listening passes are owed, and the plan they belonged to has
 closed.** `eq-v2/` archived on 2026-09-15 when Adam declined step 04, so these
 are now owed against shipped code rather than against a pending decision, and
