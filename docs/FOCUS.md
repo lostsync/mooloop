@@ -341,9 +341,10 @@ and is aligned by construction. Sidechain still needs what sends did not: a
 dependency edge that schedules a producer without summing it in. Read
 `docs/plans/archive/typed-audio-edges/` before building it.
 
-**Plugin hosting itself** (#10, #26–#30). Deferred rather than refused, and
-`PRODUCT.md` says why: not before the instrument model is coherent. Step 1
-above is the part of it worth doing early, and the only part.
+**Plugin hosting itself** (#10, #26–#30). No longer deferred: `SCOPE.md`
+put CLAP in for 0.2.0 on 2026-09-14, and `plans/plugin-hosting/` was written
+on 2026-09-16 at Adam's request. It sits outside this sequence the way
+`coreaudio-driver/` did.
 
 **A curated factory bank.** Every device that ships presets ships them to
 prove its architecture reaches its range from the controls, and that is the

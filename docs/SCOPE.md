@@ -73,7 +73,7 @@ sections at the end.
 | 3 | **Audio input** | Nothing. JACK registers no input port; `build_input_stream` appears nowhere; `Executor::process` (`executor.rs:118`) has no input parameter. `archive/ARCHITECTURE_REVIEW.md` confirms: *"No capture path and no media pool."* | Medium. The shape to copy already exists: `AuxIn` (`core/src/aux_in.rs`, `dsp/src/aux_in.rs`) is "a level and a copy", and `AudioTapBank` (`render.rs:53`) already hands a consumer channel a buffer someone else filled. A hardware input is one more pre-filled buffer in that bank and needs no ordering, having no producer. Issues #7, #22. |
 | 5 | **Audio + MIDI recording** | **MIDI capture landed 2026-09-15** and was as cheap as this row predicted. `EngineCommand::SetRecordArmed` arms it; armed *and* running, the renderer remembers where a note landed on the playhead and reports the whole note when the key comes up, through `EngineEvent::RecordedNote` on the existing ring. Length is measured in frames rather than ticks, so a note held across the loop point reports how long it was held instead of a negative number. `Session::record_note` writes it into the pattern, on the channel the routing sent it to rather than the selected one, trimmed to the pattern's end. The record-arm button landed beside play and stop the same day. Audio capture is still nothing. | Audio capture is gated on item 3. |
 | 8 | **Full-size browser** | Does not exist. The view set is closed at five (`PaneViews`, `main.slint:393-405`). | **Small, and the cheapest win on the list.** A sixth `PaneViews` entry, one `ViewSlot`/`PaneToolbar` block, a `view.pane-browser` action, a `VIEW_COUNT` bump (`settings.rs:498`) and a settings migration. The `BrowserRow` model and row rendering transfer unchanged; what a full-size view adds is column layout, selection and search — which item 7 wants anyway. Machinery: `ViewSlot` (`main.slint:443`), `PaneToolbar` (`:462`), `PaneTabs` (`:485`), `slot-rect` (`:2797`), `LayoutSettings` (`settings.rs:463-496`); tests at `tests/panes.rs`, `pane_drag.rs`, `dock_resize.rs`. |
-| 9 | **CLAP effects + instruments** | Zero code. No dependency, no scaffolding, no scanner. Only intent in prose (`node.rs:3-7`). | **The largest item on the list by a wide margin**, and four concrete blockers sit in front of it — see §6. Issues #10, #26–30. |
+| 9 | **CLAP effects + instruments** | Zero code. No dependency, no scaffolding, no scanner. Only intent in prose (`node.rs:3-7`). **Planned 2026-09-16: `plans/plugin-hosting/`**, which also outlines VST3 and AU after CLAP. | **The largest item on the list by a wide margin**, and six concrete blockers sit in front of it — the four in §5 and two more in the plan's `00-status.md`. Issues #10, #26–30. |
 
 ### Tier C — already built under another name. What is missing is a gesture, not a subsystem.
 
@@ -360,7 +360,12 @@ have to change to carry it, because a face showing one band at a time is a
 *view* and the selection belongs in the view. What it did **not** settle is
 item 1 below, which is the part that is actually about plugins.
 
-**The four things standing between here and CLAP**, all verified:
+**The four things standing between here and CLAP**, all verified. The
+2026-09-16 plan (`plans/plugin-hosting/00-status.md`) adds two: nothing on
+the control thread can reach a node once it is installed, and the effect
+menu and source popup are hard-coded rather than data-driven. It also records
+Adam's direction that **VST3 follows CLAP and AU comes last**, and that Linux
+is the audience.
 
 1. `EffectKind::descriptors()` returns `&'static [ParamDescriptor]` — a table
    per *kind* (`effect.rs:128-145`). A plugin's parameters belong to an

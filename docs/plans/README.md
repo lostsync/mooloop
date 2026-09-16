@@ -15,6 +15,16 @@ on a Mac as well as on Fedora. It builds a Core Audio driver beside JACK,
 chosen at compile time, and stops short of packaging or a macOS release. Every
 step has landed; the macOS CI job is the one thing that has not yet run.
 
+`plugin-hosting/` was added 2026-09-16 and is **not started, outside the
+`FOCUS.md` sequence**, because Adam asked for it directly: CLAP effects and
+instruments now, then VST3, then AU if ever. Thirteen steps. The first four
+build the host-neutral contract (#26) with a fake plugin before any protocol
+code, and the rule running through all of them is that no format type leaves
+`mooloop-plugin-host`. Adam settled four questions while it was written: plugin
+state goes in the project TOML, plugin GUIs open in their own windows,
+plugins without a GUI get a real face, and the scanner runs out of process.
+Linux is the acceptance bar.
+
 `mixer-track-reorder/` was added 2026-09-16, **all four steps landed the same
 day**, and it archived. Adam asked for it directly: a mixer track moves by
 dragging its strip's name plate, the master stays first, and everything that

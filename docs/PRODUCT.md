@@ -172,6 +172,8 @@ Mooloop is not trying to be:
 - A replacement for REAPER or a general linear recording DAW.
 - A clone of FruityLoops, Reason, Maschine, Bitwig, or any one reference UI.
 - A plugin host before its own instrument and sequencing model is coherent.
+  (Superseded 2026-09-14: CLAP is in for 0.2.0 — see `SCOPE.md` item 9 and
+  `plans/plugin-hosting/`.)
 - A modular patching environment as broad as Max/MSP.
 - A mandatory graph editor or an exposed patch-cord view for ordinary
   modulation work.
