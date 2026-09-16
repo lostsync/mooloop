@@ -668,6 +668,46 @@ fn push_appearance_colors(window: &MainWindow, appearance: &AppearanceSettings) 
     window.set_preferences_appearance_ramp(ramp_swatches(appearance));
     window.set_preferences_appearance_variant_derived(variant_is_derived(appearance));
     push_appearance_contrast(window, appearance);
+    push_appearance_swatches(window, appearance);
+}
+
+/// The quick swatches beside the three colour fields.
+///
+/// **Base offers the built-in themes' backgrounds; accent and alert offer the
+/// hues of the scheme in force.** Both rows used to be six hex literals in the
+/// markup, which was defensible when the page's own colours were the only
+/// palette there was and stopped being so the moment a theme could be Nord:
+/// the accent row was suggesting a lime while Nord was on screen.
+///
+/// Six of each, because that is what the row draws. The hues are slots 08-0D
+/// -- red, orange, yellow, green, cyan, blue -- which every ramp has and which
+/// are in a predictable order, so the row does not reshuffle itself as the
+/// theme changes.
+fn push_appearance_swatches(window: &MainWindow, appearance: &AppearanceSettings) {
+    let dark = appearance.wants_dark();
+    let mut bases: Vec<ColorChoice> = Vec::new();
+    for theme in appearance.themes() {
+        let background = theme.variant(dark).ramp().slot(0);
+        let value: SharedString = background.to_hex().into();
+        if bases.iter().all(|choice| choice.value != value) {
+            bases.push(ColorChoice {
+                value,
+                tint: background.color(),
+            });
+        }
+        if bases.len() == 6 {
+            break;
+        }
+    }
+    let ramp = appearance.ramp();
+    let hues: Vec<ColorChoice> = (0x08..=0x0D)
+        .map(|slot| ColorChoice {
+            value: ramp.slot(slot).to_hex().into(),
+            tint: ramp.slot(slot).color(),
+        })
+        .collect();
+    window.set_preferences_appearance_base_choices(ModelRc::from(Rc::new(VecModel::from(bases))));
+    window.set_preferences_appearance_hue_choices(ModelRc::from(Rc::new(VecModel::from(hues))));
 }
 
 /// The two WCAG ratios the Appearance page reports.
@@ -729,6 +769,7 @@ fn sync_preferences_properties(window: &MainWindow, settings: &UiSettings) {
     window.set_preferences_appearance_stroke_emphasis(appearance.stroke_emphasis);
     window.set_preferences_appearance_variant_derived(variant_is_derived(appearance));
     push_appearance_contrast(window, appearance);
+    push_appearance_swatches(window, appearance);
     window.set_preferences_developer_mode(settings.general.developer_mode);
     window.set_preferences_log_to_file(settings.general.log_to_file);
     window.set_preferences_log_path(settings::log_path().display().to_string().into());
@@ -6472,6 +6513,7 @@ impl AppUi {
                             variant_is_derived(&appearance),
                         );
                         push_appearance_contrast(&window, &appearance);
+                        push_appearance_swatches(&window, &appearance);
                         apply_appearance(&window, &appearance);
                         window.set_preferences_error("".into());
                     }

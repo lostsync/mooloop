@@ -55,6 +55,17 @@ between a control and its own edge are the same decision.
 `device-concepts.slint` and the mockup files are untouched — they are not
 shipped interface.
 
+**A literal came back within a day, and it is worth knowing how.** Rebasing
+this branch onto `musical-time/`'s merge turned up a fresh
+`font-family: "monospace"` in `controls.slint` — `BbtText`, extracted from the
+transport readout while this sweep was in flight, carried the literal with it
+rather than the token. Nothing could have caught that: the sweep is a one-time
+pass over what exists, and the two branches were green separately and green
+together. `scripts/dupe-audit` does not look for this shape either, because a
+family name is not a *duplicated* value, it is an untokenized one. The habit
+that catches it is the one the rebase forced: after merging, grep the axis you
+just closed.
+
 ### 03 — the theme file — **landed, widened**
 
 Taken against the brief above rather than as written, which means one thing:

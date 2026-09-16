@@ -3,6 +3,11 @@ import { Theme, Motion, StatusHint } from "theme.slint";
 import { MeterPrefs } from "meters.slint";
 import { AudioOrientation, IconButton, ParameterFader, SectionLabel, SegmentedControl, ToggleButton, ToolButton } from "controls.slint";
 import { AudioDriverCopy, DriverControlSurface, OutputTargetRow } from "audio-preferences.slint";
+// The swatch rows beside the colour fields offer colours from the scheme in
+// force, so they use the same `ColorChoice` the channel picker does -- one
+// struct, because both halves of it come from Rust for the same reason: Slint
+// cannot turn a hex string into a colour.
+import { ColorChoice } from "color-picker.slint";
 export { AudioDriverCopy, OutputTargetRow }
 
 // One selectable theme in Preferences > Appearance. The three colours are the
@@ -25,10 +30,6 @@ export struct AppearanceSchemeRow {
     derived: bool,
 }
 
-struct ColorChoice {
-    value: string,
-    tint: color,
-}
 
 // Label, quick swatches, and a hex field for one seed color. Every path here
 // writes `value` and then raises `changed`, so the caller has a single place
@@ -411,6 +412,12 @@ export component AppearancePage inherits VerticalLayout {
     in-out property <bool> variant-derived;
     in-out property <float> text-ratio: 1.0;
     in-out property <float> accent-ratio: 1.0;
+    // Quick swatches for the three fields. Base offers the built-in themes'
+    // backgrounds for the variant in force; accent and alert offer the hues of
+    // the scheme in force, so the row stops suggesting a lime while Nord is on
+    // screen.
+    in property <[ColorChoice]> base-choices;
+    in property <[ColorChoice]> hue-choices;
     in-out property <string> base;
     in-out property <string> accent;
     in-out property <string> alert;
@@ -580,14 +587,7 @@ export component AppearancePage inherits VerticalLayout {
         description: "Seeds every neutral: background, panels, borders, and text.";
         value <=> root.base;
         resolved: Theme.background;
-        choices: [
-            { value: "#18181B", tint: #18181B },
-            { value: "#151617", tint: #151617 },
-            { value: "#000000", tint: #000000 },
-            { value: "#1A1413", tint: #1A1413 },
-            { value: "#14141F", tint: #14141F },
-            { value: "#EDEDF0", tint: #EDEDF0 },
-        ];
+        choices: root.base-choices;
         changed => { root.preview-changed(); }
     }
     ColorField {
@@ -595,14 +595,7 @@ export component AppearancePage inherits VerticalLayout {
         description: "State: selection, focus, and meters in their safe range.";
         value <=> root.accent;
         resolved: Theme.accent;
-        choices: [
-            { value: "#84CC16", tint: #84CC16 },
-            { value: "#22D3EE", tint: #22D3EE },
-            { value: "#F59E0B", tint: #F59E0B },
-            { value: "#F43F5E", tint: #F43F5E },
-            { value: "#A78BFA", tint: #A78BFA },
-            { value: "#3F7D00", tint: #3F7D00 },
-        ];
+        choices: root.hue-choices;
         changed => { root.preview-changed(); }
     }
     ColorField {
@@ -610,14 +603,7 @@ export component AppearancePage inherits VerticalLayout {
         description: "Attention: warnings, meter headroom, out-of-range values.";
         value <=> root.alert;
         resolved: Theme.warning;
-        choices: [
-            { value: "#EAB308", tint: #EAB308 },
-            { value: "#F97316", tint: #F97316 },
-            { value: "#FACC15", tint: #FACC15 },
-            { value: "#38BDF8", tint: #38BDF8 },
-            { value: "#F472B6", tint: #F472B6 },
-            { value: "#B45309", tint: #B45309 },
-        ];
+        choices: root.hue-choices;
         changed => { root.preview-changed(); }
     }
     Text { text: root.validation-error; color: Theme.destructive; font-size: Theme.text-lg; height: 18px; }
@@ -1173,6 +1159,8 @@ export component PreferencesDialog inherits Rectangle {
     in-out property <bool> appearance-variant-derived;
     in-out property <float> appearance-text-ratio: 1.0;
     in-out property <float> appearance-accent-ratio: 1.0;
+    in-out property <[ColorChoice]> appearance-base-choices;
+    in-out property <[ColorChoice]> appearance-hue-choices;
     in-out property <string> appearance-base;
     in-out property <string> appearance-accent;
     in-out property <string> appearance-alert;
@@ -1423,6 +1411,8 @@ export component PreferencesDialog inherits Rectangle {
                                 variant-derived <=> root.appearance-variant-derived;
                                 text-ratio <=> root.appearance-text-ratio;
                                 accent-ratio <=> root.appearance-accent-ratio;
+                                base-choices: root.appearance-base-choices;
+                                hue-choices: root.appearance-hue-choices;
                                 base <=> root.appearance-base;
                                 accent <=> root.appearance-accent;
                                 alert <=> root.appearance-alert;

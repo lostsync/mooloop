@@ -15,6 +15,7 @@ mod common;
 
 slint::slint! {
     import { AppearancePage, AppearanceSchemeRow } from "../ui/appearance-dialog.slint";
+    import { ColorChoice } from "../ui/color-picker.slint";
 
     export component AppearancePageHarness inherits Window {
         width: 620px;
@@ -22,6 +23,8 @@ slint::slint! {
         background: #232328;
         in property <[AppearanceSchemeRow]> rows;
         in property <[color]> slots;
+        in property <[ColorChoice]> bases;
+        in property <[ColorChoice]> hues;
         AppearancePage {
             schemes: root.rows;
             ramp: root.slots;
@@ -40,6 +43,8 @@ slint::slint! {
             stroke-emphasis: 2.0;
             text-ratio: 7.45;
             accent-ratio: 5.03;
+            base-choices: root.bases;
+            hue-choices: root.hues;
             smooth-curves: true;
         }
     }
@@ -71,6 +76,32 @@ fn click_at(window: &slint::Window, p: (f32, f32)) {
         position,
         button: PointerEventButton::Left,
     });
+}
+
+/// The two harnesses generate their own `ColorChoice`, so the fixture is built
+/// per type -- the same reason `FIXTURE` is.
+fn choices(swatches: &[u32]) -> ModelRc<mooloop_ui::ColorChoice> {
+    ModelRc::from(Rc::new(VecModel::from(
+        swatches
+            .iter()
+            .map(|&rgb| mooloop_ui::ColorChoice {
+                value: SharedString::from(format!("#{rgb:06X}")),
+                tint: color(rgb),
+            })
+            .collect::<Vec<_>>(),
+    )))
+}
+
+fn page_choices(swatches: &[u32]) -> ModelRc<ColorChoice> {
+    ModelRc::from(Rc::new(VecModel::from(
+        swatches
+            .iter()
+            .map(|&rgb| ColorChoice {
+                value: SharedString::from(format!("#{rgb:06X}")),
+                tint: color(rgb),
+            })
+            .collect::<Vec<_>>(),
+    )))
 }
 
 fn color(rgb: u32) -> Color {
@@ -137,6 +168,10 @@ fn render_preferences_appearance_snapshot() {
     ui.set_preferences_appearance_roundness(1.0);
     ui.set_preferences_appearance_text_ratio(7.45);
     ui.set_preferences_appearance_accent_ratio(5.03);
+    ui.set_preferences_appearance_base_choices(choices(&[
+        0x2e3440, 0x18181b, 0x282a36, 0x282828, 0x2d353b, 0x002b36,
+    ]));
+    ui.set_preferences_appearance_hue_choices(choices(&NORD[8..14]));
 
     // The Appearance page only becomes visible after clicking its nav item;
     // `page` is private to `PreferencesDialog` and not exposed to Rust.
@@ -150,6 +185,10 @@ fn render_preferences_appearance_snapshot() {
     // the color fields, the interface scalars, and the preview strip -- are
     // checkable too.
     let harness = AppearancePageHarness::new().unwrap();
+    harness.set_bases(page_choices(&[
+        0x2e3440, 0x18181b, 0x282a36, 0x282828, 0x2d353b, 0x002b36,
+    ]));
+    harness.set_hues(page_choices(&NORD[8..14]));
     harness.set_slots(ModelRc::from(Rc::new(VecModel::from(
         NORD.iter().map(|&slot| color(slot)).collect::<Vec<_>>(),
     ))));

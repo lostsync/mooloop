@@ -755,6 +755,8 @@ export component MainWindow inherits Window {
     // surface it sits on, and the accent against the same.
     in-out property <float> preferences-appearance-text-ratio: 1.0;
     in-out property <float> preferences-appearance-accent-ratio: 1.0;
+    in-out property <[ColorChoice]> preferences-appearance-base-choices;
+    in-out property <[ColorChoice]> preferences-appearance-hue-choices;
     in-out property <string> preferences-appearance-base: "#18181B";
     in-out property <string> preferences-appearance-accent: "#84CC16";
     in-out property <string> preferences-appearance-alert: "#EAB308";
@@ -7096,6 +7098,8 @@ export component MainWindow inherits Window {
         appearance-variant-derived <=> root.preferences-appearance-variant-derived;
         appearance-text-ratio <=> root.preferences-appearance-text-ratio;
         appearance-accent-ratio <=> root.preferences-appearance-accent-ratio;
+        appearance-base-choices <=> root.preferences-appearance-base-choices;
+        appearance-hue-choices <=> root.preferences-appearance-hue-choices;
         appearance-base <=> root.preferences-appearance-base;
         appearance-accent <=> root.preferences-appearance-accent;
         appearance-alert <=> root.preferences-appearance-alert;
