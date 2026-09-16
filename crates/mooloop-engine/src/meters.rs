@@ -20,7 +20,7 @@ use mooloop_core::{
     modulation::CONTROL_SOURCE_SLOTS, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_SAMPLER_VOICES,
 };
 use mooloop_dsp::dynamics::db_to_lin;
-use mooloop_dsp::{DynamicsFrame, SPECTRUM_BINS};
+use mooloop_dsp::{BufferDisplay, DynamicsFrame, SPECTRUM_BINS, WAVEFORM_BINS};
 
 /// Peak-hold cells for every bus, left and right interleaved, and beside
 /// them the deepest gain reduction each track's channel strip applied.
@@ -69,6 +69,17 @@ pub struct DeviceMeters {
 /// this one is 64 KB.
 pub const SPECTRUM_SLOTS: usize = 64;
 
+/// How many Buffer faces may have a live waveform at once.
+///
+/// The same shape as [`SPECTRUM_SLOTS`] and for the same reason -- an array
+/// per addressable stage would be `(MAX_CHANNELS + MAX_BUSES) *
+/// (MAX_EFFECTS_PER_CHANNEL + 1) * WAVEFORM_BINS` whether or not a Buffer
+/// existed, which is the shape `docs/CAPACITY_POLICY.md` is about. Eight is
+/// far fewer than sixty-four because the number of Buffer faces a person can
+/// be *looking at* is smaller again: a spectrum is offered on every device
+/// stage, and this is offered on one device kind.
+pub const WAVEFORM_SLOTS: usize = 8;
+
 /// Latest display-oriented data for every device stage.
 ///
 /// This is intentionally a distinct transport from `EngineEvent`: analyzer
@@ -96,6 +107,38 @@ pub struct DeviceTelemetry {
     /// against the value it last saw, so a forced return landing between two
     /// GUI frames is still noticed.
     buffer_collisions: Vec<AtomicU32>,
+    /// Which waveform pool slot each Buffer stage holds, plus one. Zero is
+    /// unsubscribed, exactly as `spectrum_enabled` works.
+    waveform_enabled: Vec<AtomicU32>,
+    waveform: Vec<AtomicU32>,
+    waveform_slot_owner: Vec<AtomicU32>,
+    /// Head, writer and window as fractions of the ring, and a flag word.
+    ///
+    /// Scalars, so they are unpooled and published unconditionally: five
+    /// atomic stores a block against a subscription check that would cost
+    /// about as much. Only the peaks are worth a pool.
+    buffer_marks: Vec<AtomicU32>,
+}
+
+/// How many scalar cells [`DeviceTelemetry::publish_buffer_display`] writes
+/// per stage: head, writer, window start, window end, flags.
+const BUFFER_MARKS: usize = 5;
+
+/// Bits in the flag word.
+const BUFFER_FLAG_FROZEN: u32 = 1;
+const BUFFER_FLAG_ARMED: u32 = 2;
+const BUFFER_FLAG_ARMED_FREEZE: u32 = 4;
+
+/// What a Buffer face draws, read back out of the bank.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BufferMarks {
+    /// Where the read head is, as a fraction of the ring, or `None` while the
+    /// device is following and there is no detached head to draw.
+    pub head: Option<f32>,
+    pub write: f32,
+    pub window: Option<(f32, f32)>,
+    pub frozen: bool,
+    pub armed_freeze: Option<bool>,
 }
 
 impl DeviceTelemetry {
@@ -112,6 +155,16 @@ impl DeviceTelemetry {
                 .collect(),
             spectrum_slot_owner: (0..SPECTRUM_SLOTS).map(|_| AtomicU32::new(0)).collect(),
             buffer_collisions: (0..Self::TARGETS * Self::STAGES)
+                .map(|_| AtomicU32::new(0))
+                .collect(),
+            waveform_enabled: (0..Self::TARGETS * Self::STAGES)
+                .map(|_| AtomicU32::new(0))
+                .collect(),
+            waveform: (0..WAVEFORM_SLOTS * WAVEFORM_BINS)
+                .map(|_| AtomicU32::new(0))
+                .collect(),
+            waveform_slot_owner: (0..WAVEFORM_SLOTS).map(|_| AtomicU32::new(0)).collect(),
+            buffer_marks: (0..Self::TARGETS * Self::STAGES * BUFFER_MARKS)
                 .map(|_| AtomicU32::new(0))
                 .collect(),
         })
@@ -218,6 +271,130 @@ impl DeviceTelemetry {
         }
     }
 
+    /// Subscribe or unsubscribe a Buffer stage's waveform, returning whether
+    /// it is subscribed afterwards. `false` means the pool was full, which
+    /// draws as an empty waveform -- what a picture nobody is taking looks
+    /// like. Control thread only, same as the spectrum pool.
+    pub fn set_waveform_enabled(&self, target: usize, stage: usize, enabled: bool) -> bool {
+        let Some(index) = Self::enabled_index(target, stage) else {
+            return false;
+        };
+        let held = self.waveform_enabled[index].load(Ordering::Relaxed);
+        if !enabled {
+            self.waveform_enabled[index].store(0, Ordering::Relaxed);
+            if held != 0 {
+                let slot = held as usize - 1;
+                self.waveform_slot_owner[slot].store(0, Ordering::Relaxed);
+                self.clear_waveform_slot(slot);
+            }
+            return false;
+        }
+        if held != 0 {
+            return true;
+        }
+        let Some(slot) = self
+            .waveform_slot_owner
+            .iter()
+            .position(|owner| owner.load(Ordering::Relaxed) == 0)
+        else {
+            return false;
+        };
+        self.waveform_slot_owner[slot].store(index as u32 + 1, Ordering::Relaxed);
+        self.clear_waveform_slot(slot);
+        self.waveform_enabled[index].store(slot as u32 + 1, Ordering::Relaxed);
+        true
+    }
+
+    fn waveform_slot_of(&self, target: usize, stage: usize) -> Option<usize> {
+        let index = Self::enabled_index(target, stage)?;
+        let held = self.waveform_enabled[index].load(Ordering::Relaxed);
+        (held != 0).then(|| held as usize - 1)
+    }
+
+    fn clear_waveform_slot(&self, slot: usize) {
+        let base = slot * WAVEFORM_BINS;
+        for cell in &self.waveform[base..base + WAVEFORM_BINS] {
+            cell.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Publish a Buffer's picture from the audio thread.
+    ///
+    /// The marks go out unconditionally -- five stores -- and the peaks only
+    /// when something is looking.
+    pub fn publish_buffer_display(&self, target: usize, stage: usize, display: &BufferDisplay<'_>) {
+        if let Some(index) = Self::enabled_index(target, stage) {
+            let base = index * BUFFER_MARKS;
+            let mut flags = 0;
+            if display.frozen {
+                flags |= BUFFER_FLAG_FROZEN;
+            }
+            if let Some(freeze) = display.armed_freeze {
+                flags |= BUFFER_FLAG_ARMED;
+                if freeze {
+                    flags |= BUFFER_FLAG_ARMED_FREEZE;
+                }
+            }
+            // `-1` for absent, which a fraction of a ring can never be.
+            let head = display.head.unwrap_or(-1.0);
+            let (start, end) = display.window.unwrap_or((-1.0, -1.0));
+            self.buffer_marks[base].store(head.to_bits(), Ordering::Relaxed);
+            self.buffer_marks[base + 1].store(display.write.to_bits(), Ordering::Relaxed);
+            self.buffer_marks[base + 2].store(start.to_bits(), Ordering::Relaxed);
+            self.buffer_marks[base + 3].store(end.to_bits(), Ordering::Relaxed);
+            self.buffer_marks[base + 4].store(flags, Ordering::Relaxed);
+        }
+        let Some(slot) = self.waveform_slot_of(target, stage) else {
+            return;
+        };
+        let base = slot * WAVEFORM_BINS;
+        for (cell, peak) in self.waveform[base..base + WAVEFORM_BINS]
+            .iter()
+            .zip(display.peaks)
+        {
+            cell.store(peak.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    /// Latest peaks for a Buffer stage, oldest ring index first. All zero
+    /// when nothing is subscribed.
+    pub fn read_waveform(&self, target: usize, stage: usize) -> Vec<f32> {
+        let mut peaks = vec![0.0; WAVEFORM_BINS];
+        if let Some(slot) = self.waveform_slot_of(target, stage) {
+            let base = slot * WAVEFORM_BINS;
+            for (peak, cell) in peaks
+                .iter_mut()
+                .zip(&self.waveform[base..base + WAVEFORM_BINS])
+            {
+                *peak = f32::from_bits(cell.load(Ordering::Relaxed));
+            }
+        }
+        peaks
+    }
+
+    /// Latest head, writer, window and state for a Buffer stage.
+    pub fn read_buffer_marks(&self, target: usize, stage: usize) -> BufferMarks {
+        let Some(index) = Self::enabled_index(target, stage) else {
+            return BufferMarks::default();
+        };
+        let base = index * BUFFER_MARKS;
+        let read = |offset: usize| {
+            f32::from_bits(self.buffer_marks[base + offset].load(Ordering::Relaxed))
+        };
+        let head = read(0);
+        let start = read(2);
+        let end = read(3);
+        let flags = self.buffer_marks[base + 4].load(Ordering::Relaxed);
+        BufferMarks {
+            head: (head >= 0.0).then_some(head),
+            write: read(1),
+            window: (start >= 0.0 && end >= 0.0).then_some((start, end)),
+            frozen: flags & BUFFER_FLAG_FROZEN != 0,
+            armed_freeze: (flags & BUFFER_FLAG_ARMED != 0)
+                .then_some(flags & BUFFER_FLAG_ARMED_FREEZE != 0),
+        }
+    }
+
     /// Collisions counted by the device in this stage since it was installed.
     pub fn read_buffer_collisions(&self, target: usize, stage: usize) -> u32 {
         Self::enabled_index(target, stage).map_or(0, |index| {
@@ -228,6 +405,18 @@ impl DeviceTelemetry {
     /// Clear subscriptions and retained display data before a complete graph
     /// replacement. The UI re-subscribes the new project after it is visible.
     pub fn clear_spectra(&self) {
+        for cell in &self.waveform_enabled {
+            cell.store(0, Ordering::Relaxed);
+        }
+        for cell in &self.waveform_slot_owner {
+            cell.store(0, Ordering::Relaxed);
+        }
+        for cell in &self.waveform {
+            cell.store(0, Ordering::Relaxed);
+        }
+        for cell in &self.buffer_marks {
+            cell.store(0, Ordering::Relaxed);
+        }
         for cell in &self.spectrum_enabled {
             cell.store(0, Ordering::Relaxed);
         }

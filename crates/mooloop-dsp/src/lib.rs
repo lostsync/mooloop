@@ -68,7 +68,9 @@ pub use aux_in::AuxIn;
 pub use taps::AudioTaps;
 pub use stretch::{render_stretched, StretchPool, StretchReader, StretchRender, Stretcher};
 pub use analysis::{SpectrumAnalyzer, SPECTRUM_BINS};
-pub use buffer_device::{buffer_allocation_key, BufferDevice, TimedBufferEvent};
+pub use buffer_device::{
+    buffer_allocation_key, BufferDevice, BufferDisplay, TimedBufferEvent, WAVEFORM_BINS,
+};
 pub use modulator::{ModulatorRack, NoteGateEvents, CONTROL_RATE_FRAMES};
 pub use bus::{balance_gains, pan_gains, StereoBus, MAX_BLOCK_SIZE};
 pub use delayline::{DelayLine, ReadHead};

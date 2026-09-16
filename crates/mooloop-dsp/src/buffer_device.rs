@@ -127,6 +127,15 @@ struct Scrub {
 /// A stopped platter must go silent. Holding at rate zero would repeat one
 /// sample forever, which is a DC step, not silence.
 const SCRUB_MUTE_RATE: f32 = 0.02;
+/// How many peaks the face draws the retained history as.
+///
+/// The memory *is* the instrument here, which is why the Buffer gets a
+/// waveform where a synth does not -- but the ring is megabytes and the face
+/// is a few hundred pixels, so what crosses to the GUI is a downsample rather
+/// than PCM. Two hundred and fifty-six is a little over one peak per pixel at
+/// the width a 2U face gives it.
+pub const WAVEFORM_BINS: usize = 256;
+
 /// How far either side of the midpoint the `Freeze` parameter has to travel
 /// before it changes anything.
 const FREEZE_HYSTERESIS: f32 = 0.05;
@@ -192,6 +201,19 @@ pub struct BufferDevice {
     quantize: bool,
     /// Which boundary, as a [`mooloop_core::ModTimeDivision`] index.
     quant_grid_index: f32,
+    /// Peak magnitude per bin over the retained history, for the face to
+    /// draw.
+    ///
+    /// Accumulated **as the writer goes**, one `max` per frame into the bin
+    /// the write head is in, and reset when the writer first enters a bin.
+    /// Recomputing it from the ring would be ninety-six thousand operations a
+    /// block for a picture that changes by one pixel; this is one comparison,
+    /// and it is the only shape that is honest about a ring nobody reads in
+    /// order.
+    ///
+    /// Frozen, the writer stops and so does this -- which is right: the
+    /// picture should stop moving when the sample does.
+    peaks: [f32; WAVEFORM_BINS],
     /// A freeze or a thaw waiting for the boundary, and how many frames are
     /// left to wait.
     ///
@@ -291,6 +313,7 @@ impl BufferDevice {
             last_jump: 0.0,
             quantize: true,
             quant_grid_index: 2.0,
+            peaks: [0.0; WAVEFORM_BINS],
             armed_freeze: None,
             writing: true,
             frames_elapsed: 0,
@@ -379,6 +402,7 @@ impl BufferDevice {
                 let write_index = self.index(self.write_head as f64);
                 self.left[write_index] = input_l;
                 self.right[write_index] = input_r;
+                self.accumulate_peak(write_index, input_l.abs().max(input_r.abs()));
             }
 
             let (mut output_l, mut output_r) = match self.head {
@@ -555,6 +579,60 @@ impl BufferDevice {
 
     pub fn is_frozen(&self) -> bool {
         !self.writing
+    }
+
+    /// Fold one frame's magnitude into the bin it belongs to.
+    ///
+    /// The bin is reset on the writer's *first* frame in it, which is what
+    /// makes the picture a rolling history rather than an ever-rising
+    /// envelope. Integer arithmetic and one branch: this runs once a frame.
+    fn accumulate_peak(&mut self, write_index: usize, magnitude: f32) {
+        let capacity = self.capacity_frames();
+        let bin = write_index * WAVEFORM_BINS / capacity.max(1);
+        let bin = bin.min(WAVEFORM_BINS - 1);
+        let first_frame_in_bin = write_index * WAVEFORM_BINS % capacity.max(1) < WAVEFORM_BINS;
+        if first_frame_in_bin {
+            self.peaks[bin] = magnitude;
+        } else if magnitude > self.peaks[bin] {
+            self.peaks[bin] = magnitude;
+        }
+    }
+
+    /// Peak magnitude per bin over the retained history, oldest bin first.
+    ///
+    /// Bin zero is ring index zero rather than the oldest *sample*: the ring
+    /// is a fixed array and the writer walks it, so the picture is stable and
+    /// the head marker moves over it. A picture that rotated under a
+    /// stationary head would be unreadable.
+    pub fn waveform_peaks(&self) -> &[f32; WAVEFORM_BINS] {
+        &self.peaks
+    }
+
+    /// Where the read head is, as a fraction of the ring. `None` when the
+    /// device is following, because there is no detached head to draw.
+    pub fn head_fraction(&self) -> Option<f32> {
+        let capacity = self.capacity_frames() as f64;
+        self.head
+            .map(|head| (self.index(head.position) as f64 / capacity) as f32)
+    }
+
+    /// Where the writer is, as a fraction of the ring. This is "now", and it
+    /// stops moving when the device freezes.
+    pub fn write_fraction(&self) -> f32 {
+        let capacity = self.capacity_frames() as f64;
+        (self.index(self.write_head as f64) as f64 / capacity) as f32
+    }
+
+    /// The active window as fractions of the ring, or `None` when the head is
+    /// not looping inside one.
+    pub fn window_fractions(&self) -> Option<(f32, f32)> {
+        let capacity = self.capacity_frames() as f64;
+        let head = self.head?;
+        let end = head.window_end?;
+        Some((
+            (self.index(head.window_start) as f64 / capacity) as f32,
+            (self.index(end) as f64 / capacity) as f32,
+        ))
     }
 
     /// Where `Position` currently points, in absolute ring frames.
@@ -1146,6 +1224,27 @@ impl BufferDevice {
     }
 }
 
+/// What a Buffer face draws, gathered in one borrow.
+///
+/// Display telemetry, and therefore **never** an input to an audio node --
+/// `02-control-and-modulation.md` is explicit that a musical control signal
+/// belongs in the modulator path where it gets a declared rate and latency,
+/// and this has neither. It is the latest available picture and nothing more.
+pub struct BufferDisplay<'a> {
+    pub peaks: &'a [f32; WAVEFORM_BINS],
+    /// Where the read head is, as a fraction of the ring. `None` while
+    /// following, because there is no detached head to draw.
+    pub head: Option<f32>,
+    pub write: f32,
+    pub window: Option<(f32, f32)>,
+    pub frozen: bool,
+    /// `Some(true)` when a freeze is waiting for its boundary, `Some(false)`
+    /// for a thaw. The face has to show this: until it lands the device is
+    /// still live, and a control that looked as though nothing had happened
+    /// would be the gesture failing silently.
+    pub armed_freeze: Option<bool>,
+}
+
 /// Stable identity for a buffer allocation configuration. The tempo is
 /// intentionally absent: a tempo resize replaces the same logical device;
 /// only a bars change makes an older prepared resize stale.
@@ -1175,6 +1274,17 @@ impl AudioNode for BufferDevice {
 
     fn holds_frozen_audio(&self) -> bool {
         self.is_frozen()
+    }
+
+    fn buffer_waveform(&self) -> Option<BufferDisplay<'_>> {
+        Some(BufferDisplay {
+            peaks: self.waveform_peaks(),
+            head: self.head_fraction(),
+            write: self.write_fraction(),
+            window: self.window_fractions(),
+            frozen: self.is_frozen(),
+            armed_freeze: self.armed_freeze(),
+        })
     }
 
     fn process(
