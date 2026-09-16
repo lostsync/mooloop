@@ -209,15 +209,16 @@ const FROZEN: &[(Owner, &[(u32, &str)])] = &[
     // after it moves down a position, which is safe only because a position
     // is read at runtime while an id is read off disk.
     //
-    // The gaps at 4, 5 and 7-9 are reserved by
-    // `03-freeze-and-the-grid.md` for Length, Loop, Jump, Quantize and Quant
-    // Grid. Spending one on something else is a renumber wearing an append's
-    // clothes.
     (Effect(EffectKind::Buffer), &[
         (2, "Position"),
         (1, "Crossfade"),
         (3, "Rate"),
         (6, "Freeze"),
+        (4, "Length"),
+        (5, "Loop"),
+        (7, "Jump"),
+        (8, "Quantize"),
+        (9, "Quant Grid"),
     ]),
     (Effect(EffectKind::Chain), &[
         (0, "Mix"),

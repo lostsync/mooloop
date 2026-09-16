@@ -38,7 +38,7 @@ use mooloop_core::strip::{
 use mooloop_core::{log_debug, log_error, log_info, log_warn};
 use mooloop_core::{
     snap_bars_to_power_of_two,
-    BufferDuration, BufferEvent, BusSetup, ChannelEdit, ListEdit, TrackEdit, ENV_MAX_SECONDS, ENV_MIN_SECONDS,
+    BusSetup, ChannelEdit, ListEdit, TrackEdit, ENV_MAX_SECONDS, ENV_MIN_SECONDS,
     DeviceKind, DrumMode, DrumSynthParams, EffectKind,
     EffectSlotState, EffectTarget, EngineCommand, EngineEvent, EnvTrigger, EqFaceControl,
     EqParams, EQ_FACE_CONTROLS, FilterModel,
@@ -1766,16 +1766,24 @@ fn envelope_seconds(t: f32) -> f32 {
     t.clamp(ENV_MIN_SECONDS, ENV_MAX_SECONDS)
 }
 
-/// Number of positional parameter fields `EffectSlotRow` carries. Raising it
-/// means adding matching `pN` fields to the Slint struct too.
-const EFFECT_ROW_PARAMS: usize = 10;
+/// Number of parameter fields `EffectSlotRow` carries. Raising it means
+/// adding matching `pN` fields to the Slint struct too.
+const EFFECT_ROW_PARAMS: usize = 12;
 
-/// How many of those a descriptor table may fill. The last two are reserved
-/// for what a device keeps beside its parameters -- a tempo-sync flag and a
-/// musical division, neither of which is a continuous, addressable value.
-/// The delay's pair fits inside its six descriptors; the modulation effect
-/// has eight of its own and does not, which is why the reservation is a
-/// constant rather than "whatever is left".
+/// How many of those a descriptor table may fill, **indexed by descriptor
+/// id**. The last two are reserved for what a device keeps beside its
+/// parameters -- a tempo-sync flag and a musical division, neither of which
+/// is a continuous, addressable value. The delay's pair fits inside its six
+/// descriptors; the modulation effect has eight of its own and does not,
+/// which is why the reservation is a constant rather than "whatever is left".
+///
+/// **By id and not by position**, which used to be the same statement.
+/// `modulation_allowed` and `destination_depths` have always indexed by id --
+/// `descriptor_slots` sizes them `max(id) + 1` -- so a face reading
+/// `p2` and `modulation-allowed[2]` was reading two different schemes that
+/// happened to agree. The Buffer retiring `Offset` parted them: its table
+/// starts at id 1 and reaches id 9 with a hole at 0. One scheme, and it is
+/// the one an on-disk identifier already uses.
 const EFFECT_ROW_DESCRIPTOR_PARAMS: usize = EFFECT_ROW_PARAMS - 2;
 
 /// The number that binds a kind to its face, and the only thing that does.
@@ -1827,7 +1835,11 @@ pub fn effect_kind_units(kind: EffectKind) -> i32 {
         | EffectKind::Bitcrush
         | EffectKind::Preamp
         | EffectKind::Limiter => 1,
-        EffectKind::Buffer => 1,
+        // Nine parameters and a waveform. `UI_DESIGN.md` is explicit that a
+        // face which outgrows its width takes another unit rather than
+        // compressing, and the waveform earns its place here in a way it does
+        // not on a synth: the memory *is* the instrument.
+        EffectKind::Buffer => 2,
         EffectKind::Gate | EffectKind::Compressor | EffectKind::Plate => 2,
         EffectKind::Delay => 3,
         EffectKind::Reverb => 3,
@@ -2011,30 +2023,31 @@ fn effect_slot_row(
         p[EqFaceControl::SELECTOR as usize] =
             eq.selected_target() as f32 / EqParams::LOW_PASS_TARGET as f32;
     } else {
-        for (index, descriptor) in kind
-            .descriptors()
-            .iter()
-            .take(EFFECT_ROW_DESCRIPTOR_PARAMS)
-            .enumerate()
-        {
+        for descriptor in kind.descriptors() {
+            let slot_index = descriptor.id as usize;
+            if slot_index >= EFFECT_ROW_DESCRIPTOR_PARAMS {
+                continue;
+            }
             if let Some(natural) = slot.params.get(descriptor.id) {
-                p[index] = descriptor.to_normalized(natural);
+                p[slot_index] = descriptor.to_normalized(natural);
             }
         }
         debug_assert!(
-            kind.descriptors().len() <= EFFECT_ROW_DESCRIPTOR_PARAMS,
-            "{} has more parameters than EffectSlotRow can carry",
+            kind.descriptors()
+                .iter()
+                .all(|descriptor| (descriptor.id as usize) < EFFECT_ROW_DESCRIPTOR_PARAMS),
+            "{} has a parameter id past what EffectSlotRow can carry",
             kind.label()
         );
     }
     // The two reserved fields, for the two devices that follow the tempo.
     if let Some(delay) = slot.params.delay() {
-        p[8] = if delay.tempo_sync { 1.0 } else { 0.0 };
-        p[9] = delay.time_division.to_index() as f32;
+        p[EFFECT_ROW_DESCRIPTOR_PARAMS] = if delay.tempo_sync { 1.0 } else { 0.0 };
+        p[EFFECT_ROW_DESCRIPTOR_PARAMS + 1] = delay.time_division.to_index() as f32;
     }
     if let mooloop_core::EffectParams::Modulation(modulation) = &slot.params {
-        p[8] = if modulation.tempo_sync { 1.0 } else { 0.0 };
-        p[9] = modulation.rate_division.to_index() as f32;
+        p[EFFECT_ROW_DESCRIPTOR_PARAMS] = if modulation.tempo_sync { 1.0 } else { 0.0 };
+        p[EFFECT_ROW_DESCRIPTOR_PARAMS + 1] = modulation.rate_division.to_index() as f32;
     }
     // The response plot's three arrays. Two of them place handles -- where
     // a band or a pass filter sits and whether to draw it -- and the third
@@ -2079,6 +2092,8 @@ fn effect_slot_row(
         p7: p[7],
         p8: p[8],
         p9: p[9],
+        p10: p[10],
+        p11: p[11],
         modulation_depths: Vec::<f32>::new().as_slice().into(),
         modulation_allowed: Vec::<bool>::new().as_slice().into(),
         modulation_offsets: Vec::<f32>::new().as_slice().into(),
@@ -2102,6 +2117,24 @@ fn effect_slot_row(
         output_left_db: METER_FLOOR_DB,
         output_right_db: METER_FLOOR_DB,
         buffer_collisions: 0,
+        buffer_peaks: Vec::<f32>::new().as_slice().into(),
+        // -1 is "no head", which a fraction of a ring can never be.
+        buffer_head: -1.0,
+        buffer_write: 0.0,
+        buffer_window_start: -1.0,
+        buffer_window_end: -1.0,
+        buffer_frozen: false,
+        buffer_armed_freeze: 0,
+        buffer_history_bars: slot
+            .params
+            .buffer()
+            .map_or(0, |buffer| i32::from(buffer.bars.max(1))),
+        buffer_position_bar: 1,
+        buffer_position_beat: 1,
+        buffer_position_tick: 0,
+        buffer_length_bars: 0,
+        buffer_length_beats: 0,
+        buffer_length_ticks: 0,
         detector_db: METER_FLOOR_DB,
         gain_reduction_db: 0.0,
         children: match slot.params {
@@ -2115,48 +2148,40 @@ fn effect_slot_row(
     }
 }
 
+/// What a held Buffer button borrowed and has to put back on release.
+///
+/// Named rather than a tuple because `.0` and `.1` over two floats that look
+/// alike is a swap waiting to happen, and named rather than inlined because
+/// clippy is right that `Rc<RefCell<HashMap<(i32, BufferHold), (f32, f32)>>>`
+/// is a type nobody should have to read twice.
+///
+/// One `Option` per borrowable parameter, and keyed by *which* control took
+/// it: **REV and STUT can be down at the same time**, and with one entry per
+/// slot the second press overwrote the first's record and the first release
+/// threw the whole entry away. Holding STUT, tapping REV and letting go left
+/// the device looping for good, because STUT's release found nothing to put
+/// back.
+#[derive(Clone, Copy, Default)]
+struct BorrowedBufferParams {
+    rate: Option<f32>,
+    looping: Option<f32>,
+}
+
+/// Which held control borrowed it. Keyed with the slot, because two Buffer
+/// faces can be on screen and a release has to put back what *that* press
+/// took.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum BufferHold {
+    Reverse,
+    Stutter,
+}
+
+type HeldBufferParams =
+    Rc<RefCell<std::collections::HashMap<(i32, BufferHold), BorrowedBufferParams>>>;
+
 /// Whether the rack's wrap button on `slot` should be live.
 fn wrap_enabled_at(effects: &[EffectSlotState], slot: usize) -> bool {
     mooloop_core::can_wrap(effects, slot..mooloop_core::run_of(effects, slot).end)
-}
-
-/// The fixed debug events the buffer device face fires, in the order its
-/// buttons appear. These stand in for the note layer and per-step parameter
-/// locks that will eventually produce tuples, and deliberately go through the
-/// same `TriggerBuffer` command those will: jump back a beat, and stutter the
-/// last sixteenth eight times. Reverse is not here — it is held rather than
-/// latched, so it is built at the press site with a `Gate` duration.
-fn debug_buffer_event(index: i32) -> Option<BufferEvent> {
-    let event = match index {
-        0 => BufferEvent {
-            offset_beats: -1.0,
-            ..BufferEvent::live()
-        },
-        2 => BufferEvent {
-            offset_beats: -0.0625,
-            window_beats: Some(0.0625),
-            repeat: Some(8),
-            ..BufferEvent::live()
-        },
-        _ => return None,
-    };
-    Some(event)
-}
-
-/// The held reverse: runs backward from the moment of the press and loops
-/// over the two bars behind it, so a long hold repeats recent material
-/// instead of running until it exhausts the retained history. `Gate` is what
-/// makes the release meaningful — a latching event would ignore it.
-fn held_reverse_event() -> BufferEvent {
-    BufferEvent {
-        offset_beats: 0.0,
-        rate: -1.0,
-        // Four beats to the bar.
-        window_beats: Some(8.0),
-        repeat: None,
-        duration: BufferDuration::Gate,
-        crossfade_ms: BufferEvent::live().crossfade_ms,
-    }
 }
 
 fn loop_mode_from_int(i: i32) -> LoopMode {
@@ -9994,51 +10019,176 @@ impl AppUi {
             });
         }
 
+
+        // The Buffer face's buttons, as **macros over published parameters**.
+        //
+        // They used to fire debug `BufferEvent` tuples, which the face's own
+        // comment called a debug surface standing in for the real control
+        // layer. Everything they do now is a parameter write, so nothing the
+        // mouse can reach is unreachable from an automation lane or a
+        // modulator -- which is what makes the face a control surface rather
+        // than a second way of doing things.
         {
-            let tx = cmd_tx.clone();
             let st = state.clone();
-            // The buffer device's debug triggers. Unlike a parameter change
-            // this never touches project state: a fired event is a transient
-            // performance gesture, not something the project remembers.
-            let rtx = cmd_tx.clone();
+            let tx = cmd_tx.clone();
+            // One place that writes a Buffer parameter, so the six handlers
+            // below cannot each invent their own way of doing it.
+            let write = move |slot: i32, id: u32, normalized: f32| {
+                let mut st = st.borrow_mut();
+                let EffectParamWrite::Applied(command) =
+                    st.session.set_effect_param(slot, id as i32, normalized)
+                else {
+                    return;
+                };
+                st.refresh_effect_row(slot as usize);
+                if let Some(command) = command {
+                    let _ = tx.send(command);
+                }
+            };
+
+            let w = write.clone();
+            window.on_effect_buffer_loop(move |slot, on| {
+                w(slot, mooloop_core::BUFFER_PARAM_LOOP, if on { 1.0 } else { 0.0 });
+            });
+            let w = write.clone();
+            window.on_effect_buffer_quantize(move |slot, on| {
+                w(slot, mooloop_core::BUFFER_PARAM_QUANTIZE, if on { 1.0 } else { 0.0 });
+            });
+            let w = write.clone();
+            window.on_effect_buffer_freeze(move |slot, on| {
+                w(slot, mooloop_core::BUFFER_PARAM_FREEZE, if on { 1.0 } else { 0.0 });
+            });
+            let w = write.clone();
+            window.on_effect_buffer_jump(move |slot, down| {
+                // Press and release separately, because the parameter is a
+                // trigger and only a rising edge fires: holding the button is
+                // one gesture, and letting go is what arms the next one.
+                w(slot, mooloop_core::BUFFER_PARAM_JUMP, if down { 1.0 } else { 0.0 });
+            });
+            // What REV and STUT put back when they are let go.
+            //
+            // A held gesture has to restore what it borrowed, and only the
+            // press knows what that was. It is UI state and nothing else --
+            // no project edit, because a momentary button is a performance
+            // gesture rather than something the document remembers.
+            let borrowed: HeldBufferParams = Rc::new(RefCell::new(Default::default()));
+
+            let w = write.clone();
+            let held = borrowed.clone();
             let rst = state.clone();
             window.on_effect_buffer_reverse_pressed(move |slot| {
-                let Ok(slot) = u8::try_from(slot) else {
+                // Rate the other way round. It is linear over -4..4, so
+                // negating the natural value is `1 - normalized` -- and
+                // because it is one parameter write, a lane can do it too.
+                // Read back out of the row the face is drawing, which is
+                // already normalized and already the id-indexed scheme the
+                // write below uses.
+                let Some(row) = rst.borrow().effect_slot_model.row_data(slot as usize) else {
                     return;
                 };
-                let _ = rtx.send(EngineCommand::TriggerBuffer {
-                    target: rst.borrow().session.effect_target,
-                    slot,
-                    event: held_reverse_event(),
-                });
+                let rate = row.p3;
+                held.borrow_mut().insert(
+                    (slot, BufferHold::Reverse),
+                    BorrowedBufferParams {
+                        rate: Some(rate),
+                        looping: None,
+                    },
+                );
+                w(slot, mooloop_core::BUFFER_PARAM_RATE, 1.0 - rate);
             });
-            let rtx = cmd_tx.clone();
-            let rst = state.clone();
+            let w = write.clone();
+            let held = borrowed.clone();
             window.on_effect_buffer_reverse_released(move |slot| {
-                let Ok(slot) = u8::try_from(slot) else {
+                let Some(prior) = held.borrow_mut().remove(&(slot, BufferHold::Reverse)) else {
                     return;
                 };
-                // Inert unless the gated head is still the one running, so a
-                // release can never cancel an event that superseded it.
-                let _ = rtx.send(EngineCommand::ReleaseBuffer {
-                    target: rst.borrow().session.effect_target,
-                    slot,
-                });
+                if let Some(rate) = prior.rate {
+                    w(slot, mooloop_core::BUFFER_PARAM_RATE, rate);
+                }
             });
-            window.on_effect_buffer_triggered(move |slot, trigger| {
-                let Some(event) = debug_buffer_event(trigger) else {
-                    return;
-                };
-                let Ok(slot) = u8::try_from(slot) else {
-                    return;
-                };
-                // The tuple travels whole, never split into parameter
-                // updates, so the read head sees one sample-accurate change.
-                let _ = tx.send(EngineCommand::TriggerBuffer {
-                    target: st.borrow().session.effect_target,
+
+            let w = write.clone();
+            let held = borrowed.clone();
+            let rst = state.clone();
+            window.on_effect_buffer_stutter(move |slot, down| {
+                if down {
+                    let Some(row) = rst.borrow().effect_slot_model.row_data(slot as usize) else {
+                        return;
+                    };
+                    held.borrow_mut().insert(
+                        (slot, BufferHold::Stutter),
+                        BorrowedBufferParams {
+                            rate: None,
+                            looping: Some(row.p5),
+                        },
+                    );
+                    // **Length is the stutter length, and STUT leaves it
+                    // alone.** It used to force a sixteenth and put the knob
+                    // back on release, which made the one control named for
+                    // the size of the repeat the one thing the gesture
+                    // ignored -- "how does one set the stutter length?" had no
+                    // answer, because nothing on the face was it. The gesture
+                    // is Loop plus a Jump to Position; how long the repeat is
+                    // was always a setting rather than part of the press.
+                    w(slot, mooloop_core::BUFFER_PARAM_LOOP, 1.0);
+                    w(slot, mooloop_core::BUFFER_PARAM_JUMP, 1.0);
+                    w(slot, mooloop_core::BUFFER_PARAM_JUMP, 0.0);
+                } else {
+                    let Some(prior) = held.borrow_mut().remove(&(slot, BufferHold::Stutter)) else {
+                        return;
+                    };
+                    if let Some(looping) = prior.looping {
+                        w(slot, mooloop_core::BUFFER_PARAM_LOOP, looping);
+                    }
+                }
+            });
+
+            let w = write.clone();
+            let rst = state.clone();
+            window.on_effect_buffer_window(move |slot, from, to| {
+                // A drag across the history is Position plus Length: where it
+                // started, and how long it is on the nearest grid step. Both
+                // are published, so the same drag is expressible as two lane
+                // points.
+                //
+                // The length half used to be dropped on the floor -- `to` went
+                // into a `let _` while the comment above claimed otherwise --
+                // so every drag set the window's *start* and left its size at
+                // whatever the knob said.
+                let bars = rst
+                    .borrow()
+                    .effect_slot_model
+                    .row_data(slot as usize)
+                    .map_or(0, |row| row.buffer_history_bars)
+                    .max(1);
+                let beats =
+                    (to - from).abs() * bars as f32 * mooloop_core::BEATS_PER_BAR as f32;
+                let division = mooloop_core::ModTimeDivision::nearest(beats);
+                w(slot, mooloop_core::BUFFER_PARAM_POSITION, from.clamp(0.0, 1.0));
+                w(
                     slot,
-                    event,
-                });
+                    mooloop_core::BUFFER_PARAM_LENGTH,
+                    division.to_index() as f32 / mooloop_core::MOD_TIME_DIVISION_TOP,
+                );
+                w(slot, mooloop_core::BUFFER_PARAM_LOOP, 1.0);
+            });
+
+            let st = state.clone();
+            let tx = cmd_tx.clone();
+            let weak = window.as_weak();
+            window.on_effect_buffer_history_bars(move |slot, bars| {
+                // Not a parameter write: the ring is reallocated for it, off
+                // the audio thread, and swapped in at a block boundary. See
+                // `Session::set_buffer_bars`.
+                let Some(window) = weak.upgrade() else { return };
+                let bpm = f64::from(window.get_bpm());
+                let mut st = st.borrow_mut();
+                let Some(resize) = st.session.set_buffer_bars(slot, bars.clamp(1, 255) as u8) else {
+                    return;
+                };
+                st.refresh_effect_row(slot as usize);
+                let _ = tx.resize_buffer(resize, bpm);
+                st.update_document_title(&window);
             });
         }
         {
@@ -13710,9 +13860,64 @@ impl AppUi {
                                     row.buffer_collisions
                                 };
                                 let collisions_changed = collisions != row.buffer_collisions;
+                                // The Buffer's picture: peaks while something
+                                // is looking, marks always. Subscribing is
+                                // idempotent and one atomic load, so it is
+                                // re-asserted rather than tracked -- which is
+                                // also what re-subscribes after a graph
+                                // replacement clears the bank.
+                                let buffer_drawn = row.kind == effect_kind_index(EffectKind::Buffer);
+                                if buffer_drawn {
+                                    let target = state.session.effect_target;
+                                    handle.set_buffer_waveform_enabled(target, slot as u8, true);
+                                    let peaks = handle.effect_buffer_waveform(target, slot as u8);
+                                    let marks = handle.effect_buffer_marks(target, slot as u8);
+                                    row.buffer_peaks = peaks.as_slice().into();
+                                    row.buffer_head = marks.head.unwrap_or(-1.0);
+                                    row.buffer_write = marks.write;
+                                    let (start, end) = marks.window.unwrap_or((-1.0, -1.0));
+                                    row.buffer_window_start = start;
+                                    row.buffer_window_end = end;
+                                    row.buffer_frozen = marks.frozen;
+                                    row.buffer_armed_freeze = match marks.armed_freeze {
+                                        Some(true) => 1,
+                                        Some(false) => 2,
+                                        None => 0,
+                                    };
+                                    let bars = row.buffer_history_bars.max(1) as f64;
+                                    let ppq = mooloop_core::Ppq::DEFAULT;
+                                    let history_ticks = bars
+                                        * f64::from(mooloop_core::BEATS_PER_BAR)
+                                        * f64::from(ppq.ticks_per_beat());
+                                    let head = f64::from(marks.head.unwrap_or(0.0).max(0.0));
+                                    let at = mooloop_core::BbtPosition::from_ticks(
+                                        mooloop_core::Ticks((head * history_ticks) as u64),
+                                        ppq,
+                                    );
+                                    row.buffer_position_bar = at.bar as i32;
+                                    row.buffer_position_beat = at.beat as i32;
+                                    row.buffer_position_tick = at.tick as i32;
+                                    // A *duration*, so a one-bar window reads
+                                    // 1:0:0 rather than 2:1:0 -- which is the
+                                    // whole reason there are two types.
+                                    let division = mooloop_core::ModTimeDivision::from_index(
+                                        (row.p4 * mooloop_core::MOD_TIME_DIVISION_TOP).round()
+                                            as i32,
+                                    );
+                                    let length_ticks = f64::from(division.beats())
+                                        * f64::from(ppq.ticks_per_beat());
+                                    let long = mooloop_core::BbtDuration::from_ticks(
+                                        mooloop_core::Ticks(length_ticks as u64),
+                                        ppq,
+                                    );
+                                    row.buffer_length_bars = long.bars as i32;
+                                    row.buffer_length_beats = long.beats as i32;
+                                    row.buffer_length_ticks = long.ticks as i32;
+                                }
                                 if meter_changed
                                     || dynamics_changed
                                     || collisions_changed
+                                    || buffer_drawn
                                     || row.eq_analyzer_enabled
                                     || row.preamp_display_enabled
                                 {
@@ -15202,6 +15407,26 @@ mod tests {
                 division.beats()
             );
         }
+
+        // And the top index beside the table, which is the divisor every
+        // stepped grid knob decodes its normalized value through. It was
+        // written `20` by hand at three call sites before it was one value.
+        // The table above checks the *entries*; nothing checked the count, so
+        // a twenty-second division would have left every stepped grid knob in
+        // the markup decoding one step short, silently.
+        let top = CONTROLS_SLINT
+            .split("out property <int> top:")
+            .nth(1)
+            .and_then(|rest| rest.split(';').next())
+            .expect("Divisions.top in controls.slint")
+            .trim()
+            .parse::<f32>()
+            .expect("a grid top index");
+        assert!(
+            (top - mooloop_core::MOD_TIME_DIVISION_TOP).abs() < 1e-6,
+            "controls.slint's Divisions.top is {top}, MOD_TIME_DIVISION_TOP is {}",
+            mooloop_core::MOD_TIME_DIVISION_TOP
+        );
     }
 
     #[test]

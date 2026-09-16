@@ -161,7 +161,9 @@ use render::{ReclaimedEffect, RenderState};
 pub use render::{AudioTapBank, ChannelStorage, ContainerScratch, EffectSlot, SendBank, SendSpec};
 
 pub use driver::{AudioConfig, DriverStatus, OutputTarget};
-pub use meters::{BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters};
+pub use meters::{
+    BufferMarks, BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters,
+};
 pub use offline::{
     ExportError, ExportFormat, ExportSpec, Mp3Bitrate, OfflineRenderer, RenderScope, RenderSummary,
     WavEncoding,
@@ -894,6 +896,40 @@ impl EngineHandle {
     pub fn effect_buffer_collisions(&self, target: EffectTarget, slot: u8) -> u32 {
         self.device_telemetry
             .read_buffer_collisions(effect_target_index(target), usize::from(slot) + 1)
+    }
+
+    /// Start or stop drawing a Buffer insert's waveform.
+    ///
+    /// A pooled subscription, exactly like a spectrum's: the peaks only cross
+    /// to the GUI while a face is looking at them, and the pool is small
+    /// because the number of Buffer faces a person can watch is smaller than
+    /// the number of stages that could offer a spectrum. `false` means the
+    /// pool was full, which draws as an empty waveform.
+    pub fn set_buffer_waveform_enabled(
+        &self,
+        target: EffectTarget,
+        slot: u8,
+        enabled: bool,
+    ) -> bool {
+        self.device_telemetry.set_waveform_enabled(
+            effect_target_index(target),
+            usize::from(slot) + 1,
+            enabled,
+        )
+    }
+
+    /// Latest peaks over a Buffer insert's retained history, oldest ring
+    /// index first. All zero when nothing is subscribed.
+    pub fn effect_buffer_waveform(&self, target: EffectTarget, slot: u8) -> Vec<f32> {
+        self.device_telemetry
+            .read_waveform(effect_target_index(target), usize::from(slot) + 1)
+    }
+
+    /// Where a Buffer insert's head and window are, and whether it is frozen
+    /// or waiting for a boundary. Published every block, subscription or not.
+    pub fn effect_buffer_marks(&self, target: EffectTarget, slot: u8) -> BufferMarks {
+        self.device_telemetry
+            .read_buffer_marks(effect_target_index(target), usize::from(slot) + 1)
     }
 
     /// Every currently-active sampler voice's normalized playback position

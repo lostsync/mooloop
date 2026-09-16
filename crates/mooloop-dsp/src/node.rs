@@ -214,6 +214,16 @@ pub trait AudioNode {
         0
     }
 
+    /// The latest picture of a retained-audio buffer, for a face to draw.
+    ///
+    /// Only the buffer device answers. It is display telemetry with no timing
+    /// guarantee beyond "latest available", and it must never be read by an
+    /// audio node as input -- a musical control signal belongs in the
+    /// modulator path, where it has a declared rate and latency.
+    fn buffer_waveform(&self) -> Option<crate::buffer_device::BufferDisplay<'_>> {
+        None
+    }
+
     /// Whether this node is holding audio that replacing it would destroy.
     ///
     /// Only the buffer device answers yes, and only while frozen: its ring is

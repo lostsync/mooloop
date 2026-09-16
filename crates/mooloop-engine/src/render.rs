@@ -1720,6 +1720,11 @@ impl EffectChain {
                     // counter. Publishing it here keeps the audio thread free
                     // of logging.
                     telemetry.publish_buffer_collisions(target, slot + 1, node.buffer_collisions());
+                    // Only the buffer device answers; everything else is one
+                    // `None` and the cells stay where they were.
+                    if let Some(display) = node.buffer_waveform() {
+                        telemetry.publish_buffer_display(target, slot + 1, &display);
+                    }
                     // Only the dynamics devices answer this; for everything
                     // else it is one `None` and the cells stay at rest.
                     if let Some(frame) = node.dynamics_frame() {
@@ -6295,7 +6300,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         // puts the head into. Held in an array so the count below is the
         // number of states actually exercised rather than a number somebody
         // remembered.
-        let blocks: [(&str, &[TimedEvent]); 10] = [
+        let blocks: [(&str, &[TimedEvent]); 17] = [
             ("an offset chase", &[param(mooloop_core::BUFFER_PARAM_OFFSET_BEATS, 1.0)]),
             ("the chase still closing", &[]),
             ("back to live", &[param(mooloop_core::BUFFER_PARAM_OFFSET_BEATS, 0.0)]),
@@ -6312,6 +6317,31 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 "a hand scrub",
                 &[TimedEvent { offset: 0, event: Event::BufferScrub { delta_frames: -400.0 } }],
             ),
+            (
+                "a loop opening on the grid",
+                &[
+                    param(mooloop_core::BUFFER_PARAM_LENGTH, 13.0),
+                    param(mooloop_core::BUFFER_PARAM_LOOP, 1.0),
+                ],
+            ),
+            ("the loop running", &[]),
+            ("a length swept under a running loop", &[param(mooloop_core::BUFFER_PARAM_LENGTH, 16.0)]),
+            (
+                "a jump",
+                &[
+                    param(mooloop_core::BUFFER_PARAM_POSITION, 0.25),
+                    param(mooloop_core::BUFFER_PARAM_JUMP, 1.0),
+                ],
+            ),
+            ("the trigger released", &[param(mooloop_core::BUFFER_PARAM_JUMP, 0.0)]),
+            (
+                "a quantized freeze arming",
+                &[
+                    param(mooloop_core::BUFFER_PARAM_QUANT_GRID, 2.0),
+                    param(mooloop_core::BUFFER_PARAM_FREEZE, 1.0),
+                ],
+            ),
+            ("the armed freeze counting down", &[]),
         ];
 
         let mut exercised = 0;
@@ -6340,7 +6370,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             exercised += 1;
         }
         assert_eq!(
-            exercised, 10,
+            exercised, 17,
             "the sweep stopped covering the head's states, so it proved nothing"
         );
         assert!(
@@ -6348,6 +6378,130 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             "the thaw has to have taken, or the last blocks measured the wrong \
              thing"
         );
+    }
+
+    /// The picture a Buffer face draws reaches the bank, and says the right
+    /// things about a head that is somewhere.
+    ///
+    /// Display telemetry rather than a signal: it has no timing guarantee
+    /// beyond "latest available", which is why nothing in the audio path may
+    /// read it back. What it has to be is *truthful* -- a face that drew a
+    /// head where there was none, or a still picture while the writer ran,
+    /// would be worse than no face.
+    #[test]
+    fn a_buffer_publishes_a_picture_for_its_face_to_draw() {
+        use mooloop_dsp::StereoBus;
+
+        const FRAMES: usize = 512;
+        let context = mooloop_dsp::ProcessContext {
+            sample_rate: 48_000,
+            frames: FRAMES,
+            playing: true,
+            bpm: 120.0,
+            position_ticks: 0.0,
+            position_frames: 0,
+        };
+        let mut device = mooloop_dsp::BufferDevice::with_capacity(4_096);
+        let mut bus = StereoBus::with_capacity(FRAMES);
+        // Half a ring of signal, so some bins have peaks and some do not --
+        // a picture that was all one value would not prove it was drawn.
+        for block in 0..4 {
+            for frame in 0..FRAMES {
+                let loud = block % 2 == 0;
+                bus.l[frame] = if loud { 0.8 } else { 0.0 };
+                bus.r[frame] = bus.l[frame];
+            }
+            device.process(&context, &mut bus, &[]);
+        }
+
+        let display = device.buffer_waveform().expect("a buffer draws itself");
+        assert!(
+            display.peaks.iter().any(|peak| *peak > 0.5),
+            "the loud blocks have to show up"
+        );
+        assert!(
+            display.peaks.iter().any(|peak| *peak < 0.1),
+            "and the quiet ones have to stay quiet: a picture that is all one \
+             value is not a picture"
+        );
+        assert!(display.head.is_none(), "following, so there is no head to draw");
+        assert!(!display.frozen);
+        assert_eq!(display.armed_freeze, None);
+        let write = display.write;
+        assert!((0.0..1.0).contains(&write), "the writer is somewhere: {write}");
+
+        // Detach the head and freeze, and the picture has to follow.
+        device.detach_at_rate(&context);
+        device.freeze(&context);
+        device.process(&context, &mut bus, &[]);
+        let display = device.buffer_waveform().expect("a buffer draws itself");
+        assert!(display.head.is_some(), "a detached head has to be drawable");
+        assert!(display.frozen, "and the face has to know the writer stopped");
+        assert_eq!(
+            display.write, write,
+            "a frozen writer does not move, and neither does its mark"
+        );
+    }
+
+    /// The bank is a pool, and an unsubscribed stage reads empty.
+    ///
+    /// `docs/CAPACITY_POLICY.md` is about the array this is not: one waveform
+    /// per addressable stage would be allocated whether or not a Buffer
+    /// existed. What is bounded here is how many are *drawn at once*.
+    #[test]
+    fn a_waveform_crosses_only_while_a_face_is_looking() {
+        let telemetry = DeviceTelemetry::new();
+        let peaks = [0.7_f32; mooloop_dsp::WAVEFORM_BINS];
+        let display = mooloop_dsp::BufferDisplay {
+            peaks: &peaks,
+            head: Some(0.25),
+            write: 0.5,
+            window: Some((0.1, 0.2)),
+            frozen: true,
+            armed_freeze: Some(false),
+        };
+
+        telemetry.publish_buffer_display(0, 1, &display);
+        assert!(
+            telemetry.read_waveform(0, 1).iter().all(|peak| *peak == 0.0),
+            "nothing is subscribed, so no peaks crossed"
+        );
+        // The marks are unpooled and always published: they are five stores,
+        // and a face needs them the moment it opens rather than a block later.
+        let marks = telemetry.read_buffer_marks(0, 1);
+        assert_eq!(marks.head, Some(0.25));
+        assert_eq!(marks.write, 0.5);
+        assert_eq!(marks.window, Some((0.1, 0.2)));
+        assert!(marks.frozen);
+        assert_eq!(marks.armed_freeze, Some(false));
+
+        assert!(telemetry.set_waveform_enabled(0, 1, true));
+        telemetry.publish_buffer_display(0, 1, &display);
+        assert!(
+            telemetry.read_waveform(0, 1).iter().all(|peak| *peak == 0.7),
+            "subscribed, so the peaks crossed"
+        );
+
+        telemetry.set_waveform_enabled(0, 1, false);
+        assert!(
+            telemetry.read_waveform(0, 1).iter().all(|peak| *peak == 0.0),
+            "and unsubscribing hands the slot back empty"
+        );
+
+        // A head that is not there reads as absent rather than as position
+        // zero, which is a real place in the ring.
+        let following = mooloop_dsp::BufferDisplay {
+            head: None,
+            window: None,
+            frozen: false,
+            armed_freeze: None,
+            ..display
+        };
+        telemetry.publish_buffer_display(0, 1, &following);
+        let marks = telemetry.read_buffer_marks(0, 1);
+        assert_eq!(marks.head, None);
+        assert_eq!(marks.window, None);
+        assert_eq!(marks.armed_freeze, None);
     }
 
     /// A frozen buffer's ring is a sample being played, so the node that holds

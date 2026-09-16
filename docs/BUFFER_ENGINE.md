@@ -24,13 +24,21 @@ that follows from it, and it supersedes this document where they disagree.
 
 ## What shipped
 
-`EffectKind::Buffer` is an ordinary 1U insert, added from the same picker as
+`EffectKind::Buffer` is an ordinary 2U insert, added from the same picker as
 every other effect, capturing whatever reaches its position in the chain.
 
-- `mooloop_dsp::buffer_device` owns a stereo ring sized by `bars` (default
-  8). Construction allocates; `process` does not. Resizing the ring is an
-  off-thread structural edit, which is why `bars` is deliberately not a
-  descriptor-addressed parameter.
+- `mooloop_dsp::buffer_device` owns a stereo ring sized by `bars`, **two by
+  default** and adjustable from the face's HISTORY stepper. Construction
+  allocates; `process` does not. Resizing the ring is an off-thread structural
+  edit, which is why `bars` is deliberately not a descriptor-addressed
+  parameter -- the control edits the document and the pump swaps a prepared
+  replacement in, down the road a tempo change already travels.
+
+  It defaulted to eight until 2026-09-16 and that was too long to play.
+  `Position` is normalized over the *ring*, so the ring's length is the
+  position knob's resolution: at eight bars, halfway along the knob was four
+  bars ago and every small move was a leap. Two bars is the loop somebody is
+  playing over.
 - Four parameters are addressable and therefore automatable and modulatable:
   `Position`, `Rate`, `Freeze` and `Crossfade` (declick length in ms).
   Position is normalized over the ring -- `0` is the oldest retained sample
@@ -39,12 +47,19 @@ every other effect, capturing whatever reaches its position in the chain.
   sweeping it scrubs. **It replaced `Offset`, which was beats behind the
   writer**, on 2026-09-16; id 0 is retired and spent, and a project that names
   it is migrated on load. Rate is the head's free-run velocity, which the
-  writer used to supply implicitly.
+  writer used to supply implicitly -- and which **detaches a head of its
+  own** when it is not unity, because at unity the device follows its input
+  directly and there is otherwise nothing for a velocity to apply to. That
+  was missing until 2026-09-16, which is why REV appeared to do nothing at
+  all over a live buffer: it is one `Rate` write, and there was no head.
 - `BufferEvent` is the gesture contract in `mooloop-core`: offset, rate,
   optional window, optional repeat count, a `BufferDuration` of steps /
-  until-next-event / gate, and a crossfade. The face exposes JUMP, REV, and
-  STUT as debug triggers. A running gesture outranks the offset; the offset
-  re-asserts on the next control tick after one ends.
+  until-next-event / gate, and a crossfade. The face's JUMP, REV and STUT are
+  **no longer debug triggers**: each is a write to a published parameter, so
+  nothing the mouse can reach is unreachable from a lane or a modulator. REV
+  is `Rate := 1 - rate`; STUT is LOOP plus a JUMP to `Position`, and the
+  stutter's length is the `Length` knob. A running gesture outranks the
+  position; the position re-asserts on the next control tick after one ends.
 - Read/write collisions are counted and published as device telemetry, so a
   head overtaken by its writer is visible rather than merely audible.
 - The device is built on the shared `mooloop_dsp::delayline` primitive rather

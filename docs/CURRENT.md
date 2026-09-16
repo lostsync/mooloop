@@ -1086,8 +1086,8 @@ land on its own when it starts to matter:
   the hall. The thirteenth kind is the retained-audio Buffer described below,
   which is an ordinary insert in the same picker. Device faces are
   width-quantized in rack units: filter, drive, preamp, bitcrush, limiter,
-  plate, and Buffer take 1U; gate, compressor, EQ, and Mod take 2U; delay and reverb
-  take 3U.
+  and plate take 1U; gate, compressor, EQ, Mod, and Buffer take 2U; delay and
+  reverb take 3U.
 - Gate, compressor, and limiter share one transfer-curve display with a
   draggable threshold handle. Its live dot is fed by the device's own gain
   computer rather than by the surrounding peak meters: the audio thread
@@ -1205,10 +1205,46 @@ land on its own when it starts to matter:
   macros remain planned.
 - The retained-audio buffer is descriptor-addressed: `Position` says where in
   the retained history the read head is, `Rate` is its free-run speed,
-  `Freeze` stops the writer, and `Crossfade` sets the declick length. All four
-  automate and modulate; the face carries Position and Crossfade, and `Rate`
-  and `Freeze` are reachable from the automation lane's device-grouped picker
-  until the 2U face arrives.
+  `Length` and `Loop` are the window it repeats, `Jump` relocates it, `Freeze`
+  stops the writer, `Quantize` and `Quant Grid` decide when a freeze lands, and
+  `Crossfade` sets the declick length. All nine automate and modulate, and the
+  2U face carries all nine — including the clicks and drags on the history,
+  and including the LOOP/JUMP/REV/STUT/QUANT buttons, which are macros over
+  published parameters rather than a second way of doing things.
+  **`Length` is always on the shared musical grid** -- the same twenty-one
+  `ModTimeDivision` entries the modulator racks and the delay use, from `4/1`
+  down to `1/64T`, with dotted and triplet interleaved in pitch order. It is
+  never a free length in beats: one id standing for both would mean two
+  settings of different semantics behind one automatable address, and a
+  stepped index is also what makes modulating it musical -- an envelope on
+  Length sweeps `1/4 → 1/8 → 1/16` where a continuous length would smear. A
+  fresh Buffer loops one bar. **`Length` is also the stutter length**: STUT is
+  LOOP plus a JUMP to `Position`, and it leaves the knob alone. It used to
+  force a sixteenth and put the knob back on release, which made the one
+  control named for the size of the repeat the one thing the gesture ignored.
+  **Freezing and unfreezing wait for a musical boundary**, on by default at
+  one bar, on a `Quant Grid` of its own. That is not a nicety: at the freeze
+  instant the head sits at the write position, so continuing forward wraps
+  straight into the *oldest* retained sample — you hear N bars ago, not now —
+  and that only joins up when the material repeats at the buffer length, which
+  is what freezing on a loop's bar line gives you. While a freeze is waiting
+  the device is **still live**, and a second press before the line takes the
+  request back. With the transport stopped there is no grid to wait for, so it
+  happens at once. A saved freeze is restored rather than quantized: it is a
+  state the document was in, not a gesture somebody just made.
+  `Loop` wraps the head inside that window. The window opens where `Position`
+  points, extends **forward from its anchor for a forward head and backward
+  for a reverse one**, and stays put while the position is held; moving the
+  position moves the loop. It is then **slid back to lie inside retained
+  history**: `Position` at live *is* the write head, so a forward window drawn
+  from it would cover samples the writer has not reached, and a head faster
+  than the writer would walk straight into it. A window longer than the ring
+  is shortened to the ring. Dragging across the history sets the position and
+  the length together, the length snapped to the nearest grid step. `Jump` is the hard edit: a rising edge relocates
+  the head to `Position` with no chase, crossfaded, so a sequenced
+  `0% / 50% / 25% / 75%` with a trigger per step slices exactly rather than
+  arriving a few milliseconds late and at a pitch. A held trigger is one
+  gesture, and a document saved with it down does not fire one on load.
   **Position is normalized over the ring**: `0` is the oldest sample it still
   holds and `1` is now, so a rising ramp is forward playback and the knob's
   top is live. Writing it is an *edit* rather than a standing value -- it aims
@@ -1220,8 +1256,14 @@ land on its own when it starts to matter:
   other way. **A project saved before 2026-09-16 opens where it was**: the
   device's saved offset, its automation lanes and its modulation routes are
   all converted on load, and the old id is retired rather than reused.
-  `bars` is deliberately not a parameter: resizing the ring
-  reallocates, which happens off-thread.
+  **A fresh Buffer keeps two bars of history**, adjustable from 1 to 64 on the
+  face's HISTORY stepper. `bars` is deliberately not a descriptor parameter
+  and cannot become one: resizing the ring reallocates, so the replacement is
+  built on the control thread and swapped in at a block boundary, down the
+  same road a tempo change already travels. The length is not decoration —
+  `Position` is normalized over the whole ring, so the ring's length is the
+  position knob's resolution. It defaulted to eight bars until 2026-09-16,
+  which put 50% four bars ago.
   **Freeze is what makes the device a small realtime sampler rather than an
   effect with buffer controls.** Audio is always flowing through it and the
   last N bars are always being recorded; freezing stops the writer and the
@@ -1230,21 +1272,27 @@ land on its own when it starts to matter:
   plays round and round; unfreezing returns to live. Freezing on a bar line of
   a loop is what makes it seamless — the head is at the write position when it
   freezes, so continuing forward lands in the *oldest* retained sample, which
-  only joins up when the material repeats at the buffer length. **Quantized
-  freeze, which would put the transition on that line for you, is not built
-  yet**, so the timing is currently the hand's.
+  only joins up when the material repeats at the buffer length. Quantized
+  freeze puts the transition on that line for you, and is on by default.
   Changing tempo while frozen **leaves the frozen audio alone**: a tempo
   change rebuilds the ring off-thread, and a frozen buffer refuses the
   replacement rather than losing what is playing.
   `Freeze` persists, and a project saved frozen reopens frozen over an
   **empty ring**, because the frozen audio itself is not saved yet.
   Three controls arbitrate over one head and the rule is fixed: a gesture
-  carries its own rate and keeps it while it runs, a chase armed by `Offset`
+  carries its own rate and keeps it while it runs, a chase armed by `Position`
   outranks free-run while it is closing, and otherwise the head runs at
   `Rate`. `Rate` is signed and spans ±4x; zero is a hold, and a hold is
-  silence rather than one sample repeated. The JUMP/REV/STUT gestures are
-  unchanged, and one running when the writer stops keeps running against the
-  frozen ring and still expires on time.
+  silence rather than one sample repeated. **A `Rate` that is not unity
+  detaches a head of its own**, which is what makes the knob and the REV
+  button audible over a live buffer: at unity the device follows its input
+  directly, and nothing else was detaching a free-running head except Freeze,
+  a `Position` write or a gesture. Unity takes the head back. A head `Rate`
+  created keeps its direction when it runs out of history — it wraps round the
+  ring rather than handing back, so a held REV keeps reversing — unless it is
+  looping, in which case the writer catching its window returns it to live and
+  says so in `RETURNS`. A gesture running when the writer stops keeps running
+  against the frozen ring and still expires on time.
 - **Every generator is descriptor-addressed** through `GeneratorParams`, so
   their parameters automate and modulate like an effect's. The
   three-oscillator synths reserve ten parameter ids per oscillator, starting

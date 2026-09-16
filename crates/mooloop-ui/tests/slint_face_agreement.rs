@@ -615,31 +615,32 @@ fn optional_number(text: &str, key: &str) -> Option<f32> {
 /// the stronger `strip_face.rs` shape.
 /// The parameter a face's modulation index names.
 ///
-/// The index is a **position** in the kind's descriptor table, because that is
-/// what `lib.rs` fills the overlay arrays from, in order. For most kinds the
-/// position and the id are the same number and this is the identity -- which
-/// is why it used to be written as one, and why it stopped being true without
-/// anything having to change here.
+/// **The index is the descriptor id.** `descriptor_policy_flags` and
+/// `destination_depths` both write `slot[descriptor.id]` into a vector
+/// `descriptor_slots` sizes as `max(id) + 1`, so a face reading
+/// `modulation-allowed[n]` is asking about id `n` and nothing else. A
+/// retired id leaves a hole in those vectors, and a face that indexed by
+/// position instead would read its neighbour's hole.
 ///
-/// **The Buffer retired `Offset` on 2026-09-16.** Removing a row moves every
-/// row after it down a position while their ids stay put, so its face index 0
-/// is id 2. A retirement is the one edit that can part the two, and there is
-/// no way to keep them together short of reusing a spent id -- which is the
-/// thing the retirement exists to avoid.
+/// **This was changed to a position lookup on 2026-09-16 and that was
+/// wrong.** The Buffer had just retired `Offset`, its face still said `[0]`
+/// for the knob that had become id 2, and this test reported it exactly as it
+/// should have: "a knob routes modulation to parameter 0, which Buffer does
+/// not describe". Rewriting the *test* to agree with the face made it pass
+/// and left Position's modulation overlay reading a slot nothing writes --
+/// an arc that would never have drawn. The fix belonged in the markup.
+///
+/// The lesson is `AGENTS.md`'s, in a new costume: when a guard fails, check
+/// which side moved before deciding which side is wrong.
 fn face_param_id(kind: EffectKind, index: u32) -> u32 {
-    if kind == EffectKind::Eq {
-        // The EQ's seven controls are a view over fifty descriptors, so its
-        // index is not a position at all.
-        let opening = EqParams::default().selected_target();
-        return EqFaceControl::from_face_index(index)
-            .and_then(|control| EqParams::id_for_selected(opening, control))
-            .unwrap_or(index);
+    if kind != EffectKind::Eq {
+        return index;
     }
-    kind.descriptors()
-        .get(index as usize)
-        .map(|descriptor| descriptor.id)
-        // Past the end of the table, so the caller's "does not describe"
-        // failure is the right one and this must not hide it.
+    // The EQ's seven controls are a view over fifty descriptors, so its index
+    // is not an id either.
+    let opening = EqParams::default().selected_target();
+    EqFaceControl::from_face_index(index)
+        .and_then(|control| EqParams::id_for_selected(opening, control))
         .unwrap_or(index)
 }
 

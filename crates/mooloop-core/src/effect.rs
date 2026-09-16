@@ -2396,6 +2396,44 @@ pub struct BufferParams {
     /// which is at least explicable from the face.
     #[serde(default)]
     pub freeze: f32,
+    /// Length of the active window, as a [`crate::ModTimeDivision`] index.
+    ///
+    /// **Always on the grid, never free.** A free length and a grid length
+    /// behind one automatable id would be one id standing for two settings of
+    /// different semantics, which is the `eq-v2` step 01 fault, and there is
+    /// no lamp on this control to say which one is live. Being stepped is
+    /// also what makes modulating it mean something: an envelope sweeps
+    /// `1/4 -> 1/8 -> 1/16`, where a continuous length in beats would smear.
+    #[serde(default = "default_buffer_length")]
+    pub length: f32,
+    /// Whether the head wraps inside the active window instead of running
+    /// past it. Nonzero is on.
+    #[serde(default)]
+    pub looping: f32,
+    /// Rising edge relocates the head to [`Self::position`] with no chase,
+    /// crossfaded by [`Self::crossfade_ms`].
+    ///
+    /// It persists like every other parameter, and a document saved with it
+    /// held down does **not** fire one on load: the device takes its resting
+    /// value as the edge detector's starting point, so only a transition
+    /// after that is an edge.
+    #[serde(default)]
+    pub jump: f32,
+    /// Whether freezing and unfreezing wait for the next grid boundary.
+    /// Nonzero is on, and **on is the default**.
+    ///
+    /// It is not a nicety. "Pressing Freeze sounds like almost nothing
+    /// happened" is only true when it is true: at the freeze instant the head
+    /// sits at the write position, so continuing forward wraps straight into
+    /// the *oldest* retained sample -- you hear N bars ago, not now. That is
+    /// seamless exactly when the material is periodic at the buffer length,
+    /// which is what freezing on a loop's bar line gives you.
+    #[serde(default = "default_buffer_quantize")]
+    pub quantize: f32,
+    /// Which boundary [`Self::quantize`] waits for, as a
+    /// [`crate::ModTimeDivision`] index. One bar by default.
+    #[serde(default = "default_buffer_quant_grid")]
+    pub quant_grid: f32,
     /// Where in retained memory the read head is, normalized over the ring:
     /// `0` is the oldest sample it still holds and `1` is now. Freeze latches
     /// what "now" means.
@@ -2421,8 +2459,16 @@ pub struct BufferParams {
     pub crossfade_ms: f32,
 }
 
+/// How much history a fresh Buffer keeps, in bars.
+///
+/// **Two, not eight.** `Position` is normalized over the whole ring, so the
+/// ring's length is the knob's resolution: eight bars put 50% four bars ago
+/// and made every small move a leap. Two bars is the loop somebody is playing
+/// over, a sixteenth of it is a tenth of the knob's travel, and it is what
+/// `bars` being adjustable is for -- a pad that wants eight can still say so,
+/// and now has a control that says it.
 const fn default_buffer_bars() -> u8 {
-    8
+    2
 }
 
 const fn default_buffer_crossfade_ms() -> f32 {
@@ -2435,6 +2481,22 @@ const fn default_buffer_rate() -> f32 {
 
 const fn default_buffer_position() -> f32 {
     1.0
+}
+
+/// `ModTimeDivision::Whole`, which is one bar. Index 2 of the shared grid.
+const fn default_buffer_length() -> f32 {
+    2.0
+}
+
+const fn default_buffer_quantize() -> f32 {
+    1.0
+}
+
+/// One bar, the same index [`default_buffer_length`] uses and for the same
+/// reason: a loop and the boundary it starts on are the same musical unit
+/// until somebody says otherwise.
+const fn default_buffer_quant_grid() -> f32 {
+    2.0
 }
 
 /// [`BufferParams`] as documents on disk spell it.
@@ -2457,6 +2519,16 @@ struct BufferParamsOnDisk {
     rate: f32,
     #[serde(default)]
     freeze: f32,
+    #[serde(default = "default_buffer_length")]
+    length: f32,
+    #[serde(default)]
+    looping: f32,
+    #[serde(default)]
+    jump: f32,
+    #[serde(default = "default_buffer_quantize")]
+    quantize: f32,
+    #[serde(default = "default_buffer_quant_grid")]
+    quant_grid: f32,
     #[serde(default)]
     position: Option<f32>,
     #[serde(default)]
@@ -2484,6 +2556,11 @@ impl From<BufferParamsOnDisk> for BufferParams {
             bars,
             rate: disk.rate,
             freeze: disk.freeze,
+            length: disk.length,
+            looping: disk.looping,
+            jump: disk.jump,
+            quantize: disk.quantize,
+            quant_grid: disk.quant_grid,
             position: position.clamp(0.0, 1.0),
             crossfade_ms: disk.crossfade_ms,
         }
@@ -2497,6 +2574,11 @@ impl Default for BufferParams {
             position: default_buffer_position(),
             rate: default_buffer_rate(),
             freeze: 0.0,
+            length: default_buffer_length(),
+            looping: 0.0,
+            jump: 0.0,
+            quantize: default_buffer_quantize(),
+            quant_grid: default_buffer_quant_grid(),
             crossfade_ms: default_buffer_crossfade_ms(),
         }
     }
@@ -2519,7 +2601,12 @@ pub const BUFFER_PARAM_OFFSET_BEATS: u32 = 0;
 pub const BUFFER_PARAM_CROSSFADE_MS: u32 = 1;
 pub const BUFFER_PARAM_POSITION: u32 = 2;
 pub const BUFFER_PARAM_RATE: u32 = 3;
+pub const BUFFER_PARAM_LENGTH: u32 = 4;
+pub const BUFFER_PARAM_LOOP: u32 = 5;
 pub const BUFFER_PARAM_FREEZE: u32 = 6;
+pub const BUFFER_PARAM_JUMP: u32 = 7;
+pub const BUFFER_PARAM_QUANTIZE: u32 = 8;
+pub const BUFFER_PARAM_QUANT_GRID: u32 = 9;
 
 /// How fast the read head may ever travel, forward or back.
 ///
@@ -2530,7 +2617,7 @@ pub const BUFFER_PARAM_FREEZE: u32 = 6;
 /// outruns four-point Hermite into noise -- not a musical choice.
 pub const MAX_BUFFER_RATE: f32 = 4.0;
 
-static BUFFER_DESCRIPTORS: [ParamDescriptor; 4] = [
+static BUFFER_DESCRIPTORS: [ParamDescriptor; 9] = [
     ParamDescriptor {
         id: BUFFER_PARAM_POSITION,
         name: "Position",
@@ -2562,12 +2649,74 @@ static BUFFER_DESCRIPTORS: [ParamDescriptor; 4] = [
         id: BUFFER_PARAM_FREEZE,
         name: "Freeze",
         unit: "",
+        // A switch, so `Stepped(2)`, which is what every other switch in the
+        // tables declares. It shipped as `Linear` on 2026-09-16 and that was
+        // an oversight rather than a choice: a lane drawn on it would have
+        // carried values the device could only round.
+        curve: ParamCurve::Stepped(2),
         min: 0.0,
         max: 1.0,
-        curve: ParamCurve::Linear,
         default: 0.0,
     },
+    ParamDescriptor {
+        id: BUFFER_PARAM_LENGTH,
+        name: "Length",
+        unit: "",
+        min: 0.0,
+        max: MOD_TIME_DIVISION_TOP,
+        curve: ParamCurve::Stepped(crate::ModTimeDivision::ALL.len() as u16),
+        default: 2.0,
+    },
+    ParamDescriptor {
+        id: BUFFER_PARAM_LOOP,
+        name: "Loop",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Stepped(2),
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: BUFFER_PARAM_JUMP,
+        name: "Jump",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Stepped(2),
+        default: 0.0,
+    },
+    ParamDescriptor {
+        id: BUFFER_PARAM_QUANTIZE,
+        name: "Quantize",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        curve: ParamCurve::Stepped(2),
+        default: 1.0,
+    },
+    ParamDescriptor {
+        id: BUFFER_PARAM_QUANT_GRID,
+        name: "Quant Grid",
+        unit: "",
+        min: 0.0,
+        max: MOD_TIME_DIVISION_TOP,
+        curve: ParamCurve::Stepped(crate::ModTimeDivision::ALL.len() as u16),
+        default: 2.0,
+    },
 ];
+
+/// The top index of the shared musical grid, as a parameter range.
+///
+/// Derived rather than spelled, because `ModTimeDivision::ALL` is the grid and
+/// a descriptor that said `20.0` would be a second copy of its length --
+/// exactly the shape `scripts/dupe-audit` exists to find.
+///
+/// Public, because it is also the divisor every caller needs to turn a
+/// normalized stepped parameter back into a grid index, and three of them had
+/// written `20` by hand: two in `buffer-device.slint` and one in the Buffer's
+/// telemetry. `Divisions.top` in `controls.slint` is the markup's single copy
+/// and `the_slint_division_table_matches_mod_time_division` now guards it.
+pub const MOD_TIME_DIVISION_TOP: f32 = crate::ModTimeDivision::ALL.len() as f32 - 1.0;
 
 /// A container's own state.
 ///
@@ -2923,6 +3072,11 @@ impl EffectParams {
                 BUFFER_PARAM_CROSSFADE_MS => Some(p.crossfade_ms),
                 BUFFER_PARAM_RATE => Some(p.rate),
                 BUFFER_PARAM_FREEZE => Some(p.freeze),
+                BUFFER_PARAM_LENGTH => Some(p.length),
+                BUFFER_PARAM_LOOP => Some(p.looping),
+                BUFFER_PARAM_JUMP => Some(p.jump),
+                BUFFER_PARAM_QUANTIZE => Some(p.quantize),
+                BUFFER_PARAM_QUANT_GRID => Some(p.quant_grid),
                 _ => None,
             },
             Self::Chain(p) => match id {
@@ -3059,6 +3213,11 @@ impl EffectParams {
                 BUFFER_PARAM_CROSSFADE_MS => p.crossfade_ms = value,
                 BUFFER_PARAM_RATE => p.rate = value,
                 BUFFER_PARAM_FREEZE => p.freeze = value,
+                BUFFER_PARAM_LENGTH => p.length = value,
+                BUFFER_PARAM_LOOP => p.looping = value,
+                BUFFER_PARAM_JUMP => p.jump = value,
+                BUFFER_PARAM_QUANTIZE => p.quantize = value,
+                BUFFER_PARAM_QUANT_GRID => p.quant_grid = value,
                 _ => return None,
             },
             Self::Chain(p) => match id {

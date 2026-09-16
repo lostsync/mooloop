@@ -1,22 +1,24 @@
 import { Theme } from "theme.slint";
-import { ParameterKnob, ToolButton } from "controls.slint";
+import { BbtText, Divisions, ParameterKnob, SectionLabel, ToggleButton, ToolButton } from "controls.slint";
+import { StepperField } from "toolbar.slint";
 import { DeviceRackMetrics, EffectDeviceShell } from "device-rack.slint";
 
 // A momentary trigger: it reports press and release separately rather than
-// a click, so a gated event can hold for exactly as long as the control is
-// down. Modelled on ToolButton's look so it sits with the latching triggers.
+// a click, so a held gesture can last exactly as long as the control is down.
+// Modelled on ToolButton's look so it sits with the latching controls.
 component HeldButton inherits Rectangle {
     in property <string> text;
     in property <string> tooltip: root.text;
+    in property <bool> lit;
     callback pressed;
     callback released;
 
     min-width: 44px;
-    min-height: 24px;
+    min-height: 22px;
     border-radius: Theme.radius-md;
-    border-width: tap.has-hover ? Theme.hairline : 0px;
+    border-width: tap.has-hover ? 1px : 0px;
     border-color: Theme.border;
-    background: tap.pressed ? Theme.accent-active : Theme.surface-raised;
+    background: tap.pressed || root.lit ? Theme.accent-active : Theme.surface-raised;
     accessible-role: button;
     accessible-label: root.tooltip;
 
@@ -25,12 +27,12 @@ component HeldButton inherits Rectangle {
         color: Theme.text;
         horizontal-alignment: center;
         vertical-alignment: center;
-        font-size: Theme.text-xl;
+        font-size: 11px;
     }
 
     tap := TouchArea {
         mouse-cursor: pointer;
-        // A pointer leaving while down still releases: otherwise the head
+        // A pointer leaving while down still releases: otherwise the gesture
         // would latch on indefinitely after a drag off the control.
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down) { root.pressed(); }
@@ -43,108 +45,333 @@ component HeldButton inherits Rectangle {
     Tooltip { text: @markdown("\{root.tooltip}"); }
 }
 
-// One retained-audio buffer insert.
+// The retained history, drawn, with the read head and the active window over
+// it.
 //
-// Two surfaces, because the device has two kinds of control. POSITION and
-// XFADE are standing parameters: descriptor-addressed, so an automation lane
-// or the modulation matrix can drive them like any other knob. Sweeping
-// POSITION is a scrub — the head chases it and the closing speed *is* the
-// playback rate — and a position written once is an edit that finishes, after
-// which the head free-runs at Rate.
+// The waveform earns its place here in a way it does not on a synth, because
+// the memory *is* the instrument: there is nothing else on the face that says
+// what the device is holding. The bars are peaks published from the audio
+// thread, one per ring bin, and everything drawn over them is a fraction of
+// the ring rather than a pixel somebody worked out.
+component HistoryView inherits Rectangle {
+    in property <[float]> peaks;
+    // -1 when the device is following and there is no detached head.
+    in property <float> head: -1;
+    in property <float> write;
+    in property <float> window-start: -1;
+    in property <float> window-end: -1;
+    in property <bool> frozen;
+    callback position-picked(float);
+    callback window-dragged(float, float);
+
+    background: Theme.background;
+    border-radius: Theme.radius-sm;
+    clip: true;
+
+    // The window, behind the bars so the audio inside it stays readable, and
+    // edged so it is legible when it is narrow -- a `1/64` window is two
+    // pixels wide and a wash alone would be invisible at exactly the setting
+    // somebody most wants to see.
+    if root.window-start >= 0 && root.window-end >= 0 : Rectangle {
+        x: min(root.window-start, root.window-end) * parent.width;
+        width: max(1px, abs(root.window-end - root.window-start) * parent.width);
+        height: 100%;
+        background: Theme.accent;
+        opacity: 0.22;
+        Rectangle {
+            x: 0; width: 1px; height: 100%;
+            background: Theme.accent;
+        }
+        Rectangle {
+            x: parent.width - 1px; width: 1px; height: 100%;
+            background: Theme.accent;
+        }
+    }
+
+    for amplitude[index] in root.peaks : Rectangle {
+        x: index * parent.width / max(1, root.peaks.length);
+        y: (parent.height - self.height) / 2;
+        width: max(1px, parent.width / max(1, root.peaks.length));
+        height: max(1px, amplitude * (parent.height - 6px));
+        // Frozen history is the thing being played rather than the thing
+        // going past, so it reads as material rather than as a meter.
+        background: root.frozen ? Theme.text : Theme.text-muted;
+    }
+
+    // Now. It stops moving when the writer does, which is most of what
+    // "frozen" looks like from here.
+    Rectangle {
+        x: clamp(root.write, 0, 1) * (parent.width - 1px);
+        width: 1px;
+        height: 100%;
+        background: Theme.text-faint;
+    }
+
+    if root.head >= 0 : Rectangle {
+        x: clamp(root.head, 0, 1) * (parent.width - 2px);
+        width: 2px;
+        height: 100%;
+        background: Theme.accent;
+    }
+
+    // Click sets Position; drag sets the window. Both write published
+    // parameters and nothing else -- there are no UI-only operations on this
+    // face, which is what keeps a lane able to do everything a mouse can.
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        private property <float> from: 0;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                self.from = clamp(self.mouse-x / max(1px, parent.width), 0, 1);
+            }
+            if (e.kind == PointerEventKind.up) {
+                let to = clamp(self.mouse-x / max(1px, parent.width), 0, 1);
+                if (abs(to - self.from) < 0.01) {
+                    root.position-picked(to);
+                } else {
+                    root.window-dragged(min(self.from, to), max(self.from, to));
+                }
+            }
+        }
+    }
+}
+
+// One retained-audio buffer insert, at two units.
 //
-// **Rate and Freeze have no knob here yet.** They are published parameters and
-// reachable from a lane; the face that shows them is this plan's step 6, where
-// Buffer becomes 2U. A knob each in the meantime would be two knobs to move.
+// **The device is a small realtime sampler lurking behind the live audio**,
+// not an effect with buffer-related controls. Audio is always flowing through
+// it and the last N bars are always being recorded; FREEZE turns that history
+// into a sample, control signals manipulate it, and releasing FREEZE returns
+// to live. There is no arm, no record gesture and no file dialog, which is
+// the whole success test.
 //
-// The three buttons are gestures, which a curve cannot express: they fire a
-// complete event tuple that creates a head with its own window and repeat
-// count. They remain a debug surface standing in for the note-mapping and
-// parameter-lock layers, and go through the same `TriggerBuffer` command
-// those will. A running gesture outranks POSITION, which re-asserts itself on
-// the next control tick after the gesture ends.
+// It outgrew 1U at nine parameters and took another unit rather than
+// compressing, per `UI_DESIGN.md`. Every control here writes a **published
+// parameter** -- including the clicks and drags on the history, and including
+// the three buttons that used to fire debug event tuples. Nothing the mouse
+// can reach is unreachable from an automation lane or a modulator, which is
+// what makes the face a control surface rather than a second way of doing
+// things.
+//
+// Modulation indices are descriptor **ids**, which is what `lib.rs` fills the
+// overlay vectors by: Position 2, Crossfade 1, Rate 3, Length 4, Quant Grid 9.
+// Id 0 is retired and its slot is a hole nothing writes, so a face that
+// counted knobs from zero would draw an arc that never moves.
 export component BufferDeviceFace inherits EffectDeviceShell {
     name: "Buffer";
-    kind: "BUFFER / 1U";
+    kind: "BUFFER / 2U";
+
+    // --- what the device is doing, published as display telemetry ---------
+    in property <[float]> peaks;
+    in property <float> head-fraction: -1;
+    in property <float> write-fraction;
+    in property <float> window-start: -1;
+    in property <float> window-end: -1;
+    in property <bool> frozen;
+    /// 0 none, 1 a freeze waiting for its boundary, 2 a thaw waiting.
+    in property <int> armed-freeze;
+    /// How much history the ring holds, in bars. Not a descriptor parameter
+    /// -- changing it reallocates, which the audio callback may not do -- so
+    /// it has its own callback rather than an id, and the engine rebuilds the
+    /// ring off-thread. It is still the number that decides what `Position`
+    /// means, which is why it is a control and not a caption.
+    ///
+    /// `in-out` for the reason `looping` and `quantize` are, one section
+    /// down: `StepperField.value` is `in-out` and an arrow click assigns to
+    /// it, which drops whatever binding it had. Bound one way the stepper
+    /// would follow the engine until the first press and then stop.
+    in-out property <int> history-bars: 2;
     // Running count of forced returns to live: the writer overtaking a
-    // detached head. Monotonic, so a collision landing between two GUI
-    // frames still shows up.
+    // detached head. Demoted from the headline it used to be -- it is
+    // live-mode information, and Freeze removes most of what it reported.
     in property <int> collisions;
-    // Normalized 0..1 against the descriptor tables in mooloop-core.
-    // Position is *already* normalized there — 0 is the oldest retained
-    // sample and 1 is now — so it is the one control on this face with no
-    // second spelling of a range to get wrong.
+    // Bar, beat and tick are computed in Rust and printed here. The markup
+    // formats and never derives: `time::BEATS_PER_BAR` is the only place that
+    // says four, and a second one on this side is the fault `BbtText` exists
+    // to avoid.
+    in property <int> position-bar: 1;
+    in property <int> position-beat: 1;
+    in property <int> position-tick;
+    in property <int> length-bars;
+    in property <int> length-beats;
+    in property <int> length-ticks;
+
+    // --- published parameters, normalized 0..1 ----------------------------
     in-out property <float> position;
-    in-out property <float> crossfade; // 0.5..50 ms
+    in-out property <float> crossfade;
+    in-out property <float> rate;
+    in-out property <float> length;
+    in-out property <float> quant-grid;
+    // `in-out`, because `ToggleButton.checked` is: a click assigns to it, and
+    // assigning to a property drops whatever binding it had. Bound one way
+    // these would follow the engine until the first press and then stop,
+    // which is a control that lies after exactly one use.
+    in-out property <bool> looping;
+    in-out property <bool> quantize;
+
     callback position-changed(float);
     callback crossfade-changed(float);
-    // Index into the fixed debug event table, matching TRIGGERS below.
-    callback trigger(int);
-
-    private property <float> crossfade-ms: 0.5 * pow(100, root.crossfade);
-    // Reverse is held rather than latched: it runs while the control is down.
+    callback rate-changed(float);
+    callback length-changed(float);
+    callback quant-grid-changed(float);
+    callback loop-toggled(bool);
+    callback quantize-toggled(bool);
+    callback history-bars-changed(int);
+    callback freeze-toggled(bool);
+    callback window-dragged(float, float);
+    // Momentary, because the gesture lasts as long as the control is down.
+    // Each one writes parameters and restores them on release; the face keeps
+    // no state a lane could not also reach.
+    callback jump-pressed();
+    callback jump-released();
     callback reverse-pressed();
     callback reverse-released();
+    callback stutter-pressed();
+    callback stutter-released();
+
+    private property <float> rate-value: (root.rate * 8) - 4;
+    private property <float> crossfade-ms: 0.5 * pow(100, root.crossfade);
+    private property <int> length-index: round(root.length * Divisions.top);
+    private property <int> quant-index: round(root.quant-grid * Divisions.top);
 
     VerticalLayout {
         padding: 6px;
         padding-top: DeviceRackMetrics.header-height + 6px;
-        spacing: 6px;
+        spacing: 5px;
 
-        Rectangle {
-            height: 34px;
-            background: Theme.panel;
-            border-radius: Theme.radius-sm;
-            HorizontalLayout {
-                padding: 6px;
-                spacing: 6px;
+        // --- state, history length, and the freeze --------------------------
+        HorizontalLayout {
+            // The row's height is the stepper's, rather than the 20px it was
+            // when everything in it was a caption: a control with arrows to
+            // hit cannot be squeezed to fit a label's row.
+            height: Theme.control-height;
+            spacing: 6px;
+            Rectangle {
+                width: 58px;
+                border-radius: Theme.radius-sm;
+                background: root.frozen ? Theme.accent-active : Theme.surface-raised;
                 Text {
-                    text: "COLLISIONS";
-                    color: Theme.text-faint;
-                    font-size: Theme.text-md;
+                    text: root.frozen ? "FROZEN" : "LIVE";
+                    color: Theme.text;
+                    font-size: 9px;
+                    horizontal-alignment: center;
                     vertical-alignment: center;
-                    horizontal-stretch: 1;
                 }
-                Text {
-                    text: root.collisions;
-                    // A nonzero count is not an error — a forced return is
-                    // the specified behaviour — so it reads as attention,
-                    // not as a fault.
-                    color: root.collisions > 0 ? Theme.warning : Theme.text-muted;
-                    font-size: Theme.text-2xl;
-                    font-family: Theme.font-family-mono;
-                    vertical-alignment: center;
+            }
+            StepperField {
+                label: "HISTORY";
+                tooltip: "History";
+                hint: "How many bars of audio the buffer keeps. Position is measured over the whole of it, so a shorter history is a finer control.";
+                value <=> root.history-bars;
+                minimum: 1;
+                maximum: 64;
+                coarse-step: 4;
+                value-width: 44px;
+                display-text: root.history-bars + (root.history-bars == 1 ? " BAR" : " BARS");
+                changed(bars) => { root.history-bars-changed(bars); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            // A pending freeze is the one state the face must not stay quiet
+            // about: until the boundary the device is still live, and a
+            // control that looked as though nothing had happened would be the
+            // gesture failing silently.
+            Text {
+                text: root.armed-freeze == 1 ? "ARMED" : root.armed-freeze == 2 ? "RELEASING" : "";
+                color: Theme.warning;
+                font-size: 9px;
+                vertical-alignment: center;
+            }
+            // A `ToolButton` rather than a `ToggleButton`, because what it
+            // shows is not one boolean: a freeze that is armed but has not
+            // landed is lit while `frozen` is still false, and that state is
+            // the one the face must not stay quiet about.
+            ToolButton {
+                width: 62px;
+                text: "FREEZE";
+                tooltip: "FREEZE";
+                active: root.frozen || root.armed-freeze == 1;
+                clicked => {
+                    root.freeze-toggled(!(root.frozen || root.armed-freeze == 1));
                 }
             }
         }
 
+        HistoryView {
+            vertical-stretch: 1;
+            peaks: root.peaks;
+            head: root.head-fraction;
+            write: root.write-fraction;
+            window-start: root.window-start;
+            window-end: root.window-end;
+            frozen: root.frozen;
+            position-picked(p) => { root.position = p; root.position-changed(p); }
+            window-dragged(a, b) => { root.window-dragged(a, b); }
+        }
+
+        // --- the standing parameters ---------------------------------------
         HorizontalLayout {
             spacing: 0px;
             ParameterKnob {
-                width: 52px;
-                diameter: 36px;
+                width: 54px;
+                diameter: 34px;
                 label: "Position";
                 tooltip: "Where in the retained history the read head is";
                 value <=> root.position;
                 default-value: 1;
-                // The top of the travel is the write head, which is live.
                 value-text: root.position > 0.9995
                     ? "live"
                     : round(root.position * 1000) / 10 + " %";
                 modulation-armed: root.modulation-armed;
-                modulation-allowed: root.modulation-allowed[0];
-                modulation-depth: root.modulation-depths[0];
-                modulation-offset: root.modulation-offsets[0];
-                modulation-route-count: root.modulation-route-counts[0];
+                modulation-allowed: root.modulation-allowed[2];
+                modulation-depth: root.modulation-depths[2];
+                modulation-offset: root.modulation-offsets[2];
+                modulation-route-count: root.modulation-route-counts[2];
                 changed(v) => { root.position-changed(v); }
-                modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
-                modulation-edit-started => { root.modulation-edit-started(0); }
-                modulation-edit-finished => { root.modulation-edit-finished(0); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(2, v); }
+                modulation-edit-started => { root.modulation-edit-started(2); }
+                modulation-edit-finished => { root.modulation-edit-finished(2); }
             }
             ParameterKnob {
-                width: 52px;
-                diameter: 36px;
+                width: 54px;
+                diameter: 34px;
+                label: "Length";
+                tooltip: "Length of the active window, on the shared grid";
+                value <=> root.length;
+                default-value: 0.1;
+                value-text: Divisions.label(root.length-index);
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[4];
+                modulation-depth: root.modulation-depths[4];
+                modulation-offset: root.modulation-offsets[4];
+                modulation-route-count: root.modulation-route-counts[4];
+                changed(v) => { root.length-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(4, v); }
+                modulation-edit-started => { root.modulation-edit-started(4); }
+                modulation-edit-finished => { root.modulation-edit-finished(4); }
+            }
+            ParameterKnob {
+                width: 54px;
+                diameter: 34px;
+                label: "Rate";
+                tooltip: "Free-run speed of the read head";
+                value <=> root.rate;
+                default-value: 0.625;
+                value-text: round(root.rate-value * 100) / 100 + "x";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[3];
+                modulation-depth: root.modulation-depths[3];
+                modulation-offset: root.modulation-offsets[3];
+                modulation-route-count: root.modulation-route-counts[3];
+                changed(v) => { root.rate-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(3, v); }
+                modulation-edit-started => { root.modulation-edit-started(3); }
+                modulation-edit-finished => { root.modulation-edit-finished(3); }
+            }
+            ParameterKnob {
+                width: 54px;
+                diameter: 34px;
                 label: "Xfade";
-                tooltip: "Crossfade applied when the head detaches or returns";
+                tooltip: "Crossfade applied when the head moves or returns";
                 value <=> root.crossfade;
                 default-value: 0.349485;
                 value-text: round(root.crossfade-ms * 10) / 10 + " ms";
@@ -158,30 +385,107 @@ export component BufferDeviceFace inherits EffectDeviceShell {
                 modulation-edit-started => { root.modulation-edit-started(1); }
                 modulation-edit-finished => { root.modulation-edit-finished(1); }
             }
-            Rectangle { horizontal-stretch: 1; }
+            ParameterKnob {
+                width: 54px;
+                diameter: 34px;
+                label: "Quant";
+                tooltip: "Which boundary a freeze waits for";
+                value <=> root.quant-grid;
+                default-value: 0.1;
+                value-text: root.quantize ? Divisions.label(root.quant-index) : "off";
+                modulation-armed: root.modulation-armed;
+                modulation-allowed: root.modulation-allowed[9];
+                modulation-depth: root.modulation-depths[9];
+                modulation-offset: root.modulation-offsets[9];
+                modulation-route-count: root.modulation-route-counts[9];
+                changed(v) => { root.quant-grid-changed(v); }
+                modulation-depth-changed(v) => { root.modulation-depth-changed(9, v); }
+                modulation-edit-started => { root.modulation-edit-started(9); }
+                modulation-edit-finished => { root.modulation-edit-finished(9); }
+            }
+            VerticalLayout {
+                padding-top: 6px;
+                spacing: 3px;
+                horizontal-stretch: 1;
+                // Bars:beats:ticks, from the same component the transport
+                // draws. The head's place is a *position* and counts from
+                // one; the window's length is a *duration* and counts from
+                // zero, so a one-bar window reads 1:0:0 rather than 2:1:0.
+                HorizontalLayout {
+                    spacing: 4px;
+                    SectionLabel { text: "HEAD"; }
+                    BbtText {
+                        bar: root.position-bar;
+                        beat: root.position-beat;
+                        tick: root.position-tick;
+                        bar-digits: 1;
+                        tick-digits: 2;
+                        color: Theme.text;
+                        font-size: 10px;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 4px;
+                    SectionLabel { text: "WINDOW"; }
+                    BbtText {
+                        bar: root.length-bars;
+                        beat: root.length-beats;
+                        tick: root.length-ticks;
+                        bar-digits: 1;
+                        tick-digits: 2;
+                        color: Theme.text-muted;
+                        font-size: 10px;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 4px;
+                    SectionLabel { text: "RETURNS"; }
+                    Text {
+                        text: root.collisions;
+                        color: root.collisions > 0 ? Theme.warning : Theme.text-faint;
+                        font-size: 10px;
+                        font-family: "monospace";
+                        vertical-alignment: center;
+                    }
+                }
+            }
         }
 
+        // --- the gestures ---------------------------------------------------
         HorizontalLayout {
-            height: 26px;
+            height: 22px;
             spacing: 4px;
-            ToolButton {
+            ToggleButton {
+                width: 58px;
+                text: "LOOP";
+                checked <=> root.looping;
+                toggled(on) => { root.loop-toggled(on); }
+            }
+            HeldButton {
                 text: "JUMP";
-                tooltip: "−1 beat, 1.0x";
-                clicked => { root.trigger(0); }
+                tooltip: "Relocate the head to Position, with no chase";
+                pressed => { root.jump-pressed(); }
+                released => { root.jump-released(); }
             }
             HeldButton {
                 text: "REV";
-                tooltip: "hold: reverse, 2-bar loop";
+                tooltip: "hold: Rate the other way round";
                 pressed => { root.reverse-pressed(); }
                 released => { root.reverse-released(); }
             }
-            ToolButton {
+            HeldButton {
                 text: "STUT";
-                tooltip: "−1/16, window 1/16, 8x";
-                clicked => { root.trigger(2); }
+                tooltip: "hold: loop one Length from Position";
+                pressed => { root.stutter-pressed(); }
+                released => { root.stutter-released(); }
             }
+            ToggleButton {
+                width: 58px;
+                text: "QUANT";
+                checked <=> root.quantize;
+                toggled(on) => { root.quantize-toggled(on); }
+            }
+            Rectangle { horizontal-stretch: 1; }
         }
-
-        Rectangle { vertical-stretch: 1; }
     }
 }

@@ -3,6 +3,7 @@
 //! `effect_target` is a channel or a bus, and every edit here goes through
 //! `effect_chain_mut`, so none of them needs to know which.
 
+use crate::engine::BufferResize;
 use crate::session::Session;
 use mooloop_core::gain::{db_to_linear, MIN_DB as METER_FLOOR_DB};
 use mooloop_core::{
@@ -623,6 +624,41 @@ impl Session {
     fn selector_from_normalized(normalized: f32) -> usize {
         let last = EqParams::LOW_PASS_TARGET;
         (normalized.clamp(0.0, 1.0) * last as f32).round() as usize
+    }
+
+    /// How many bars of history a Buffer keeps.
+    ///
+    /// **Not a descriptor parameter, and it cannot become one**: changing it
+    /// reallocates the ring, which the audio callback may not do. The table
+    /// in `effect.rs` says so where the ids are declared. So this reports the
+    /// pair the pump needs instead -- what the running node was built with,
+    /// and what it is to become -- and the caller sends it down the same road
+    /// a tempo resize already travels.
+    ///
+    /// The document is edited here and the engine catches up afterwards, so
+    /// the *old* configuration cannot be re-read later; it goes in the
+    /// message.
+    pub fn set_buffer_bars(&mut self, slot: i32, bars: u8) -> Option<BufferResize> {
+        let target = self.effect_target;
+        let index = usize::try_from(slot).ok()?;
+        let effect = self.effect_chain_mut()?.get_mut(index)?;
+        let EffectParams::Buffer(params) = &mut effect.params else {
+            return None;
+        };
+        let bars = bars.max(1);
+        if params.bars == bars {
+            return None;
+        }
+        let expected = *params;
+        params.bars = bars;
+        let next = *params;
+        self.mark_dirty();
+        Some(BufferResize {
+            target,
+            slot: index as u8,
+            expected,
+            next,
+        })
     }
 
     /// Turns a delay's tempo sync on or off.
