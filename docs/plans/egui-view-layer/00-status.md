@@ -9,7 +9,26 @@ mood. It is deliberately shorter than
 detailed plan for the second half would be pretending to know things that the
 spike in step 01 is supposed to find out.
 
-## Prerequisite, hard
+## Prerequisite, hard -- met 2026-09-03
+
+**Satisfied.** `session-layer-extraction/` finished the day after this was
+written and is archived; the section below is kept as the reason it was a
+prerequisite. What a toolkit change still meets, checked 2026-09-16:
+
+- **Tempo and swing live only in the window.** `Session::project_snapshot`
+  takes them as arguments, and `lib.rs` reads `get_bpm` 19 times and
+  `get_swing_percent` 9. They are document state and belong on `Session`.
+- **A few flags are read back from the window instead of the session** --
+  `editing-bus` and `editing-bus-index` (which duplicate
+  `Session::effect_target`), `playing`, `pattern-length`, `selected-channel`.
+  Small, and each one is a place a new view would have to reproduce the same
+  property rather than ask the session.
+- **Pane layout and appearance preferences are read from the window.** That
+  is view state and can reasonably stay with whatever view replaces it.
+- **The callback registration is still 5,228 lines in `UiState::new`**, and
+  the meter polling stayed in the view; both are adapters a new view would
+  replace rather than port.
+
 
 **`docs/plans/archive/session-layer-extraction/` must be finished first.**
 
