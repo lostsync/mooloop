@@ -25,7 +25,7 @@
 //! point, so a block is no longer one stretch of musical time but a short
 //! ordered list of them.
 
-use mooloop_core::{ticks_per_sample, Ppq, BEATS_PER_BAR};
+use mooloop_core::{ticks_per_sample, BbtPosition, Ppq, Ticks};
 
 /// How many stretches of musical time one process block may be cut into.
 ///
@@ -94,10 +94,20 @@ impl Transport {
     }
 
     /// Current beat index within the bar (0-based).
+    ///
+    /// Zero-based where [`BbtPosition`] is one-based, because that is this
+    /// method's long-standing contract and its callers -- `RenderReport`, the
+    /// executor, the bridge, the UI -- count from zero. The derivation is
+    /// shared rather than hand-rolled: it and `Session::transport_position`
+    /// used to compute this independently in two crates and agreed only
+    /// because two people had written the same 4.
+    ///
+    /// A negative position floors to zero rather than wrapping. [`Self::seek`]
+    /// refuses a negative tick and advancing only adds, so the old
+    /// `rem_euclid` was defending against a position nothing can produce.
     pub fn beat_in_bar(&self) -> u8 {
-        let tpb = self.ppq.ticks_per_beat() as f64;
-        let beat = (self.position_ticks / tpb) as i64;
-        beat.rem_euclid(i64::from(BEATS_PER_BAR)) as u8
+        let ticks = Ticks(self.position_ticks.max(0.0) as u64);
+        BbtPosition::from_ticks(ticks, self.ppq).beat as u8 - 1
     }
 
     /// Advance the clock by `frames` samples with no loop installed,
@@ -342,6 +352,50 @@ mod tests {
         );
         let (spans, _) = t.advance_looped(64, range);
         assert_eq!(spans[0].start_tick, 0.0, "and the next block folds it");
+    }
+
+    /// The contract between this crate's beat-in-bar and `mooloop-core`'s.
+    ///
+    /// These were two hand-rolled derivations in two crates -- this one and
+    /// `Session::transport_position` -- reading the same clock and agreeing
+    /// only because two people had independently written `4`. They share
+    /// `BbtPosition` now, and this is the check that would have reported them
+    /// parting.
+    #[test]
+    fn beat_in_bar_is_the_cores_bbt_position_counted_from_zero() {
+        let mut t = Transport::new(48_000);
+        let ticks_per_beat = u64::from(t.ppq.ticks_per_beat());
+        let mut checked = 0;
+        // Five bars, landing on beat boundaries and between them.
+        let mut tick = 0;
+        while tick < ticks_per_beat * u64::from(mooloop_core::BEATS_PER_BAR) * 5 {
+            t.position_ticks = tick as f64;
+            let expected = BbtPosition::from_ticks(Ticks(tick), t.ppq).beat - 1;
+            assert_eq!(
+                u32::from(t.beat_in_bar()),
+                expected,
+                "the two derivations parted at tick {tick}"
+            );
+            checked += 1;
+            tick += 13;
+        }
+        assert_eq!(
+            checked, 148,
+            "the sweep stopped covering five bars, so it proved nothing"
+        );
+
+        // A fractional position floors to the beat it is inside, which is what
+        // `position_ticks` being an f64 means for a readout.
+        t.position_ticks = (ticks_per_beat as f64) * 2.75;
+        assert_eq!(t.beat_in_bar(), 2);
+
+        // Negative positions floor to zero rather than wrapping. `seek`
+        // refuses one and advancing only adds, so this is the posture the old
+        // `rem_euclid` had, not a case the engine can reach.
+        t.position_ticks = -(ticks_per_beat as f64);
+        assert_eq!(t.beat_in_bar(), 0);
+        t.position_ticks = f64::NAN;
+        assert_eq!(t.beat_in_bar(), 0);
     }
 
     /// A seek refuses what it cannot represent instead of landing at zero,

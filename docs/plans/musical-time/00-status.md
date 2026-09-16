@@ -13,9 +13,33 @@ is wrong.**
 
 | Step | State |
 |---|---|
-| `01-one-bar-one-home.md` | Not started |
-| `02-position-and-duration.md` | Not started |
-| `03-the-guard.md` | Not started |
+| `01-one-bar-one-home.md` | Landed 2026-09-15 |
+| `02-position-and-duration.md` | Landed 2026-09-15 |
+| `03-the-guard.md` | Landed 2026-09-15 |
+
+### What the doing changed about the plan
+
+**The guard was written first, not last.** Step 03's mutation table opens with
+"run it *before* the fix or it is decoration", and the only way to do that
+honestly was to write `dupe-audit bar-arithmetic` against the unfixed tree.
+It reported **ten** sites where the survey had found eight: `session.rs:475`
+and `project.rs:896` both set `beats_per_bar` to a literal `4` and neither was
+in the table above. A check written after its fix would have been shaped to
+report exactly what the author already knew about.
+
+**The check is narrower than step 03 specified, for a reason worth keeping.**
+It asked for `% 4` and `/ 4` on any line mentioning `bar`, `beat` *or* `tick`.
+Beat and tick sweep in `MidiMessage::song_position_ticks`, whose `ppq / 4` is
+the MIDI spec's sixteenth-note beat -- a different four, which must not move if
+mooloop's grid does. One permanent false positive is worse than a narrow
+check, because a check that is never clean stops being read. The docstring
+says so.
+
+**`transport::beat_in_bar` stopped wrapping negative positions**, and that is
+a deliberate behaviour change on an input nothing can produce: `seek` refuses a
+negative tick and advancing only adds, so the old `rem_euclid` was defending
+against a position the engine cannot reach. `BbtPosition` counts from zero, so
+the shared derivation floors instead. The test says which case is which.
 
 ## What the survey found
 

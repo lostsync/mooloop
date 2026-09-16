@@ -161,6 +161,23 @@ checks?** Ask it of any mirrored value, and ask it before believing a green
 suite. `scripts/dupe-audit one-sided-test` automates the one of the six a search
 can reach; the rest need the question asked by hand.
 
+A seventh check, `bar-arithmetic`, was added 2026-09-15 with
+`docs/plans/musical-time/`, and its lesson is about *when* a check gets
+written. The plan's own mutation table opens with "run it before the fix or it
+is decoration", so it was written against the unfixed tree -- and it reported
+**ten** sites where the survey that commissioned it had found eight. Two
+places set `beats_per_bar` to a literal `4` and nobody had noticed either. A
+check written after its fix is shaped to report what its author already knows
+about; a check written before it is shaped by the tree.
+
+It is also narrower than the plan asked for, and that is recorded in its
+docstring rather than quietly. The plan wanted `% 4` and `/ 4` swept on any
+line mentioning `bar`, `beat` or `tick`; beat and tick catch
+`MidiMessage::song_position_ticks`, whose `ppq / 4` is the MIDI spec's
+sixteenth-note beat and must *not* move if mooloop's grid does. **One
+permanent false positive is worse than a narrow check**, because a check that
+is never clean stops being read.
+
 There is a third limit, and it is the one to keep in mind when a check comes
 back clean. **`repeated-line` matches bytes, so a rename hides a copy from it
 completely.** On 2026-09-12 it reported the effect event-splitting loop in ten

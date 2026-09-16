@@ -11,7 +11,8 @@ use mooloop_core::{
     chain_latency, compensable_send_edges, compile_audio_graph, compile_bus_graph,
     compile_latency, log_error, sends_are_compensable,
     CompiledAudioGraph,
-    CompiledLatency, DeviceKind, EffectTarget, EngineCommand, OutletDescriptor, PublishesOutlets,
+    BbtPosition, CompiledLatency, DeviceKind, EffectTarget, EngineCommand, OutletDescriptor,
+    PublishesOutlets, Ticks,
     MASTER_BUS, MAX_BUSES, MAX_CHANNELS,
 };
 use mooloop_dsp::{ChannelAudioSnapshot, IntegerDelay, StereoBus, MAX_BLOCK_SIZE};
@@ -714,23 +715,26 @@ impl Session {
         // hard 24 and would not follow a PPQ change, so this line would have
         // drifted away from the scheduler while the readout looked right --
         // and being a derivation rather than a literal, no text search would
-        // have found it. The line below already takes `TICKS_PER_BAR` whole.
+        // have found it. `BbtPosition` below takes the bar whole, for the
+        // same reason.
         let ticks_per_step = u64::from(mooloop_core::TICKS_PER_STEP);
-        let ticks_per_beat = mooloop_core::Ppq::DEFAULT.ticks_per_beat() as u64;
         let (position_ticks, playlist_ticks) = if self.song_mode {
             let position = tick % u64::from(self.song_length_ticks());
             (position, Some(position as i32))
         } else {
             (tick % (length * ticks_per_step), None)
         };
-        let ticks_per_bar = u64::from(mooloop_core::TICKS_PER_BAR);
-        let tick_in_bar = position_ticks % ticks_per_bar;
+        // Bar, beat and tick come from `BbtPosition` rather than from three
+        // lines of modulus here. This crate and `engine::transport` used to
+        // derive the same window independently and agreed only because both
+        // had hardcoded four.
+        let bbt = BbtPosition::from_ticks(Ticks(position_ticks), mooloop_core::Ppq::DEFAULT);
         TransportPosition {
             step: ((tick / ticks_per_step) % length) as i32,
             playlist_ticks,
-            bar: (position_ticks / ticks_per_bar) as i32 + 1,
-            beat: (tick_in_bar / ticks_per_beat) as i32 + 1,
-            tick: (tick_in_bar % ticks_per_beat) as i32,
+            bar: bbt.bar as i32,
+            beat: bbt.beat as i32,
+            tick: bbt.tick as i32,
         }
     }
 }

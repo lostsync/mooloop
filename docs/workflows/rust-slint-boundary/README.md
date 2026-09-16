@@ -86,6 +86,22 @@ it a search can reach.
 
 ## Runs
 
+**2026-09-15.** `docs/plans/musical-time/`. "Four beats to the bar", spelled
+nine times across six crates -- and the note that prompted it guessed three,
+which is [01-find.md](01-find.md)'s rule about sizing a sweep from the tree
+doing its job. One home (`time::BEATS_PER_BAR`), one pair of types
+(`BbtPosition` and `BbtDuration`, two of them because a position counts from
+one and a duration from zero), one `BbtText` component, and a
+`dupe-audit bar-arithmetic` check.
+
+Two things this run learned that the earlier ones had not. **The guard was
+written first**, because [05-verify.md](05-verify.md)'s mutation table wanted
+it run against the unfixed tree -- and it then reported ten sites where the
+survey had found eight. And the check shipped **narrower than the plan
+specified**, because the wider version had one permanent false positive: a
+check that is never clean stops being read, which is a worse failure than a
+gap that is written down.
+
 **2026-09-13 to 2026-09-14.** Ten items closed across nine passes. Four were
 live bugs rather than missing guards: a strip EQ band opening at 2 kHz where
 the file meant 3 kHz, a clip latch a removed track left for whichever track

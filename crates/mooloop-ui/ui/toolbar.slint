@@ -1,4 +1,5 @@
 import { StatusHint, Theme } from "theme.slint";
+import { BbtText } from "controls.slint";
 
 // Toolbar vocabulary.
 //
@@ -502,16 +503,12 @@ export component PositionReadout inherits Rectangle {
     border-radius: Theme.radius-md;
     background: Theme.background;
 
-    pure function pad(value: int, width: int) -> string {
-        return value < 10 && width >= 2 ? (width >= 3 ? "00" + value : "0" + value)
-            : value < 100 && width >= 3 ? "0" + value : value;
-    }
-
-    Text {
-        text: root.pad(root.bar, 3) + ":" + root.beat + ":" + root.pad(root.tick, 3);
+    BbtText {
+        bar: root.bar;
+        beat: root.beat;
+        tick: root.tick;
         color: Theme.text;
         font-size: ToolbarMetrics.value-size;
-        font-family: "monospace";
         horizontal-alignment: center;
         vertical-alignment: center;
         width: 100%;

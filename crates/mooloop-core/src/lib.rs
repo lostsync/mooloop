@@ -221,4 +221,6 @@ pub use synth::{
     DrumMode, DrumSynthParams, HatCharacter, KickCharacter, LfoParams, LfoWave, MonoSynthParams,
     OscParams, OscWave, PolySynthParams, SnareCharacter, MAX_DRUM_VOICES, MAX_POLY_VOICES,
 };
-pub use time::{ticks_per_sample, Ppq, Samples, Ticks, BEATS_PER_BAR};
+pub use time::{
+    ticks_per_sample, BbtDuration, BbtPosition, Ppq, Samples, Ticks, BEATS_PER_BAR,
+};

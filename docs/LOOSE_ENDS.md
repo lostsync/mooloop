@@ -671,11 +671,15 @@ since latching a clip on a track that produced no audible sample is the
 hardest part to defend either way; or publish it as a third state and draw it
 in the dimmed treatment the name already uses. Found 2026-09-13.
 
-**The project is 4/4 end to end.** `render.rs:1709` hardcodes
-`const BEATS_PER_BAR: f32 = 4.0`, and `integrity.rs:480` rewrites any other
-meter back to 4/4 on load with a doctor message. `Project.beats_per_bar`
-exists and is settable in memory, so the field promises more than the engine
-delivers. Not a silent bug any more — but a 3/4 project is not a thing.
+**The project is 4/4 end to end.** Still true, and since 2026-09-15 it is
+true in one place: `time::BEATS_PER_BAR`, where it used to be nine anonymous
+fours across six crates (`docs/plans/musical-time/`). `integrity.rs` still
+rewrites any other meter back on load with a doctor message, and
+`Project.beats_per_bar` is still a persisted field the audio thread never
+sees — its doc comment says so now, and `scripts/dupe-audit bar-arithmetic`
+fails the day a tenth spelling appears. **A 3/4 project is still not a
+thing**, and what stands between here and one is threading a signature to the
+audio thread, not finding the constants.
 
 **`position_ticks` is an accumulator, not derived from `frames_played`**
 (`mooloop-engine/src/transport.rs:24`). `archive/ARCHITECTURE_REVIEW.md`'s action

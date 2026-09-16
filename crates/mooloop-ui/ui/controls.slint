@@ -1860,6 +1860,45 @@ export component TrimKnob inherits MiniKnob {
 // out at two dozen sites, each one rounding for itself and each one silently
 // wrong the moment its stage could reach past a second, which every envelope
 // stage in the program can.
+// Bars, beats and ticks, formatted once.
+//
+// Rust decides what the three numbers are -- `BbtPosition` for a transport
+// position, which counts bars and beats from one, and `BbtDuration` for a
+// length, which counts everything from zero, so a one-bar length reads
+// `1:0:0`. This side only pads and joins them.
+//
+// There is deliberately no `Divisions`-shaped global here doing bar
+// arithmetic. `time::BEATS_PER_BAR` is the only place in the workspace that
+// says four, and a second one on this side of the boundary is the fault this
+// component was extracted to avoid: the padding lived in `PositionReadout`
+// and the Buffer face was about to write its own copy.
+export component BbtText inherits Text {
+    in property <int> bar: 1;
+    in property <int> beat: 1;
+    in property <int> tick;
+    /// Digits to pad to. The transport shows `001:1:000`; a narrower readout
+    /// can ask for fewer without either of them owning the format.
+    in property <int> bar-digits: 3;
+    in property <int> tick-digits: 3;
+
+    pure function pad(value: int, width: int) -> string {
+        return value < 10 && width >= 2 ? (width >= 3 ? "00" + value : "0" + value)
+            : value < 100 && width >= 3 ? "0" + value : value;
+    }
+
+    /// The string, published as a property as well as drawn. A test harness
+    /// can lift a property into the generated Rust API and cannot read a
+    /// rendered glyph, so this is what `tests/roll_metrics.rs` compares
+    /// against `BbtPosition`'s `Display`. Delete it and that test stops
+    /// building, which is the check working rather than the check broken.
+    out property <string> formatted:
+        root.pad(root.bar, root.bar-digits) + ":" + root.beat + ":"
+            + root.pad(root.tick, root.tick-digits);
+
+    text: root.formatted;
+    font-family: "monospace";
+}
+
 export global TimeFormat {
     public pure function seconds(t: float) -> string {
         return t < 1 ? round(t * 1000) + " ms" : round(t * 10) / 10 + " s";
