@@ -102,9 +102,10 @@ we're ending up with a fair number of panes. currently the layout is totally sta
 on a 1080p monitor, in a 16 step pattern there is plenty of room to the right of the seq steps for us to split the pane and have the playlist seq beside it. this is what made me think we might want to kinda ape REAPER's dockable dialogs thing.
 
 In appearance prefs, we should be able to set up different shading options.
-  STILL OPEN. Appearance prefs now derive the whole palette from three seeds
-  plus roundness and contrast scalars, so there is a place for this to live,
-  but no shading pattern is configurable. Like, right now i think every 4th step in the step seq is brighter. Let the user configure that by setting a pattern. Maybe I want to brighten every 3rd step, or 6th. Maybe I want 8 bright, 8 dark, 8 bright, 8 dark. Maybe this shading could extend to the piano roll's grid? It would help a lot with editing sequences.
+  STILL OPEN. Appearance prefs derive the whole palette from a sixteen-colour
+  ramp now, with roundness, contrast, type, density and stroke scalars beside
+  it, so there is a well-furnished place for this to live -- but no shading
+  pattern is configurable. Like, right now i think every 4th step in the step seq is brighter. Let the user configure that by setting a pattern. Maybe I want to brighten every 3rd step, or 6th. Maybe I want 8 bright, 8 dark, 8 bright, 8 dark. Maybe this shading could extend to the piano roll's grid? It would help a lot with editing sequences.
 
 ---
 

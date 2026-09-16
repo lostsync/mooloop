@@ -608,11 +608,12 @@ export component AppearancePage inherits VerticalLayout {
     }
     Text { text: root.validation-error; color: Theme.destructive; font-size: Theme.text-lg; height: 18px; }
 
-    // The contrast report. `derive_palette` has been able to compute this
-    // since it was written and nothing ever asked it, so a user could pick
-    // seeds that produced an unreadable interface and this page would show it
-    // to them without comment. 4.5 is WCAG AA for small text; 3.0 is its bar
-    // for a non-text interface element, which is what an accent is.
+    // The contrast report. The palette derivation has been able to compute
+    // this since it was first written and nothing ever asked it, so a user
+    // could pick seeds that produced an unreadable interface and this page
+    // would show it to them without comment. 4.5 is WCAG AA for small text;
+    // 3.0 is its bar for a non-text interface element, which is what an
+    // accent is.
     HorizontalBox {
         height: 16px;
         padding: 0px;

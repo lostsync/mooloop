@@ -712,10 +712,11 @@ fn push_appearance_swatches(window: &MainWindow, appearance: &AppearanceSettings
 
 /// The two WCAG ratios the Appearance page reports.
 ///
-/// **`derive_palette` has been able to compute this since it was written and
-/// nothing ever asked it.** A user could pick seeds that produce an
-/// unreadable interface and the page would show it to them without comment,
-/// which is `04-accessibility.md`'s first item. It costs two divisions.
+/// **The palette derivation has been able to compute this since it was first
+/// written and nothing ever asked it.** A user could pick seeds that produce
+/// an unreadable interface and the page would show it to them without
+/// comment, which is `04-accessibility.md`'s first item. It costs two
+/// divisions over `theme::color::relative_luminance`.
 fn push_appearance_contrast(window: &MainWindow, appearance: &AppearanceSettings) {
     let ramp = appearance.ramp();
     window.set_preferences_appearance_text_ratio(ramp.text_contrast(appearance.contrast));
