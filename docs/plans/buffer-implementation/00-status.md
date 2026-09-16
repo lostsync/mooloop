@@ -22,7 +22,7 @@ why `FOCUS.md` had been carrying its state.
 |---|---|
 | 1. Rate, and a head that runs without a writer | Landed 2026-09-16 |
 | 2. Freeze | Landed 2026-09-16 |
-| 3. Position replaces Offset | Not started |
+| 3. Position replaces Offset | Landed 2026-09-16 |
 | 4. Length, Loop and Jump on the shared grid | Not started |
 | 5. Quantized freeze, and BBT everywhere | Not started |
 | 6. The 2U face | Not started |
@@ -53,6 +53,24 @@ that read as theoretical — but `resize_buffers` fires on an ordinary tempo
 change and rebuilds the ring. `AudioNode::holds_frozen_audio` lets the chain
 refuse the swap, down the same reclaim path a mismatched kind already takes.
 **The trigger was the common case, not the documented one.**
+
+**"Release the chase once it arrives" needed a second condition, and finding
+it took a measurement.** The plan says a static Position hands the head to
+`Rate`; release on arrival alone does that, and it also ruins a *sweep* --
+during a slow one the head is always within a frame of the target, so it
+released on every tick, free-ran past, and was dragged back. Measured at +1.00
+alternating with -0.07 every 32 frames, which is a warble rather than a scrub.
+The rule that works is arrival **plus stillness**: the request has to have
+stopped moving for longer than the chase's own time constant. Arrival is an
+audio-thread fact and stillness is a control-plane one, which is why one
+condition could not do both.
+
+Related, and the same shape: **the chase target has to travel with the
+writer.** `Scrub::offset_frames` did that before this step and the comment
+beside it said why; taking it out to make the target absolute reintroduced the
+warble it was written to prevent. Frozen, the write head is static and the same
+expression is absolute anyway -- so one mechanism covers both states, which is
+what "Freeze latches what *now* means" turns out to mean in code.
 
 **`Freeze` persists and the frozen audio does not.** A project saved frozen
 reopens frozen over an empty ring. That is the honest consequence of "persisting

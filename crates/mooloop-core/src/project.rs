@@ -690,6 +690,21 @@ impl ProjectChannel {
     }
 }
 
+/// The top of the retired `Offset` descriptor's range, in beats. Spelled here
+/// because the descriptor it came from no longer exists to be asked, and a
+/// migration has to keep meaning what the old table meant.
+const OFFSET_BEATS_FULL_SCALE: f32 = 16.0;
+
+fn history_beats(bars: u8) -> f32 {
+    f32::from(bars) * crate::time::BEATS_PER_BAR as f32
+}
+
+/// One stored lane value, from normalized `Offset` to normalized `Position`.
+fn offset_value_as_position(value: f32, history_beats: f32) -> f32 {
+    let beats = value.clamp(0.0, 1.0) * OFFSET_BEATS_FULL_SCALE;
+    (1.0 - beats / history_beats).clamp(0.0, 1.0)
+}
+
 /// What a pattern is called and what colour it was given.
 ///
 /// Both are optional in the only sense that matters to a document: an empty
@@ -934,6 +949,108 @@ impl Project {
         }
         for bus in &mut self.buses {
             bus.assign_device_ids();
+        }
+    }
+
+    /// Point every lane and route that still names the Buffer's retired
+    /// `Offset` at `Position` instead, in the new coordinate.
+    ///
+    /// `Offset` was beats behind a moving writer, on `0..16` linear;
+    /// `Position` is normalized over the ring and counts from the *old* end,
+    /// so the conversion is `pos = 1 - beats / history_beats` and it inverts
+    /// the direction. A lane's stored value is normalized against its
+    /// descriptor, so a stored `v` meant `v * 16` beats.
+    ///
+    /// **It needs the device, not just the id**, because `history_beats`
+    /// depends on that buffer's own `bars` -- which is why this is a pass over
+    /// the project rather than a `From` on a lane. A route's `depth` is a
+    /// signed fraction of the destination's range and converts the same way,
+    /// negated because the axis turned round.
+    ///
+    /// Run after [`Self::assign_device_ids`] and before anything resolves an
+    /// address: until ids exist, a chain written by an older version cannot be
+    /// looked up at all. Idempotent -- a lane already on `Position` does not
+    /// match, and id 0 is spent, so nothing can come to mean `Offset` again.
+    pub fn migrate_retired_buffer_offset(&mut self) {
+        let bars_for = |scope: crate::EffectTarget, device: crate::DeviceId| -> Option<u8> {
+            let effects = match scope {
+                crate::EffectTarget::Channel(channel) => {
+                    &self.channels.get(channel as usize)?.setup.effects
+                }
+                crate::EffectTarget::Bus(bus) => &self.buses.get(bus as usize)?.effects,
+            };
+            effects
+                .iter()
+                .find(|slot| slot.id == device)
+                .and_then(|slot| slot.params.buffer())
+                .map(|params| params.bars.max(1))
+        };
+
+        // Collected first because the closure above borrows `self`, and the
+        // edits below need it mutably. A song's lanes are a few hundred at
+        // the outside and this runs once per open.
+        let mut lane_conversions: Vec<(usize, usize, usize, f32)> = Vec::new();
+        for (channel_index, channel) in self.channels.iter().enumerate() {
+            for (pattern, lanes) in channel.automation.iter().enumerate() {
+                for (lane_index, lane) in lanes.iter().enumerate() {
+                    if lane.target.param != crate::BUFFER_PARAM_OFFSET_BEATS {
+                        continue;
+                    }
+                    let crate::ParamOwner::Effect { device } = lane.target.owner else {
+                        continue;
+                    };
+                    let Some(bars) = bars_for(lane.target.scope, device) else {
+                        continue;
+                    };
+                    lane_conversions.push((
+                        channel_index,
+                        pattern,
+                        lane_index,
+                        history_beats(bars),
+                    ));
+                }
+            }
+        }
+        let mut route_conversions: Vec<(usize, usize, f32)> = Vec::new();
+        for (channel_index, channel) in self.channels.iter().enumerate() {
+            for (route_index, route) in channel.setup.modulation.routes.iter().enumerate() {
+                let Some(route) = route else { continue };
+                if route.destination.param != crate::BUFFER_PARAM_OFFSET_BEATS {
+                    continue;
+                }
+                let crate::ParamOwner::Effect { device } = route.destination.owner else {
+                    continue;
+                };
+                let Some(bars) = bars_for(route.destination.scope, device) else {
+                    continue;
+                };
+                route_conversions.push((channel_index, route_index, history_beats(bars)));
+            }
+        }
+
+        for (channel_index, pattern, lane_index, history) in lane_conversions {
+            let lane = &mut self.channels[channel_index].automation[pattern][lane_index];
+            lane.target.param = crate::BUFFER_PARAM_POSITION;
+            let points: Vec<crate::AutomationPoint> = lane
+                .points()
+                .iter()
+                .map(|point| crate::AutomationPoint {
+                    value: offset_value_as_position(point.value, history),
+                    ..*point
+                })
+                .collect();
+            lane.reset_points(points);
+        }
+        for (channel_index, route_index, history) in route_conversions {
+            let Some(route) =
+                &mut self.channels[channel_index].setup.modulation.routes[route_index]
+            else {
+                continue;
+            };
+            route.destination.param = crate::BUFFER_PARAM_POSITION;
+            // Negated: more offset was further back, and more position is
+            // further forward.
+            route.depth = (-route.depth * OFFSET_BEATS_FULL_SCALE / history).clamp(-1.0, 1.0);
         }
     }
 
@@ -1280,6 +1397,88 @@ pub type ChannelPreset = ChannelSetup;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Both halves of the retirement, in the units a musician would check.
+    ///
+    /// `mooloop-project` proves the on-disk half; this proves the arithmetic,
+    /// and it covers the **route**, which the file test cannot reach without
+    /// two substitutions on one key. A route's depth is a signed fraction of
+    /// the destination's range, so it converts by the ratio of the two ranges
+    /// *and turns round*: more offset was further back, more position is
+    /// further forward.
+    #[test]
+    fn the_retired_offset_migrates_to_position_in_both_a_lane_and_a_route() {
+        use crate::modulation::{ModPolarity, ModRoute};
+        use crate::{AutomationLane, AutomationPoint, EffectTarget, ParamAddr, ParamOwner};
+
+        let mut project = Project::default();
+        let mut slot = crate::EffectSlotState::of_kind(crate::EffectKind::Buffer);
+        slot.params = crate::EffectParams::Buffer(crate::BufferParams {
+            bars: 8,
+            ..Default::default()
+        });
+        project.channels[0].setup.push_effect(slot);
+        project.channels[0].setup.assign_device_ids();
+        let device = project.channels[0].setup.effects[0].id;
+        let address = ParamAddr {
+            scope: EffectTarget::Channel(0),
+            owner: ParamOwner::Effect { device },
+            param: crate::BUFFER_PARAM_OFFSET_BEATS,
+        };
+
+        project.channels[0].normalize_automation();
+        let mut lane = AutomationLane::new(address);
+        lane.reserve_points();
+        // Live, one beat back, and four beats back: 0, 1/16 and 4/16 of the
+        // old 0..16 beat range.
+        lane.reset_points([
+            AutomationPoint::new(1, 0, 0.0),
+            AutomationPoint::new(2, 24, 0.0625),
+            AutomationPoint::new(3, 48, 0.25),
+        ]);
+        project.channels[0].automation[0].push(lane);
+        // Written straight into the row rather than through `add_route`,
+        // which stamps a durable source identity out of an installed module.
+        // The migration does not look at a route's source, and giving this
+        // one a module would be setting up the half that is not under test.
+        project.channels[0].setup.modulation.routes[0] =
+            Some(ModRoute::to_slot(0, address, 0.5, ModPolarity::Bipolar));
+
+        project.migrate_retired_buffer_offset();
+
+        let lane = &project.channels[0].automation[0][0];
+        assert_eq!(lane.target.param, crate::BUFFER_PARAM_POSITION);
+        let values: Vec<f32> = lane.points().iter().map(|point| point.value).collect();
+        // An eight-bar ring is 32 beats. Live is 1; one beat back is 31/32;
+        // four beats back is 28/32.
+        assert!(
+            (values[0] - 1.0).abs() < 1e-5
+                && (values[1] - 31.0 / 32.0).abs() < 1e-5
+                && (values[2] - 28.0 / 32.0).abs() < 1e-5,
+            "the lane converted to {values:?}"
+        );
+        assert!(
+            values[0] > values[1] && values[1] > values[2],
+            "the axis has to turn round: more offset was further back, and \
+             more position is further forward"
+        );
+
+        let route = project.channels[0].setup.modulation.routes[0]
+            .expect("the route is still there");
+        assert_eq!(route.destination.param, crate::BUFFER_PARAM_POSITION);
+        // Half of sixteen beats is eight, and eight of thirty-two is a
+        // quarter -- pointing the other way.
+        assert!(
+            (route.depth + 0.25).abs() < 1e-5,
+            "the route depth converted to {}",
+            route.depth
+        );
+
+        // Idempotent: id 0 is spent, so a second pass finds nothing.
+        let before = project.clone();
+        project.migrate_retired_buffer_offset();
+        assert_eq!(project, before, "running it twice must change nothing");
+    }
 
     #[test]
     fn starter_kit_is_deterministic_and_musically_shaped() {

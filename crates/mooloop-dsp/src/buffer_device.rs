@@ -37,11 +37,30 @@ pub struct TimedBufferEvent {
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Drive {
     /// A [`BufferEvent`] set a fixed rate when it fired. JUMP, REV and STUT.
-    /// The rate is part of the gesture and does not move under it.
+    /// The rate is part of the gesture and does not move under it, and it is
+    /// the one drive that outranks a `Position` write.
     Event,
-    /// The `Rate` parameter, re-read every frame so that automating it moves
-    /// the head at once rather than at the next gesture.
-    Rate,
+    /// The `Position` parameter armed this head.
+    ///
+    /// Its chase is **released once reached**, after which the head free-runs
+    /// at `Rate` from there. That is what makes a static Position leave `Rate`
+    /// in charge instead of pinning the head to a stale target, while a
+    /// continuous stream of writes stays a scrub -- each one re-arms.
+    Position,
+    /// Freeze, or a hand on the platter. Neither is a standing value, so a
+    /// `Position` write is free to take the head from them; and a hand's
+    /// chase is *not* released on arrival, because a hand that has stopped
+    /// moving is still a hand holding the platter.
+    Free,
+}
+
+impl Drive {
+    /// Whether the head's speed comes from the `Rate` parameter when no chase
+    /// is armed -- and therefore whether the mute law applies to it. A
+    /// gesture's rate is part of the gesture.
+    fn follows_rate(self) -> bool {
+        !matches!(self, Self::Event)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -71,17 +90,38 @@ enum FadeSource {
 /// Driving rate directly instead would be a jog shuttle, not a turntable.
 #[derive(Clone, Copy)]
 struct Scrub {
+    /// Absolute target, for a hand on the platter: a hand aims at a point.
     target: f64,
     /// Time constant of the chase, in frames. Roughly one control-message
     /// interval: long enough that per-message steps read as continuous
     /// motion, short enough that the head does not lag the hand.
     chase_frames: f64,
-    /// Set when the scrub is driven by the `offset_beats` parameter rather
-    /// than by a hand. The target is then `write_head - offset_frames`
-    /// recomputed every frame, not a value pushed in per control message:
-    /// a held offset has to play forward at unity, and a target that only
-    /// moved 32 frames at a time would sag between messages and warble.
+    /// Set when `Position` armed the chase. The target is then
+    /// `write_head - offset_frames`, recomputed every frame rather than
+    /// pushed in per control message.
+    ///
+    /// **It has to travel with the writer, and the reason is audible.** A
+    /// target that only moved when a control message arrived would sag
+    /// between messages: 32 frames of ripple against a 240-frame time
+    /// constant is about 6% of pitch at 1.5 kHz, and a held position would
+    /// warble. Measured, on the way to this: a lane holding one position read
+    /// 1.06 where it had to read 1.00.
+    ///
+    /// Frozen, the write head is static and the same expression is absolute,
+    /// which is what "Freeze latches what *now* means" is in code.
     offset_frames: Option<f64>,
+    /// Frames since the requested position last changed.
+    ///
+    /// This is what tells a *static* position from a *sweep*, and the two need
+    /// opposite answers. A static position hands the head to `Rate` once the
+    /// chase has arrived; a sweep must keep chasing, because releasing
+    /// mid-sweep lets the head free-run past the target and be dragged back on
+    /// the next tick -- measured at +1.00 alternating with -0.07 every 32
+    /// frames, which is a warble rather than a scrub.
+    ///
+    /// Arrival alone cannot tell them apart: during a slow sweep the head is
+    /// always within a frame of the target. Stillness can.
+    still_frames: u32,
 }
 
 /// A stopped platter must go silent. Holding at rate zero would repeat one
@@ -146,11 +186,22 @@ pub struct BufferDevice {
     /// Standing crossfade length, set by `BUFFER_PARAM_CROSSFADE_MS`. Gesture
     /// events carry their own and are unaffected.
     crossfade_ms: f32,
-    /// An offset carried in from the saved parameter set, applied on the first
-    /// block. Construction has no `ProcessContext`, so it cannot know how many
-    /// frames a beat is, and a loaded project must still come up with its head
+    /// The offset the last `Position` write asked for, in frames behind the
+    /// write head.
+    ///
+    /// Held so that a *repeated* write can be told from a *changed* one. A
+    /// lane repeating one value is a static position and must not re-arm the
+    /// chase it has already released into, or the head oscillates between
+    /// free-running at `Rate` and being dragged back -- which reads as a small
+    /// backward step every control tick. A lane whose value is moving is a
+    /// scrub and re-arms on every tick, which is the same thing said the other
+    /// way round.
+    armed_offset_frames: Option<f64>,
+    /// A position carried in from the saved parameter set, applied on the
+    /// first block. Construction has no `ProcessContext`, so it cannot arrange
+    /// a crossfade, and a loaded project must still come up with its head
     /// where the document says it was.
-    pending_offset_beats: Option<f32>,
+    pending_position: Option<f32>,
 }
 
 impl BufferDevice {
@@ -159,7 +210,9 @@ impl BufferDevice {
         device.crossfade_ms = params.crossfade_ms.clamp(0.0, 50.0);
         device.rate = params.rate.clamp(-MAX_SCRUB_RATE, MAX_SCRUB_RATE);
         device.pending_freeze = params.freeze >= 0.5;
-        device.pending_offset_beats = (params.offset_beats > 0.0).then_some(params.offset_beats);
+        // Only a position that is not already live is worth arming: `1.0` is
+        // the writer, and following is what a fresh device does anyway.
+        device.pending_position = (params.position < 1.0).then_some(params.position);
         device
     }
     /// Allocate a ring for `bars` bars at the supplied tempo.
@@ -193,7 +246,8 @@ impl BufferDevice {
             pending_freeze: false,
             collision_count: 0,
             crossfade_ms: 2.5,
-            pending_offset_beats: None,
+            armed_offset_frames: None,
+            pending_position: None,
         }
     }
 
@@ -236,8 +290,8 @@ impl BufferDevice {
         params: &[TimedBufferParam],
     ) {
         debug_assert!(context.frames <= bus.capacity());
-        if let Some(beats) = self.pending_offset_beats.take() {
-            self.set_offset_beats(beats, context);
+        if let Some(position) = self.pending_position.take() {
+            self.set_position(position, context);
         }
         if std::mem::take(&mut self.pending_freeze) {
             self.freeze(context);
@@ -281,7 +335,7 @@ impl BufferDevice {
                     // alone; a control-driven head follows its own speed down
                     // to silence, because holding at zero repeats one sample
                     // forever and that is a DC step rather than a hold.
-                    if self.scrub.is_some() || head.drive == Drive::Rate {
+                    if self.scrub.is_some() || head.drive.follows_rate() {
                         (left * self.head_gain, right * self.head_gain)
                     } else {
                         (left, right)
@@ -343,7 +397,7 @@ impl BufferDevice {
             return;
         }
         self.writing = true;
-        if let Some(head) = self.head.filter(|head| head.drive == Drive::Rate) {
+        if let Some(head) = self.head.filter(|head| head.drive.follows_rate()) {
             self.return_live(head, head.position);
         }
     }
@@ -354,7 +408,7 @@ impl BufferDevice {
 
     fn set_param(&mut self, id: u32, value: f32, context: &ProcessContext) {
         match id {
-            mooloop_core::BUFFER_PARAM_OFFSET_BEATS => self.set_offset_beats(value, context),
+            mooloop_core::BUFFER_PARAM_POSITION => self.set_position(value, context),
             mooloop_core::BUFFER_PARAM_CROSSFADE_MS => {
                 self.crossfade_ms = value.clamp(0.0, 50.0)
             }
@@ -375,43 +429,85 @@ impl BufferDevice {
         }
     }
 
-    /// Place the read head `beats` behind the writer, or return it to live at
-    /// zero.
+    /// Aim the read head at a point in retained memory, or return it to live
+    /// at `1.0`.
     ///
-    /// This is position mode, the same as a hand scrub: the head chases the
-    /// offset and the closing speed *is* the playback rate, so sweeping the
-    /// offset is a scrub and holding it is delayed playback at unity. That is
-    /// the whole reason the buffer is worth automating, and it is why there is
-    /// no separate rate parameter — a rate would contradict the position.
+    /// `position` is normalized over the ring: `0` is the oldest sample it
+    /// still holds and `1` is the write head. **Writing it is an edit rather
+    /// than a standing value.** It arms a chase, the head closes on the target
+    /// at the turntable behaviour -- the speed it closes at *is* the playback
+    /// rate -- and the chase is released once the head arrives, after which
+    /// the head free-runs at `Rate` from there. So a continuous stream of
+    /// writes is a scrub, and a static value leaves `Rate` in charge instead
+    /// of pinning the head to a target the writer has since left behind.
     ///
-    /// A gesture head outranks the parameter. Automation does not fight a
-    /// JUMP/REV/STUT that is already running; the offset re-asserts itself on
-    /// the next control tick after that gesture ends, which for a lane is
-    /// within 32 frames.
-    fn set_offset_beats(&mut self, beats: f32, context: &ProcessContext) {
-        let frames_per_beat = context.sample_rate as f64 * 60.0 / context.bpm.max(1.0);
-        let offset_frames = f64::from(beats.max(0.0)) * frames_per_beat;
+    /// While the writer runs, the target is taken from where the writer is
+    /// *now*, so the coordinate travels with it. Freeze stops the writer and
+    /// the same expression becomes absolute, which is what "Freeze latches
+    /// what now means" is in code.
+    ///
+    /// A gesture head outranks this. Automation does not fight a JUMP/REV/STUT
+    /// that is already running; the position re-asserts itself on the next
+    /// control tick after that gesture ends, which for a lane is within 32
+    /// frames. A frozen or hand-held head does *not* outrank it: neither is a
+    /// standing value, and while frozen this is the only way to move the head
+    /// at all.
+    fn set_position(&mut self, position: f32, context: &ProcessContext) {
+        let capacity = self.capacity_frames() as f64;
+        let offset_frames = (1.0 - f64::from(position.clamp(0.0, 1.0))) * capacity;
         let ours = self
-            .scrub
-            .is_some_and(|scrub| scrub.offset_frames.is_some());
-        // Below a frame there is no offset to speak of, and asking the head to
-        // sit zero frames behind the writer is a collision by definition.
+            .head
+            .is_some_and(|head| head.drive == Drive::Position);
+        // Within a frame of the writer there is no offset to speak of, and
+        // asking the head to sit zero frames behind the writer is a collision
+        // by definition.
         if offset_frames < 1.0 {
             if ours {
                 if let Some(head) = self.head {
                     self.return_live(head, head.position);
                 }
             }
+            self.armed_offset_frames = None;
             return;
         }
-        if self.head.is_some() && !ours {
+        if self.head.is_some_and(|head| head.drive == Drive::Event) {
             return;
         }
-        if !ours {
+        // The sub-frame guard, carried across from the offset this replaces:
+        // a write that moves the target less than a frame arms nothing, so a
+        // lane sampled at 32-frame ticks does not re-arm on rounding noise.
+        // It is now also what tells a static position from a sweep.
+        let changed = self
+            .armed_offset_frames
+            .is_none_or(|held| (held - offset_frames).abs() >= 1.0);
+        self.armed_offset_frames = Some(offset_frames);
+        if !changed && ours && self.scrub.is_none() {
+            // Arrived, released, and nobody has asked for anywhere else.
+            // `Rate` has the head.
+            return;
+        }
+        if self.head.is_none() {
             self.scrub_begin(context, self.crossfade_ms);
         }
-        if let Some(scrub) = &mut self.scrub {
-            scrub.offset_frames = Some(offset_frames);
+        let Some(head) = &mut self.head else { return };
+        head.drive = Drive::Position;
+        let target = self.write_head as f64 - offset_frames;
+        match &mut self.scrub {
+            Some(scrub) => {
+                scrub.offset_frames = Some(offset_frames);
+                scrub.target = target;
+                if changed {
+                    scrub.still_frames = 0;
+                }
+            }
+            None => {
+                self.scrub = Some(Scrub {
+                    target,
+                    chase_frames: chase_frames(context),
+                    offset_frames: Some(offset_frames),
+                    still_frames: 0,
+                });
+            }
         }
     }
 
@@ -455,6 +551,10 @@ impl BufferDevice {
             frames: head.crossfade_frames,
         });
         self.head = Some(head);
+        // A gesture takes the head, so whatever `Position` had armed is over;
+        // the lane's next write re-arms from scratch once the gesture ends.
+        self.scrub = None;
+        self.armed_offset_frames = None;
     }
 
     /// Put the head on the platter, holding at the live position. Idempotent:
@@ -474,7 +574,7 @@ impl BufferDevice {
         self.head = Some(ReadHead {
             position,
             rate: 0.0,
-            drive: Drive::Rate,
+            drive: Drive::Free,
             window_start: position,
             window_end: None,
             repeats_remaining: None,
@@ -485,8 +585,9 @@ impl BufferDevice {
         });
         self.scrub = Some(Scrub {
             target: position,
-            chase_frames: (context.sample_rate as f64 / 200.0).max(1.0),
+            chase_frames: chase_frames(context),
             offset_frames: None,
+            still_frames: 0,
         });
         self.head_gain = 0.0;
     }
@@ -542,7 +643,7 @@ impl BufferDevice {
         self.head = Some(ReadHead {
             position,
             rate: self.rate,
-            drive: Drive::Rate,
+            drive: Drive::Free,
             window_start: position,
             window_end: None,
             repeats_remaining: None,
@@ -576,7 +677,34 @@ impl BufferDevice {
             let rate = ((target - head.position) / scrub.chase_frames) as f32;
             head.rate = rate.clamp(-MAX_SCRUB_RATE, MAX_SCRUB_RATE);
             self.head_gain = (head.rate.abs() / SCRUB_MUTE_RATE).min(1.0);
-        } else if head.drive == Drive::Rate {
+            // A `Position` write is an edit and an edit finishes: once the
+            // head has arrived *and the request has stopped moving*, the chase
+            // is released and `Rate` takes over from there. Both halves are
+            // needed -- during a slow sweep the head is always within a frame
+            // of the target, so arrival alone would release on every tick and
+            // the head would alternate between free-running and being dragged
+            // back. Stillness longer than the chase's own time constant is
+            // what says the edit is over.
+            //
+            // A hand on the platter is still a hand, so its chase never
+            // releases; that is what keeps a stopped scrub silent rather than
+            // setting it playing.
+            //
+            // While the writer runs and `Rate` is unity the head then stays
+            // exactly where the release left it, because it travels at the
+            // speed the target does; frozen, or at any other rate, it drifts,
+            // and that difference *is* the arbitration rule.
+            if let Some(scrub) = &mut self.scrub {
+                scrub.still_frames = scrub.still_frames.saturating_add(1);
+                let settled = f64::from(scrub.still_frames) > scrub.chase_frames * 2.0;
+                if head.drive == Drive::Position
+                    && settled
+                    && (target - head.position).abs() < 1.0
+                {
+                    self.scrub = None;
+                }
+            }
+        } else if head.drive.follows_rate() {
             // Re-read every frame, so a lane drawn on `Rate` moves the head
             // within a control tick rather than at the next gesture.
             head.rate = self.rate.clamp(-MAX_SCRUB_RATE, MAX_SCRUB_RATE);
@@ -658,6 +786,8 @@ impl BufferDevice {
     fn return_live(&mut self, head: ReadHead, position: f64) {
         self.scrub = None;
         self.head_gain = 0.0;
+        // The next `Position` write starts a new edit, whatever it asks for.
+        self.armed_offset_frames = None;
         if head.crossfade_frames > 0 {
             self.fade = Some(Fade {
                 source: FadeSource::Detached {
@@ -704,6 +834,13 @@ impl BufferDevice {
 /// only a bars change makes an older prepared resize stale.
 pub fn buffer_allocation_key(params: BufferParams) -> u64 {
     u64::from(params.bars.max(1))
+}
+
+/// Time constant of the chase, in frames. Roughly one control-message
+/// interval: long enough that per-message steps read as continuous motion,
+/// short enough that the head does not lag the hand.
+fn chase_frames(context: &ProcessContext) -> f64 {
+    (context.sample_rate as f64 / 200.0).max(1.0)
 }
 
 fn ms_to_frames(ms: f32, sample_rate: u32) -> u32 {
@@ -807,12 +944,27 @@ mod tests {
         }
     }
 
-    fn offset_param(offset: u32, beats: f32) -> TimedBufferParam {
+    fn position_param(offset: u32, position: f32) -> TimedBufferParam {
         TimedBufferParam {
             offset,
-            id: mooloop_core::BUFFER_PARAM_OFFSET_BEATS,
-            value: beats,
+            id: mooloop_core::BUFFER_PARAM_POSITION,
+            value: position,
         }
+    }
+
+    /// `primed` builds a 96 000-frame ring, so a beat behind the writer at
+    /// 120 BPM and 48 kHz -- 24 000 frames -- is three quarters of the way
+    /// along it. Spelled once, because every test below that used to say
+    /// "one beat of offset" now has to say it in the new coordinate.
+    const A_BEAT_BEHIND: f32 = 0.75;
+
+    /// What a lane does: one write per control tick, which is what keeps a
+    /// held position tracking the writer rather than settling wherever the
+    /// chase happened to arrive.
+    fn held_position(frames: usize, position: f32) -> Vec<TimedBufferParam> {
+        (0..frames as u32 / 32)
+            .map(|tick| position_param(tick * 32, position))
+            .collect()
     }
 
     /// Fill the ring with a ramp so a read position can be identified from the
@@ -826,30 +978,37 @@ mod tests {
     }
 
     #[test]
-    fn a_held_offset_settles_into_playback_at_unity() {
-        // One beat at 120 BPM and 48 kHz is 24 000 frames.
+    fn a_lane_holding_one_position_plays_at_unity_a_beat_behind() {
         let (mut device, mut bus) = primed(48_000);
         fill_ramp(&mut bus, 48_000, 48_000);
         device.process_with_params(
             &context(48_000),
             &mut bus,
             &[],
-            &[offset_param(0, 1.0)],
+            &held_position(48_000, A_BEAT_BEHIND),
         );
         assert!(!device.is_following());
 
         // After the chase has converged, consecutive output samples must
         // advance by one, which is unity rate rather than a sagging chase.
         fill_ramp(&mut bus, 96_000, 48_000);
-        device.process_with_params(&context(48_000), &mut bus, &[], &[offset_param(0, 1.0)]);
+        device.process_with_params(
+            &context(48_000),
+            &mut bus,
+            &[],
+            &held_position(48_000, A_BEAT_BEHIND),
+        );
         let tail = &bus.l[40_000..40_010];
         for pair in tail.windows(2) {
             assert!(
                 (pair[1] - pair[0] - 1.0).abs() < 0.05,
-                "offset playback is not running at unity: {tail:?}"
+                "held playback is not running at unity: {tail:?}"
             );
         }
-        // ...and it must be reading roughly a beat behind the writer.
+        // ...and it must be reading roughly a beat behind the writer. Each
+        // tick re-arms the target against where the writer is *now*, which is
+        // what makes a held lane track it: a single write instead of a lane
+        // settles wherever the chase arrived, and the test below is that.
         let lag = (96_000 + 40_000) as f32 - tail[0];
         assert!(
             (lag - 24_000.0).abs() < 1_500.0,
@@ -857,27 +1016,72 @@ mod tests {
         );
     }
 
+    /// The other half of "Position is an edit": written once, it arms a chase
+    /// and then **gets out of the way**.
+    ///
+    /// The head closes on the target, the chase is released when it arrives,
+    /// and `Rate` carries it from there. This is what a knob does, where the
+    /// test above is what a lane does, and the difference is deliberate --
+    /// pinning the head to a target the writer has since left behind is the
+    /// thing the release exists to stop.
     #[test]
-    fn returning_the_offset_to_zero_returns_the_head_to_live() {
+    fn a_single_position_write_hands_the_head_to_rate_when_it_arrives() {
         let (mut device, mut bus) = primed(48_000);
         fill_ramp(&mut bus, 48_000, 48_000);
-        device.process_with_params(&context(48_000), &mut bus, &[], &[offset_param(0, 1.0)]);
+        device.process_with_params(
+            &context(48_000),
+            &mut bus,
+            &[],
+            &[position_param(0, A_BEAT_BEHIND)],
+        );
+        assert!(!device.is_following(), "the head is detached");
+        assert!(
+            !device.is_scrubbing(),
+            "and the chase has been released: an edit that has arrived is over"
+        );
+
+        // Nothing is written to it any more, so what happens next is `Rate`.
+        fill_ramp(&mut bus, 96_000, 48_000);
+        device.process(&context(48_000), &mut bus, &[]);
+        let tail = &bus.l[40_000..40_010];
+        for pair in tail.windows(2) {
+            assert!(
+                (pair[1] - pair[0] - 1.0).abs() < 0.05,
+                "the released head should free-run at Rate, which is 1.0: {tail:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn returning_the_position_to_one_returns_the_head_to_live() {
+        let (mut device, mut bus) = primed(48_000);
+        fill_ramp(&mut bus, 48_000, 48_000);
+        device.process_with_params(
+            &context(48_000),
+            &mut bus,
+            &[],
+            &[position_param(0, A_BEAT_BEHIND)],
+        );
         assert!(!device.is_following());
 
+        // `1.0` is the writer, and the writer is live. The direction is the
+        // opposite way round from the `Offset` this replaced, which is the
+        // point: a rising ramp is forward playback.
         fill_ramp(&mut bus, 96_000, 48_000);
-        device.process_with_params(&context(48_000), &mut bus, &[], &[offset_param(0, 0.0)]);
+        device.process_with_params(&context(48_000), &mut bus, &[], &[position_param(0, 1.0)]);
         assert!(device.is_following());
         assert!(!device.is_scrubbing());
     }
 
     #[test]
-    fn sweeping_the_offset_moves_the_head_rather_than_jumping_it() {
+    fn sweeping_the_position_moves_the_head_rather_than_jumping_it() {
         let (mut device, mut bus) = primed(48_000);
-        // Ramp the offset across the block the way a lane would, one message
-        // per 32 frames.
+        // Ramp the position across the block the way a lane would, one message
+        // per 32 frames: from live back to a beat behind.
         let params: Vec<TimedBufferParam> = (0..48_000 / 32)
             .map(|tick| {
-                offset_param(tick * 32, tick as f32 / (48_000.0 / 32.0))
+                let travelled = tick as f32 / (48_000.0 / 32.0);
+                position_param(tick * 32, 1.0 - travelled * (1.0 - A_BEAT_BEHIND))
             })
             .collect();
         fill_ramp(&mut bus, 48_000, 48_000);
@@ -895,7 +1099,7 @@ mod tests {
                 "the head should crawl forward, slower than the writer: {step}"
             );
         }
-        // Half a beat of offset opens across the second half of the block, so
+        // Half a beat of lag opens across the second half of the block, so
         // the head must fall behind by about that much and no more.
         let fell_behind = (travel[0] - travel[travel.len() - 1]) + travel.len() as f32;
         assert!(
@@ -905,7 +1109,7 @@ mod tests {
     }
 
     #[test]
-    fn a_gesture_outranks_the_offset_parameter_while_it_runs() {
+    fn a_gesture_outranks_the_position_parameter_while_it_runs() {
         let (mut device, mut bus) = primed(48_000);
         fill_ramp(&mut bus, 48_000, 48_000);
         let jump = TimedBufferEvent {
@@ -920,26 +1124,39 @@ mod tests {
             &context(48_000),
             &mut bus,
             &[jump],
-            &[offset_param(24_000, 1.0)],
+            &[position_param(24_000, A_BEAT_BEHIND)],
         );
         // The parameter arrived mid-block while the gesture owned the head; it
-        // must not have converted that head into an offset scrub.
+        // must not have converted that head into a position chase.
         assert!(!device.is_scrubbing());
         assert!(!device.is_following());
 
-        // Once the gesture releases, the next control tick takes the offset.
+        // Once the gesture releases, the next control tick takes the position.
         device.release();
         fill_ramp(&mut bus, 96_000, 48_000);
-        device.process_with_params(&context(48_000), &mut bus, &[], &[offset_param(0, 1.0)]);
-        assert!(device.is_scrubbing());
+        device.process_with_params(
+            &context(48_000),
+            &mut bus,
+            &[],
+            &[position_param(0, A_BEAT_BEHIND)],
+        );
+        assert!(!device.is_following(), "the position took the head");
+        // Not `is_scrubbing`: the chase has arrived and released inside this
+        // block, which is what a single write is supposed to do. Where the
+        // head *is* says the position took it.
+        let lag = (96_000 + 48_000) as f32 - bus.l[47_999];
+        assert!(
+            (lag - 24_000.0).abs() < 1_500.0,
+            "expected the head about a beat behind, and it is {lag}"
+        );
     }
 
     #[test]
-    fn a_saved_offset_is_applied_on_the_first_block() {
+    fn a_saved_position_is_applied_on_the_first_block() {
         let mut device = BufferDevice::new(
             mooloop_core::BufferParams {
                 bars: 1,
-                offset_beats: 1.0,
+                position: A_BEAT_BEHIND,
                 crossfade_ms: 2.5,
                 ..Default::default()
             },
@@ -1130,35 +1347,50 @@ mod tests {
         );
     }
 
-    /// Free-run is *alongside* the chase, not instead of it: a rate written
-    /// while `Offset` owns the head changes nothing, because the chase
-    /// outranks it.
+    /// The arbitration rule, both halves, in one block.
+    ///
+    /// A `Position` write sends the head backwards while `Rate` is asking for
+    /// double speed forwards; the chase wins, because it is closing. When it
+    /// arrives and the request stops moving, it lets go, and `Rate` takes the
+    /// head from exactly where the edit left it. **Free-run is alongside the
+    /// chase, not instead of it**, and which one is talking decides.
     #[test]
-    fn a_chase_outranks_the_rate_parameter_while_it_is_closing() {
+    fn the_chase_owns_the_head_until_it_arrives_and_then_rate_does() {
         let (mut device, mut bus) = primed(48_000);
         fill_ramp(&mut bus, 48_000, 48_000);
         device.process_with_params(
             &context(48_000),
             &mut bus,
             &[],
-            &[offset_param(0, 1.0), rate_param(0, -4.0)],
+            &[position_param(0, A_BEAT_BEHIND), rate_param(0, 2.0)],
         );
-        assert!(!device.is_following());
 
-        fill_ramp(&mut bus, 96_000, 48_000);
-        device.process_with_params(
-            &context(48_000),
-            &mut bus,
-            &[],
-            &[offset_param(0, 1.0), rate_param(0, -4.0)],
-        );
-        let tail = &bus.l[40_000..40_010];
-        for pair in tail.windows(2) {
+        // Past the crossfade, deep in the chase: the head is travelling
+        // *backwards* at the clamp, which is the opposite direction from the
+        // rate underneath it.
+        let closing = &bus.l[2_000..2_010];
+        for pair in closing.windows(2) {
             assert!(
-                (pair[1] - pair[0] - 1.0).abs() < 0.05,
-                "a reverse Rate should not reach a head the chase owns: {tail:?}"
+                (pair[1] - pair[0] + MAX_SCRUB_RATE).abs() < 0.05,
+                "the chase should own the head while it closes: {closing:?}"
             );
         }
+
+        // 24 000 frames back, closing at 5 a frame against a writer moving at
+        // 1, is about 4 800 frames of travel, and the release waits for the
+        // request to be still for twice the chase constant after that. By
+        // 20 000 it is long over.
+        let freed = &bus.l[20_000..20_010];
+        for pair in freed.windows(2) {
+            assert!(
+                (pair[1] - pair[0] - 2.0).abs() < 0.05,
+                "once the edit is over the head runs at Rate: {freed:?}"
+            );
+        }
+        assert!(
+            !device.is_scrubbing(),
+            "and the chase has let go rather than still holding on"
+        );
     }
 
     /// The `Rate` descriptor's range and the head's clamp are one number.

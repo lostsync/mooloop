@@ -45,17 +45,22 @@ component HeldButton inherits Rectangle {
 
 // One retained-audio buffer insert.
 //
-// Two surfaces, because the device has two kinds of control. OFFSET and XFADE
-// are standing parameters: descriptor-addressed, so an automation lane or the
-// modulation matrix can drive them like any other knob. Sweeping OFFSET is a
-// scrub — the head chases the position and the closing speed *is* the playback
-// rate — and holding it is delayed playback at unity.
+// Two surfaces, because the device has two kinds of control. POSITION and
+// XFADE are standing parameters: descriptor-addressed, so an automation lane
+// or the modulation matrix can drive them like any other knob. Sweeping
+// POSITION is a scrub — the head chases it and the closing speed *is* the
+// playback rate — and a position written once is an edit that finishes, after
+// which the head free-runs at Rate.
+//
+// **Rate and Freeze have no knob here yet.** They are published parameters and
+// reachable from a lane; the face that shows them is this plan's step 6, where
+// Buffer becomes 2U. A knob each in the meantime would be two knobs to move.
 //
 // The three buttons are gestures, which a curve cannot express: they fire a
 // complete event tuple that creates a head with its own window and repeat
 // count. They remain a debug surface standing in for the note-mapping and
 // parameter-lock layers, and go through the same `TriggerBuffer` command
-// those will. A running gesture outranks OFFSET, which re-asserts itself on
+// those will. A running gesture outranks POSITION, which re-asserts itself on
 // the next control tick after the gesture ends.
 export component BufferDeviceFace inherits EffectDeviceShell {
     name: "Buffer";
@@ -65,14 +70,16 @@ export component BufferDeviceFace inherits EffectDeviceShell {
     // frames still shows up.
     in property <int> collisions;
     // Normalized 0..1 against the descriptor tables in mooloop-core.
-    in-out property <float> offset;    // 0..16 beats behind the writer
+    // Position is *already* normalized there — 0 is the oldest retained
+    // sample and 1 is now — so it is the one control on this face with no
+    // second spelling of a range to get wrong.
+    in-out property <float> position;
     in-out property <float> crossfade; // 0.5..50 ms
-    callback offset-changed(float);
+    callback position-changed(float);
     callback crossfade-changed(float);
     // Index into the fixed debug event table, matching TRIGGERS below.
     callback trigger(int);
 
-    private property <float> offset-beats: root.offset * 16;
     private property <float> crossfade-ms: 0.5 * pow(100, root.crossfade);
     // Reverse is held rather than latched: it runs while the control is down.
     callback reverse-pressed();
@@ -115,19 +122,20 @@ export component BufferDeviceFace inherits EffectDeviceShell {
             ParameterKnob {
                 width: 52px;
                 diameter: 36px;
-                label: "Offset";
-                tooltip: "How far behind the input the read head sits";
-                value <=> root.offset;
-                default-value: 0;
-                value-text: root.offset-beats < 0.05
+                label: "Position";
+                tooltip: "Where in the retained history the read head is";
+                value <=> root.position;
+                default-value: 1;
+                // The top of the travel is the write head, which is live.
+                value-text: root.position > 0.9995
                     ? "live"
-                    : round(root.offset-beats * 100) / 100 + " beats";
+                    : round(root.position * 1000) / 10 + " %";
                 modulation-armed: root.modulation-armed;
                 modulation-allowed: root.modulation-allowed[0];
                 modulation-depth: root.modulation-depths[0];
                 modulation-offset: root.modulation-offsets[0];
                 modulation-route-count: root.modulation-route-counts[0];
-                changed(v) => { root.offset-changed(v); }
+                changed(v) => { root.position-changed(v); }
                 modulation-depth-changed(v) => { root.modulation-depth-changed(0, v); }
                 modulation-edit-started => { root.modulation-edit-started(0); }
                 modulation-edit-finished => { root.modulation-edit-finished(0); }

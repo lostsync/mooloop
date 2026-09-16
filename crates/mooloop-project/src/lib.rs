@@ -1047,6 +1047,11 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
             // and lane against the chain it names, and until this has run a
             // chain written by an older version holds no identities at all.
             project.assign_device_ids();
+            // And after that, because it looks a lane's buffer up by identity
+            // to find how many bars of history the old offset was a fraction
+            // of. Before the repair pass, because that pass judges a lane
+            // against the descriptor table, where id 0 no longer exists.
+            project.migrate_retired_buffer_offset();
             for (index, channel) in project.channels.iter_mut().enumerate() {
                 resolve_setup_asset(path, index, &mut channel.setup.source, &mut warnings)?;
                 channel.normalize_automation();
@@ -2749,6 +2754,116 @@ id = "default_kick"
             panic!("`type = \"ml1\"` must load as the ML-M1");
         };
         assert_eq!(state.params.filter_decay, 0.08);
+    }
+
+    /// A buffer saved before 2026-09-16 holds `offset_beats`, and its lane
+    /// holds id 0. Both mean beats behind a moving writer; neither exists any
+    /// more.
+    ///
+    /// **The test is that the head lands on the same audio**, not that a
+    /// number survived. One beat behind an eight-bar ring is one thirty-second
+    /// of the way back from the writer, so `Position` has to come back at
+    /// `31/32` -- and the lane, whose stored `0.0625` was a sixteenth of the
+    /// old sixteen-beat range and therefore also one beat, has to come back at
+    /// the same place.
+    ///
+    /// The fixture is built by writing the *modern* shape and rewriting the
+    /// text, which is backwards from how it reads and is the only way round
+    /// that works: `save_song` repairs before it writes, and a lane naming a
+    /// retired id is exactly what repair deletes. Writing it by hand instead
+    /// would mean spelling `ParamAddr`'s serde shape in a string literal,
+    /// where a rename would make the fixture stop testing anything without
+    /// failing.
+    #[test]
+    fn a_buffer_offset_saved_before_position_existed_lands_on_the_same_audio() {
+        use mooloop_core::{
+            AutomationLane, AutomationPoint, EffectTarget, ParamAddr, ParamOwner,
+        };
+
+        // Distinctive enough that the substitution below cannot hit anything
+        // else in the manifest, and asserted to occur exactly once anyway.
+        const LANE_MARKER: &str = "0.1234567";
+
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+
+        let mut project = Project::default();
+        let mut slot = mooloop_core::EffectSlotState::of_kind(mooloop_core::EffectKind::Buffer);
+        slot.params = mooloop_core::EffectParams::Buffer(mooloop_core::BufferParams {
+            bars: 8,
+            ..Default::default()
+        });
+        project.channels[0].setup.push_effect(slot);
+        project.channels[0].setup.assign_device_ids();
+        let device = project.channels[0].setup.effects[0].id;
+        project.channels[0].normalize_automation();
+        let mut lane = AutomationLane::new(ParamAddr {
+            scope: EffectTarget::Channel(0),
+            owner: ParamOwner::Effect { device },
+            param: mooloop_core::BUFFER_PARAM_POSITION,
+        });
+        lane.reserve_points();
+        lane.reset_points([AutomationPoint::new(1, 0, 0.1234567)]);
+        project.channels[0].automation[0].push(lane);
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+
+        // Now put the old spelling back: the device's key, the lane's id, and
+        // the lane's value, which was a sixteenth of a 0..16 beat range and so
+        // was one beat.
+        let manifest = fs::read_to_string(&bundle).unwrap();
+        for (what, needle) in [
+            ("the device's position", "position = 1.0"),
+            (
+                "the lane's id",
+                &format!("param = {}", mooloop_core::BUFFER_PARAM_POSITION),
+            ),
+            ("the lane's value", LANE_MARKER),
+        ] {
+            assert_eq!(
+                manifest.matches(needle).count(),
+                1,
+                "{what} has to appear exactly once for the rewrite to be exact"
+            );
+        }
+        let legacy = manifest
+            .replace("position = 1.0", "offset_beats = 1.0")
+            .replace(
+                &format!("param = {}", mooloop_core::BUFFER_PARAM_POSITION),
+                &format!("param = {}", mooloop_core::BUFFER_PARAM_OFFSET_BEATS),
+            )
+            .replace(LANE_MARKER, "0.0625");
+        fs::write(&bundle, legacy).unwrap();
+
+        let loaded = load_bundle(&bundle).unwrap();
+        let LoadedDocument::Song(reopened) = loaded.document else {
+            panic!("a song loads as a song");
+        };
+
+        // One beat behind an eight-bar ring is 1/32 of it.
+        let expected = 1.0 - 1.0 / 32.0;
+        let params = reopened.channels[0].setup.effects[0]
+            .params
+            .buffer()
+            .expect("the slot is still a buffer");
+        assert!(
+            (params.position - expected).abs() < 1e-5,
+            "the saved offset reopened at position {}, expected {expected}",
+            params.position
+        );
+
+        let lanes = &reopened.channels[0].automation[0];
+        assert_eq!(
+            lanes.len(),
+            1,
+            "the lane must survive: repair deletes one that still names a \
+             retired id, so losing it here means the migration did not run"
+        );
+        assert_eq!(lanes[0].target.param, mooloop_core::BUFFER_PARAM_POSITION);
+        assert!(
+            (lanes[0].points()[0].value - expected).abs() < 1e-5,
+            "the lane reopened at {}, expected {expected}",
+            lanes[0].points()[0].value
+        );
     }
 
     /// A delay saved before 2026-09-08 named the five-entry

@@ -2366,13 +2366,14 @@ pub struct LimiterParams {
 /// Changing this requires constructing and structurally replacing the node
 /// off the audio thread; Stage 1 exposes it as saved device state only.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "BufferParamsOnDisk")]
 pub struct BufferParams {
     #[serde(default = "default_buffer_bars")]
     pub bars: u8,
     /// Free-run velocity of the read head, signed, `1.0` = forward at unity.
     ///
     /// It is what the head does when nothing else is talking to it. A chase
-    /// armed by [`Self::offset_beats`] overrides it while it is closing, and a
+    /// armed by [`Self::position`] overrides it while it is closing, and a
     /// [`crate::BufferEvent`] gesture overrides it for as long as the gesture
     /// runs -- the arbitration rule in
     /// `docs/plans/buffer-implementation/03-freeze-and-the-grid.md`.
@@ -2395,12 +2396,27 @@ pub struct BufferParams {
     /// which is at least explicable from the face.
     #[serde(default)]
     pub freeze: f32,
-    /// How far behind the writer the read head sits, in beats. Zero follows
-    /// the input. This is the buffer's one continuous control: the device is
-    /// otherwise driven by discrete [`crate::BufferEvent`] gestures, and a
-    /// gesture is not something a curve can express.
-    #[serde(default)]
-    pub offset_beats: f32,
+    /// Where in retained memory the read head is, normalized over the ring:
+    /// `0` is the oldest sample it still holds and `1` is now. Freeze latches
+    /// what "now" means.
+    ///
+    /// **It replaced `Offset`, which was beats behind a moving writer, and
+    /// the coordinate change is the point rather than the rename.** An
+    /// `AutomationLane` is a normalized curve against a `ParamAddr`, so an id
+    /// whose meaning changed with freeze state would mean two different things
+    /// depending on a control the lane cannot see -- the `eq-v2` step 01
+    /// defect in a new costume. Normalized over the buffer, the definition
+    /// holds in both states, and the direction is inverted relative to
+    /// `Offset` on purpose: `0` is the old end, so a rising ramp is forward
+    /// playback.
+    ///
+    /// Writing it is an *edit*: it arms a chase, the head closes on it at the
+    /// turntable behaviour, and the target is released once reached, after
+    /// which the head free-runs at [`Self::rate`]. A continuous stream of
+    /// writes is therefore a scrub, and a static value leaves `Rate` in charge
+    /// rather than yanking the head back to a stale target.
+    #[serde(default = "default_buffer_position")]
+    pub position: f32,
     #[serde(default = "default_buffer_crossfade_ms")]
     pub crossfade_ms: f32,
 }
@@ -2417,11 +2433,68 @@ const fn default_buffer_rate() -> f32 {
     1.0
 }
 
+const fn default_buffer_position() -> f32 {
+    1.0
+}
+
+/// [`BufferParams`] as documents on disk spell it.
+///
+/// It exists for one field. Projects written before 2026-09-16 hold
+/// `offset_beats`, which is beats behind the writer, where this one holds
+/// `position`, which is normalized over the ring and points the other way.
+/// The two cannot share a key or a `serde(alias)`, because the *number* means
+/// something different -- an alias would read `2.0` as "two beats back" where
+/// it was written and as "twice the length of the ring" here, and nothing
+/// would report it.
+///
+/// Serialization stays derived, so `offset_beats` is read and never written:
+/// a song opened and saved leaves the old key behind for good.
+#[derive(serde::Deserialize)]
+struct BufferParamsOnDisk {
+    #[serde(default = "default_buffer_bars")]
+    bars: u8,
+    #[serde(default = "default_buffer_rate")]
+    rate: f32,
+    #[serde(default)]
+    freeze: f32,
+    #[serde(default)]
+    position: Option<f32>,
+    #[serde(default)]
+    offset_beats: Option<f32>,
+    #[serde(default = "default_buffer_crossfade_ms")]
+    crossfade_ms: f32,
+}
+
+impl From<BufferParamsOnDisk> for BufferParams {
+    fn from(disk: BufferParamsOnDisk) -> Self {
+        let bars = disk.bars.max(1);
+        // `pos = 1 - beats / history_beats`, so a head sitting at the oldest
+        // sample of an eight-bar ring comes back at 0 and one sitting on the
+        // writer comes back at 1. A document holding both keys is a document
+        // this build wrote, so the new one wins.
+        let position = disk.position.unwrap_or_else(|| {
+            disk.offset_beats
+                .map(|beats| {
+                    let history_beats = f32::from(bars) * crate::time::BEATS_PER_BAR as f32;
+                    1.0 - beats / history_beats
+                })
+                .unwrap_or_else(default_buffer_position)
+        });
+        Self {
+            bars,
+            rate: disk.rate,
+            freeze: disk.freeze,
+            position: position.clamp(0.0, 1.0),
+            crossfade_ms: disk.crossfade_ms,
+        }
+    }
+}
+
 impl Default for BufferParams {
     fn default() -> Self {
         Self {
             bars: default_buffer_bars(),
-            offset_beats: 0.0,
+            position: default_buffer_position(),
             rate: default_buffer_rate(),
             freeze: 0.0,
             crossfade_ms: default_buffer_crossfade_ms(),
@@ -2435,8 +2508,16 @@ impl Default for BufferParams {
 /// engine does off-thread through a prepared replacement; a control-rate
 /// parameter cannot do that, and pretending otherwise would put an allocation
 /// on the audio thread the first time someone drew a curve on it.
+/// **Retired 2026-09-16.** `Offset` was beats behind a moving writer;
+/// [`BUFFER_PARAM_POSITION`] is where in the ring the head is, and the two are
+/// different coordinates rather than different names for one. The id is kept
+/// here, out of the descriptor table, so the loader can recognise a lane that
+/// still names it -- and it is **spent**: nothing may ever be given id 0
+/// again, because a project saved before the change still says 0 and means
+/// beats.
 pub const BUFFER_PARAM_OFFSET_BEATS: u32 = 0;
 pub const BUFFER_PARAM_CROSSFADE_MS: u32 = 1;
+pub const BUFFER_PARAM_POSITION: u32 = 2;
 pub const BUFFER_PARAM_RATE: u32 = 3;
 pub const BUFFER_PARAM_FREEZE: u32 = 6;
 
@@ -2451,13 +2532,13 @@ pub const MAX_BUFFER_RATE: f32 = 4.0;
 
 static BUFFER_DESCRIPTORS: [ParamDescriptor; 4] = [
     ParamDescriptor {
-        id: BUFFER_PARAM_OFFSET_BEATS,
-        name: "Offset",
-        unit: "beats",
+        id: BUFFER_PARAM_POSITION,
+        name: "Position",
+        unit: "%",
         min: 0.0,
-        max: 16.0,
+        max: 1.0,
         curve: ParamCurve::Linear,
-        default: 0.0,
+        default: 1.0,
     },
     ParamDescriptor {
         id: BUFFER_PARAM_CROSSFADE_MS,
@@ -2838,7 +2919,7 @@ impl EffectParams {
                 _ => None,
             },
             Self::Buffer(p) => match id {
-                BUFFER_PARAM_OFFSET_BEATS => Some(p.offset_beats),
+                BUFFER_PARAM_POSITION => Some(p.position),
                 BUFFER_PARAM_CROSSFADE_MS => Some(p.crossfade_ms),
                 BUFFER_PARAM_RATE => Some(p.rate),
                 BUFFER_PARAM_FREEZE => Some(p.freeze),
@@ -2974,7 +3055,7 @@ impl EffectParams {
                 _ => return None,
             },
             Self::Buffer(p) => match id {
-                BUFFER_PARAM_OFFSET_BEATS => p.offset_beats = value,
+                BUFFER_PARAM_POSITION => p.position = value,
                 BUFFER_PARAM_CROSSFADE_MS => p.crossfade_ms = value,
                 BUFFER_PARAM_RATE => p.rate = value,
                 BUFFER_PARAM_FREEZE => p.freeze = value,

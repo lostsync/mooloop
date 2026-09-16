@@ -201,14 +201,21 @@ const FROZEN: &[(Owner, &[(u32, &str)])] = &[
         (1, "Release"),
         (2, "Gain"),
     ]),
+    // Id 0 is **spent**. `Offset` was retired 2026-09-16 -- see
+    // `BUFFER_PARAM_OFFSET_BEATS` -- and nothing may ever answer to 0 again,
+    // because projects saved before that still name it and mean beats behind
+    // the writer. A retirement is the one edit to this table that is not a
+    // renumber: the row leaves, the id does not come back, and every row
+    // after it moves down a position, which is safe only because a position
+    // is read at runtime while an id is read off disk.
+    //
+    // The gaps at 4, 5 and 7-9 are reserved by
+    // `03-freeze-and-the-grid.md` for Length, Loop, Jump, Quantize and Quant
+    // Grid. Spending one on something else is a renumber wearing an append's
+    // clothes.
     (Effect(EffectKind::Buffer), &[
-        (0, "Offset"),
+        (2, "Position"),
         (1, "Crossfade"),
-        // Appended 2026-09-16 with Freeze. The gap at 2, 4 and 5 is not a
-        // hole to fill: `03-freeze-and-the-grid.md` reserves 2 for Position,
-        // 4 for Length and 5 for Loop, and 7 to 9 for Jump, Quantize and
-        // Quant Grid. Spending one of them on something else is a renumber
-        // wearing an append's clothes.
         (3, "Rate"),
         (6, "Freeze"),
     ]),

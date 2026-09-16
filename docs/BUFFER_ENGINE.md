@@ -31,11 +31,15 @@ every other effect, capturing whatever reaches its position in the chain.
   8). Construction allocates; `process` does not. Resizing the ring is an
   off-thread structural edit, which is why `bars` is deliberately not a
   descriptor-addressed parameter.
-- Two parameters are addressable and therefore automatable and modulatable:
-  `Offset` (beats behind the writer) and `Crossfade` (declick length in ms).
-  Offset is a position control, not a rate control — the head chases the
-  position and the closing speed *is* the playback rate, so sweeping it
-  scrubs and holding it is delayed playback at unity.
+- Four parameters are addressable and therefore automatable and modulatable:
+  `Position`, `Rate`, `Freeze` and `Crossfade` (declick length in ms).
+  Position is normalized over the ring -- `0` is the oldest retained sample
+  and `1` is the write head -- and it is a position control rather than a rate
+  control: the head chases it and the closing speed *is* the playback rate, so
+  sweeping it scrubs. **It replaced `Offset`, which was beats behind the
+  writer**, on 2026-09-16; id 0 is retired and spent, and a project that names
+  it is migrated on load. Rate is the head's free-run velocity, which the
+  writer used to supply implicitly.
 - `BufferEvent` is the gesture contract in `mooloop-core`: offset, rate,
   optional window, optional repeat count, a `BufferDuration` of steps /
   until-next-event / gate, and a crossfade. The face exposes JUMP, REV, and

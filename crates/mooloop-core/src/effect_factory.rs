@@ -718,28 +718,31 @@ fn buffer() -> Vec<EffectFactoryPatch> {
     vec![
         with("One Bar", &["short", "loop"], "One bar of memory, following the input.", |p| {
             p.bars = 1;
-            p.offset_beats = 0.0;
+            p.position = 1.0;
             p.crossfade_ms = 2.5;
         }),
         with("Two Bar Stutter", &["stutter", "tight"], "Two bars with the fastest crossfade.", |p| {
             p.bars = 2;
-            p.offset_beats = 0.0;
+            p.position = 1.0;
             p.crossfade_ms = 1.0;
         }),
         with("Eight Bar Recall", &["long", "recall"], "Eight bars to reach back into, with a softer fade than the default.", |p| {
             p.bars = 8;
-            p.offset_beats = 0.0;
+            p.position = 1.0;
             p.crossfade_ms = 8.0;
         }),
 
         with("Beat Behind", &["offset", "echo"], "Reads one beat behind the writer.", |p| {
             p.bars = 4;
-            p.offset_beats = 1.0;
+            // A beat back in a four-bar ring is a sixteenth of it, and
+            // `Position` counts from the old end -- so one beat behind the
+            // writer is fifteen sixteenths along.
+            p.position = 1.0 - 1.0 / 16.0;
             p.crossfade_ms = 5.0;
         }),
         with("Smooth Fades", &["soft", "ambient"], "Long crossfades, so every jump is a swell.", |p| {
             p.bars = 4;
-            p.offset_beats = 0.0;
+            p.position = 1.0;
             p.crossfade_ms = 20.0;
         }),
     ]

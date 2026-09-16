@@ -1190,12 +1190,24 @@ land on its own when it starts to matter:
   A published generator outlet is a source in the same shelf, in its own pane
   beside the modules. Device (effect) outlets, cross-channel sources, and
   macros remain planned.
-- The retained-audio buffer is descriptor-addressed: `Offset` places the read
-  head behind the writer in beats, `Rate` is the head's free-run speed,
+- The retained-audio buffer is descriptor-addressed: `Position` says where in
+  the retained history the read head is, `Rate` is its free-run speed,
   `Freeze` stops the writer, and `Crossfade` sets the declick length. All four
-  automate and modulate; none of them has a knob on the face yet, so the
-  automation lane's device-grouped picker is where `Rate` and `Freeze` are
-  reachable from. `bars` is deliberately not a parameter: resizing the ring
+  automate and modulate; the face carries Position and Crossfade, and `Rate`
+  and `Freeze` are reachable from the automation lane's device-grouped picker
+  until the 2U face arrives.
+  **Position is normalized over the ring**: `0` is the oldest sample it still
+  holds and `1` is now, so a rising ramp is forward playback and the knob's
+  top is live. Writing it is an *edit* rather than a standing value -- it aims
+  the head, the head closes on it at the turntable behaviour, and once it has
+  arrived and the request has stopped moving the chase lets go and `Rate`
+  carries the head from there. A moving curve is therefore a scrub and a held
+  one is a position; both are what they look like.
+  It replaced `Offset`, which was beats behind the writer and pointed the
+  other way. **A project saved before 2026-09-16 opens where it was**: the
+  device's saved offset, its automation lanes and its modulation routes are
+  all converted on load, and the old id is retired rather than reused.
+  `bars` is deliberately not a parameter: resizing the ring
   reallocates, which happens off-thread.
   **Freeze is what makes the device a small realtime sampler rather than an
   effect with buffer controls.** Audio is always flowing through it and the
