@@ -15,13 +15,22 @@ if [ -e "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
     exit 0
 fi
 
+# Documentation may be edited on `main` directly: a worktree to change a
+# Markdown file costs more than it protects. A commit qualifies only if every
+# staged path is Markdown, so a doc edit cannot carry code in with it.
 if [ "$branch" = "main" ]; then
+    non_docs=$(git diff --cached --name-only --diff-filter=ACMRD | grep -v '\.md$' || true)
+    if [ -z "$non_docs" ]; then
+        exit 0
+    fi
     cat >&2 <<'MSG'
 Refusing to commit on main.
 Create a task worktree and branch before editing:
   git worktree add ../mooloop-worktrees/<branch-name> -b <type>/<slug> main
 
-(A merge commit is allowed; this only blocks ordinary commits.)
+(A merge commit is allowed, and so is a commit that stages only Markdown.
+These staged paths are not Markdown:)
 MSG
+    printf '  %s\n' $non_docs >&2
     exit 1
 fi
