@@ -7836,7 +7836,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         let target = ParamAddr::effect(
             EffectTarget::Channel(0),
             mooloop_core::DeviceId(0),
-            mooloop_core::BUFFER_PARAM_OFFSET_BEATS,
+            mooloop_core::BUFFER_PARAM_POSITION,
         );
 
         let mut render = RenderState::from_project(48_000, &project, &[]);
@@ -7844,7 +7844,11 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         // Fill the ring before asking the head to look backward into it.
         render.process_block(2048);
 
-        for (id, tick, value) in [(1u32, 0u32, 0.0f32), (2, 96, 0.25)] {
+        // `Position` counts from the old end, so the curve starts at the
+        // write head and travels back into the history. The old spelling of
+        // this lane ran 0.0 to 0.25 and meant the same journey the other way
+        // round.
+        for (id, tick, value) in [(1u32, 0u32, 1.0f32), (2, 96, 0.75)] {
             render.apply_command(EngineCommand::UpsertAutomationPoint {
                 pattern: 0,
                 channel: 0,
@@ -7862,7 +7866,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             .iter()
             .filter_map(|event| match event.event {
                 Event::ParamValue {
-                    id: mooloop_core::BUFFER_PARAM_OFFSET_BEATS,
+                    id: mooloop_core::BUFFER_PARAM_POSITION,
                     value,
                 } => Some(value),
                 _ => None,
@@ -7873,8 +7877,8 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             "the lane did not resolve at the control rate: {events:?}"
         );
         assert!(
-            events.iter().any(|value| *value > 0.0),
-            "the lane never opened the offset: {events:?}"
+            events.iter().any(|value| *value < 1.0),
+            "the lane never moved the head off the write position: {events:?}"
         );
     }
 
