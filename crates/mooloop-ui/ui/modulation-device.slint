@@ -10,7 +10,7 @@ component ModulationDisplay inherits Rectangle {
     in property <float> spread;
     background: Theme.panel;
     border-radius: Theme.radius-sm;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: Theme.border;
     clip: true;
     Rectangle { x: 0px; y: parent.height * 0.5; width: parent.width; height: 1px; background: Theme.border; }
@@ -80,7 +80,7 @@ export component ModulationDeviceFace inherits EffectDeviceShell {
         width: 252px;
         height: 208px;
         background: Theme.surface;
-        border-width: 1px;
+        border-width: Theme.hairline;
         border-color: Theme.border;
         border-radius: Theme.radius-sm;
     }

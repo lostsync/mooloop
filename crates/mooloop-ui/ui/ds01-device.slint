@@ -171,7 +171,7 @@ component Ds01Chip inherits Rectangle {
             height: 11px;
             text: root.label;
             color: Theme.text-muted;
-            font-size: 9px;
+            font-size: Theme.text-md;
             horizontal-alignment: center;
             vertical-alignment: center;
             overflow: elide;
@@ -180,7 +180,7 @@ component Ds01Chip inherits Rectangle {
             height: 54px;
             background: touch.has-hover ? Theme.surface-active : Theme.surface-raised;
             border-radius: Theme.radius-md;
-            border-width: 1px;
+            border-width: Theme.hairline;
             border-color: Theme.border;
             accessible-role: button;
             accessible-label: root.label;
@@ -190,7 +190,7 @@ component Ds01Chip inherits Rectangle {
                 height: 100%;
                 text: root.value-texts[root.param];
                 color: Theme.text;
-                font-size: 9px;
+                font-size: Theme.text-md;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 overflow: elide;
@@ -273,7 +273,7 @@ component Module inherits Rectangle {
             Text {
                 text: root.caption;
                 color: Theme.text-faint;
-                font-size: 9px;
+                font-size: Theme.text-md;
                 vertical-alignment: center;
             }
         }
@@ -389,7 +389,7 @@ component HitTrace inherits Rectangle {
 component Scope inherits Rectangle {
     background: Theme.surface;
     border-radius: Theme.radius-sm;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: Theme.border;
     clip: true;
     for line in [0.25, 0.5, 0.75] : Rectangle {
@@ -441,7 +441,7 @@ component MatrixRow inherits Rectangle {
             width: 12px;
             text: root.index + 1;
             color: Theme.text-faint;
-            font-size: 9px;
+            font-size: Theme.text-md;
             vertical-alignment: center;
         }
         PickerChip {
@@ -456,7 +456,7 @@ component MatrixRow inherits Rectangle {
             width: 10px;
             text: "\u{2192}";
             color: Theme.text-faint;
-            font-size: 9px;
+            font-size: Theme.text-md;
             vertical-alignment: center;
             horizontal-alignment: center;
         }
@@ -486,8 +486,8 @@ component MatrixRow inherits Rectangle {
             width: 46px;
             text: root.value-texts[root.base + 2];
             color: root.live ? Theme.text : Theme.text-faint;
-            font-size: 9px;
-            font-family: "monospace";
+            font-size: Theme.text-md;
+            font-family: Theme.font-family-mono;
             vertical-alignment: center;
         }
         Ds01Dial {
@@ -508,8 +508,8 @@ component MatrixRow inherits Rectangle {
             width: 42px;
             text: root.value-texts[root.base + 3];
             color: root.live ? Theme.text : Theme.text-faint;
-            font-size: 9px;
-            font-family: "monospace";
+            font-size: Theme.text-md;
+            font-family: Theme.font-family-mono;
             vertical-alignment: center;
         }
     }
@@ -582,7 +582,7 @@ export component Ds01DeviceFace inherits Rectangle {
             Text {
                 text: root.span-text;
                 color: Theme.text-faint;
-                font-size: 9px;
+                font-size: Theme.text-md;
                 vertical-alignment: center;
             }
         }

@@ -311,7 +311,7 @@ export component PianoGrid inherits Rectangle {
         // tint is the only thing saying "selected" now that the frame is
         // gone, and a quiet note should not look half-selected.
         opacity: cell.selected ? 1.0 : 0.55 + 0.45 * cell.velocity / 127;
-        border-width: cell.selected ? 1px : 0px;
+        border-width: cell.selected ? Theme.hairline : 0px;
         border-color: Theme.text;
     }
 
@@ -327,7 +327,7 @@ export component PianoGrid inherits Rectangle {
         width: abs(piano-touch.marquee-x - piano-touch.marquee-anchor-x);
         height: abs(piano-touch.marquee-y - piano-touch.marquee-anchor-y);
         background: Theme.focus.transparentize(0.85);
-        border-width: 1px;
+        border-width: Theme.hairline;
         border-color: Theme.focus;
     }
 

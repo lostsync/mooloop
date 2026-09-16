@@ -14,7 +14,7 @@ component HeldButton inherits Rectangle {
     min-width: 44px;
     min-height: 24px;
     border-radius: Theme.radius-md;
-    border-width: tap.has-hover ? 1px : 0px;
+    border-width: tap.has-hover ? Theme.hairline : 0px;
     border-color: Theme.border;
     background: tap.pressed ? Theme.accent-active : Theme.surface-raised;
     accessible-role: button;
@@ -25,7 +25,7 @@ component HeldButton inherits Rectangle {
         color: Theme.text;
         horizontal-alignment: center;
         vertical-alignment: center;
-        font-size: 11px;
+        font-size: Theme.text-xl;
     }
 
     tap := TouchArea {
@@ -93,7 +93,7 @@ export component BufferDeviceFace inherits EffectDeviceShell {
                 Text {
                     text: "COLLISIONS";
                     color: Theme.text-faint;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                 }
@@ -103,8 +103,8 @@ export component BufferDeviceFace inherits EffectDeviceShell {
                     // the specified behaviour — so it reads as attention,
                     // not as a fault.
                     color: root.collisions > 0 ? Theme.warning : Theme.text-muted;
-                    font-size: 13px;
-                    font-family: "monospace";
+                    font-size: Theme.text-2xl;
+                    font-family: Theme.font-family-mono;
                     vertical-alignment: center;
                 }
             }

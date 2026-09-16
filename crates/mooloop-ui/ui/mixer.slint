@@ -254,7 +254,7 @@ export component SendRow inherits Rectangle {
                 horizontal-stretch: 1;
                 text: root.send.target-name;
                 color: root.send.enabled ? Theme.text : Theme.text-faint;
-                font-size: 9px;
+                font-size: Theme.text-md;
                 vertical-alignment: center;
                 overflow: elide;
             }
@@ -347,13 +347,13 @@ export component BusPicker inherits Rectangle {
     height: 22px;
     border-radius: Theme.radius-md;
     background: pick-touch.has-hover && root.enabled ? Theme.surface-active : Theme.surface;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: Theme.border;
 
     Text {
         text: root.short-label;
         color: root.enabled ? Theme.text-muted : Theme.text-faint;
-        font-size: 10px;
+        font-size: Theme.text-lg;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -379,7 +379,7 @@ export component BusPicker inherits Rectangle {
         close-policy: close-on-click-outside;
         Rectangle {
             background: Theme.surface;
-            border-width: 1px;
+            border-width: Theme.hairline;
             border-color: Theme.border;
             border-radius: Theme.radius-md;
             VerticalLayout {
@@ -564,7 +564,7 @@ component StripFoot inherits VerticalLayout {
         if root.strip.is-master : Text {
             text: "OUT";
             color: Theme.text-faint;
-            font-size: 8px;
+            font-size: Theme.text-sm;
             horizontal-alignment: center;
             vertical-alignment: center;
             width: 100%;
@@ -647,7 +647,7 @@ component StripSendsPage inherits VerticalLayout {
             ? "Every track reaches the master, so it sends to nothing."
             : "Route this track to another and it gains a fader here.";
         color: Theme.text-faint;
-        font-size: 8px;
+        font-size: Theme.text-sm;
         wrap: word-wrap;
         vertical-stretch: 1;
     }
@@ -757,7 +757,7 @@ component MixerStrip inherits Rectangle {
 
     width: MixerMetrics.strip-width;
     background: root.strip.selected ? Theme.surface-active : Theme.surface;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: root.strip.selected ? Theme.accent : Theme.border;
     border-radius: Theme.radius-md;
 
@@ -794,7 +794,7 @@ component MixerStrip inherits Rectangle {
                 color: root.strip.solo-silenced
                     ? Theme.text-faint
                     : root.strip.selected ? Theme.text : Theme.text-muted;
-                font-size: 9px;
+                font-size: Theme.text-md;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 overflow: elide;

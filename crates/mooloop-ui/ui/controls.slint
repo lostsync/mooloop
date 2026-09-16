@@ -112,7 +112,7 @@ export component ToolButton inherits Rectangle {
     preferred-width: 44px;
     preferred-height: 24px;
     border-radius: Theme.radius-md;
-    border-width: (tap.has-hover || button-keyboard.has-focus) && root.enabled ? 1px : 0px;
+    border-width: (tap.has-hover || button-keyboard.has-focus) && root.enabled ? Theme.hairline : 0px;
     border-color: button-keyboard.has-focus ? Theme.focus : Theme.border;
     background: !root.enabled
         ? Theme.surface
@@ -128,7 +128,7 @@ export component ToolButton inherits Rectangle {
         color: root.enabled ? root.text-color : Theme.text-faint;
         horizontal-alignment: center;
         vertical-alignment: center;
-        font-size: 11px;
+        font-size: Theme.text-xl;
     }
     if root.icon != "" : Path {
         width: 16px;
@@ -212,7 +212,7 @@ export component SegmentedControl inherits Rectangle {
     min-height: 26px;
     background: Theme.surface;
     border-radius: Theme.radius-md;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: Theme.border;
 
     HorizontalLayout {
@@ -247,7 +247,7 @@ export component SelectorBank inherits Rectangle {
     width: selector-layout.preferred-width;
     background: Theme.surface;
     border-radius: Theme.radius-md;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: Theme.border;
 
     selector-layout := HorizontalLayout {
@@ -288,7 +288,7 @@ export component PickerChip inherits Rectangle {
     height: 18px;
     background: touch.has-hover ? Theme.surface-active : Theme.surface;
     border-radius: Theme.radius-sm;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: Theme.border;
 
     Text {
@@ -297,7 +297,7 @@ export component PickerChip inherits Rectangle {
         height: parent.height;
         text: root.options[root.selected-index];
         color: root.text-color;
-        font-size: 9px;
+        font-size: Theme.text-md;
         vertical-alignment: center;
         overflow: elide;
     }
@@ -307,7 +307,7 @@ export component PickerChip inherits Rectangle {
         height: parent.height;
         text: "\u{25be}";
         color: Theme.text-faint;
-        font-size: 8px;
+        font-size: Theme.text-sm;
         vertical-alignment: center;
     }
     touch := TouchArea {
@@ -326,7 +326,7 @@ export component PickerChip inherits Rectangle {
         close-policy: close-on-click-outside;
         Rectangle {
             background: Theme.surface;
-            border-width: 1px;
+            border-width: Theme.hairline;
             border-color: Theme.border;
             border-radius: Theme.radius-md;
             ScrollView {
@@ -348,7 +348,7 @@ export component PickerChip inherits Rectangle {
                             height: parent.height;
                             text: option;
                             color: index == root.selected-index ? Theme.accent : Theme.text;
-                            font-size: 9px;
+                            font-size: Theme.text-md;
                             vertical-alignment: center;
                             overflow: elide;
                         }
@@ -378,7 +378,7 @@ export component PickerChip inherits Rectangle {
 
 export component SectionLabel inherits Text {
     color: Theme.text-faint;
-    font-size: 9px;
+    font-size: Theme.text-md;
     height: 12px;
 }
 
@@ -391,7 +391,7 @@ export component InstrumentModule inherits Rectangle {
     min-height: 64px;
     background: Theme.surface;
     border-radius: Theme.radius-md;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: Theme.border;
 
     VerticalLayout {
@@ -420,15 +420,15 @@ export component ValueReadout inherits Rectangle {
     width: min(readout-text.preferred-width + 10px, root.readout-max-width);
     border-radius: Theme.radius-sm;
     background: Theme.panel;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: Theme.border;
 
     readout-text := Text {
         width: 100%;
         text: root.value-text + (root.unit == "" ? "" : " " + root.unit);
         color: Theme.accent;
-        font-family: "monospace";
-        font-size: 10px;
+        font-family: Theme.font-family-mono;
+        font-size: Theme.text-lg;
         horizontal-alignment: center;
         vertical-alignment: center;
         overflow: elide;
@@ -582,7 +582,7 @@ component KnobFace inherits Rectangle {
         height: parent.height * 0.68;
         border-radius: self.width / 2;
         background: Theme.surface-raised;
-        border-width: root.focused || root.hovered ? 2px : 1px;
+        border-width: root.focused || root.hovered ? Theme.stroke-emphasis : Theme.hairline;
         border-color: root.focused ? Theme.focus : root.hovered ? Theme.text-faint : Theme.border;
     }
 
@@ -637,7 +637,7 @@ component KnobFace inherits Rectangle {
         width: root.diameter;
         height: root.diameter;
         border-radius: self.width / 2;
-        border-width: 2px;
+        border-width: Theme.stroke-emphasis;
         border-color: root.hovered ? Theme.accent : Theme.focus;
     }
 
@@ -787,7 +787,7 @@ export component ParameterKnob inherits Rectangle {
             text: root.label;
             color: !root.enabled ? Theme.text-faint
                 : root.modulation-active ? Theme.warning : Theme.text-muted;
-            font-size: 9px;
+            font-size: Theme.text-md;
             height: 12px;
             horizontal-alignment: center;
             overflow: elide;
@@ -972,7 +972,7 @@ export component KnobField inherits Rectangle {
         text: root.label;
         color: root.modulation-armed && root.modulation-allowed
             ? Theme.warning : Theme.text-muted;
-        font-size: 9px;
+        font-size: Theme.text-md;
         vertical-alignment: center;
         overflow: elide;
     }
@@ -1014,7 +1014,7 @@ export component KnobField inherits Rectangle {
         height: 20px;
         border-radius: Theme.radius-md;
         background: Theme.surface-raised;
-        border-width: 1px;
+        border-width: Theme.hairline;
         border-color: entry.has-focus ? Theme.accent : Theme.border;
         accessible-role: text-input;
         accessible-label: root.tooltip;
@@ -1028,8 +1028,8 @@ export component KnobField inherits Rectangle {
             // value lands.
             text: root.display-text;
             color: Theme.text;
-            font-size: 9px;
-            font-family: "monospace";
+            font-size: Theme.text-md;
+            font-family: Theme.font-family-mono;
             single-line: true;
             vertical-alignment: center;
             selection-background-color: Theme.accent;
@@ -1068,7 +1068,7 @@ export component LedIndicator inherits Rectangle {
     height: root.diameter;
     border-radius: self.width / 2;
     background: root.on ? root.led-color : root.led-color.with-alpha(0.16);
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: root.on ? root.led-color.brighter(0.4) : Theme.border;
 
     if root.tooltip != "" : Tooltip { text: @markdown("\{root.tooltip}"); }
@@ -1229,7 +1229,7 @@ export component TimeDivisionKnob inherits Rectangle {
                 text: root.tempo-sync ? Divisions.label(root.division) : "MS";
                 color: root.clamped ? Theme.warning
                     : root.tempo-sync ? Theme.focus : Theme.text-faint;
-                font-size: 8px;
+                font-size: Theme.text-sm;
                 horizontal-alignment: center;
                 overflow: elide;
             }
@@ -1305,7 +1305,7 @@ export component ParameterFader inherits Rectangle {
         Text {
             text: root.label;
             color: root.text-color;
-            font-size: 10px;
+            font-size: Theme.text-lg;
             vertical-alignment: center;
             width: root.label-width;
         }
@@ -1378,7 +1378,7 @@ export component ParameterFader inherits Rectangle {
         Text {
             text: root.label;
             color: root.text-color;
-            font-size: 9px;
+            font-size: Theme.text-md;
             height: 12px;
             horizontal-alignment: center;
         }
@@ -1554,7 +1554,7 @@ export component ConsoleButton inherits Rectangle {
     min-height: 18px;
     max-height: 18px;
     border-radius: Theme.radius-sm;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: root.on ? Theme.accent : Theme.border;
     background: root.on ? Theme.accent-active
         : touch.has-hover ? Theme.surface-raised : Theme.surface;
@@ -1896,7 +1896,10 @@ export component BbtText inherits Text {
             + root.pad(root.tick, root.tick-digits);
 
     text: root.formatted;
-    font-family: "monospace";
+    // The one statement a face should make about a family: this content must
+    // not reflow as the value changes. The token, not the literal, so a theme
+    // that names its own mono face reaches the transport readout too.
+    font-family: Theme.font-family-mono;
 }
 
 export global TimeFormat {
@@ -1966,7 +1969,7 @@ export component SyncMiniKnob inherits Rectangle {
         height: 9px;
         text: root.label;
         color: Theme.text-muted;
-        font-size: 7px;
+        font-size: Theme.text-xs;
         horizontal-alignment: center;
     }
     MiniKnob {
@@ -2010,7 +2013,7 @@ export component SyncMiniKnob inherits Rectangle {
         height: 12px;
         text: root.synced ? Divisions.label(root.division) : root.free-value-text;
         color: root.synced ? Theme.focus : Theme.accent;
-        font-size: 7px;
+        font-size: Theme.text-xs;
         horizontal-alignment: center;
         overflow: elide;
     }
@@ -2087,7 +2090,7 @@ export component KnobStack inherits Rectangle {
                 text: root.label;
                 color: root.modulation-armed && root.modulation-allowed
                     ? Theme.warning : Theme.text-muted;
-                font-size: 9px;
+                font-size: Theme.text-md;
                 vertical-alignment: center;
                 overflow: elide;
             }
@@ -2143,7 +2146,7 @@ export component KnobStack inherits Rectangle {
             height: 18px;
             border-radius: Theme.radius-md;
             background: Theme.surface-raised;
-            border-width: 1px;
+            border-width: Theme.hairline;
             border-color: stacked-entry.has-focus ? Theme.accent : Theme.border;
             accessible-role: text-input;
             accessible-label: root.tooltip;
@@ -2153,8 +2156,8 @@ export component KnobStack inherits Rectangle {
                 height: 100%;
                 text: root.display-text;
                 color: Theme.text;
-                font-size: 9px;
-                font-family: "monospace";
+                font-size: Theme.text-md;
+                font-family: Theme.font-family-mono;
                 single-line: true;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -2201,7 +2204,7 @@ export component TransportButton inherits Rectangle {
     min-width: 34px;
     min-height: 26px;
     border-radius: Theme.radius-md;
-    border-width: transport-touch.has-hover && root.enabled ? 1px : 0px;
+    border-width: transport-touch.has-hover && root.enabled ? Theme.hairline : 0px;
     border-color: root.role-color;
     background: !root.enabled
         ? Theme.surface
@@ -2214,7 +2217,7 @@ export component TransportButton inherits Rectangle {
     Text {
         text: root.text;
         color: !root.enabled ? Theme.text-faint : root.active ? root.role-color : Theme.text;
-        font-size: 13px;
+        font-size: Theme.text-2xl;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -2336,7 +2339,7 @@ export component MixerFader inherits Rectangle {
             height: parent.height - root.cap-height;
             border-radius: Theme.radius-sm;
             background: Theme.background;
-            border-width: 1px;
+            border-width: Theme.hairline;
             border-color: Theme.border;
         }
 
@@ -2358,7 +2361,7 @@ export component MixerFader inherits Rectangle {
             height: root.cap-height;
             border-radius: Theme.radius-sm;
             background: mixer-touch.pressed ? Theme.surface-active : Theme.surface-raised;
-            border-width: mixer-keyboard.has-focus || mixer-touch.has-hover ? 2px : 1px;
+            border-width: mixer-keyboard.has-focus || mixer-touch.has-hover ? Theme.stroke-emphasis : Theme.hairline;
             border-color: mixer-keyboard.has-focus ? Theme.focus : Theme.border;
             // Grip line on the cap marks the exact value position.
             Rectangle {
@@ -2459,7 +2462,7 @@ export component ZoomScrollBar inherits Rectangle {
     min-width: root.vertical ? 14px : 64px;
     min-height: root.vertical ? 64px : 14px;
     border-radius: Theme.radius-md;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: Theme.border;
     background: Theme.surface;
 
@@ -2482,7 +2485,7 @@ export component ZoomScrollBar inherits Rectangle {
         width: root.vertical ? parent.width : root.thumb-length;
         height: root.vertical ? root.thumb-length : parent.height;
         border-radius: Theme.radius-sm;
-        border-width: 1px;
+        border-width: Theme.hairline;
         border-color: (root.active-zone == "left" || root.active-zone == "right" || root.active-zone == "body")
             ? Theme.text-faint : Theme.border;
         background: !root.enabled

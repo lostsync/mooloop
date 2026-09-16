@@ -82,7 +82,7 @@ export component ContainerDeviceFace inherits EffectDeviceShell {
             Text {
                 x: split.left-x + 4px; y: split.dry-y - 17px;
                 text: "DRY"; color: Theme.text-faint;
-                font-size: 8px; letter-spacing: 0.5px;
+                font-size: Theme.text-sm; letter-spacing: 0.5px;
             }
 
             // The wet lane: through the run.
@@ -111,13 +111,13 @@ export component ContainerDeviceFace inherits EffectDeviceShell {
                 x: split.run-x; y: split.wet-y - 8px;
                 width: split.run-w;
                 text: "empty — + to fill";
-                color: Theme.text-faint; font-size: 9px;
+                color: Theme.text-faint; font-size: Theme.text-md;
                 horizontal-alignment: center;
             }
             if root.children > 0 : Text {
                 x: split.left-x + 4px; y: split.wet-y + 17px;
                 text: root.children == 1 ? "1 DEVICE" : root.children + " DEVICES";
-                color: Theme.text-faint; font-size: 8px; letter-spacing: 0.5px;
+                color: Theme.text-faint; font-size: Theme.text-sm; letter-spacing: 0.5px;
             }
 
             // The sum, taken at the blend position.
@@ -126,7 +126,7 @@ export component ContainerDeviceFace inherits EffectDeviceShell {
                 y: split.dry-y + (split.wet-y - split.dry-y) * root.mix - 4px;
                 width: 9px; height: 9px; border-radius: 5px;
                 background: Theme.panel;
-                border-width: 2px;
+                border-width: Theme.stroke-emphasis;
                 border-color: root.mix >= 0.5 ? Theme.accent : Theme.text;
                 animate y { duration: 60ms; easing: ease-out; }
             }

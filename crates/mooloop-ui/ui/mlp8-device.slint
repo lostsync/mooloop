@@ -63,7 +63,7 @@ component RouteRow inherits Rectangle {
             height: parent.height;
             text: "\u{2192}";
             color: Theme.text-faint;
-            font-size: 9px;
+            font-size: Theme.text-md;
             vertical-alignment: center;
             horizontal-alignment: center;
         }
@@ -79,7 +79,7 @@ component RouteRow inherits Rectangle {
             height: parent.height;
             text: root.route.bipolar ? "BI" : "UNI";
             color: Theme.text-faint;
-            font-size: 7px;
+            font-size: Theme.text-xs;
             vertical-alignment: center;
             horizontal-alignment: center;
         }
@@ -199,7 +199,7 @@ component NetworkCell inherits Rectangle {
     min-height: 22px;
     border-radius: Theme.radius-sm;
     background: root.inert ? Theme.surface : Theme.panel;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: root.inert ? Theme.border.with-alpha(0.35)
         : root.assignable ? Theme.warning.with-alpha(0.7)
         : knob.hovered ? Theme.accent.with-alpha(0.55)
@@ -282,8 +282,8 @@ component NetworkCell inherits Rectangle {
             : root.live ? (root.value > 0 ? "+" : "") + round(root.value)
             : "";
         color: root.inert || !root.live ? Theme.text-faint : Theme.text;
-        font-family: "monospace";
-        font-size: 9px;
+        font-family: Theme.font-family-mono;
+        font-size: Theme.text-md;
         horizontal-alignment: right;
         vertical-alignment: center;
     }
@@ -338,7 +338,7 @@ component SyncChip inherits Rectangle {
     min-height: 18px;
     border-radius: Theme.radius-sm;
     background: root.source == 0 ? Theme.panel : Theme.accent.with-alpha(0.22);
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: touch.has-hover ? Theme.accent.with-alpha(0.5)
         : root.source == 0 ? Theme.border : Theme.accent.with-alpha(0.45);
     accessible-role: button;
@@ -349,7 +349,7 @@ component SyncChip inherits Rectangle {
         height: 100%;
         text: root.source == 0 ? "--" : "OSC " + root.source;
         color: root.source == 0 ? Theme.text-faint : Theme.text;
-        font-size: 9px;
+        font-size: Theme.text-md;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -411,7 +411,7 @@ component Module inherits Rectangle {
             Text {
                 text: root.caption;
                 color: Theme.text-muted;
-                font-size: 10px;
+                font-size: Theme.text-lg;
                 vertical-alignment: center;
             }
         }
@@ -858,7 +858,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     height: grid.header-h;
                     text: "MIX";
                     color: Theme.text-faint;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -869,7 +869,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     height: grid.header-h;
                     text: "OSC 1";
                     color: Theme.text-faint;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -880,7 +880,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     height: grid.header-h;
                     text: "OSC 2";
                     color: Theme.text-faint;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -891,7 +891,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     height: grid.header-h;
                     text: "OSC 3";
                     color: Theme.text-faint;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -902,7 +902,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     height: grid.cell-h;
                     text: "OSC 1";
                     color: Theme.text-muted;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     vertical-alignment: center;
                 }
                 NetworkCell {
@@ -986,7 +986,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     height: grid.cell-h;
                     text: "OSC 2";
                     color: Theme.text-muted;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     vertical-alignment: center;
                 }
                 NetworkCell {
@@ -1070,7 +1070,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     height: grid.cell-h;
                     text: "OSC 3";
                     color: Theme.text-muted;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     vertical-alignment: center;
                 }
                 NetworkCell {
@@ -1154,7 +1154,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     height: grid.cell-h;
                     text: "SUB";
                     color: Theme.text-muted;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     vertical-alignment: center;
                 }
                 NetworkCell {
@@ -1207,7 +1207,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     height: grid.cell-h;
                     text: "NOISE";
                     color: Theme.text-muted;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     vertical-alignment: center;
                 }
                 NetworkCell {
@@ -1290,7 +1290,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     height: 18px;
                     text: "SYNC";
                     color: Theme.text-muted;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     vertical-alignment: center;
                 }
                 SyncChip {
@@ -1777,7 +1777,7 @@ export component MlP8DeviceFace inherits Rectangle {
                             height: 100%;
                             text: root.lfo-wave == 4 ? "sample & hold" : "chaos";
                             color: Theme.text-faint;
-                            font-size: 9px;
+                            font-size: Theme.text-md;
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
@@ -1909,7 +1909,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     Text {
                         text: root.routes-status;
                         color: Theme.text-faint;
-                        font-size: 8px;
+                        font-size: Theme.text-sm;
                         vertical-alignment: center;
                     }
                     // The affordance stops offering itself at the ceiling
@@ -1926,7 +1926,7 @@ export component MlP8DeviceFace inherits Rectangle {
                     height: 22px;
                     text: "No internal routes. This patch moves only where its knobs are set.";
                     color: Theme.text-faint;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     vertical-alignment: center;
                 }
                 ScrollView {

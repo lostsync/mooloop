@@ -33,6 +33,54 @@ export global Theme {
     out property <length> radius-sm: 2px * root.roundness;
     out property <length> radius-md: 3px * root.roundness;
     out property <length> radius-lg: 4px * root.roundness;
+
+    // Type. `font-family` is a family name resolved at load time -- empty
+    // means whatever the platform hands us -- and `main.slint` binds it to the
+    // window's `default-font-family`, which is what makes it reach the three
+    // hundred `Text` elements that never name a family. `font-family-mono` is
+    // named explicitly, and only where the content demands it: a readout whose
+    // digits must not reflow as the value changes.
+    //
+    // `type-scale` is the accessibility control. The working range of this
+    // interface is 7-11px, which is small, and before these tokens existed
+    // turning it up meant editing three hundred literals.
+    in-out property <string> font-family: "";
+    in-out property <string> font-family-mono: "monospace";
+    in-out property <float> type-scale: 1.0;
+    in-out property <int> font-weight: 400;
+
+    out property <length> text-xs: 7px * root.type-scale;
+    out property <length> text-sm: 8px * root.type-scale;
+    out property <length> text-md: 9px * root.type-scale;
+    out property <length> text-lg: 10px * root.type-scale;
+    out property <length> text-xl: 11px * root.type-scale;
+    // Above the working range: dialog headings, the transport readout, and
+    // the handful of glyphs drawn large on purpose.
+    out property <length> text-2xl: 13px * root.type-scale;
+    out property <length> text-3xl: 16px * root.type-scale;
+    out property <length> text-4xl: 22px * root.type-scale;
+
+    // Stroke. A theme that wants a borderless interface sets `hairline` to 0
+    // and gets one without any face knowing that is what it asked for; the
+    // conditional strokes keep their condition, because whether a border is
+    // drawn is behaviour and how thick it is is theme.
+    in-out property <length> hairline: 1px;
+    in-out property <length> stroke-emphasis: 2px;
+
+    // Metrics. One `density` scalar over the control heights and the padding
+    // ramp, which is what lets a theme open the interface up -- or a touch
+    // display grow the hit targets -- without a per-face edit.
+    //
+    // The ramp is padding *and* spacing: at this size the distance between a
+    // control and its neighbour and the distance between a control and its own
+    // edge are the same decision, and two scales would be two names for it.
+    in-out property <float> density: 1.0;
+    out property <length> control-height: 24px * root.density;
+    out property <length> control-min-width: 44px * root.density;
+    out property <length> pad-xs: 2px * root.density;
+    out property <length> pad-sm: 4px * root.density;
+    out property <length> pad-md: 6px * root.density;
+    out property <length> pad-lg: 8px * root.density;
 }
 
 // Rendering preferences set from Preferences > Appearance, alongside the

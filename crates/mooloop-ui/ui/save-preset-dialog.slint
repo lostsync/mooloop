@@ -22,7 +22,7 @@ export component SavePresetDialog inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.surface;
-        border-width: 1px;
+        border-width: Theme.hairline;
         border-color: Theme.border;
         border-radius: 6px;
 
@@ -30,7 +30,7 @@ export component SavePresetDialog inherits Rectangle {
             padding: 16px;
             spacing: 10px;
 
-            Text { text: root.title; color: Theme.text; font-size: 16px; height: 24px; }
+            Text { text: root.title; color: Theme.text; font-size: Theme.text-3xl; height: 24px; }
 
             SectionLabel { text: "NAME"; }
             LineEdit {

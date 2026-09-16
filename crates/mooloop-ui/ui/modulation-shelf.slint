@@ -226,7 +226,7 @@ component ModulatorShape inherits Rectangle {
     private property <float> decay-end: (root.attack-weight + root.decay-weight) / root.envelope-total;
     private property <float> hold-end: (root.attack-weight + root.decay-weight + root.hold-weight) / root.envelope-total;
     background: Theme.panel;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: Theme.border;
     clip: true;
 
@@ -328,7 +328,7 @@ component ModulatorShape inherits Rectangle {
         height: parent.height;
         text: MathOps.labels[root.math-op];
         color: root.line-color;
-        font-size: 13px;
+        font-size: Theme.text-2xl;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -351,7 +351,7 @@ component StepBank inherits Rectangle {
     private property <length> column-width: (self.width - root.gap * 15) / 16;
 
     background: Theme.surface;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: Theme.border;
     border-radius: Theme.radius-sm;
 
@@ -431,7 +431,7 @@ component ModuleTile inherits Rectangle {
     width: ModuleGrid.tile-width;
     height: ModuleGrid.tile-height;
     border-radius: Theme.radius-md;
-    border-width: root.selected ? 1px : 0px;
+    border-width: root.selected ? Theme.hairline : 0px;
     border-color: root.armed ? Theme.focus : Theme.accent;
     background: tap.pressed ? Theme.surface-active
         : root.selected ? Theme.surface-raised : Theme.surface;
@@ -461,7 +461,7 @@ component ModuleTile inherits Rectangle {
             height: 12px;
             text: root.name;
             color: root.selected ? Theme.text : Theme.text-muted;
-            font-size: 8px;
+            font-size: Theme.text-sm;
             horizontal-alignment: center;
             vertical-alignment: center;
             overflow: elide;
@@ -517,7 +517,7 @@ component OutletChip inherits Rectangle {
     width: OutletBand.chip-width;
     height: OutletBand.chip-height;
     border-radius: Theme.radius-sm;
-    border-width: root.selected ? 1px : 0px;
+    border-width: root.selected ? Theme.hairline : 0px;
     border-color: root.armed ? Theme.focus : Theme.accent;
     background: tap.pressed ? Theme.surface-active
         : root.selected ? Theme.surface-raised : Theme.surface;
@@ -537,7 +537,7 @@ component OutletChip inherits Rectangle {
     Text {
         text: root.name;
         color: root.selected ? Theme.text : Theme.text-muted;
-        font-size: 8px;
+        font-size: Theme.text-sm;
         horizontal-alignment: center;
         vertical-alignment: center;
         overflow: elide;
@@ -568,7 +568,7 @@ component RouteRow inherits Rectangle {
             horizontal-stretch: 1;
             text: root.destination;
             color: root.allowed ? Theme.text : Theme.text-faint;
-            font-size: 9px;
+            font-size: Theme.text-md;
             vertical-alignment: center;
             overflow: elide;
         }
@@ -576,8 +576,8 @@ component RouteRow inherits Rectangle {
             width: 38px;
             text: (root.depth > 0 ? "+" : "") + round(root.depth * 100) + "%";
             color: root.depth == 0 ? Theme.text-faint : Theme.accent;
-            font-family: "monospace";
-            font-size: 9px;
+            font-family: Theme.font-family-mono;
+            font-size: Theme.text-md;
             horizontal-alignment: right;
             vertical-alignment: center;
         }
@@ -631,7 +631,7 @@ component LedToggle inherits Rectangle {
         height: 12px;
         text: root.label;
         color: root.on ? Theme.accent : Theme.text-muted;
-        font-size: 7px;
+        font-size: Theme.text-xs;
         vertical-alignment: center;
     }
     TouchArea {
@@ -745,7 +745,7 @@ export component ModulationShelf inherits Rectangle {
     }
 
     height: root.open ? ModulationShelfMetrics.open-height : ModulationShelfMetrics.closed-height;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: root.assigning ? Theme.accent : Theme.border;
     border-radius: Theme.radius-md;
     background: Theme.surface;
@@ -765,14 +765,14 @@ export component ModulationShelf inherits Rectangle {
                     width: 68px;
                     text: "MODULATION";
                     color: root.open || root.assigning ? Theme.accent : Theme.text-muted;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     vertical-alignment: center;
                 }
                 Text {
                     text: root.sources.length + " source" + (root.sources.length == 1 ? "" : "s")
                         + "  ·  " + root.routes.length + " route" + (root.routes.length == 1 ? "" : "s");
                     color: Theme.text-faint;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     vertical-alignment: center;
                 }
                 Rectangle { horizontal-stretch: 1; }
@@ -784,7 +784,7 @@ export component ModulationShelf inherits Rectangle {
                     Text {
                         text: "ASSIGN · " + root.armed-name;
                         color: Theme.focus;
-                        font-size: 8px;
+                        font-size: Theme.text-sm;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -792,7 +792,7 @@ export component ModulationShelf inherits Rectangle {
                 Text {
                     text: root.open ? "⌃" : "⌄";
                     color: Theme.text-muted;
-                    font-size: 12px;
+                    font-size: Theme.text-2xl;
                     vertical-alignment: center;
                 }
             }
@@ -814,7 +814,7 @@ export component ModulationShelf inherits Rectangle {
                 // step (docs/plans/archive/modulator-modules/03-the-grid.md).
                 Rectangle {
                     width: ModuleGrid.row-width + 10px;
-                    border-width: 1px;
+                    border-width: Theme.hairline;
                     border-color: Theme.border;
                     background: Theme.panel;
                     VerticalLayout {
@@ -822,9 +822,9 @@ export component ModulationShelf inherits Rectangle {
                         spacing: 3px;
                         HorizontalLayout {
                             height: 10px;
-                            Text { text: "MODULES"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                            Text { text: "MODULES"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; }
-                            Text { text: root.sources.length + "/" + root.max-sources; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                            Text { text: root.sources.length + "/" + root.max-sources; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
                         }
                         // A grid taller than the shelf scrolls inside it.
                         // Capacity therefore never argues with the rack's
@@ -892,7 +892,7 @@ export component ModulationShelf inherits Rectangle {
                                 height: ModuleGrid.column-height;
                                 z: 20;
                                 background: Theme.surface;
-                                border-width: 1px;
+                                border-width: Theme.hairline;
                                 border-color: Theme.accent;
                                 border-radius: Theme.radius-sm;
                                 VerticalLayout {
@@ -900,7 +900,7 @@ export component ModulationShelf inherits Rectangle {
                                     spacing: 3px;
                                     HorizontalLayout {
                                         height: 10px;
-                                        Text { text: "ADD MODULE"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                                        Text { text: "ADD MODULE"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
                                         Rectangle { horizontal-stretch: 1; }
                                         ToolButton {
                                             text: "×";
@@ -947,7 +947,7 @@ export component ModulationShelf inherits Rectangle {
                 // place for.
                 if root.outlets.length > 0 : Rectangle {
                     width: OutletBand.chip-width + 10px;
-                    border-width: 1px;
+                    border-width: Theme.hairline;
                     border-color: Theme.border;
                     background: Theme.panel;
                     VerticalLayout {
@@ -955,9 +955,9 @@ export component ModulationShelf inherits Rectangle {
                         spacing: 3px;
                         HorizontalLayout {
                             height: 10px;
-                            Text { text: "OUTLETS"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                            Text { text: "OUTLETS"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; }
-                            Text { text: root.outlet-device; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                            Text { text: root.outlet-device; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
                         }
                         ScrollView {
                             vertical-stretch: 1;
@@ -992,7 +992,7 @@ export component ModulationShelf inherits Rectangle {
                     spacing: 6px;
                     Rectangle {
                         vertical-stretch: 1;
-                        border-width: 1px;
+                        border-width: Theme.hairline;
                         border-color: root.assigning ? Theme.accent : Theme.border;
                         background: Theme.panel;
                         VerticalLayout {
@@ -1004,13 +1004,13 @@ export component ModulationShelf inherits Rectangle {
                                 Text {
                                     text: root.kind-name(root.selected-kind) + " " + (root.selected-slot + 1);
                                     color: Theme.text;
-                                    font-size: 10px;
+                                    font-size: Theme.text-lg;
                                     vertical-alignment: center;
                                 }
                                 Text {
                                     text: root.kind-signal(root.selected-kind) + "  ·  32 FRAME";
                                     color: Theme.text-faint;
-                                    font-size: 7px;
+                                    font-size: Theme.text-xs;
                                     vertical-alignment: center;
                                 }
                                 Rectangle { horizontal-stretch: 1; }
@@ -1048,7 +1048,7 @@ export component ModulationShelf inherits Rectangle {
                                         width: 46px;
                                         text: root.jack-label(root.selected-kind);
                                         color: Theme.text-faint;
-                                        font-size: 7px;
+                                        font-size: Theme.text-xs;
                                         vertical-alignment: center;
                                     }
                                     Text {
@@ -1056,7 +1056,7 @@ export component ModulationShelf inherits Rectangle {
                                         text: "\u{25c0}";
                                         color: root.selected-kind == 0 && root.selected-values[LfoParam.retrigger] < 0.5
                                             ? Theme.text-faint : Theme.accent;
-                                        font-size: 8px;
+                                        font-size: Theme.text-sm;
                                         vertical-alignment: center;
                                     }
                                     if root.selected-kind == 0 : SelectorBank {
@@ -1104,7 +1104,7 @@ export component ModulationShelf inherits Rectangle {
                                     Text {
                                         text: root.jack-note(root.selected-kind);
                                         color: Theme.text-faint;
-                                        font-size: 7px;
+                                        font-size: Theme.text-xs;
                                         vertical-alignment: center;
                                         overflow: elide;
                                     }
@@ -1123,13 +1123,13 @@ export component ModulationShelf inherits Rectangle {
                                 Text {
                                     text: root.selected-outlet-name;
                                     color: Theme.text;
-                                    font-size: 10px;
+                                    font-size: Theme.text-lg;
                                     vertical-alignment: center;
                                 }
                                 Text {
                                     text: root.selected-outlet-signal;
                                     color: Theme.text-faint;
-                                    font-size: 7px;
+                                    font-size: Theme.text-xs;
                                     vertical-alignment: center;
                                 }
                                 Rectangle { horizontal-stretch: 1; }
@@ -1148,7 +1148,7 @@ export component ModulationShelf inherits Rectangle {
                                 text: root.outlet-device + " publishes this. It has no controls of its "
                                     + "own: arm it, then drag a knob to route it.";
                                 color: Theme.text-muted;
-                                font-size: 10px;
+                                font-size: Theme.text-lg;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                                 wrap: word-wrap;
@@ -1162,7 +1162,7 @@ export component ModulationShelf inherits Rectangle {
                                     ? "Add a module to begin."
                                     : "Select a module to open its surface.";
                                 color: Theme.text-muted;
-                                font-size: 10px;
+                                font-size: Theme.text-lg;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                                 wrap: word-wrap;
@@ -1190,7 +1190,7 @@ export component ModulationShelf inherits Rectangle {
                             HorizontalLayout {
                                 height: 19px;
                                 spacing: 3px;
-                                Text { width: 30px; text: "SHAPE"; color: Theme.text-faint; font-size: 7px; vertical-alignment: center; }
+                                Text { width: 30px; text: "SHAPE"; color: Theme.text-faint; font-size: Theme.text-xs; vertical-alignment: center; }
                                 SelectorBank {
                                     options: ["SIN", "TRI", "SAW", "SQR", "RND"];
                                     selected-index: round(root.selected-values[LfoParam.waveform]);
@@ -1240,7 +1240,7 @@ export component ModulationShelf inherits Rectangle {
                             height: 51px;
                             spacing: 1px;
                             alignment: center;
-                            Text { height: 8px; text: "AMOUNT"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: "AMOUNT"; color: Theme.text-muted; font-size: Theme.text-xs; horizontal-alignment: center; }
                             MiniKnob {
                                 label: "LFO source amount";
                                 value: root.selected-values[LfoParam.depth];
@@ -1251,14 +1251,14 @@ export component ModulationShelf inherits Rectangle {
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            Text { height: 8px; text: round(root.selected-values[LfoParam.depth] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: round(root.selected-values[LfoParam.depth] * 100) + "%"; color: Theme.accent; font-size: Theme.text-xs; horizontal-alignment: center; }
                         }
                         VerticalLayout {
                             width: 40px;
                             height: 51px;
                             spacing: 1px;
                             alignment: center;
-                            Text { height: 8px; text: "PHASE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: "PHASE"; color: Theme.text-muted; font-size: Theme.text-xs; horizontal-alignment: center; }
                             MiniKnob {
                                 label: "LFO reset phase";
                                 value: root.selected-values[LfoParam.phase];
@@ -1269,14 +1269,14 @@ export component ModulationShelf inherits Rectangle {
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            Text { height: 8px; text: round(root.selected-values[LfoParam.phase] * 360) + "\u{b0}"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: round(root.selected-values[LfoParam.phase] * 360) + "\u{b0}"; color: Theme.accent; font-size: Theme.text-xs; horizontal-alignment: center; }
                         }
                         VerticalLayout {
                             width: 40px;
                             height: 51px;
                             spacing: 1px;
                             alignment: center;
-                            Text { height: 8px; text: "SMOOTH"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: "SMOOTH"; color: Theme.text-muted; font-size: Theme.text-xs; horizontal-alignment: center; }
                             MiniKnob {
                                 label: "LFO smoothing";
                                 value: root.selected-values[LfoParam.smoothing];
@@ -1290,14 +1290,14 @@ export component ModulationShelf inherits Rectangle {
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            Text { height: 8px; text: root.selected-values[LfoParam.smoothing] <= 0.0001 ? "OFF" : round(root.selected-values[LfoParam.smoothing] * 1000) + " ms"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: root.selected-values[LfoParam.smoothing] <= 0.0001 ? "OFF" : round(root.selected-values[LfoParam.smoothing] * 1000) + " ms"; color: Theme.accent; font-size: Theme.text-xs; horizontal-alignment: center; }
                         }
                         VerticalLayout {
                             width: 40px;
                             height: 51px;
                             spacing: 1px;
                             alignment: center;
-                            Text { height: 8px; text: "P WIDTH"; color: round(root.selected-values[LfoParam.waveform]) == 3 ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: "P WIDTH"; color: round(root.selected-values[LfoParam.waveform]) == 3 ? Theme.text-muted : Theme.text-faint; font-size: Theme.text-xs; horizontal-alignment: center; }
                             MiniKnob {
                                 label: "Square pulse width";
                                 value: root.selected-values[LfoParam.pulse-width];
@@ -1311,7 +1311,7 @@ export component ModulationShelf inherits Rectangle {
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            Text { height: 8px; text: round(root.selected-values[LfoParam.pulse-width] * 100) + "%"; color: round(root.selected-values[LfoParam.waveform]) == 3 ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: round(root.selected-values[LfoParam.pulse-width] * 100) + "%"; color: round(root.selected-values[LfoParam.waveform]) == 3 ? Theme.accent : Theme.text-faint; font-size: Theme.text-xs; horizontal-alignment: center; }
                         }
                         Rectangle { horizontal-stretch: 1; }
                     }
@@ -1357,7 +1357,7 @@ export component ModulationShelf inherits Rectangle {
                         }
                         VerticalLayout {
                             width: 40px; height: 51px; spacing: 1px; alignment: center;
-                            Text { height: 8px; text: "SUSTAIN"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: "SUSTAIN"; color: Theme.text-muted; font-size: Theme.text-xs; horizontal-alignment: center; }
                             MiniKnob {
                                 label: "Envelope sustain";
                                 value: root.selected-values[EnvParam.sustain];
@@ -1368,7 +1368,7 @@ export component ModulationShelf inherits Rectangle {
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            Text { height: 8px; text: round(root.selected-values[EnvParam.sustain] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: round(root.selected-values[EnvParam.sustain] * 100) + "%"; color: Theme.accent; font-size: Theme.text-xs; horizontal-alignment: center; }
                         }
                         SyncMiniKnob {
                             label: "RELEASE"; free-value: root.selected-values[EnvParam.release]; free-minimum: 0; free-maximum: 16; free-default: 0.4;
@@ -1383,7 +1383,7 @@ export component ModulationShelf inherits Rectangle {
                         }
                         VerticalLayout {
                             width: 40px; height: 51px; spacing: 1px; alignment: center;
-                            Text { height: 8px; text: "AMOUNT"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: "AMOUNT"; color: Theme.text-muted; font-size: Theme.text-xs; horizontal-alignment: center; }
                             MiniKnob {
                                 label: "Envelope amount";
                                 value: root.selected-values[EnvParam.amount];
@@ -1394,7 +1394,7 @@ export component ModulationShelf inherits Rectangle {
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            Text { height: 8px; text: round(root.selected-values[EnvParam.amount] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: round(root.selected-values[EnvParam.amount] * 100) + "%"; color: Theme.accent; font-size: Theme.text-xs; horizontal-alignment: center; }
                         }
                         Rectangle { horizontal-stretch: 1; }
                     }
@@ -1419,7 +1419,7 @@ export component ModulationShelf inherits Rectangle {
                         }
                         VerticalLayout {
                             width: 44px; height: 51px; spacing: 1px; alignment: center;
-                            Text { height: 8px; text: "RATE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: "RATE"; color: Theme.text-muted; font-size: Theme.text-xs; horizontal-alignment: center; }
                             MiniKnob {
                                 label: "Step rate";
                                 value: root.selected-values[StepParam.division];
@@ -1433,11 +1433,11 @@ export component ModulationShelf inherits Rectangle {
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            Text { height: 8px; text: Divisions.label(round(root.selected-values[StepParam.division])); color: Theme.focus; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: Divisions.label(round(root.selected-values[StepParam.division])); color: Theme.focus; font-size: Theme.text-xs; horizontal-alignment: center; }
                         }
                         VerticalLayout {
                             width: 40px; height: 51px; spacing: 1px; alignment: center;
-                            Text { height: 8px; text: "LENGTH"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: "LENGTH"; color: Theme.text-muted; font-size: Theme.text-xs; horizontal-alignment: center; }
                             MiniKnob {
                                 label: "Steps played";
                                 value: root.selected-values[StepParam.length];
@@ -1451,11 +1451,11 @@ export component ModulationShelf inherits Rectangle {
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            Text { height: 8px; text: round(root.selected-values[StepParam.length]) + " STEPS"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: round(root.selected-values[StepParam.length]) + " STEPS"; color: Theme.accent; font-size: Theme.text-xs; horizontal-alignment: center; }
                         }
                         VerticalLayout {
                             width: 40px; height: 51px; spacing: 1px; alignment: center;
-                            Text { height: 8px; text: "GLIDE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: "GLIDE"; color: Theme.text-muted; font-size: Theme.text-xs; horizontal-alignment: center; }
                             MiniKnob {
                                 label: "Step glide";
                                 value: root.selected-values[StepParam.glide];
@@ -1467,7 +1467,7 @@ export component ModulationShelf inherits Rectangle {
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            Text { height: 8px; text: root.selected-values[StepParam.glide] <= 0.0001 ? "OFF" : round(root.selected-values[StepParam.glide] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: root.selected-values[StepParam.glide] <= 0.0001 ? "OFF" : round(root.selected-values[StepParam.glide] * 100) + "%"; color: Theme.accent; font-size: Theme.text-xs; horizontal-alignment: center; }
                         }
                         Rectangle { horizontal-stretch: 1; }
                     }
@@ -1501,7 +1501,7 @@ export component ModulationShelf inherits Rectangle {
                         }
                         VerticalLayout {
                             width: 42px; height: 51px; spacing: 1px; alignment: center;
-                            Text { height: 8px; text: "CHANCE"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: "CHANCE"; color: Theme.text-muted; font-size: Theme.text-xs; horizontal-alignment: center; }
                             MiniKnob {
                                 label: "Chance a due draw lands";
                                 value: root.selected-values[RandomParam.probability];
@@ -1512,11 +1512,11 @@ export component ModulationShelf inherits Rectangle {
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            Text { height: 8px; text: round(root.selected-values[RandomParam.probability] * 100) + "%"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: round(root.selected-values[RandomParam.probability] * 100) + "%"; color: Theme.accent; font-size: Theme.text-xs; horizontal-alignment: center; }
                         }
                         VerticalLayout {
                             width: 42px; height: 51px; spacing: 1px; alignment: center;
-                            Text { height: 8px; text: "QUANT"; color: Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: "QUANT"; color: Theme.text-muted; font-size: Theme.text-xs; horizontal-alignment: center; }
                             MiniKnob {
                                 label: "Levels a draw snaps to";
                                 value: root.selected-values[RandomParam.quantize];
@@ -1531,11 +1531,11 @@ export component ModulationShelf inherits Rectangle {
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            Text { height: 8px; text: round(root.selected-values[RandomParam.quantize]) < 2 ? "OFF" : round(root.selected-values[RandomParam.quantize]) + " LVL"; color: Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: round(root.selected-values[RandomParam.quantize]) < 2 ? "OFF" : round(root.selected-values[RandomParam.quantize]) + " LVL"; color: Theme.accent; font-size: Theme.text-xs; horizontal-alignment: center; }
                         }
                         VerticalLayout {
                             width: 42px; height: 51px; spacing: 1px; alignment: center;
-                            Text { height: 8px; text: "WALK"; color: root.selected-values[RandomParam.drunk] > 0.5 ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: "WALK"; color: root.selected-values[RandomParam.drunk] > 0.5 ? Theme.text-muted : Theme.text-faint; font-size: Theme.text-xs; horizontal-alignment: center; }
                             MiniKnob {
                                 label: "Largest drunk step";
                                 value: root.selected-values[RandomParam.walk];
@@ -1549,7 +1549,7 @@ export component ModulationShelf inherits Rectangle {
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            Text { height: 8px; text: round(root.selected-values[RandomParam.walk] * 100) + "%"; color: root.selected-values[RandomParam.drunk] > 0.5 ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: round(root.selected-values[RandomParam.walk] * 100) + "%"; color: root.selected-values[RandomParam.drunk] > 0.5 ? Theme.accent : Theme.text-faint; font-size: Theme.text-xs; horizontal-alignment: center; }
                         }
                         VerticalLayout {
                             width: 132px; height: 51px; spacing: 1px;
@@ -1586,7 +1586,7 @@ export component ModulationShelf inherits Rectangle {
                         spacing: 4px;
                         VerticalLayout {
                             width: 218px; height: 51px; spacing: 2px;
-                            Text { height: 8px; text: "OPERATOR"; color: Theme.text-muted; font-size: 7px; }
+                            Text { height: 8px; text: "OPERATOR"; color: Theme.text-muted; font-size: Theme.text-xs; }
                             SelectorBank {
                                 height: 20px;
                                 options: MathOps.labels;
@@ -1605,13 +1605,13 @@ export component ModulationShelf inherits Rectangle {
                                         + " " + MathOps.labels[round(root.selected-values[MathParam.op])]
                                         + " " + round(root.selected-values[MathParam.operand] * 100) / 100;
                                 color: Theme.accent;
-                                font-size: 7px;
+                                font-size: Theme.text-xs;
                                 overflow: elide;
                             }
                         }
                         VerticalLayout {
                             width: 44px; height: 51px; spacing: 1px; alignment: center;
-                            Text { height: 8px; text: "OPERAND"; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-faint : Theme.text-muted; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: "OPERAND"; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-faint : Theme.text-muted; font-size: Theme.text-xs; horizontal-alignment: center; }
                             MiniKnob {
                                 label: "Constant operand";
                                 value: root.selected-values[MathParam.operand];
@@ -1626,11 +1626,11 @@ export component ModulationShelf inherits Rectangle {
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            Text { height: 8px; text: round(root.selected-values[MathParam.operand] * 100) / 100 + ""; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-faint : Theme.accent; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: round(root.selected-values[MathParam.operand] * 100) / 100 + ""; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-faint : Theme.accent; font-size: Theme.text-xs; horizontal-alignment: center; }
                         }
                         VerticalLayout {
                             width: 42px; height: 51px; spacing: 1px; alignment: center;
-                            Text { height: 8px; text: "LOW"; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: "LOW"; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-muted : Theme.text-faint; font-size: Theme.text-xs; horizontal-alignment: center; }
                             MiniKnob {
                                 label: "Clamp floor";
                                 value: root.selected-values[MathParam.clamp-low];
@@ -1645,11 +1645,11 @@ export component ModulationShelf inherits Rectangle {
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            Text { height: 8px; text: round(root.selected-values[MathParam.clamp-low] * 100) / 100 + ""; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: round(root.selected-values[MathParam.clamp-low] * 100) / 100 + ""; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.accent : Theme.text-faint; font-size: Theme.text-xs; horizontal-alignment: center; }
                         }
                         VerticalLayout {
                             width: 42px; height: 51px; spacing: 1px; alignment: center;
-                            Text { height: 8px; text: "HIGH"; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-muted : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: "HIGH"; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.text-muted : Theme.text-faint; font-size: Theme.text-xs; horizontal-alignment: center; }
                             MiniKnob {
                                 label: "Clamp ceiling";
                                 value: root.selected-values[MathParam.clamp-high];
@@ -1664,7 +1664,7 @@ export component ModulationShelf inherits Rectangle {
                                 edit-started => { root.param-edit-started(); }
                                 edit-finished => { root.param-edit-finished(); }
                             }
-                            Text { height: 8px; text: round(root.selected-values[MathParam.clamp-high] * 100) / 100 + ""; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.accent : Theme.text-faint; font-size: 7px; horizontal-alignment: center; }
+                            Text { height: 8px; text: round(root.selected-values[MathParam.clamp-high] * 100) / 100 + ""; color: round(root.selected-values[MathParam.op]) == MathOps.clamp-index ? Theme.accent : Theme.text-faint; font-size: Theme.text-xs; horizontal-alignment: center; }
                         }
                         Rectangle { horizontal-stretch: 1; }
                     }
@@ -1676,7 +1676,7 @@ export component ModulationShelf inherits Rectangle {
             Rectangle {
                 horizontal-stretch: 1;
                 min-width: 170px;
-                border-width: 1px;
+                border-width: Theme.hairline;
                 border-color: Theme.border;
                 background: Theme.panel;
                 VerticalLayout {
@@ -1684,9 +1684,9 @@ export component ModulationShelf inherits Rectangle {
                     spacing: 3px;
                     HorizontalLayout {
                         height: 10px;
-                        Text { text: "DESTINATIONS"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                        Text { text: "DESTINATIONS"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
-                        Text { text: root.routes.length + " ROUTES"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                        Text { text: root.routes.length + " ROUTES"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
                     }
                     if root.routes.length == 0 : Text {
                         text: root.assigning
@@ -1695,7 +1695,7 @@ export component ModulationShelf inherits Rectangle {
                                 ? "Select a source to inspect or assign it."
                                 : "Choose Assign, then drag a destination.";
                         color: Theme.text-muted;
-                        font-size: 9px;
+                        font-size: Theme.text-md;
                         wrap: word-wrap;
                     }
                     if root.routes.length > 0 : ScrollView {

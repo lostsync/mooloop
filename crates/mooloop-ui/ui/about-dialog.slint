@@ -15,22 +15,22 @@ export component AboutDialog inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.surface;
-        border-width: 1px;
+        border-width: Theme.hairline;
         border-color: Theme.border;
         border-radius: Theme.radius-lg;
         VerticalLayout {
             padding: 18px;
             spacing: 10px;
-            Text { text: "mooloop"; color: Theme.text; font-size: 20px; }
+            Text { text: "mooloop"; color: Theme.text; font-size: Theme.text-4xl; }
             Text {
                 text: "Version " + root.app-version;
                 color: Theme.text-muted;
-                font-size: 11px;
+                font-size: Theme.text-xl;
             }
             Text {
                 text: "A Linux-native pattern instrument for rhythm-centered music.";
                 color: Theme.text-muted;
-                font-size: 11px;
+                font-size: Theme.text-xl;
                 wrap: word-wrap;
             }
             Rectangle { vertical-stretch: 1; }
@@ -44,7 +44,7 @@ export component AboutDialog inherits Rectangle {
                     Text {
                         text: "Close";
                         color: Theme.text;
-                        font-size: 11px;
+                        font-size: Theme.text-xl;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }

@@ -106,7 +106,7 @@ export component MonoDeviceFace inherits Rectangle {
                 border-radius: Theme.radius-sm;
                 VerticalLayout {
                     padding: 5px; spacing: 4px;
-                    Text { text: "AMPLITUDE"; color: Theme.text-faint; font-size: 8px; }
+                    Text { text: "AMPLITUDE"; color: Theme.text-faint; font-size: Theme.text-sm; }
                     EnvelopeEditor {
                         vertical-stretch: 1;
                         min-height: 50px;
@@ -133,7 +133,7 @@ export component MonoDeviceFace inherits Rectangle {
                 border-radius: Theme.radius-sm;
                 VerticalLayout {
                     padding: 5px; spacing: 4px;
-                    Text { text: "FILTER / DRIVE"; color: Theme.text-faint; font-size: 8px; }
+                    Text { text: "FILTER / DRIVE"; color: Theme.text-faint; font-size: Theme.text-sm; }
                     FilterResponseDisplay {
                         vertical-stretch: 1;
                         min-height: 50px;
@@ -175,7 +175,7 @@ export component MonoDeviceFace inherits Rectangle {
                 padding: 8px; spacing: 8px;
                 VerticalLayout {
                     width: 214px; spacing: 6px;
-                    Text { text: "LFO SHAPE"; color: Theme.text-faint; font-size: 8px; }
+                    Text { text: "LFO SHAPE"; color: Theme.text-faint; font-size: Theme.text-sm; }
                     SelectorBank {
                         options: ["Sin", "Tri", "Saw", "Sq", "S&H"];
                         selected-index <=> root.lfo-wave;

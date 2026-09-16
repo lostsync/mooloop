@@ -125,7 +125,7 @@ export component ChannelSidebar inherits Rectangle {
                     tab-label := Text {
                         text: root.is-track ? "TRACK" : "CHANNEL";
                         color: Theme.text;
-                        font-size: 9px;
+                        font-size: Theme.text-md;
                         letter-spacing: 0.5px;
                         vertical-alignment: center;
                         horizontal-alignment: center;
@@ -137,7 +137,7 @@ export component ChannelSidebar inherits Rectangle {
                         ? ""
                         : (root.is-track ? "TRK " : "CH ") + root.channel-number;
                     color: Theme.text-faint;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     vertical-alignment: center;
                 }
             }
@@ -197,7 +197,7 @@ export component ChannelSidebar inherits Rectangle {
                 if root.sends.length == 0 : Text {
                     text: "Route this track to another and it gains a fader here.";
                     color: Theme.text-faint;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     wrap: word-wrap;
                 }
                 for send[i] in root.sends : SendRow {
@@ -283,7 +283,7 @@ export component ChannelSidebar inherits Rectangle {
                     // Said out loud rather than left to a silent channel.
                     if root.midi-input-missing : Text {
                         text: root.midi-input-missing-name + " not connected";
-                        font-size: 9px;
+                        font-size: Theme.text-md;
                         color: Theme.warning;
                         wrap: word-wrap;
                         width: parent.value-width + 38px;

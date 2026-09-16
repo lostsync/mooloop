@@ -37,7 +37,7 @@ export component ColorSwatch inherits Rectangle {
     height: 20px;
     border-radius: Theme.radius-md;
     background: root.is-none ? Theme.surface-raised : root.tint;
-    border-width: root.selected ? 2px : 1px;
+    border-width: root.selected ? Theme.stroke-emphasis : Theme.hairline;
     border-color: root.selected ? Theme.text : Theme.border;
     accessible-role: button;
     accessible-label: root.tooltip;
@@ -145,7 +145,7 @@ export component ColorChooser inherits VerticalLayout {
             width: 20px;
             height: ToolbarMetrics.control-height;
             border-radius: Theme.radius-md;
-            border-width: 1px;
+            border-width: Theme.hairline;
             border-color: Theme.border;
             background: root.has-color ? root.tint : Theme.surface-raised;
         }
@@ -175,7 +175,7 @@ export component ColorChipButton inherits Rectangle {
         y: (parent.height - self.height) / 2;
         border-radius: Theme.radius-md;
         background: root.has-color ? root.tint : Theme.surface-raised;
-        border-width: 1px;
+        border-width: Theme.hairline;
         border-color: touch.has-hover ? Theme.focus : Theme.border;
 
         if !root.has-color : Path {
@@ -208,7 +208,7 @@ export component ColorChipButton inherits Rectangle {
         Rectangle {
             background: Theme.panel;
             border-color: Theme.border;
-            border-width: 1px;
+            border-width: Theme.hairline;
             border-radius: Theme.radius-md;
             chooser := ColorChooser {
                 x: 8px;

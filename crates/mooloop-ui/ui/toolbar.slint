@@ -59,10 +59,13 @@ export global ToolIcons {
         root.panel-frame + "M 8 3 L 8 13";
 }
 
+// The toolbar's own names for three of `Theme`'s tokens. Kept as an alias
+// rather than swept away so the bar's call sites stay readable -- `value-size`
+// says what the number is for, where `text-2xl` says only how big it is.
 export global ToolbarMetrics {
-    out property <length> control-height: 24px;
-    out property <length> label-size: 9px;
-    out property <length> value-size: 12px;
+    out property <length> control-height: Theme.control-height;
+    out property <length> label-size: Theme.text-md;
+    out property <length> value-size: Theme.text-2xl;
 }
 
 // Hairline group separator. Grouping is the whole point of the bar, so it gets
@@ -102,7 +105,7 @@ component StepperArrow inherits Rectangle {
     Text {
         text: root.glyph;
         color: root.enabled ? Theme.text-muted : Theme.text-faint;
-        font-size: 10px;
+        font-size: Theme.text-lg;
         horizontal-alignment: center;
         vertical-alignment: center;
         width: 100%;
@@ -188,7 +191,7 @@ export component StepperField inherits Rectangle {
                 text: root.display-text;
                 color: root.enabled ? Theme.text : Theme.text-faint;
                 font-size: ToolbarMetrics.value-size;
-                font-family: "monospace";
+                font-family: Theme.font-family-mono;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 width: 100%;
@@ -278,7 +281,7 @@ export component MenuField inherits Rectangle {
         Text {
             text: "▾";
             color: Theme.text-faint;
-            font-size: 9px;
+            font-size: Theme.text-md;
             vertical-alignment: center;
         }
     }
@@ -303,7 +306,7 @@ export component MenuField inherits Rectangle {
         Rectangle {
             background: Theme.surface;
             border-radius: Theme.radius-md;
-            border-width: 1px;
+            border-width: Theme.hairline;
             border-color: Theme.border;
 
             Flickable {
@@ -324,7 +327,7 @@ export component MenuField inherits Rectangle {
                             Text {
                                 text: option;
                                 color: i == root.selected-index ? Theme.text : Theme.text-muted;
-                                font-size: 11px;
+                                font-size: Theme.text-xl;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
@@ -382,7 +385,7 @@ export component NameField inherits Rectangle {
     width: 104px;
     border-radius: Theme.radius-md;
     background: input.has-focus ? Theme.surface : Theme.surface-raised;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: input.has-focus ? Theme.focus : transparent;
     accessible-role: text-input;
     accessible-label: root.tooltip;
@@ -396,7 +399,7 @@ export component NameField inherits Rectangle {
         x: 6px;
         text: root.placeholder;
         color: Theme.text-faint;
-        font-size: 11px;
+        font-size: Theme.text-xl;
         vertical-alignment: center;
         height: 100%;
     }
@@ -408,7 +411,7 @@ export component NameField inherits Rectangle {
         // The initial value only; `changed text` above owns it from then on.
         text: root.text;
         color: Theme.text;
-        font-size: 11px;
+        font-size: Theme.text-xl;
         vertical-alignment: center;
         single-line: true;
         edited => { root.edited(self.text); }
@@ -450,7 +453,7 @@ export component ToolModeButton inherits Rectangle {
     background: root.active ? Theme.accent-active
         : touch.pressed ? Theme.surface-active
         : touch.has-hover ? Theme.surface-raised : transparent;
-    border-width: root.active ? 1px : 0px;
+    border-width: root.active ? Theme.hairline : 0px;
     border-color: Theme.accent;
     accessible-role: button;
     accessible-label: root.name;
@@ -471,7 +474,7 @@ export component ToolModeButton inherits Rectangle {
     if root.icon == "" : Text {
         text: root.glyph;
         color: root.active ? Theme.text : Theme.text-muted;
-        font-size: 13px;
+        font-size: Theme.text-2xl;
         horizontal-alignment: center;
         vertical-alignment: center;
         width: 100%;
@@ -552,7 +555,7 @@ export component TempoField inherits Rectangle {
             text: root.bpm;
             color: Theme.text;
             font-size: ToolbarMetrics.value-size;
-            font-family: "monospace";
+            font-family: Theme.font-family-mono;
             vertical-alignment: center;
             horizontal-stretch: 1;
             horizontal-alignment: right;
@@ -561,7 +564,7 @@ export component TempoField inherits Rectangle {
             text: root.bpm;
             color: Theme.text;
             font-size: ToolbarMetrics.value-size;
-            font-family: "monospace";
+            font-family: Theme.font-family-mono;
             vertical-alignment: center;
             horizontal-alignment: right;
             horizontal-stretch: 1;

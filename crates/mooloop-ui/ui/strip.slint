@@ -282,7 +282,7 @@ component StripLight inherits Rectangle {
     width: StripMetrics.light;
     height: StripMetrics.light;
     border-radius: self.width / 2;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: root.on || root.glow > 0.02 ? Theme.accent : Theme.border;
     background: root.on
         ? Theme.accent
@@ -336,7 +336,7 @@ component StripKnobCell inherits VerticalLayout {
     Text {
         text: root.caption;
         color: root.enabled ? Theme.text-muted : Theme.text-faint;
-        font-size: 8px;
+        font-size: Theme.text-sm;
         height: StripMetrics.caption;
         horizontal-alignment: center;
     }
@@ -538,21 +538,21 @@ export component StripEqPage inherits Rectangle {
                 width: root.major;
                 text: "G";
                 color: Theme.text-faint;
-                font-size: 8px;
+                font-size: Theme.text-sm;
                 horizontal-alignment: center;
             }
             Text {
                 width: root.minor;
                 text: "F";
                 color: Theme.text-faint;
-                font-size: 8px;
+                font-size: Theme.text-sm;
                 horizontal-alignment: center;
             }
             Text {
                 width: root.minor;
                 text: "Q";
                 color: Theme.text-faint;
-                font-size: 8px;
+                font-size: Theme.text-sm;
                 horizontal-alignment: center;
             }
         }

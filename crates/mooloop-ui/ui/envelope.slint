@@ -84,7 +84,7 @@ export component EnvelopeEditor inherits Rectangle {
     min-height: 48px;
     border-radius: Theme.radius-md;
     background: Theme.panel;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: Theme.border;
     clip: true;
     accessible-role: none;
@@ -177,7 +177,7 @@ export component EnvelopeEditor inherits Rectangle {
             height: root.handle-size;
             border-radius: self.width / 2;
             background: root.active-handle == 0 ? Theme.focus : root.fill;
-            border-width: 1px;
+            border-width: Theme.hairline;
             border-color: Theme.background;
             TouchArea {
                 enabled: root.enabled;
@@ -204,7 +204,7 @@ export component EnvelopeEditor inherits Rectangle {
             height: root.handle-size;
             border-radius: self.width / 2;
             background: root.active-handle == 1 ? Theme.focus : root.fill;
-            border-width: 1px;
+            border-width: Theme.hairline;
             border-color: Theme.background;
             TouchArea {
                 enabled: root.enabled;
@@ -234,7 +234,7 @@ export component EnvelopeEditor inherits Rectangle {
             height: root.handle-size;
             border-radius: self.width / 2;
             background: root.active-handle == 2 ? Theme.focus : root.fill;
-            border-width: 1px;
+            border-width: Theme.hairline;
             border-color: Theme.background;
             TouchArea {
                 enabled: root.enabled;
@@ -269,7 +269,7 @@ export component EnvelopeEditor inherits Rectangle {
                 : root.active-handle == 1 ? "D " + root.decay-text + "  S " + root.sustain-text
                 : "R " + root.release-text;
             color: Theme.text;
-            font-size: 9px;
+            font-size: Theme.text-md;
             horizontal-alignment: center;
             vertical-alignment: center;
             width: 100%;

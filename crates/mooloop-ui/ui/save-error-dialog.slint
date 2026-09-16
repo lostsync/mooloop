@@ -41,7 +41,7 @@ export component SaveErrorDialog inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.surface;
-        border-width: 1px;
+        border-width: Theme.hairline;
         border-color: Theme.warning;
         border-radius: Theme.radius-lg;
 
@@ -52,7 +52,7 @@ export component SaveErrorDialog inherits Rectangle {
             Text {
                 text: root.title;
                 color: Theme.text;
-                font-size: 16px;
+                font-size: Theme.text-3xl;
                 height: 22px;
             }
 
@@ -60,7 +60,7 @@ export component SaveErrorDialog inherits Rectangle {
                 vertical-stretch: 1;
                 background: Theme.panel;
                 border-radius: Theme.radius-lg;
-                border-width: 1px;
+                border-width: Theme.hairline;
                 border-color: Theme.border;
 
                 ScrollView {
@@ -80,8 +80,8 @@ export component SaveErrorDialog inherits Rectangle {
                         single-line: false;
                         wrap: word-wrap;
                         color: Theme.text-muted;
-                        font-size: 11px;
-                        font-family: "monospace";
+                        font-size: Theme.text-xl;
+                        font-family: Theme.font-family-mono;
                     }
                 }
             }

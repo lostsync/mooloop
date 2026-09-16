@@ -34,7 +34,7 @@ component OutputTargetItem inherits Rectangle {
         width: parent.width - 16px;
         text: root.text;
         color: Theme.text;
-        font-size: 11px;
+        font-size: Theme.text-xl;
         vertical-alignment: center;
         overflow: elide;
     }
@@ -76,7 +76,7 @@ export component DriverControlSurface inherits VerticalLayout {
         // appearance-dialog.slint), so the target list does not need its own
         // nested scroll area too.
         background: Theme.surface-raised;
-        border-width: 1px;
+        border-width: Theme.hairline;
         border-color: Theme.border;
         border-radius: Theme.radius-md;
         VerticalLayout {
@@ -85,7 +85,7 @@ export component DriverControlSurface inherits VerticalLayout {
             if root.output-targets.length == 0 : Text {
                 text: root.driver.targets-empty;
                 color: Theme.text-muted;
-                font-size: 10px;
+                font-size: Theme.text-lg;
                 height: 20px;
             }
             for target in root.output-targets : OutputTargetItem {
@@ -105,12 +105,12 @@ export component DriverControlSurface inherits VerticalLayout {
     Text {
         text: root.driver.buffer-note;
         color: Theme.text-faint;
-        font-size: 9px;
+        font-size: Theme.text-md;
         height: 12px;
     }
 
     SectionLabel { text: "SAMPLE RATE"; }
-    Text { text: root.sample-rate-text; color: Theme.text; font-size: 11px; height: 18px; }
+    Text { text: root.sample-rate-text; color: Theme.text; font-size: Theme.text-xl; height: 18px; }
 
     ToggleButton {
         text: "Auto-reconnect output";
@@ -119,5 +119,5 @@ export component DriverControlSurface inherits VerticalLayout {
         toggled(v) => { root.auto-reconnect-toggled(v); }
     }
 
-    if root.error != "" : Text { text: root.error; color: Theme.destructive; font-size: 10px; height: 18px; }
+    if root.error != "" : Text { text: root.error; color: Theme.destructive; font-size: Theme.text-lg; height: 18px; }
 }

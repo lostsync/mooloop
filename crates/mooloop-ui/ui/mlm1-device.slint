@@ -117,7 +117,7 @@ export component MlM1DeviceFace inherits Rectangle {
                 border-radius: Theme.radius-sm;
                 VerticalLayout {
                     padding: 5px; spacing: 4px;
-                    Text { text: "AMPLITUDE"; color: Theme.text-faint; font-size: 8px; }
+                    Text { text: "AMPLITUDE"; color: Theme.text-faint; font-size: Theme.text-sm; }
                     EnvelopeEditor {
                         vertical-stretch: 1;
                         min-height: 44px;
@@ -145,7 +145,7 @@ export component MlM1DeviceFace inherits Rectangle {
                     padding: 5px; spacing: 4px;
                     HorizontalLayout {
                         spacing: 4px;
-                        Text { text: "FILTER"; color: Theme.text-faint; font-size: 8px; vertical-alignment: center; }
+                        Text { text: "FILTER"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
                         SelectorBank {
                             options: ["LADDER", "ACID", "CLEAN"];
@@ -214,7 +214,7 @@ export component MlM1DeviceFace inherits Rectangle {
             border-radius: Theme.radius-sm;
             VerticalLayout {
                 padding: 8px; spacing: 8px;
-                Text { text: "PERFORMANCE"; color: Theme.text-faint; font-size: 8px; }
+                Text { text: "PERFORMANCE"; color: Theme.text-faint; font-size: Theme.text-sm; }
                 HorizontalLayout {
                     vertical-stretch: 1;
                     spacing: 12px;
@@ -260,7 +260,7 @@ export component MlM1DeviceFace inherits Rectangle {
                         spacing: 10px;
                         HorizontalLayout {
                             spacing: 8px;
-                            Text { width: 74px; text: "GLIDE MODE"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                            Text { width: 74px; text: "GLIDE MODE"; color: Theme.text-muted; font-size: Theme.text-md; vertical-alignment: center; }
                             SelectorBank {
                                 options: ["ALWAYS", "LEGATO"];
                                 selected-index <=> root.glide-mode;
@@ -272,7 +272,7 @@ export component MlM1DeviceFace inherits Rectangle {
                         }
                         HorizontalLayout {
                             spacing: 8px;
-                            Text { width: 74px; text: "ENV TRIGGER"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                            Text { width: 74px; text: "ENV TRIGGER"; color: Theme.text-muted; font-size: Theme.text-md; vertical-alignment: center; }
                             SelectorBank {
                                 options: ["RETRIG", "LEGATO"];
                                 selected-index <=> root.env-trigger;
@@ -284,7 +284,7 @@ export component MlM1DeviceFace inherits Rectangle {
                         }
                         HorizontalLayout {
                             spacing: 8px;
-                            Text { width: 74px; text: "PRIORITY"; color: Theme.text-muted; font-size: 9px; vertical-alignment: center; }
+                            Text { width: 74px; text: "PRIORITY"; color: Theme.text-muted; font-size: Theme.text-md; vertical-alignment: center; }
                             SelectorBank {
                                 options: ["LAST", "LOW", "HIGH"];
                                 selected-index <=> root.priority;

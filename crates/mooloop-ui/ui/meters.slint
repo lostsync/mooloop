@@ -64,7 +64,7 @@ export component MeterScale inherits Rectangle {
                 y: -5px;
                 text: db == 0 ? "0" : db;
                 color: Theme.text-faint;
-                font-size: 8px;
+                font-size: Theme.text-sm;
             }
         }
     }
@@ -89,7 +89,7 @@ export component MeterScale inherits Rectangle {
                 y: 5px;
                 text: db == 0 ? "0" : db;
                 color: Theme.text-faint;
-                font-size: 8px;
+                font-size: Theme.text-sm;
                 width: 16px;
                 horizontal-alignment: center;
             }
@@ -454,7 +454,7 @@ export component MasterMeter inherits Rectangle {
             text: root.peak-db <= root.minimum-db
                 ? "-inf" : GainMath.format-db-value(root.peak-db);
             color: root.left-clipping || root.right-clipping ? Theme.meter-clip : Theme.text-muted;
-            font-size: 9px;
+            font-size: Theme.text-md;
             horizontal-alignment: right;
             vertical-alignment: center;
         }
@@ -562,11 +562,11 @@ export component CorrelationMeter inherits Rectangle {
             }
         }
         HorizontalLayout {
-            Text { text: "-1"; color: Theme.text-faint; font-size: 8px; }
+            Text { text: "-1"; color: Theme.text-faint; font-size: Theme.text-sm; }
             Rectangle { horizontal-stretch: 1; }
-            Text { text: "0"; color: Theme.text-faint; font-size: 8px; }
+            Text { text: "0"; color: Theme.text-faint; font-size: Theme.text-sm; }
             Rectangle { horizontal-stretch: 1; }
-            Text { text: "+1"; color: Theme.text-faint; font-size: 8px; }
+            Text { text: "+1"; color: Theme.text-faint; font-size: Theme.text-sm; }
         }
     }
     Tooltip { text: @markdown("Stereo correlation"); }

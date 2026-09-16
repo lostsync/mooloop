@@ -18,16 +18,16 @@ export component ExportDialog inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.surface;
-        border-width: 1px;
+        border-width: Theme.hairline;
         border-color: Theme.border;
         border-radius: Theme.radius-lg;
         VerticalLayout {
             padding: 18px;
             spacing: 14px;
-            Text { text: "Export Audio"; color: Theme.text; font-size: 16px; }
+            Text { text: "Export Audio"; color: Theme.text; font-size: Theme.text-3xl; }
             HorizontalLayout {
                 spacing: 8px;
-                Text { text: "FORMAT"; color: Theme.text-faint; font-size: 9px; vertical-alignment: center; }
+                Text { text: "FORMAT"; color: Theme.text-faint; font-size: Theme.text-md; vertical-alignment: center; }
                 ComboBox {
                     model: ["WAV 24-bit PCM", "WAV 32-bit float", "MP3"];
                     current-index <=> root.format-index;
@@ -36,7 +36,7 @@ export component ExportDialog inherits Rectangle {
             }
             HorizontalLayout {
                 spacing: 8px;
-                Text { text: "MP3 RATE"; color: Theme.text-faint; font-size: 9px; vertical-alignment: center; }
+                Text { text: "MP3 RATE"; color: Theme.text-faint; font-size: Theme.text-md; vertical-alignment: center; }
                 ComboBox {
                     enabled: root.format-index == 2;
                     model: ["192 kbps", "256 kbps", "320 kbps"];
@@ -46,7 +46,7 @@ export component ExportDialog inherits Rectangle {
             }
             HorizontalLayout {
                 spacing: 8px;
-                Text { text: "TAIL (SECONDS)"; color: Theme.text-faint; font-size: 9px; vertical-alignment: center; }
+                Text { text: "TAIL (SECONDS)"; color: Theme.text-faint; font-size: Theme.text-md; vertical-alignment: center; }
                 SpinBox { value <=> root.tail-seconds; minimum: 0; maximum: 30; width: 100px; }
                 Rectangle { horizontal-stretch: 1; }
             }

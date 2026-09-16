@@ -41,7 +41,7 @@ component ColorField inherits VerticalBox {
         Text {
             text: root.label;
             color: Theme.text;
-            font-size: 11px;
+            font-size: Theme.text-xl;
             vertical-alignment: center;
             width: 54px;
         }
@@ -50,7 +50,7 @@ component ColorField inherits VerticalBox {
             height: 22px;
             border-radius: Theme.radius-md;
             background: choice.tint;
-            border-width: choice.value == root.value ? 2px : 1px;
+            border-width: choice.value == root.value ? Theme.stroke-emphasis : Theme.hairline;
             border-color: choice.value == root.value ? Theme.text : Theme.border;
             TouchArea {
                 mouse-cursor: pointer;
@@ -71,7 +71,7 @@ component ColorField inherits VerticalBox {
             height: 22px;
             border-radius: Theme.radius-md;
             background: root.resolved;
-            border-width: 1px;
+            border-width: Theme.hairline;
             border-color: Theme.border;
         }
         Rectangle { horizontal-stretch: 1; }
@@ -80,7 +80,7 @@ component ColorField inherits VerticalBox {
         x: 60px;
         text: root.description;
         color: Theme.text-muted;
-        font-size: 10px;
+        font-size: Theme.text-lg;
     }
 }
 
@@ -101,7 +101,7 @@ component PreferenceNavItem inherits Rectangle {
         width: parent.width - 18px;
         text: root.text;
         color: root.selected ? Theme.text : Theme.text-muted;
-        font-size: 11px;
+        font-size: Theme.text-xl;
         vertical-alignment: center;
     }
     tap := TouchArea { mouse-cursor: pointer; clicked => { root.selected-page(); } }
@@ -153,12 +153,12 @@ export component GestureRowView inherits Rectangle {
             Text {
                 text: root.entry.label;
                 color: Theme.text;
-                font-size: 11px;
+                font-size: Theme.text-xl;
             }
             Text {
                 text: root.entry.description;
                 color: Theme.text-muted;
-                font-size: 9px;
+                font-size: Theme.text-md;
             }
         }
         Rectangle { horizontal-stretch: 1; }
@@ -172,7 +172,7 @@ export component GestureRowView inherits Rectangle {
         Text {
             text: root.entry.is-default ? "" : "changed";
             color: Theme.text-faint;
-            font-size: 9px;
+            font-size: Theme.text-md;
             width: 50px;
             vertical-alignment: center;
         }
@@ -197,21 +197,21 @@ export component ShortcutRowView inherits Rectangle {
         Text {
             text: root.entry.label;
             color: Theme.text;
-            font-size: 11px;
+            font-size: Theme.text-xl;
             vertical-alignment: center;
             width: 150px;
         }
         Text {
             text: root.capturing ? "Press keys... (Esc cancels)" : (root.entry.chord == "" ? "Not set" : root.entry.chord);
             color: root.capturing ? Theme.accent : (root.entry.chord == "" ? Theme.text-faint : Theme.text-muted);
-            font-size: 10px;
+            font-size: Theme.text-lg;
             vertical-alignment: center;
             horizontal-stretch: 1;
         }
         Text {
             text: root.entry.context;
             color: Theme.text-faint;
-            font-size: 9px;
+            font-size: Theme.text-md;
             width: 96px;
             vertical-alignment: center;
             horizontal-alignment: right;
@@ -417,13 +417,13 @@ export component AppearancePage inherits VerticalLayout {
     // which inherit VerticalBox and would otherwise absorb it as layouts do.
     alignment: start;
 
-    Text { text: "Appearance"; color: Theme.text; font-size: 14px; height: 20px; }
+    Text { text: "Appearance"; color: Theme.text; font-size: Theme.text-3xl; height: 20px; }
 
     SectionLabel { text: "SCHEME"; }
     Rectangle {
         height: 108px;
         background: Theme.background;
-        border-width: 1px;
+        border-width: Theme.hairline;
         border-color: Theme.border;
         border-radius: Theme.radius-md;
         ScrollView {
@@ -449,13 +449,13 @@ export component AppearancePage inherits VerticalLayout {
                             y: (parent.height - 14px) / 2;
                             border-radius: Theme.radius-sm;
                             background: tint;
-                            border-width: 1px;
+                            border-width: Theme.hairline;
                             border-color: Theme.border;
                         }
                         Text {
                             text: scheme.name;
                             color: scheme.name == root.scheme ? Theme.text : Theme.text-muted;
-                            font-size: 11px;
+                            font-size: Theme.text-xl;
                             vertical-alignment: center;
                             horizontal-stretch: 1;
                         }
@@ -533,7 +533,7 @@ export component AppearancePage inherits VerticalLayout {
         ];
         changed => { root.preview-changed(); }
     }
-    Text { text: root.validation-error; color: Theme.destructive; font-size: 10px; height: 18px; }
+    Text { text: root.validation-error; color: Theme.destructive; font-size: Theme.text-lg; height: 18px; }
 
     SectionLabel { text: "INTERFACE"; }
     ParameterFader {
@@ -567,8 +567,8 @@ export component AppearancePage inherits VerticalLayout {
         VerticalBox {
             spacing: 0px;
             padding: 0px;
-            Text { text: "Smooth curves"; color: Theme.text; font-size: 11px; }
-            Text { text: "Antialias device graphs and filter curves"; color: Theme.text-muted; font-size: 10px; }
+            Text { text: "Smooth curves"; color: Theme.text; font-size: Theme.text-xl; }
+            Text { text: "Antialias device graphs and filter curves"; color: Theme.text-muted; font-size: Theme.text-lg; }
         }
         Rectangle { horizontal-stretch: 1; }
         ToggleButton {
@@ -589,8 +589,8 @@ export component AppearancePage inherits VerticalLayout {
         VerticalBox {
             spacing: 0px;
             padding: 0px;
-            Text { text: "Speed"; color: Theme.text; font-size: 11px; }
-            Text { text: "How long panel hide/show moves take"; color: Theme.text-muted; font-size: 10px; }
+            Text { text: "Speed"; color: Theme.text; font-size: Theme.text-xl; }
+            Text { text: "How long panel hide/show moves take"; color: Theme.text-muted; font-size: Theme.text-lg; }
         }
         Rectangle { horizontal-stretch: 1; }
         SegmentedControl {
@@ -606,8 +606,8 @@ export component AppearancePage inherits VerticalLayout {
         VerticalBox {
             spacing: 0px;
             padding: 0px;
-            Text { text: "Easing"; color: Theme.text; font-size: 11px; }
-            Text { text: "The curve the move follows"; color: Theme.text-muted; font-size: 10px; }
+            Text { text: "Easing"; color: Theme.text; font-size: Theme.text-xl; }
+            Text { text: "The curve the move follows"; color: Theme.text-muted; font-size: Theme.text-lg; }
         }
         Rectangle { horizontal-stretch: 1; }
         SegmentedControl {
@@ -628,11 +628,11 @@ export component AppearancePage inherits VerticalLayout {
         VerticalBox {
             spacing: 0px;
             padding: 0px;
-            Text { text: "Falloff"; color: Theme.text; font-size: 11px; }
+            Text { text: "Falloff"; color: Theme.text; font-size: Theme.text-xl; }
             Text {
                 text: "How fast a meter falls back after a peak";
                 color: Theme.text-muted;
-                font-size: 10px;
+                font-size: Theme.text-lg;
             }
         }
         Rectangle { horizontal-stretch: 1; }
@@ -648,7 +648,7 @@ export component AppearancePage inherits VerticalLayout {
     Rectangle {
         height: 64px;
         background: Theme.background;
-        border-width: 1px;
+        border-width: Theme.hairline;
         border-color: Theme.border;
         border-radius: Theme.radius-md;
         HorizontalBox {
@@ -657,9 +657,9 @@ export component AppearancePage inherits VerticalLayout {
             VerticalBox {
                 padding: 0px;
                 spacing: 1px;
-                Text { text: "Value"; color: Theme.text; font-size: 11px; }
-                Text { text: "Label"; color: Theme.text-muted; font-size: 10px; }
-                Text { text: "Hint"; color: Theme.text-faint; font-size: 10px; }
+                Text { text: "Value"; color: Theme.text; font-size: Theme.text-xl; }
+                Text { text: "Label"; color: Theme.text-muted; font-size: Theme.text-lg; }
+                Text { text: "Hint"; color: Theme.text-faint; font-size: Theme.text-lg; }
             }
             ToolButton { text: "Selected"; active: true; }
             ToolButton { text: "Idle"; }
@@ -728,7 +728,7 @@ component MidiBindingRowView inherits Rectangle {
             Text {
                 text: root.entry.source;
                 color: root.entry.unresolved ? Theme.warning : Theme.text;
-                font-size: 11px;
+                font-size: Theme.text-xl;
                 overflow: elide;
             }
         }
@@ -738,7 +738,7 @@ component MidiBindingRowView inherits Rectangle {
             Text {
                 text: root.entry.target;
                 color: Theme.text-muted;
-                font-size: 11px;
+                font-size: Theme.text-xl;
                 overflow: elide;
             }
         }
@@ -748,7 +748,7 @@ component MidiBindingRowView inherits Rectangle {
             Text {
                 text: root.entry.unresolved ? "not plugged in" : root.entry.mode;
                 color: root.entry.unresolved ? Theme.warning : Theme.text-faint;
-                font-size: 10px;
+                font-size: Theme.text-lg;
                 overflow: elide;
             }
         }
@@ -805,7 +805,7 @@ component MidiTransportRowView inherits Rectangle {
         VerticalLayout {
             width: 140px;
             alignment: center;
-            Text { text: root.entry.label; color: Theme.text; font-size: 11px; }
+            Text { text: root.entry.label; color: Theme.text; font-size: Theme.text-xl; }
         }
         VerticalLayout {
             width: 240px;
@@ -816,7 +816,7 @@ component MidiTransportRowView inherits Rectangle {
                     : root.entry.source == "" ? "not mapped" : root.entry.source;
                 color: root.entry.listening ? Theme.focus
                     : root.entry.source == "" ? Theme.text-faint : Theme.text-muted;
-                font-size: 11px;
+                font-size: Theme.text-xl;
                 overflow: elide;
             }
         }
@@ -863,24 +863,24 @@ export component MidiPage inherits VerticalLayout {
     // rather than a layout stretching rows to fill it.
     alignment: start;
 
-    Text { text: "MIDI"; color: Theme.text; font-size: 14px; height: 20px; }
+    Text { text: "MIDI"; color: Theme.text; font-size: Theme.text-3xl; height: 20px; }
 
     SectionLabel { text: "MIDI INPUTS"; }
     if root.ports.length == 0 : Text {
         text: "No MIDI input is connected.";
         color: Theme.text-faint;
-        font-size: 11px;
+        font-size: Theme.text-xl;
     }
     for port in root.ports : Text {
         text: port;
         color: Theme.text-muted;
-        font-size: 11px;
+        font-size: Theme.text-xl;
         height: 16px;
     }
     if root.port-note != "" : Text {
         text: root.port-note;
         color: Theme.text-faint;
-        font-size: 10px;
+        font-size: Theme.text-lg;
         wrap: word-wrap;
     }
 
@@ -889,7 +889,7 @@ export component MidiPage inherits VerticalLayout {
         text: "Turn on LEARN beside the transport, press a knob or fader, "
             + "then move the control you want it to follow.";
         color: Theme.text-faint;
-        font-size: 10px;
+        font-size: Theme.text-lg;
         wrap: word-wrap;
     }
     HorizontalLayout {
@@ -910,7 +910,7 @@ export component MidiPage inherits VerticalLayout {
     if root.bindings.length == 0 : Text {
         text: "Nothing is mapped.";
         color: Theme.text-faint;
-        font-size: 11px;
+        font-size: Theme.text-xl;
     }
     for entry in root.bindings : MidiBindingRowView {
         entry: entry;
@@ -926,7 +926,7 @@ export component MidiPage inherits VerticalLayout {
             + "from here. Start, Stop and Continue from an external sequencer "
             + "work without being mapped.";
         color: Theme.text-faint;
-        font-size: 10px;
+        font-size: Theme.text-lg;
         wrap: word-wrap;
     }
     for entry in root.transport-rows : MidiTransportRowView {
@@ -1026,7 +1026,7 @@ export component PreferencesDialog inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.panel;
-        border-width: 1px;
+        border-width: Theme.hairline;
         border-color: Theme.border;
         border-radius: Theme.radius-sm;
 
@@ -1038,7 +1038,7 @@ export component PreferencesDialog inherits Rectangle {
                 border-width: 0px;
                 HorizontalBox {
                     padding: 10px;
-                    Text { text: "Preferences"; color: Theme.text; font-size: 14px; vertical-alignment: center; }
+                    Text { text: "Preferences"; color: Theme.text; font-size: Theme.text-3xl; vertical-alignment: center; }
                     Rectangle { horizontal-stretch: 1; }
                     IconButton {
                         icon: "M 4 4 L 12 12 M 12 4 L 4 12";
@@ -1074,15 +1074,15 @@ export component PreferencesDialog inherits Rectangle {
                         spacing: 8px;
                         if root.page == 0 : VerticalBox {
                             spacing: 8px;
-                            Text { text: "General"; color: Theme.text; font-size: 14px; height: 20px; }
+                            Text { text: "General"; color: Theme.text; font-size: Theme.text-3xl; height: 20px; }
                             SectionLabel { text: "APPLICATION"; }
                             HorizontalBox {
                                 height: 36px;
                                 spacing: 8px;
                                 VerticalBox {
                                     spacing: 0px;
-                                    Text { text: "Developer mode"; color: Theme.text; font-size: 11px; }
-                                    Text { text: "Show developer tools and diagnostics"; color: Theme.text-muted; font-size: 10px; }
+                                    Text { text: "Developer mode"; color: Theme.text; font-size: Theme.text-xl; }
+                                    Text { text: "Show developer tools and diagnostics"; color: Theme.text-muted; font-size: Theme.text-lg; }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
                                 ToggleButton { text: "Enabled"; tooltip: "Show developer preferences"; checked <=> root.developer-mode; }
@@ -1099,23 +1099,23 @@ export component PreferencesDialog inherits Rectangle {
                                 width: parent.width - 8px;
                                 padding-right: 8px;
                                 spacing: 8px;
-                                Text { text: "Audio"; color: Theme.text; font-size: 14px; height: 20px; }
+                                Text { text: "Audio"; color: Theme.text; font-size: Theme.text-3xl; height: 20px; }
                                 SectionLabel { text: "DRIVER"; }
                                 HorizontalBox {
                                     spacing: 8px;
                                     padding: 0px;
                                     SegmentedControl { width: 96px; options: [root.audio-driver.name]; selected-index: 0; }
-                                    Text { text: root.audio-driver.note; color: Theme.text-faint; font-size: 10px; vertical-alignment: center; }
+                                    Text { text: root.audio-driver.note; color: Theme.text-faint; font-size: Theme.text-lg; vertical-alignment: center; }
                                     Rectangle { horizontal-stretch: 1; }
                                 }
                                 HorizontalBox {
                                     spacing: 8px;
                                     padding: 0px;
-                                    Text { text: "Device in"; color: Theme.text; font-size: 11px; vertical-alignment: center; }
+                                    Text { text: "Device in"; color: Theme.text; font-size: Theme.text-xl; vertical-alignment: center; }
                                     Text {
                                         text: "input capture isn't implemented yet";
                                         color: Theme.text-faint;
-                                        font-size: 10px;
+                                        font-size: Theme.text-lg;
                                         vertical-alignment: center;
                                     }
                                     Rectangle { horizontal-stretch: 1; }
@@ -1199,7 +1199,7 @@ export component PreferencesDialog inherits Rectangle {
                             spacing: 8px;
                             HorizontalBox {
                                 padding: 0px;
-                                Text { text: "Shortcuts"; color: Theme.text; font-size: 14px; height: 20px; vertical-alignment: center; }
+                                Text { text: "Shortcuts"; color: Theme.text; font-size: Theme.text-3xl; height: 20px; vertical-alignment: center; }
                                 Rectangle { horizontal-stretch: 1; }
                                 ToolButton { text: "Reset All"; clicked => { root.shortcut-reset-all(); } }
                             }
@@ -1208,7 +1208,7 @@ export component PreferencesDialog inherits Rectangle {
                                     + "A chord with a context on the right only acts there; "
                                     + "\"Focused panel\" means it asks what you last clicked.";
                                 color: Theme.text-muted;
-                                font-size: 10px;
+                                font-size: Theme.text-lg;
                                 wrap: word-wrap;
                             }
                             ScrollView {
@@ -1238,7 +1238,7 @@ export component PreferencesDialog inherits Rectangle {
                                             + "Alt is offered but never a default, since some window managers "
                                             + "take Alt+drag before the app sees it.";
                                         color: Theme.text-muted;
-                                        font-size: 10px;
+                                        font-size: Theme.text-lg;
                                         wrap: word-wrap;
                                     }
                                     for row in root.gesture-rows : GestureRowView {
@@ -1251,15 +1251,15 @@ export component PreferencesDialog inherits Rectangle {
                         }
                         if root.page == 5 && root.developer-mode : VerticalBox {
                             spacing: 8px;
-                            Text { text: "Developer"; color: Theme.text; font-size: 14px; height: 20px; }
+                            Text { text: "Developer"; color: Theme.text; font-size: Theme.text-3xl; height: 20px; }
                             if root.mockup-tool-available : SectionLabel { text: "DEVELOPER TOOLS"; }
                             if root.mockup-tool-available : HorizontalBox {
                                 height: 36px;
                                 spacing: 8px;
                                 VerticalBox {
                                     spacing: 0px;
-                                    Text { text: "UI mockup"; color: Theme.text; font-size: 11px; }
-                                    Text { text: "Compose layouts from the real controls"; color: Theme.text-muted; font-size: 10px; }
+                                    Text { text: "UI mockup"; color: Theme.text; font-size: Theme.text-xl; }
+                                    Text { text: "Compose layouts from the real controls"; color: Theme.text-muted; font-size: Theme.text-lg; }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
                                 ToolButton { text: "Open"; clicked => { root.open-mockup-tool(); } }
@@ -1270,8 +1270,8 @@ export component PreferencesDialog inherits Rectangle {
                                 spacing: 8px;
                                 VerticalBox {
                                     spacing: 0px;
-                                    Text { text: "Write a log file"; color: Theme.text; font-size: 11px; }
-                                    Text { text: "Keep what the console reports, so a problem can be read back later"; color: Theme.text-muted; font-size: 10px; }
+                                    Text { text: "Write a log file"; color: Theme.text; font-size: Theme.text-xl; }
+                                    Text { text: "Keep what the console reports, so a problem can be read back later"; color: Theme.text-muted; font-size: Theme.text-lg; }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
                                 ToggleButton {
@@ -1295,8 +1295,8 @@ export component PreferencesDialog inherits Rectangle {
                                     single-line: false;
                                     wrap: word-wrap;
                                     color: Theme.text-muted;
-                                    font-size: 10px;
-                                    font-family: "monospace";
+                                    font-size: Theme.text-lg;
+                                    font-family: Theme.font-family-mono;
                                     selection-background-color: Theme.accent;
                                 }
                             }

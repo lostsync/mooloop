@@ -32,7 +32,7 @@ component HallResponse inherits Rectangle {
 
     background: Theme.panel;
     border-radius: Theme.radius-sm;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: Theme.border;
     clip: true;
 
@@ -41,14 +41,14 @@ component HallResponse inherits Rectangle {
         y: 3px;
         text: "HALL RESPONSE";
         color: Theme.text-faint;
-        font-size: 8px;
+        font-size: Theme.text-sm;
     }
     Text {
         x: parent.width - self.width - 5px;
         y: 3px;
         text: root.readout;
         color: Theme.accent;
-        font-size: 9px;
+        font-size: Theme.text-md;
     }
 
     // Baseline, and the pre-delay gap before the tail starts.
@@ -71,7 +71,7 @@ component HallResponse inherits Rectangle {
         y: parent.height - 12px;
         text: "PRE";
         color: Theme.text-faint;
-        font-size: 7px;
+        font-size: Theme.text-xs;
     }
 
     for tap in 28 : Rectangle {

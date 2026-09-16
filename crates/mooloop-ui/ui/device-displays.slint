@@ -205,7 +205,7 @@ export component FilterResponseDisplay inherits Rectangle {
             height: 14px;
             border-radius: 7px;
             background: Theme.accent;
-            border-width: 1px;
+            border-width: Theme.hairline;
             border-color: Theme.panel;
         }
     }
@@ -491,7 +491,7 @@ export component EqResponseDisplay inherits Rectangle {
     }
 
     background: Theme.panel;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: Theme.border;
     clip: true;
     for grid in 7 : Rectangle { x: grid * parent.width / 6; width: 1px; height: 100%; background: Theme.border.with-alpha(0.32); }
@@ -529,7 +529,7 @@ export component EqResponseDisplay inherits Rectangle {
         Rectangle {
             width: 14px; height: 14px; border-radius: 7px;
             background: Theme.text-faint;
-            border-width: root.selected-target == root.band-count + pass ? 2px : 1px;
+            border-width: root.selected-target == root.band-count + pass ? Theme.stroke-emphasis : Theme.hairline;
             border-color: root.selected-target == root.band-count + pass ? Theme.text : Theme.panel;
         }
     }
@@ -548,7 +548,7 @@ export component EqResponseDisplay inherits Rectangle {
                 clamp(self.frequency + dx * 1px / parent.width, 0, 1),
                 clamp(self.gain - dy * 1px / parent.height, 0, 1));
         }
-        Rectangle { width: 14px; height: 14px; border-radius: 7px; background: root.point-color(index); border-width: root.selected-target == index ? 2px : 1px; border-color: root.selected-target == index ? Theme.text : Theme.panel; }
+        Rectangle { width: 14px; height: 14px; border-radius: 7px; background: root.point-color(index); border-width: root.selected-target == index ? Theme.stroke-emphasis : Theme.hairline; border-color: root.selected-target == index ? Theme.text : Theme.panel; }
     }
 }
 
@@ -661,7 +661,7 @@ export component DynamicsCurveDisplay inherits Rectangle {
         width: 100%;
         height: 100%;
         background: Theme.warning.with-alpha(root.reduction-amount * 0.07);
-        border-width: 1px;
+        border-width: Theme.hairline;
         border-color: Theme.warning.with-alpha(root.reduction-amount * 0.22);
         border-radius: Theme.radius-xs;
     }
@@ -728,7 +728,7 @@ export component DynamicsCurveDisplay inherits Rectangle {
         y: 2px;
         z: 2;
         text: "GR -" + GainMath.format-plain-db(root.reduction-db) + " dB";
-        font-size: 9px;
+        font-size: Theme.text-md;
         color: Theme.warning.with-alpha(0.85);
     }
 
@@ -757,7 +757,7 @@ export component DynamicsCurveDisplay inherits Rectangle {
             height: 100%;
             border-radius: 4px;
             background: Theme.accent;
-            border-width: 1px;
+            border-width: Theme.hairline;
             border-color: Theme.panel;
         }
     }
@@ -779,7 +779,7 @@ export component DynamicsCurveDisplay inherits Rectangle {
             height: 14px;
             border-radius: 7px;
             background: Theme.panel;
-            border-width: 2px;
+            border-width: Theme.stroke-emphasis;
             border-color: Theme.warning;
         }
         Rectangle {

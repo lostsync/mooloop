@@ -62,7 +62,7 @@ export component AuxInDeviceFace inherits Rectangle {
                 Text {
                     text: "Channel";
                     color: Theme.text-muted;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                 }
                 PickerChip {
                     options: root.source-names;
@@ -75,7 +75,7 @@ export component AuxInDeviceFace inherits Rectangle {
                 Text {
                     text: "Outlet";
                     color: root.connected ? Theme.text-muted : Theme.text-faint;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                 }
                 if root.connected : PickerChip {
                     options: root.outlet-names;
@@ -86,7 +86,7 @@ export component AuxInDeviceFace inherits Rectangle {
                 if !root.connected : Text {
                     text: "\u{2014}";
                     color: Theme.text-faint;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     height: 18px;
                     vertical-alignment: center;
                 }
@@ -145,7 +145,7 @@ export component AuxInDeviceFace inherits Rectangle {
                     color: root.refusal-text != ""
                         ? Theme.warning
                         : root.connected ? Theme.text-muted : Theme.text-faint;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     wrap: word-wrap;
                 }
                 // The one behaviour worth stating on the face rather than in
@@ -155,7 +155,7 @@ export component AuxInDeviceFace inherits Rectangle {
                 if root.refusal-text == "" && root.connected && root.tap-text == "pre-level" : Text {
                     text: "A source muted in its own device still publishes here.";
                     color: Theme.text-faint;
-                    font-size: 9px;
+                    font-size: Theme.text-md;
                     wrap: word-wrap;
                 }
                 Rectangle { vertical-stretch: 1; }

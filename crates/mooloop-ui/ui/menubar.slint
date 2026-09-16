@@ -27,7 +27,7 @@ export component MenuRow inherits Rectangle {
         width: parent.width - 26px - (root.shortcut != "" ? 76px : 8px);
         text: root.text;
         color: root.enabled ? Theme.text : Theme.text-faint;
-        font-size: 11px;
+        font-size: Theme.text-xl;
         vertical-alignment: center;
         overflow: elide;
     }
@@ -38,7 +38,7 @@ export component MenuRow inherits Rectangle {
         text: "✓";
         visible: root.checked;
         color: root.enabled ? Theme.text : Theme.text-faint;
-        font-size: 11px;
+        font-size: Theme.text-xl;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -48,7 +48,7 @@ export component MenuRow inherits Rectangle {
         text: root.shortcut;
         visible: root.shortcut != "";
         color: root.enabled ? Theme.text-faint : Theme.text-faint;
-        font-size: 10px;
+        font-size: Theme.text-lg;
         vertical-alignment: center;
     }
 
@@ -99,7 +99,7 @@ export component MenuBarItem inherits Rectangle {
         x: 8px;
         text: root.title;
         color: root.enabled ? Theme.text : Theme.text-faint;
-        font-size: 11px;
+        font-size: Theme.text-xl;
         vertical-alignment: center;
     }
 
@@ -172,7 +172,7 @@ export component MenuBarItem inherits Rectangle {
                     width: catcher-text.preferred-width + 16px;
                     catcher-text := Text {
                         text: t;
-                        font-size: 11px;
+                        font-size: Theme.text-xl;
                         color: transparent;
                     }
                     TouchArea {
@@ -196,7 +196,7 @@ export component MenuBarItem inherits Rectangle {
             width: 216px;
             height: menu-frame-content.preferred-height;
             background: Theme.surface;
-            border-width: 1px;
+            border-width: Theme.hairline;
             border-color: Theme.border;
             border-radius: Theme.radius-md;
 

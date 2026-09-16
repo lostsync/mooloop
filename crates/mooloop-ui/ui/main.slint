@@ -332,7 +332,7 @@ component AutomationMenuRow inherits Rectangle {
         x: 8px;
         text: root.text;
         color: root.current ? Theme.accent : Theme.text;
-        font-size: 10px;
+        font-size: Theme.text-lg;
         vertical-alignment: center;
     }
     touch := TouchArea {
@@ -382,7 +382,7 @@ component AutomationLaneMenu inherits VerticalLayout {
                     height: 16px;
                     text: row.device;
                     color: Theme.text-faint;
-                    font-size: 8px;
+                    font-size: Theme.text-sm;
                     vertical-alignment: bottom;
                     x: 6px;
                 }
@@ -577,7 +577,7 @@ component PaneTabs inherits Rectangle {
     width: strip.preferred-width + 2px;
     background: Theme.surface;
     border-radius: Theme.radius-md;
-    border-width: 1px;
+    border-width: Theme.hairline;
     border-color: Theme.border;
 
     strip := HorizontalLayout {
@@ -603,7 +603,7 @@ component PaneTabs inherits Rectangle {
                 : tab-touch.has-hover ? Theme.surface-active : transparent;
             Text {
                 text: PaneViews.names[view];
-                font-size: 9px;
+                font-size: Theme.text-md;
                 letter-spacing: 0.5px;
                 color: root.active == view
                     ? (root.zoomed ? Theme.background : Theme.text)
@@ -668,7 +668,7 @@ component PaneTabs inherits Rectangle {
                 close-policy: close-on-click;
                 tab-menu-frame := Rectangle {
                     background: Theme.surface;
-                    border-width: 1px;
+                    border-width: Theme.hairline;
                     border-color: Theme.border;
                     border-radius: Theme.radius-md;
                     VerticalLayout {
@@ -709,6 +709,15 @@ export component MainWindow inherits Window {
     preferred-width: 1280px;
     preferred-height: 760px;
     background: Theme.background;
+
+    // The whole reason a theme's font reaches anything. Slint resolves an
+    // element's `font-*` against the window's `default-font-*`, so binding the
+    // tokens here is what themes the three hundred `Text` elements that never
+    // name a family -- and it is why no face should name one except when the
+    // content needs the mono family.
+    default-font-family: Theme.font-family;
+    default-font-size: Theme.text-md;
+    default-font-weight: Theme.font-weight;
 
     // ---- transport / state exchanged with Rust ----
     in-out property <bool>  playing;
@@ -3300,7 +3309,7 @@ export component MainWindow inherits Window {
                                             Text {
                                                 text: row.name;
                                                 color: row.selected ? Theme.text : Theme.text-muted;
-                                                font-size: 11px;
+                                                font-size: Theme.text-xl;
                                                 horizontal-alignment: left;
                                                 vertical-alignment: center;
                                                 x: 6px;
@@ -3358,7 +3367,7 @@ export component MainWindow inherits Window {
                                                 close-policy: close-on-click;
                                                 context-frame := Rectangle {
                                                     background: Theme.surface;
-                                                    border-width: 1px;
+                                                    border-width: Theme.hairline;
                                                     border-color: Theme.border;
                                                     border-radius: Theme.radius-md;
                                                     VerticalLayout {
@@ -3435,7 +3444,7 @@ export component MainWindow inherits Window {
                                                     height: 24px;
                                                     border-radius: Theme.radius-sm;
                                                     clip: true;
-                                                    border-width: root.playing && root.current-step == i ? 1px : 0px;
+                                                    border-width: root.playing && root.current-step == i ? Theme.hairline : 0px;
                                                     border-color: Theme.text;
                                                     background: mod(i, root.step-group) == 0
                                                         ? Theme.surface-active : Theme.surface-raised;
@@ -3574,7 +3583,7 @@ export component MainWindow inherits Window {
                                                 close-policy: close-on-click;
                                                 Rectangle {
                                                     background: Theme.surface;
-                                                    border-width: 1px;
+                                                    border-width: Theme.hairline;
                                                     border-color: Theme.border;
                                                     border-radius: Theme.radius-md;
                                                     VerticalLayout {
@@ -3685,7 +3694,7 @@ export component MainWindow inherits Window {
                                 Text {
                                     text: "DEVICE CHAIN";
                                     color: Theme.text-faint;
-                                    font-size: 9px;
+                                    font-size: Theme.text-md;
                                     vertical-alignment: center;
                                 }
                                 // A picker rather than a bank of
@@ -3715,7 +3724,7 @@ export component MainWindow inherits Window {
                                 if root.editing-bus : Text {
                                     text: root.editing-bus-name;
                                     color: Theme.text;
-                                    font-size: 11px;
+                                    font-size: Theme.text-xl;
                                     vertical-alignment: center;
                                 }
                                 if root.editing-bus : Text {
@@ -3723,7 +3732,7 @@ export component MainWindow inherits Window {
                                         ? "Everything lands here"
                                         : "Effects here shape every channel routed to this bus";
                                     color: Theme.text-faint;
-                                    font-size: 9px;
+                                    font-size: Theme.text-md;
                                     vertical-alignment: center;
                                 }
                                 Rectangle { horizontal-stretch: 1; }
@@ -3744,7 +3753,7 @@ export component MainWindow inherits Window {
                                 if root.editing-bus : Text {
                                     text: root.editing-bus-name;
                                     color: Theme.text-muted;
-                                    font-size: 10px;
+                                    font-size: Theme.text-lg;
                                     vertical-alignment: center;
                                 }
                                 if !root.editing-bus : NameField {
@@ -4508,7 +4517,7 @@ export component MainWindow inherits Window {
                                                 x: cell.shift;
                                                 width: cell.frame-width;
                                                 height: parent.height;
-                                                border-width: 1px;
+                                                border-width: Theme.hairline;
                                                 border-color: Theme.accent.with-alpha(0.45);
                                                 border-radius: Theme.radius-md;
                                                 background: Theme.background.with-alpha(0.5);
@@ -5246,13 +5255,13 @@ export component MainWindow inherits Window {
                                 Text {
                                     text: root.has-selected-note ? "TICK " + root.selected-note-step : "NO NOTE";
                                     color: Theme.text-muted;
-                                    font-size: 9px;
+                                    font-size: Theme.text-md;
                                     vertical-alignment: center;
                                 }
                                 Text {
                                     text: "NOTE";
                                     color: Theme.text-faint;
-                                    font-size: 9px;
+                                    font-size: Theme.text-md;
                                     vertical-alignment: center;
                                 }
                                 SpinBox {
@@ -5269,7 +5278,7 @@ export component MainWindow inherits Window {
                                 Text {
                                     text: "VEL";
                                     color: Theme.text-faint;
-                                    font-size: 9px;
+                                    font-size: Theme.text-md;
                                     vertical-alignment: center;
                                 }
                                 SpinBox {
@@ -5286,7 +5295,7 @@ export component MainWindow inherits Window {
                                 Text {
                                     text: "LEN";
                                     color: Theme.text-faint;
-                                    font-size: 9px;
+                                    font-size: Theme.text-md;
                                     vertical-alignment: center;
                                 }
                                 // Musical divisions rather than raw
@@ -5311,7 +5320,7 @@ export component MainWindow inherits Window {
                                 Text {
                                     text: root.selected-duration-text;
                                     color: Theme.text-muted;
-                                    font-size: 9px;
+                                    font-size: Theme.text-md;
                                     width: 56px;
                                     vertical-alignment: center;
                                 }
@@ -5339,7 +5348,7 @@ export component MainWindow inherits Window {
                                 Text {
                                     text: root.editing-bus ? root.editing-bus-name : root.selected-channel-name;
                                     color: Theme.text-muted;
-                                    font-size: 10px;
+                                    font-size: Theme.text-lg;
                                     vertical-alignment: center;
                                 }
                             }
@@ -5379,7 +5388,7 @@ export component MainWindow inherits Window {
                                                         // copy that would not move if it ever did.
                                                         text: NoteFormat.midi-name(note-number);
                                                         color: Theme.text-muted;
-                                                        font-size: min(9px, root.piano-row-height - 1px);
+                                                        font-size: min(Theme.text-md, root.piano-row-height - 1px);
                                                         vertical-alignment: center;
                                                         x: 3px;
                                                     }
@@ -5399,7 +5408,7 @@ export component MainWindow inherits Window {
                                             Text {
                                                 text: "VEL";
                                                 color: Theme.text-muted;
-                                                font-size: 8px;
+                                                font-size: Theme.text-sm;
                                                 horizontal-alignment: center;
                                                 vertical-alignment: center;
                                             }
@@ -5410,7 +5419,7 @@ export component MainWindow inherits Window {
                                             Text {
                                                 text: "AUTO";
                                                 color: Theme.text-muted;
-                                                font-size: 8px;
+                                                font-size: Theme.text-sm;
                                                 horizontal-alignment: center;
                                                 vertical-alignment: center;
                                             }
@@ -5569,7 +5578,7 @@ export component MainWindow inherits Window {
                                         Text {
                                             text: "Velocity";
                                             color: Theme.text-faint;
-                                            font-size: 8px;
+                                            font-size: Theme.text-sm;
                                             x: 4px;
                                             vertical-alignment: center;
                                         }
@@ -5613,7 +5622,7 @@ export component MainWindow inherits Window {
                                                     height: parent.head-size;
                                                     border-radius: parent.head-size / 2;
                                                     background: cell.selected ? Theme.focus : Theme.accent;
-                                                    border-width: 1px;
+                                                    border-width: Theme.hairline;
                                                     border-color: velocity-touch.has-hover
                                                         ? Theme.text : transparent;
                                                 }
@@ -5652,7 +5661,7 @@ export component MainWindow inherits Window {
                                                         : root.automation-lane-name + "  ▾";
                                                     color: root.automation-lane-name == ""
                                                         ? Theme.text-faint : Theme.text;
-                                                    font-size: 8px;
+                                                    font-size: Theme.text-sm;
                                                     x: 2px;
                                                     vertical-alignment: center;
                                                 }
@@ -5671,7 +5680,7 @@ export component MainWindow inherits Window {
                                                     close-policy: close-on-click-outside;
                                                     Rectangle {
                                                         background: Theme.surface;
-                                                        border-width: 1px;
+                                                        border-width: Theme.hairline;
                                                         border-color: Theme.border;
                                                         border-radius: Theme.radius-md;
                                                         menu-content := AutomationLaneMenu {
@@ -5696,7 +5705,7 @@ export component MainWindow inherits Window {
                                             Text {
                                                 text: root.automation-value-text;
                                                 color: Theme.text-muted;
-                                                font-size: 8px;
+                                                font-size: Theme.text-sm;
                                                 vertical-alignment: center;
                                             }
                                         }
@@ -5792,7 +5801,7 @@ export component MainWindow inherits Window {
                                                 height: 8px;
                                                 border-radius: Theme.radius-lg;
                                                 background: point.selected ? Theme.focus : Theme.accent;
-                                                border-width: 1px;
+                                                border-width: Theme.hairline;
                                                 border-color: Theme.surface;
                                             }
 
@@ -5800,7 +5809,7 @@ export component MainWindow inherits Window {
                                                 x: 6px;
                                                 text: "No parameter selected";
                                                 color: Theme.text-faint;
-                                                font-size: 9px;
+                                                font-size: Theme.text-md;
                                                 vertical-alignment: center;
                                             }
 
@@ -5996,7 +6005,7 @@ export component MainWindow inherits Window {
                                         width: 88px; height: 18px;
                                         text: "PATTERN";
                                         color: Theme.text-faint;
-                                        font-size: 9px;
+                                        font-size: Theme.text-md;
                                         vertical-alignment: center;
                                     }
 
@@ -6143,12 +6152,12 @@ export component MainWindow inherits Window {
                                             x: bar * root.playlist-bar-width;
                                             width: root.playlist-bar-width;
                                             height: parent.height;
-                                            border-width: 1px;
+                                            border-width: Theme.hairline;
                                             border-color: Theme.border;
                                             Text {
                                                 text: bar + 1;
                                                 color: Theme.text-faint;
-                                                font-size: 8px;
+                                                font-size: Theme.text-sm;
                                                 horizontal-alignment: center;
                                                 vertical-alignment: center;
                                             }
@@ -6217,7 +6226,7 @@ export component MainWindow inherits Window {
                                                 text: root.pattern-label(pattern);
                                                 color: root.current-pattern == pattern
                                                     ? Theme.text : Theme.text-muted;
-                                                font-size: 10px;
+                                                font-size: Theme.text-lg;
                                                 overflow: elide;
                                                 vertical-alignment: center;
                                             }
@@ -6245,7 +6254,7 @@ export component MainWindow inherits Window {
                                                 close-policy: close-on-click;
                                                 pattern-context-frame := Rectangle {
                                                     background: Theme.surface;
-                                                    border-width: 1px;
+                                                    border-width: Theme.hairline;
                                                     border-color: Theme.border;
                                                     border-radius: Theme.radius-md;
                                                     VerticalLayout {
@@ -6271,7 +6280,7 @@ export component MainWindow inherits Window {
                                                 height: parent.height;
                                                 background: mod(bar, 4) == 0
                                                     ? Theme.surface : Theme.background;
-                                                border-width: 1px;
+                                                border-width: Theme.hairline;
                                                 border-color: Theme.border;
                                                 for division in root.playlist-bar-ticks / root.playlist-snap-ticks : Rectangle {
                                                     visible: division > 0;
@@ -6297,7 +6306,7 @@ export component MainWindow inherits Window {
                                                 border-radius: Theme.radius-sm;
                                                 border-width: root.playing && root.song-mode
                                                     && root.playlist-position-ticks >= clip.start-tick
-                                                    && root.playlist-position-ticks < self.clip-end-tick ? 1px : 0px;
+                                                    && root.playlist-position-ticks < self.clip-end-tick ? Theme.hairline : 0px;
                                                 border-color: Theme.text;
                                                 // **The clip is filled, so here
                                                 // the colour replaces the fill
@@ -6319,7 +6328,7 @@ export component MainWindow inherits Window {
                                                     color: root.pattern-info[pattern].has-color
                                                         ? root.pattern-info[pattern].ink
                                                         : Theme.background;
-                                                    font-size: 9px;
+                                                    font-size: Theme.text-md;
                                                     font-weight: 600;
                                                     horizontal-alignment: center;
                                                     vertical-alignment: center;
@@ -6438,7 +6447,7 @@ export component MainWindow inherits Window {
                         height: self.r.height;
                         background: Theme.accent;
                         opacity: 0.12;
-                        border-width: 1px;
+                        border-width: Theme.hairline;
                         border-color: Theme.focus;
                     }
 
@@ -6622,7 +6631,7 @@ export component MainWindow inherits Window {
                                         text: tab;
                                         color: root.browser-tab == i
                                             ? Theme.text : Theme.text-faint;
-                                        font-size: 9px;
+                                        font-size: Theme.text-md;
                                         horizontal-alignment: center;
                                         vertical-alignment: center;
                                     }
@@ -6654,7 +6663,7 @@ export component MainWindow inherits Window {
                                         text: "♪";
                                         color: root.browser-autoplay
                                             ? Theme.text : Theme.text-muted;
-                                        font-size: 10px;
+                                        font-size: Theme.text-lg;
                                         vertical-alignment: center;
                                         horizontal-alignment: center;
                                     }
@@ -6683,7 +6692,7 @@ export component MainWindow inherits Window {
                                         width: parent.width;
                                         text: "+";
                                         color: Theme.text-muted;
-                                        font-size: 11px;
+                                        font-size: Theme.text-xl;
                                         vertical-alignment: center;
                                         horizontal-alignment: center;
                                     }
@@ -6700,7 +6709,7 @@ export component MainWindow inherits Window {
                                 ? "Click + to add a folder of samples"
                                 : "No presets saved yet";
                             color: Theme.text-faint;
-                            font-size: 9px;
+                            font-size: Theme.text-md;
                             wrap: word-wrap;
                             horizontal-alignment: center;
                             vertical-alignment: center;
@@ -6762,7 +6771,7 @@ export component MainWindow inherits Window {
                                             color: (row.kind == 0 || row.kind == 2)
                                                 ? Theme.text-muted
                                                 : row.loadable ? Theme.accent : Theme.text-faint;
-                                            font-size: 9px;
+                                            font-size: Theme.text-md;
                                             vertical-alignment: center;
                                         }
                                         Text {
@@ -6770,7 +6779,7 @@ export component MainWindow inherits Window {
                                             color: (row.kind == 0 || row.kind == 2)
                                                 ? Theme.text-muted
                                                 : row.loadable ? Theme.text : Theme.text-faint;
-                                            font-size: 10px;
+                                            font-size: Theme.text-lg;
                                             vertical-alignment: center;
                                             overflow: elide;
                                         }
@@ -6782,7 +6791,7 @@ export component MainWindow inherits Window {
                                         if row.detail != "" : Text {
                                             text: row.detail;
                                             color: Theme.text-faint;
-                                            font-size: 9px;
+                                            font-size: Theme.text-md;
                                             vertical-alignment: center;
                                             overflow: elide;
                                         }
@@ -6833,7 +6842,7 @@ export component MainWindow inherits Window {
                                         close-policy: close-on-click;
                                         browser-sample-context-frame := Rectangle {
                                             background: Theme.surface;
-                                            border-width: 1px;
+                                            border-width: Theme.hairline;
                                             border-color: Theme.border;
                                             border-radius: Theme.radius-md;
                                             VerticalLayout {
@@ -6867,7 +6876,7 @@ export component MainWindow inherits Window {
                                 Text {
                                     text: root.browser-info-name;
                                     color: Theme.text-muted;
-                                    font-size: 9px;
+                                    font-size: Theme.text-md;
                                     overflow: elide;
                                 }
                                 SampleTrace {
@@ -6877,7 +6886,7 @@ export component MainWindow inherits Window {
                                 Text {
                                     text: root.browser-info-stats;
                                     color: Theme.text-faint;
-                                    font-size: 9px;
+                                    font-size: Theme.text-md;
                                     wrap: no-wrap;
                                     overflow: elide;
                                 }
@@ -6967,7 +6976,7 @@ export component MainWindow inherits Window {
                             ? "Zoomed — double-click the tab or press Esc to restore"
                         : root.status-message;
                     color: Theme.text-muted;
-                    font-size: 10px;
+                    font-size: Theme.text-lg;
                     x: 8px;
                     width: parent.width - 16px - 72px;
                     vertical-alignment: center;
@@ -6995,7 +7004,7 @@ export component MainWindow inherits Window {
                     // when a hardcoded three would stop being true.
                     x: parent.width - (root.layout-chips.length - k) * 26px;
                     border-radius: Theme.radius-sm;
-                    border-width: 1px;
+                    border-width: Theme.hairline;
                     border-color: chip-touch.has-hover ? Theme.border : transparent;
                     background: chip.on ? Theme.accent-active
                         : chip-touch.pressed ? Theme.surface-active : Theme.surface;
