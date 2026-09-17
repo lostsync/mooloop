@@ -1247,7 +1247,12 @@ land on its own when it starts to matter:
   Start` is independent of every length on the device — starting on the
   quarter while stuttering a thirty-second is the ordinary case. With the
   transport stopped there is no grid, so a press lands at once. A saved
-  freeze is restored rather than quantized.
+  freeze is restored rather than quantized. A waiting freeze and a waiting
+  gesture are independent — both land, the freeze first, so the gesture
+  plays over the frozen ring — and a gesture still waiting outranks nothing
+  until it lands. The wait is measured from the press's own frame, and a
+  setting written on the same tick as a press (`Quant Start`, a length)
+  applies before it.
   **Every length is on the shared musical grid** — the twenty-one
   `ModTimeDivision` entries the modulator racks and the delay use — and `Span`
   adds one position past them for the whole ring, which is its default.

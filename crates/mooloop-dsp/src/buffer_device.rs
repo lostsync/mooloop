@@ -159,20 +159,20 @@ struct Fade {
     frames: u32,
 }
 
-/// What a press is waiting for, when `Quantize` says it has to wait.
+/// A freeze or a thaw waiting for its boundary, when `Quantize` says it has
+/// to wait.
+///
+/// **Its own slot, apart from the gestures' waits.** One shared slot meant a
+/// gesture pressed while a freeze was waiting replaced it, and the freeze
+/// never happened -- which a lane hid, by re-sending `Freeze` every control
+/// tick and re-arming it, and a single press from the face did not.
 #[derive(Clone, Copy)]
-struct Armed {
-    what: ArmedWhat,
+struct ArmedFreeze {
+    freeze: bool,
     /// Frames still to wait. Counted down rather than compared against a
     /// transport position, because the position is only given at block start
     /// and the boundary can fall inside a block.
     frames_remaining: f64,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ArmedWhat {
-    Gesture(Gesture),
-    Freeze(bool),
 }
 
 /// The three gates, in the order [`BufferDevice::gates`] holds them.
@@ -197,7 +197,11 @@ pub struct BufferDevice {
     frozen: bool,
     head: Option<Head>,
     fade: Option<Fade>,
-    armed: Option<Armed>,
+    armed_freeze: Option<ArmedFreeze>,
+    /// Frames each pressed gate still has to wait for its boundary, in
+    /// [`GATES`] order. A gate that is held and waiting is not yet held as far
+    /// as [`Self::held_gesture`] is concerned.
+    gate_waits: [Option<f64>; 3],
 
     // --- standing settings, in the units the descriptors publish ----------
     crossfade_ms: f32,
@@ -282,7 +286,8 @@ impl BufferDevice {
             frozen: false,
             head: None,
             fade: None,
-            armed: None,
+            armed_freeze: None,
+            gate_waits: [None; 3],
             crossfade_ms: defaults.crossfade_ms,
             position: defaults.position,
             position_was: defaults.position,
@@ -360,7 +365,7 @@ impl BufferDevice {
         for (index, held) in std::mem::take(&mut self.pending_gates).into_iter().enumerate() {
             if held {
                 self.gates[index] = true;
-                self.start(GATES[index], context);
+                self.start(index, 0, context);
             }
         }
 
@@ -370,12 +375,25 @@ impl BufferDevice {
             // Parameters first: a gesture arriving on the same frame as a
             // setting change should see the new setting, and a gesture owns
             // the head afterwards either way.
-            while let Some(timed) = params.get(param_index) {
-                if timed.offset as usize != frame {
-                    break;
-                }
-                self.set_param(timed.id, timed.value, frame, context);
+            //
+            // **Settings before actions, whatever order they came in.** The
+            // engine delivers one frame's values in descriptor-table order,
+            // which puts the gates ahead of `Quant Start`, so a gate and a
+            // new grid on the same tick waited on the old grid. The table
+            // order is frozen -- the face addresses it by position -- so the
+            // two passes are here instead.
+            let due_from = param_index;
+            while params
+                .get(param_index)
+                .is_some_and(|timed| timed.offset as usize == frame)
+            {
                 param_index += 1;
+            }
+            let due = &params[due_from..param_index];
+            for acts in [false, true] {
+                for timed in due.iter().filter(|timed| is_action(timed.id) == acts) {
+                    self.set_param(timed.id, timed.value, frame, context);
+                }
             }
             while let Some(timed) = events.get(event_index) {
                 if timed.offset as usize != frame {
@@ -421,14 +439,7 @@ impl BufferDevice {
             bus.l[frame] = output_l;
             bus.r[frame] = output_r;
 
-            if let Some(mut armed) = self.armed {
-                armed.frames_remaining -= 1.0;
-                if armed.frames_remaining <= 0.0 {
-                    self.land(armed.what, context);
-                } else {
-                    self.armed = Some(armed);
-                }
-            }
+            self.count_down(context);
             self.frames_elapsed += 1;
             if self.writing {
                 self.write_head += 1;
@@ -476,36 +487,62 @@ impl BufferDevice {
     /// The gesture currently holding the head. Last one pressed wins, which
     /// is what a hand expects: reaching for STUTTER while JUMP is still down
     /// is a stutter, not a refusal.
+    ///
+    /// A gate still waiting for its boundary is not held yet: otherwise
+    /// anything else that reconsidered in the meantime -- a freeze landing, a
+    /// playhead let go of -- would start the gesture early.
     fn held_gesture(&self) -> Option<Gesture> {
         GATES
             .iter()
             .zip(self.gates)
+            .zip(self.gate_waits)
             .rev()
-            .find_map(|(gesture, held)| held.then_some(*gesture))
+            .find_map(|((gesture, held), wait)| (held && wait.is_none()).then_some(*gesture))
     }
 
-    /// Start a gesture, waiting for the boundary if `Quantize` says so.
-    fn start(&mut self, gesture: Gesture, context: &ProcessContext) {
-        match self.boundary_wait(context, 0) {
-            Some(frames) => {
-                self.armed = Some(Armed {
-                    what: ArmedWhat::Gesture(gesture),
-                    frames_remaining: frames,
-                })
+    /// Start the gesture in `GATES[index]`, pressed `frame` frames into this
+    /// block, waiting for the boundary if `Quantize` says so.
+    fn start(&mut self, index: usize, frame: usize, context: &ProcessContext) {
+        match self.boundary_wait(context, frame) {
+            Some(frames) => self.gate_waits[index] = Some(frames),
+            None => {
+                self.gate_waits[index] = None;
+                self.reconsider(context);
             }
-            None => self.reconsider(context),
         }
     }
 
-    /// A gesture's press has reached its boundary, or a freeze has.
-    fn land(&mut self, what: ArmedWhat, context: &ProcessContext) {
-        self.armed = None;
-        match what {
-            ArmedWhat::Gesture(_) => self.reconsider(context),
-            ArmedWhat::Freeze(freeze) => {
-                self.apply_freeze(freeze);
-                self.reconsider(context);
+    /// Count every waiting press down by a frame, and land the ones that are
+    /// due.
+    ///
+    /// **A freeze lands before a gesture due on the same frame**, and the
+    /// device reconsiders once, after both. `reconsider` ranks a held gesture
+    /// above a frozen ring, so the result is the gesture either way; freezing
+    /// first is what makes it a gesture *over the frozen ring*, so that
+    /// letting go of it hands the head to the ring rather than to the input
+    /// for a frame, and the writer never restarts in between.
+    fn count_down(&mut self, context: &ProcessContext) {
+        let mut landed = false;
+        if let Some(mut armed) = self.armed_freeze {
+            armed.frames_remaining -= 1.0;
+            if armed.frames_remaining <= 0.0 {
+                self.armed_freeze = None;
+                self.apply_freeze(armed.freeze);
+                landed = true;
+            } else {
+                self.armed_freeze = Some(armed);
             }
+        }
+        for wait in &mut self.gate_waits {
+            let Some(frames) = wait else { continue };
+            *frames -= 1.0;
+            if *frames <= 0.0 {
+                *wait = None;
+                landed = true;
+            }
+        }
+        if landed {
+            self.reconsider(context);
         }
     }
 
@@ -523,10 +560,14 @@ impl BufferDevice {
         }
         let ticks_per_beat = f64::from(mooloop_core::Ppq::DEFAULT.ticks_per_beat());
         let beats_now = context.position_ticks / ticks_per_beat;
-        // `position_ticks` is the block's *start*, and the request arrived
-        // `frame` frames into it.
-        let next = (beats_now / grid_beats).floor() * grid_beats + grid_beats;
         let frames_per_beat = frames_per_beat(context);
+        // `position_ticks` is the block's *start*, and the request arrived
+        // `frame` frames into it -- possibly past a boundary inside the block,
+        // so the next boundary is found from the press, not the block start.
+        let beats_at_press = beats_now + frame as f64 / frames_per_beat;
+        let next = (beats_at_press / grid_beats).floor() * grid_beats + grid_beats;
+        // Measured from the block start and then shortened, rather than from
+        // `beats_at_press`, so a press on frame 0 waits exactly what it did.
         let frames = (next - beats_now) * frames_per_beat - frame as f64;
         (frames > 0.0).then_some(frames)
     }
@@ -724,15 +765,15 @@ impl BufferDevice {
                     self.request_freeze(false, frame, context);
                 }
             }
-            mooloop_core::BUFFER_PARAM_JUMP => self.set_gate(0, value, context),
-            mooloop_core::BUFFER_PARAM_REVERSE => self.set_gate(1, value, context),
-            mooloop_core::BUFFER_PARAM_STUTTER => self.set_gate(2, value, context),
+            mooloop_core::BUFFER_PARAM_JUMP => self.set_gate(0, value, frame, context),
+            mooloop_core::BUFFER_PARAM_REVERSE => self.set_gate(1, value, frame, context),
+            mooloop_core::BUFFER_PARAM_STUTTER => self.set_gate(2, value, frame, context),
             _ => {}
         }
     }
 
     /// A gesture gate, with hysteresis for the same reason `Freeze` has it.
-    fn set_gate(&mut self, index: usize, value: f32, context: &ProcessContext) {
+    fn set_gate(&mut self, index: usize, value: f32, frame: usize, context: &ProcessContext) {
         let held = if value >= 0.5 + SWITCH_HYSTERESIS {
             true
         } else if value <= 0.5 - SWITCH_HYSTERESIS {
@@ -745,18 +786,13 @@ impl BufferDevice {
         }
         self.gates[index] = held;
         if held {
-            self.start(GATES[index], context);
+            self.start(index, frame, context);
             return;
         }
         // Releases are never quantized: a gesture ends when the hand says so,
         // and a press still waiting for its boundary is taken back rather
         // than fired late.
-        if matches!(
-            self.armed.map(|armed| armed.what),
-            Some(ArmedWhat::Gesture(gesture)) if gesture == GATES[index]
-        ) {
-            self.armed = None;
-        }
+        self.gate_waits[index] = None;
         self.reconsider(context);
     }
 
@@ -826,21 +862,19 @@ impl BufferDevice {
     /// holding it writes the same 1.0 every control tick, and treating each
     /// of those as a press would arm, cancel, arm, cancel and never land.
     fn request_freeze(&mut self, freeze: bool, frame: usize, context: &ProcessContext) {
-        if let Some(armed) = self.armed {
-            if let ArmedWhat::Freeze(pending) = armed.what {
-                if pending != freeze {
-                    self.armed = None;
-                }
-                return;
+        if let Some(armed) = self.armed_freeze {
+            if armed.freeze != freeze {
+                self.armed_freeze = None;
             }
+            return;
         }
         if freeze == self.frozen {
             return;
         }
         match self.boundary_wait(context, frame) {
             Some(frames) => {
-                self.armed = Some(Armed {
-                    what: ArmedWhat::Freeze(freeze),
+                self.armed_freeze = Some(ArmedFreeze {
+                    freeze,
                     frames_remaining: frames,
                 })
             }
@@ -873,15 +907,12 @@ impl BufferDevice {
     /// state it was, and a control that looked as though nothing had happened
     /// would be the whole gesture failing silently.
     pub fn armed_freeze(&self) -> Option<bool> {
-        match self.armed.map(|armed| armed.what) {
-            Some(ArmedWhat::Freeze(freeze)) => Some(freeze),
-            _ => None,
-        }
+        self.armed_freeze.map(|armed| armed.freeze)
     }
 
     /// Whether a gesture press is waiting for its boundary.
     pub fn armed_gesture(&self) -> bool {
-        matches!(self.armed.map(|armed| armed.what), Some(ArmedWhat::Gesture(_)))
+        self.gate_waits.iter().any(Option::is_some)
     }
 
     // --- geometry ----------------------------------------------------------
@@ -1106,6 +1137,21 @@ pub fn buffer_allocation_key(params: BufferParams) -> u64 {
     u64::from(params.bars.max(1))
 }
 
+/// Whether a parameter *does* something when it arrives -- moves the head,
+/// latches the ring, presses a gate -- rather than configuring what the next
+/// such thing will do. See the two passes in
+/// [`BufferDevice::process_with_params`].
+const fn is_action(id: u32) -> bool {
+    matches!(
+        id,
+        mooloop_core::BUFFER_PARAM_POSITION
+            | mooloop_core::BUFFER_PARAM_FREEZE
+            | mooloop_core::BUFFER_PARAM_JUMP
+            | mooloop_core::BUFFER_PARAM_REVERSE
+            | mooloop_core::BUFFER_PARAM_STUTTER
+    )
+}
+
 fn frames_per_beat(context: &ProcessContext) -> f64 {
     context.sample_rate as f64 * 60.0 / context.bpm.max(1.0)
 }
@@ -1206,8 +1252,8 @@ mod tests {
     use super::*;
     use mooloop_core::{
         BUFFER_PARAM_CROSSFADE_MS, BUFFER_PARAM_FREEZE, BUFFER_PARAM_JUMP,
-        BUFFER_PARAM_POSITION, BUFFER_PARAM_POSITION_SPAN,
-        BUFFER_PARAM_QUANTIZE, BUFFER_PARAM_REVERSE, BUFFER_PARAM_STUTTER,
+        BUFFER_PARAM_POSITION, BUFFER_PARAM_POSITION_SPAN, BUFFER_PARAM_QUANTIZE,
+        BUFFER_PARAM_QUANT_START, BUFFER_PARAM_REVERSE, BUFFER_PARAM_STUTTER,
         BUFFER_PARAM_STUTTER_LENGTH,
     };
 
@@ -1557,6 +1603,147 @@ mod tests {
         // start -- the last frame of this block.
         assert_eq!(bus.l[1_000], (BAR + 1_000) as f32, "still live before the line");
         assert!(!device.is_following(), "and playing after it");
+    }
+
+    /// A press that arrives inside a block waits from **its own frame**, not
+    /// from the block's start. It used to wait as though every press came on
+    /// frame 0, so it landed late by its offset -- and a lane's press moved
+    /// with the block size, which made an offline render depend on it.
+    #[test]
+    fn a_press_inside_a_block_waits_from_its_own_frame() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, BAR / 2);
+        // Half a bar in, with a one-bar Quant Start, pressed 10 000 frames
+        // into the block: the line is 38 000 frames after the press, which is
+        // the first frame of the next block.
+        let half_bar_ticks = f64::from(mooloop_core::Ppq::DEFAULT.ticks_per_beat()) * 2.0;
+        device.process_with_params(
+            &playing(BAR / 2, half_bar_ticks),
+            &mut bus,
+            &[],
+            &[
+                param(0, BUFFER_PARAM_CROSSFADE_MS, 0.0),
+                param(0, BUFFER_PARAM_QUANTIZE, 1.0),
+                param(10_000, BUFFER_PARAM_JUMP, 1.0),
+            ],
+        );
+        assert_eq!(
+            bus.l[BAR / 2 - 1],
+            (BAR + BAR / 2 - 1) as f32,
+            "live up to the line"
+        );
+        assert!(!device.armed_gesture(), "the press landed on the line");
+        assert!(!device.is_following(), "and the jump is playing");
+
+        let live = BAR + BAR / 2;
+        fill_ramp(&mut bus, live, 1_000);
+        let bar_ticks = f64::from(mooloop_core::Ppq::DEFAULT.ticks_per_beat()) * 4.0;
+        device.process(&playing(1_000, bar_ticks), &mut bus, &[]);
+        // One beat back from the line, playing forward.
+        assert_eq!(bus.l[0], (live - BEAT) as f32);
+        assert_eq!(bus.l[999], (live - BEAT + 999) as f32);
+    }
+
+    /// A gesture pressed while a freeze waits for the same boundary does not
+    /// take the freeze's place: both land, and the gesture plays over the
+    /// frozen ring. One press each, the way the face sends them -- a lane
+    /// would re-send `Freeze` every tick and hide the failure.
+    #[test]
+    fn a_gesture_pressed_while_a_freeze_waits_keeps_the_freeze() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, BAR / 2);
+        let half_bar_ticks = f64::from(mooloop_core::Ppq::DEFAULT.ticks_per_beat()) * 2.0;
+        device.process_with_params(
+            &playing(BAR / 2, half_bar_ticks),
+            &mut bus,
+            &[],
+            &[
+                param(0, BUFFER_PARAM_CROSSFADE_MS, 0.0),
+                param(0, BUFFER_PARAM_QUANTIZE, 1.0),
+                param(0, BUFFER_PARAM_FREEZE, 1.0),
+                param(100, BUFFER_PARAM_JUMP, 1.0),
+            ],
+        );
+        assert!(device.is_frozen(), "the freeze landed");
+        assert_eq!(device.armed_freeze(), None);
+        assert!(!device.armed_gesture(), "and so did the jump");
+        assert!(!device.is_writing());
+
+        // Let go of the jump: the frozen ring takes the head, not the input.
+        let bar_ticks = f64::from(mooloop_core::Ppq::DEFAULT.ticks_per_beat()) * 4.0;
+        fill_ramp(&mut bus, BAR + BAR / 2, 1_000);
+        device.process_with_params(
+            &playing(1_000, bar_ticks),
+            &mut bus,
+            &[],
+            &[param(0, BUFFER_PARAM_JUMP, 0.0)],
+        );
+        assert!(device.is_frozen() && !device.is_writing());
+        assert!(!device.is_following(), "the frozen ring plays");
+    }
+
+    /// A freeze that lands while a gesture is still waiting for a later
+    /// boundary does not start the gesture early.
+    #[test]
+    fn a_landing_freeze_does_not_start_a_waiting_gesture() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, BEAT);
+        device.process_with_params(
+            &playing(BEAT, 0.0),
+            &mut bus,
+            &[],
+            &[
+                param(0, BUFFER_PARAM_CROSSFADE_MS, 0.0),
+                // On the bar line with a one-bar grid: the jump waits a bar.
+                param(0, BUFFER_PARAM_QUANTIZE, 1.0),
+                param(0, BUFFER_PARAM_JUMP, 1.0),
+                // Quantize off before the freeze, so it lands at once.
+                param(10, BUFFER_PARAM_QUANTIZE, 0.0),
+                param(10, BUFFER_PARAM_FREEZE, 1.0),
+            ],
+        );
+        assert!(device.is_frozen(), "the unquantized freeze landed at once");
+        assert!(
+            device.armed_gesture(),
+            "the jump pressed under a one-bar grid is still waiting for it"
+        );
+        // The frozen ring is playing, not the jump. It starts at ring index
+        // 10, the oldest frame, and from there the ring still holds the
+        // primer's own frame numbers; a jump one beat back would be reading
+        // this block's ramp instead.
+        assert_eq!(bus.l[BEAT - 1], (BEAT - 1) as f32);
+    }
+
+    /// A setting and a gate on the same frame: the gate sees the setting,
+    /// whatever order the two arrived in. The engine delivers them in
+    /// descriptor-table order, which puts the gates first.
+    #[test]
+    fn a_gate_waits_on_a_grid_set_on_its_own_frame() {
+        let (mut device, mut bus) = primed();
+        fill_ramp(&mut bus, BAR, BAR / 2);
+        // Half a bar in. The default grid is a bar, so the old order would
+        // wait 48 000 frames; a quarter waits 24 000.
+        let half_bar_ticks = f64::from(mooloop_core::Ppq::DEFAULT.ticks_per_beat()) * 2.0;
+        device.process_with_params(
+            &playing(BAR / 2, half_bar_ticks),
+            &mut bus,
+            &[],
+            &[
+                param(0, BUFFER_PARAM_CROSSFADE_MS, 0.0),
+                param(0, BUFFER_PARAM_JUMP, 1.0),
+                param(
+                    0,
+                    BUFFER_PARAM_QUANT_START,
+                    mooloop_core::ModTimeDivision::Quarter.to_index() as f32,
+                ),
+            ],
+        );
+        assert_eq!(bus.l[BEAT - 1], (BAR + BEAT - 1) as f32, "live up to the beat");
+        assert_ne!(
+            bus.l[BEAT + 1_000],
+            (BAR + BEAT + 1_000) as f32,
+            "and jumping after it, not a bar later"
+        );
     }
 
     /// Letting go before the boundary takes the press back. A musician who
