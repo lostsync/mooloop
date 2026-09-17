@@ -86,12 +86,26 @@ rediscovered in step 02:
   `PROJECT_FORMAT.md` says so beside the device-preset rule.
 - **The session had to carry the id and the mint.** `Session` does not hold a
   `Project`: it decomposes one into `ChannelState` on the way in and rebuilds
-  it on the way out, and every project edit goes through both. Without
-  `ChannelState.id` and `Session.next_channel_id` travelling in both
-  directions, the ids minted by `add_channel` would be reset by the next
-  undo -- the exact fault `ChannelState::next_device_id`'s own comment was
-  written for. That is the minimum of step 03, not the whole of it: the
-  session's ~20 parallel lists are still keyed by index.
+  one on the way out. Those two directions run on different paths, and the
+  difference is worth knowing before step 03 reasons about cost:
+
+  - `project_snapshot` runs on **every undoable edit**, including drawing one
+    note -- twice, for the `before` and `after` of a history entry
+    (`record_project_history`, `ui/src/lib.rs`). The session itself is
+    mutated in place and is *not* rebuilt; the snapshots only go on the undo
+    stack.
+  - `replace_project` runs on the narrower set: a channel insert, delete,
+    move or paste, a kit load, a track add, an undo, a redo, a load. Those
+    go through `ProjectEditSender` to the install at `ui/src/lib.rs`, which
+    also tears down the whole `RenderState`.
+
+  So a field not carried in both directions is not reset by the next edit --
+  it is reset by the next **undo**, having been silently absent from every
+  history entry since. Without `ChannelState.id` and `Session.next_channel_id`
+  travelling both ways, the ids `add_channel` minted would vanish there. That
+  is the fault `ChannelState::next_device_id`'s own comment was written for,
+  and it is the minimum of step 03, not the whole of it: the session's ~20
+  parallel lists are still keyed by index.
 - **`insert_channel` mints unconditionally** rather than only for a paste.
   It is the paste path, what it is handed is a clipboard copy of a channel
   very probably still in the song, and making the mint the insert's own rule
