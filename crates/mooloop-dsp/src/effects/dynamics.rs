@@ -373,11 +373,13 @@ impl AudioNode for CompressorEffect {
 
 /// A fast peak limiter.
 ///
-/// There is no lookahead, deliberately: lookahead means latency, and with no
-/// plugin-delay compensation in the engine a limiter on one channel would
-/// shift it against every other channel. The cost is that a sample-fast
-/// transient can overshoot the ceiling slightly before the detector catches
-/// it. Add lookahead when the engine can compensate for it, not before.
+/// There is no lookahead. It was built that way because the engine had no
+/// plugin-delay compensation, so lookahead latency would have shifted a
+/// limited channel against its neighbours; that condition expired on
+/// 2026-09-05 when the mixer became latency compensated (see `CURRENT.md`).
+/// Whether the limiter should now take lookahead is an open decision, not a
+/// settled no. The remaining cost either way: a sample-fast transient can
+/// overshoot the ceiling slightly before the detector catches it.
 pub struct LimiterEffect {
     params: LimiterParams,
     sample_rate: u32,
