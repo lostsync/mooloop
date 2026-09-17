@@ -758,13 +758,6 @@ which is now merely redundant rather than a lie nobody is told about, and
 `CURRENT.md` says what a referenced save of an embedded song actually does.
 Found 2026-09-13, made honest 2026-09-14.
 
-**The limiter still has no lookahead, and the code's stated reason is now
-false.** `mooloop-dsp/src/effects/dynamics.rs:391` says "Add lookahead when
-the engine can compensate for it, not before." The mixer became latency
-compensated on 2026-09-05, so the condition is met. `CURRENT.md` already
-records this as an open decision rather than a settled no; the source comment
-does not.
-
 ---
 
 ## Cannot currently be tested
@@ -1336,3 +1329,6 @@ Kept briefly so the same thing is not re-reported. Delete freely once stale.
 - `scripts/antibox` refilling with caches for checkouts that no longer exist —
   `--prune` and `--prune-age` exist.
 - Stray remote-tracking refs and empty `mooloop-worktrees/` directories — gone.
+- The limiter's doc comment claimed lookahead was blocked on delay
+  compensation that shipped 2026-09-05 — corrected to match `CURRENT.md`'s
+  "open decision, not a settled no" (`dynamics.rs`).
