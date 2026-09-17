@@ -1,9 +1,10 @@
 # 03 — Capture
 
-## Needs an answer first
+## Adam's answers (2026-09-17)
 
-Open questions 3 (what a loop pass does) and 5 (where a take lives before the
-project is saved) in `00-status.md`.
+- **A take runs until it is stopped.** Loop passes don't end it or split it,
+  so a take can be much longer than its pattern.
+- **Takes go to a recordings folder** until the project is saved.
 
 ## Build
 
@@ -24,8 +25,14 @@ project is saved) in `00-status.md`.
   latency from the start position, so a take lines up with what the
   performer heard. JACK reports both; Core Audio reports what cpal exposes.
   Record which latencies are and are not accounted for.
-- **End event:** disarming, stopping, or (under the recommended answer to
-  question 3) reaching the loop end emits `CaptureEnded { frames }`.
+- **End event:** disarming or stopping the transport emits
+  `CaptureEnded { frames }`. The loop point is not an end: the ring keeps
+  filling across the wrap, and the take is one continuous file.
+- **Length:** because a take can run for minutes, the ring only has to cover
+  the drain thread's worst stall, never the whole take. The file is what
+  grows. At about 22 MiB per stereo minute at 48 kHz (`BUFFER_ENGINE.md`),
+  loading a long take back as a sample is the real cost. Step 05 shows how
+  long the take is while it records.
 - **Overflow:** a ring the drain has not kept up with drops frames and counts
   them. The count reaches the session, and the take is marked damaged. No
   silent gaps (`AUDIO_ARCHITECTURE.md`: overflow is visible to the sender).

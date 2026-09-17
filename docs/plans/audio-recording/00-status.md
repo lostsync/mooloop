@@ -64,12 +64,13 @@ that the second fix gives notes.
 | [03](03-capture.md) | Bounded capture on the audio thread, drained to a WAV file off it | engine, session | not started |
 | [04](04-the-take.md) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | not started |
 | [05](05-interface.md) | Record button, input meter, monitoring, the non-sampler rule | UI build | not started |
+| [06](06-unused-takes.md) | Find and delete takes nothing refers to | session, project, UI build | not started |
 
 ## Open questions for Adam
 
 Each of these changes what a step builds. They are listed here so the step
-that needs an answer can stop and ask rather than guess. The first two were
-answered the day the plan was written.
+that needs an answer can stop and ask rather than guess. All five were
+answered the day the plan was written, and are kept here as a record.
 
 1. ~~**An audio input on a channel that is not a sampler.**~~ **Answered
    2026-09-17:** on a channel that is not a sampler, the audio inputs are
@@ -79,17 +80,14 @@ answered the day the plan was written.
 2. ~~**What lands in the pattern.**~~ **Answered 2026-09-17: nothing.** A take
    replaces the channel's sample and writes no notes. It is heard through
    whatever the pattern already triggers. Step 04.
-3. **What a loop pass does.** Recording while the pattern loops: one take per
-   arm (stop at the loop end), keep only the last pass, or keep all passes as
-   slices. *Recommended for the first version: one take per arm, which ends at
-   the loop point.* Needed by step 03.
-4. **Monitoring.** Does an armed audio channel play its live input while you
-   record? Without that you can't hear yourself unless JACK routes the input
-   around mooloop. Needed by step 05.
-5. **Where a take lives before the project is saved.** *Recommended: a
-   recordings folder under the app's data directory, moved into the project's
-   assets on the next save and deleted once nothing refers to it.* Needed by
-   step 03.
+3. ~~**What a loop pass does.**~~ **Answered 2026-09-17:** a take runs
+   **until it is stopped**, straight through any number of loop passes. It is
+   one continuous file, not one take per pass. Step 03.
+4. ~~**Monitoring.**~~ **Answered 2026-09-17: a toggle.** Live input is heard
+   only when the toggle is on. Step 05.
+5. ~~**Where a take lives before the project is saved.**~~ **Answered
+   2026-09-17:** a recordings folder. Adam added that takes nobody used need a
+   way to be deleted, which is step 06.
 
 ## Not in this plan
 
