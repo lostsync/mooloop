@@ -290,7 +290,38 @@ Two fixtures came out of that: a drum bar for the tests about *where the head
 is*, and a held tone for the freeze tests, which need a full ring and audio
 still playing at the same moment. A drum pattern cannot give both.
 
+**Rewritten 2026-09-17 against the gesture model.** The suite was written
+before the rebuild and two of its tests drew the retired `Rate`, `Length` and
+`Loop`. The frozen-ring transformation is now a held REVERSE, checked against
+the same freeze without it and matched sample for sample against the ring read
+backward; the round-trip case is a quarter-quantized thirty-second STUTTER,
+proved to have fired by repeating at exactly its length before the reload is
+compared. The rewrite also found that the other tests had stopped meaning what
+they said: every `Position` lane started at `1.0`, which is now a ring
+coordinate rather than "live", and swept faster than `MAX_SWEEP_RATE` through
+history the writer had not reached -- so they passed on silence. And the drum
+fixture had put all sixteen hits in its first sixteen *ticks*. Both are fixed.
+
+**It is not green, and the failure is the device's.** With a quantized gesture
+in the document, `two_offline_renders_of_one_document_agree` renders
+differently at 128- and 512-frame blocks. See the first item below.
+
 ## Still open from the earlier steps
+
+- **A quantized gesture lands late by its offset inside the block.**
+  `BufferDevice::start` calls `boundary_wait(context, 0)` whatever frame the
+  press arrived on; `request_freeze` passes the frame. A press 10 000 frames
+  into a block waits 10 000 frames past the boundary, and a lane's press moves
+  with the block size, so an offline render depends on it. Found 2026-09-17
+  by the acceptance suite and a device-level probe; not fixed.
+- **A gesture press replaces a waiting freeze.** `armed` is one slot, so FREEZE
+  pressed and then JUMP pressed before the same boundary leaves the device
+  unfrozen once it lands. A lane hides this, because it re-sends FREEZE every
+  control tick and re-arms it; a single press from the face does not.
+- **Lane events at one offset arrive in descriptor order**, so a gesture gate
+  (position 6-8) is applied before `Quant Start` (position 10) on the same
+  tick and waits on the old grid. The device's comment says a gesture should
+  see a setting written on its own frame.
 
 - **The locks half of acceptance test 8.** The allocation half closed with ten
   measured blocks. Nothing in the tree can express "no lock was taken on the

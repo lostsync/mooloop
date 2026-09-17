@@ -26,7 +26,7 @@ use crate::render::RenderState;
 use crate::render_test_support::{peak_of, render_blocks, worst_difference, SAMPLE_RATE};
 use mooloop_core::{
     AutomationLane, AutomationPoint, BufferParams, EffectKind, EffectParams, EffectSlotState,
-    EffectTarget, NoteEvent, ParamAddr, ParamOwner, Project, ProjectChannel,
+    EffectTarget, NoteEvent, ParamAddr, ParamOwner, Project, ProjectChannel, TICKS_PER_STEP,
 };
 
 /// Put a Buffer on a channel's chain and make room for lanes.
@@ -57,10 +57,25 @@ fn with_buffer(mut channel: ProjectChannel, bars: u8) -> Project {
 ///
 /// Hits rather than a tone because these are the tests about *where* the head
 /// is: moving through a sustained note sounds like a sustained note.
+///
+/// **The ring is two bars and only the first is ever written**, because that
+/// is all the render lasts. `Position` addresses the ring in its own
+/// coordinates at the default full span, so the written half is `0.0..0.5`
+/// and anything above it is silence the writer never reached.
 fn drum_bar() -> Project {
     let mut channel = ProjectChannel::drum_synth(0, 1);
+    // `NoteEvent::new` takes a start *tick*. Passing the step index put all
+    // sixteen hits in the first sixteen ticks -- 4 000 frames -- and left the
+    // rest of the bar silent, which every test here was quietly relying on
+    // not mattering.
     for step in 0..16u32 {
-        channel.notes[0].push(NoteEvent::new(step + 1, step, 24, 36, 127));
+        channel.notes[0].push(NoteEvent::new(
+            step + 1,
+            step * TICKS_PER_STEP,
+            TICKS_PER_STEP,
+            36,
+            127,
+        ));
     }
     with_buffer(channel, 2)
 }
@@ -70,8 +85,9 @@ fn drum_bar() -> Project {
 /// The freeze tests need two things at once that a drum pattern cannot give
 /// them: a **full ring** at the moment of the freeze, and audio **still
 /// playing** afterwards to compare against. A note held for the whole render
-/// gives both, and a tone is also the signal that makes a rate change
-/// legible -- half speed is an octave down.
+/// gives both. The ring is one bar and so is the default `Quant Start`, so a
+/// freeze or a gesture held from the top lands on the 2 s line with the ring
+/// exactly full.
 fn held_tone() -> Project {
     let mut channel = ProjectChannel::poly_synth(0, 1);
     // Far longer than any render here, so the note never releases.
@@ -104,6 +120,33 @@ fn render_with_marks(project: &Project, seconds: f32) -> (Vec<f32>, BufferMarks)
     (left, telemetry.read_buffer_marks(0, 1))
 }
 
+/// A lane value that denormalizes to `index` on one of the Buffer's stepped
+/// grid parameters, whose range is the whole `ModTimeDivision` table.
+fn grid(index: f32) -> f32 {
+    index / mooloop_core::MOD_TIME_DIVISION_TOP
+}
+
+/// Frames per tick in these fixtures: 120 BPM, 96 PPQ, 48 kHz.
+const FRAMES_PER_TICK: usize = 250;
+
+/// A `Position` lane that rests at its default for the first half-bar and
+/// then plays the first half-bar **backward, at unity**, over the second.
+///
+/// Resting at `1.0` -- the default -- is resting: `Position` is heard only
+/// while it moves, so the first half of the render is the input untouched.
+/// From tick 193 it runs `0.25 -> 0.0`, which on a two-bar ring is frames
+/// 48 000 down to 0 over 47 750 frames: the half-bar that was just written,
+/// read back at very nearly unit speed. Unity matters -- a ramp faster than
+/// `MAX_SWEEP_RATE` is treated as a string of edits and cut, not swept -- and
+/// so does the direction: the drum bar repeats every sixteenth, so a
+/// *forward* replay of it could be indistinguishable from the live signal.
+///
+/// The one-tick step from `1.0` to `0.25` is a jump, and is heard as one.
+const REVERSE_SWEEP: [(u32, f32); 4] = [(0, 1.0), (192, 1.0), (193, 0.25), (384, 0.0)];
+
+/// The frame the sweep starts at.
+const SWEEP_START: usize = 192 * FRAMES_PER_TICK;
+
 fn buffer_address(project: &Project, param: u32) -> ParamAddr {
     ParamAddr {
         scope: EffectTarget::Channel(0),
@@ -134,16 +177,20 @@ fn draw(project: &mut Project, param: u32, points: &[(u32, f32)]) {
 /// The comparison is against the same project with the Buffer bypassed rather
 /// than against silence: a Buffer doing nothing is a wire, so "it made sound"
 /// proves only that the drum synth works.
+///
+/// It also pins where the difference is. `Position` is heard only while it
+/// moves, so the half-bar it rests in has to be the input **exactly**, and the
+/// half-bar it sweeps has to be sound rather than the silence of a part of the
+/// ring the writer never reached -- which is what the lane this test first
+/// had was reading, from a ring coordinate that no longer meant "live".
 #[test]
 fn a_position_lane_makes_an_audible_difference() {
     let plain = drum_bar();
     let mut moved = plain.clone();
-    // Sweep the head back through the retained history across the bar, then
-    // hold it there. Live is 1.0 and the old end is 0.0.
     draw(
         &mut moved,
         mooloop_core::BUFFER_PARAM_POSITION,
-        &[(0, 1.0), (48, 0.6), (96, 0.6)],
+        &REVERSE_SWEEP,
     );
 
     let before = render_blocks(&plain, 2.0, 128);
@@ -153,8 +200,20 @@ fn a_position_lane_makes_an_audible_difference() {
         peak_of(&before) > 0.001,
         "the channel has to make sound before the Buffer can do anything to it"
     );
+    let resting = ..SWEEP_START - 1_000;
+    assert_eq!(
+        worst_difference(&before[resting], &after[resting]),
+        0.0,
+        "a Position resting at its default was heard: it has to be live"
+    );
+    // Past the jump and its crossfades, into the sweep proper.
+    let sweeping = SWEEP_START + 2 * FRAMES_PER_TICK..before.len().min(after.len());
     assert!(
-        worst_difference(&before, &after) > 0.01,
+        peak_of(&after[sweeping.clone()]) > 0.001,
+        "the sweep is silent: the head is reading history nobody wrote"
+    );
+    assert!(
+        worst_difference(&before[sweeping.clone()], &after[sweeping]) > 0.01,
         "a Position lane changed nothing: the device is wired up and inert"
     );
 }
@@ -171,10 +230,11 @@ fn a_position_lane_makes_an_audible_difference() {
 /// fixture is either one pass of a pattern or a held note whose period has
 /// no relation to the ring's. A held tone frozen mid-cycle differs from the
 /// live one by more than either amplitude, which is phase rather than a
-/// defect. `buffer_device::tests::freezing_a_periodic_loop_is_inaudible`
-/// makes that claim against a ring holding a whole number of cycles, which is
-/// the only place it can honestly be made today. The end-to-end version wants
-/// a looping transport, and until then it wants ears.
+/// defect. `buffer_device::tests::freezing_leaves_a_loop_running` pins what
+/// the claim rests on -- a frozen ring plays forward at unity from its oldest
+/// frame, which is the input delayed by exactly one ring, and so is the input
+/// itself whenever the input repeats at that length. The end-to-end version
+/// wants a looping transport, and until then it wants ears.
 #[test]
 fn a_freeze_latches_the_history_and_stops_the_writer() {
     let plain = held_tone();
@@ -203,67 +263,153 @@ fn a_freeze_latches_the_history_and_stops_the_writer() {
     );
 }
 
-/// **Freeze plus a Rate change is audible**, which is the transformation the
-/// freeze exists to enable: once the writer has stopped, `Rate` is the time
-/// base, and running the latched history at half speed is something no
+/// **Reversing a frozen ring is audible, and it is the ring backward**, which
+/// is the transformation the freeze exists to enable: once the writer has
+/// stopped, the history is a sample, and playing it backward is something no
 /// arrangement of the live signal can produce.
+///
+/// The reference is the same freeze *without* the gesture, not the live
+/// signal. A frozen ring going round forward already differs from the live
+/// tone by its phase (see the test above), so "differs from live" would pass
+/// on a REVERSE that did nothing.
+///
+/// Both lanes are held from the top and both land on the 2 s bar line, the
+/// gesture outranking the frozen ring the moment it does.
 #[test]
-fn a_frozen_buffer_played_at_another_rate_is_audible() {
+fn a_frozen_buffer_played_in_reverse_is_the_ring_backward() {
     let plain = held_tone();
-    let mut stretched = plain.clone();
-    draw(&mut stretched, mooloop_core::BUFFER_PARAM_FREEZE, &[(0, 1.0)]);
-    // 0.5 normalized over -4..4 is a rate of zero; 0.5625 is half speed
-    // forward, which on a held note is an octave down -- audible in a way
-    // that needs no ears to confirm.
+    let mut frozen = plain.clone();
+    draw(&mut frozen, mooloop_core::BUFFER_PARAM_FREEZE, &[(0, 1.0)]);
+    let mut reversed = frozen.clone();
     draw(
-        &mut stretched,
-        mooloop_core::BUFFER_PARAM_RATE,
-        &[(0, 0.5625)],
+        &mut reversed,
+        mooloop_core::BUFFER_PARAM_REVERSE,
+        &[(0, 1.0)],
     );
 
-    let before = render_blocks(&plain, 3.0, 128);
-    let (after, marks) = render_with_marks(&stretched, 3.0);
-    assert!(marks.frozen, "the freeze has to have landed first");
-    // Only the frozen span is worth comparing: before the bar line both
-    // renders are the same live signal by construction.
-    let frozen_span = (SAMPLE_RATE as usize * 2)..before.len().min(after.len());
+    let live = render_blocks(&plain, 3.0, 128);
+    let (forward, forward_marks) = render_with_marks(&frozen, 3.0);
+    let (backward, marks) = render_with_marks(&reversed, 3.0);
     assert!(
-        peak_of(&before[frozen_span.clone()]) > 0.01,
+        forward_marks.frozen,
+        "the reference freeze has to have landed"
+    );
+    assert!(
+        marks.frozen && marks.head.is_some(),
+        "the freeze has to have landed and a head has to be playing, or the \
+         comparison below is between two things that did nothing"
+    );
+    assert!(!marks.armed_gesture, "and the reverse is not still waiting");
+
+    let line = SAMPLE_RATE as usize * 2;
+    // Past the crossfade out of live.
+    let span = line + 1_000..live.len().min(backward.len());
+    assert!(
+        peak_of(&live[span.clone()]) > 0.01,
         "the note has to still be sounding after the freeze, or there is \
          nothing to compare the frozen playback against"
     );
     assert!(
-        worst_difference(&before[frozen_span.clone()], &after[frozen_span]) > 0.01,
-        "a frozen buffer at half speed sounded the same as the live signal"
+        worst_difference(&forward[span.clone()], &backward[span]) > 0.01,
+        "a frozen buffer held in REVERSE sounded the same as the frozen buffer"
+    );
+
+    // And it is the ring *backward*: the frames after the line are the frames
+    // before it, in the opposite order. A lag of a frame or two is where the
+    // head starts relative to the newest frame, which this does not pin.
+    let length = SAMPLE_RATE as usize / 2;
+    let start = line + 1_000;
+    let (lag, worst) = (0..8)
+        .map(|lag| {
+            let worst = (0..length)
+                .map(|k| (backward[start + k] - live[2 * line - 1 - start - k - lag]).abs())
+                .fold(0.0f32, f32::max);
+            (lag, worst)
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .expect("at least one lag");
+    assert!(
+        worst < 1e-4,
+        "half a second of the reversed playback is not the ring read backward \
+         at any lag under 8 frames (best: lag {lag}, worst difference {worst})"
     );
 }
 
+/// A thirty-second stutter, quantized to the quarter, held from just before
+/// beat 2 to just after beat 3 of the drum bar.
+///
+/// Three lanes, and each is one of the gesture's own settings: the gate, its
+/// length and the grid it starts on. A thirty-second is 3 000 frames, which is
+/// half the drum bar's spacing, so a live signal cannot repeat at that period
+/// and a stutter must.
+fn draw_stutter(project: &mut Project) {
+    draw(
+        project,
+        mooloop_core::BUFFER_PARAM_STUTTER_LENGTH,
+        &[(0, grid(16.0))],
+    );
+    draw(
+        project,
+        mooloop_core::BUFFER_PARAM_QUANT_START,
+        &[(0, grid(7.0))],
+    );
+    draw(
+        project,
+        mooloop_core::BUFFER_PARAM_STUTTER,
+        &[(0, 0.0), (95, 0.0), (96, 1.0), (240, 1.0), (241, 0.0)],
+    );
+}
+
+const THIRTY_SECOND: usize = 3_000;
+
 /// **It survives save and reload, and renders the same offline.**
 ///
-/// Sample for sample: the document has to carry the lane, the device's own
+/// Sample for sample: the document has to carry the lanes, the device's own
 /// parameters and its identity, and the offline path has to be the same
 /// engine. A difference here is a project that sounds different the second
 /// time it is opened, which is the failure a musician cannot work around.
+///
+/// **Equality is an absence**, so the stutter is first proved to have fired:
+/// the render differs from the unstuttered bar, and inside the held span it
+/// repeats at exactly the stutter's length, which the drums alone do not.
 #[test]
 fn the_whole_thing_survives_a_round_trip_and_renders_the_same() {
     let temp = tempfile::tempdir().expect("a temp dir");
     let path = temp.path().join("buffered.mooloop");
 
-    let mut project = drum_bar();
-    draw(
-        &mut project,
-        mooloop_core::BUFFER_PARAM_POSITION,
-        &[(0, 1.0), (48, 0.6), (96, 0.6)],
-    );
-    draw(
-        &mut project,
-        mooloop_core::BUFFER_PARAM_LENGTH,
-        &[(0, 13.0 / 20.0)],
-    );
-    draw(&mut project, mooloop_core::BUFFER_PARAM_LOOP, &[(48, 1.0)]);
+    let plain = drum_bar();
+    let mut project = plain.clone();
+    draw_stutter(&mut project);
 
+    let unstuttered = render_blocks(&plain, 2.0, 128);
     let before = render_blocks(&project, 2.0, 128);
     assert!(peak_of(&before) > 0.001, "the fixture has to make sound");
+    assert!(
+        worst_difference(&unstuttered, &before) > 0.01,
+        "the stutter lanes changed nothing"
+    );
+    // Beat 2 is frame 24 000 and the release is just after frame 60 000; one
+    // repeat in, and one repeat short of the release.
+    let held = 24_000 + THIRTY_SECOND + 1_000..60_000 - THIRTY_SECOND;
+    assert!(
+        peak_of(&before[held.clone()]) > 0.001,
+        "the stutter is repeating silence, which proves nothing"
+    );
+    let repeats = |render: &[f32]| {
+        held.clone()
+            .map(|t| (render[t] - render[t + THIRTY_SECOND]).abs())
+            .fold(0.0f32, f32::max)
+    };
+    assert!(
+        repeats(&before) < 1e-6,
+        "the held span does not repeat at the stutter length: {}",
+        repeats(&before)
+    );
+    assert!(
+        repeats(&unstuttered) > 0.01,
+        "the drums alone repeat at a thirty-second, so the check above is \
+         not evidence of a stutter"
+    );
 
     mooloop_project::save_song(&path, &project, mooloop_project::AssetMode::Referenced)
         .expect("the song saves");
@@ -297,27 +443,32 @@ fn the_whole_thing_survives_a_round_trip_and_renders_the_same() {
 /// **The offline render is deterministic.** Two runs of the same document
 /// have to agree, or "render the same result offline" cannot be asserted of
 /// anything.
+///
+/// The document drives both a moving `Position` and a quantized gesture, and
+/// the first assertion is that it did something at all -- two renders of an
+/// inert device agree trivially.
 #[test]
 fn two_offline_renders_of_one_document_agree() {
-    let mut project = drum_bar();
+    let plain = drum_bar();
+    let mut project = plain.clone();
     draw(
         &mut project,
         mooloop_core::BUFFER_PARAM_POSITION,
-        &[(0, 1.0), (48, 0.6), (96, 0.6)],
+        &REVERSE_SWEEP,
     );
-    draw(
-        &mut project,
-        mooloop_core::BUFFER_PARAM_FREEZE,
-        &[(96, 1.0)],
-    );
+    draw_stutter(&mut project);
 
     let first = render_blocks(&project, 2.0, 128);
+    assert!(
+        worst_difference(&render_blocks(&plain, 2.0, 128), &first) > 0.01,
+        "the lanes changed nothing, so agreement below proves nothing"
+    );
     let second = render_blocks(&project, 2.0, 128);
     assert_eq!(worst_difference(&first, &second), 0.0);
 
     // And across block sizes, which is where a device that carried per-block
     // state would show up. The buffer's own suite asserts this of the device;
-    // this asserts it of the whole graph with a lane driving it.
+    // this asserts it of the whole graph with lanes driving it.
     let chunked = render_blocks(&project, 2.0, 512);
     let shared = first.len().min(chunked.len());
     assert!(
@@ -331,18 +482,26 @@ fn two_offline_renders_of_one_document_agree() {
 ///
 /// This is the "capture it continuously at a chosen insert point" half, and
 /// it is the one that makes the device an insert rather than a recorder.
+///
+/// **A Delay, not a Drive.** A memoryless shaper commutes with replay -- a
+/// sample distorted and then read back is the sample read back and then
+/// distorted -- so it could only ever show the choice through crossfade
+/// blends. A delay does not commute with a backward sweep: in front, the
+/// history holds the echoes and they play backward as pre-echoes; behind, the
+/// echoes follow the reversed hits. And while the Buffer is live it is a wire,
+/// so until the sweep starts the two chains have to be the same signal.
 #[test]
 fn where_the_insert_sits_decides_what_it_captures() {
     let mut early = drum_bar();
-    // A drive in front of the Buffer, so the history holds distorted audio.
+    // A delay in front of the Buffer, so the history holds the echoes.
     early.channels[0]
         .setup
         .effects
-        .insert(0, EffectSlotState::of_kind(EffectKind::Drive));
+        .insert(0, EffectSlotState::of_kind(EffectKind::Delay));
     early.channels[0].setup.assign_device_ids();
     let mut late = early.clone();
-    // ...and the same drive behind it, so the history holds clean audio and
-    // the distortion is applied to whatever the head plays.
+    // ...and the same delay behind it, so the history holds the dry hits and
+    // the echoes are applied to whatever the head plays.
     late.channels[0].setup.effects.swap(0, 1);
     late.channels[0].setup.assign_device_ids();
 
@@ -360,18 +519,29 @@ fn where_the_insert_sits_decides_what_it_captures() {
             param: mooloop_core::BUFFER_PARAM_POSITION,
         });
         lane.reserve_points();
-        lane.reset_points([
-            AutomationPoint::new(1, 0, 1.0),
-            AutomationPoint::new(2, 48, 0.6),
-        ]);
+        lane.reset_points(
+            REVERSE_SWEEP
+                .iter()
+                .enumerate()
+                .map(|(index, (tick, value))| {
+                    AutomationPoint::new(index as u32 + 1, *tick, *value)
+                }),
+        );
         project.channels[0].automation[0].clear();
         project.channels[0].automation[0].push(lane);
     }
 
     let a = render_blocks(&early, 2.0, 128);
     let b = render_blocks(&late, 2.0, 128);
+    let resting = ..SWEEP_START - 1_000;
     assert!(
-        worst_difference(&a, &b) > 0.001,
+        worst_difference(&a[resting], &b[resting]) < 1e-6,
+        "the chains differ while the Buffer is a wire, so a difference later \
+         would not be the capture point's"
+    );
+    let sweeping = SWEEP_START..a.len().min(b.len());
+    assert!(
+        worst_difference(&a[sweeping.clone()], &b[sweeping]) > 0.001,
         "the insert position made no difference, so it is not an insert"
     );
 }
