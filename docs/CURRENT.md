@@ -1066,7 +1066,6 @@ land on its own when it starts to matter:
   button in that row, and the selected target's ON sits beside the three
   knobs it switches on. Double-clicking a knob
   returns to the *selected* band's resting value rather than to band 2's. A
-  feedback-delay-network hall reverb; and
   feedback-delay-network hall reverb; and one five-mode modulation processor
   (chorus, flange, phaser, ensemble, and ADT) whose Rate carries the same
   sync lamp the delay does, over the same grid, clamped to the 12 Hz its LFO
