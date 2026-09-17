@@ -210,6 +210,19 @@ These are firm enough to build against:
   routable, insertable strip rather than fixed banks of unrelated objects.
 - Buffer capture position is determined by where its device is inserted; it
   does not require a separate fixed channel tap point.
+- **0.2 is not a DAW.** (Adam, 2026-09-17.) Notes live in patterns and the
+  playlist places patterns; there are no per-track clips. If a part outgrows
+  a pattern, the answer is to raise the pattern limits, not to add clips.
+  DAW-style lanes tied to the mixer's tracks are an open idea for later, and
+  the one thing it must not repeat is how FL Studio grafted them onto its
+  playlist.
+- **There is no song-level automation.** (Adam, 2026-09-17.) To automate a
+  ramp across a pattern played twice, clone the pattern and draw half the ramp
+  in each, as in Impulse Tracker. Song automation is part of the tracker
+  question in `IDEAS.md`, not a separate feature.
+- **Audio is recorded into the channel's sampler**, on the selected channel
+  and pattern, and the channel's one input menu decides whether record-arm
+  captures audio or notes. (Adam, 2026-09-17; `plans/audio-recording/`.)
 - **Rack semantics, graph-capable model.** Mooloop normally presents a channel
   as an ordered source-and-insert rack. Its modulation sources, typed
   destinations, and explicit routes are nevertheless represented clearly
@@ -243,8 +256,9 @@ Still open:
 - How much live performance behavior matters relative to composition and
   export?
 - How far should MIDI go past a keyboard playing the selected channel? Adam
-  asked for exactly that on 2026-09-13 and it is in; recording, controller
-  mapping, input choice and MIDI output are still undecided.
+  asked for exactly that on 2026-09-13 and it is in. Recording, controller
+  mapping and input choice landed with `plans/midi-control/` on 2026-09-15;
+  MIDI output is in scope for 0.2.0 and not built.
 
 ## Decision Precedence
 

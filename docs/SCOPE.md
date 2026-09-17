@@ -261,7 +261,12 @@ thirteen sit downstream of, or that the definition in §1 forces.
 All thirteen, with three amendments that the sizing above forces:
 
 - **Item 5 splits.** MIDI recording is in; audio recording follows audio input
-  and is in only if item 3 lands early.
+  and is in only if item 3 lands early. **Its shape was settled 2026-09-17**
+  (Adam): a take goes into the selected channel's sampler, and the channel's
+  one input menu, which today is the MIDI IN row, chooses between audio and
+  MIDI. No per-track clips. Items 3 and 5b are planned together in
+  `plans/audio-recording/`, whose step 01 argues that the executor's input
+  contract is enough for them and #7 is not a prerequisite.
 - **Item 13 grows.** It is no longer "a compressor exists" — it is a master bus
   compressor with its own laws, its own meter and its own presence (§2.1),
   *plus* a separate master **safety limiter** and a lookahead decision.

@@ -198,6 +198,13 @@ this plan.
    nothing lets the audio thread ask for main-thread work. **Step 04.**
 6. The effect menu (`device-rack.slint:172-196`, 14 hard-coded rows) and the
    source popup (`main.slint:3619`) are not driven by data. **Step 08.**
+7. **Found 2026-09-17, and not solved by this plan.** A channel paste, delete
+   or move rebuilds the whole `RenderState` through `install_project`
+   (`LOOSE_ENDS.md`, "Every structural edit stops the song"). `PluginSlotId`
+   stops a move from *renumbering* plugins, but not from tearing down every
+   plugin processor in the song and loading it again. Solved by
+   `plans/channel-identity/` step 05, which **must land before step 06
+   here**.
 
 ## Steps
 

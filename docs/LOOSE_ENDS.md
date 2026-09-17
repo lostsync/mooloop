@@ -73,6 +73,10 @@ node, and a move is a relabel the audio thread never sees. That is the
 cheaper interim step is to carry the transport state and position across an
 install, which would stop the rewind and leave the cut tails.
 
+**Planned 2026-09-17 as `plans/channel-identity/`**: step 04 is the interim
+fix and step 05 is the real one. It is also a prerequisite of plugin hosting,
+which would otherwise reload every plugin in the song on any channel edit.
+
 
 **A mixer drag does not scroll the mixer, and a turned strip stays at its
 seat.** Both came in with the track reorder on 2026-09-16. Seventeen strips at

@@ -15,6 +15,17 @@ on a Mac as well as on Fedora. It builds a Core Audio driver beside JACK,
 chosen at compile time, and stops short of packaging or a macOS release. Every
 step has landed; the macOS CI job is the one thing that has not yet run.
 
+`channel-identity/` and `audio-recording/` were added 2026-09-17, **not
+started, outside the `FOCUS.md` sequence**, from Adam's answers to the
+architecture section of `reports/fable-2026-09-17.md`. `channel-identity/`
+gives a channel a durable id, the way devices already have one, and ends with
+an engine that keeps strips across an install. That ends "every structural
+edit stops the song", and it has to land before `plugin-hosting/` step 06.
+`audio-recording/` is `SCOPE.md` items 3 and the audio half of 5, in Adam's
+shape: a take goes into the channel's sampler, and one input menu chooses
+between audio and MIDI. It has five open questions for Adam, each tied to the
+step that needs its answer.
+
 `plugin-hosting/` was added 2026-09-16 and is **not started, outside the
 `FOCUS.md` sequence**, because Adam asked for it directly: CLAP effects and
 instruments now, then VST3, then AU if ever. Thirteen steps. The first four
