@@ -44,6 +44,12 @@ edit, undo and load builds a fresh renderer, and it started disarmed while the
 button still read armed. The arm now travels with the install
 (`mooloop_engine::InputState`).
 
+**Routing was not republished after an install until 2026-09-17.** A channel
+removal, move, paste or undo left later channels reading another channel's
+input setting. Each install now carries the incoming project's routing into a
+routing cell of its own, so no renderer ever reads another project's channel
+order.
+
 ## What is not built, and why
 
 - **MIDI output does not exist.** The sidebar's OUT row is inert and says so.

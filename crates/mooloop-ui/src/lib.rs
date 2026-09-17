@@ -14082,9 +14082,19 @@ fn install_project_in_ui(
     // If the bounded realtime queue is full, leave the sample bank, the
     // engine and the visible project untouched.
     // What the session set by command rather than by document goes with the
-    // install, because the renderer it replaces takes that state with it.
-    let input = mooloop_engine::InputState {
-        record_armed: state.borrow().session.record_armed(),
+    // install, because the renderer it replaces takes that state with it. The
+    // routing is resolved from the *incoming* project: every structural edit,
+    // paste, undo and load comes through here, and any of them can renumber
+    // the channels the routing is indexed by.
+    let input = {
+        let state = state.borrow();
+        mooloop_engine::InputState {
+            record_armed: state.session.record_armed(),
+            midi_routing: Session::project_midi_routing(
+                &project,
+                &state.midi_ports,
+            ),
+        }
     };
     if !handle.install_project(Arc::new(project.clone()), audio, input) {
         return false;

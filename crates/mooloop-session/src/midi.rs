@@ -15,8 +15,8 @@
 use mooloop_core::{
     ChannelMidiInput, ControlBinding, ControlLearn, ControlMode, ControlOutcome, ControlTarget,
     EffectSlotState, EffectTarget, EngineCommand, MidiInputRoute, MidiKind, MidiMessage,
-    MidiPortInfo, NoteEvent, ParamAddr, ParamDescriptor, ParamOwner, Takeover, TransportControl,
-    STRIP_PARAM_PAN, STRIP_PARAM_VOLUME,
+    MidiPortInfo, NoteEvent, ParamAddr, ParamDescriptor, ParamOwner, Project, Takeover,
+    TransportControl, STRIP_PARAM_PAN, STRIP_PARAM_VOLUME,
 };
 
 use crate::roll::NoteEdit;
@@ -79,6 +79,17 @@ impl Session {
         self.channels
             .iter()
             .map(|channel| channel.midi_input.resolve(ports))
+            .collect()
+    }
+
+    /// The same resolution over a document, for the routing an install
+    /// carries: at that point the session still holds the outgoing project's
+    /// channels, and the routing has to be in the incoming one's order.
+    pub fn project_midi_routing(project: &Project, ports: &[MidiPortInfo]) -> Vec<MidiInputRoute> {
+        project
+            .channels
+            .iter()
+            .map(|channel| channel.setup.channel.midi_input.resolve(ports))
             .collect()
     }
 
@@ -773,6 +784,13 @@ mod tests {
         assert_eq!(routing[0].source, MidiRouteSource::FollowSelection);
         assert_eq!(routing[1].source, MidiRouteSource::Port(MidiPortId(0)));
         assert_eq!(routing[1].channel, MidiChannelFilter::One(9));
+
+        // The document an install carries resolves to the same thing, which
+        // is what lets the install hand the engine its routing.
+        assert_eq!(
+            Session::project_midi_routing(&session.project_snapshot(120, 50), &ports()),
+            routing
+        );
     }
 
     /// A bound CC moves the fader, through the same write the on-screen fader

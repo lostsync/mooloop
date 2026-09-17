@@ -510,6 +510,7 @@ impl Engine {
 /// and reads settings nobody writes. There are two places a renderer is built
 /// for the audio thread -- at startup and at every project install -- and
 /// [`Self::attach`] is the one list both of them use.
+#[derive(Clone)]
 struct SharedCells {
     bus_meters: Arc<BusMeters>,
     device_meters: Arc<DeviceMeters>,
@@ -573,6 +574,15 @@ impl SharedCells {
 pub struct InputState {
     /// Whether recording is armed, as the session says.
     pub record_armed: bool,
+    /// How each channel of the *incoming* project takes MIDI input, indexed
+    /// by its channel order, as [`EngineHandle::set_midi_routing`] takes it.
+    ///
+    /// A channel removal, move, paste or undo renumbers channels, so the
+    /// outgoing project's routing names the wrong ones. The incoming renderer
+    /// gets a routing cell of its own holding this, and the handle's later
+    /// writes go to that cell once the install is queued -- so neither
+    /// renderer ever reads the other's channel order.
+    pub midi_routing: Vec<mooloop_core::MidiInputRoute>,
 }
 
 /// The renderer a project install hands the audio thread, built and attached
@@ -585,16 +595,25 @@ fn prepare_render_state(
     bank: render::ChannelAudioBank,
     project: &mooloop_core::Project,
     input: &InputState,
-) -> RenderState {
+) -> (RenderState, SharedCells) {
     let mut render = RenderState::new(sample_rate, bank);
+    // Every cell but the routing is shared with the outgoing generation,
+    // because what they carry does not depend on which project's channel
+    // order is live.
+    let cells = SharedCells {
+        midi_routing: Arc::new(ArcSwap::from_pointee(render::MidiRouting {
+            routes: input.midi_routing.clone(),
+        })),
+        ..shared.clone()
+    };
     // A project swap replaces the complete renderer. Reconnect every shared
     // cell before it reaches the audio thread: otherwise the new renderer
     // publishes into its private, unread arrays while the UI continues to
     // read the startup arrays forever.
-    shared.attach(&mut render);
+    cells.attach(&mut render);
     render.load_project(project);
     render.set_record_armed(input.record_armed);
-    render
+    (render, cells)
 }
 
 /// Somewhere to put a command for the audio thread, and an honest answer
@@ -811,7 +830,7 @@ impl EngineHandle {
         // carries, and `audio` is taken by value so the live generation's
         // slots cannot be handed in by mistake.
         let bank = render::channel_audio_bank(audio);
-        let render = prepare_render_state(
+        let (render, cells) = prepare_render_state(
             &self.shared,
             self.sample_rate,
             bank.clone(),
@@ -830,6 +849,9 @@ impl EngineHandle {
             .push(RealtimeCommand::InstallProject(prepared))
             .is_ok()
         {
+            // From here on, handle writes address the incoming generation's
+            // cells; the outgoing renderer keeps the routing it was built for.
+            self.shared = cells;
             self.shared.device_telemetry.clear_spectra();
             self.install_generation = generation;
             // Per-channel publication now addresses the bank of the
@@ -1102,7 +1124,7 @@ mod install_tests {
         let mut project = Project::default();
         project.channels.push(ProjectChannel::sampler(1, 1));
         let bank = render::channel_audio_bank(Vec::new());
-        let mut render =
+        let (mut render, shared) =
             prepare_render_state(&shared, 48_000, bank, &project, &InputState::default());
 
         // Channel 1 listens on MIDI channel 10; the selection is channel 0.
@@ -1149,8 +1171,11 @@ mod install_tests {
         let mut project = Project::default();
         project.channels.push(ProjectChannel::sampler(1, 1));
         let bank = render::channel_audio_bank(Vec::new());
-        let input = InputState { record_armed: true };
-        let mut render = prepare_render_state(&shared, 48_000, bank, &project, &input);
+        let input = InputState {
+            record_armed: true,
+            ..InputState::default()
+        };
+        let (mut render, shared) = prepare_render_state(&shared, 48_000, bank, &project, &input);
         shared.keyboard_channel.store(0, Ordering::Relaxed);
 
         let key = |kind| MidiMessage {
@@ -1172,5 +1197,75 @@ mod install_tests {
             matches!(recorded[..], [EngineEvent::RecordedNote { note: 60, .. }]),
             "an armed session records through the installed renderer, got {recorded:?}"
         );
+    }
+
+    /// An install carries the incoming project's routing into a cell of its
+    /// own: the incoming renderer reads it from its first block, the outgoing
+    /// one keeps the routing its own channel order was built for, and writes
+    /// after the install reach only the incoming one.
+    ///
+    /// Until 2026-09-17 nothing republished the routing after an install, so
+    /// removing, moving or pasting a channel left later channels reading
+    /// another channel's input setting until the port list next changed.
+    #[test]
+    fn an_install_carries_its_own_routing() {
+        let listen = |channel| MidiInputRoute {
+            source: MidiRouteSource::AllPorts,
+            channel: MidiChannelFilter::One(channel),
+        };
+        let note_on_ten = |note| {
+            [MidiMessage {
+                offset: 0,
+                port: MidiPortId::FIRST,
+                channel: 9,
+                kind: MidiKind::NoteOn {
+                    note,
+                    velocity: 100,
+                },
+            }]
+        };
+        let mut project = Project::default();
+        project.channels.push(ProjectChannel::sampler(1, 1));
+        let startup = SharedCells::new();
+        startup.keyboard_channel.store(0, Ordering::Relaxed);
+
+        // The outgoing generation: channel 0 listens on MIDI channel 10.
+        let (mut outgoing, live) = prepare_render_state(
+            &startup,
+            48_000,
+            render::channel_audio_bank(Vec::new()),
+            &project,
+            &InputState {
+                midi_routing: vec![listen(9), listen(0)],
+                ..InputState::default()
+            },
+        );
+        // The incoming one, after the two channels swapped places.
+        let (mut incoming, live) = prepare_render_state(
+            &live,
+            48_000,
+            render::channel_audio_bank(Vec::new()),
+            &project,
+            &InputState {
+                midi_routing: vec![listen(0), listen(9)],
+                ..InputState::default()
+            },
+        );
+
+        incoming.apply_midi(&note_on_ten(60));
+        assert_eq!(incoming.audition_channels(), vec![1], "the incoming order");
+        outgoing.apply_midi(&note_on_ten(60));
+        assert_eq!(outgoing.audition_channels(), vec![0], "the outgoing order");
+
+        // A later write -- a picker change, a port appearing -- is about the
+        // live project, and reaches only its renderer. Another pitch, so the
+        // press does not also release the first one.
+        live.set_midi_routing(vec![listen(3), listen(3)]);
+        incoming.process_block(64);
+        outgoing.process_block(64);
+        incoming.apply_midi(&note_on_ten(62));
+        outgoing.apply_midi(&note_on_ten(62));
+        assert_eq!(incoming.audition_channels(), Vec::<u8>::new(), "nothing listens on 10 now");
+        assert_eq!(outgoing.audition_channels(), vec![0]);
     }
 }
