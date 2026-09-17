@@ -502,7 +502,10 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - **Per-channel MIDI input, controller mapping, transport control and MIDI
   recording.** `docs/plans/midi-control/` landed on 2026-09-15. A channel picks
   its input and an Omni-or-1–16 channel filter from the sidebar's IN and CH
-  rows, and the engine routes notes by them; a stored port that is not plugged
+  rows, and the engine routes notes by them (only since 2026-09-17: until
+  then every project install, the startup one included, handed the audio
+  thread a renderer that read a private routing nobody wrote, so every channel
+  behaved as Follow Selection); a stored port that is not plugged
   in says so under the picker rather than leaving the channel silently
   unplayable. A record-arm button sits beside play and stop — arming, not
   recording, so arming while stopped works — and an armed transport captures

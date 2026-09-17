@@ -4863,6 +4863,16 @@ impl RenderState {
         ticks.max(0.0) as u32
     }
 
+    /// The channels this block's queued notes are addressed to, in order.
+    #[cfg(test)]
+    pub(crate) fn audition_channels(&self) -> Vec<u8> {
+        self.auditions
+            .iter()
+            .flatten()
+            .map(|audition| audition.channel)
+            .collect()
+    }
+
     /// Hold an auditioned note until the block's event lists exist.
     ///
     /// Silently dropped past the cap, which returns `false`: that many notes

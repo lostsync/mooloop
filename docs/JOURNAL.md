@@ -1592,6 +1592,10 @@ silent.
 
 The whole-system review's second finding: `Sampler::trigger` assigned the new sample over a voice's old one, and after a load-over-load with no undo entry the voice was the old buffer's last holder, so the next note on it freed the buffer in the callback. The allocation test could not see it, because freeing is not allocating; the counting allocator now counts frees per thread too, and the new test failed red on exactly one free before the fix. Displaced samples, and the snapshot the sampler last read, now go into a fixed per-sampler ring the executor drains into the reclaim path; a full ring refuses the note rather than drop anything.
 
+## Sep 17 (the review) — MIDI routing that nothing read
+
+Per-channel MIDI input had never worked in the running app. `EngineHandle::new` attached nine shared cells to the startup renderer and `install_project` attached eight to every renderer after it, and the missing one was the routing. The app installs a project at startup, so `set_midi_routing` wrote to a cell no renderer read and every channel followed the selection. Every engine routing test attached its own cell to a hand-built `RenderState`, so none of them went through the path that had lost it. Both sites now call one list, `SharedCells::attach`, and the renderer an install builds comes from `prepare_render_state`, which a test can call without a driver. The new test failed red with the note on the selected channel. No other cell was missing, but record arm has the same shape without being a cell: a fresh renderer starts disarmed, and nothing re-sends the arm after an install.
+
 ## Open threads
 
 Refreshed 2026-09-02, with the September documentation audit's threads merged in on 2026-09-04 and Adam's 2026-09-05 list merged in after that. Four of the six threads listed here in August are closed: modulation drives things now, the buffer device exists, undo and clipboard are real, and the convolution reverb that needed an IR loader was replaced outright by an FDN hall — so `StereoIr` is no longer the boundary anything is waiting on.

@@ -466,27 +466,9 @@ impl Engine {
 
         let xrun_count = Arc::new(AtomicU64::new(0));
         let load = load::LoadMeters::new();
-        let bus_meters = BusMeters::new();
-        let device_meters = DeviceMeters::new();
-        let device_telemetry = DeviceTelemetry::new();
-        let playhead_meters = PlayheadMeters::new();
-        let modulator_meters = ModulatorMeters::new();
-        let preview_gain = Arc::new(AtomicU32::new(mooloop_core::gain::db_to_linear(mooloop_core::gain::REFERENCE_PEAK_DBFS).to_bits()));
-        let buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>> =
-            Arc::new(ArcSwapOption::empty());
-        let keyboard_channel = Arc::new(AtomicU8::new(render::NO_KEYBOARD_CHANNEL));
-        let midi_routing: Arc<ArcSwap<render::MidiRouting>> =
-            Arc::new(ArcSwap::from_pointee(render::MidiRouting::default()));
+        let shared = SharedCells::new();
         let mut render = RenderState::new(sample_rate, audio_slots.clone());
-        render.attach_keyboard_channel(keyboard_channel.clone());
-        render.attach_meters(bus_meters.clone());
-        render.attach_device_meters(device_meters.clone());
-        render.attach_device_telemetry(device_telemetry.clone());
-        render.attach_playhead_meters(playhead_meters.clone());
-        render.attach_modulator_meters(modulator_meters.clone());
-        render.attach_buffer_midi_map(buffer_midi_map.clone());
-        render.attach_midi_routing(midi_routing.clone());
-        render.attach_preview_gain(preview_gain.clone());
+        shared.attach(&mut render);
         let executor = Executor::new(
             ExecutorIo {
                 cmd_rx,
@@ -508,23 +490,94 @@ impl Engine {
                 cmd_tx,
                 evt_rx,
                 reclaim_rx,
-                bus_meters,
-                device_meters,
-                device_telemetry,
-                buffer_midi_map,
-                keyboard_channel,
-                midi_routing,
-                playhead_meters,
-                modulator_meters,
+                shared,
                 audio_slots,
                 sample_rate,
                 install_generation: 0,
                 driver,
-                preview_gain,
                 load,
             },
         ))
     }
+}
+
+/// The cells the control thread and the renderer share rather than message
+/// through: meters and telemetry the GUI reads, and the MIDI and preview
+/// settings the GUI writes.
+///
+/// A [`RenderState`] is built with private copies of every one of them, so a
+/// renderer that was not attached to these publishes into arrays nobody reads
+/// and reads settings nobody writes. There are two places a renderer is built
+/// for the audio thread -- at startup and at every project install -- and
+/// [`Self::attach`] is the one list both of them use.
+struct SharedCells {
+    bus_meters: Arc<BusMeters>,
+    device_meters: Arc<DeviceMeters>,
+    device_telemetry: Arc<DeviceTelemetry>,
+    buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>>,
+    keyboard_channel: Arc<AtomicU8>,
+    midi_routing: Arc<ArcSwap<render::MidiRouting>>,
+    playhead_meters: Arc<PlayheadMeters>,
+    modulator_meters: Arc<ModulatorMeters>,
+    preview_gain: Arc<AtomicU32>,
+}
+
+impl SharedCells {
+    fn new() -> Self {
+        Self {
+            bus_meters: BusMeters::new(),
+            device_meters: DeviceMeters::new(),
+            device_telemetry: DeviceTelemetry::new(),
+            buffer_midi_map: Arc::new(ArcSwapOption::empty()),
+            keyboard_channel: Arc::new(AtomicU8::new(render::NO_KEYBOARD_CHANNEL)),
+            midi_routing: Arc::new(ArcSwap::from_pointee(render::MidiRouting::default())),
+            playhead_meters: PlayheadMeters::new(),
+            modulator_meters: ModulatorMeters::new(),
+            preview_gain: Arc::new(AtomicU32::new(
+                mooloop_core::gain::db_to_linear(mooloop_core::gain::REFERENCE_PEAK_DBFS)
+                    .to_bits(),
+            )),
+        }
+    }
+
+    /// The store behind [`EngineHandle::set_midi_routing`].
+    fn set_midi_routing(&self, routes: Vec<mooloop_core::MidiInputRoute>) {
+        self.midi_routing
+            .store(Arc::new(render::MidiRouting { routes }));
+    }
+
+    /// Point `render` at these cells in place of its private ones.
+    fn attach(&self, render: &mut RenderState) {
+        render.attach_meters(self.bus_meters.clone());
+        render.attach_device_meters(self.device_meters.clone());
+        render.attach_device_telemetry(self.device_telemetry.clone());
+        render.attach_buffer_midi_map(self.buffer_midi_map.clone());
+        render.attach_keyboard_channel(self.keyboard_channel.clone());
+        render.attach_midi_routing(self.midi_routing.clone());
+        render.attach_playhead_meters(self.playhead_meters.clone());
+        render.attach_modulator_meters(self.modulator_meters.clone());
+        render.attach_preview_gain(self.preview_gain.clone());
+    }
+}
+
+/// The renderer a project install hands the audio thread, built and attached
+/// on the calling thread. Separate from [`EngineHandle::install_project`]
+/// because a handle cannot be built without opening an audio driver, and what
+/// this returns is the part of an install a test can hold.
+fn prepare_render_state(
+    shared: &SharedCells,
+    sample_rate: u32,
+    bank: render::ChannelAudioBank,
+    project: &mooloop_core::Project,
+) -> RenderState {
+    let mut render = RenderState::new(sample_rate, bank);
+    // A project swap replaces the complete renderer. Reconnect every shared
+    // cell before it reaches the audio thread: otherwise the new renderer
+    // publishes into its private, unread arrays while the UI continues to
+    // read the startup arrays forever.
+    shared.attach(&mut render);
+    render.load_project(project);
+    render
 }
 
 /// Somewhere to put a command for the audio thread, and an honest answer
@@ -567,14 +620,7 @@ pub struct EngineHandle {
     cmd_tx: Producer<RealtimeCommand>,
     evt_rx: Consumer<EngineEvent>,
     reclaim_rx: Consumer<StructuralReclaim>,
-    bus_meters: Arc<BusMeters>,
-    device_meters: Arc<DeviceMeters>,
-    device_telemetry: Arc<DeviceTelemetry>,
-    buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>>,
-    keyboard_channel: Arc<AtomicU8>,
-    midi_routing: Arc<ArcSwap<render::MidiRouting>>,
-    playhead_meters: Arc<PlayheadMeters>,
-    modulator_meters: Arc<ModulatorMeters>,
+    shared: SharedCells,
     /// The bank the **most recently prepared** generation reads.
     ///
     /// Not "the live generation's": a per-channel publication between queueing
@@ -587,7 +633,6 @@ pub struct EngineHandle {
     sample_rate: u32,
     install_generation: u64,
     driver: Arc<Driver>,
-    preview_gain: Arc<AtomicU32>,
     load: Arc<load::LoadMeters>,
 }
 
@@ -722,7 +767,7 @@ impl EngineHandle {
     /// Sets the preview voice's linear output gain. Live: the voice reads
     /// the shared cell every block, so turning the knob is heard at once.
     pub fn set_preview_gain(&self, gain: f32) {
-        self.preview_gain.store(gain.to_bits(), Ordering::Relaxed);
+        self.shared.preview_gain.store(gain.to_bits(), Ordering::Relaxed);
     }
 
     /// Prepare a complete executor from a validated project on this
@@ -748,20 +793,7 @@ impl EngineHandle {
         // carries, and `audio` is taken by value so the live generation's
         // slots cannot be handed in by mistake.
         let bank = render::channel_audio_bank(audio);
-        let mut render = RenderState::new(self.sample_rate, bank.clone());
-        render.attach_meters(self.bus_meters.clone());
-        // A project swap replaces the complete renderer. Reconnect every meter
-        // transport before it reaches the audio thread: otherwise the new
-        // renderer publishes into its private, unread arrays while the UI
-        // continues to read the startup arrays forever.
-        render.attach_device_meters(self.device_meters.clone());
-        render.attach_device_telemetry(self.device_telemetry.clone());
-        render.attach_buffer_midi_map(self.buffer_midi_map.clone());
-        render.attach_keyboard_channel(self.keyboard_channel.clone());
-        render.attach_playhead_meters(self.playhead_meters.clone());
-        render.attach_modulator_meters(self.modulator_meters.clone());
-        render.attach_preview_gain(self.preview_gain.clone());
-        render.load_project(&project);
+        let render = prepare_render_state(&self.shared, self.sample_rate, bank.clone(), &project);
         let prepared = PreparedProject {
             generation,
             render: Box::new(render),
@@ -774,7 +806,7 @@ impl EngineHandle {
             .push(RealtimeCommand::InstallProject(prepared))
             .is_ok()
         {
-            self.device_telemetry.clear_spectra();
+            self.shared.device_telemetry.clear_spectra();
             self.install_generation = generation;
             // Per-channel publication now addresses the bank of the
             // generation that is *about to* be live, which is the right
@@ -798,20 +830,20 @@ impl EngineHandle {
     /// Read and clear one bus's held peak. Wait-free; see `meters` for why
     /// this is an atomic array rather than another event.
     pub fn take_bus_peak(&self, bus: usize) -> (f32, f32) {
-        self.bus_meters.take(bus)
+        self.shared.bus_meters.take(bus)
     }
 
     /// Read and clear how much gain reduction a track's channel strip took,
     /// in dB as a positive amount. Zero while its compressor is out.
     pub fn take_strip_reduction(&self, bus: usize) -> f32 {
-        self.bus_meters.take_reduction(bus)
+        self.shared.bus_meters.take_reduction(bus)
     }
 
     /// Read and clear a device's held input/output peaks. `target` addresses
     /// channels and buses in one space: a channel is its own index, a bus is
     /// `MAX_CHANNELS + bus index`. Stage 0 is the source; effect slots follow.
     pub fn take_device_peak(&self, target: usize, stage: usize) -> ((f32, f32), (f32, f32)) {
-        self.device_meters.take(target, stage)
+        self.shared.device_meters.take(target, stage)
     }
 
     /// Read and clear a dynamics device's held display state: the loudest
@@ -825,11 +857,11 @@ impl EngineHandle {
     /// looking at keeps its loudest block forever and shows it for one tick
     /// the moment the rack is turned back to it.
     pub fn clear_device_meters(&self, target: usize) {
-        self.device_meters.clear_target(target);
+        self.shared.device_meters.clear_target(target);
     }
 
     pub fn take_device_dynamics(&self, target: usize, stage: usize) -> (f32, f32) {
-        self.device_meters.take_dynamics(target, stage)
+        self.shared.device_meters.take_dynamics(target, stage)
     }
 
     /// Subscribe an effect stage's input to compact spectrum telemetry,
@@ -846,7 +878,7 @@ impl EngineHandle {
         slot: u8,
         enabled: bool,
     ) -> bool {
-        self.device_telemetry.set_spectrum_enabled(
+        self.shared.device_telemetry.set_spectrum_enabled(
             effect_target_index(target),
             usize::from(slot) + 1,
             enabled,
@@ -857,7 +889,7 @@ impl EngineHandle {
     /// The data is a display vector, not PCM; callers may poll it at their
     /// own frame rate without affecting the audio callback.
     pub fn effect_spectrum(&self, target: EffectTarget, slot: u8) -> [f32; SPECTRUM_BINS] {
-        self.device_telemetry
+        self.shared.device_telemetry
             .read_spectrum(effect_target_index(target), usize::from(slot) + 1)
     }
 
@@ -868,13 +900,13 @@ impl EngineHandle {
         let channel = channel
             .filter(|&channel| channel != render::NO_KEYBOARD_CHANNEL)
             .unwrap_or(render::NO_KEYBOARD_CHANNEL);
-        self.keyboard_channel.store(channel, Ordering::Relaxed);
+        self.shared.keyboard_channel.store(channel, Ordering::Relaxed);
     }
 
     /// Install the MIDI mapping that drives a buffer insert, or clear it.
     /// Built and dropped on this thread; the audio thread only loads it.
     pub fn set_buffer_midi_map(&self, map: Option<mooloop_core::midi::BufferMidiMap>) {
-        self.buffer_midi_map.store(map.map(Arc::new));
+        self.shared.buffer_midi_map.store(map.map(Arc::new));
     }
 
     /// Install how each channel takes MIDI input, indexed by channel.
@@ -885,8 +917,7 @@ impl EngineHandle {
     /// list does -- a keyboard plugged in mid-session is a channel whose
     /// stored port name resolves for the first time.
     pub fn set_midi_routing(&self, routes: Vec<mooloop_core::MidiInputRoute>) {
-        self.midi_routing
-            .store(Arc::new(render::MidiRouting { routes }));
+        self.shared.set_midi_routing(routes);
     }
 
     /// The MIDI inputs available to pick from right now.
@@ -913,7 +944,7 @@ impl EngineHandle {
     /// its writer and force-returned to live. Monotonic since the device was
     /// installed, so a UI compares it against the value it last displayed.
     pub fn effect_buffer_collisions(&self, target: EffectTarget, slot: u8) -> u32 {
-        self.device_telemetry
+        self.shared.device_telemetry
             .read_buffer_collisions(effect_target_index(target), usize::from(slot) + 1)
     }
 
@@ -930,7 +961,7 @@ impl EngineHandle {
         slot: u8,
         enabled: bool,
     ) -> bool {
-        self.device_telemetry.set_waveform_enabled(
+        self.shared.device_telemetry.set_waveform_enabled(
             effect_target_index(target),
             usize::from(slot) + 1,
             enabled,
@@ -940,14 +971,14 @@ impl EngineHandle {
     /// Latest peaks over a Buffer insert's retained history, oldest ring
     /// index first. All zero when nothing is subscribed.
     pub fn effect_buffer_waveform(&self, target: EffectTarget, slot: u8) -> Vec<f32> {
-        self.device_telemetry
+        self.shared.device_telemetry
             .read_waveform(effect_target_index(target), usize::from(slot) + 1)
     }
 
     /// Where a Buffer insert's head and window are, and whether it is frozen
     /// or waiting for a boundary. Published every block, subscription or not.
     pub fn effect_buffer_marks(&self, target: EffectTarget, slot: u8) -> BufferMarks {
-        self.device_telemetry
+        self.shared.device_telemetry
             .read_buffer_marks(effect_target_index(target), usize::from(slot) + 1)
     }
 
@@ -955,7 +986,7 @@ impl EngineHandle {
     /// on `channel`, for a UI playhead. Wait-free; see `meters` for why this
     /// is a plain array read rather than another event.
     pub fn playhead_positions(&self, channel: usize) -> Vec<f32> {
-        self.playhead_meters.read(channel)
+        self.shared.playhead_meters.read(channel)
     }
 
     /// The channel's modulator outputs as of the last control tick the audio
@@ -964,7 +995,7 @@ impl EngineHandle {
     /// value per parameter: a channel has at most
     /// `MAX_MODULATORS_PER_CHANNEL` sources but many more destinations.
     pub fn modulator_outputs(&self, channel: usize) -> [f32; CONTROL_SOURCE_SLOTS] {
-        self.modulator_meters.read(channel)
+        self.shared.modulator_meters.read(channel)
     }
 
     /// Candidate output destinations as the driver discovers them -- under
@@ -1021,5 +1052,61 @@ fn effect_target_index(target: EffectTarget) -> usize {
     match target {
         EffectTarget::Channel(channel) => usize::from(channel),
         EffectTarget::Bus(bus) => MAX_CHANNELS + usize::from(bus),
+    }
+}
+
+#[cfg(test)]
+mod install_tests {
+    use super::*;
+    use mooloop_core::{
+        MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage, MidiPortId, MidiRouteSource,
+        Project, ProjectChannel,
+    };
+
+    /// A channel's MIDI input setting is heard by the renderer a project
+    /// install hands the audio thread, not only by the one built at startup.
+    ///
+    /// The app installs a project at startup, so the startup renderer is
+    /// replaced before anybody plays a note. Until 2026-09-17 the install
+    /// path attached every shared cell but the routing one, and every channel
+    /// behaved as Follow Selection however it was set. Driven through
+    /// `prepare_render_state` because an `EngineHandle` needs an audio driver;
+    /// the routing is written through the same store `set_midi_routing` uses.
+    #[test]
+    fn an_installed_renderer_reads_the_routing_the_handle_writes() {
+        let shared = SharedCells::new();
+        let mut project = Project::default();
+        project.channels.push(ProjectChannel::sampler(1, 1));
+        let bank = render::channel_audio_bank(Vec::new());
+        let mut render = prepare_render_state(&shared, 48_000, bank, &project);
+
+        // Channel 1 listens on MIDI channel 10; the selection is channel 0.
+        shared.set_midi_routing(vec![
+            MidiInputRoute {
+                source: MidiRouteSource::AllPorts,
+                channel: MidiChannelFilter::One(0),
+            },
+            MidiInputRoute {
+                source: MidiRouteSource::AllPorts,
+                channel: MidiChannelFilter::One(9),
+            },
+        ]);
+        shared.keyboard_channel.store(0, Ordering::Relaxed);
+
+        render.apply_midi(&[MidiMessage {
+            offset: 0,
+            port: MidiPortId::FIRST,
+            channel: 9,
+            kind: MidiKind::NoteOn {
+                note: 60,
+                velocity: 100,
+            },
+        }]);
+        assert_eq!(
+            render.audition_channels(),
+            vec![1],
+            "a note on MIDI channel 10 belongs to the channel listening there, \
+             not to the selection"
+        );
     }
 }

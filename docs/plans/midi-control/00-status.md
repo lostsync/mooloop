@@ -24,6 +24,14 @@ control, move the knob. Preferences > MIDI lists the inputs, every mapping,
 and all seven transport gestures with whatever is bound to each. The map is
 saved with the project, because its targets name channels of this song.
 
+**Per-channel routing did not reach the live engine until 2026-09-17.**
+`EngineHandle::install_project` reattached every shared cell but the routing
+one, and the app installs a project at startup, so the input setting was
+written to a cell no renderer read and every channel followed the selection.
+The engine tests attached routing by hand and passed throughout. The install
+path and startup now share one attach list (`SharedCells::attach`), and
+`install_tests` drives the renderer an install builds.
+
 ## What is not built, and why
 
 - **MIDI output does not exist.** The sidebar's OUT row is inert and says so.
