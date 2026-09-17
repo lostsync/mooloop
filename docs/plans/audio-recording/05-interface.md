@@ -25,13 +25,14 @@ in `scripts/slint-sketch` first.
   the point where its source would play. That is `AuxIn`'s level-and-copy
   applied to the input bus, which is why this is an interface step and not an
   engine one.
-- **The non-sampler rule** from open question 1, made visible.
+- **The non-sampler rule** from step 02, made visible: greyed-out audio rows,
+  with the reason in the status bar.
 
 ## Acceptance
 
 Record a phrase from a microphone or a line input into a sampler channel
 while the pattern loops, stop, and play it back.
-- The take sits where it was played.
+- A pattern that already triggers the sampler plays the take.
 - It survives save and reload.
 - It renders offline the same way it plays.
 

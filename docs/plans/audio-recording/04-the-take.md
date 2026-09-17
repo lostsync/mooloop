@@ -1,8 +1,10 @@
 # 04 — A take becomes the channel's sample
 
-## Needs an answer first
+## Nothing lands in the pattern (Adam, 2026-09-17)
 
-Open question 2 in `00-status.md`: what lands in the pattern.
+A take replaces the channel's sample and writes no notes. It is heard through
+whatever the pattern already triggers. So `CaptureStarted`'s tick is used
+only for alignment and display, not to place anything.
 
 ## Build
 
@@ -16,16 +18,8 @@ Open question 2 in `00-status.md`: what lands in the pattern.
    it, **by `ChannelId`** if `channel-identity/` step 03 has landed, and by
    the load token otherwise.
 
-**The note (recommended answer to question 2)**
-- One `NoteEvent` at the take's start tick.
-- Its length covers the take, clamped to the pattern.
-- Root note: the sample's `root_note`.
-- It goes into the pattern that was current when recording started, not the
-  one current when the take is applied. The engine event carries that pattern.
-
 **Undo**
-- The take (sample plus note) is one undo step, and undo restores the
-  previous sample.
+- The take is one undo step, and undo restores the previous sample.
 - That relies on `ProjectSnapshot.samples`, which only pins a sample when an
   undoable edit is recorded while it is loaded. The survey could not find an
   undo entry for an ordinary sample load; check that first. If loads are not
@@ -41,6 +35,6 @@ Open question 2 in `00-status.md`: what lands in the pattern.
 ## Test
 
 - **Session:** a finished take on channel 2 while channel 0 is selected ends
-  up on channel 2, with the note at the reported tick, and undo restores the
-  previous sample and removes the note.
+  up on channel 2, writes no notes to any pattern, and undo restores the
+  previous sample.
 - **Save:** a project saved after a take reloads with the take.

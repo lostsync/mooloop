@@ -68,18 +68,17 @@ that the second fix gives notes.
 ## Open questions for Adam
 
 Each of these changes what a step builds. They are listed here so the step
-that needs an answer can stop and ask rather than guess.
+that needs an answer can stop and ask rather than guess. The first two were
+answered the day the plan was written.
 
-1. **An audio input on a channel that is not a sampler** (a synth, DS-01,
-   Aux In). Options: list audio inputs only on sampler channels; list them
-   everywhere and switch the source to a sampler on the first take; or list
-   them and refuse to record, with a reason. *Recommended: list them only on
-   sampler channels, and have the IN row say why the rest are missing.*
-   Needed by step 02.
-2. **What lands in the pattern.** A take that only replaces the sample must be
-   triggered by hand before you hear it again. *Recommended: the take plus
-   one note at the tick where recording started, as long as the take, so
-   playback reproduces what was played.* Needed by step 04.
+1. ~~**An audio input on a channel that is not a sampler.**~~ **Answered
+   2026-09-17:** on a channel that is not a sampler, the audio inputs are
+   listed but **greyed out**. If a channel with an audio input selected is
+   switched away from Sampler, its input moves to the **no-input** row (Off).
+   Step 02.
+2. ~~**What lands in the pattern.**~~ **Answered 2026-09-17: nothing.** A take
+   replaces the channel's sample and writes no notes. It is heard through
+   whatever the pattern already triggers. Step 04.
 3. **What a loop pass does.** Recording while the pattern loops: one take per
    arm (stop at the loop end), keep only the last pass, or keep all passes as
    slices. *Recommended for the first version: one take per arm, which ends at

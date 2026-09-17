@@ -3,10 +3,18 @@
 Adam's decision 3: the sidebar's IN row picks the channel's input, MIDI or
 audio, and that choice decides what record-arm captures.
 
-## Needs an answer first
+## The non-sampler rule (Adam, 2026-09-17)
 
-Open question 1 in `00-status.md`: what an audio input means on a channel
-that is not a sampler.
+- On a channel whose source is not a Sampler, the audio-input rows are
+  **shown but greyed out**, with the reason in the status bar. They are
+  never hidden.
+- Switching a channel's source away from Sampler while an audio input is
+  selected moves the input to the **no-input** row (`Off`), not back to Follow
+  Selection. That happens in the session, in the same edit as the source
+  change, so undo restores both. Switching back to Sampler does not restore
+  the audio input.
+- A saved file can't hold an audio input on a non-sampler channel. If one
+  does, `integrity` repairs it to `Off` with a doctor message.
 
 ## Build
 
@@ -56,6 +64,10 @@ type outgrows the MIDI module)
 ## Test
 
 - Picker round-trips for every row.
+- The audio rows are disabled on every non-sampler source kind, and enabled
+  on Sampler.
+- Switching Sampler → any other kind with an audio input selected leaves the
+  input `Off`, and one undo restores both the source and the input.
 - A project saved with an audio input reloads with the same input.
 - An old project, with only `midi_input`, loads unchanged.
 - The routing cell survives an install.
