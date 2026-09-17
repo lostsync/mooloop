@@ -21,10 +21,20 @@ in `scripts/slint-sketch` first.
   recording.
 - **A damaged take** (overflow, from step 03) says so in the status bar and in
   the sample's description.
-- **Monitoring**, if Adam wants it: the armed channel plays its input bus at
-  the point where its source would play. That is `AuxIn`'s level-and-copy
-  applied to the input bus, which is why this is an interface step and not an
-  engine one.
+- **Monitoring is a toggle** (Adam, 2026-09-17). When it is on, a channel
+  with an audio input plays its input bus where its source would play. That
+  is `AuxIn`'s level-and-copy applied to the input bus, which is why this is
+  an interface step and not an engine one.
+  - **Placement:** sketch per channel, next to the IN row. That is where the
+    input is chosen, so that is where you would look for whether you can hear
+    it.
+  - **Not saved in the project.** It is performance state, like record arm.
+    It travels to the engine in `InputState`, so a project install doesn't
+    silently switch it off, which is the bug record arm had until
+    2026-09-17.
+  - **Feedback:** monitoring through speakers with a live microphone
+    feeds back. Default the toggle to off, and never turn it on
+    automatically.
 - **The non-sampler rule** from step 02, made visible: greyed-out audio rows,
   with the reason in the status bar.
 

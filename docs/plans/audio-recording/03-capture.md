@@ -39,8 +39,8 @@
 
 **Off the audio thread**
 - A drain thread started at arm time pulls from the ring and writes a 32-bit
-  float stereo WAV with hound, into the recordings folder that question 5
-  settles.
+  float stereo WAV with hound, into the recordings folder: `<data dir>/recordings/`, one file per take,
+  named by date and time plus the channel's name.
 - It also keeps a running peak summary, so the take's waveform can be drawn
   while it records without reading the file back.
 - This thread is the only place that does file I/O for a take. It also

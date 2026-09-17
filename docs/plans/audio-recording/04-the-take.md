@@ -28,8 +28,9 @@ only for alignment and display, not to place anything.
 
 **Save**
 - A take that is still in the recordings folder is saved like any other
-  referenced file. Under the recommended answer to question 5, it is moved
-  into the project's assets instead, and the reference is updated.
+  referenced file. On save it is moved into the project's assets
+  (`name.mooloop-assets/recordings/`), and the reference is updated, so a
+  saved song never depends on the shared recordings folder.
 - `PROJECT_FORMAT.md` describes the rule.
 
 ## Test
