@@ -2868,8 +2868,21 @@ pub(crate) struct RenderState {
     /// This block's note gates, kept rather than rebuilt. See [`GateTable`].
     gate_ticks: Box<GateTable>,
     sample_rate: u32,
-    /// Nodes displaced from effect slots this block, awaiting handoff to the
-    /// reclaim ring (realtime playback) or plain drop (offline render).
+    /// Effect-slot occupants displaced by a chain being cleared, awaiting
+    /// disposal off the realtime thread.
+    ///
+    /// Filled by `EffectChain::clear` through `reset_slot` / `reset`: on the
+    /// control thread when `load_project` reuses a state, and on the audio
+    /// thread when `StructuralCommand::AddChannel` reuses a spare channel
+    /// slot. Drained by the executor, one [`StructuralReclaim::Effect`] per
+    /// free reclaim-ring slot, through [`Self::pop_displaced_effect`]; a
+    /// state that never reaches an executor (an offline render, a retired
+    /// generation) drops whatever is left with itself, off the audio thread.
+    ///
+    /// Reserved for one whole chain, which is the most a single structural
+    /// edit can displace, and the executor admits no structural edit while
+    /// anything is still waiting here -- so the audio thread only ever pushes
+    /// into an empty vector with room for everything the push can add.
     reclaim: Reclaim,
     /// Where per-bus peaks are published for the mixer. Offline renders keep
     /// their own unread instance rather than paying for an `Option` check per
@@ -3016,7 +3029,7 @@ impl RenderState {
             gate_ticks: Box::new([[NoteGateEvents::default(); MAX_CHANNELS];
                 MAX_CONTROL_TICKS_PER_BLOCK]),
             sample_rate,
-            reclaim: Vec::new(),
+            reclaim: Vec::with_capacity(MAX_EFFECTS_PER_CHANNEL),
             meters: BusMeters::new(),
             device_meters: DeviceMeters::new(),
             device_telemetry: DeviceTelemetry::new(),
@@ -3865,6 +3878,19 @@ impl RenderState {
         )
     }
 
+    /// Hands back one effect-slot occupant a cleared chain displaced, for the
+    /// executor to send down the reclaim ring. See the `reclaim` field.
+    pub(crate) fn pop_displaced_effect(&mut self) -> Option<ReclaimedEffect> {
+        self.reclaim.pop()
+    }
+
+    /// Whether displaced effect occupants are still waiting for the reclaim
+    /// ring. The executor holds structural edits back while they are, which
+    /// is what keeps the `reclaim` vector within its reservation.
+    pub(crate) fn has_displaced_effects(&self) -> bool {
+        !self.reclaim.is_empty()
+    }
+
     /// Apply a structural change (install/remove of a boxed node). Called on
     /// the realtime thread from the ordered control stream; the boxes
     /// themselves were allocated on the control thread. Returns whatever the
@@ -3959,6 +3985,14 @@ impl RenderState {
                 // rather than being dropped on this thread.
                 let spare = channel < self.strips.len();
                 let returned = if spare { Some(storage) } else { self.push_channel(storage); None };
+                // A spare slot keeps whatever chain it had until now. Clearing
+                // it pushes up to one chain's worth into `reclaim`, which the
+                // executor guarantees is empty here and which was reserved
+                // for exactly that much; the executor forwards the contents.
+                debug_assert!(
+                    self.reclaim.is_empty(),
+                    "a structural edit ran while displaced effects were still queued"
+                );
                 if let Some(strip) = self.strips.get_mut(channel) {
                     strip.reset_slot(source, &mut self.reclaim);
                 }
@@ -4147,14 +4181,6 @@ impl RenderState {
             } => {
                 self.sequencer
                     .set_playlist_placement(pattern as usize, start_tick, on);
-            }
-            EngineCommand::RemoveChannel => {
-                let active = self.sequencer.active_channels();
-                if let Some(channel) = active.checked_sub(1) {
-                    self.strips[channel].reset_slot(DeviceKind::Sampler, &mut self.reclaim);
-                    self.set_channel_modulation(channel, ModRack::default());
-                    self.sequencer.set_active_channels(channel);
-                }
             }
             EngineCommand::SetChannelMuted { channel, muted } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
@@ -7122,11 +7148,91 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         render.play();
         assert!(render.process_block(256).peak_l > 0.001);
 
-        render.apply_command(EngineCommand::RemoveChannel);
+        // What incremental removal would do: shrink the active region and
+        // leave the slot's storage and contents behind for the re-add to
+        // reset. Nothing sends that today (`EngineCommand::RemoveChannel`
+        // was deleted unused), so the test shrinks the region directly.
+        render.sequencer.set_active_channels(1);
         add_channel(&mut render, DeviceKind::DrumSynth);
         render.apply_command(EngineCommand::Stop);
         render.apply_command(EngineCommand::Play);
         assert_eq!(render.process_block(256).peak_l, 0.0);
+    }
+
+    /// A spare channel slot that still holds effects gives them back through
+    /// the reclaim ring when `AddChannel` reuses it, and the block that does
+    /// so does not allocate.
+    ///
+    /// Nothing in production leaves a populated spare today -- removal
+    /// rebuilds the whole state -- so the test lowers the active count by
+    /// hand, which is what incremental removal will do when it arrives
+    /// (`reports/fable-2026-09-17.md`, finding 3). `reclaim` was a
+    /// `Vec::new()` that nothing drained: the first displaced node allocated
+    /// on the audio thread and then stayed in the live generation. With that
+    /// fixed, the block still made two allocations: resetting the slot's
+    /// sources rebuilt ML-P8's chorus delay line, which `SetChannelSource`
+    /// does in production too.
+    #[test]
+    fn reusing_a_populated_spare_channel_reclaims_its_effects_without_allocating() {
+        use crate::executor::{Executor, ExecutorIo};
+        use crate::RealtimeCommand;
+
+        let mut project = full_bank_project();
+        project.channels = (0..3).map(|index| ProjectChannel::sampler(index, 1)).collect();
+        project.channels[2]
+            .setup
+            .push_effect(mooloop_core::EffectSlotState::of_kind(
+                mooloop_core::EffectKind::Eq,
+            ))
+            .expect("pushed");
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        assert!(render.strips[2].effects.nodes[0].is_some());
+        render.sequencer.set_active_channels(2);
+
+        let (mut cmd_tx, cmd_rx) = rtrb::RingBuffer::new(8);
+        let (evt_tx, _evt_rx) = rtrb::RingBuffer::new(64);
+        let (reclaim_tx, mut reclaim_rx) = rtrb::RingBuffer::new(8);
+        let mut executor = Executor::new(
+            ExecutorIo {
+                cmd_rx,
+                evt_tx,
+                reclaim_tx,
+            },
+            Box::new(render),
+            Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            48_000,
+            crate::load::LoadMeters::new(),
+        );
+        let (mut left, mut right) = ([0.0; 256], [0.0; 256]);
+        let no_midi = || std::iter::empty::<(mooloop_core::MidiPortId, u32, &[u8])>();
+        // Warm: the first block asks the scheduler about its thread and
+        // touches whatever is lazily initialised.
+        executor.process(no_midi(), &mut left, &mut right);
+
+        let storage = RenderState::build_channel(Arc::new(ArcSwapOption::from(None)), 48_000);
+        assert!(cmd_tx
+            .push(RealtimeCommand::Structural(StructuralCommand::AddChannel {
+                storage,
+                source: DeviceKind::Sampler,
+            }))
+            .is_ok());
+        let before = crate::COUNTING.allocations();
+        executor.process(no_midi(), &mut left, &mut right);
+        let allocations = crate::COUNTING.allocations() - before;
+
+        let (mut nodes, mut storages) = (0, 0);
+        while let Ok(reclaimed) = reclaim_rx.pop() {
+            if let StructuralReclaim::Effect(effect) = reclaimed {
+                nodes += usize::from(effect.node.is_some());
+                storages += usize::from(effect.channel.is_some());
+            }
+        }
+        assert_eq!(
+            (allocations, nodes, storages),
+            (0, 1, 1),
+            "(allocations in the block, effect nodes reclaimed, channel \
+             storages reclaimed)"
+        );
     }
 
     fn strip_route(param: u32, depth: f32) -> ModRack {

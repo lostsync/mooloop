@@ -81,9 +81,13 @@ pub enum EngineCommand {
     /// rather than a gesture so that arming before pressing play works, which
     /// is how every recorder is operated.
     SetRecordArmed(bool),
-    /// Shrink the channel pool's active region by one (removes the last
-    /// channel). Kept last-index-only so existing indices stay valid.
-    RemoveChannel,
+    // There is no incremental channel removal. Removing a channel rebuilds
+    // the whole render state (`EngineHandle::install_project`); the unsent
+    // `RemoveChannel` that used to sit here cleared a chain on the audio
+    // thread as a value command, with nowhere to send the nodes it displaced.
+    // When incremental removal arrives it belongs with `AddChannel` as a
+    // `StructuralCommand`, since it displaces boxes the reclaim ring must
+    // carry (`reports/fable-2026-09-17.md`, finding 3).
     /// Mute/unmute a channel.
     SetChannelMuted { channel: u8, muted: bool },
     /// Set a channel's linear output volume in [0, 1].

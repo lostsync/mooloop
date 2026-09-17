@@ -105,6 +105,20 @@ impl Executor {
         self.checked_scheduling = false;
     }
 
+    /// Send as many effects a cleared chain displaced down the reclaim ring
+    /// as it has room for. The rest wait in the renderer for a later block,
+    /// and structural edits wait behind them.
+    fn forward_displaced_effects(&mut self) {
+        for _ in 0..self.reclaim_tx.slots() {
+            let Some(effect) = self.render.pop_displaced_effect() else {
+                break;
+            };
+            if self.reclaim_tx.push(StructuralReclaim::Effect(effect)).is_err() {
+                unreachable!("reclaim capacity checked before forwarding");
+            }
+        }
+    }
+
     /// Render one block into `out_l` and `out_r`.
     ///
     /// `midi` yields `(port, frame offset, raw message)` triples for this
@@ -146,6 +160,7 @@ impl Executor {
         // when its displaced object can immediately leave through the reclaim
         // ring; otherwise retain it and let no later command cross the
         // generation boundary.
+        self.forward_displaced_effects();
         loop {
             let command = match self.pending_command.take() {
                 Some(command) => command,
@@ -160,7 +175,10 @@ impl Executor {
                     continue;
                 }
                 RealtimeCommand::Structural(command) => {
-                    if self.reclaim_tx.slots() == 0 {
+                    // Also held back while effects a previous edit displaced
+                    // are still waiting: the renderer reserved room for one
+                    // edit's worth, not for an edit on top of a backlog.
+                    if self.reclaim_tx.slots() == 0 || self.render.has_displaced_effects() {
                         self.pending_command = Some(RealtimeCommand::Structural(command));
                         break;
                     }
@@ -172,6 +190,7 @@ impl Executor {
                             }
                         }
                     }
+                    self.forward_displaced_effects();
                     continue;
                 }
                 RealtimeCommand::Preview(command) => {

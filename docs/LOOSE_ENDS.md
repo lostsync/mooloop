@@ -811,6 +811,15 @@ state the head can be in and each transition between them: following, the
 validated the same way the preview test was: with a `vec!` put inside
 `freeze` it reports one and names the block.
 
+**Channel-slot reuse joined it 2026-09-17.**
+`reusing_a_populated_spare_channel_reclaims_its_effects_without_allocating`
+runs a structural `AddChannel` over a spare slot that still holds an effect,
+through the executor. On the unfixed tree it counted three allocations and
+reclaimed no node: `RenderState::reclaim` was an undrained `Vec::new()`
+(`reports/fable-2026-09-17.md`, finding 3). Two of the three were something
+else: `MlP8::reset` rebuilt its chorus delay line, and the UI's
+`SetChannelSource` reaches that same reset in production. Both are fixed.
+
 **What is still open is the locks half**, which is measured by nothing. The
 allocator can only answer the allocation question; a lock taken on the
 callback would pass every test in the tree. Nobody has proposed an instrument

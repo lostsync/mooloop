@@ -948,8 +948,22 @@ impl Chorus {
         }
     }
 
+    /// The state [`Self::new`] would build, reached in place.
+    ///
+    /// Not `*self = Self::new(..)`: that allocates a fresh delay line and
+    /// frees the old one, and this runs on the audio thread whenever a
+    /// channel's source is reset (`SetChannelSource`, or `AddChannel` reusing
+    /// a spare slot). The sample rate never changes under a device, so the
+    /// line already has the length `new` would give it.
     fn reset(&mut self, mode: MlP8Chorus, sample_rate: u32) {
-        *self = Self::new(mode, sample_rate);
+        self.effect.reset();
+        self.effect.set_params(mode_params(mode));
+        self.active = mode;
+        self.gain = Smoothed::new(
+            f32::from(u8::from(mode != MlP8Chorus::Off)),
+            CHORUS_FADE_S,
+            sample_rate,
+        );
     }
 
     /// Bring the stage in line with the patch, and say whether it can be
