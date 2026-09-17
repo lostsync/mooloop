@@ -100,12 +100,18 @@ component PreferenceNavItem inherits Rectangle {
     callback selected-page();
 
     height: 28px;
-    background: tap.pressed ? Theme.surface-active : root.selected ? Theme.surface-raised : transparent;
-    Rectangle {
-        width: root.selected ? 2px : 0px;
-        height: parent.height;
-        background: Theme.accent;
-    }
+    border-radius: Theme.radius-md;
+    // The selected page is marked by the whole row's fill, the way
+    // `OutputTargetItem` marks the chosen output target. It used to be a 2px
+    // accent bar instead, which never reached the row's left edge: a child of
+    // a plain Rectangle with no `x` is *centred*, so the marker drew as a
+    // hairline down the middle of the tab, behind the label. Every other
+    // edge bar in this UI writes `x: 0` for that reason -- but a bar beside a
+    // fill is for a second meaning, as the channel plates' colour is, and
+    // selection is the only thing this row has to say.
+    background: tap.pressed ? Theme.surface-active
+        : root.selected ? Theme.accent-active
+        : transparent;
     Text {
         x: 10px;
         width: parent.width - 18px;
