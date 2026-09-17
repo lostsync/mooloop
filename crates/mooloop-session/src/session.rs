@@ -488,7 +488,14 @@ impl Session {
                 PlaybackMode::Pattern
             },
             current_pattern: self.current_pattern as u16,
-            selected_channel: self.selected as u8,
+            // The session keeps a seat; the document keeps the channel in
+            // it. A snapshot that wrote the seat would put the selection back
+            // on a different channel after any edit that renumbered the bank.
+            selected_channel: self
+                .channels
+                .get(self.selected)
+                .map(|channel| channel.id)
+                .unwrap_or_default(),
             channels,
             next_channel_id: self.next_channel_id,
             buses: self.buses.clone(),
@@ -1380,7 +1387,7 @@ impl Session {
         self.control_learn = None;
         self.song_mode = project.playback_mode == PlaybackMode::Song;
         self.current_pattern = project.current_pattern as usize;
-        self.selected = project.selected_channel as usize;
+        self.selected = project.selected_index();
         // Modulation source selection and assignment are session gestures,
         // never document state. A newly loaded project must start unarmed
         // even if it selects the same channel index as the previous one.
@@ -1413,7 +1420,7 @@ impl Session {
         self.track_graph_sent = (mooloop_core::CompiledBusGraph::default(), Vec::new());
         // A load points the device rack back at a channel; the bus the
         // previous document had open means nothing in this one.
-        self.effect_target = EffectTarget::Channel(project.selected_channel);
+        self.effect_target = EffectTarget::Channel(self.selected as u8);
         self.selected_note_id = None;
         self.selected_note_ids.clear();
         self.channels = channels;

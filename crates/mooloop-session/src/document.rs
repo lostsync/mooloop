@@ -379,7 +379,7 @@ impl Session {
         let snapshot = self.project_snapshot(bpm, swing_percent);
         let setup = snapshot
             .channels
-            .get(snapshot.selected_channel as usize)?
+            .get(snapshot.selected_index())?
             .setup
             .clone();
         let effect = match target {

@@ -523,9 +523,16 @@ fn check_channel_ids(doctor: &mut Doctor, project: &mut Project) {
     // loader runs before this pass ever sees a song. This is the save-side
     // door, for a project assembled in memory, and it is silent for the same
     // reason the loader is. The rule is spelled there and nowhere else.
-    if doctor.apply {
-        project.assign_channel_ids();
-    }
+    //
+    // **Not gated on `doctor.apply`**, unlike every correction below it, and
+    // that is deliberate: this is normalization rather than a repair, and
+    // every check downstream that resolves a channel by id -- the selection,
+    // and from `channel-identity/02` onwards the fields that name another
+    // channel -- is unanswerable until it has run. Gating it made
+    // `inspect_project` report a selection naming nothing on a perfectly
+    // ordinary song that simply had not been given its ids yet.
+    // `inspect_project` hands this a clone for exactly this reason.
+    project.assign_channel_ids();
 
     // What that pass cannot decide is which of two channels wearing one id is
     // the one an address meant. Nothing this program does can produce a
@@ -644,17 +651,24 @@ fn check_project(doctor: &mut Doctor, project: &mut Project) {
 
     check_channel_ids(doctor, project);
 
-    // Clamped against what survived the checks above, so an out-of-range
-    // selection is repaired against the real bank rather than the broken one.
-    let last_channel = project.channels.len().saturating_sub(1);
-    doctor.fit_int(
-        "song.selected_channel",
-        SONG,
-        "the selected channel",
-        &mut project.selected_channel,
-        0,
-        u8::try_from(last_channel).unwrap_or(u8::MAX),
-    );
+    // Judged against what survived the checks above, so a selection is
+    // repaired against the real bank rather than the broken one. It names a
+    // channel rather than a seat now, so the question is no longer "is it in
+    // range" -- an id of 40 is perfectly ordinary in a song that has been
+    // edited forty times -- but "is that channel still here".
+    if project.channel_index(project.selected_channel).is_none() {
+        if let Some(first) = project.channels.first().map(|channel| channel.id) {
+            let found = project.selected_channel.0;
+            if doctor.correct(
+                "song.selected_channel",
+                SONG,
+                format!("it has channel {found} open, which this song does not have"),
+                "open the first channel instead".into(),
+            ) {
+                project.selected_channel = first;
+            }
+        }
+    }
     let last_pattern = project.pattern_lengths.len().saturating_sub(1);
     doctor.fit_int(
         "song.current_pattern",
@@ -2926,7 +2940,10 @@ mod tests {
     fn out_of_range_song_selections_are_pulled_back_onto_what_exists() {
         let mut project = Project {
             current_pattern: 40,
-            selected_channel: 12,
+            // Not "out of range" any more -- an id is not an index -- but a
+            // channel this song does not have, which is the same mistake and
+            // the same repair.
+            selected_channel: ChannelId(12),
             bpm: 4000,
             playlist: vec![PatternPlacement::new(9, MAX_PLAYLIST_TICKS + 500)],
             ..Project::default()
@@ -2935,7 +2952,7 @@ mod tests {
         let diagnosis = repair_project(&mut project);
         assert!(diagnosis.is_usable(), "{diagnosis}");
         assert_eq!(project.current_pattern, 0);
-        assert_eq!(project.selected_channel, 0);
+        assert_eq!(project.selected_channel, project.channels[0].id);
         assert_eq!(project.bpm, 999);
         assert_eq!(project.playlist[0].pattern, 0);
         assert_eq!(project.playlist[0].start_tick, MAX_PLAYLIST_TICKS - 1);

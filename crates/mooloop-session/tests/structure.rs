@@ -278,7 +278,8 @@ fn installing_a_shorter_document_leaves_the_selection_somewhere_real() {
     // Drop the last channel, the way a delete does.
     let mut project = session.project_snapshot(120, 50);
     project.remove_channel(2).expect("channel 2 exists");
-    project.selected_channel = 2usize.min(project.channels.len() - 1) as u8;
+    // No hand-clamp any more: the selection named the channel that was just
+    // deleted, and `remove_channel` is what answers for that.
     let samples = vec![None; project.channels.len()];
     session.replace_project(&project, &samples);
 

@@ -1447,7 +1447,9 @@ fn queue_channel_insert(
         return false;
     };
     samples.insert(index, clipboard.sample);
-    project.selected_channel = index as u8;
+    // The paste selects what it just made, and names it: `insert_channel`
+    // minted its identity on the way in.
+    project.selected_channel = project.channels[index].id;
     queue_structural_edit(
         tx,
         before,
@@ -1480,7 +1482,9 @@ fn queue_channel_delete(
         return false;
     }
     samples.remove(index);
-    project.selected_channel = index.min(project.channels.len() - 1) as u8;
+    // No clamp here any more. `remove_channel` moves the selection only when
+    // it was the deleted channel that held it, which is the case this line
+    // used to get wrong for every other channel.
     queue_structural_edit(
         tx,
         before,
@@ -1526,7 +1530,8 @@ fn queue_channel_move(
         let sample = samples.remove(from);
         samples.insert(to, sample);
     }
-    project.selected_channel = to as u8;
+    // The selection is untouched: it names the channel being dragged, which
+    // is still the same channel wherever it lands.
     queue_structural_edit(
         tx,
         before,
@@ -5673,7 +5678,7 @@ impl AppUi {
                 let snapshot = st
                     .borrow()
                     .session.project_snapshot(window.get_bpm(), window.get_swing_percent());
-                let channel = snapshot.channels[snapshot.selected_channel as usize]
+                let channel = snapshot.channels[snapshot.selected_index()]
                     .setup
                     .clone();
                 let mode = asset_mode_from_window(&window);
@@ -12862,9 +12867,19 @@ impl AppUi {
                                             })
                                             .collect();
                                         project.next_channel_id = next_channel_id;
-                                        project.selected_channel = project
-                                            .selected_channel
-                                            .min(project.channels.len().saturating_sub(1) as u8);
+                                        // A kit can be shorter than the
+                                        // song, so the selected channel may
+                                        // be one of the ones it dropped.
+                                        if project
+                                            .channel_index(project.selected_channel)
+                                            .is_none()
+                                        {
+                                            if let Some(first) =
+                                                project.channels.first().map(|c| c.id)
+                                            {
+                                                project.selected_channel = first;
+                                            }
+                                        }
                                         let mut samples = current_samples;
                                         samples.resize(project.channels.len(), None);
                                         samples.truncate(project.channels.len());
@@ -12880,7 +12895,7 @@ impl AppUi {
                                 }
                                 (LoadTarget::Channel, LoadedDocument::Channel(setup)) => {
                                     let mut project = current;
-                                    let selected = project.selected_channel as usize;
+                                    let selected = project.selected_index();
                                     project.channels[selected].setup = *setup;
                                     // A saved rack still names the channel it
                                     // was authored on. Point it at this one,
@@ -12897,7 +12912,7 @@ impl AppUi {
                                 }
                                 (LoadTarget::Generator { .. }, LoadedDocument::Generator(source)) => {
                                     let mut project = current;
-                                    let selected = project.selected_channel as usize;
+                                    let selected = project.selected_index();
                                     project.channels[selected].setup.channel.kind = source.kind();
                                     project.channels[selected].setup.source = *source;
                                     let mut samples = current_samples;

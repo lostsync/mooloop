@@ -1,6 +1,6 @@
 # Channel identity — plan status
 
-**Written 2026-09-17. Step 01 landed 2026-09-17.** It came out of the architecture
+**Written 2026-09-17. Steps 01 and 02 landed 2026-09-17.** It came out of the architecture
 section of `reports/fable-2026-09-17.md`, and Adam asked for it the same day:
 a channel gets a durable id, the way a device already has one, before plugin
 hosting starts keying anything by channel position.
@@ -48,6 +48,16 @@ this once:
 - **Kits, channel documents and pasted channels drop their ids and get new
   ones**, the way device presets already do.
 
+**The four-fields table below was too optimistic**, and step 02 found out how
+on contact. Only `selected_channel` converted with no change to the saved
+form. Of the other three, the envelope gate has an audio-thread reader and so
+depends on step 05 rather than preceding it; Aux In's source is an addressable
+parameter whose descriptor range an id does not fit, and Adam settled on
+2026-09-17 that the parameter stays a position with the identity beside it;
+and a control binding is unblocked but needs a decision about how to hold a
+scope that is an id. All three are
+[06](06-the-remaining-cross-channel-addresses.md).
+
 **Which layers change** (the survey counted sites on 2026-09-17):
 
 | Layer | Sites | Decision |
@@ -62,10 +72,11 @@ this once:
 | Step | What | Rung | State |
 | --- | --- | --- | --- |
 | [01](01-the-id.md) | `ChannelId`, minting, load-time assignment, fresh ids for kits and pastes | core, project | **landed 2026-09-17** |
-| [02](02-cross-channel-addresses.md) | The four saved fields that name another channel hold an id | core, project, session | not started |
+| [02](02-cross-channel-addresses.md) | `selected_channel` holds an id | core, project, session | **landed 2026-09-17**, one field of four |
 | [03](03-session-keys.md) | Session state keyed by id; the parallel sample list folds into the channel | session, UI build | not started |
 | [04](04-keep-the-transport.md) | An install carries the transport across (the interim fix `LOOSE_ENDS.md` names) | engine, UI | not started |
 | [05](05-strips-by-id.md) | The engine keeps strips whose id and chain survive an install | engine | not started |
+| [06](06-the-remaining-cross-channel-addresses.md) | The other three fields that name another channel | core, session, dsp | not started; the gate half waits on 05 |
 
 Tracks (`BusSetup`) have the same problem under `TrackEdit` and the same
 fix. They are left out of this plan on purpose: channels are what plugins and
@@ -119,9 +130,21 @@ Eleven round-trip tests in `mooloop-project` had to say
 cloning one channel thirty-two times. Both are the same correction: a channel
 is now a thing with an identity, and a test that makes one has to say which.
 
+## What step 02 actually did
+
+`Project.selected_channel` is a `ChannelId`, and the bug that made it worth
+doing first is fixed: an insert above the selected channel never moved the
+selection at all, and a removal clamped instead of following. Both were
+verified failing on the tree before the change.
+
+The step's own proposed test -- a control binding surviving a delete and a
+redo -- passes on the old tree, because index arithmetic is symmetric under
+undo. It was dropped, as that file instructed, and two selection tests
+replaced it.
+
 ## Open questions
 
-None of these needs Adam before step 01.
+None of these needs Adam before step 03.
 
 - Step 04 changes what a user hears during an edit: the song keeps playing
   across a paste or a move. That should be listened to, not only tested.

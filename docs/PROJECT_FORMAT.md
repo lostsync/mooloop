@@ -90,7 +90,7 @@ ppq = 96
 beats_per_bar = 4
 playback_mode = "pattern" # or "song"
 current_pattern = 0
-selected_channel = 0
+selected_channel = 0 # a channel id, not a position -- see below
 pattern_lengths = [16]
 
 [[document.playlist]]
@@ -295,9 +295,28 @@ before any of them existed still loads:
   never reused, so an address left holding it resolves to nothing rather than
   to whichever channel closed the gap.
 
-  The id is not yet what anything *saves*: the four fields that name another
-  channel are still positions, and `docs/plans/channel-identity/02` is where
-  they move.
+  **`selected_channel` is the first field to hold one.** It is written as a
+  bare number exactly as it always was, and a song written before channels
+  had identities reads its old index as an id -- which names the same
+  channel, because a bank with no identities takes its positions. So the
+  format did not change; only what the number means did, and it means the
+  same thing for every file written so far.
+
+  This is what the identity is for, in its smallest form. As a position the
+  selection had to be renumbered by every structural edit, and two of the
+  three did it wrong: an insert above the selected channel never moved it at
+  all, and a removal *clamped* rather than followed, which is only
+  accidentally right when the selection is at the end of the bank. As an
+  identity there is nothing to renumber. A selection naming a channel the
+  song does not have is repaired to the first channel
+  (`song.selected_channel`), which is a different question from the range
+  check it replaced: an id of 40 is perfectly ordinary in a song that has
+  been edited forty times.
+
+  The other three fields that name another channel -- a control binding's
+  target, the envelope gate's `input_channel`, and Aux In's `source_channel`
+  -- are **still positions**, renumbered on every structural edit.
+  `docs/plans/channel-identity/06` records what each of them is waiting on.
 - **Analog sum is one defaulted boolean per track.** `buses[].bus.console`
   says whether that track's output is encoded on its way into its destination,
   to be decoded there with everything else that opted in. It defaults to

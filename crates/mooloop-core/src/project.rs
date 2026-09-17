@@ -788,7 +788,22 @@ pub struct Project {
     pub beats_per_bar: u8,
     pub playback_mode: PlaybackMode,
     pub current_pattern: u16,
-    pub selected_channel: u8,
+    /// The channel the interface is editing, as an identity rather than a
+    /// seat.
+    ///
+    /// **This is why the identity exists**, in its smallest form. As a
+    /// position it had to be renumbered by every structural edit, and two of
+    /// the three did it wrong: `insert_channel` never touched it at all, so
+    /// adding a channel above the selected one silently moved the selection
+    /// to its neighbour, and `remove_channel` *clamped* rather than followed,
+    /// which is only accidentally right when the selection is at the end.
+    /// As an identity there is nothing to renumber and nothing to get wrong.
+    ///
+    /// Serialized as a bare number and read back as one, so a song written
+    /// before this decodes its old index as an id -- which names the same
+    /// channel, because a bank with no identities takes its positions.
+    /// Resolve it through [`Self::selected_index`] rather than by hand.
+    pub selected_channel: ChannelId,
     pub channels: Vec<ProjectChannel>,
     /// The mint [`ProjectChannel::id`] comes from, with the same defaulting
     /// as `ChannelSetup::next_device_id`: a song written before channels had
@@ -968,7 +983,7 @@ impl Default for Project {
             beats_per_bar: crate::time::BEATS_PER_BAR as u8,
             playback_mode: PlaybackMode::Pattern,
             current_pattern: 0,
-            selected_channel: 0,
+            selected_channel: ChannelId(0),
             channels: vec![ProjectChannel::sampler(0, 1).with_id(ChannelId(0))],
             next_channel_id: 1,
             buses: default_buses(),
@@ -1050,6 +1065,17 @@ impl Project {
             return None;
         }
         self.channels.iter().position(|channel| channel.id == id)
+    }
+
+    /// Where [`Self::selected_channel`] currently sits.
+    ///
+    /// Falls back to the first channel when the selection names one this song
+    /// does not have -- a hand-edited file, or a document saved by a version
+    /// that let the selection go stale. Every reader goes through here, so
+    /// there is one answer to "which seat is selected" rather than a `as
+    /// usize` at each call site that has to remember the fallback.
+    pub fn selected_index(&self) -> usize {
+        self.channel_index(self.selected_channel).unwrap_or(0)
     }
 
     /// Point every lane and route that still names the Buffer's retired
@@ -1166,8 +1192,14 @@ impl Project {
         }
         let removed = self.channels.remove(index);
         self.rescope_after(ChannelEdit::Removed(index as u8));
-        self.selected_channel =
-            (self.selected_channel as usize).min(self.channels.len() - 1) as u8;
+        // The selection names a channel rather than a seat, so removing any
+        // *other* channel leaves it exactly where it was. Only losing the
+        // selected channel itself needs an answer, and the answer is whoever
+        // closed the gap -- or the last channel, when it was the end.
+        if removed.id == self.selected_channel {
+            let seat = index.min(self.channels.len() - 1);
+            self.selected_channel = self.channels[seat].id;
+        }
         Some(removed)
     }
 
@@ -1220,9 +1252,9 @@ impl Project {
             to: to as u8,
         };
         self.rescope_after(edit);
-        // The selection is one more thing that named a channel. Nothing can
-        // be dropped by a move, so this never has to clamp.
-        self.selected_channel = edit.channel(self.selected_channel).unwrap_or(self.selected_channel);
+        // The selection is *not* one more thing to renumber any more: it
+        // names the channel, and a move does not change which channel that
+        // is. This is what the identity bought.
         Some(edit)
     }
 
@@ -1536,6 +1568,86 @@ pub type ChannelPreset = ChannelSetup;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The selection names a channel, so an edit to a different channel
+    /// leaves it alone.** Both halves of this failed before the id existed,
+    /// and they failed in opposite directions: `insert_channel` never
+    /// rescoped the selection at all, so adding a channel above it moved the
+    /// selection down one; `remove_channel` *clamped* instead of following,
+    /// which is only accidentally right when the selection is at the end of
+    /// the bank. Verified failing on the tree before the change, which is the
+    /// only way to know a test of this shape is doing anything.
+    #[test]
+    fn the_selection_survives_an_edit_to_another_channel() {
+        let mut project = Project::default();
+        for index in 1..4 {
+            project.insert_channel(index, ProjectChannel::mlm1(index, 1));
+        }
+        for index in 0..4usize {
+            project.channels[index].setup.channel.name = format!("ch{index}");
+        }
+        let selected = |project: &Project| {
+            project.channels[project.selected_index()].setup.channel.name.clone()
+        };
+
+        project.selected_channel = project.channels[2].id;
+        assert_eq!(selected(&project), "ch2");
+
+        project.insert_channel(0, ProjectChannel::sampler(9, 1)).expect("room");
+        assert_eq!(selected(&project), "ch2", "an insert above the selection");
+
+        project.remove_channel(0).expect("the newcomer exists");
+        assert_eq!(selected(&project), "ch2", "a removal above the selection");
+
+        project.move_channel(3, 0).expect("a real move");
+        assert_eq!(selected(&project), "ch2", "a move that passed the selection");
+
+        // And the selected channel moving is the same answer, which is the
+        // case a position got right for the wrong reason.
+        let selected_index = project.selected_index();
+        project.move_channel(selected_index, 0).expect("a real move");
+        assert_eq!(selected(&project), "ch2", "the selected channel itself moved");
+    }
+
+    /// Losing the selected channel is the one case that needs an answer, and
+    /// the answer is whoever closed the gap -- or the last channel, when the
+    /// selection was at the end.
+    #[test]
+    fn deleting_the_selected_channel_selects_its_seat() {
+        let mut project = Project::default();
+        for index in 1..4 {
+            project.insert_channel(index, ProjectChannel::mlm1(index, 1));
+        }
+        for index in 0..4usize {
+            project.channels[index].setup.channel.name = format!("ch{index}");
+        }
+        let selected = |project: &Project| {
+            project.channels[project.selected_index()].setup.channel.name.clone()
+        };
+
+        project.selected_channel = project.channels[1].id;
+        project.remove_channel(1).expect("channel 1 exists");
+        assert_eq!(selected(&project), "ch2", "whoever closed the gap");
+
+        project.selected_channel = project.channels[2].id;
+        project.remove_channel(2).expect("the last channel");
+        assert_eq!(selected(&project), "ch2", "the new last channel");
+    }
+
+    /// A selection naming a channel the song does not have resolves to the
+    /// first one rather than panicking or addressing a stranger. `selected_index`
+    /// is the only place that decides this.
+    #[test]
+    fn a_selection_that_names_nothing_resolves_to_the_first_channel() {
+        let mut project = Project::default();
+        project.insert_channel(1, ProjectChannel::mlm1(1, 1));
+
+        project.selected_channel = ChannelId(9_999);
+        assert_eq!(project.selected_index(), 0);
+
+        project.selected_channel = ChannelId::UNASSIGNED;
+        assert_eq!(project.selected_index(), 0);
+    }
 
     /// **A removed channel's id is never handed to its successor.** The whole
     /// point of an identity over a position: an address left holding the id of
