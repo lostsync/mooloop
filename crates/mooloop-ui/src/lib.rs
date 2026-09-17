@@ -6021,6 +6021,8 @@ impl AppUi {
         let audio_tx = AudioActionSender(pending_tx.clone());
         let telemetry_tx = TelemetryActionSender(pending_tx.clone());
         let preview_tx = PreviewSender(pending_tx.clone());
+        // The pump's own sender, for the messages a project load keeps.
+        let requeue_tx = pending_tx.clone();
         let structural_tx = StructuralCommandSender(pending_tx);
         let sample_rate = handle.sample_rate();
         // Sample slots are published out-of-band, so source replacement asks
@@ -12896,7 +12898,16 @@ impl AppUi {
                                 // not reached the engine yet: the prepared
                                 // project already contains them (or, for a
                                 // song load, deliberately supersedes them).
-                                while pending_rx.try_recv().is_ok() {}
+                                // What is addressed to the machine rather
+                                // than the document goes back on the queue,
+                                // in order, for the drain below.
+                                let kept: Vec<_> = pending_rx
+                                    .try_iter()
+                                    .filter(PendingEngineMessage::survives_project_load)
+                                    .collect();
+                                for message in kept {
+                                    let _ = requeue_tx.send(message);
+                                }
                                 while sample_reset_rx.try_recv().is_ok() {}
                                 if !install_project_in_ui(
                                     &mut handle,

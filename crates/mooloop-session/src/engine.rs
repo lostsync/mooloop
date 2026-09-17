@@ -141,6 +141,27 @@ pub enum PendingEngineMessage {
     MidiRouting(Vec<mooloop_core::MidiInputRoute>),
 }
 
+impl PendingEngineMessage {
+    /// Whether this message still means something after a load replaces the
+    /// whole project.
+    ///
+    /// A load discards what is queued, because the prepared project already
+    /// contains every edit (or deliberately supersedes it). That is true of
+    /// anything addressed to the document, and not of the two kinds addressed
+    /// to the machine: an Audio preferences action and the preview volume are
+    /// in no project, so dropping one lost a buffer-size pick or a knob turn
+    /// for good.
+    ///
+    /// Everything else is dropped, and some of it *must* be. A routing table
+    /// or a spectrum subscription queued before the load is indexed by the
+    /// outgoing project's channels and devices, and applied afterwards it
+    /// would overwrite what the install carried for the incoming one. Record
+    /// arm travels with the install itself (`mooloop_engine::InputState`).
+    pub fn survives_project_load(&self) -> bool {
+        matches!(self, Self::Audio(_) | Self::PreviewGain(_))
+    }
+}
+
 /// Display subscriptions are handled by the pump, which exclusively owns the
 /// engine handle. They observe a device's signal; they are not audio-thread
 /// commands and never become modulation routes.
@@ -789,6 +810,26 @@ impl Session {
 mod tests {
     use super::*;
     use mooloop_core::{PatternPlacement, BEATS_PER_BAR, TICKS_PER_BAR, TICKS_PER_STEP};
+
+    /// A load keeps what is addressed to the machine and drops what is
+    /// addressed to the outgoing project -- including a routing table, which
+    /// is in that project's channel order.
+    #[test]
+    fn a_load_keeps_machine_settings_and_drops_project_addressed_messages() {
+        assert!(PendingEngineMessage::Audio(AudioAction::SelectBufferSize(256))
+            .survives_project_load());
+        assert!(PendingEngineMessage::PreviewGain(0.5).survives_project_load());
+
+        assert!(!PendingEngineMessage::MidiRouting(Vec::new()).survives_project_load());
+        assert!(!PendingEngineMessage::Command(EngineCommand::SetRecordArmed(true))
+            .survives_project_load());
+        assert!(!PendingEngineMessage::Telemetry(TelemetryAction::SetEffectSpectrumEnabled {
+            target: EffectTarget::Channel(0),
+            slot: 0,
+            enabled: true,
+        })
+        .survives_project_load());
+    }
 
     /// Pattern mode wraps inside the pattern on screen; song mode runs along
     /// the arrangement. The two cannot share one modulus, which is the whole
