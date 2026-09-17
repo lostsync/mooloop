@@ -25,7 +25,7 @@ engine, but it is not something the user sees.
 
 ## What exists
 
-- **MIDI capture works end to end**, with the two bugs below.
+- **MIDI capture works end to end.**
 - **Nothing takes audio in.** JACK registers `out_l`, `out_r` and `midi_in`.
   Core Audio opens an output stream only. `Executor::process` has no input
   parameter.
@@ -42,8 +42,8 @@ engine, but it is not something the user sees.
 
 ## Before step 01: two bugs in the MIDI path this plan builds on
 
-Found while surveying on 2026-09-17, and being fixed on
-`fix/midi-routing-and-record-wrap`:
+Found while surveying on 2026-09-17, and **fixed on `main` the same day**
+(`9d81e3a`, `6acf812`, then four follow-ups ending at `e293d29`):
 
 - `EngineHandle::install_project` never re-attached the MIDI routing cell, so
   after the first project install, per-channel MIDI input choices never
@@ -62,7 +62,7 @@ that the second fix gives notes.
 | [01](01-input-in-the-engine.md) | Drivers deliver input; the executor carries it; input meters | engine; macOS unverified | not started |
 | [02](02-one-input-menu.md) | `ChannelInput`: MIDI or audio, one picker, saved | core, project, session, UI build | not started |
 | [03](03-capture.md) | Bounded capture on the audio thread, drained to a WAV file off it | engine, session | not started |
-| [04](04-the-take.md) | A finished take becomes the channel's sample, with a note and an undo entry | session, UI | not started |
+| [04](04-the-take.md) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | not started |
 | [05](05-interface.md) | Record button, input meter, monitoring, the non-sampler rule | UI build | not started |
 
 ## Open questions for Adam
