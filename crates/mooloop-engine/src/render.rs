@@ -3083,6 +3083,16 @@ impl RenderState {
         self.preview_retired.pop()
     }
 
+    /// Hands back a sample a channel's sampler let go of on a note-on, for
+    /// disposal off the realtime thread. Every materialised strip, not just
+    /// the live ones: a strip the project stopped using can still be holding
+    /// what it displaced before the ring had room.
+    pub(crate) fn pop_retired_sampler_audio(&mut self) -> Option<mooloop_dsp::RetiredAudio> {
+        self.strips
+            .iter_mut()
+            .find_map(|strip| strip.sampler.pop_retired())
+    }
+
 
     /// Sums the preview voice into the master bus. Deliberately after the
     /// bus walk: the preview bypasses the project's chains, balance, and
@@ -6282,6 +6292,86 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             allocations, 0,
             "the callback allocated {allocations} times on the block that \
              retired a preview"
+        );
+    }
+
+    /// **A note-on that replaces a voice's sample frees nothing on the
+    /// callback.** Finding 2 of `reports/fable-2026-09-17.md`.
+    ///
+    /// Load sample A, play it, load sample B over it and let go of A the way
+    /// the session does (no undo entry pins it), then play the same voice
+    /// again. The voice was A's last holder, so assigning B to it used to free
+    /// A's frame buffer inside `trigger` -- allocation-free, and therefore
+    /// invisible to the allocation counter, which is why this counts frees
+    /// too.
+    #[test]
+    fn a_note_on_that_replaces_a_voice_sample_does_not_free() {
+        let sample = |frames: usize| {
+            Arc::new(SampleData {
+                frames: vec![[0.5, -0.5]; frames],
+                sample_rate: 48_000,
+                root_note: 60,
+            })
+        };
+        let slots = empty_channel_audio_bank();
+        let first = sample(64);
+        let first_alive = Arc::downgrade(&first);
+        slots[0].store(Some(Arc::new(ChannelAudioSnapshot::sample(first))));
+        let mut render = RenderState::new(48_000, slots.clone());
+        render.load_project(&Project::default());
+        let trigger = |render: &mut RenderState| {
+            render.apply_command(EngineCommand::TriggerChannelNote {
+                channel: 0,
+                note: 60,
+                velocity: 127,
+            });
+        };
+
+        // A plays and runs out, so the voice is free again and the next note
+        // lands on the same one.
+        trigger(&mut render);
+        render.process_block(512);
+        render.process_block(512);
+        render.process_block(512);
+        assert!(render.strips[0].sampler.voice_positions()[0].is_nan());
+
+        // The control thread publishes B -- long enough to still be sounding
+        // after the block under test -- and nothing but the voice still holds
+        // A.
+        slots[0].store(Some(Arc::new(ChannelAudioSnapshot::sample(sample(4_096)))));
+        assert!(first_alive.upgrade().is_some(), "the voice should still hold A");
+        trigger(&mut render);
+
+        let allocations = crate::COUNTING.allocations();
+        let frees = crate::COUNTING.frees();
+        render.process_block(512);
+        let allocations = crate::COUNTING.allocations() - allocations;
+        let frees = crate::COUNTING.frees() - frees;
+
+        assert!(
+            !render.strips[0].sampler.voice_positions()[0].is_nan(),
+            "the block has to actually play B, or this measures the wrong thing"
+        );
+        assert_eq!(
+            allocations, 0,
+            "the callback allocated {allocations} times on a note-on that \
+             replaced a voice's sample"
+        );
+        assert_eq!(
+            frees, 0,
+            "the callback freed {frees} times on a note-on that replaced a \
+             voice's sample"
+        );
+
+        // And A leaves through the reclaim path rather than being leaked:
+        // the voice's handle and the snapshot the sampler last read.
+        let retired: Vec<_> = std::iter::from_fn(|| render.pop_retired_sampler_audio()).collect();
+        assert_eq!(retired.len(), 2, "expected A's sample and its snapshot");
+        assert!(first_alive.upgrade().is_some());
+        drop(retired);
+        assert!(
+            first_alive.upgrade().is_none(),
+            "the reclaim path should have held A's last reference"
         );
     }
 
@@ -10783,7 +10873,15 @@ mod footprint {
         // that two slots meant a note-on could land between the two stores
         // and play a new buffer against old markers. It is recorded here
         // because a figure that only ever grows stops being read.
-        assert_eq!(size_of::<ChannelStrip>(), 42_216);
+        //
+        // Finding 2 of `reports/fable-2026-09-17.md` added 152, all in the
+        // sampler, and all so a note-on never frees a sample buffer: a fixed
+        // ring of sixteen displaced voice samples (128), its count (8), one
+        // displaced snapshot (8), and the snapshot the last note-on read,
+        // held rather than dropped (8). The buffers themselves are not new
+        // memory -- they were already alive until the voice let go -- they
+        // just leave on the control thread now.
+        assert_eq!(size_of::<ChannelStrip>(), 42_368);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -10808,7 +10906,8 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        assert_eq!(per_live, 60_656);
+        // The sampler's retired-sample ring is the latest 152 of this.
+        assert_eq!(per_live, 60_808);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -10863,7 +10962,9 @@ mod footprint {
         // The v1 poly's mono mode added 264 a live channel and nothing to the
         // reserved figure -- a held-note stack is per sounding voice, not per
         // addressable channel -- so four KiB across sixteen.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_434);
+        // The sampler's retired-sample ring added 152 a live channel, so
+        // that a note-on never frees a buffer: 2.4 KiB across sixteen.
+        assert_eq!((fixed + per_live * 16) / 1024, 1_437);
     }
 
 }

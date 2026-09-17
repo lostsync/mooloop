@@ -260,6 +260,17 @@ impl Executor {
                 .reclaim_tx
                 .push(StructuralReclaim::PreviewSample { sample });
         }
+        // Samples a note-on took off a voice, straight to the ring. No holding
+        // area here, unlike the preview: each sampler's own fixed ring already
+        // is one, and a sampler whose ring stays full refuses notes rather
+        // than dropping anything. Popped only once a slot is known to be
+        // free, so the push cannot hand the handle back to be dropped.
+        while self.reclaim_tx.slots() > 0 {
+            let Some(audio) = self.render.pop_retired_sampler_audio() else {
+                break;
+            };
+            let _ = self.reclaim_tx.push(StructuralReclaim::SamplerAudio(audio));
+        }
         let master = self.render.master();
         out_l[..frames].copy_from_slice(&master.l[..frames]);
         out_r[..frames].copy_from_slice(&master.r[..frames]);

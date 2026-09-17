@@ -1588,6 +1588,10 @@ name substituted, and the song opens with its samples rather than opening
 silent.
 
 
+## Sep 17 (the review) — a note-on that freed a buffer
+
+The whole-system review's second finding: `Sampler::trigger` assigned the new sample over a voice's old one, and after a load-over-load with no undo entry the voice was the old buffer's last holder, so the next note on it freed the buffer in the callback. The allocation test could not see it, because freeing is not allocating; the counting allocator now counts frees per thread too, and the new test failed red on exactly one free before the fix. Displaced samples, and the snapshot the sampler last read, now go into a fixed per-sampler ring the executor drains into the reclaim path; a full ring refuses the note rather than drop anything.
+
 ## Open threads
 
 Refreshed 2026-09-02, with the September documentation audit's threads merged in on 2026-09-04 and Adam's 2026-09-05 list merged in after that. Four of the six threads listed here in August are closed: modulation drives things now, the buffer device exists, undo and clipboard are real, and the convolution reverb that needed an IR loader was replaced outright by an FDN hall — so `StereoIr` is no longer the boundary anything is waiting on.

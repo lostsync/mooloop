@@ -41,6 +41,12 @@ use rtrb::{Consumer, Producer};
 /// see an allocation paired with a free in the same block, and that pair is
 /// exactly what a `Vec` reallocating on the audio callback looks like.
 ///
+/// `frees()` is the same shape for `dealloc`, and exists because a callback
+/// can be clean of allocations and still free: dropping the last `Arc` of a
+/// sample buffer on the audio thread allocates nothing and releases
+/// megabytes. (`realloc` is not counted there; `allocations()` already sees
+/// it.)
+///
 /// Per thread because the callback is one thread and the assertion is about
 /// what *it* did. A process-wide count would be measuring the test harness.
 #[cfg(test)]
@@ -55,6 +61,9 @@ thread_local! {
     /// through `try_with` so a late allocation during TLS teardown returns
     /// rather than panicking.
     static ALLOCATION_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Deallocation calls made on this thread. Same construction, same
+    /// reasons.
+    static FREE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -66,6 +75,11 @@ impl CountingAllocator {
     /// How many times this thread has called the allocator.
     pub(crate) fn allocations(&self) -> usize {
         ALLOCATION_CALLS.try_with(|calls| calls.get()).unwrap_or(0)
+    }
+
+    /// How many times this thread has handed memory back to the allocator.
+    pub(crate) fn frees(&self) -> usize {
+        FREE_CALLS.try_with(|calls| calls.get()).unwrap_or(0)
     }
 }
 
@@ -79,6 +93,7 @@ unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
         self.live.fetch_sub(layout.size(), Ordering::Relaxed);
+        let _ = FREE_CALLS.try_with(|calls| calls.set(calls.get() + 1));
         unsafe { std::alloc::System.dealloc(ptr, layout) }
     }
 
@@ -341,6 +356,9 @@ pub(crate) enum StructuralReclaim {
     /// ownership round trip as an effect node: the sample's last reference
     /// must not be dropped on the realtime thread.
     PreviewSample { sample: Arc<SampleData> },
+    /// A sample, or the snapshot that carried it, that a sampler voice let go
+    /// of on a note-on. Either can be the last reference to the buffer.
+    SamplerAudio(mooloop_dsp::RetiredAudio),
     /// Stretch state displaced by an install, or surrendered when a sampler
     /// stopped stretching. Same reason as the rest: megabytes of `Box` must
     /// not be freed on the audio thread.
@@ -633,6 +651,7 @@ impl EngineHandle {
                 StructuralReclaim::Effect(effect) => drop(effect),
                 StructuralReclaim::RenderState(render) => drop(render),
                 StructuralReclaim::PreviewSample { sample } => drop(sample),
+                StructuralReclaim::SamplerAudio(audio) => drop(audio),
                 StructuralReclaim::SamplerStretch(pool) => drop(pool),
                 StructuralReclaim::Compensation(delay) => drop(delay),
                 StructuralReclaim::ConsoleSum(buffer) => drop(buffer),

@@ -89,4 +89,4 @@ pub use node::{
     feedback_tail_frames, AudioNode, DynamicsFrame, ProcessContext, REST_EPSILON, SILENCE_PEAK,
 };
 pub use polysynth::PolySynth;
-pub use sampler::{ChannelAudioSnapshot, SampleData, Sampler};
+pub use sampler::{ChannelAudioSnapshot, RetiredAudio, SampleData, Sampler};

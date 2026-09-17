@@ -364,12 +364,88 @@ struct VoiceContext {
     bpm: f64,
 }
 
+/// A sample handle a sampler let go of on the audio thread, on its way to be
+/// dropped somewhere else.
+///
+/// Either may be the last reference to a buffer of megabytes: the control
+/// thread publishes a new snapshot and the session lets go of the old sample
+/// without an undo entry to pin it, so the voice that last played it -- or the
+/// snapshot the sampler last read -- is all that is left. Dropping that on the
+/// callback frees the buffer there.
+pub enum RetiredAudio {
+    /// What a voice held until a note-on gave it a different sample.
+    Sample(Arc<SampleData>),
+    /// The channel snapshot the sampler last read, displaced by a newer one.
+    Snapshot(Arc<ChannelAudioSnapshot>),
+}
+
+/// Handles a sampler has displaced and the host has not collected yet.
+///
+/// Fixed-size, so pushing never allocates, and one voice's worth of room each:
+/// a voice gives up a sample only when it is struck with a different one, so
+/// between two host drains the ring fills only if every voice is re-struck
+/// across two bank changes. When it is full the note is refused rather than
+/// the handle dropped -- the same policy as the preview voice's ring
+/// (`docs/plans/archive/control-plane-seams/04`).
+struct RetiredSamples {
+    samples: [Option<Arc<SampleData>>; MAX_SAMPLER_VOICES as usize],
+    len: usize,
+    /// One displaced snapshot. A second is only possible if the channel is
+    /// published twice between drains, and then the sampler keeps reading the
+    /// snapshot it has until this one is collected.
+    snapshot: Option<Arc<ChannelAudioSnapshot>>,
+}
+
+impl RetiredSamples {
+    fn new() -> Self {
+        Self {
+            samples: std::array::from_fn(|_| None),
+            len: 0,
+            snapshot: None,
+        }
+    }
+
+    fn samples_full(&self) -> bool {
+        self.len == self.samples.len()
+    }
+
+    /// Callers check `samples_full` first; a push past it hands the sample
+    /// back rather than dropping it.
+    fn push_sample(&mut self, sample: Arc<SampleData>) -> Option<Arc<SampleData>> {
+        if self.samples_full() {
+            return Some(sample);
+        }
+        self.samples[self.len] = Some(sample);
+        self.len += 1;
+        None
+    }
+
+    fn pop(&mut self) -> Option<RetiredAudio> {
+        if let Some(snapshot) = self.snapshot.take() {
+            return Some(RetiredAudio::Snapshot(snapshot));
+        }
+        if self.len == 0 {
+            return None;
+        }
+        self.len -= 1;
+        self.samples[self.len].take().map(RetiredAudio::Sample)
+    }
+}
+
 /// The sampler node.
 pub struct Sampler {
     /// The channel's published buffer and slice map, as one atomically
     /// replaced value. Read once at note-on; see [`ChannelAudioSnapshot`] for
     /// why it is one slot and not two.
     audio_slot: Arc<ArcSwapOption<ChannelAudioSnapshot>>,
+    /// The snapshot the last note-on read, kept rather than dropped at the end
+    /// of `trigger`: a store landing between the load and the drop would have
+    /// made that drop the last reference. Replaced only when the slot moves
+    /// on, and the one it replaces goes to `retired`.
+    last_audio: Option<Arc<ChannelAudioSnapshot>>,
+    /// Sample handles let go of on the audio thread, waiting for the host to
+    /// take them off it. See [`Sampler::pop_retired`].
+    retired: RetiredSamples,
     params: SamplerParams,
     sample_rate: u32,
     voices: [Voice; MAX_SAMPLER_VOICES as usize],
@@ -428,6 +504,8 @@ impl Sampler {
         }
         Self {
             audio_slot,
+            last_audio: None,
+            retired: RetiredSamples::new(),
             params,
             sample_rate,
             voices,
@@ -638,6 +716,38 @@ impl Sampler {
             .reset_to(clamp_output_gain(self.params.output_gain));
     }
 
+    /// Take one handle this sampler let go of, so the host can drop it off
+    /// the audio thread. Realtime-safe: it moves an `Arc`, it does not drop
+    /// one. A host that never calls this loses nothing but notes: a full ring
+    /// refuses a note-on that would displace another sample.
+    pub fn pop_retired(&mut self) -> Option<RetiredAudio> {
+        self.retired.pop()
+    }
+
+    /// The channel's current snapshot, read without ever being the one to
+    /// drop a snapshot.
+    ///
+    /// A fresh load is only compared against `last_audio`, which holds its own
+    /// reference, so dropping the fresh one when they match is never the last
+    /// drop; when they differ the old one is retired, not dropped. With no
+    /// room to retire it the slot is not read at all and the snapshot already
+    /// held is played -- one block stale, in a backlog no gesture produces.
+    fn current_audio(&mut self) -> Option<Arc<ChannelAudioSnapshot>> {
+        if self.last_audio.is_none() || self.retired.snapshot.is_none() {
+            let fresh = self.audio_slot.load_full();
+            match (&self.last_audio, fresh) {
+                (Some(last), Some(fresh)) if Arc::ptr_eq(last, &fresh) => {}
+                // The slot has been emptied. Keep what was last read rather
+                // than drop it; it plays nothing, because there is nothing.
+                (_, None) => return None,
+                (_, Some(fresh)) => {
+                    self.retired.snapshot = self.last_audio.replace(fresh);
+                }
+            }
+        }
+        self.last_audio.clone()
+    }
+
     fn voice_limit(&self) -> usize {
         self.params.polyphony.clamp(1, MAX_SAMPLER_VOICES) as usize
     }
@@ -669,7 +779,10 @@ impl Sampler {
         // One load, both fields. The buffer and the map that indexes it are
         // one fact; reading them separately let a note-on land between two
         // stores and play new audio against old markers.
-        let Some(audio) = self.audio_slot.load_full() else {
+        //
+        // Every `Arc` this function leaves behind has another holder --
+        // `last_audio`, and the voice -- so none of their drops can free.
+        let Some(audio) = self.current_audio() else {
             return;
         };
         let Some(sample) = audio.sample.clone() else {
@@ -715,6 +828,17 @@ impl Sampler {
         };
 
         let index = self.select_voice(note);
+        // A voice struck with a different sample gives its old one to the
+        // ring rather than dropping it. With the ring full the note is
+        // refused and the voice left as it was: a lost note in a backlog no
+        // gesture produces, against a free on the callback.
+        let displaces = self.voices[index]
+            .sample
+            .as_ref()
+            .is_some_and(|held| !Arc::ptr_eq(held, &sample));
+        if displaces && self.retired.samples_full() {
+            return;
+        }
         let (start, end) = Self::resolve_playback_bounds(self.params, len, slice);
         let age = self.next_age;
         self.next_age = self.next_age.wrapping_add(1).max(1);
@@ -723,7 +847,20 @@ impl Sampler {
         voice.event_id = event_id;
         voice.midi_note = note;
         voice.age = age;
-        voice.sample = Some(sample.clone());
+        if displaces {
+            if let Some(held) = voice.sample.replace(sample.clone()) {
+                let refused = self.retired.push_sample(held);
+                debug_assert!(refused.is_none(), "room was checked above");
+                // Back on the voice rather than dropped, in a release build
+                // where the assertion is not there to stop us.
+                if let Some(held) = refused {
+                    voice.sample = Some(held);
+                    return;
+                }
+            }
+        } else if voice.sample.is_none() {
+            voice.sample = Some(sample.clone());
+        }
         voice.active = !sample.is_empty();
         if !voice.active {
             return;
@@ -1204,6 +1341,84 @@ mod tests {
             root_note: 60,
         });
         Sampler::new(slot(ChannelAudioSnapshot::sample(sample)), params, sr)
+    }
+
+    /// A voice struck with a new sample hands the old one, and the snapshot
+    /// that carried it, to the retired ring rather than dropping either --
+    /// either may be the last reference. Finding 2 of
+    /// `reports/fable-2026-09-17.md`.
+    #[test]
+    fn a_displaced_sample_is_retired_rather_than_dropped() {
+        let sr = 48_000;
+        let sample = |value: f32| {
+            Arc::new(SampleData {
+                frames: vec![[value, value]; 64],
+                sample_rate: sr,
+                root_note: 60,
+            })
+        };
+        let first = sample(0.1);
+        let first_alive = Arc::downgrade(&first);
+        let audio = slot(ChannelAudioSnapshot::sample(first));
+        let params = SamplerParams {
+            polyphony: 1,
+            ..SamplerParams::default()
+        };
+        let mut sampler = Sampler::new(audio.clone(), params, sr);
+
+        sampler.trigger(1, 60, 127);
+        assert!(sampler.pop_retired().is_none(), "nothing was displaced yet");
+        // Striking the same sample again displaces nothing either.
+        sampler.trigger(2, 60, 127);
+        assert!(sampler.pop_retired().is_none());
+
+        audio.store(Some(Arc::new(ChannelAudioSnapshot::sample(sample(0.2)))));
+        sampler.trigger(3, 60, 127);
+        let mut snapshots = 0;
+        let mut samples = Vec::new();
+        while let Some(retired) = sampler.pop_retired() {
+            match retired {
+                RetiredAudio::Snapshot(_) => snapshots += 1,
+                RetiredAudio::Sample(sample) => samples.push(sample),
+            }
+        }
+        assert_eq!(snapshots, 1, "the snapshot the sampler held should be retired");
+        assert_eq!(samples.len(), 1, "the voice's old sample should be retired");
+        assert!(Arc::ptr_eq(&samples[0], &first_alive.upgrade().unwrap()));
+        drop(samples);
+        assert!(
+            first_alive.upgrade().is_none(),
+            "the ring should have been the last holder of the old sample"
+        );
+    }
+
+    /// Two publishes between drains leave the second snapshot unread rather
+    /// than dropping one on the callback; once the ring is collected the
+    /// sampler catches up.
+    #[test]
+    fn an_undrained_sampler_keeps_the_snapshot_it_holds() {
+        let sr = 48_000;
+        let sample = |len: usize| {
+            Arc::new(SampleData {
+                frames: vec![[0.5, 0.5]; len],
+                sample_rate: sr,
+                root_note: 60,
+            })
+        };
+        let audio = slot(ChannelAudioSnapshot::sample(sample(10)));
+        let mut sampler = Sampler::new(audio.clone(), SamplerParams::default(), sr);
+        sampler.trigger(1, 60, 127);
+
+        audio.store(Some(Arc::new(ChannelAudioSnapshot::sample(sample(20)))));
+        sampler.trigger(2, 60, 127);
+        audio.store(Some(Arc::new(ChannelAudioSnapshot::sample(sample(30)))));
+        sampler.trigger(3, 60, 127);
+        let held = |sampler: &Sampler| sampler.last_audio.as_ref().unwrap().sample.as_ref().unwrap().len();
+        assert_eq!(held(&sampler), 20, "the third publish should wait for a drain");
+
+        while sampler.pop_retired().is_some() {}
+        sampler.trigger(4, 60, 127);
+        assert_eq!(held(&sampler), 30);
     }
 
     /// Fit-to-tempo derives the ratio so the region lasts the requested
