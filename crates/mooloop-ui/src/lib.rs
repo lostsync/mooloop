@@ -14081,7 +14081,12 @@ fn install_project_in_ui(
         .collect();
     // If the bounded realtime queue is full, leave the sample bank, the
     // engine and the visible project untouched.
-    if !handle.install_project(Arc::new(project.clone()), audio) {
+    // What the session set by command rather than by document goes with the
+    // install, because the renderer it replaces takes that state with it.
+    let input = mooloop_engine::InputState {
+        record_armed: state.borrow().session.record_armed(),
+    };
+    if !handle.install_project(Arc::new(project.clone()), audio, input) {
         return false;
     }
     // A project install is the only thing that can change which track a strip

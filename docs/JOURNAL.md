@@ -1598,6 +1598,10 @@ Per-channel MIDI input had never worked in the running app. `EngineHandle::new` 
 
 MIDI recording had a matching gap. `capture_note_on` reported `transport.position_ticks`, and the pattern-mode transport never folds: the sequencer wraps a private copy when it schedules. The session took the tick as a pattern position and clamped it, so every note after the first pass landed on the last tick. The one record test played at tick 0, where folded and unfolded agree. The engine now asks `Sequencer::recording_tick`, which uses the same `wrap_tick` as playback. In song mode it takes the offset into the selected pattern's placement under the playhead, or records nothing if there is none: folding would have written the note at a position nobody heard it against. Both new assertions failed red first (144 against 48, and a note recorded where nothing was playing).
 
+## Sep 17 (the review) — what an install forgets
+
+The follow-ups to the routing entry above, all about state that lives in a renderer rather than a document and so did not survive a swap. Record arm was the first: a fresh `RenderState` starts disarmed, and nothing re-sent the arm, so any structural edit stopped recording under a button that still read armed. `install_project` now takes an `InputState` beside the project and the incoming renderer is armed before it goes live. That is carried rather than re-sent, so no block goes by with the renderer holding the default. The test failed red with nothing recorded.
+
 ## Open threads
 
 Refreshed 2026-09-02, with the September documentation audit's threads merged in on 2026-09-04 and Adam's 2026-09-05 list merged in after that. Four of the six threads listed here in August are closed: modulation drives things now, the buffer device exists, undo and clipboard are real, and the convolution reverb that needed an IR loader was replaced outright by an FDN hall — so `StereoIr` is no longer the boundary anything is waiting on.

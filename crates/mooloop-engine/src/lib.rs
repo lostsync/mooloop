@@ -560,6 +560,21 @@ impl SharedCells {
     }
 }
 
+/// Performance state a project does not contain but a renderer holds, handed
+/// over with every install so the incoming renderer starts with it.
+///
+/// A project install replaces the complete renderer, and a fresh one starts
+/// from defaults. Anything the control thread set by command rather than by
+/// document has to travel here, or the swap quietly resets it: record arm did
+/// exactly that until 2026-09-17, leaving the interface showing armed over an
+/// engine that was not. Carried rather than re-sent after the install so there
+/// is no block in which the new renderer holds the default.
+#[derive(Debug, Clone, Default)]
+pub struct InputState {
+    /// Whether recording is armed, as the session says.
+    pub record_armed: bool,
+}
+
 /// The renderer a project install hands the audio thread, built and attached
 /// on the calling thread. Separate from [`EngineHandle::install_project`]
 /// because a handle cannot be built without opening an audio driver, and what
@@ -569,6 +584,7 @@ fn prepare_render_state(
     sample_rate: u32,
     bank: render::ChannelAudioBank,
     project: &mooloop_core::Project,
+    input: &InputState,
 ) -> RenderState {
     let mut render = RenderState::new(sample_rate, bank);
     // A project swap replaces the complete renderer. Reconnect every shared
@@ -577,6 +593,7 @@ fn prepare_render_state(
     // read the startup arrays forever.
     shared.attach(&mut render);
     render.load_project(project);
+    render.set_record_armed(input.record_armed);
     render
 }
 
@@ -779,6 +796,7 @@ impl EngineHandle {
         &mut self,
         project: Arc<mooloop_core::Project>,
         audio: Vec<ChannelAudioSnapshot>,
+        input: InputState,
     ) -> bool {
         let generation = self
             .install_generation
@@ -793,7 +811,13 @@ impl EngineHandle {
         // carries, and `audio` is taken by value so the live generation's
         // slots cannot be handed in by mistake.
         let bank = render::channel_audio_bank(audio);
-        let render = prepare_render_state(&self.shared, self.sample_rate, bank.clone(), &project);
+        let render = prepare_render_state(
+            &self.shared,
+            self.sample_rate,
+            bank.clone(),
+            &project,
+            &input,
+        );
         let prepared = PreparedProject {
             generation,
             render: Box::new(render),
@@ -1078,7 +1102,8 @@ mod install_tests {
         let mut project = Project::default();
         project.channels.push(ProjectChannel::sampler(1, 1));
         let bank = render::channel_audio_bank(Vec::new());
-        let mut render = prepare_render_state(&shared, 48_000, bank, &project);
+        let mut render =
+            prepare_render_state(&shared, 48_000, bank, &project, &InputState::default());
 
         // Channel 1 listens on MIDI channel 10; the selection is channel 0.
         shared.set_midi_routing(vec![
@@ -1107,6 +1132,45 @@ mod install_tests {
             vec![1],
             "a note on MIDI channel 10 belongs to the channel listening there, \
              not to the selection"
+        );
+    }
+
+    /// A renderer an install hands over is armed when the session is.
+    ///
+    /// Every install -- a channel added or removed, an undo, a load -- builds
+    /// a fresh renderer, and a fresh renderer starts disarmed. Nothing re-sent
+    /// the arm, so until 2026-09-17 the first structural edit silently stopped
+    /// recording while the record button still read armed.
+    #[test]
+    fn an_installed_renderer_keeps_the_record_arm() {
+        use mooloop_core::EngineEvent;
+
+        let shared = SharedCells::new();
+        let mut project = Project::default();
+        project.channels.push(ProjectChannel::sampler(1, 1));
+        let bank = render::channel_audio_bank(Vec::new());
+        let input = InputState { record_armed: true };
+        let mut render = prepare_render_state(&shared, 48_000, bank, &project, &input);
+        shared.keyboard_channel.store(0, Ordering::Relaxed);
+
+        let key = |kind| MidiMessage {
+            offset: 0,
+            port: MidiPortId::FIRST,
+            channel: 0,
+            kind,
+        };
+        render.play();
+        render.apply_midi(&[key(MidiKind::NoteOn {
+            note: 60,
+            velocity: 100,
+        })]);
+        render.process_block(256);
+        render.apply_midi(&[key(MidiKind::NoteOff { note: 60 })]);
+        render.process_block(256);
+        let recorded: Vec<_> = std::iter::from_fn(|| render.pop_outgoing()).collect();
+        assert!(
+            matches!(recorded[..], [EngineEvent::RecordedNote { note: 60, .. }]),
+            "an armed session records through the installed renderer, got {recorded:?}"
         );
     }
 }

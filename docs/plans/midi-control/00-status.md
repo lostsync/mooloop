@@ -39,6 +39,11 @@ it with the sequencer's own wrap (`Sequencer::recording_tick`). In song mode it
 records at the offset into the selected pattern's placement under the
 playhead, and not at all where none covers it.
 
+**Record arm did not survive an install until 2026-09-17.** Every structural
+edit, undo and load builds a fresh renderer, and it started disarmed while the
+button still read armed. The arm now travels with the install
+(`mooloop_engine::InputState`).
+
 ## What is not built, and why
 
 - **MIDI output does not exist.** The sidebar's OUT row is inert and says so.
