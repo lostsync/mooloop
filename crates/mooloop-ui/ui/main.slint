@@ -1598,10 +1598,11 @@ export component MainWindow inherits Window {
     callback modulation-tempo-sync-changed(int, bool);
     callback modulation-rate-division-changed(int, int);
     callback delay-time-division-changed(int, int);
-    // Slot, the gate parameter's descriptor id, and whether it is down. One
+    // Slot, the gate parameter's position in the descriptor table, and
+    // whether it is down. One
     // callback for all three gestures, because a gate is a gate: what the
-    // face knows is which id it is holding, and a fourth gesture would need
-    // no new wiring at all.
+    // face knows is which parameter it is holding, and a fourth gesture
+    // would need no new wiring at all.
     callback effect-buffer-gate(int, int, bool);
     callback effect-buffer-quantize(int, bool);
     callback effect-buffer-freeze(int, bool);
@@ -5148,7 +5149,10 @@ export component MainWindow inherits Window {
                                                     position-bar: slot.buffer-position-bar;
                                                     position-beat: slot.buffer-position-beat;
                                                     position-tick: slot.buffer-position-tick;
-                                                    // Normalized, and addressed by descriptor id.
+                                                    // Normalized values are stored in fields addressed
+                                                    // by descriptor id. Edits are addressed by position
+                                                    // in the descriptor table, which is the contract of
+                                                    // Session::set_effect_param.
                                                     crossfade: slot.p1;
                                                     position: slot.p2;
                                                     quant-start: slot.p9;
@@ -5156,21 +5160,21 @@ export component MainWindow inherits Window {
                                                     stutter-length: slot.p13;
                                                     position-span: slot.p14;
                                                     quantize: slot.p8 > 0.5;
-                                                    crossfade-changed(v) => { root.effect-param-changed(index, 1, v); }
-                                                    position-changed(v) => { root.effect-param-changed(index, 2, v); }
-                                                    quant-start-changed(v) => { root.effect-param-changed(index, 9, v); }
-                                                    jump-back-changed(v) => { root.effect-param-changed(index, 10, v); }
-                                                    stutter-length-changed(v) => { root.effect-param-changed(index, 13, v); }
-                                                    position-span-changed(v) => { root.effect-param-changed(index, 14, v); }
+                                                    crossfade-changed(v) => { root.effect-param-changed(index, 4, v); }
+                                                    position-changed(v) => { root.effect-param-changed(index, 0, v); }
+                                                    quant-start-changed(v) => { root.effect-param-changed(index, 10, v); }
+                                                    jump-back-changed(v) => { root.effect-param-changed(index, 2, v); }
+                                                    stutter-length-changed(v) => { root.effect-param-changed(index, 3, v); }
+                                                    position-span-changed(v) => { root.effect-param-changed(index, 1, v); }
                                                     quantize-toggled(on) => { root.effect-buffer-quantize(index, on); }
                                                     freeze-toggled(on) => { root.effect-buffer-freeze(index, on); }
                                                     history-bars-changed(bars) => { root.effect-buffer-history-bars(index, bars); }
                                                     // Gates, so each is one callback carrying whether
                                                     // the button is down rather than a press and a
                                                     // release that have to be paired up.
-                                                    jump-held(down) => { root.effect-buffer-gate(index, 7, down); }
-                                                    reverse-held(down) => { root.effect-buffer-gate(index, 11, down); }
-                                                    stutter-held(down) => { root.effect-buffer-gate(index, 12, down); }
+                                                    jump-held(down) => { root.effect-buffer-gate(index, 6, down); }
+                                                    reverse-held(down) => { root.effect-buffer-gate(index, 7, down); }
+                                                    stutter-held(down) => { root.effect-buffer-gate(index, 8, down); }
                                                     reorder-requested(target) => { root.reorder-effect(index, target); }
                                                     select-requested => { root.device-selected(index); }
                                                 }

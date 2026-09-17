@@ -45,8 +45,68 @@ const EQ_SLINT: &str = include_str!("../ui/eq-device.slint");
 const FILTER_SLINT: &str = include_str!("../ui/filter-device.slint");
 const MODULATION_SLINT: &str = include_str!("../ui/modulation-device.slint");
 const BUFFER_SLINT: &str = include_str!("../ui/buffer-device.slint");
+const MAIN_SLINT: &str = include_str!("../ui/main.slint");
 const CONTAINER_SLINT: &str = include_str!("../ui/container-device.slint");
 const AUX_IN_SLINT: &str = include_str!("../ui/aux-in-device.slint");
+
+/// A Buffer edit crosses two address spaces in `main.slint`: row fields and
+/// modulation overlays use stable descriptor ids, while
+/// `Session::set_effect_param` accepts a descriptor's position in the kind's
+/// table. Most effect tables happen to make those numbers equal. Buffer's
+/// retired ids make them differ, which is why passing ids here made JUMP
+/// operate Reverse, REV and STUT do nothing, and QUANT operate Stutter.
+///
+/// Read the actual wiring rather than restating its numbers in a session
+/// test: the DSP and session tests were all green while the face was broken.
+#[test]
+fn the_buffer_face_sends_descriptor_positions_for_edits() {
+    let writes = [
+        ("crossfade-changed(v)", mooloop_core::BUFFER_PARAM_CROSSFADE_MS),
+        ("position-changed(v)", mooloop_core::BUFFER_PARAM_POSITION),
+        ("quant-start-changed(v)", mooloop_core::BUFFER_PARAM_QUANT_START),
+        ("jump-back-changed(v)", mooloop_core::BUFFER_PARAM_JUMP_BACK),
+        (
+            "stutter-length-changed(v)",
+            mooloop_core::BUFFER_PARAM_STUTTER_LENGTH,
+        ),
+        (
+            "position-span-changed(v)",
+            mooloop_core::BUFFER_PARAM_POSITION_SPAN,
+        ),
+        ("jump-held(down)", mooloop_core::BUFFER_PARAM_JUMP),
+        ("reverse-held(down)", mooloop_core::BUFFER_PARAM_REVERSE),
+        ("stutter-held(down)", mooloop_core::BUFFER_PARAM_STUTTER),
+    ];
+
+    for (callback, id) in writes {
+        let line = MAIN_SLINT
+            .lines()
+            .find(|line| line.contains(callback))
+            .unwrap_or_else(|| panic!("main.slint no longer wires {callback}"));
+        let after_slot = line
+            .split_once("index,")
+            .unwrap_or_else(|| panic!("{callback} no longer sends a parameter after its slot"))
+            .1
+            .trim_start();
+        let actual: usize = after_slot
+            .split(',')
+            .next()
+            .expect("parameter argument")
+            .trim()
+            .parse()
+            .unwrap_or_else(|error| panic!("{callback} has no literal parameter position: {error}"));
+        let expected = EffectKind::Buffer
+            .descriptors()
+            .iter()
+            .position(|descriptor| descriptor.id == id)
+            .unwrap_or_else(|| panic!("Buffer descriptor table has no id {id}"));
+
+        assert_eq!(
+            actual, expected,
+            "{callback} sends descriptor id {actual} as though it were table position {expected}"
+        );
+    }
+}
 
 /// The face's declaration for one knob: its bounds, its resting value, and
 /// whether it is drawn in ratio.

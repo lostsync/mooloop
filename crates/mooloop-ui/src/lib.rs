@@ -10018,10 +10018,10 @@ impl AppUi {
             let tx = cmd_tx.clone();
             // One place that writes a Buffer parameter, so the handlers below
             // cannot each invent their own way of doing it.
-            let write = move |slot: i32, id: u32, normalized: f32| {
+            let write = move |slot: i32, param_index: i32, normalized: f32| {
                 let mut st = st.borrow_mut();
                 let EffectParamWrite::Applied(command) =
-                    st.session.set_effect_param(slot, id as i32, normalized)
+                    st.session.set_effect_param(slot, param_index, normalized)
                 else {
                     return;
                 };
@@ -10031,21 +10031,35 @@ impl AppUi {
                 }
             };
 
+            // These callbacks name controls by stable wire id, while the
+            // session's face API takes positions in the descriptor table.
+            // Derive the position from the table rather than duplicating it.
+            let buffer_param_index = |id| {
+                mooloop_core::EffectKind::Buffer
+                    .descriptors()
+                    .iter()
+                    .position(|descriptor| descriptor.id == id)
+                    .expect("Buffer face parameter is absent from its descriptor table")
+                    as i32
+            };
+
             let w = write.clone();
+            let quantize = buffer_param_index(mooloop_core::BUFFER_PARAM_QUANTIZE);
             window.on_effect_buffer_quantize(move |slot, on| {
-                w(slot, mooloop_core::BUFFER_PARAM_QUANTIZE, if on { 1.0 } else { 0.0 });
+                w(slot, quantize, if on { 1.0 } else { 0.0 });
             });
             let w = write.clone();
+            let freeze = buffer_param_index(mooloop_core::BUFFER_PARAM_FREEZE);
             window.on_effect_buffer_freeze(move |slot, on| {
-                w(slot, mooloop_core::BUFFER_PARAM_FREEZE, if on { 1.0 } else { 0.0 });
+                w(slot, freeze, if on { 1.0 } else { 0.0 });
             });
             let w = write.clone();
-            window.on_effect_buffer_gate(move |slot, id, down| {
+            window.on_effect_buffer_gate(move |slot, param_index, down| {
                 // A gate, so the press and the release are the same write
                 // with different values and the device needs no edge
-                // detector. The face sends the descriptor id, which is the
-                // same number a lane drawn on that gesture stores.
-                w(slot, id as u32, if down { 1.0 } else { 0.0 });
+                // detector. Like every other face edit, the markup sends the
+                // parameter's position in the descriptor table.
+                w(slot, param_index, if down { 1.0 } else { 0.0 });
             });
 
             let st = state.clone();
