@@ -23,8 +23,9 @@ an engine that keeps strips across an install. That ends "every structural
 edit stops the song", and it has to land before `plugin-hosting/` step 06.
 `audio-recording/` is `SCOPE.md` items 3 and the audio half of 5, in Adam's
 shape: a take goes into the channel's sampler, and one input menu chooses
-between audio and MIDI. It has five open questions for Adam, each tied to the
-step that needs its answer.
+between audio and MIDI. Its five open questions were all answered by Adam on
+2026-09-17, the day the plan was written; they are kept in its `00-status.md`
+as a record beside the step each one settles.
 
 `plugin-hosting/` was added 2026-09-16 and is **not started, outside the
 `FOCUS.md` sequence**, because Adam asked for it directly: CLAP effects and
@@ -55,7 +56,12 @@ instruction was to raise the device's *shape* before building, because
 `BUFFER_ENGINE.md`'s insert model was not settled; **it was settled on
 2026-09-15 and Buffer stays a device**, with
 `buffer-implementation/03-freeze-and-the-grid.md` as the work order that
-followed. `device-registry/`,
+followed. **Every step of `03` landed 2026-09-16, and the acceptance suite
+followed on 2026-09-17**: `buffer_workflow_tests.rs` carries six of
+`FOCUS.md`'s seven clauses, and writing it found three defects in the
+quantized gesture path, all fixed in the same run. What is left of the plan is
+the seventh clause and Adam's judgement, both of which need ears.
+`device-registry/`,
 `theming/`, `pattern-bank-floor/` and `egui-view-layer/` are all parked under
 "deliberately not now", each with its reason and with what would unpark it. One
 piece is exempt: take `device-registry/`'s face host component if a device step
