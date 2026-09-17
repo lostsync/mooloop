@@ -143,6 +143,10 @@ impl Session {
         let index = self.channels.len();
         let patterns = self.pattern_lengths.len();
         let mut channel = ChannelState::new(index);
+        // The session's half of the rule `Project::insert_channel` keeps: a
+        // channel that joins the bank is minted on the way in, so no two ever
+        // wear one id.
+        channel.id = mooloop_core::mint_channel_id(&mut self.next_channel_id);
         channel.notes.resize_with(patterns, Vec::new);
         channel.automation.resize_with(patterns, Vec::new);
         self.channels.push(channel);

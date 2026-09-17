@@ -3364,6 +3364,44 @@ impl Default for DeviceId {
     }
 }
 
+/// A channel's durable identity, for the same reason and in the same shape as
+/// [`DeviceId`] one type up.
+///
+/// A channel today is its position in `Project.channels`, so every insert,
+/// removal and move renumbers everything that named one. An id is what lets a
+/// saved address, a session key and -- from `channel-identity/05` -- an engine
+/// strip survive that renumbering: the position is derived from the list when
+/// it is needed, through [`crate::Project::channel_index`].
+///
+/// Minted from `Project.next_channel_id` and never reused, so an address left
+/// holding the id of a deleted channel resolves to nothing rather than to
+/// whichever channel slid into its seat.
+///
+/// [`Self::UNASSIGNED`] is the top of the range rather than zero for
+/// `DeviceId`'s reason: a value that escapes without being minted must address
+/// nothing, not the first channel.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct ChannelId(pub u32);
+
+impl ChannelId {
+    /// Not yet part of a song: a pasted channel, a value under construction,
+    /// or a row in a document written before channels had identities.
+    pub const UNASSIGNED: Self = Self(u32::MAX);
+
+    pub const fn is_assigned(self) -> bool {
+        self.0 != Self::UNASSIGNED.0
+    }
+}
+
+impl Default for ChannelId {
+    fn default() -> Self {
+        Self::UNASSIGNED
+    }
+}
+
 /// Persisted state of one slot in a channel's effect chain.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EffectSlotState {

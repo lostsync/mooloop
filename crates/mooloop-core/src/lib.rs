@@ -144,7 +144,7 @@ pub use gain::{
 };
 pub use effect::{
     BitcrushParams, BitcrushStyle, BufferParams, CompressorParams, DelayMode, DelayParams,
-    ChainParams, DeviceId, DriveCurve, DriveParams, EffectKind, EffectParams,
+    ChainParams, ChannelId, DeviceId, DriveCurve, DriveParams, EffectKind, EffectParams,
     EffectRun, EffectSlotState, eq_effective_q, EqBand,
     EqBandKind, EqParams, EqPassFilter, EqQProfile, EqSlope, FilterMode, FilterParams, FilterSlope,
     GateParams, LimiterParams, ModulationMode, ModulationParams, ParamCurve, ParamDescriptor,
@@ -217,6 +217,7 @@ pub use sampler::{
 };
 pub use structure::{
     assign_device_ids, depth_at, device_slot, drop_lanes_for_device, insert_effect,
+    mint_channel_id,
     can_insert_into_container, can_move_into_container, can_wrap, insert_into_container, insert_run,
     insert_run_beside, mint_device_id, move_sequence, parent_of, run_of, span_of, span_problem,
     unwrap_container, wrap_in_container,

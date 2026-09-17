@@ -12813,6 +12813,8 @@ impl AppUi {
                                         None
                                     } else {
                                         let mut project = current.clone();
+                                        let mut next_channel_id =
+                                            project.next_channel_id;
                                         project.channels = kit
                                             .channels
                                             .into_iter()
@@ -12829,6 +12831,22 @@ impl AppUi {
                                                     channel
                                                 } else {
                                                     ProjectChannel {
+                                                        // A kit entry past
+                                                        // the end of the song
+                                                        // makes a channel,
+                                                        // and a channel that
+                                                        // joins the bank is
+                                                        // minted. An entry
+                                                        // landing on a live
+                                                        // channel keeps that
+                                                        // channel's id above,
+                                                        // because it changes
+                                                        // what the channel
+                                                        // plays rather than
+                                                        // which one it is.
+                                                        id: mooloop_core::mint_channel_id(
+                                                            &mut next_channel_id,
+                                                        ),
                                                         setup,
                                                         notes: vec![
                                                             Vec::new();
@@ -12843,6 +12861,7 @@ impl AppUi {
                                                 }
                                             })
                                             .collect();
+                                        project.next_channel_id = next_channel_id;
                                         project.selected_channel = project
                                             .selected_channel
                                             .min(project.channels.len().saturating_sub(1) as u8);

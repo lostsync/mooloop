@@ -30,7 +30,7 @@
 //! [`ModRack::forget_device`]: crate::modulation::ModRack::forget_device
 
 use crate::automation::AutomationLane;
-use crate::effect::{DeviceId, EffectParams, EffectSlotState};
+use crate::effect::{ChannelId, DeviceId, EffectParams, EffectSlotState};
 use crate::mixer::EffectTarget;
 use crate::modulation::{ParamAddr, ParamOwner};
 use crate::MAX_EFFECTS_PER_CHANNEL;
@@ -271,6 +271,18 @@ fn resize_enclosing(effects: &mut [EffectSlotState], slot: usize, delta: isize) 
 /// across a removal resolves to nothing rather than to a stranger.
 pub fn mint_device_id(next: &mut u32) -> DeviceId {
     let id = DeviceId(*next);
+    *next = next.saturating_add(1);
+    id
+}
+
+/// Take the next channel identity from `next` and advance it.
+///
+/// [`mint_device_id`] for channels, with the same monotonic rule: a removed
+/// channel's id is not handed to the channel that closes the gap, so an
+/// address left holding it after a deletion resolves to nothing rather than
+/// to a stranger.
+pub fn mint_channel_id(next: &mut u32) -> ChannelId {
+    let id = ChannelId(*next);
     *next = next.saturating_add(1);
     id
 }

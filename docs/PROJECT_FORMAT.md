@@ -274,6 +274,30 @@ before any of them existed still loads:
   ids takes its **positions** as its ids — which is exactly what the routes
   and lanes in such a project already mean by `slot`, so an older song loads
   pointing where it pointed.
+- **A channel carries a durable `id`, and `next_channel_id` is the mint it
+  comes from.** Both default and are skipped when unset, so a song written
+  before channels had identities is byte-identical to one saved now with
+  none. A bank decoded without any ids takes its **positions** as its ids --
+  which is what every address in such a song that said `channel = 3` already
+  meant, so it loads pointing where it pointed and `FORMAT_VERSION` does not
+  move. `Project::assign_channel_ids` is that pass, and it runs beside
+  `assign_device_ids` on the way in.
+
+  **Two channels may not wear one id.** It is the invariant everything built
+  on the identity assumes, and nothing this program does can break it:
+  `Project::insert_channel` mints on the way in, so a pasted channel is
+  another channel rather than another view of the one it was copied from, and
+  a kit entry that lands past the end of the song is minted the same way. A
+  duplicate is therefore a hand-edited file; the integrity pass reports it as
+  `channel.id.duplicate` and corrects it by reminting the later channel,
+  which keeps every note, device and lane and leaves the addresses naming
+  that id meaning the first channel wearing it. A removed channel's id is
+  never reused, so an address left holding it resolves to nothing rather than
+  to whichever channel closed the gap.
+
+  The id is not yet what anything *saves*: the four fields that name another
+  channel are still positions, and `docs/plans/channel-identity/02` is where
+  they move.
 - **Analog sum is one defaulted boolean per track.** `buses[].bus.console`
   says whether that track's output is encoded on its way into its destination,
   to be decoded there with everything else that opted in. It defaults to
@@ -410,7 +434,10 @@ holding the container and everything inside it, in rack order, with
 than replacing `effect_params`, so a reader that predates run presets refuses
 the bundle instead of loading its first device and dropping the box. Device
 ids are stripped on save and minted fresh on load, because identity belongs to
-the chain a device is on rather than to the patch. The modulation that drives
+the chain a device is on rather than to the patch. **A kit or channel document
+carries no channel identity at all** -- both hold `ChannelSetup`, which is a
+channel's devices rather than the channel -- so there is nothing to strip, and
+loading a kit entry onto a seat the song does not have yet mints one for it. The modulation that drives
 a run is not carried — a route's source is a module in the channel's rack, not
 in the container — and `docs/plans/containers/00-status.md` records why that
 is a deferred decision rather than an omission.

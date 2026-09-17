@@ -21,7 +21,8 @@ use std::collections::HashSet;
 use std::fmt;
 
 use mooloop_core::{
-    sanitize_route, strip_descriptor, BusSetup, ChannelSetup, ChannelSource, DeviceId, DeviceKind,
+    mint_channel_id, sanitize_route, strip_descriptor, BusSetup, ChannelId, ChannelSetup,
+    ChannelSource, DeviceId, DeviceKind,
     ds01, Ds01Params, DrumSynthParams, EffectKind, EffectSlotState, EffectTarget, MlM1Params,
     MlP8Params, ModRack,
     ModulatorKind, MonoSynthParams, NoteId, ParamAddr, ParamOwner, PolySynthParams, Project,
@@ -509,6 +510,54 @@ impl Doctor {
     }
 }
 
+/// **Two channels may not wear one id.** It is the single invariant the
+/// identity has, and everything built on it from `channel-identity/02`
+/// onwards -- a saved cross-channel address, a session key, an engine strip --
+/// assumes it: a duplicate does not make an address ambiguous so much as make
+/// it silently name whichever channel is found first.
+fn check_channel_ids(doctor: &mut Doctor, project: &mut Project) {
+    // An unassigned channel is not damage. Positions for a bank that holds no
+    // identities at all -- which is what every address in such a song already
+    // meant by `channel = 3` -- a fresh id for a straggler, and the mint
+    // raised past both are all [`Project::assign_channel_ids`], which the
+    // loader runs before this pass ever sees a song. This is the save-side
+    // door, for a project assembled in memory, and it is silent for the same
+    // reason the loader is. The rule is spelled there and nowhere else.
+    if doctor.apply {
+        project.assign_channel_ids();
+    }
+
+    // What that pass cannot decide is which of two channels wearing one id is
+    // the one an address meant. Nothing this program does can produce a
+    // duplicate -- [`Project::insert_channel`] mints, so a pasted channel is
+    // another channel rather than another view of the one it was copied from
+    // -- which leaves the hand-edited file. It is corrected rather than
+    // refused: reminting the later channel keeps every note, device and lane
+    // in the song, and the addresses that named the id go on meaning the
+    // first channel wearing it, which is the reading that was already true.
+    //
+    // `assign_channel_ids` has already put the mint past everything the bank
+    // holds, so the id handed out here cannot be another duplicate.
+    let mut seen: HashSet<ChannelId> = HashSet::new();
+    for index in 0..project.channels.len() {
+        let id = project.channels[index].id;
+        if !id.is_assigned() || seen.insert(id) {
+            continue;
+        }
+        let who = channel_name(index, &project.channels[index].setup);
+        if doctor.correct(
+            "channel.id.duplicate",
+            &who,
+            format!("its identity {} already belongs to an earlier channel", id.0),
+            "give it a new one".into(),
+        ) {
+            let fresh = mint_channel_id(&mut project.next_channel_id);
+            project.channels[index].id = fresh;
+            seen.insert(fresh);
+        }
+    }
+}
+
 fn check_project(doctor: &mut Doctor, project: &mut Project) {
     const SONG: &str = "Song settings";
 
@@ -592,6 +641,8 @@ fn check_project(doctor: &mut Doctor, project: &mut Project) {
             format!("delete {} channels", found - MAX_CHANNELS),
         );
     }
+
+    check_channel_ids(doctor, project);
 
     // Clamped against what survived the checks above, so an out-of-range
     // selection is repaired against the real bank rather than the broken one.
@@ -2377,6 +2428,59 @@ mod tests {
 
     fn codes(diagnosis: &Diagnosis) -> Vec<&'static str> {
         diagnosis.issues.iter().map(|issue| issue.code).collect()
+    }
+
+    /// **Two channels wearing one id is the state the identity must make
+    /// impossible**, and the only way into it is a hand-edited file. It is
+    /// corrected rather than refused: reminting the later one keeps every
+    /// note, device and lane, and the addresses that named the id go on
+    /// meaning the first channel wearing it.
+    #[test]
+    fn two_channels_wearing_one_identity_are_told_apart() {
+        let mut project = Project::default();
+        project.channels.push(project.channels[0].clone());
+        project.channels.push(project.channels[0].clone());
+        assert_eq!(project.channels[1].id, project.channels[0].id);
+
+        let looked = inspect_project(&project);
+        assert_eq!(
+            codes(&looked),
+            ["channel.id.duplicate", "channel.id.duplicate"],
+            "a look does not correct it"
+        );
+
+        let diagnosis = repair_project(&mut project);
+        assert!(diagnosis.is_usable(), "the song opens: {diagnosis:?}");
+        let ids: Vec<_> = project.channels.iter().map(|channel| channel.id).collect();
+        assert_eq!(ids[0], ChannelId(0), "the first keeps what it had");
+        assert_eq!(
+            ids.iter().collect::<HashSet<_>>().len(),
+            3,
+            "three channels wearing {ids:?}"
+        );
+        // And the mint is past all three, so the next paste cannot collide.
+        for id in &ids {
+            assert!(project.next_channel_id > id.0);
+        }
+        assert!(inspect_project(&project).is_clean());
+    }
+
+    /// A bank with no identities at all is an older document rather than
+    /// damage: it is given positions silently, because that is what every
+    /// address in such a song already meant by `channel = 3`.
+    #[test]
+    fn a_song_with_no_channel_identities_is_not_damaged() {
+        let mut project = Project::default();
+        project.channels = vec![ProjectChannel::sampler(0, 1); 3];
+        project.next_channel_id = 0;
+
+        assert!(inspect_project(&project).is_clean(), "nothing to report");
+
+        let diagnosis = repair_project(&mut project);
+        assert!(diagnosis.is_clean(), "and nothing to say: {diagnosis:?}");
+        for (index, channel) in project.channels.iter().enumerate() {
+            assert_eq!(channel.id, ChannelId(index as u32));
+        }
     }
 
     #[test]

@@ -15,8 +15,8 @@ use crate::values::descriptor_slots;
 use mooloop_core::{
     default_buses, log_warn, sanitize_bank, would_create_cycle, DEFAULT_STEPS,
     MAX_BUSES, MAX_PLAYLIST_PLACEMENTS,
-    drop_lanes_for_device, strip_descriptor, AutomationLane, BusSetup, Channel, ChannelSetup,
-    DeviceId,
+    drop_lanes_for_device, strip_descriptor, AutomationLane, BusSetup, Channel, ChannelId,
+    ChannelSetup, DeviceId,
     AuxInParams, AuxInState, ChannelSource, DeviceKind, DrumSynthParams, DrumSynthState, Ds01Params, Ds01State,
     EffectParams, EffectSlotState, EffectTarget, MlM1Params, MlM1State, MlP8Params, MlP8State,
     LoopRange, ModDestinationDescriptor, ModEnvelopeParams, ModPolarity, ModRoute, ModulatorParams,
@@ -53,6 +53,10 @@ pub enum PresetSaveTarget {
 
 pub struct Session {
     pub channels: Vec<ChannelState>,
+    /// The mint [`ChannelState::id`] comes from, held here because it is
+    /// project-wide where `next_device_id` is per chain. Installed from the
+    /// document and handed back to it, so a round trip never rewinds it.
+    pub next_channel_id: u32,
     /// Destination shown in the piano roll's variable lane. `None` means the
     /// lane is open but empty-handed, which is the state a fresh project is
     /// in; it is not the same as the lane being hidden.
@@ -267,7 +271,11 @@ impl Default for Session {
     /// one empty sampler channel, one pattern, the default bus bank.
     fn default() -> Self {
         Self {
-            channels: vec![ChannelState::new(0)],
+            // Minted rather than left unassigned, so the bank a session holds
+            // before any document arrives obeys the same rule as one that
+            // came from a file: every channel in it has an identity.
+            channels: vec![ChannelState::new(0).with_id(ChannelId(0))],
+            next_channel_id: 1,
             automation_target: Cell::new(None),
             automation_selected_point: Cell::new(None),
             slice_audition: None,
@@ -445,6 +453,7 @@ impl Session {
                     }),
                 };
                 ProjectChannel {
+                    id: channel.id,
                     setup: ChannelSetup {
                         channel: Channel {
                             name: channel.name.clone(),
@@ -481,6 +490,7 @@ impl Session {
             current_pattern: self.current_pattern as u16,
             selected_channel: self.selected as u8,
             channels,
+            next_channel_id: self.next_channel_id,
             buses: self.buses.clone(),
             pattern_lengths: self
                 .pattern_lengths
@@ -1319,6 +1329,7 @@ impl Session {
                                 .collect()
                         })
                         .collect(),
+                    id: project_channel.id,
                     next_note_id: project_channel.next_note_id,
                     effects: setup.effects.clone(),
                     next_device_id: setup.next_device_id,
@@ -1342,6 +1353,10 @@ impl Session {
             log_warn!("project", "track bank repaired: {repair}");
         }
         self.buses = repaired.buses;
+        // Taken from the document rather than recomputed, so a mint is never
+        // rewound by an install: `ChannelSetup::next_device_id` travels the
+        // same way and for the same reason.
+        self.next_channel_id = project.next_channel_id;
         self.pattern_lengths = project
             .pattern_lengths
             .iter()

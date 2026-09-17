@@ -541,3 +541,49 @@ fn a_track_can_move_anywhere_but_into_or_out_of_the_masters_seat() {
     assert!(!session.can_move_track(2, 0), "a move that goes nowhere");
     assert!(!session.can_move_track(9, -1));
 }
+
+/// **A channel identity must survive a round trip through the session.**
+///
+/// `Session` does not hold a `Project`: it decomposes one into `ChannelState`
+/// on the way in and rebuilds it on the way out, and every project edit --
+/// an undo, a paste, a channel insert -- goes through both. A field that is
+/// not carried in both directions is silently reset on the next edit, which
+/// is the fault `ChannelState::next_device_id`'s own comment was written for.
+///
+/// The mint travels too: if the session started counting again from what the
+/// document happened to hold, the channel added after a reinstall would wear
+/// an id another channel already had.
+#[test]
+fn a_channel_identity_survives_the_session_round_trip() {
+    let mut session = Session::default();
+    session.add_channel(DeviceKind::Sampler);
+    session.add_channel(DeviceKind::DrumSynth);
+
+    let before: Vec<_> = session.channels.iter().map(|channel| channel.id).collect();
+    assert_eq!(before.len(), 3);
+    assert!(before.iter().all(|id| id.is_assigned()), "{before:?}");
+    assert_eq!(
+        before.iter().collect::<std::collections::HashSet<_>>().len(),
+        3,
+        "three channels wearing {before:?}"
+    );
+
+    let project = session.project_snapshot(120, 50);
+    assert_eq!(
+        project.channels.iter().map(|channel| channel.id).collect::<Vec<_>>(),
+        before,
+        "the document carries what the session minted"
+    );
+
+    session.replace_project(&project, &[None, None, None]);
+    assert_eq!(
+        session.channels.iter().map(|channel| channel.id).collect::<Vec<_>>(),
+        before,
+        "and hands it back unchanged"
+    );
+
+    // The mint came back with it, so the next channel is not a repeat.
+    session.add_channel(DeviceKind::Sampler);
+    let fresh = session.channels[3].id;
+    assert!(!before.contains(&fresh), "{fresh:?} was already in {before:?}");
+}

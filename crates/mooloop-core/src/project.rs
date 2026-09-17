@@ -2,10 +2,12 @@
 
 use std::path::PathBuf;
 
-use crate::structure::{rescope_lanes, rescope_lanes_for_track, ChannelEdit, TrackEdit};
+use crate::structure::{
+    mint_channel_id, rescope_lanes, rescope_lanes_for_track, ChannelEdit, TrackEdit,
+};
 use crate::{
-    default_buses, BusSetup, Channel, DeviceKind, Ds01Params, DrumMode, DrumSynthParams,
-    EffectTarget,
+    default_buses, BusSetup, Channel, ChannelId, DeviceKind, Ds01Params, DrumMode,
+    DrumSynthParams, EffectTarget,
     KickCharacter, AutomationLane, LoopRange, ModRack, MAX_CHANNELS, MonoSynthParams, MlM1Params, MlP8Params, NoteEvent, NoteId,
     PatternPlacement,
     PlaybackMode, PolySynthParams,
@@ -514,8 +516,20 @@ impl ChannelSetup {
     }
 }
 
+fn channel_id_is_unassigned(id: &ChannelId) -> bool {
+    !id.is_assigned()
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ProjectChannel {
+    /// This channel's durable identity, minted from [`Project::next_channel_id`].
+    ///
+    /// Defaulted and skipped when unassigned, so a song written before
+    /// channels had identities is byte-identical to one saved now with none;
+    /// [`Project::assign_channel_ids`] gives such a song id = position on the
+    /// way in, which is what everything that said `channel = 3` already meant.
+    #[serde(default, skip_serializing_if = "channel_id_is_unassigned")]
+    pub id: ChannelId,
     pub setup: ChannelSetup,
     /// Pattern-indexed note lanes. Notes beyond a pattern's logical length are retained.
     pub notes: Vec<Vec<NoteEvent>>,
@@ -529,6 +543,7 @@ pub struct ProjectChannel {
 impl ProjectChannel {
     pub fn sampler(index: usize, pattern_count: usize) -> Self {
         Self {
+            id: ChannelId::UNASSIGNED,
             setup: ChannelSetup::sampler(DeviceKind::Sampler.default_channel_name(index)),
             notes: vec![Vec::new(); pattern_count.max(1)],
             automation: vec![Vec::new(); pattern_count.max(1)],
@@ -546,6 +561,7 @@ impl ProjectChannel {
         params: DrumSynthParams,
     ) -> Self {
         Self {
+            id: ChannelId::UNASSIGNED,
             setup: ChannelSetup::drum_synth_with_params(
                 DeviceKind::DrumSynth.default_channel_name(index),
                 params,
@@ -566,6 +582,7 @@ impl ProjectChannel {
         params: MonoSynthParams,
     ) -> Self {
         Self {
+            id: ChannelId::UNASSIGNED,
             setup: ChannelSetup::mono_synth_with_params(
                 DeviceKind::MonoSynth.default_channel_name(index),
                 params,
@@ -586,6 +603,7 @@ impl ProjectChannel {
         params: MlM1Params,
     ) -> Self {
         Self {
+            id: ChannelId::UNASSIGNED,
             setup: ChannelSetup::mlm1_with_params(DeviceKind::MlM1.default_channel_name(index), params),
             notes: vec![Vec::new(); pattern_count.max(1)],
             automation: vec![Vec::new(); pattern_count.max(1)],
@@ -599,6 +617,7 @@ impl ProjectChannel {
 
     pub fn mlp8_with_params(index: usize, pattern_count: usize, params: MlP8Params) -> Self {
         Self {
+            id: ChannelId::UNASSIGNED,
             setup: ChannelSetup::mlp8_with_params(DeviceKind::MlP8.default_channel_name(index), params),
             notes: vec![Vec::new(); pattern_count.max(1)],
             automation: vec![Vec::new(); pattern_count.max(1)],
@@ -612,6 +631,7 @@ impl ProjectChannel {
 
     pub fn ds01_with_params(index: usize, pattern_count: usize, params: Ds01Params) -> Self {
         Self {
+            id: ChannelId::UNASSIGNED,
             setup: ChannelSetup::ds01_with_params(DeviceKind::Ds01.default_channel_name(index), params),
             notes: vec![Vec::new(); pattern_count.max(1)],
             automation: vec![Vec::new(); pattern_count.max(1)],
@@ -629,6 +649,7 @@ impl ProjectChannel {
         params: crate::AuxInParams,
     ) -> Self {
         Self {
+            id: ChannelId::UNASSIGNED,
             setup: ChannelSetup::aux_in_with_params(DeviceKind::AuxIn.default_channel_name(index), params),
             notes: vec![Vec::new(); pattern_count.max(1)],
             automation: vec![Vec::new(); pattern_count.max(1)],
@@ -646,6 +667,7 @@ impl ProjectChannel {
         params: PolySynthParams,
     ) -> Self {
         Self {
+            id: ChannelId::UNASSIGNED,
             setup: ChannelSetup::poly_synth_with_params(
                 DeviceKind::PolySynth.default_channel_name(index),
                 params,
@@ -768,6 +790,12 @@ pub struct Project {
     pub current_pattern: u16,
     pub selected_channel: u8,
     pub channels: Vec<ProjectChannel>,
+    /// The mint [`ProjectChannel::id`] comes from, with the same defaulting
+    /// as `ChannelSetup::next_device_id`: a song written before channels had
+    /// identities decodes with a zero here, and
+    /// [`Self::assign_channel_ids`] raises it past whatever it hands out.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub next_channel_id: u32,
     /// Mixer buses, master first. Defaulted on load so songs written before
     /// the mixer existed get the master and nothing else -- a bank is the
     /// tracks somebody made, and `default_buses` stopped returning seventeen
@@ -815,6 +843,10 @@ fn is_empty_control_map(map: &crate::control::ControlMap) -> bool {
     map.bindings.is_empty()
 }
 
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
 /// Whether a bank of `count` tracks can move the one at `from` to `to`.
 ///
 /// The one rule [`Project::move_track`] applies and every surface that offers
@@ -853,6 +885,13 @@ impl Project {
 }
 
 impl ProjectChannel {
+    /// This channel wearing `id`. For the constructors, which build a channel
+    /// before it has joined a song and so cannot know one.
+    pub fn with_id(mut self, id: ChannelId) -> Self {
+        self.id = id;
+        self
+    }
+
     /// The heap this channel owns, beyond its own `size_of`.
     ///
     /// The pattern-indexed banks are the part that grows: a song with
@@ -930,7 +969,8 @@ impl Default for Project {
             playback_mode: PlaybackMode::Pattern,
             current_pattern: 0,
             selected_channel: 0,
-            channels: vec![ProjectChannel::sampler(0, 1)],
+            channels: vec![ProjectChannel::sampler(0, 1).with_id(ChannelId(0))],
+            next_channel_id: 1,
             buses: default_buses(),
             pattern_lengths: vec![DEFAULT_STEPS],
             // Empty rather than one blank entry per pattern: an entry that
@@ -961,6 +1001,55 @@ impl Project {
         for bus in &mut self.buses {
             bus.assign_device_ids();
         }
+    }
+
+    /// Give every channel its identity, and put the mint past them all.
+    ///
+    /// [`crate::assign_device_ids`] for channels, and a no-op on a song that
+    /// already has them rather than a migration. A song written before
+    /// channels had identities holds none, so each takes its **position** --
+    /// which is what every saved address that said `channel = 3` already
+    /// meant, so an older song loads pointing where it pointed and
+    /// `FORMAT_VERSION` does not move.
+    ///
+    /// A part-assigned bank is a hand-edited file rather than anything this
+    /// code can produce; its unassigned channels are minted fresh instead of
+    /// taking positions that could collide with an id already in use.
+    ///
+    /// Call it after decode and before anything resolves a channel address.
+    pub fn assign_channel_ids(&mut self) {
+        if !self.channels.iter().any(|channel| channel.id.is_assigned()) {
+            for (index, channel) in self.channels.iter_mut().enumerate() {
+                channel.id = ChannelId(index as u32);
+            }
+        }
+        let highest = self
+            .channels
+            .iter()
+            .filter(|channel| channel.id.is_assigned())
+            .map(|channel| channel.id.0)
+            .max();
+        if let Some(highest) = highest {
+            self.next_channel_id = self.next_channel_id.max(highest.saturating_add(1));
+        }
+        for index in 0..self.channels.len() {
+            if !self.channels[index].id.is_assigned() {
+                self.channels[index].id = mint_channel_id(&mut self.next_channel_id);
+            }
+        }
+    }
+
+    /// Where the channel wearing `id` currently sits.
+    ///
+    /// **The only id-to-position conversion anything should use.** A second
+    /// one written by hand is the shape `AGENTS.md` calls this codebase's
+    /// characteristic fault, and the shape that made Buffer's face operate
+    /// the wrong parameters while every test stayed green.
+    pub fn channel_index(&self, id: ChannelId) -> Option<usize> {
+        if !id.is_assigned() {
+            return None;
+        }
+        self.channels.iter().position(|channel| channel.id == id)
     }
 
     /// Point every lane and route that still names the Buffer's retired
@@ -1085,10 +1174,18 @@ impl Project {
     /// Insert `channel` at `index` (clamped to the end), opening a gap. The
     /// newcomer's own references are pointed at its new index and every
     /// later channel's follow it up by one. Refused when the song is full.
+    ///
+    /// **The newcomer is always minted a fresh identity**, whatever it
+    /// arrived wearing. This is the paste path, and what it is handed is a
+    /// clipboard copy of a channel that is very probably still in the song:
+    /// keeping the id would put two channels wearing one id into the same
+    /// bank, which is the one state the identity has to make impossible. A
+    /// paste makes another channel, not another view of the same one.
     pub fn insert_channel(&mut self, index: usize, mut channel: ProjectChannel) -> Option<usize> {
         if self.channels.len() >= MAX_CHANNELS {
             return None;
         }
+        channel.id = mint_channel_id(&mut self.next_channel_id);
         let index = index.min(self.channels.len());
         let edit = ChannelEdit::Inserted(index as u8);
         self.rescope_after(edit);
@@ -1325,6 +1422,7 @@ impl Project {
             ]
             .into_iter()
             .map(|(name, params)| ProjectChannel {
+                id: ChannelId::UNASSIGNED,
                 setup: ChannelSetup::drum_synth_with_params(name, params),
                 notes: vec![Vec::new()],
                 automation: vec![Vec::new()],
@@ -1345,6 +1443,9 @@ impl Project {
         for channel in &mut project.channels {
             channel.setup.channel.bus = DRUM_TRACK;
         }
+        // Built as a literal rather than through `insert_channel`, so the
+        // four arrive unminted; this is the same pass a loaded song gets.
+        project.assign_channel_ids();
         project
     }
 }
@@ -1435,6 +1536,109 @@ pub type ChannelPreset = ChannelSetup;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A removed channel's id is never handed to its successor.** The whole
+    /// point of an identity over a position: an address left holding the id of
+    /// a deleted channel has to resolve to nothing, not to whichever channel
+    /// closed the gap.
+    #[test]
+    fn a_deleted_channels_identity_is_not_reused() {
+        let mut project = Project::default();
+        for _ in 0..2 {
+            project.insert_channel(project.channels.len(), ProjectChannel::sampler(0, 1));
+        }
+        let doomed = project.channels[1].id;
+        assert!(doomed.is_assigned());
+
+        project.remove_channel(1).expect("channel 1 exists");
+        assert_eq!(project.channel_index(doomed), None);
+
+        project.insert_channel(project.channels.len(), ProjectChannel::sampler(0, 1));
+        let fresh = project.channels.last().expect("the bank is not empty").id;
+        assert_ne!(fresh, doomed);
+        assert_eq!(project.channel_index(fresh), Some(project.channels.len() - 1));
+    }
+
+    /// **Pasting one channel twice makes three channels and three
+    /// identities.** The clipboard hands `insert_channel` a copy of a channel
+    /// that is still in the song, so keeping the copy's id would put two
+    /// channels wearing one id into the bank -- the one state this must make
+    /// impossible.
+    #[test]
+    fn pasting_a_channel_twice_makes_three_identities() {
+        let mut project = Project::default();
+        let clipboard = project.channels[0].clone();
+        project.insert_channel(1, clipboard.clone()).expect("room for a paste");
+        project.insert_channel(1, clipboard).expect("room for another");
+
+        let ids: Vec<_> = project.channels.iter().map(|channel| channel.id).collect();
+        assert_eq!(ids.len(), 3);
+        let unique: std::collections::HashSet<_> = ids.iter().copied().collect();
+        assert_eq!(unique.len(), 3, "three channels wearing {ids:?}");
+        for (index, id) in ids.iter().enumerate() {
+            assert_eq!(project.channel_index(*id), Some(index));
+        }
+    }
+
+    /// **A bank with no identities takes its positions**, which is what every
+    /// saved address in such a song already meant by `channel = 3`. That is
+    /// what makes this a defaulted field rather than a format migration.
+    #[test]
+    fn a_bank_with_no_identities_takes_its_positions() {
+        let mut project = Project::default();
+        project.channels = vec![ProjectChannel::sampler(0, 1); 4];
+        project.next_channel_id = 0;
+        assert!(project.channels.iter().all(|channel| !channel.id.is_assigned()));
+
+        project.assign_channel_ids();
+
+        for (index, channel) in project.channels.iter().enumerate() {
+            assert_eq!(channel.id, ChannelId(index as u32));
+        }
+        // And the mint is past them, so the next paste cannot collide.
+        assert_eq!(project.next_channel_id, 4);
+
+        // Idempotent: running it again on a bank that has them changes
+        // nothing, which is why the loader can call it unconditionally.
+        let before = project.clone();
+        project.assign_channel_ids();
+        assert_eq!(project, before);
+    }
+
+    /// A hand-edited bank where only some channels have ids: the ones that do
+    /// keep them, and the stragglers are minted past the highest rather than
+    /// taking positions that are already in use.
+    #[test]
+    fn a_part_assigned_bank_mints_its_stragglers() {
+        let mut project = Project::default();
+        project.channels = vec![ProjectChannel::sampler(0, 1); 3];
+        project.channels[1].id = ChannelId(7);
+        project.next_channel_id = 0;
+
+        project.assign_channel_ids();
+
+        assert_eq!(project.channels[1].id, ChannelId(7));
+        assert_eq!(project.channels[0].id, ChannelId(8));
+        assert_eq!(project.channels[2].id, ChannelId(9));
+        assert_eq!(project.next_channel_id, 10);
+    }
+
+    /// The id survives a move, and `channel_index` is what says where it went.
+    /// An unassigned id addresses nothing rather than the first channel.
+    #[test]
+    fn channel_index_follows_a_move_and_refuses_an_unassigned_id() {
+        let mut project = Project::default();
+        for _ in 0..2 {
+            project.insert_channel(project.channels.len(), ProjectChannel::sampler(0, 1));
+        }
+        let travelling = project.channels[0].id;
+
+        project.move_channel(0, 2).expect("a real move");
+
+        assert_eq!(project.channel_index(travelling), Some(2));
+        assert_eq!(project.channel_index(ChannelId::UNASSIGNED), None);
+        assert_eq!(project.channel_index(ChannelId(9_999)), None);
+    }
 
     /// Both halves of the retirement, in the units a musician would check.
     ///

@@ -6,7 +6,8 @@
 //! and automation banks.
 
 use mooloop_core::{
-    AutomationLane, AuxInParams, DeviceKind, Ds01Params, EffectSlotState, GeneratorParams,
+    AutomationLane, AuxInParams, ChannelId, DeviceKind, Ds01Params, EffectSlotState,
+    GeneratorParams,
     MlM1Params,
     MlP8Params, ModRack, MonoSynthParams, NoteEvent, NoteId, PolySynthParams, Project,
     ProjectChannel, SampleCommit, SampleReference, SamplerParams, SliceMap, DrumSynthParams,
@@ -17,6 +18,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub struct ChannelState {
+    /// This channel's durable identity, carried in both directions so a mint
+    /// is never rewound by a round trip through the document -- the same
+    /// reason and the same treatment `next_device_id` below gets.
+    ///
+    /// [`ChannelId::UNASSIGNED`] until the channel joins a song: a
+    /// [`ChannelState::new`] built for a rack that is about to add it is not
+    /// addressable yet, and `Session::add_channel` mints on the way in.
+    pub id: ChannelId,
     pub name: String,
     /// Which MIDI input, and which MIDI channel on it, plays this channel.
     pub midi_input: mooloop_core::ChannelMidiInput,
@@ -147,6 +156,7 @@ impl ChannelState {
     /// loaded or a project assigns one.
     pub fn new(index: usize) -> Self {
         Self {
+            id: ChannelId::UNASSIGNED,
             name: DeviceKind::Sampler.default_channel_name(index),
             midi_input: mooloop_core::ChannelMidiInput::default(),
             color: None,
@@ -183,6 +193,13 @@ impl ChannelState {
             modulation: ModRack::default(),
             bus: MASTER_BUS,
         }
+    }
+
+    /// This channel wearing `id`, for the constructors, which build a channel
+    /// before it has joined a rack.
+    pub fn with_id(mut self, id: ChannelId) -> Self {
+        self.id = id;
+        self
     }
 
     pub fn create_note(

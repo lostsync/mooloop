@@ -1,6 +1,6 @@
 # Channel identity — plan status
 
-**Written 2026-09-17. Nothing has landed.** It came out of the architecture
+**Written 2026-09-17. Step 01 landed 2026-09-17.** It came out of the architecture
 section of `reports/fable-2026-09-17.md`, and Adam asked for it the same day:
 a channel gets a durable id, the way a device already has one, before plugin
 hosting starts keying anything by channel position.
@@ -61,7 +61,7 @@ this once:
 
 | Step | What | Rung | State |
 | --- | --- | --- | --- |
-| [01](01-the-id.md) | `ChannelId`, minting, load-time assignment, fresh ids for kits and pastes | core, project | not started |
+| [01](01-the-id.md) | `ChannelId`, minting, load-time assignment, fresh ids for kits and pastes | core, project | **landed 2026-09-17** |
 | [02](02-cross-channel-addresses.md) | The four saved fields that name another channel hold an id | core, project, session | not started |
 | [03](03-session-keys.md) | Session state keyed by id; the parallel sample list folds into the channel | session, UI build | not started |
 | [04](04-keep-the-transport.md) | An install carries the transport across (the interim fix `LOOSE_ENDS.md` names) | engine, UI | not started |
@@ -71,6 +71,39 @@ Tracks (`BusSetup`) have the same problem under `TrackEdit` and the same
 fix. They are left out of this plan on purpose: channels are what plugins and
 recording need first, and a `TrackId` should copy whatever step 05 learns
 rather than be designed alongside it.
+
+## What step 01 actually did
+
+Three things the plan did not say, recorded here rather than left to be
+rediscovered in step 02:
+
+- **A kit and a channel document hold `ChannelSetup`, not `ProjectChannel`**,
+  so neither carries a channel id and there is nothing to strip on save. The
+  rule the plan wanted still exists, but it lands on the *merge*: a kit entry
+  that falls past the end of the song makes a channel and is minted like any
+  other, while an entry landing on a live channel keeps that channel's id,
+  because it changes what the channel plays rather than which one it is.
+  `PROJECT_FORMAT.md` says so beside the device-preset rule.
+- **The session had to carry the id and the mint.** `Session` does not hold a
+  `Project`: it decomposes one into `ChannelState` on the way in and rebuilds
+  it on the way out, and every project edit goes through both. Without
+  `ChannelState.id` and `Session.next_channel_id` travelling in both
+  directions, the ids minted by `add_channel` would be reset by the next
+  undo -- the exact fault `ChannelState::next_device_id`'s own comment was
+  written for. That is the minimum of step 03, not the whole of it: the
+  session's ~20 parallel lists are still keyed by index.
+- **`insert_channel` mints unconditionally** rather than only for a paste.
+  It is the paste path, what it is handed is a clipboard copy of a channel
+  very probably still in the song, and making the mint the insert's own rule
+  is what makes two channels wearing one id unreachable rather than merely
+  unlikely. `channel.id.duplicate` in `integrity.rs` then guards only the
+  hand-edited file, which is the only way in that remains.
+
+Eleven round-trip tests in `mooloop-project` had to say
+`ProjectChannel::ds01(0, 1).with_id(id)` where they said
+`ProjectChannel::ds01(0, 1)`, and one had to stop building a full bank by
+cloning one channel thirty-two times. Both are the same correction: a channel
+is now a thing with an identity, and a test that makes one has to say which.
 
 ## Open questions
 

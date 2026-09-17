@@ -1047,6 +1047,12 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
             // and lane against the chain it names, and until this has run a
             // chain written by an older version holds no identities at all.
             project.assign_device_ids();
+            // Beside it, and for the same reason: until this has run a song
+            // written before channels had identities holds none, and every
+            // saved address that names another channel resolves to nothing.
+            // A song with no ids takes positions, which is what those
+            // addresses already meant.
+            project.assign_channel_ids();
             // And after that, because it looks a lane's buffer up by identity
             // to find how many bars of history the old offset was a fraction
             // of. Before the repair pass, because that pass judges a lane
@@ -1425,6 +1431,57 @@ mod tests {
         let loaded = load_bundle(&bundle).unwrap();
         assert!(loaded.warnings.is_empty());
         assert_eq!(loaded.document, LoadedDocument::Song(project));
+    }
+
+    /// **A song written before channels had identities needs no migration.**
+    /// Both fields are defaulted and skipped when unset, so such a song is
+    /// byte-identical to one saved now with none; on the way in each channel
+    /// takes its **position**, which is what every address in that song that
+    /// said `channel = 3` already meant. `FORMAT_VERSION` does not move.
+    ///
+    /// Written through `save_song_file` rather than `save_song` on purpose:
+    /// the repair pass is the thing under test on the way back out, so the
+    /// file has to be made without it.
+    #[test]
+    fn a_song_with_no_channel_identities_loads_with_its_positions() {
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("old.mooloop");
+        let mut project = Project::default();
+        project.channels = vec![
+            mooloop_core::ProjectChannel::sampler(0, 1),
+            mooloop_core::ProjectChannel::sampler(1, 1),
+            mooloop_core::ProjectChannel::sampler(2, 1),
+        ];
+        project.next_channel_id = 0;
+        save_song_file(&bundle, &project, AssetMode::Embedded).unwrap();
+
+        let manifest = fs::read_to_string(&bundle).unwrap();
+        assert!(
+            !manifest.contains("next_channel_id"),
+            "the mint was written into a file that predates it:\n{manifest}"
+        );
+        assert!(
+            !manifest.contains("\nid = "),
+            "an identity was written into a file that predates it:\n{manifest}"
+        );
+
+        let LoadedDocument::Song(loaded) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected a song");
+        };
+        for (index, channel) in loaded.channels.iter().enumerate() {
+            assert_eq!(channel.id, mooloop_core::ChannelId(index as u32));
+        }
+        assert_eq!(loaded.next_channel_id, 3, "and the mint is past them");
+
+        // Saving it then writes them, so the second open reads them rather
+        // than deriving them again.
+        save_song(&bundle, &loaded, AssetMode::Embedded).unwrap();
+        let rewritten = fs::read_to_string(&bundle).unwrap();
+        assert!(rewritten.contains("next_channel_id = 3"), "{rewritten}");
+        let LoadedDocument::Song(reopened) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected a song");
+        };
+        assert_eq!(reopened, loaded);
     }
 
     /// **Opening a song and saving it must not rewrite it.**
@@ -1936,7 +1993,10 @@ mod tests {
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("song.mooloop");
         let mut project = Project::default();
-        project.channels[0] = mooloop_core::ProjectChannel::mono_synth(0, 1);
+        // The channel keeps its identity: swapping the generator changes
+        // what channel 0 plays, not which channel it is.
+        let id = project.channels[0].id;
+        project.channels[0] = mooloop_core::ProjectChannel::mono_synth(0, 1).with_id(id);
         project.channels[0]
             .setup
             .mono_synth_state_mut()
@@ -2455,6 +2515,14 @@ id = "default_kick"
         let mut project = Project::default();
         let channel = project.channels[0].clone();
         project.channels = vec![channel; mooloop_core::MAX_CHANNELS];
+        // Thirty-two clones of one channel are thirty-two copies of its
+        // identity, which is exactly the state `channel.id.duplicate`
+        // reports. A full bank is thirty-two *channels*, so they are given
+        // the identities a full bank would really have.
+        for (index, channel) in project.channels.iter_mut().enumerate() {
+            channel.id = mooloop_core::ChannelId(index as u32);
+        }
+        project.next_channel_id = mooloop_core::MAX_CHANNELS as u32;
         let effect = mooloop_core::EffectSlotState::of_kind(mooloop_core::EffectKind::Filter);
         project.channels[0].setup.effects = vec![effect; mooloop_core::MAX_EFFECTS_PER_CHANNEL];
         project.buses[0].effects = vec![effect; mooloop_core::MAX_EFFECTS_PER_CHANNEL];
@@ -2505,7 +2573,10 @@ id = "default_kick"
         assert!(matches!(validate_project(&project), Err(Error::InvalidDocument(_))));
 
         let mut project = Project::default();
-        project.channels[0] = mooloop_core::ProjectChannel::mono_synth(0, 1);
+        // The channel keeps its identity: swapping the generator changes
+        // what channel 0 plays, not which channel it is.
+        let id = project.channels[0].id;
+        project.channels[0] = mooloop_core::ProjectChannel::mono_synth(0, 1).with_id(id);
         project.channels[0]
             .setup
             .mono_synth_state_mut()
@@ -2515,7 +2586,10 @@ id = "default_kick"
         assert!(matches!(validate_project(&project), Err(Error::InvalidDocument(_))));
 
         let mut project = Project::default();
-        project.channels[0] = mooloop_core::ProjectChannel::mono_synth(0, 1);
+        // The channel keeps its identity: swapping the generator changes
+        // what channel 0 plays, not which channel it is.
+        let id = project.channels[0].id;
+        project.channels[0] = mooloop_core::ProjectChannel::mono_synth(0, 1).with_id(id);
         project.channels[0]
             .setup
             .mono_synth_state_mut()
@@ -2529,7 +2603,10 @@ id = "default_kick"
         assert!(error.contains("Mono Synth 1"), "{error}");
 
         let mut project = Project::default();
-        project.channels[0] = mooloop_core::ProjectChannel::poly_synth(0, 1);
+        // The channel keeps its identity: swapping the generator changes
+        // what channel 0 plays, not which channel it is.
+        let id = project.channels[0].id;
+        project.channels[0] = mooloop_core::ProjectChannel::poly_synth(0, 1).with_id(id);
         project.channels[0]
             .setup
             .poly_synth_state_mut()
@@ -2575,7 +2652,10 @@ id = "default_kick"
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("mlp8.mooloop");
         let mut project = Project::default();
-        project.channels[0] = mooloop_core::ProjectChannel::mlp8(0, 1);
+        // The channel keeps its identity: swapping the generator changes
+        // what channel 0 plays, not which channel it is.
+        let id = project.channels[0].id;
+        project.channels[0] = mooloop_core::ProjectChannel::mlp8(0, 1).with_id(id);
         let params = &mut project.channels[0].setup.mlp8_state_mut().unwrap().params;
         params.xmod[mooloop_core::mlp8::xmod_index(1, 0)] = -62.5;
         params.osc_feedback[2] = 41.0;
@@ -2599,7 +2679,10 @@ id = "default_kick"
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("ds01.mooloop");
         let mut project = Project::default();
-        project.channels[0] = mooloop_core::ProjectChannel::ds01(0, 1);
+        // The channel keeps its identity: swapping the generator changes
+        // what channel 0 plays, not which channel it is.
+        let id = project.channels[0].id;
+        project.channels[0] = mooloop_core::ProjectChannel::ds01(0, 1).with_id(id);
         let params = &mut project.channels[0].setup.ds01_state_mut().unwrap().params;
         // One value from every band, because the bands are what the on-disk
         // form is made of: a field that failed to serialize would otherwise
@@ -2648,7 +2731,10 @@ id = "default_kick"
     #[test]
     fn ds01_validation_switches_off_a_row_aimed_at_a_stepped_control() {
         let mut project = Project::default();
-        project.channels[0] = mooloop_core::ProjectChannel::ds01(0, 1);
+        // The channel keeps its identity: swapping the generator changes
+        // what channel 0 plays, not which channel it is.
+        let id = project.channels[0].id;
+        project.channels[0] = mooloop_core::ProjectChannel::ds01(0, 1).with_id(id);
         project.channels[0]
             .setup
             .ds01_state_mut()
@@ -2672,7 +2758,10 @@ id = "default_kick"
     #[test]
     fn ds01_validation_clamps_an_out_of_range_value() {
         let mut project = Project::default();
-        project.channels[0] = mooloop_core::ProjectChannel::ds01(0, 1);
+        // The channel keeps its identity: swapping the generator changes
+        // what channel 0 plays, not which channel it is.
+        let id = project.channels[0].id;
+        project.channels[0] = mooloop_core::ProjectChannel::ds01(0, 1).with_id(id);
         project.channels[0]
             .setup
             .ds01_state_mut()
@@ -2692,7 +2781,10 @@ id = "default_kick"
     #[test]
     fn mlp8_validation_clamps_an_out_of_range_route_amount() {
         let mut project = Project::default();
-        project.channels[0] = mooloop_core::ProjectChannel::mlp8(0, 1);
+        // The channel keeps its identity: swapping the generator changes
+        // what channel 0 plays, not which channel it is.
+        let id = project.channels[0].id;
+        project.channels[0] = mooloop_core::ProjectChannel::mlp8(0, 1).with_id(id);
         project.channels[0]
             .setup
             .mlp8_state_mut()
@@ -2712,7 +2804,10 @@ id = "default_kick"
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("mlm1.mooloop");
         let mut project = Project::default();
-        project.channels[0] = mooloop_core::ProjectChannel::mlm1(0, 1);
+        // The channel keeps its identity: swapping the generator changes
+        // what channel 0 plays, not which channel it is.
+        let id = project.channels[0].id;
+        project.channels[0] = mooloop_core::ProjectChannel::mlm1(0, 1).with_id(id);
         let params = &mut project.channels[0]
             .setup
             .mlm1_state_mut()
@@ -2916,7 +3011,10 @@ id = "default_kick"
     #[test]
     fn mlm1_validation_rejects_an_out_of_range_filter_envelope() {
         let mut project = Project::default();
-        project.channels[0] = mooloop_core::ProjectChannel::mlm1(0, 1);
+        // The channel keeps its identity: swapping the generator changes
+        // what channel 0 plays, not which channel it is.
+        let id = project.channels[0].id;
+        project.channels[0] = mooloop_core::ProjectChannel::mlm1(0, 1).with_id(id);
         project.channels[0]
             .setup
             .mlm1_state_mut()
