@@ -1,9 +1,5 @@
 # 05 — The interface
 
-## Needs an answer first
-
-Open question 4 in `00-status.md`: monitoring.
-
 ## Build
 
 **One `main.slint` contract change, shared with step 02.** Draft everything
