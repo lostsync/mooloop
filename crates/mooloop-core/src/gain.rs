@@ -1,28 +1,33 @@
 //! The shared definition of decibels.
 //!
-//! One module for every dB/linear conversion a *control* makes, the +12 dB
-//! gain ceiling, and the mixer fader taper, so a control's readout and its
-//! audio can never disagree. Reference document:
+//! One module for every dB/linear conversion -- a control's and a
+//! detector's -- the +12 dB gain ceiling, and the mixer fader taper, so a
+//! control's readout and its audio can never disagree. Reference document:
 //! `docs/plans/archive/gain-structure/01-the-gain-contract.md`.
 //!
-//! These run per control change, not per sample: clarity beats speed.
+//! The control pair runs per control change, not per sample: clarity beats
+//! speed. The detector pair runs per sample in the dynamics stages.
 //!
-//! # The one pair that is deliberately not here
+//! # Two floor policies, one module
 //!
-//! `mooloop_dsp::dynamics` has its own `lin_to_db`/`db_to_lin`, and they are
-//! not duplicates of [`linear_to_db`]/[`db_to_linear`] -- they differ where it
-//! matters. A control floors at [`MIN_DB`], because a knob at the bottom of
-//! its travel means silence rather than -60 dB of residual gain. A gain
-//! computer must not: a compressor measuring a -70 dB input has to be told
-//! -70 dB, not -60, or its static curve reports a reduction the signal never
-//! had. So that pair floors at about -180 dB instead, low enough to keep
-//! `log10` away from negative infinity and far below anything audible.
+//! There are two dB/linear pairs here, and they are not duplicates -- they
+//! differ where it matters. A control floors at [`MIN_DB`], because a knob at
+//! the bottom of its travel means silence rather than -60 dB of residual
+//! gain: that is [`linear_to_db`]/[`db_to_linear`]. A gain computer must not:
+//! a compressor measuring a -70 dB input has to be told -70 dB, not -60, or
+//! its static curve reports a reduction the signal never had. So the
+//! detector pair, [`linear_to_db_unfloored`]/[`db_to_linear_unfloored`], has
+//! no dB floor at all and only keeps `log10` away from negative infinity, at
+//! [`DETECTOR_MIN_LEVEL`] (about -180 dB, far below anything audible).
 //!
 //! The consequence worth knowing before reaching for either: they disagree
-//! below -60 dB and agree above it. Anything converting a *parameter* uses
-//! this module; anything converting a measured *level* inside a dynamics
-//! stage uses that one. `mooloop_dsp::strip` calls both, for exactly that
-//! reason.
+//! below -60 dB and agree above it. Anything converting a *parameter* uses the
+//! control pair; anything converting a measured *level* inside a dynamics
+//! stage uses the detector pair. `mooloop_dsp::strip` calls both, for exactly
+//! that reason. They used to live in two crates under near-identical names
+//! (`mooloop_dsp::dynamics::{lin_to_db, db_to_lin}`), which made the choice
+//! look like a matter of which crate a file could see rather than which
+//! policy it wanted.
 
 /// Floor of every dB readout and scale: -inf collapses here.
 pub const MIN_DB: f32 = -60.0;
@@ -87,6 +92,29 @@ pub fn db_to_linear(db: f32) -> f32 {
         return 0.0;
     }
     10.0f32.powf(db / 20.0)
+}
+
+/// Smallest level [`linear_to_db_unfloored`] takes the log of, about
+/// -180 dB. Keeps silence from producing negative infinity and poisoning a
+/// gain computer, without flooring anything a detector could measure.
+pub const DETECTOR_MIN_LEVEL: f32 = 1e-9;
+
+/// The detector pair's level-to-dB: no [`MIN_DB`] floor, and never `-inf`.
+///
+/// For measured levels inside a dynamics stage (envelopes, peaks, gain
+/// computer inputs), where -70 dB has to read as -70 dB. Silence reads as
+/// about -180 dB. The sign of `level` is ignored. Not for parameters: use
+/// [`linear_to_db`], whose floor is what a knob means.
+pub fn linear_to_db_unfloored(level: f32) -> f32 {
+    20.0 * level.abs().max(DETECTOR_MIN_LEVEL).log10()
+}
+
+/// The detector pair's dB-to-level: no [`MIN_DB`] floor, so it never returns
+/// exact 0 for a finite dB. The inverse of [`linear_to_db_unfloored`] above
+/// [`DETECTOR_MIN_LEVEL`]; for gain-computer outputs such as a reduction in
+/// dB. Not for parameters: use [`db_to_linear`], whose floor is silence.
+pub fn db_to_linear_unfloored(db: f32) -> f32 {
+    10f32.powf(db / 20.0)
 }
 
 /// The mixer fader taper: linear in dB over travel, piecewise between these
@@ -170,6 +198,32 @@ pub fn format_db(db: f32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Moved with the pair from `mooloop_dsp::dynamics`.
+    #[test]
+    fn detector_conversions_round_trip() {
+        for db in [-60.0, -24.0, -6.0, 0.0, 6.0] {
+            let back = linear_to_db_unfloored(db_to_linear_unfloored(db));
+            assert!((back - db).abs() < 1e-3, "{db} round-tripped to {back}");
+        }
+        assert!((linear_to_db_unfloored(1.0)).abs() < 1e-4);
+        assert!((db_to_linear_unfloored(0.0) - 1.0).abs() < 1e-6);
+        assert!(
+            linear_to_db_unfloored(0.0).is_finite(),
+            "silence must not produce -inf"
+        );
+    }
+
+    /// The whole difference between the two pairs, pinned: below `MIN_DB`
+    /// the control pair reads silence and the detector pair keeps measuring.
+    #[test]
+    fn the_detector_pair_has_no_control_floor() {
+        assert!((linear_to_db_unfloored(db_to_linear_unfloored(-70.0)) + 70.0).abs() < 1e-3);
+        assert_eq!(linear_to_db(db_to_linear_unfloored(-70.0)), MIN_DB);
+        assert_eq!(db_to_linear(-70.0), 0.0);
+        assert!(db_to_linear_unfloored(-70.0) > 0.0);
+        assert!((linear_to_db_unfloored(0.0) + 180.0).abs() < 1e-3);
+    }
 
     #[test]
     fn converts_linear_amplitude_to_db() {

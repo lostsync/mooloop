@@ -193,6 +193,11 @@ Three consequences worth stating, because each one is a decision:
   The sampler's Output is the exception that proves the range rather than
   the default: same `TrimKnob`, same travel, same double-click-to-0 dB, but
   a fresh one starts at -9 dB for the reason above.
+- Two dB/linear policies, both in `gain.rs`. `db_to_linear`/`linear_to_db`
+  are for parameters and floor at `MIN_DB`: -60 dB and below is silence.
+  `db_to_linear_unfloored`/`linear_to_db_unfloored` are for measured levels
+  inside the dynamics stages, and have no dB floor (silence reads about
+  -180 dB), so a detector told -70 dB hears -70 dB. They agree above -60 dB.
 - Oscillator level: -inf to 0 dB — an oscillator never boosts past its
   device's reference.
 - Every gain, trim, level, and fader reads through `gain::format_db`

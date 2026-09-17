@@ -42,11 +42,12 @@ use mooloop_core::strip::{
     STRIP_COMP_THRESHOLD_DB, STRIP_DRIVE_DB, STRIP_EQ_BANDS, STRIP_EQ_IN, STRIP_PRE_IN,
     STRIP_VOICING,
 };
+use mooloop_core::gain::{db_to_linear_unfloored, linear_to_db_unfloored};
 use mooloop_core::{db_to_linear, EqQProfile};
 
 use crate::biquad::Biquad;
 use crate::bus::StereoBus;
-use crate::dynamics::{compressor_gain_db, db_to_lin, lin_to_db, EnvelopeFollower};
+use crate::dynamics::{compressor_gain_db, EnvelopeFollower};
 use crate::node::DynamicsFrame;
 use crate::preamp::Preamp;
 use crate::smooth::Smoothed;
@@ -347,13 +348,15 @@ fn bent_ratio(ratio: f32, over_db: f32, bend: f32) -> f32 {
 pub fn static_curve_db(params: &StripParams, floor_db: f32, samples: usize) -> Vec<f32> {
     let voicing = strip_voicing(params.voicing);
     let samples = samples.max(2);
-    // `db_to_linear`, not `dynamics::db_to_lin`: the audio path converts this
-    // parameter through the control-side function when the knob moves
-    // (`snap_comp`, `apply_param`), and the two floor differently below
-    // -60 dB. Makeup's range is 0..24 dB so they agree on every reachable
-    // value -- but the claim above, that this is sampled "by the same two
-    // functions the audio path calls", was not true of this line until it
-    // said `db_to_linear`.
+    // Makeup is a parameter, so it takes the control policy (`db_to_linear`,
+    // floored at `MIN_DB`), as the audio path does when the knob moves
+    // (`snap_comp`, `apply_param`). What the curve computes from it -- a
+    // reduction and an output level -- are measurements, and take the
+    // detector policy (`*_unfloored`). The two policies differ only at and
+    // below -60 dB, and
+    // `static_curve_makeup_policy_agrees_across_the_descriptor_range` holds
+    // that no makeup the descriptor allows gets there; until that test
+    // existed, this comment claimed as much with nothing behind it.
     let makeup = db_to_linear(params.makeup_db);
     let mix = params.mix.clamp(0.0, 1.0);
     (0..samples)
@@ -363,8 +366,8 @@ pub fn static_curve_db(params: &StripParams, floor_db: f32, samples: usize) -> V
             let ratio = bent_ratio(params.ratio, over, voicing.ratio_bend);
             let reduction =
                 compressor_gain_db(input_db, params.threshold_db, ratio, params.knee_db);
-            let wet = db_to_lin(reduction) * makeup;
-            input_db + lin_to_db((1.0 - mix) + mix * wet)
+            let wet = db_to_linear_unfloored(reduction) * makeup;
+            input_db + linear_to_db_unfloored((1.0 - mix) + mix * wet)
         })
         .collect()
 }
@@ -725,7 +728,7 @@ impl Strip {
     /// hold whatever it last saw.
     pub fn dynamics_frame(&self) -> Option<DynamicsFrame> {
         self.params.comp_in.then_some(DynamicsFrame {
-            detector_db: lin_to_db(self.detector_peak),
+            detector_db: linear_to_db_unfloored(self.detector_peak),
             reduction_db: self.reduction_db,
         })
     }
@@ -822,13 +825,13 @@ impl Strip {
             } else {
                 fast
             };
-            let envelope_db = lin_to_db(envelope);
+            let envelope_db = linear_to_db_unfloored(envelope);
             let effective_ratio = bent_ratio(ratio, envelope_db - threshold_db, bend);
             let reduction_db =
                 compressor_gain_db(envelope_db, threshold_db, effective_ratio, knee_db);
             self.detector_peak = self.detector_peak.max(envelope);
             self.reduction_db = self.reduction_db.min(reduction_db);
-            let gain = db_to_lin(reduction_db) * makeup;
+            let gain = db_to_linear_unfloored(reduction_db) * makeup;
             bus.l[frame] = dry_l * (1.0 - mix) + wet_l * gain * mix;
             bus.r[frame] = dry_r * (1.0 - mix) + wet_r * gain * mix;
         }
@@ -1448,6 +1451,39 @@ mod tests {
         let mut loud = sine(frames, 200.0, 0.5);
         strip.process_block(&mut loud, frames);
         assert!(strip.is_at_rest(), "a section that is out cannot hold rest");
+    }
+
+    /// `static_curve_db` converts makeup with the control policy and
+    /// everything downstream of it with the detector policy, and its comment
+    /// says the difference cannot matter because no reachable makeup is at
+    /// or below `MIN_DB`. This holds that claim against the range production
+    /// actually clamps to: every value goes in through `StripParams::set`,
+    /// which reads `StripParams::descriptor`, and the walk's bounds come
+    /// from that same lookup. Values past both ends are included so the
+    /// clamp is exercised too. A makeup descriptor widened to reach -60 dB
+    /// fails here.
+    #[test]
+    fn static_curve_makeup_policy_agrees_across_the_descriptor_range() {
+        let descriptor = StripParams::descriptor(STRIP_COMP_MAKEUP_DB)
+            .expect("the strip has a makeup parameter");
+        let (min, max) = (descriptor.min, descriptor.max);
+        assert!(max > min, "makeup's range is empty: {min}..{max}");
+        let steps = ((max - min) / 0.1).round() as i32;
+        let requested = (-1..=steps + 1).map(|step| min + step as f32 * 0.1);
+        let mut params = StripParams::default();
+        let mut walked = 0;
+        for request in requested.chain([min - 100.0, max + 100.0]) {
+            assert!(params.set(STRIP_COMP_MAKEUP_DB, request));
+            let stored = params.makeup_db;
+            let control = db_to_linear(stored);
+            let detector = db_to_linear_unfloored(stored);
+            assert!(
+                (control - detector).abs() <= 1e-6,
+                "makeup {stored} dB (asked {request}): control {control} vs detector {detector}"
+            );
+            walked += 1;
+        }
+        assert_eq!(walked, steps + 5, "the walk skipped values of {min}..{max}");
     }
 
     /// Every parameter the model has reaches the audio, and nothing else is

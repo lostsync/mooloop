@@ -17,11 +17,11 @@ use mooloop_core::{
     GATE_PARAM_THRESHOLD_DB, LIMITER_PARAM_CEILING_DB, LIMITER_PARAM_GAIN_DB,
     LIMITER_PARAM_RELEASE_MS,
 };
+use mooloop_core::gain::{db_to_linear_unfloored, linear_to_db_unfloored};
 
 use crate::bus::StereoBus;
 use crate::dynamics::{
-    compressor_gain_db, db_to_lin, gate_gain_db, limiter_gain_db, lin_to_db, time_coeff,
-    EnvelopeFollower,
+    compressor_gain_db, gate_gain_db, limiter_gain_db, time_coeff, EnvelopeFollower,
 };
 use crate::event::EventList;
 use crate::node::{AudioNode, DynamicsFrame, ProcessContext};
@@ -77,7 +77,7 @@ impl DynamicsBlock {
 
     fn frame(&self) -> DynamicsFrame {
         DynamicsFrame {
-            detector_db: lin_to_db(self.detector),
+            detector_db: linear_to_db_unfloored(self.detector),
             reduction_db: self.reduction_db,
         }
     }
@@ -132,7 +132,7 @@ impl RangeProcessor for GateEffect {
         let hold_samples = (hold_ms * 0.001 * self.sample_rate as f32) as u32;
 
         for i in start..end {
-            let level_db = lin_to_db(linked_peak(bus.l[i], bus.r[i]));
+            let level_db = linear_to_db_unfloored(linked_peak(bus.l[i], bus.r[i]));
 
             if level_db >= threshold_db {
                 self.hold_remaining = hold_samples;
@@ -156,9 +156,9 @@ impl RangeProcessor for GateEffect {
             self.gain_db = target_db + coeff * (self.gain_db - target_db);
             // The gate detects on the bare level, so that level *is* its
             // detector; report it rather than an envelope it does not have.
-            self.block.observe(db_to_lin(level_db), self.gain_db);
+            self.block.observe(db_to_linear_unfloored(level_db), self.gain_db);
 
-            let gain = db_to_lin(self.gain_db);
+            let gain = db_to_linear_unfloored(self.gain_db);
             bus.l[i] *= gain;
             bus.r[i] *= gain;
         }
@@ -200,7 +200,7 @@ impl AudioNode for GateEffect {
             return false;
         }
         let shut = gate_gain_db(
-            lin_to_db(0.0),
+            linear_to_db_unfloored(0.0),
             self.params.threshold_db,
             self.params.range_db,
         );
@@ -282,12 +282,12 @@ impl RangeProcessor for CompressorEffect {
         for i in start..end {
             let threshold_db = self.threshold_db.advance();
             let ratio = self.ratio.advance();
-            let makeup = db_to_lin(self.makeup_db.advance());
+            let makeup = db_to_linear_unfloored(self.makeup_db.advance());
             let envelope = self.detector.process(linked_peak(bus.l[i], bus.r[i]));
             let reduction_db =
-                compressor_gain_db(lin_to_db(envelope), threshold_db, ratio, knee_db);
+                compressor_gain_db(linear_to_db_unfloored(envelope), threshold_db, ratio, knee_db);
             self.block.observe(envelope, reduction_db);
-            let gain = db_to_lin(reduction_db) * makeup;
+            let gain = db_to_linear_unfloored(reduction_db) * makeup;
             bus.l[i] *= gain;
             bus.r[i] *= gain;
         }
@@ -424,15 +424,15 @@ impl RangeProcessor for LimiterEffect {
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         for i in start..end {
             let ceiling_db = self.ceiling_db.advance();
-            let drive = db_to_lin(self.gain_db.advance());
-            let ceiling = db_to_lin(ceiling_db);
+            let drive = db_to_linear_unfloored(self.gain_db.advance());
+            let ceiling = db_to_linear_unfloored(ceiling_db);
 
             let l = bus.l[i] * drive;
             let r = bus.r[i] * drive;
 
             let envelope = self.detector.process(linked_peak(l, r));
-            let reduction_db = limiter_gain_db(lin_to_db(envelope), ceiling_db);
-            let reduction = db_to_lin(reduction_db);
+            let reduction_db = limiter_gain_db(linear_to_db_unfloored(envelope), ceiling_db);
+            let reduction = db_to_linear_unfloored(reduction_db);
             // The detector sits after the input gain, but the display's axis
             // is this node's input, so refer the level back across the drive.
             self.block.observe(envelope / drive.max(f32::MIN_POSITIVE), reduction_db);
@@ -645,7 +645,7 @@ mod tests {
             "quiet signal was altered: {quiet_in} -> {quiet_out}"
         );
         // Above it: 12 dB over at 4:1 should come out about 9 dB down.
-        let reduction_db = lin_to_db(loud_out) - lin_to_db(loud_in);
+        let reduction_db = linear_to_db_unfloored(loud_out) - linear_to_db_unfloored(loud_in);
         assert!(
             (reduction_db + 9.0).abs() < 1.5,
             "expected about -9 dB, got {reduction_db}"
@@ -673,7 +673,7 @@ mod tests {
         };
         let plain = run(0.0);
         let made_up = run(9.0);
-        let lift_db = lin_to_db(made_up) - lin_to_db(plain);
+        let lift_db = linear_to_db_unfloored(made_up) - linear_to_db_unfloored(plain);
         assert!(
             (lift_db - 9.0).abs() < 0.5,
             "makeup should add 9 dB, added {lift_db}"
@@ -721,7 +721,7 @@ mod tests {
                 SR,
             );
             effect.process(&context(frames), &mut bus, &EventList::empty(), None);
-            let ceiling = db_to_lin(ceiling_db);
+            let ceiling = db_to_linear_unfloored(ceiling_db);
             let out = peak(&bus.l[..frames]);
             assert!(
                 out <= ceiling + 1e-4,
@@ -877,10 +877,10 @@ mod tests {
         // The detector settles at the tone's own level, so the display's dot
         // lands where the signal really is on the input axis.
         assert!(
-            (frame.detector_db - lin_to_db(amplitude)).abs() < 1.0,
+            (frame.detector_db - linear_to_db_unfloored(amplitude)).abs() < 1.0,
             "detector read {} for a {} dB tone",
             frame.detector_db,
-            lin_to_db(amplitude)
+            linear_to_db_unfloored(amplitude)
         );
         // 12 dB over at 4:1 is 9 dB of reduction, which is also what the
         // audio lost -- the reported number is the applied one, not a
@@ -890,7 +890,7 @@ mod tests {
             "reported {} dB of reduction",
             frame.reduction_db
         );
-        let measured_db = lin_to_db(peak(&bus.l[frames / 2..])) - lin_to_db(amplitude);
+        let measured_db = linear_to_db_unfloored(peak(&bus.l[frames / 2..])) - linear_to_db_unfloored(amplitude);
         assert!(
             (frame.reduction_db - measured_db).abs() < 1.0,
             "reported {} dB but the audio lost {measured_db} dB",

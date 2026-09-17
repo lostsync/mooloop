@@ -1,8 +1,11 @@
 //! Level detection and gain computation shared by the dynamics effects.
 //!
 //! Gate, compressor, and limiter differ only in how they turn a measured
-//! level into a gain; the measuring, the smoothing, and the decibel plumbing
-//! are the same in all three, so they live here.
+//! level into a gain; the measuring and the smoothing are the same in all
+//! three, so they live here. The decibel plumbing is not: it is
+//! `mooloop_core::gain`'s detector pair, `linear_to_db_unfloored` and
+//! `db_to_linear_unfloored`, called by name so a caller says which floor
+//! policy it wants.
 //!
 //! ## Stereo linking
 //!
@@ -12,22 +15,10 @@
 //! under compression. Linking is the default people expect and the only mode
 //! offered for now.
 
-/// Smallest level fed to the log converter, about -180 dB. Keeps silence from
-/// producing negative infinity and poisoning the gain computers.
-const MIN_LEVEL: f32 = 1e-9;
-
 /// Gap below which `EnvelopeFollower::process` snaps to the rectified input
 /// instead of continuing to decay toward it. Far below any audible or
 /// musically meaningful level, and far above `f32`'s subnormal range.
 const SNAP_EPSILON: f32 = 1.0e-9;
-
-pub fn lin_to_db(level: f32) -> f32 {
-    20.0 * level.abs().max(MIN_LEVEL).log10()
-}
-
-pub fn db_to_lin(db: f32) -> f32 {
-    10f32.powf(db / 20.0)
-}
 
 /// One-pole coefficient for a time constant in milliseconds. This is the
 /// fraction of the old value *retained* per sample, so 0 is instant.
@@ -155,17 +146,6 @@ pub fn limiter_gain_db(input_db: f32, ceiling_db: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn decibel_conversions_round_trip() {
-        for db in [-60.0, -24.0, -6.0, 0.0, 6.0] {
-            let back = lin_to_db(db_to_lin(db));
-            assert!((back - db).abs() < 1e-3, "{db} round-tripped to {back}");
-        }
-        assert!((lin_to_db(1.0)).abs() < 1e-4);
-        assert!((db_to_lin(0.0) - 1.0).abs() < 1e-6);
-        assert!(lin_to_db(0.0).is_finite(), "silence must not produce -inf");
-    }
 
     #[test]
     fn a_zero_time_constant_is_instant() {

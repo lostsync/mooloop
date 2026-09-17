@@ -19,7 +19,7 @@ use mooloop_core::MAX_BUSES;
 use mooloop_core::{
     modulation::CONTROL_SOURCE_SLOTS, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_SAMPLER_VOICES,
 };
-use mooloop_dsp::dynamics::db_to_lin;
+use mooloop_core::gain::db_to_linear_unfloored;
 use mooloop_dsp::{BufferDisplay, DynamicsFrame, SPECTRUM_BINS, WAVEFORM_BINS};
 
 /// Peak-hold cells for every bus, left and right interleaved, and beside
@@ -495,7 +495,7 @@ impl DeviceMeters {
         // A silent block reports `-inf` dB, which converts to the zero the
         // held cell already rests at; anything else is an ordinary level.
         let detector = if frame.detector_db.is_finite() {
-            db_to_lin(frame.detector_db).max(0.0)
+            db_to_linear_unfloored(frame.detector_db).max(0.0)
         } else {
             0.0
         };
@@ -783,7 +783,7 @@ mod tests {
         assert!(telemetry.set_spectrum_enabled(0, 2, true));
     }
     use super::*;
-    use mooloop_dsp::dynamics::lin_to_db;
+    use mooloop_core::gain::linear_to_db_unfloored;
 
     #[test]
     fn a_peak_is_held_until_it_is_read() {
@@ -846,9 +846,9 @@ mod tests {
         );
         let (detector, reduction_db) = meters.take_dynamics(0, 1);
         assert!(
-            (lin_to_db(detector) + 20.0).abs() < 0.01,
+            (linear_to_db_unfloored(detector) + 20.0).abs() < 0.01,
             "held detector read {} dB",
-            lin_to_db(detector)
+            linear_to_db_unfloored(detector)
         );
         assert!(
             (reduction_db + 9.0).abs() < 0.01,

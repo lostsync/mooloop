@@ -138,7 +138,8 @@ pub use generator::{
 pub use channel::{Channel, DeviceKind, MAX_CHANNELS, MAX_EFFECTS_PER_CHANNEL, MAX_PATTERNS};
 pub use color::ProjectColor;
 pub use gain::{
-    db_to_linear, format_db, linear_to_db, reference_level_gain, MAX_DB, MAX_LINEAR_GAIN, METER_HOT_DB,
+    db_to_linear, db_to_linear_unfloored, format_db, linear_to_db, linear_to_db_unfloored,
+    reference_level_gain, DETECTOR_MIN_LEVEL, MAX_DB, MAX_LINEAR_GAIN, METER_HOT_DB,
     METER_WARNING_DB, MIN_DB, REFERENCE_PEAK_DBFS,
 };
 pub use effect::{
