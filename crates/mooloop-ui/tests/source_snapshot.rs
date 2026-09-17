@@ -626,6 +626,7 @@ fn effect_slot(kind: EffectKind) -> EffectSlotRow {
         p14: 0.0,
         p15: 0.0,
         p16: 0.0,
+        p17: 0.0,
         modulation_depths: Vec::<f32>::new().as_slice().into(),
         modulation_allowed: Vec::<bool>::new().as_slice().into(),
         modulation_offsets: Vec::<f32>::new().as_slice().into(),
@@ -684,7 +685,8 @@ fn render_effect_header_comparison() {
     set_drum_preview(&ui, DrumSynthParams::default());
 
     let mut reverb = effect_slot(EffectKind::Reverb);
-    reverb.p1 = 1.0;
+    // Decay, which the row carries by id (9), not by position.
+    reverb.p9 = 1.0;
     let mut plate = effect_slot(EffectKind::Plate);
     plate.p4 = 0.25;
     ui.set_effect_slots(ModelRc::from(Rc::new(VecModel::from(vec![

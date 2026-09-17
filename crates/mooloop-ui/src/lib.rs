@@ -1768,7 +1768,7 @@ fn envelope_seconds(t: f32) -> f32 {
 
 /// Number of parameter fields `EffectSlotRow` carries. Raising it means
 /// adding matching `pN` fields to the Slint struct too.
-const EFFECT_ROW_PARAMS: usize = 17;
+const EFFECT_ROW_PARAMS: usize = 18;
 
 /// How many of those a descriptor table may fill, **indexed by descriptor
 /// id**. The last two are reserved for what a device keeps beside its
@@ -1790,6 +1790,13 @@ const EFFECT_ROW_PARAMS: usize = 17;
 /// topping out at 14. A retired id is a hole here forever, which is the cost
 /// of ids that outlive the control model that minted them and is cheaper than
 /// the alternative -- a saved lane that silently means something else.
+///
+/// Sixteen since 2026-09-17: the Reverb's ids are 8..15 (0..7 are its
+/// retired convolution-era parameters), so its Low Cut is id 15, which was
+/// the reserved tempo-sync field while this was fifteen. Its face also read
+/// `p0..p7` by position, so every knob opened at zero;
+/// `tests/slint_face_agreement.rs` (`every_face_reads_its_parameters_by_id`)
+/// now checks every face's reads against its ids.
 const EFFECT_ROW_DESCRIPTOR_PARAMS: usize = EFFECT_ROW_PARAMS - 2;
 
 /// The number that binds a kind to its face, and the only thing that does.
@@ -2105,6 +2112,7 @@ fn effect_slot_row(
         p14: p[14],
         p15: p[15],
         p16: p[16],
+        p17: p[17],
         modulation_depths: Vec::<f32>::new().as_slice().into(),
         modulation_allowed: Vec::<bool>::new().as_slice().into(),
         modulation_offsets: Vec::<f32>::new().as_slice().into(),

@@ -582,15 +582,36 @@ struct FaceKnobBlock {
 /// copy of nothing and the shape the rest could move to.
 fn face_knobs(markup: &str) -> Vec<FaceKnobBlock> {
     let mut out = Vec::new();
+    for (line, block) in blocks_after(markup, "ParameterKnob") {
+        let Some(default) = optional_number(block, "default-value:") else {
+            continue;
+        };
+        out.push(FaceKnobBlock {
+            line,
+            property: bound_property(block),
+            param: indexed_param(block),
+            minimum: optional_number(block, "minimum:"),
+            maximum: optional_number(block, "maximum:"),
+            default,
+        });
+    }
+    out
+}
+
+/// Every `{ .. }` block that follows an occurrence of `marker`, with the
+/// 1-based line `marker` sits on. Braces are matched, so a block holding
+/// callbacks or nested elements is returned whole.
+fn blocks_after<'a>(markup: &'a str, marker: &str) -> Vec<(usize, &'a str)> {
+    let mut out = Vec::new();
     let bytes = markup.as_bytes();
     let mut from = 0usize;
-    while let Some(found) = markup[from..].find("ParameterKnob") {
+    while let Some(found) = markup[from..].find(marker) {
         let start = from + found;
         let Some(open) = markup[start..].find('{').map(|at| start + at) else {
             break;
         };
         // `from` advances to the block's closing brace below, which is always
-        // past `start`, so the walk cannot stall on one knob.
+        // past `start`, so the walk cannot stall on one block.
 
         let mut depth = 0i32;
         let mut end = open;
@@ -607,19 +628,8 @@ fn face_knobs(markup: &str) -> Vec<FaceKnobBlock> {
                 _ => {}
             }
         }
-        let block = &markup[open..=end];
+        out.push((markup[..start].matches('\n').count() + 1, &markup[open..=end]));
         from = end;
-        let Some(default) = optional_number(block, "default-value:") else {
-            continue;
-        };
-        out.push(FaceKnobBlock {
-            line: markup[..start].matches('\n').count() + 1,
-            property: bound_property(block),
-            param: indexed_param(block),
-            minimum: optional_number(block, "minimum:"),
-            maximum: optional_number(block, "maximum:"),
-            default,
-        });
     }
     out
 }
@@ -913,5 +923,215 @@ fn the_aux_in_face_agrees_with_its_table() {
         "aux-in-device.slint tops the Level knob at {stated} dB where gain::MAX_DB \
          is {}, so the face and `MAX_LINEAR_GAIN` in the table no longer meet",
         mooloop_core::gain::MAX_DB
+    );
+}
+
+// --- The read side: which row field each face displays ---------------------
+
+/// The face properties `main.slint` feeds from a row field that no knob in the
+/// face's own markup can name, because the control is a selector, a switch, a
+/// slider, a knob whose `value` is an expression, or a knob that refuses
+/// modulation. Each is the descriptor id the property displays.
+const UNKNOBBED_BINDINGS: [(EffectKind, &str, u32); 12] = [
+    (EffectKind::Filter, "mode", mooloop_core::FILTER_PARAM_MODE),
+    (EffectKind::Filter, "slope", mooloop_core::FILTER_PARAM_SLOPE),
+    (EffectKind::Drive, "curve", mooloop_core::DRIVE_PARAM_CURVE),
+    (EffectKind::Drive, "output", mooloop_core::DRIVE_PARAM_OUTPUT),
+    (EffectKind::Preamp, "voicing", mooloop_core::PREAMP_PARAM_VOICING),
+    (EffectKind::Bitcrush, "style", mooloop_core::BITCRUSH_PARAM_STYLE),
+    (EffectKind::Delay, "time", mooloop_core::DELAY_PARAM_TIME_MS),
+    (EffectKind::Delay, "mode", mooloop_core::DELAY_PARAM_MODE),
+    (EffectKind::Modulation, "mode", mooloop_core::MODULATION_PARAM_MODE),
+    (EffectKind::Modulation, "rate", mooloop_core::MODULATION_PARAM_RATE_HZ),
+    (EffectKind::Buffer, "quantize", mooloop_core::BUFFER_PARAM_QUANTIZE),
+    (EffectKind::Chain, "mix", mooloop_core::CHAIN_PARAM_MIX),
+];
+
+/// The face properties fed from the row's reserved fields: a tempo-sync flag
+/// and a musical division, which a device keeps beside its parameters and
+/// which have no descriptor id at all.
+const RESERVED_BINDINGS: [(EffectKind, &str); 4] = [
+    (EffectKind::Delay, "tempo-sync"),
+    (EffectKind::Delay, "time-division"),
+    (EffectKind::Modulation, "tempo-sync"),
+    (EffectKind::Modulation, "rate-division"),
+];
+
+/// The markup a `main.slint` face element is declared in.
+fn face_markup(face: &str) -> (&'static str, &'static str) {
+    match face {
+        "FilterDeviceFace" => ("filter-device.slint", FILTER_SLINT),
+        "DriveDeviceFace" => ("drive-device.slint", DRIVE_SLINT),
+        "PreampDeviceFace" => ("preamp-device.slint", PREAMP_SLINT),
+        "BitcrushDeviceFace" => ("bitcrush-device.slint", BITCRUSH_SLINT),
+        "DelayDeviceFace" => ("delay-device.slint", DELAY_SLINT),
+        "GateDeviceFace" => ("gate-device.slint", GATE_SLINT),
+        "CompressorDeviceFace" => ("compressor-device.slint", COMPRESSOR_SLINT),
+        "LimiterDeviceFace" => ("limiter-device.slint", LIMITER_SLINT),
+        "EqDeviceFace" => ("eq-device.slint", EQ_SLINT),
+        "ReverbDeviceFace" => ("reverb-device.slint", REVERB_SLINT),
+        "ModulationDeviceFace" => ("modulation-device.slint", MODULATION_SLINT),
+        "PlateDeviceFace" => ("plate-device.slint", PLATE_SLINT),
+        "BufferDeviceFace" => ("buffer-device.slint", BUFFER_SLINT),
+        "ContainerDeviceFace" => ("container-device.slint", CONTAINER_SLINT),
+        other => panic!("main.slint dispatches to {other}, which this test does not know"),
+    }
+}
+
+/// `prop: <expression reading slot.pK>;` -> `(prop, K)`, for one line of a
+/// face element's body in `main.slint`.
+fn row_field_binding(line: &str) -> Option<(String, usize)> {
+    let (property, expression) = line.trim().split_once(':')?;
+    let property = property.trim();
+    if property.is_empty()
+        || !property
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return None;
+    }
+    let at = expression.find("slot.p")? + "slot.p".len();
+    let digits: String = expression[at..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    let field = digits.parse().ok()?;
+    Some((property.to_string(), field))
+}
+
+/// The read-side twin of `the_buffer_face_sends_descriptor_positions_for_edits`.
+///
+/// `EffectSlotRow.pN` is filled by descriptor **id**, so a face must read the
+/// field numbered by the id of the parameter it displays. Every kind but two
+/// has `id == position`, which is why a face reading by position looked
+/// right. The Reverb's ids are 8..15 -- 0..7 are the retired convolution-era
+/// parameters -- and its face kept reading `p0..p7`, which nothing fills for
+/// that kind: every knob opened at zero whatever the saved values, and Low
+/// Cut (id 15) had nowhere to go but the field reserved for the tempo-sync
+/// flag. Found by the 2026-09-17 review, a day after the Buffer's write-side
+/// incident, and for the same reason: only the write side was tested.
+///
+/// Each `if slot.kind == N : XDeviceFace` element in `main.slint` is read for
+/// its `prop: slot.pK` bindings. `prop` is resolved to an id through the
+/// face's own knob for it -- the modulation index that knob reads, which
+/// `every_effect_face_knob_agrees_with_its_table` already holds to the table
+/// -- or through `UNKNOBBED_BINDINGS` where the face has no such knob. The
+/// reserved tempo pair must sit past every id any kind has. The EQ is skipped:
+/// its row is a documented view over one target, numbered by `EqFaceControl`.
+#[test]
+fn every_face_reads_its_parameters_by_id() {
+    let highest_id = EffectKind::ALL
+        .iter()
+        .filter(|kind| **kind != EffectKind::Eq)
+        .flat_map(|kind| kind.descriptors().iter().map(|descriptor| descriptor.id))
+        .max()
+        .expect("effect kinds describe parameters") as usize;
+
+    let mut failures = Vec::new();
+    let mut checked = 0usize;
+    for (line, body) in blocks_after(MAIN_SLINT, "if slot.kind == ") {
+        let header = MAIN_SLINT.lines().nth(line - 1).expect("header line");
+        let Some((number, face)) = header
+            .trim()
+            .strip_prefix("if slot.kind == ")
+            .and_then(|rest| rest.split_once(':'))
+        else {
+            continue;
+        };
+        let number: i32 = number.trim().parse().expect("a literal kind number");
+        let face = face.trim().trim_end_matches('{').trim();
+        let kind = EffectKind::ALL
+            .into_iter()
+            .find(|kind| mooloop_ui::effect_kind_index(*kind) == number)
+            .unwrap_or_else(|| panic!("main.slint:{line}: no effect kind is numbered {number}"));
+        if kind == EffectKind::Eq {
+            continue;
+        }
+        let (file, markup) = face_markup(face);
+        let knobs: Vec<(String, u32)> = blocks_after(markup, "ParameterKnob")
+            .into_iter()
+            .filter_map(|(_, block)| Some((bound_property(block)?, indexed_param(block)?)))
+            // A knob whose `value` is an expression (the modulation effect's
+            // Rate) is not bound to one property; `UNKNOBBED_BINDINGS` names it.
+            .filter(|(property, _)| {
+                property
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
+            })
+            .collect();
+
+        let bindings: Vec<(String, usize)> =
+            body.lines().filter_map(row_field_binding).collect();
+
+        for (property, field) in &bindings {
+            if RESERVED_BINDINGS
+                .iter()
+                .any(|(k, p)| *k == kind && *p == property.as_str())
+            {
+                if *field <= highest_id {
+                    failures.push(format!(
+                        "{face}.{property} reads p{field} as a reserved field, but \
+                         ids run to {highest_id}, so p{field} is also where a \
+                         parameter is carried"
+                    ));
+                }
+                checked += 1;
+                continue;
+            }
+            let id = knobs
+                .iter()
+                .find(|(bound, _)| bound == property)
+                .map(|(_, index)| face_param_id(kind, *index))
+                .or_else(|| {
+                    UNKNOBBED_BINDINGS
+                        .iter()
+                        .find(|(k, p, _)| *k == kind && *p == property.as_str())
+                        .map(|(_, _, id)| *id)
+                });
+            let Some(id) = id else {
+                failures.push(format!(
+                    "{face}.{property} reads p{field}, and neither a knob in {file} \
+                     nor UNKNOBBED_BINDINGS says which {kind:?} parameter it shows"
+                ));
+                continue;
+            };
+            let name = kind
+                .descriptor(id)
+                .map(|descriptor| descriptor.name)
+                .unwrap_or("<undescribed>");
+            if *field != id as usize {
+                failures.push(format!(
+                    "{face}.{property} ({name}, id {id}) reads p{field}; the row \
+                     carries it in p{id}"
+                ));
+            }
+            checked += 1;
+        }
+
+        // And the other way: a knob the face draws for a parameter has to be
+        // fed from the row at all.
+        for (property, index) in &knobs {
+            if !bindings.iter().any(|(bound, _)| bound == property) {
+                failures.push(format!(
+                    "{face}.{property} (id {}) is a knob in {file} that main.slint \
+                     never feeds from the row",
+                    face_param_id(kind, *index)
+                ));
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{} face binding(s) read the wrong row field:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+    // The tripwire, as above: 66 bindings across thirteen faces when this was
+    // written.
+    assert!(
+        checked >= 60,
+        "only {checked} bindings were compared; the main.slint parse has stopped \
+         matching the markup it is meant to read"
     );
 }
