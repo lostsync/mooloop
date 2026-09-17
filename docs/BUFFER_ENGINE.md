@@ -47,9 +47,12 @@ every other effect, capturing whatever reaches its position in the chain.
   window, and an arbitration rule decided which of them owned the one head.
   The face's buttons were macros over those shared knobs. It needed a chase
   time constant, an arrival test and a stillness test to know when an edit
-  was over; REV was inaudible over a live buffer because nothing detached a
-  head for `Rate` to drive; and STUT could not have a length of its own
-  without taking the loop's. Adam, having played it: *"i dont understand what
+  was over; STUT could not have a length of its own without taking the
+  loop's; and `Rate`, the knob REV negated, could not be heard over a live
+  buffer because nothing detached a head for it to drive. (That last one was
+  real but was not why REV did nothing when Adam pressed it. The face was
+  sending descriptor ids to an API that takes table positions, so REV was
+  writing Freeze. See the plan status for 2026-09-16.) Adam, having played it: *"i dont understand what
   is difficult. its a buffer."* `Rate`, `Length` and `Loop` are retired, and
   their ids are spent with `Offset`'s.
 - `BufferEvent` is the MIDI map's gesture contract in `mooloop-core`: offset,

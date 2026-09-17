@@ -101,7 +101,10 @@ to be rearranged anyway was the alternative. `Rate`, `Freeze`, `Length`,
 `Loop`, `Jump`, `Quantize` and `Quant Grid` were reachable from the automation
 lane's picker in the meantime, which is a real surface rather than a debug one.
 
-**The row carried two indexing schemes and they had always agreed.**
+**The row carried two indexing schemes and they had always agreed.** (It
+was three, not two: the edit path through `Session::set_effect_param` is
+positional, and the paragraph below missed it. See the correction under the
+playability pass.)
 `EffectSlotRow.pN` was filled by descriptor *position*; `modulation_allowed`
 and `destination_depths` are filled by descriptor *id*, which
 `descriptor_slots` sizes as `max(id) + 1`. Every kind had dense ids from zero,
@@ -140,6 +143,22 @@ so.
 The whole of `03` had landed and the device was played for the first time. Three
 of the four things Adam reported were one defect each, and one of them was the
 device's headline control.
+
+> **Correction, same evening.** This section misdiagnosed its headline
+> report. REV did nothing because **the face was addressing the wrong
+> parameters**, not because of the Rate problem described below.
+> `Session::set_effect_param` takes a parameter's *position* in the
+> descriptor table, and the face and its Rust handlers passed descriptor
+> *ids*. Once `Offset` was retired, the Buffer's ids and positions no
+> longer lined up, so REV (id 3) wrote position 3, which was Freeze. The
+> Rate defect below was real and was fixed, but it was found by reasoning
+> from the DSP instead of by following an actual press to the device, and
+> every DSP and session test was green the whole time. Codex found the
+> wiring fault after the gesture rebuild had carried it forward (JUMP then
+> operated Reverse). It is fixed in `76b4409` and guarded by
+> `the_buffer_face_sends_descriptor_positions_for_edits`, and `AGENTS.md`
+> now has a section on the two address spaces. **When a control "does
+> nothing", trace the press before diagnosing the device.**
 
 **`Rate` had no head to drive, so REV did nothing at all.** The device follows
 its input -- a direct assignment, bit-identical and zero latency -- until
