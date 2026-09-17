@@ -117,21 +117,23 @@ impl Session {
     /// Write a note the engine captured into the pattern it was played over.
     ///
     /// The engine reports a note when its key comes up, already folded into
-    /// its own selected pattern — so `start_tick` is a position in the pattern
-    /// and needs no further arithmetic. That pattern is assumed to be
-    /// `current_pattern`; the event does not name it. What this adds is the pattern's own
+    /// `pattern` — so `start_tick` is a position in that pattern and needs no
+    /// further arithmetic. `pattern` is the engine's, not `current_pattern`:
+    /// the selection may have moved while the key was held, or a selection
+    /// command may have been refused. What this adds is the pattern's own
     /// bounds: a note played over the loop point starts where it was played
-    /// and is trimmed to the end rather than overhanging into nothing.
+    /// and is trimmed to the end rather than overhanging into nothing. A
+    /// pattern the session does not have records nothing.
     pub fn record_note(
         &mut self,
         channel: usize,
+        pattern: usize,
         note: u8,
         velocity: u8,
         start_tick: u32,
         length_ticks: u32,
     ) -> Option<NoteEdit> {
-        let pattern = self.current_pattern;
-        let length = self.recorded_pattern_ticks();
+        let length = self.recorded_pattern_length(pattern);
         if self.channels.len() <= channel || length == 0 {
             return None;
         }
@@ -159,10 +161,11 @@ impl Session {
         })
     }
 
-    /// The current pattern's length in ticks, for recording.
-    fn recorded_pattern_ticks(&self) -> u32 {
+    /// One pattern's length in ticks, for recording, or 0 if there is no such
+    /// pattern.
+    fn recorded_pattern_length(&self, pattern: usize) -> u32 {
         self.pattern_lengths
-            .get(self.current_pattern)
+            .get(pattern)
             .map_or(0, |steps| *steps as u32 * mooloop_core::TICKS_PER_STEP)
     }
 
@@ -717,7 +720,7 @@ mod tests {
         session.selected = 0;
 
         let edit = session
-            .record_note(1, 64, 90, TICKS_PER_STEP * 3, TICKS_PER_STEP * 2)
+            .record_note(1, 0, 64, 90, TICKS_PER_STEP * 3, TICKS_PER_STEP * 2)
             .expect("a recorded note is an edit");
         assert_eq!(edit.notes, 1);
         let notes = &session.channels[1].notes[0];
@@ -733,6 +736,32 @@ mod tests {
         ));
     }
 
+    /// A note lands in the pattern the engine folded it into, whatever the
+    /// selection is by the time it arrives, and is trimmed to that pattern's
+    /// length rather than the selected one's.
+    #[test]
+    fn a_recorded_note_lands_in_the_pattern_the_engine_names() {
+        let mut session = Session::default();
+        session.add_pattern().expect("a second pattern");
+        session.pattern_lengths[0] = 4;
+        assert_eq!(session.current_pattern, 1);
+
+        let edit = session
+            .record_note(0, 0, 60, 100, TICKS_PER_STEP * 2, TICKS_PER_STEP * 8)
+            .expect("an edit");
+        assert!(session.channels[0].notes[1].is_empty(), "not the selected pattern");
+        let note = session.channels[0].notes[0][0];
+        assert_eq!(note.start_tick, TICKS_PER_STEP * 2);
+        assert_eq!(note.duration_ticks, TICKS_PER_STEP * 2, "trimmed to pattern 0");
+        assert!(matches!(
+            edit.commands[0],
+            EngineCommand::UpsertNote { pattern: 0, .. }
+        ));
+
+        // A pattern the session does not have is refused rather than guessed.
+        assert!(session.record_note(0, 7, 60, 100, 0, 1).is_none());
+    }
+
     /// A note held past the end of the pattern is trimmed to it rather than
     /// overhanging into nothing, and one played on the last tick still starts
     /// inside the pattern.
@@ -742,13 +771,13 @@ mod tests {
         let length = session.pattern_lengths[0] as u32 * TICKS_PER_STEP;
 
         session
-            .record_note(0, 60, 100, length - TICKS_PER_STEP, TICKS_PER_STEP * 8)
+            .record_note(0, 0, 60, 100, length - TICKS_PER_STEP, TICKS_PER_STEP * 8)
             .expect("an edit");
         let note = session.channels[0].notes[0][0];
         assert_eq!(note.start_tick, length - TICKS_PER_STEP);
         assert_eq!(note.duration_ticks, TICKS_PER_STEP);
 
-        session.record_note(0, 62, 100, length * 2, 4).expect("an edit");
+        session.record_note(0, 0, 62, 100, length * 2, 4).expect("an edit");
         let note = session.channels[0].notes[0]
             .iter()
             .find(|note| note.note == 62)

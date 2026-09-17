@@ -357,8 +357,9 @@ impl Sequencer {
         self.current
     }
 
-    /// Where a note played at `song_tick` belongs in the selected pattern, or
-    /// `None` when the selected pattern is not what is playing there.
+    /// Which pattern a note played at `song_tick` belongs in -- the selected
+    /// one -- and where in it, or `None` when the selected pattern is not
+    /// what is playing there.
     ///
     /// The transport never folds in pattern mode -- scheduling wraps its own
     /// copy of the position -- so a recorder that reported the playhead as it
@@ -370,9 +371,9 @@ impl Sequencer {
     /// placement of it covers the playhead there is nowhere to record: the
     /// note would otherwise land in a pattern at a position that was never
     /// heard against it.
-    pub fn recording_tick(&self, song_tick: f64) -> Option<u32> {
+    pub fn recording_tick(&self, song_tick: f64) -> Option<(usize, u32)> {
         let length = self.pattern_length_ticks(self.current)?;
-        match self.playback_mode {
+        let tick = match self.playback_mode {
             PlaybackMode::Pattern => Some(wrap_tick(song_tick, length) as u32),
             PlaybackMode::Song => {
                 let position = wrap_tick(song_tick, self.song_length_ticks());
@@ -384,7 +385,8 @@ impl Sequencer {
                     .find(|offset| (0.0..f64::from(length)).contains(offset))
                     .map(|offset| offset as u32)
             }
-        }
+        };
+        tick.map(|tick| (self.current, tick))
     }
 
     /// The `ordinal`-th pattern covering a position, for a caller that has to

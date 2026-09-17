@@ -50,6 +50,11 @@ input setting. Each install now carries the incoming project's routing into a
 routing cell of its own, so no renderer ever reads another project's channel
 order.
 
+**A recorded note names its pattern as of 2026-09-17.** `RecordedNote`
+carries the pattern its tick was folded into, taken at the press, and the
+session writes there rather than into whatever is selected when the key comes
+up.
+
 ## What is not built, and why
 
 - **MIDI output does not exist.** The sidebar's OUT row is inert and says so.

@@ -12526,7 +12526,7 @@ impl AppUi {
         // Reused across pumps rather than allocated per pump: a desk sending
         // a fader stream fills these sixty times a second.
         let mut control_input: Vec<mooloop_core::MidiMessage> = Vec::new();
-        let mut recorded: Vec<(u8, u8, u8, u32, u32)> = Vec::new();
+        let mut recorded: Vec<(u8, u8, u8, u8, u32, u32)> = Vec::new();
         let mut last_port_scan = std::time::Instant::now()
             - std::time::Duration::from_secs(2);
         let autodrive_verbose = std::env::var_os("MOOLOOP_AUTODRIVE_VERBOSE").is_some();
@@ -13373,11 +13373,13 @@ impl AppUi {
                         EngineEvent::ControlInput(message) => control_input.push(message),
                         EngineEvent::RecordedNote {
                             channel,
+                            pattern,
                             note,
                             velocity,
                             start_tick,
                             length_ticks,
-                        } => recorded.push((channel, note, velocity, start_tick, length_ticks)),
+                        } => recorded
+                            .push((channel, pattern, note, velocity, start_tick, length_ticks)),
                         EngineEvent::ProjectInstalled { .. } => {
                             unreachable!("EngineHandle filters project acknowledgements")
                         }
@@ -13422,11 +13424,18 @@ impl AppUi {
                             // already drawn that line.
                             edited |= effects.edits;
                         }
-                        for (channel, note, velocity, start, length) in recorded.drain(..) {
+                        for (channel, pattern, note, velocity, start, length) in
+                            recorded.drain(..)
+                        {
                             let channel = usize::from(channel);
-                            let Some(edit) =
-                                state.session.record_note(channel, note, velocity, start, length)
-                            else {
+                            let Some(edit) = state.session.record_note(
+                                channel,
+                                usize::from(pattern),
+                                note,
+                                velocity,
+                                start,
+                                length,
+                            ) else {
                                 continue;
                             };
                             for command in &edit.commands {

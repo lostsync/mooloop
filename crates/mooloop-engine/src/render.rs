@@ -2698,6 +2698,9 @@ impl MidiRouting {
 #[derive(Clone, Copy)]
 struct RecordingNote {
     channel: u8,
+    /// The pattern `start_tick` is in: the one selected at the press, which
+    /// is not necessarily the one selected at the release.
+    pattern: u8,
     velocity: u8,
     /// Where it landed in the selected pattern, folded by
     /// `Sequencer::recording_tick`.
@@ -4823,11 +4826,16 @@ impl RenderState {
         else {
             return;
         };
-        let Some(start_tick) = self.sequencer.recording_tick(self.tick_at(message.offset)) else {
+        let Some((pattern, start_tick)) =
+            self.sequencer.recording_tick(self.tick_at(message.offset))
+        else {
             return;
         };
         self.recording[usize::from(note & 0x7f)] = Some(RecordingNote {
             channel,
+            // In range: the sequencer's bank is `MAX_PATTERNS` long, which
+            // `SetCurrentPattern`'s own `u8` already bounds.
+            pattern: pattern as u8,
             velocity,
             start_tick,
             start_frames: self.transport.frames_played() + u64::from(message.offset),
@@ -4847,6 +4855,7 @@ impl RenderState {
             .max(1);
         self.emit(mooloop_core::EngineEvent::RecordedNote {
             channel: held.channel,
+            pattern: held.pattern,
             note,
             velocity: held.velocity,
             start_tick: held.start_tick,
@@ -6102,6 +6111,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         let recorded: Vec<_> = std::iter::from_fn(|| render.pop_outgoing()).collect();
         let [EngineEvent::RecordedNote {
             channel,
+            pattern,
             note,
             velocity,
             start_tick,
@@ -6110,7 +6120,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         else {
             panic!("expected exactly one recorded note, got {recorded:?}");
         };
-        assert_eq!((channel, note, velocity), (0, 60, 90));
+        assert_eq!((channel, pattern, note, velocity), (0, 0, 60, 90));
         assert_eq!(start_tick, 0, "it was played at the top of the pattern");
         assert!(
             (94..=96).contains(&length_ticks),
@@ -6233,6 +6243,50 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             tick: f64::from(TICKS_PER_BAR + 48),
         });
         assert_eq!(tap(&mut render, 0), vec![], "the selected pattern is not playing");
+    }
+
+    /// A recorded note names the pattern it was folded into, and that is the
+    /// pattern selected when the key went down -- not the one selected when it
+    /// came up.
+    #[test]
+    fn a_recorded_note_names_the_pattern_it_was_played_over() {
+        use mooloop_core::{
+            EngineEvent, MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage, MidiPortId,
+            MidiRouteSource,
+        };
+
+        let mut render = two_channel_render();
+        render.attach_midi_routing(Arc::new(ArcSwap::from_pointee(MidiRouting {
+            routes: vec![MidiInputRoute {
+                source: MidiRouteSource::AllPorts,
+                channel: MidiChannelFilter::Omni,
+            }],
+        })));
+        render.apply_command(EngineCommand::AddPattern);
+        render.set_record_armed(true);
+        render.play();
+        let message = |kind| MidiMessage {
+            offset: 0,
+            port: MidiPortId::FIRST,
+            channel: 0,
+            kind,
+        };
+
+        render.process_block(256);
+        render.apply_midi(&[message(MidiKind::NoteOn {
+            note: 60,
+            velocity: 90,
+        })]);
+        render.process_block(256);
+        // The selection moves with the key still down.
+        render.apply_command(EngineCommand::SetCurrentPattern(1));
+        render.apply_midi(&[message(MidiKind::NoteOff { note: 60 })]);
+        render.process_block(256);
+        let recorded: Vec<_> = std::iter::from_fn(|| render.pop_outgoing()).collect();
+        let [EngineEvent::RecordedNote { pattern, .. }] = recorded[..] else {
+            panic!("expected exactly one recorded note, got {recorded:?}");
+        };
+        assert_eq!(pattern, 0, "the pattern the press was folded into");
     }
 
     /// Auditioning has to work with the transport stopped -- that is the

@@ -509,7 +509,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   in says so under the picker rather than leaving the channel silently
   unplayable. A record-arm button sits beside play and stop — arming, not
   recording, so arming while stopped works — and an armed transport captures
-  played notes into the selected pattern. In pattern mode a note lands where
+  played notes into the pattern selected when the key went down, even if
+  the selection moves before it comes up. In pattern mode a note lands where
   it was played in the loop (until 2026-09-17 every note after the first pass
   stacked on the pattern's last tick); in song mode it lands at its offset in
   the placement of the selected pattern under the playhead, and a note played

@@ -1606,6 +1606,8 @@ Routing was the second. The cell was shared by every generation, and nothing rep
 
 A song load empties the pump's queue before it installs, which looked like a third leak for routing and turned out not to be one. After the routing change, a routing table queued before the load is in the outgoing channel order, and replaying it would overwrite the correct one the install carried, so dropping it is correct. What the drain did lose was the two kinds of message addressed to the machine rather than the document: an Audio preferences action and a preview volume change. Those go back on the queue now (`PendingEngineMessage::survives_project_load`), and everything else is still dropped.
 
+Last, `RecordedNote` now names its pattern. The engine folded a note's tick against its own selected pattern at the press, and the session wrote it into `current_pattern` at the release, so switching patterns with a key held, or a refused selection command, put the note in the wrong pattern at a position folded against the wrong length. The pattern is taken at the press and carried on the event, and `Session::record_note` writes into it and trims to its length. Both tests failed red first: the engine reported the pattern selected at the release, and the session wrote into the selected one.
+
 ## Open threads
 
 Refreshed 2026-09-02, with the September documentation audit's threads merged in on 2026-09-04 and Adam's 2026-09-05 list merged in after that. Four of the six threads listed here in August are closed: modulation drives things now, the buffer device exists, undo and clipboard are real, and the convolution reverb that needed an IR loader was replaced outright by an FDN hall — so `StereoIr` is no longer the boundary anything is waiting on.
