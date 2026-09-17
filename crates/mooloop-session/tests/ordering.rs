@@ -97,7 +97,7 @@ fn snapshot(bpm: u16) -> ProjectSnapshot {
             bpm,
             ..Project::default()
         },
-        samples: Vec::new(),
+        samples: std::collections::HashMap::new(),
     }
 }
 

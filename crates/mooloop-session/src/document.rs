@@ -118,14 +118,22 @@ pub fn quarantine_song(
 /// the disk finishes. The effect case is already safe either way, because
 /// `DeviceId` is durable -- a device removed while the write was in flight is
 /// simply not found, and nothing is renamed.
+/// Which device wears the name a save is writing, resolved when the dialog is
+/// confirmed and applied when the file has landed.
+///
+/// **Both arms name their channel durably**, and this is the clearest case in
+/// the session for why: the resolve and the apply are separated by a disk
+/// write, and a channel can be pasted, deleted or dragged in between. Keyed by
+/// a seat, a slow save could put a preset label on a channel the user never
+/// saved from.
 pub enum PresetNaming {
     Effect {
-        target: mooloop_core::EffectTarget,
+        target: crate::session::ChainKey,
         device: mooloop_core::DeviceId,
         name: String,
     },
     Source {
-        channel: u8,
+        channel: mooloop_core::ChannelId,
         name: String,
     },
 }
@@ -387,7 +395,7 @@ impl Session {
                 target: chain,
                 device,
             } => {
-                let chain = self.effect_chain_of(chain)?;
+                let chain = self.effect_chain_of(self.chain_target(chain)?)?;
                 let slot = mooloop_core::device_slot(chain, device)?;
                 // Stripped of its identity on the way out: a preset is what a
                 // device sounds like, and identity belongs to the chain it
@@ -404,7 +412,7 @@ impl Session {
                 target: chain,
                 device,
             } if effect.is_some_and(|effect| effect.kind() == EffectKind::Chain) => {
-                let chain = self.effect_chain_of(chain)?;
+                let chain = self.effect_chain_of(self.chain_target(chain)?)?;
                 let slot = mooloop_core::device_slot(chain, device)?;
                 Some(mooloop_core::EffectRun {
                     effects: chain[mooloop_core::run_of(chain, slot)]

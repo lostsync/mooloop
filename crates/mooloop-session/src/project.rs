@@ -2,8 +2,9 @@
 //! and the pattern-bank invariant both depend on.
 
 use crate::history::Entry as HistoryEntry;
-use mooloop_core::Project;
+use mooloop_core::{ChannelId, Project};
 use mooloop_dsp::SampleData;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -13,7 +14,34 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Clone)]
 pub struct ProjectSnapshot {
     pub project: Project,
-    pub samples: Vec<Option<Arc<SampleData>>>,
+    /// The decoded audio, **keyed by the channel that owns it**.
+    ///
+    /// This was a `Vec` parallel to `project.channels`, kept in step by hand
+    /// in three places in `ui/src/lib.rs` -- a paste inserted into it, a
+    /// delete removed from it, and a move had to rotate it or every sampler
+    /// between the two seats played the wrong file. That is this codebase's
+    /// characteristic fault written out in three functions: a second list
+    /// that has to be told, every time, what the first one just did.
+    ///
+    /// Keyed by identity there is nothing to tell. A channel edit does not
+    /// touch this map at all, and [`Self::seated`] derives the positional
+    /// list the install wants from the project it is being installed with.
+    pub samples: HashMap<ChannelId, Arc<SampleData>>,
+}
+
+impl ProjectSnapshot {
+    /// The audio in seat order, for the install.
+    ///
+    /// The engine addresses channels by position, so the conversion happens
+    /// here -- once, against the project these samples are being installed
+    /// with, rather than in a list that has to be maintained alongside.
+    pub fn seated(&self) -> Vec<Option<Arc<SampleData>>> {
+        self.project
+            .channels
+            .iter()
+            .map(|channel| self.samples.get(&channel.id).cloned())
+            .collect()
+    }
 }
 
 /// A bare project is a history unit in its own right in a few places -- the
@@ -39,7 +67,7 @@ impl crate::history::Retained for ProjectSnapshot {
         self.project.heap_bytes()
             + std::mem::size_of::<Self>()
             + self.samples.capacity()
-                * std::mem::size_of::<Option<std::sync::Arc<SampleData>>>()
+                * std::mem::size_of::<(ChannelId, std::sync::Arc<SampleData>)>()
     }
 }
 
@@ -127,11 +155,11 @@ mod tests {
 
         let empty = ProjectSnapshot {
             project: Project::default(),
-            samples: Vec::new(),
+            samples: HashMap::new(),
         };
         let loaded = ProjectSnapshot {
             project: project.clone(),
-            samples: vec![None; 8],
+            samples: HashMap::new(),
         };
 
         // Against the snapshot's *own* project, not the one it was cloned
@@ -151,10 +179,11 @@ mod tests {
 
         // The sample table is charged by capacity, as pointers -- the reason
         // is in `retained_bytes`'s own doc, and this pins that it is charged
-        // at all.
+        // at all. Capacity rather than entries, so this needs no audio: the
+        // claim is about what the table itself occupies.
         let with_table = ProjectSnapshot {
             project: Project::default(),
-            samples: vec![None; 64],
+            samples: HashMap::with_capacity(64),
         };
         assert!(
             with_table.retained_bytes() > empty.retained_bytes(),

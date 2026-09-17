@@ -1036,7 +1036,7 @@ fn project_snapshot(state: &UiState, window: &MainWindow) -> ProjectSnapshot {
     normalize_project_pattern_banks(&mut project);
     ProjectSnapshot {
         project,
-        samples: state.session.sample_snapshots(),
+        samples: state.session.keyed_sample_snapshots(),
     }
 }
 
@@ -1065,9 +1065,12 @@ fn queue_structural_edit(
         label: status,
         gesture: None,
     };
+    // The engine addresses channels by seat, so the keyed table is flattened
+    // once, here, against the project it is being installed with.
+    let samples = after.seated();
     tx.send(ProjectEdit {
         project: after.project,
-        samples: after.samples,
+        samples,
         status: status.into(),
         history: Some((HistoryMove::Record, entry)),
         edit,
@@ -1089,9 +1092,10 @@ fn queue_history_target(
         HistoryMove::Redo => format!("Redid {}", entry.label),
         HistoryMove::Record => unreachable!(),
     };
+    let samples = snapshot.seated();
     tx.send(ProjectEdit {
         project: snapshot.project,
-        samples: snapshot.samples,
+        samples,
         status,
         history: Some((movement, entry)),
         // An undo restores a whole document rather than applying an edit to
@@ -1446,10 +1450,14 @@ fn queue_channel_insert(
     let Some(index) = project.insert_channel(after + 1, channel) else {
         return false;
     };
-    samples.insert(index, clipboard.sample);
     // The paste selects what it just made, and names it: `insert_channel`
-    // minted its identity on the way in.
-    project.selected_channel = project.channels[index].id;
+    // minted its identity on the way in -- and the same id is what its audio
+    // is filed under, so the sample table needs no insert.
+    let pasted = project.channels[index].id;
+    project.selected_channel = pasted;
+    if let Some(sample) = clipboard.sample {
+        samples.insert(pasted, sample);
+    }
     queue_structural_edit(
         tx,
         before,
@@ -1471,7 +1479,7 @@ fn queue_channel_delete(
         project_snapshot(&state, window)
     };
     let mut project = before.project.clone();
-    let mut samples = before.samples.clone();
+    let samples = before.samples.clone();
     if project.channels.len() <= 1 || index >= project.channels.len() {
         return false;
     }
@@ -1481,8 +1489,11 @@ fn queue_channel_delete(
     if project.remove_channel(index).is_none() {
         return false;
     }
-    samples.remove(index);
-    // No clamp here any more. `remove_channel` moves the selection only when
+    // Nothing removed from the sample table: it is keyed by channel, so the
+    // departed channel's entry is simply never looked up again -- and an undo
+    // brings the channel back to find its audio still there.
+    //
+    // No clamp here either. `remove_channel` moves the selection only when
     // it was the deleted channel that held it, which is the case this line
     // used to get wrong for every other channel.
     queue_structural_edit(
@@ -1517,21 +1528,19 @@ fn queue_channel_move(
         project_snapshot(&state, window)
     };
     let mut project = before.project.clone();
-    let mut samples = before.samples.clone();
+    let samples = before.samples.clone();
     // The song renumbers every route, lane and Aux In subscription that named
     // a channel the move passed, and carries the mover's own with it.
     let Some(edit) = project.move_channel(from, to) else {
         return false;
     };
-    // The sample sidecar is parallel to `project.channels` and hand
-    // maintained, so it has to make the same move or every sampler between
-    // the two seats plays the wrong file.
-    if from < samples.len() && to < samples.len() {
-        let sample = samples.remove(from);
-        samples.insert(to, sample);
-    }
-    // The selection is untouched: it names the channel being dragged, which
-    // is still the same channel wherever it lands.
+    // The sample table used to be rotated here, because it was parallel to
+    // `project.channels` and hand maintained: miss this and every sampler
+    // between the two seats plays the wrong file. Keyed by channel there is
+    // no second list to move.
+    //
+    // The selection is untouched for the same reason: it names the channel
+    // being dragged, which is still the same channel wherever it lands.
     queue_structural_edit(
         tx,
         before,
@@ -4038,8 +4047,13 @@ impl UiState {
     /// Selection and assignment are transient UI state: project reloads and
     /// channel changes never leave an invisible armed slot behind.
     fn refresh_modulation(&self, window: &MainWindow) {
-        if self.session.modulation_ui_channel.get() != Some(self.session.selected) {
-            self.session.modulation_ui_channel.set(Some(self.session.selected));
+        // By identity, so switching to a channel that happens to occupy the
+        // seat the last one did still clears the arm -- which is what the
+        // field's own comment has always claimed and what a `usize` seat
+        // could not deliver.
+        let selected_id = self.session.channel_id(self.session.selected);
+        if self.session.modulation_ui_channel.get() != selected_id {
+            self.session.modulation_ui_channel.set(selected_id);
             self.session.modulation_selected_slot.set(None);
             self.session.modulation_armed_slot.set(None);
         }
@@ -5850,10 +5864,15 @@ impl AppUi {
                         device,
                         name: name.clone(),
                     }),
-                    PresetSaveTarget::Generator => Some(PresetNaming::Source {
-                        channel: st.borrow().session.selected as u8,
-                        name: name.clone(),
-                    }),
+                    PresetSaveTarget::Generator => {
+                        let st = st.borrow();
+                        st.session.channel_id(st.session.selected).map(|channel| {
+                            PresetNaming::Source {
+                                channel,
+                                name: name.clone(),
+                            }
+                        })
+                    }
                     // A channel preset spans the generator and the mixer, so
                     // no one device is the thing it names.
                     PresetSaveTarget::Channel => None,
@@ -9958,7 +9977,10 @@ impl AppUi {
                 else {
                     return;
                 };
-                st.session.pending_preset_save = Some(PresetSaveTarget::Effect { target, device });
+                st.session.pending_preset_save = st
+                    .session
+                    .chain_key(target)
+                    .map(|target| PresetSaveTarget::Effect { target, device });
                 if let Some(window) = weak.upgrade() {
                     window.set_save_preset_title("Save Effect Preset".into());
                     window.set_save_preset_name("".into());
@@ -10811,7 +10833,11 @@ impl AppUi {
                 if note > 127 {
                     return;
                 }
-                st.session.slice_audition = Some((ch as u8, note as u8));
+                // The channel, not the seat: a structural edit between the
+                // press and the release would otherwise send the note-off to
+                // whoever had slid into this row.
+                st.session.slice_audition =
+                    st.session.channel_id(ch).map(|id| (id, note as u8));
                 let _ = tx.send(EngineCommand::TriggerChannelNote {
                     channel: ch as u8,
                     note: note as u8,
@@ -10826,10 +10852,21 @@ impl AppUi {
                 // The note that was struck, not the note under the handle's
                 // current index: a drag that crossed a neighbour has already
                 // renumbered the handles by the time the button comes up.
-                let Some((channel, note)) = st.borrow_mut().session.slice_audition.take() else {
+                let mut st = st.borrow_mut();
+                let Some((id, note)) = st.session.slice_audition.take() else {
                     return;
                 };
-                let _ = tx.send(EngineCommand::ReleaseChannelNote { channel, note });
+                // The engine works in seats, so the identity is resolved here
+                // and nowhere earlier. A channel that has gone resolves to
+                // nothing and the release is dropped, which is the right
+                // answer: there is no voice of its to release.
+                let Some(channel) = st.session.channel_index(id) else {
+                    return;
+                };
+                let _ = tx.send(EngineCommand::ReleaseChannelNote {
+                    channel: channel as u8,
+                    note,
+                });
             });
         }
 
@@ -12718,14 +12755,23 @@ impl AppUi {
                                     name,
                                 }) => {
                                     let mut state = st.borrow_mut();
-                                    state.session.set_effect_preset_name(target, device, &name);
-                                    state.sync_effects();
+                                    // Resolved now rather than when the
+                                    // dialog was confirmed: the write has
+                                    // been on disk in between, and the rack
+                                    // may have been edited under it.
+                                    if let Some(seat) = state.session.chain_target(target) {
+                                        state.session.set_effect_preset_name(seat, device, &name);
+                                        state.sync_effects();
+                                    }
                                 }
                                 Some(PresetNaming::Source { channel, name }) => {
-                                    st.borrow_mut()
-                                        .session
-                                        .set_source_preset_name(channel, &name);
-                                    window.set_source_preset_name(name.as_str().into());
+                                    let mut state = st.borrow_mut();
+                                    if let Some(seat) = state.session.channel_index(channel) {
+                                        state
+                                            .session
+                                            .set_source_preset_name(seat as u8, &name);
+                                        window.set_source_preset_name(name.as_str().into());
+                                    }
                                 }
                                 None => {}
                             }

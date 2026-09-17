@@ -317,10 +317,13 @@ impl Session {
     ///
     /// `None` clears the selection, and so does a slot that names nothing.
     pub fn select_device(&mut self, slot: Option<usize>) {
-        let target = self.effect_target;
+        // The seat becomes a durable name here, once, so the selection is
+        // not something a structural edit has to remember to rewrite.
+        let key = self.chain_key(self.effect_target);
         self.selected_device = slot
             .and_then(|slot| self.effect_chain()?.get(slot))
-            .map(|effect| (target, effect.id));
+            .zip(key)
+            .map(|(effect, key)| (key, effect.id));
         // One selection, not two. A rack that could show a lit generator and
         // a lit effect at once would have no answer to "what does Copy act
         // on", which is the only question the selection exists to answer.
@@ -355,8 +358,8 @@ impl Session {
     /// an identity: a reorder moves the device and this answer follows it
     /// without anything having been rewritten.
     pub fn selected_device_slot(&self) -> Option<usize> {
-        let (target, device) = self.selected_device?;
-        if target != self.effect_target {
+        let (key, device) = self.selected_device?;
+        if Some(key) != self.chain_key(self.effect_target) {
             return None;
         }
         mooloop_core::device_slot(self.effect_chain()?, device)
@@ -1134,7 +1137,7 @@ mod tests {
         session.channels[0].effects[2] = dialled_in_delay().with_id(delay);
 
         session.pending_preset_save = Some(PresetSaveTarget::Effect {
-            target: EffectTarget::Channel(0),
+            target: session.chain_key(EffectTarget::Channel(0)).expect("channel 0"),
             device: delay,
         });
         let source = session.take_preset_save(120, 50).expect("a save was pending");
@@ -1305,7 +1308,7 @@ mod tests {
         session.insert_effect_at(EffectKind::Delay, 0).expect("room");
         session.insert_effect_at(EffectKind::Filter, 1).expect("room");
         session.insert_effect_at(EffectKind::Drive, 2).expect("room");
-        let target = EffectTarget::Channel(0);
+        let target = session.chain_key(EffectTarget::Channel(0)).expect("channel 0");
         let filter = device_at(&session, 1);
 
         session.pending_preset_save = Some(PresetSaveTarget::Effect { target, device: filter });
@@ -1356,7 +1359,7 @@ mod tests {
             .expect("room")
             .device;
         session.pending_preset_save = Some(PresetSaveTarget::Effect {
-            target: EffectTarget::Bus(1),
+            target: crate::session::ChainKey::Bus(1),
             device: compressor,
         });
         let source = session.take_preset_save(120, 50).expect("pending");
@@ -1768,7 +1771,7 @@ mod tests {
 
         let container = session.channels[0].effects[1].id;
         session.pending_preset_save = Some(PresetSaveTarget::Effect {
-            target: EffectTarget::Channel(0),
+            target: session.chain_key(EffectTarget::Channel(0)).expect("channel 0"),
             device: container,
         });
         let source = session.take_preset_save(120, 50).expect("a save was pending");

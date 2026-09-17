@@ -1,6 +1,6 @@
 # Channel identity — plan status
 
-**Written 2026-09-17. Steps 01 and 02 landed 2026-09-17.** It came out of the architecture
+**Written 2026-09-17. Steps 01, 02 and 03 landed 2026-09-17.** It came out of the architecture
 section of `reports/fable-2026-09-17.md`, and Adam asked for it the same day:
 a channel gets a durable id, the way a device already has one, before plugin
 hosting starts keying anything by channel position.
@@ -73,7 +73,7 @@ scope that is an id. All three are
 | --- | --- | --- | --- |
 | [01](01-the-id.md) | `ChannelId`, minting, load-time assignment, fresh ids for kits and pastes | core, project | **landed 2026-09-17** |
 | [02](02-cross-channel-addresses.md) | `selected_channel` holds an id | core, project, session | **landed 2026-09-17**, one field of four |
-| [03](03-session-keys.md) | Session state keyed by id; the parallel sample list folds into the channel | session, UI build | not started |
+| [03](03-session-keys.md) | Session state keyed by id; the parallel sample list folds into the channel | session, UI build | **landed 2026-09-17** |
 | [04](04-keep-the-transport.md) | An install carries the transport across (the interim fix `LOOSE_ENDS.md` names) | engine, UI | not started |
 | [05](05-strips-by-id.md) | The engine keeps strips whose id and chain survive an install | engine | not started |
 | [06](06-the-remaining-cross-channel-addresses.md) | The other three fields that name another channel | core, session, dsp | not started; the gate half waits on 05 |
@@ -142,9 +142,26 @@ redo -- passes on the old tree, because index arithmetic is symmetric under
 undo. It was dropped, as that file instructed, and two selection tests
 replaced it.
 
+## What step 03 actually did
+
+All of it, plus `PresetNaming`, which the step did not list and which is the
+clearest case in the session for a durable key: it is resolved when a save
+dialog is confirmed and applied when the file has landed, so a channel edit
+during a slow write could put a preset label on a channel nobody saved from.
+
+The two fields the step flagged as suspect -- `slice_audition` and
+`modulation_ui_channel` -- really were missed by `Session::rescope_after`, and
+had been mis-keyed by every structural edit since they were written. Verified
+failing before the change.
+
+`ChainKey` is the new type it needed: `EffectTarget`'s twin for session state,
+`Channel(ChannelId) | Bus(u8)`. A bus is still a seat, so
+`ChainKey::after_track` is where the remaining half of the migration is
+spelled -- and it is the shape a `TrackId` would delete.
+
 ## Open questions
 
-None of these needs Adam before step 03.
+None of these needs Adam before step 04.
 
 - Step 04 changes what a user hears during an edit: the song keeps playing
   across a paste or a move. That should be listened to, not only tested.

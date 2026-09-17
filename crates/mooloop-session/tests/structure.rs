@@ -393,7 +393,8 @@ fn the_session_follows_a_channel_move_too() {
     let third = EffectTarget::Channel(3);
     let device = DeviceId(7);
     session.effect_target = third;
-    session.selected_device = Some((third, device));
+    let third_key = session.chain_key(third).expect("channel 3");
+    session.selected_device = Some((third_key, device));
     session.selected_source = Some(third);
     session
         .automation_target
@@ -405,10 +406,21 @@ fn the_session_follows_a_channel_move_too() {
     let bus = EffectTarget::Bus(2);
     session.set_effect_preset_name(bus, device, "Glue");
 
+    // What the application does: install the edited document -- which is
+    // what puts the rack in its new order -- and *then* rescope the session.
+    // Before `ChannelId`, reordering here changed nothing this test could
+    // see, so it was left out. It cannot be left out now: the id-keyed maps
+    // resolve through the rack, so the rack is the thing that has to have
+    // moved.
+    let moved = session.channels.remove(3);
+    session.channels.insert(0, moved);
     session.rescope_after(mooloop_core::ChannelEdit::Moved { from: 3, to: 0 });
 
     let first = EffectTarget::Channel(0);
-    assert_eq!(session.selected_device, Some((first, device)));
+    // The key never changed -- it names the channel -- so this asserts the
+    // rack moved and the selection stayed on the same device.
+    assert_eq!(session.selected_device, Some((third_key, device)));
+    assert_eq!(session.chain_key(first), Some(third_key));
     assert_eq!(session.selected_source, Some(first));
     assert_eq!(
         session.automation_target.get(),
@@ -426,9 +438,22 @@ fn the_session_follows_a_channel_move_too() {
     assert_eq!(session.effect_preset_name(bus, device), Some("Glue"));
 
     // A removal is the same walk with a different answer: what named the
-    // departed channel is dropped rather than moved.
+    // departed channel no longer resolves.
+    //
+    // `selected_device` is not *cleared* any more, and that is deliberate. A
+    // `ChainKey` naming a channel that has gone resolves to nothing, which is
+    // what clearing it used to arrange -- and because ids are never reused,
+    // it cannot come to name a stranger. Leaving it is the better answer:
+    // undo restores the channel with the same id and the selection comes
+    // back with it, where the old walk had already thrown it away.
+    // `selected_device_slot` is the only reader, and it resolves.
+    session.channels.remove(0);
     session.rescope_after(mooloop_core::ChannelEdit::Removed(0));
-    assert_eq!(session.selected_device, None);
+    assert_eq!(
+        session.selected_device_slot(),
+        None,
+        "a selection on a departed channel still resolved to a slot"
+    );
     assert_eq!(session.selected_source, None);
     assert_eq!(session.automation_target.get(), None);
     assert_eq!(session.effect_preset_name(first, device), None);
@@ -450,17 +475,31 @@ fn the_session_follows_a_channel_move_too() {
 #[test]
 fn the_session_follows_a_track_move_and_a_track_removal() {
     use mooloop_core::{ListEdit, TrackEdit, STRIP_PARAM_VOLUME};
-    use mooloop_session::session::PresetSaveTarget;
+    use mooloop_session::session::{ChainKey, PresetSaveTarget};
 
     let mut session = Session::default();
+    // Four channels, because the channel-scoped half of this test names
+    // channel 3. It used to get away with naming one that did not exist:
+    // `source_preset_names` was keyed by a bare index and took any number.
+    // Keyed by identity there is no key for a channel that is not there, and
+    // a label for one is dropped rather than stored -- so the test has to
+    // mean what it says.
+    session.add_channel(DeviceKind::Sampler);
+    session.add_channel(DeviceKind::Sampler);
+    session.add_channel(DeviceKind::Sampler);
     let third = EffectTarget::Bus(3);
     let first_track = EffectTarget::Bus(1);
     let device = DeviceId(0);
-    session.selected_device = Some((third, device));
+    // A bus is still a seat, so these keys are still positions and still
+    // have to be rewritten by a track edit. That asymmetry is the state of
+    // the migration: `ChainKey::after_track` is where it is spelled.
+    let third_key = ChainKey::Bus(3);
+    let first_track_key = ChainKey::Bus(1);
+    session.selected_device = Some((third_key, device));
     session
         .automation_target
         .set(Some(ParamAddr::strip(third, STRIP_PARAM_VOLUME)));
-    session.pending_preset_save = Some(PresetSaveTarget::Effect { target: third, device });
+    session.pending_preset_save = Some(PresetSaveTarget::Effect { target: third_key, device });
     session.set_effect_preset_name(third, device, "Wide Plate");
     session.set_effect_preset_name(first_track, device, "Glue");
     // Channel-scoped state, which a track edit must leave alone.
@@ -471,7 +510,7 @@ fn the_session_follows_a_track_move_and_a_track_removal() {
 
     session.rescope_after_track(TrackEdit::Moved { from: 3, to: 1 }, third);
 
-    assert_eq!(session.selected_device, Some((first_track, device)));
+    assert_eq!(session.selected_device, Some((first_track_key, device)));
     assert_eq!(
         session.automation_target.get(),
         Some(ParamAddr::strip(first_track, STRIP_PARAM_VOLUME)),
@@ -479,7 +518,7 @@ fn the_session_follows_a_track_move_and_a_track_removal() {
     );
     assert_eq!(
         session.pending_preset_save,
-        Some(PresetSaveTarget::Effect { target: first_track, device })
+        Some(PresetSaveTarget::Effect { target: first_track_key, device })
     );
     assert_eq!(session.effect_preset_name(first_track, device), Some("Wide Plate"));
     assert_eq!(
@@ -515,9 +554,10 @@ fn the_session_follows_a_track_move_and_a_track_removal() {
     // The shared walk, the other way round: a channel edit leaves every track
     // target where it is.
     session.set_effect_preset_name(third, device, "Hall");
-    session.selected_device = Some((third, device));
+    session.selected_device = Some((third_key, device));
+    session.channels.remove(0);
     session.rescope_after(mooloop_core::ChannelEdit::Removed(0));
-    assert_eq!(session.selected_device, Some((third, device)));
+    assert_eq!(session.selected_device, Some((third_key, device)));
     assert_eq!(session.effect_preset_name(third, device), Some("Hall"));
     assert_eq!(
         ListEdit::Channel(mooloop_core::ChannelEdit::Removed(3)).target(third),
@@ -587,4 +627,141 @@ fn a_channel_identity_survives_the_session_round_trip() {
     session.add_channel(DeviceKind::Sampler);
     let fresh = session.channels[3].id;
     assert!(!before.contains(&fresh), "{fresh:?} was already in {before:?}");
+}
+
+/// **The two fields `rescope_after` never mentioned.** Both were keyed by a
+/// channel index and neither was in that walk, so every structural edit has
+/// mis-keyed them for as long as they have existed -- verified failing on the
+/// tree before this change.
+///
+/// Neither is in the walk now either, and that is the point: they are keyed
+/// by `ChannelId`, so a move is not an event they can observe. The test is
+/// the same shape as before and the mechanism underneath it is the opposite
+/// one.
+///
+/// `modulation_ui_channel` in particular now does what its own comment always
+/// claimed -- "changing channels clears both even when the new channel
+/// happens to occupy the same runtime slot" is a statement about identity,
+/// and it was written against a `usize` seat.
+#[test]
+fn the_last_two_keyed_fields_follow_a_move() {
+    let mut session = Session::default();
+    session.add_channel(DeviceKind::Sampler);
+    session.add_channel(DeviceKind::Sampler);
+    session.add_channel(DeviceKind::Sampler);
+
+    let third = session.channel_id(3).expect("four channels");
+    session.slice_audition = Some((third, 60));
+    session.modulation_ui_channel.set(Some(third));
+
+    let moved = session.channels.remove(3);
+    session.channels.insert(0, moved);
+    session.rescope_after(mooloop_core::ChannelEdit::Moved { from: 3, to: 0 });
+
+    assert_eq!(session.channel_index(third), Some(0), "the rack moved");
+    assert_eq!(
+        session.slice_audition.map(|(channel, note)| (session.channel_index(channel), note)),
+        Some((Some(0), 60)),
+        "the held slice still names the channel it was struck on"
+    );
+    assert_eq!(
+        session.modulation_ui_channel.get().and_then(|id| session.channel_index(id)),
+        Some(0),
+        "the armed rack still names its channel"
+    );
+
+    // And a removal: the channel is gone, so neither resolves to anything
+    // rather than to whoever closed the gap.
+    session.channels.remove(0);
+    session.rescope_after(mooloop_core::ChannelEdit::Removed(0));
+    assert_eq!(session.channel_index(third), None);
+    assert_eq!(
+        session.slice_audition.and_then(|(channel, _)| session.channel_index(channel)),
+        None,
+        "a held slice resolved onto a stranger"
+    );
+}
+
+/// An in-flight sample load follows its channel through a move, and is
+/// dropped when its channel goes.
+///
+/// **The move half is new behaviour rather than a preserved one.** The token
+/// walk `rescope_after` used to do carried a request to its channel's new
+/// seat, but a completion still compared against the seat it was *asked* at,
+/// so a load whose channel moved under it was discarded. Keyed by identity
+/// there is nothing to carry and nothing to discard.
+#[test]
+fn an_in_flight_load_follows_its_channel() {
+    let mut session = Session::default();
+    session.add_channel(DeviceKind::Sampler);
+    session.add_channel(DeviceKind::Sampler);
+
+    let token = session.next_sample_request(2);
+    assert!(session.sample_request_is_current(2, token));
+
+    let moved = session.channels.remove(2);
+    session.channels.insert(0, moved);
+    session.rescope_after(mooloop_core::ChannelEdit::Moved { from: 2, to: 0 });
+
+    assert!(
+        session.sample_request_is_current(0, token),
+        "the load was asked for by a channel, not by a seat"
+    );
+    assert!(!session.sample_request_is_current(2, token), "and not by the seat it left");
+
+    // What happens when the channel is *gone* is
+    // `a_channel_removal_does_not_hand_its_load_to_its_successor`, in
+    // `delivery.rs`, which is where the dispatch side of this lives.
+}
+
+/// **The sample table is keyed by channel, so a structural edit does not
+/// touch it.**
+///
+/// It used to be a `Vec` parallel to `project.channels`, and three functions
+/// in `ui/src/lib.rs` had to keep it in step by hand: a paste inserted, a
+/// delete removed, and a move rotated -- "or every sampler between the two
+/// seats plays the wrong file", as the comment there said. That is the
+/// duplicated-list fault `AGENTS.md` is about, and the only guard on it was
+/// that somebody remembered.
+///
+/// `ProjectSnapshot::seated` derives the seat order the engine wants from the
+/// project it is being installed with, so the two cannot drift: there is only
+/// one list now, and the other is a view of it.
+#[test]
+fn the_sample_table_needs_no_rotating() {
+    use mooloop_session::project::ProjectSnapshot;
+    use std::sync::Arc;
+
+    let mut session = Session::default();
+    session.add_channel(DeviceKind::Sampler);
+    session.add_channel(DeviceKind::Sampler);
+
+    // Distinguishable audio on the last channel only.
+    let audio = Arc::new(mooloop_dsp::SampleData {
+        frames: vec![[0.25, 0.25]; 8],
+        sample_rate: 48_000,
+        root_note: 60,
+    });
+    session.channels[2].sample_data = Some(Arc::clone(&audio));
+
+    let mut project = session.project_snapshot(120, 50);
+    let snapshot = ProjectSnapshot {
+        samples: session.keyed_sample_snapshots(),
+        project: project.clone(),
+    };
+    assert_eq!(snapshot.seated().len(), 3);
+    assert!(snapshot.seated()[2].is_some(), "the audio is on the third seat");
+
+    // Drag it to the front. Nothing touches the table.
+    project.move_channel(2, 0).expect("a real move");
+    let moved = ProjectSnapshot {
+        samples: snapshot.samples.clone(),
+        project,
+    };
+    let seated = moved.seated();
+    assert!(
+        seated[0].as_ref().is_some_and(|held| Arc::ptr_eq(held, &audio)),
+        "the audio did not follow its channel to the front"
+    );
+    assert!(seated[1].is_none() && seated[2].is_none(), "and did not leave a copy behind");
 }

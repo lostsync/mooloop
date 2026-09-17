@@ -280,11 +280,18 @@ fn an_older_sample_load_cannot_overwrite_a_newer_one() {
     );
 }
 
-/// A token names a seat, and a channel removal moves every later seat down.
-/// The map has to move with them, or a completion dispatched for channel 2
-/// would be accepted by whatever slid into channel 2's place.
+/// **A completion must not be honoured by whoever slid into its channel's
+/// seat.** A load is dispatched for a seat, because a seat is all the
+/// completion carries; the token it is checked against is keyed by the
+/// channel, so the two disagree exactly when they should.
+///
+/// The map used to be a `Vec` indexed by seat, rewritten by
+/// `Session::rescope_after` on every structural edit. It is keyed by
+/// `ChannelId` since `channel-identity/03`, so there is nothing to rewrite --
+/// but the claim this test makes is the same one, and it is the claim that
+/// matters.
 #[test]
-fn a_channel_removal_carries_the_load_tokens_with_it() {
+fn a_channel_removal_does_not_hand_its_load_to_its_successor() {
     let mut session = Session::default();
     session.add_channel(DeviceKind::Sampler);
     session.add_channel(DeviceKind::Sampler);
@@ -292,6 +299,8 @@ fn a_channel_removal_carries_the_load_tokens_with_it() {
     let second = session.next_sample_request(1);
     let third = session.next_sample_request(2);
 
+    // The install is what removes the channel; the rescope follows it.
+    session.channels.remove(1);
     session.rescope_after(mooloop_core::ChannelEdit::Removed(1));
 
     assert!(

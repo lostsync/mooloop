@@ -36,6 +36,38 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// One effect chain in the song, named durably.
+///
+/// [`EffectTarget`]'s twin for **session** state. An `EffectTarget` is a
+/// seat -- it is what the engine addresses, what every `ParamAddr` carries,
+/// and what a Slint callback hands over -- and a seat is renumbered by every
+/// structural edit. This names the chain itself, so a key made of one does
+/// not have to be rewritten when the rack is reordered, and cannot be made
+/// to point at a stranger by forgetting to rewrite it.
+///
+/// **A bus is still a position**, because a track has no identity yet.
+/// `docs/plans/channel-identity/00-status.md` records why a `TrackId` is
+/// deliberately left until step 05 has been built and can be copied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChainKey {
+    Channel(ChannelId),
+    Bus(u8),
+}
+
+impl ChainKey {
+    /// Where this chain points after a **track** edit.
+    ///
+    /// A channel is named by identity and so cannot be moved by one; a bus is
+    /// a seat and follows. The asymmetry is the whole state of the migration
+    /// in one match arm.
+    fn after_track(self, edit: mooloop_core::TrackEdit) -> Option<Self> {
+        match self {
+            Self::Channel(_) => Some(self),
+            Self::Bus(bus) => edit.track(bus).map(Self::Bus),
+        }
+    }
+}
+
 /// Which preset kind a save dialog in flight is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PresetSaveTarget {
@@ -48,7 +80,7 @@ pub enum PresetSaveTarget {
     /// whichever device now sits in position 3 would be a bug that is very
     /// hard to find later. An id cannot land on the wrong device: it either
     /// resolves to the one the dialog was opened from or to nothing at all.
-    Effect { target: EffectTarget, device: DeviceId },
+    Effect { target: ChainKey, device: DeviceId },
 }
 
 pub struct Session {
@@ -73,7 +105,7 @@ pub struct Session {
     /// than re-derived from the handle's index on the way up: a drag past a
     /// neighbour reorders the map underneath the handle, and the index it
     /// releases with is then a different slice's.
-    pub slice_audition: Option<(u8, u8)>,
+    pub slice_audition: Option<(ChannelId, u8)>,
     pub modulation_shelf_open: bool,
     /// Source whose editor is open in the shelf. Selection is intentionally
     /// separate from assignment: looking at an LFO must not hijack knob
@@ -92,7 +124,7 @@ pub struct Session {
     /// Scoped to `effect_target` like the chain itself: pointing the rack at
     /// a different channel or bus clears it, because a device id is only
     /// unique within one chain.
-    pub selected_device: Option<(EffectTarget, DeviceId)>,
+    pub selected_device: Option<(ChainKey, DeviceId)>,
     /// The generator at the head of a channel's chain, when *it* is what the
     /// selection names.
     ///
@@ -115,7 +147,7 @@ pub struct Session {
     /// Channel that owns the transient selection/assignment state. Changing
     /// channels clears both even when the new channel happens to occupy the
     /// same runtime slot.
-    pub modulation_ui_channel: Cell<Option<usize>>,
+    pub modulation_ui_channel: Cell<Option<ChannelId>>,
     /// The compensation the engine has been told about, so the pump's
     /// reconcile can send only what changed. Not document state: it is a
     /// record of what has been said to the audio thread, and a fresh session
@@ -160,7 +192,7 @@ pub struct Session {
     /// channel whose index has moved fails the comparison and its completion
     /// is dropped, which is the conservative answer and the right one: the
     /// load was asked for at a seat that now holds somebody else.
-    pub sample_request: Vec<u64>,
+    pub sample_request: HashMap<ChannelId, u64>,
     /// The last token handed out, for any channel. Monotonic across the
     /// session, so a token is never reused after a removal renumbers things.
     ///
@@ -256,12 +288,12 @@ pub struct Session {
     /// to these settings, not part of what the settings are. It follows the
     /// row through a reorder and is dropped with a removal, like every other
     /// thing on this side that names a slot.
-    pub effect_preset_names: HashMap<(EffectTarget, DeviceId), String>,
+    pub effect_preset_names: HashMap<(ChainKey, DeviceId), String>,
     /// The preset each channel's generator was last loaded from or saved as,
     /// for the source device's header. The generator half of
     /// `effect_preset_names`, keyed by channel because a channel has exactly
     /// one generator and it is not a slot in any chain.
-    pub source_preset_names: HashMap<u8, String>,
+    pub source_preset_names: HashMap<ChannelId, String>,
     pub pending_preset_save: Option<PresetSaveTarget>,
 }
 
@@ -291,7 +323,7 @@ impl Default for Session {
             solo_silenced_sent: [false; MAX_BUSES],
             track_graph_sent: (mooloop_core::CompiledBusGraph::default(), Vec::new()),
             audio_graph_sent: mooloop_core::CompiledAudioGraph::default(),
-            sample_request: Vec::new(),
+            sample_request: HashMap::new(),
             sample_request_counter: 0,
             engine_queue_refused: false,
             modulation_edit_before: None,
@@ -347,13 +379,62 @@ pub enum ArmedRoute {
 }
 
 impl Session {
+    /// Where the channel wearing `id` currently sits, if it is still here.
+    ///
+    /// `Project::channel_index` for the session's own bank. The two are
+    /// separate lists holding the same identities, and this side is the one
+    /// every session key resolves through.
+    pub fn channel_index(&self, id: ChannelId) -> Option<usize> {
+        if !id.is_assigned() {
+            return None;
+        }
+        self.channels.iter().position(|channel| channel.id == id)
+    }
+
+    /// The identity of the channel in seat `index`.
+    ///
+    /// The boundary a row number crosses to become a key. Every session map
+    /// keyed by a channel goes through here on the way in, so an index is
+    /// never what gets *stored* -- which is the whole of what
+    /// `rescope_after` used to be for.
+    pub fn channel_id(&self, index: usize) -> Option<ChannelId> {
+        self.channels.get(index).map(|channel| channel.id)
+    }
+
+    /// The durable name of the chain `target` addresses.
+    ///
+    /// The one door an `EffectTarget` goes through to become a session key.
+    /// `None` when it names a channel seat that does not exist, which is the
+    /// same answer as "there is nothing there to key by".
+    pub fn chain_key(&self, target: EffectTarget) -> Option<ChainKey> {
+        match target {
+            EffectTarget::Channel(channel) => self
+                .channel_id(usize::from(channel))
+                .map(ChainKey::Channel),
+            EffectTarget::Bus(bus) => Some(ChainKey::Bus(bus)),
+        }
+    }
+
+    /// The seat `key` currently addresses, for the engine and for anything
+    /// holding a `ParamAddr`. `None` when its channel has gone.
+    pub fn chain_target(&self, key: ChainKey) -> Option<EffectTarget> {
+        match key {
+            ChainKey::Channel(id) => u8::try_from(self.channel_index(id)?)
+                .ok()
+                .map(EffectTarget::Channel),
+            ChainKey::Bus(bus) => Some(EffectTarget::Bus(bus)),
+        }
+    }
+
     pub fn reset_channel_source(&mut self, index: usize, kind: DeviceKind) {
         let Some(channel) = self.channels.get_mut(index) else {
             return;
         };
         self.source_revision = self.source_revision.wrapping_add(1);
         // A fresh device did not come from whatever preset the last one wore.
-        self.source_preset_names.remove(&(index as u8));
+        if let Some(id) = channel.id.is_assigned().then_some(channel.id) {
+            self.source_preset_names.remove(&id);
+        }
         // **A name the user typed outlives the device it was typed over.**
         //
         // This re-derived the name unconditionally until 2026-09-13, which was
@@ -509,6 +590,24 @@ impl Session {
             loop_range: self.loop_range,
             control_map: self.control_map.clone(),
         }
+    }
+
+    /// The decoded audio keyed by the channel that owns it, for
+    /// [`crate::project::ProjectSnapshot`].
+    ///
+    /// The seat-ordered [`Self::sample_snapshots`] still exists for the
+    /// offline renderer, which addresses channels by position like the engine
+    /// does. The difference is what each is *for*: one is consumed
+    /// immediately, the other is retained in the undo history across edits
+    /// that renumber the bank.
+    pub fn keyed_sample_snapshots(&self) -> std::collections::HashMap<ChannelId, Arc<SampleData>> {
+        self.channels
+            .iter()
+            .filter(|channel| channel.kind == DeviceKind::Sampler)
+            .filter_map(|channel| {
+                Some((channel.id, channel.sample_data.clone()?))
+            })
+            .collect()
     }
 
     pub fn sample_snapshots(&self) -> Vec<Option<Arc<SampleData>>> {
@@ -815,31 +914,29 @@ impl Session {
     /// re-points it at the project's own selected channel on every install,
     /// and the edit sets that to wherever the moved channel landed.
     pub fn rescope_after(&mut self, edit: mooloop_core::ChannelEdit) {
-        self.rescope_targets(mooloop_core::ListEdit::Channel(edit));
+        // The open automation lane is the only thing left here: it holds a
+        // `ParamAddr`, which is an engine address and stays a seat.
+        self.automation_target
+            .set(self.automation_target.get().and_then(|addr| edit.address(addr)));
         self.selected_source = self.selected_source.and_then(|target| edit.target(target));
-        self.source_preset_names = self
-            .source_preset_names
-            .drain()
-            .filter_map(|(channel, name)| Some((edit.channel(channel)?, name)))
-            .collect();
-        // The in-flight load tokens move with their channels. Any completion
-        // whose seat no longer holds the channel it was asked for then fails
-        // the comparison and is dropped, which is what should happen to it.
-        // One longer than the old map: `ChannelEdit::Inserted` shifts indices
-        // *up*, so the last channel's token needs a seat that did not exist
-        // before. Sized short, its in-flight load would have been refused.
-        let mut moved_requests = vec![0u64; self.sample_request.len() + 1];
-        for (old_index, token) in self.sample_request.iter().enumerate() {
-            let Ok(old_index) = u8::try_from(old_index) else {
-                continue;
-            };
-            if let Some(new_index) = edit.channel(old_index) {
-                if let Some(slot) = moved_requests.get_mut(usize::from(new_index)) {
-                    *slot = *token;
-                }
-            }
-        }
-        self.sample_request = moved_requests;
+        // `selected_device`, `pending_preset_save` and `effect_preset_names`
+        // used to be rewritten here too, through the shared walk. They are
+        // keyed by `ChainKey` now, whose channel arm is an identity -- so a
+        // channel edit is not an event any of them can observe.
+        //
+        // A key naming a channel that is *gone* simply stops resolving, which
+        // is what dropping it used to arrange. It is not dropped, and that is
+        // a small improvement rather than a leak: an undo brings the channel
+        // back and its preset labels come back with it, where the old walk
+        // had already thrown them away.
+        //
+        // `source_preset_names`, `sample_request`, `slice_audition` and
+        // `modulation_ui_channel` used to be rewritten here and are not any
+        // more: they are keyed by `ChannelId`, so a structural edit is not an
+        // event any of them can observe. An in-flight load whose channel is
+        // *gone* no longer resolves and its completion is dropped, which is
+        // what the token walk was trying to arrange by hand -- and one whose
+        // channel merely moved now lands on it, where the walk discarded it.
     }
 
     /// Follow a track edit through everything on this side that names a
@@ -853,36 +950,41 @@ impl Session {
     /// back on wherever that track went; the caller captures `rack_was`
     /// because the install has already overwritten it by the time this runs.
     pub fn rescope_after_track(&mut self, edit: mooloop_core::TrackEdit, rack_was: EffectTarget) {
-        self.rescope_targets(mooloop_core::ListEdit::Track(edit));
+        self.rescope_track_targets(edit);
         if let (EffectTarget::Bus(_), Some(target)) = (rack_was, edit.target(rack_was)) {
             self.effect_target = target;
         }
     }
 
-    /// The four things on this side that can hold a target in *either* list,
-    /// walked once for both. `selected_source`, `source_preset_names` and
-    /// the sample-load tokens are channel-only and stay in
-    /// [`Self::rescope_after`].
+    /// The things on this side that name a **track** by position.
+    ///
+    /// This used to be one walk shared with `rescope_after`, over a
+    /// `ListEdit` that could be either list. Since the channel arm of
+    /// [`ChainKey`] became an identity there is nothing for a channel edit to
+    /// do here, so the walk is a track walk and says so.
     ///
     /// Until 2026-09-16 a track removal ran none of this, so a preset label
     /// on track 3's device landed on track 2's device with the same id --
     /// and every chain mints its ids from zero, so there usually was one.
-    fn rescope_targets(&mut self, edit: mooloop_core::ListEdit) {
+    fn rescope_track_targets(&mut self, edit: mooloop_core::TrackEdit) {
         self.selected_device = self
             .selected_device
-            .and_then(|(target, device)| Some((edit.target(target)?, device)));
-        self.automation_target
-            .set(self.automation_target.get().and_then(|addr| edit.address(addr)));
+            .and_then(|(key, device)| Some((key.after_track(edit)?, device)));
+        self.automation_target.set(
+            self.automation_target
+                .get()
+                .and_then(|addr| mooloop_core::ListEdit::Track(edit).address(addr)),
+        );
         self.pending_preset_save = match self.pending_preset_save {
-            Some(PresetSaveTarget::Effect { target, device }) => edit
-                .target(target)
+            Some(PresetSaveTarget::Effect { target, device }) => target
+                .after_track(edit)
                 .map(|target| PresetSaveTarget::Effect { target, device }),
             other => other,
         };
         self.effect_preset_names = self
             .effect_preset_names
             .drain()
-            .filter_map(|((target, device), name)| Some(((edit.target(target)?, device), name)))
+            .filter_map(|((key, device), name)| Some(((key.after_track(edit)?, device), name)))
             .collect();
     }
 
@@ -896,16 +998,17 @@ impl Session {
     pub fn next_sample_request(&mut self, channel: usize) -> u64 {
         self.sample_request_counter = self.sample_request_counter.wrapping_add(1).max(1);
         let token = self.sample_request_counter;
-        if self.sample_request.len() <= channel {
-            self.sample_request.resize(channel + 1, 0);
+        if let Some(id) = self.channel_id(channel) {
+            self.sample_request.insert(id, token);
         }
-        self.sample_request[channel] = token;
         token
     }
 
     /// Whether `request` is still the load `channel` is waiting for.
     pub fn sample_request_is_current(&self, channel: usize, request: u64) -> bool {
-        self.sample_request.get(channel).copied() == Some(request)
+        self.channel_id(channel)
+            .and_then(|id| self.sample_request.get(&id).copied())
+            == Some(request)
     }
 
     /// Let go of `device` everywhere on this side that could still be naming
@@ -936,14 +1039,18 @@ impl Session {
         }) {
             self.automation_target.set(None);
         }
-        if self.pending_preset_save
-            == Some(PresetSaveTarget::Effect { target, device })
-        {
-            self.pending_preset_save = None;
-        }
-        self.effect_preset_names.remove(&(target, device));
-        if self.selected_device == Some((target, device)) {
-            self.selected_device = None;
+        // The device is gone, so everything naming it goes with it. Resolved
+        // once, here, because the caller has the seat and these three hold
+        // the durable name.
+        let key = self.chain_key(target);
+        if let Some(key) = key {
+            if self.pending_preset_save == Some(PresetSaveTarget::Effect { target: key, device }) {
+                self.pending_preset_save = None;
+            }
+            self.effect_preset_names.remove(&(key, device));
+            if self.selected_device == Some((key, device)) {
+                self.selected_device = None;
+            }
         }
     }
 
@@ -956,19 +1063,23 @@ impl Session {
     /// Keyed by identity rather than by position, so a reorder no longer has
     /// to rebuild the whole map to keep a row wearing its own label.
     pub fn effect_preset_name(&self, target: EffectTarget, device: DeviceId) -> Option<&str> {
+        let key = self.chain_key(target)?;
         self.effect_preset_names
-            .get(&(target, device))
+            .get(&(key, device))
             .map(String::as_str)
     }
 
     /// Names `device` of `target` after a preset, or clears it when `name` is
     /// empty.
     pub fn set_effect_preset_name(&mut self, target: EffectTarget, device: DeviceId, name: &str) {
+        let Some(key) = self.chain_key(target) else {
+            return;
+        };
         if name.is_empty() {
-            self.effect_preset_names.remove(&(target, device));
+            self.effect_preset_names.remove(&(key, device));
         } else {
             self.effect_preset_names
-                .insert((target, device), name.to_string());
+                .insert((key, device), name.to_string());
         }
     }
 
@@ -978,17 +1089,25 @@ impl Session {
     /// says where these settings came from, which stays true after they are
     /// adjusted. Dropped when the channel changes source, since the device
     /// wearing it is then gone.
+    /// Takes a row number and resolves it, because that is what every caller
+    /// has: a Slint callback, or a loop over the rack. The *key* is the
+    /// channel, so nothing here has to be rewritten when the rack is
+    /// reordered.
     pub fn source_preset_name(&self, channel: u8) -> Option<&str> {
-        self.source_preset_names.get(&channel).map(String::as_str)
+        let id = self.channel_id(usize::from(channel))?;
+        self.source_preset_names.get(&id).map(String::as_str)
     }
 
     /// Names `channel`'s generator after a preset, or clears it when `name`
     /// is empty.
     pub fn set_source_preset_name(&mut self, channel: u8, name: &str) {
+        let Some(id) = self.channel_id(usize::from(channel)) else {
+            return;
+        };
         if name.is_empty() {
-            self.source_preset_names.remove(&channel);
+            self.source_preset_names.remove(&id);
         } else {
-            self.source_preset_names.insert(channel, name.to_string());
+            self.source_preset_names.insert(id, name.to_string());
         }
     }
 

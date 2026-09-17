@@ -1,47 +1,75 @@
 # 03 — Session state keyed by id
 
-## Build
+**Landed 2026-09-17.**
 
-**Keyed by `ChannelId` instead of position:**
+## What landed
 
-- `selected_device` and `effect_preset_names`. `(ChannelId, DeviceId)` is now
-  a stable key for a device anywhere in the song.
-- `source_preset_names` (a `HashMap<u8, _>` today) and
-  `PresetNaming::Source { channel }`.
-- `sample_request` (the `control-plane-seams/05` token), together with
-  `LoadTarget.channel` and `LoadResult.channel`. A completed load whose
-  channel is gone is dropped, and one whose channel moved still lands on it.
-  That is better than today, where a moved channel's load is discarded.
-- `slice_audition`, and `modulation_ui_channel`. The survey found that
-  `rescope_after` does not update these two today; check that before relying
-  on it, and if they really are missed, add them to the test below first.
+Everything in the session that was keyed by a channel seat is now keyed by
+`ChannelId`, and the hand-maintained sample sidecar is gone.
 
-**The parallel sample list goes away.** `ProjectSnapshot.samples` is a
-`Vec<Option<Arc<SampleData>>>` kept in step with `channels` by hand, and
-`ui/src/lib.rs` edits it in three places whenever channels change. Key it by
-`ChannelId`, so a channel edit no longer has to touch it.
+**Keyed by `ChannelId` directly:** `source_preset_names`, `sample_request`,
+`slice_audition`, `modulation_ui_channel`, and both arms of `PresetNaming`.
 
-**What stays positional:**
+**Keyed by `ChainKey`:** `selected_device`, `effect_preset_names` and
+`PresetSaveTarget::Effect`. `ChainKey` is `EffectTarget`'s twin for session
+state -- `Channel(ChannelId) | Bus(u8)` -- and the asymmetry is the state of
+the migration in one type: a channel is named durably, a bus is still a seat,
+because a track has no identity yet.
 
-- `Session::selected: usize`: it is a cursor.
-- `compensation_sent` and `audio_graph_sent`: they mirror what the engine
-  holds, and the engine works in positions.
+**The parallel sample list is gone.** `ProjectSnapshot.samples` is a
+`HashMap<ChannelId, Arc<SampleData>>`, and `ProjectSnapshot::seated` derives
+the seat-ordered list the install wants from the project it is being installed
+with. Three functions in `ui/src/lib.rs` used to keep a `Vec` in step by hand
+-- a paste inserted, a delete removed, a move rotated, "or every sampler
+between the two seats plays the wrong file" -- and none of them do anything to
+it now.
 
-`Session::rescope_after` should now be much shorter. Whatever it still does
-should be only what an index truly requires.
+**What stayed positional**, and why each is right to:
 
-**UI:** Slint callbacks keep passing row numbers. `ui/src/lib.rs` resolves a
-row to an id once, where each callback is handled.
-`sync_effect_spectrum_subscriptions` keys its state by id.
+- `Session::selected`, a cursor.
+- `ParamAddr` and `automation_target`, which are engine addresses.
+- `compensation_sent`, `audio_graph_sent`, `ResolvedDocument.samples` and
+  `ExportRequest.samples`: they mirror or feed something that works in seats.
 
-## Test
+`Session::rescope_after` is three lines and one of them is a comment about
+what is no longer there. The shared `rescope_targets` walk became
+`rescope_track_targets` and takes a `TrackEdit`, because after this there is
+nothing for a *channel* edit to do in it.
 
-Using the session tests that already drive channel edits (`mooloop-session`):
-for a delete, a paste and a move, every keyed map still points at the same
-channel afterwards, and undo/redo restores the samples without the parallel
-list. Run the test against the old tree first; any fields that fail there
-are the missed-rescope bugs mentioned above.
+## Two bugs it fixes
 
-## Rung
+`rescope_after` never mentioned `slice_audition` or `modulation_ui_channel`,
+so both had been mis-keyed by every structural edit since they were written.
+Verified failing on the tree before the change.
 
-Session, then a `mooloop-ui` build, because the callback boundary moves.
+`modulation_ui_channel` in particular now does what its own comment always
+claimed: "changing channels clears both even when the new channel happens to
+occupy the same runtime slot" is a statement about identity, and it was
+written against a `usize` seat.
+
+An in-flight sample load also improves. The old token walk carried a request
+to its channel's new seat, but a completion compared against the seat it was
+*asked* at -- so a load whose channel moved under it was discarded. Keyed by
+identity there is nothing to carry and nothing to discard.
+
+## One deliberate behaviour change
+
+`selected_device` is no longer **cleared** when its channel is deleted. A
+`ChainKey` naming a departed channel resolves to nothing, which is what
+clearing arranged, and ids are never reused, so it cannot come to name a
+stranger. Leaving it is better: undo restores the channel with the same id and
+the selection returns, where the old walk had already thrown it away.
+`selected_device_slot` is the only reader and it resolves. The same is true of
+`effect_preset_names`, whose entries now survive an undo.
+
+## What the tests had to learn
+
+Three existing tests called `Session::rescope_after` without reordering
+`session.channels`, which modelled nothing once the keys became identities --
+the truth is in the rack now, so the rack has to move. They install first and
+rescope second, which is what the application does (`ui/src/lib.rs` calls
+`rescope_after` *after* `install_project_in_ui`).
+
+One of them named channel 3 on a session that had one channel, and got away
+with it because `source_preset_names` took any `u8`. There is no key for a
+channel that is not there now, so the test had to mean what it said.
