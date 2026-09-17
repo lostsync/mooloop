@@ -202,6 +202,29 @@ dozen implementors, read all twelve before believing they differ.
 Copied arithmetic is mostly waste. Copied numbers and copied policies are
 what diverge silently, and they are what the checks are aimed at.
 
+## Parameter identity across the session boundary
+
+Moving session editing into `mooloop-session` left two integer address spaces
+on opposite sides of a crate boundary. They are not interchangeable:
+
+- `EffectSlotRow.pN`, modulation arrays, automation lanes and engine events
+  use a parameter's stable descriptor **id**.
+- `Session::set_effect_param(slot, param_index, normalized)` is a face-editing
+  API and takes the parameter's **position in the kind's descriptor table**.
+
+Most effect tables originally had `id == position`, which hid the distinction.
+Buffer's retired ids made the table sparse on 2026-09-16: forwarding its ids
+through the session API made JUMP operate Reverse, REV and STUT do nothing,
+and QUANT operate Stutter while the DSP and session tests remained green.
+
+At this boundary, name an integer `id` or `param_index` according to what it
+is; never use one as the other because the values happen to agree. Derive a
+conversion from `EffectKind::descriptors()` rather than spelling another map.
+A regression test for face wiring must read the production `.slint` callback
+and compare it with that table -- a test that calls the session or DSP directly
+does not cross the boundary that failed. When changing or extracting an API,
+audit every plain integer it accepts for this kind of lost semantic type.
+
 ## Documentation is part of the change
 
 `docs/CURRENT.md` describes the application as it exists. A change that adds,

@@ -38,7 +38,7 @@ Alphabetical by model name, then by harness.
 | Claude Opus 5 | Claude Code | 2026-08-21 | 2026-09-16 | 151 | Descriptors and modulation, the mixer and console arc, most of the documentation |
 | Claude Sonnet 5 | Claude Code | 2026-08-21 | 2026-09-16 | 21 | Sampler UI, audio preferences, assignable shortcuts, the mockup tool |
 | GLM 5.3 Flash (glm-5.3-flash) | opencode | 2026-08-23 | 2026-09-01 | 17 | Effect containers, the sample browser, the gain-structure plan |
-| GPT-5 | Codex | 2026-08-21 | 2026-09-16 | 75 | Audio-core architecture, realtime project swaps, compiled bus graphs |
+| GPT-5 | Codex | 2026-08-21 | 2026-09-16 | 76 | Audio-core architecture, realtime project swaps, compiled bus graphs |
 | GPT-5.6 Terra | Zed | 2026-08-23 | 2026-08-23 | 1 | Fixed duplicate loop-wrap event scheduling |
 | Kimi k3-256k | Kimi Code CLI | 2026-08-23 | 2026-08-23 | 1 | The poly synth source device, end to end |
 | Kimi k3-256k | opencode | 2026-08-21 | 2026-08-21 | 1 | The effects-chain vertical slice, the filter effect |

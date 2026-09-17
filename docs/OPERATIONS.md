@@ -55,8 +55,10 @@ cargo run -p mooloop-app --bin mooloop -j 2
 # Optimized build, suitable for a local performance or packaging check.
 cargo build --release -p mooloop-app -j 2
 
-# Format check for CI; omit --check to apply formatting.
-cargo fmt --check
+# This tree is not rustfmt-normalized, and CI does not run rustfmt. Do not use
+# a workspace-wide `cargo fmt` or `cargo fmt --check` as a verification gate:
+# it rewrites or reports unrelated legacy code. Keep touched Rust formatted
+# locally and use the compile, test and clippy rungs below.
 
 # Lint the whole workspace exactly as CI does.
 cargo clippy --workspace --all-targets -j 2 -- -D warnings
