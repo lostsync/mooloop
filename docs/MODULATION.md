@@ -240,6 +240,27 @@ The base stays authored and visible. A knob changes the centre/floor underneath
 active modulation; it neither removes a route nor fights the next LFO update.
 Devices receive only `resolved`; the engine owns base and the route sum.
 
+**Write precedence.** Three writers reach an effect parameter, and which one
+the device hears is a stated rule, not an order of calls. The same table sits
+on `control_events_for_slot` in `crates/mooloop-engine/src/render.rs`:
+
+| Lane | Route | Base | Offset | Who writes the device |
+| --- | --- | --- | --- | --- |
+| yes | any | lane | routes, summed | the engine, every control tick |
+| no | yes | knob | routes, summed | the engine, every control tick |
+| no | no | knob | none | the knob's own value, queued once at the next block's first frame |
+
+A lane is present when one with points covers the playhead, playing or
+stopped. A route is present when the destination's policy accepts modulation.
+A route to a destination that refuses it doesn't count. A knob edit always
+updates the stored base. It sends the device a value only in the last row.
+Under a lane, the knob isn't heard until the lane is cleared or stops covering
+the playhead. The engine then hands the knob back. The engine answers "is a
+lane present" in one place (`AutomationCurve::at`), so the per-tick resolution
+and the knob edit can't disagree. A recorded lane, when recording lands, will
+be written from the knob and will take over as the base on the next control
+tick.
+
 A bipolar route swings source `-1..1` about the base. A unipolar route maps
 that output to `0..1`, making the base the floor. Signed depth inverts either
 form without inventing another source. Clamp only after all offsets sum.

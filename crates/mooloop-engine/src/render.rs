@@ -688,16 +688,25 @@ struct AutomationCurve<'a> {
     length_ticks: u32,
 }
 
-impl<'a> AutomationBlock<'a> {
-    fn curve_for(&self, destination: ParamAddr) -> Option<AutomationCurve<'a>> {
-        let (lane, start_tick, length_ticks) = self
-            .sequencer
-            .automation_lane_at(destination, self.start_tick)?;
-        Some(AutomationCurve {
+impl<'a> AutomationCurve<'a> {
+    /// The lane driving `destination` at `song_tick`, if one is. This is the
+    /// one answer to "has a lane taken this base over": the block's
+    /// resolution and a knob edit's decision not to queue both ask here, so
+    /// they cannot disagree about it.
+    fn at(sequencer: &'a Sequencer, destination: ParamAddr, song_tick: f64) -> Option<Self> {
+        let (lane, start_tick, length_ticks) =
+            sequencer.automation_lane_at(destination, song_tick)?;
+        Some(Self {
             lane,
             start_tick,
             length_ticks,
         })
+    }
+}
+
+impl<'a> AutomationBlock<'a> {
+    fn curve_for(&self, destination: ParamAddr) -> Option<AutomationCurve<'a>> {
+        AutomationCurve::at(self.sequencer, destination, self.start_tick)
     }
 
     /// Normalized value at control tick `tick`. The pattern wraps underneath a
@@ -1199,6 +1208,27 @@ impl EffectChain {
     /// the **base** the knob would otherwise supply, and the matrix adds its
     /// offsets on top. That ordering is what lets an LFO wobble around a drawn
     /// curve instead of one of them winning.
+    ///
+    /// # Write precedence
+    ///
+    /// Three writers reach an effect parameter, and this is the rule between
+    /// them (`docs/MODULATION.md` states the same table):
+    ///
+    /// | Lane | Route | Base | Offset | Who writes the device |
+    /// | --- | --- | --- | --- | --- |
+    /// | yes | any | lane | routes, summed | this function, every control tick |
+    /// | no | yes | knob | routes, summed | this function, every control tick |
+    /// | no | no | knob | none | the knob's own `ParamValue`, queued once at offset 0 |
+    ///
+    /// "Lane" means [`AutomationCurve::at`] finds one; "route" means the
+    /// rack `modulates` the destination under its descriptor's policy.
+    /// `RenderState::effect_is_driven` asks the same two questions, so a knob
+    /// edit queues a value exactly when this function will not write one. The
+    /// knob always updates the stored base; under a lane that base is not
+    /// heard until the lane goes, and clearing it hands the knob back.
+    ///
+    /// A recorded lane, when recording lands, is written from the knob and
+    /// takes over as the base on the next control tick.
     fn control_events_for_slot(
         &mut self,
         slot: usize,
@@ -3723,29 +3753,44 @@ impl RenderState {
         }
     }
 
-    /// Whether a source will overwrite this effect parameter this block, and
-    /// so whether writing the knob's base straight through would be undone.
-    /// A route aimed at a destination that refuses modulation does not count:
-    /// it resolves to nothing, so the knob must still reach the device.
-    fn effect_is_modulated(&self, target: EffectTarget, slot: u8, id: u32) -> bool {
-        let EffectTarget::Channel(channel) = target else {
-            return false;
-        };
+    /// Whether a lane or a route will resolve this effect parameter in the
+    /// next block, and so whether writing the knob's base straight through
+    /// would put a second, stale value in front of it. These are the two
+    /// questions of the precedence table on
+    /// `EffectChain::control_events_for_slot`, asked the way it asks them:
+    ///
+    /// - a lane counts when [`AutomationCurve::at`] -- which
+    ///   `AutomationBlock::curve_for` also calls -- finds one at the position
+    ///   the next block starts from. Playing or stopped does not matter;
+    ///   lanes resolve either way. Channel and bus chains both carry lanes.
+    /// - a route counts only on a channel, and only when the destination
+    ///   accepts modulation: a route aimed at one that refuses it resolves to
+    ///   nothing, so the knob must still reach the device.
+    fn effect_is_driven(&self, target: EffectTarget, slot: u8, id: u32) -> bool {
         let Some(state) = self.chain(target).and_then(|chain| chain.slot(slot as usize)) else {
             return false;
         };
-        let device = state.device;
+        let destination = ParamAddr::effect(target, state.device, id);
         let Some(descriptor) = state.kind.and_then(|kind| kind.descriptor(id)) else {
+            return false;
+        };
+        if AutomationCurve::at(&self.sequencer, destination, self.transport.position_ticks)
+            .is_some()
+        {
+            return true;
+        }
+        let EffectTarget::Channel(channel) = target else {
             return false;
         };
         let policy = ModDestinationDescriptor::for_param(descriptor);
         self.modulation
             .get(channel as usize)
-            .is_some_and(|rack| rack.modulates(ParamAddr::effect(target, device, id), &policy))
+            .is_some_and(|rack| rack.modulates(destination, &policy))
     }
 
-    /// Change the stored base, then immediately queue it only if a control
-    /// signal is not about to resolve that destination for this block.
+    /// Change the stored base, then queue it for the next block only if
+    /// neither a lane nor a route is about to resolve that destination -- the
+    /// last row of `control_events_for_slot`'s precedence table.
     fn set_effect_param(&mut self, target: EffectTarget, slot: u8, id: u32, value: f32) {
         let Some(value) = self
             .chain_mut(target)
@@ -3753,7 +3798,7 @@ impl RenderState {
         else {
             return;
         };
-        if !self.effect_is_modulated(target, slot, id) {
+        if !self.effect_is_driven(target, slot, id) {
             if let Some(chain) = self.chain_mut(target) {
                 chain.queue_param(slot as usize, id, value);
             }
@@ -7213,7 +7258,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
 
         // And the knob still reaches the device, because the parked route does
         // not count as modulating it.
-        assert!(!render.effect_is_modulated(EffectTarget::Channel(0), 0, stepped_id));
+        assert!(!render.effect_is_driven(EffectTarget::Channel(0), 0, stepped_id));
     }
 
     #[test]
@@ -7665,7 +7710,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             (restored[0].1 - 1_000.0).abs() < 1.0,
             "the base was not restored: {restored:?}"
         );
-        assert!(!render.effect_is_modulated(
+        assert!(!render.effect_is_driven(
             EffectTarget::Channel(0),
             0,
             mooloop_core::FILTER_PARAM_CUTOFF_HZ
@@ -7697,7 +7742,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             target: CUTOFF,
             point: mooloop_core::AutomationPoint::new(1, 0, 0.5),
         });
-        assert!(render.effect_is_modulated(channel, 0, mooloop_core::FILTER_PARAM_CUTOFF_HZ));
+        assert!(render.effect_is_driven(channel, 0, mooloop_core::FILTER_PARAM_CUTOFF_HZ));
         assert!(render.sequencer.automation_lane_at(CUTOFF, 0.0).is_some());
 
         // Filter to the end of the chain: drive first, filter second.
@@ -7707,12 +7752,12 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             to: 1,
         });
         assert!(
-            !render.effect_is_modulated(channel, 0, mooloop_core::FILTER_PARAM_CUTOFF_HZ),
-            "the drive inherited the filter's route"
+            !render.effect_is_driven(channel, 0, mooloop_core::FILTER_PARAM_CUTOFF_HZ),
+            "the drive inherited the filter's route or lane"
         );
         assert!(
-            render.effect_is_modulated(channel, 1, mooloop_core::FILTER_PARAM_CUTOFF_HZ),
-            "the route did not follow the filter"
+            render.effect_is_driven(channel, 1, mooloop_core::FILTER_PARAM_CUTOFF_HZ),
+            "the route and lane did not follow the filter"
         );
         // The address built before the reorder is the address after it. This
         // is the assertion the slot scheme could not make: there, `CUTOFF`
@@ -7822,7 +7867,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         render.play();
         render.process_block(128);
 
-        assert!(!render.effect_is_modulated(
+        assert!(!render.effect_is_driven(
             EffectTarget::Channel(0),
             0,
             mooloop_core::FILTER_PARAM_CUTOFF_HZ
@@ -7958,6 +8003,108 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             "an empty lane should stop resolving per control tick: {restored:?}"
         );
         assert_eq!(restored[0], (0, 1_000.0));
+    }
+
+    /// The cutoff values waiting in slot 0's between-block queue: what a knob
+    /// edit sends straight to the device, ahead of any control signal.
+    fn queued_cutoff(render: &RenderState) -> Vec<(u32, f32)> {
+        render.strips[0]
+            .effects
+            .slot(0)
+            .expect("slot 0 holds the filter")
+            .events
+            .events
+            .iter()
+            .flatten()
+            .filter_map(|event| match event.event {
+                Event::ParamValue {
+                    id: mooloop_core::FILTER_PARAM_CUTOFF_HZ,
+                    value,
+                } => Some((event.offset, value)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn turn_cutoff_knob(render: &mut RenderState, value: f32) {
+        render.apply_command(EngineCommand::SetEffectParam {
+            target: EffectTarget::Channel(0),
+            slot: 0,
+            id: mooloop_core::FILTER_PARAM_CUTOFF_HZ,
+            value,
+        });
+    }
+
+    /// Precedence, lane over knob: a lane is the base, so a knob edit under
+    /// one changes only the stored knob and sends the device nothing. Queuing
+    /// it put a second, stray value at offset 0 ahead of the lane's.
+    #[test]
+    fn a_knob_edit_under_a_lane_queues_no_value() {
+        let project = synth_project(filter_channel(1_000.0));
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.apply_command(EngineCommand::UpsertAutomationPoint {
+            pattern: 0,
+            channel: 0,
+            target: CUTOFF,
+            point: mooloop_core::AutomationPoint::new(1, 0, 0.1),
+        });
+        render.play();
+        render.process_block(128);
+
+        turn_cutoff_knob(&mut render, 5_000.0);
+        assert_eq!(
+            queued_cutoff(&render),
+            vec![],
+            "the knob reached the device under a lane"
+        );
+        render.process_block(128);
+        let events = cutoff_events(&render);
+        assert_eq!(
+            events.iter().map(|(offset, _)| *offset).collect::<Vec<_>>(),
+            vec![0, 32, 64, 96],
+            "only the lane should resolve the cutoff: {events:?}"
+        );
+        assert!(
+            events.iter().all(|(_, value)| *value < 900.0),
+            "the knob value sounded under the lane: {events:?}"
+        );
+        // The knob is still stored, so clearing the lane hands it back.
+        assert_eq!(
+            render.strips[0].effects.slot(0).and_then(|state| state.base_params)
+                .unwrap()
+                .get(mooloop_core::FILTER_PARAM_CUTOFF_HZ),
+            Some(5_000.0),
+        );
+    }
+
+    /// Precedence, route over knob: a route resolves the destination every
+    /// control tick from the knob's base, so the edit is heard through it.
+    #[test]
+    fn a_knob_edit_under_a_route_queues_no_value() {
+        let (project, _) = lfo_on_cutoff(0.25);
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.play();
+        render.process_block(128);
+
+        turn_cutoff_knob(&mut render, 5_000.0);
+        assert_eq!(
+            queued_cutoff(&render),
+            vec![],
+            "the knob reached the device under a route"
+        );
+    }
+
+    /// Precedence, knob alone: nothing else will write the destination, so
+    /// the knob's value is queued for the next block's first frame.
+    #[test]
+    fn a_knob_edit_with_nothing_driving_it_queues_one_value() {
+        let project = synth_project(filter_channel(1_000.0));
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.play();
+        render.process_block(128);
+
+        turn_cutoff_knob(&mut render, 5_000.0);
+        assert_eq!(queued_cutoff(&render), vec![(0, 5_000.0)]);
     }
 
     #[test]
