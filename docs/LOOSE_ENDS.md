@@ -77,6 +77,21 @@ install, which would stop the rewind and leave the cut tails.
 fix and step 05 is the real one. It is also a prerequisite of plugin hosting,
 which would otherwise reload every plugin in the song on any channel edit.
 
+**Half done, 2026-09-17 (step 04).** The song no longer stops or rewinds. A
+`ProjectEdit` carries the transport across the install: the executor copies
+the outgoing renderer's playing state, position and frame count into the
+incoming one **at the moment it swaps**, which is the only place the current
+position exists -- the song goes on playing while the install is prepared on
+the control thread, so a position captured earlier would step the song back by
+the length of its own install. Opening a document still stops and rewinds,
+which is what opening a document means.
+
+**The tails are still cut.** Every voice, delay line, reverb tail and
+compensation ring is still emptied by any edit, because the incoming renderer
+is still a fresh graph. That is step 05, and it is what the second paragraph
+above is about. So the entry stays open, and what is left of it is exactly the
+part that needs strips keyed by id.
+
 
 **A mixer drag does not scroll the mixer, and a turned strip stays at its
 seat.** Both came in with the track reorder on 2026-09-16. Seventeen strips at

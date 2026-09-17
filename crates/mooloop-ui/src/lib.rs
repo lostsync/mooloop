@@ -5451,6 +5451,8 @@ impl AppUi {
             &window,
             &starter,
             &starter_samples,
+            // Startup: there is nothing playing to keep.
+            false,
         );
         state.borrow().update_document_title(&window);
         state.borrow().sync_pattern_menu(&window);
@@ -12668,6 +12670,8 @@ impl AppUi {
                                 &window,
                                 &project,
                                 &samples,
+                                // A new song starts at the beginning, stopped.
+                                false,
                             );
                             let mut state = st.borrow_mut();
                             state.session.bundle_path = None;
@@ -12996,6 +13000,10 @@ impl AppUi {
                                     &window,
                                     &project,
                                     &samples,
+                                    // Opening a document stops and rewinds:
+                                    // it is a different song, and its
+                                    // playhead is not this one's.
+                                    false,
                                 ) {
                                     window.set_status_message(
                                         "Audio engine is busy; project was not installed".into(),
@@ -13201,6 +13209,27 @@ impl AppUi {
                                 &window,
                                 &edit.project,
                                 &edit.samples,
+                                // **Every project edit keeps the song
+                                // running.** `LOOSE_ENDS.md`, "Every
+                                // structural edit stops the song": a paste, a
+                                // delete, a move, a track added, a preset
+                                // loaded -- all of them stopped and rewound
+                                // the transport, including for the channels
+                                // the edit never touched.
+                                //
+                                // The plan proposed testing `edit.edit` for a
+                                // `ListEdit`, which would have covered the
+                                // three channel edits and left a track add or
+                                // a preset load still stopping the song. The
+                                // distinction that matters is edit versus
+                                // open, and every `ProjectEdit` is an edit:
+                                // the three install sites that are opens are
+                                // the other callers of this function.
+                                //
+                                // Undo and redo are included, and should be.
+                                // Undoing a channel delete mid-song is an
+                                // edit to the song you are listening to.
+                                true,
                             ) {
                                 let mut state = st.borrow_mut();
                                 // The song's own addresses were renumbered
@@ -14137,6 +14166,7 @@ fn install_project_in_ui(
     window: &MainWindow,
     project: &Project,
     samples: &[Option<Arc<SampleData>>],
+    keep_transport: bool,
 ) -> bool {
     let mut project = project.clone();
     normalize_project_pattern_banks(&mut project);
@@ -14196,7 +14226,7 @@ fn install_project_in_ui(
             ),
         }
     };
-    if !handle.install_project(Arc::new(project.clone()), audio, input) {
+    if !handle.install_project(Arc::new(project.clone()), audio, input, keep_transport) {
         return false;
     }
     // A project install is the only thing that can change which track a strip
@@ -14236,8 +14266,14 @@ fn install_project_in_ui(
         }
     }
     sync_effect_spectrum_subscriptions(&state.borrow(), handle);
-    window.set_playing(false);
-    window.set_playlist_position_ticks(0);
+    // An **edit** leaves the transport alone; the engine carries it across the
+    // swap and these two would only make the interface disagree with what is
+    // audibly still playing. An **open** stops and rewinds, which is what
+    // opening a document means.
+    if !keep_transport {
+        window.set_playing(false);
+        window.set_playlist_position_ticks(0);
+    }
     // A new project brings its own control map, so a learn gesture waiting on
     // the old one has nothing left to bind to -- `Session::load` has already
     // dropped it. The arm goes with it rather than staying lit over a gesture

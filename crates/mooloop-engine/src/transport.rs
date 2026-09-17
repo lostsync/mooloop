@@ -243,6 +243,24 @@ impl Transport {
         self.frames_played = 0;
     }
 
+    /// Take `other`'s running state: whether it plays, where it is, and how
+    /// long it has been going.
+    ///
+    /// For a project install that must not interrupt the song -- a channel
+    /// paste, delete or move. Tempo, sample rate and timebase are deliberately
+    /// **not** taken: those belong to the project being installed, and a
+    /// structural edit may well have changed the tempo in the same gesture.
+    ///
+    /// `frames_played` travels with the position because the two are one
+    /// answer. Left behind, the incoming transport would report the song as
+    /// having just started while its playhead sat two minutes in, and
+    /// everything deriving elapsed time from it would step.
+    pub fn adopt_running_state(&mut self, other: &Self) {
+        self.playing = other.playing;
+        self.position_ticks = other.position_ticks;
+        self.frames_played = other.frames_played;
+    }
+
     pub fn set_tempo(&mut self, bpm: f64) {
         self.bpm = bpm.clamp(1.0, 999.0);
     }

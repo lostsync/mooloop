@@ -392,6 +392,23 @@ pub(crate) enum StructuralReclaim {
 pub(crate) struct PreparedProject {
     pub generation: u64,
     pub render: Box<RenderState>,
+    /// Whether the incoming renderer should take over the outgoing one's
+    /// transport instead of starting stopped at zero.
+    ///
+    /// Set for a **structural edit** -- a channel paste, delete or move --
+    /// and clear for opening a document, which is meant to stop and rewind.
+    /// `LOOSE_ENDS.md`, "Every structural edit stops the song": moving one
+    /// channel halted the transport and rewound the whole arrangement,
+    /// including for the channels the edit never touched.
+    ///
+    /// **It is a flag rather than a transport value**, and that is the point.
+    /// The install is prepared on the control thread and swapped in on the
+    /// audio thread, and the song keeps playing in between. A position
+    /// captured at preparation time would be however many blocks stale by the
+    /// time it landed, so the song would jump backwards by the length of its
+    /// own install. The executor reads the outgoing transport at the instant
+    /// it swaps.
+    pub keep_transport: bool,
 }
 
 /// The ordered control stream consumed at block boundaries. Project swaps
@@ -813,11 +830,15 @@ impl EngineHandle {
     /// The displaced executor returns through the reclaim ring and is dropped
     /// by `poll`, never by the audio callback.
     #[must_use]
+    /// `keep_transport` carries the song across the swap rather than stopping
+    /// and rewinding it; see [`PreparedProject::keep_transport`]. A structural
+    /// edit sets it, opening a document does not.
     pub fn install_project(
         &mut self,
         project: Arc<mooloop_core::Project>,
         audio: Vec<ChannelAudioSnapshot>,
         input: InputState,
+        keep_transport: bool,
     ) -> bool {
         let generation = self
             .install_generation
@@ -842,6 +863,7 @@ impl EngineHandle {
         let prepared = PreparedProject {
             generation,
             render: Box::new(render),
+            keep_transport,
         };
         // A full queue leaves `prepared` on this thread, so dropping it is
         // realtime-safe. Project loads are rare and the queue has the same

@@ -3291,6 +3291,28 @@ impl RenderState {
         }
     }
 
+    /// Take the running transport of the renderer this one is replacing.
+    ///
+    /// Called by the executor at the moment of the swap, for a structural
+    /// edit; see [`crate::PreparedProject::keep_transport`]. Not part of
+    /// `load_project`, which runs on the control thread where the answer is
+    /// not yet knowable.
+    ///
+    /// **Voices, tails and delay lines are still cut**, because the incoming
+    /// renderer is a fresh graph. The song keeps its place and its clock; what
+    /// was ringing at the moment of the edit is not carried across.
+    /// `docs/plans/channel-identity/05-strips-by-id.md` is where that goes.
+    pub fn adopt_transport(&mut self, outgoing: &Self) {
+        self.transport.adopt_running_state(outgoing.transport());
+    }
+
+    /// The transport this renderer is running, for the executor -- which owns
+    /// this state and has to read the outgoing one at a swap -- and for the
+    /// tests that assert what a swap did to it.
+    pub(crate) fn transport(&self) -> &crate::transport::Transport {
+        &self.transport
+    }
+
     pub fn load_project(&mut self, project: &Project) {
         // A loaded project decides how many channels exist. This runs on the
         // control thread inside `install_project`, so allocating here is the

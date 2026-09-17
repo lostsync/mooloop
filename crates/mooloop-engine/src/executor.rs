@@ -223,6 +223,15 @@ impl Executor {
                 self.pending_command = Some(RealtimeCommand::InstallProject(prepared));
                 break;
             }
+            // **Read at the swap, not at preparation.** The song has gone on
+            // playing while the incoming renderer was built on the control
+            // thread, so the outgoing transport is the only place the current
+            // position exists. Copying a position captured earlier would step
+            // the song backwards by however long the install took.
+            let mut prepared = prepared;
+            if prepared.keep_transport {
+                prepared.render.adopt_transport(&self.render);
+            }
             let retired = std::mem::replace(&mut self.render, prepared.render);
             match self
                 .reclaim_tx
@@ -368,3 +377,117 @@ fn enable_flush_to_zero() {
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 fn enable_flush_to_zero() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::RenderState;
+    use crate::PreparedProject;
+    use mooloop_core::Project;
+
+    const SAMPLE_RATE: u32 = 48_000;
+    const BLOCK: usize = 256;
+
+    /// An executor with nothing in flight, plus the ends of its rings.
+    fn executor() -> (
+        Executor,
+        rtrb::Producer<RealtimeCommand>,
+        Consumer<StructuralReclaim>,
+    ) {
+        let (cmd_tx, cmd_rx) = rtrb::RingBuffer::new(8);
+        let (evt_tx, _evt_rx) = rtrb::RingBuffer::new(8);
+        let (reclaim_tx, reclaim_rx) = rtrb::RingBuffer::new(8);
+        let render = Box::new(RenderState::from_project(
+            SAMPLE_RATE,
+            &Project::default(),
+            &[],
+        ));
+        let executor = Executor::new(
+            ExecutorIo {
+                cmd_rx,
+                evt_tx,
+                reclaim_tx,
+            },
+            render,
+            Arc::new(AtomicU64::new(0)),
+            SAMPLE_RATE,
+            LoadMeters::new(),
+        );
+        (executor, cmd_tx, reclaim_rx)
+    }
+
+    fn prepared(generation: u64, keep_transport: bool) -> PreparedProject {
+        PreparedProject {
+            generation,
+            render: Box::new(RenderState::from_project(
+                SAMPLE_RATE,
+                &Project::default(),
+                &[],
+            )),
+            keep_transport,
+        }
+    }
+
+    /// **A structural edit must not stop the song.** `LOOSE_ENDS.md`, "Every
+    /// structural edit stops the song": moving one channel halted the
+    /// transport and rewound the arrangement, including for the channels the
+    /// edit never touched.
+    ///
+    /// The position is asserted to be *past* where it was when the install was
+    /// queued, not merely non-zero, because that is the half the flag exists
+    /// for. The song goes on playing while the incoming renderer is built on
+    /// the control thread, so a position captured at preparation time would
+    /// step the song backwards by the length of its own install. The executor
+    /// reads the outgoing transport at the moment it swaps.
+    #[test]
+    fn a_kept_transport_carries_the_position_as_of_the_swap() {
+        let (mut executor, mut cmd_tx, _reclaim) = executor();
+        let mut out_l = [0.0f32; BLOCK];
+        let mut out_r = [0.0f32; BLOCK];
+
+        executor.render.play();
+        for _ in 0..4 {
+            executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        }
+        let queued_at = executor.render.transport().position_ticks;
+        assert!(queued_at > 0.0, "the song has to be somewhere to be carried");
+
+        // One more block runs *after* the install is queued and before it is
+        // consumed, which is what a real install does.
+        cmd_tx
+            .push(RealtimeCommand::InstallProject(prepared(1, true)))
+            .expect("room in the ring");
+        executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+
+        assert!(executor.render.transport().playing, "the install stopped the song");
+        assert!(
+            executor.render.transport().position_ticks > queued_at,
+            "the song jumped back to where it was when the install was prepared: \
+             {} against {queued_at}",
+            executor.render.transport().position_ticks
+        );
+    }
+
+    /// The other half: opening a document stops and rewinds, which is what
+    /// opening a document means.
+    #[test]
+    fn an_install_that_does_not_keep_the_transport_stops_and_rewinds() {
+        let (mut executor, mut cmd_tx, _reclaim) = executor();
+        let mut out_l = [0.0f32; BLOCK];
+        let mut out_r = [0.0f32; BLOCK];
+
+        executor.render.play();
+        for _ in 0..4 {
+            executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        }
+        assert!(executor.render.transport().position_ticks > 0.0);
+
+        cmd_tx
+            .push(RealtimeCommand::InstallProject(prepared(1, false)))
+            .expect("room in the ring");
+        executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+
+        assert!(!executor.render.transport().playing);
+        assert_eq!(executor.render.transport().position_ticks, 0.0);
+    }
+}

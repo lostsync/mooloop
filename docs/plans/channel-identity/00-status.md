@@ -1,6 +1,6 @@
 # Channel identity — plan status
 
-**Written 2026-09-17. Steps 01, 02 and 03 landed 2026-09-17.** It came out of the architecture
+**Written 2026-09-17. Steps 01 to 04 landed 2026-09-17.** It came out of the architecture
 section of `reports/fable-2026-09-17.md`, and Adam asked for it the same day:
 a channel gets a durable id, the way a device already has one, before plugin
 hosting starts keying anything by channel position.
@@ -74,7 +74,7 @@ scope that is an id. All three are
 | [01](01-the-id.md) | `ChannelId`, minting, load-time assignment, fresh ids for kits and pastes | core, project | **landed 2026-09-17** |
 | [02](02-cross-channel-addresses.md) | `selected_channel` holds an id | core, project, session | **landed 2026-09-17**, one field of four |
 | [03](03-session-keys.md) | Session state keyed by id; the parallel sample list folds into the channel | session, UI build | **landed 2026-09-17** |
-| [04](04-keep-the-transport.md) | An install carries the transport across (the interim fix `LOOSE_ENDS.md` names) | engine, UI | not started |
+| [04](04-keep-the-transport.md) | An install carries the transport across (the interim fix `LOOSE_ENDS.md` names) | engine, UI | **landed 2026-09-17**, not yet listened to |
 | [05](05-strips-by-id.md) | The engine keeps strips whose id and chain survive an install | engine | not started |
 | [06](06-the-remaining-cross-channel-addresses.md) | The other three fields that name another channel | core, session, dsp | not started; the gate half waits on 05 |
 
@@ -159,9 +159,22 @@ failing before the change.
 `ChainKey::after_track` is where the remaining half of the migration is
 spelled -- and it is the shape a `TrackId` would delete.
 
+## What step 04 actually did
+
+All of it, and wider than it asked. The step proposed keying on
+`ProjectEdit { edit: Some(..) }`, which covers the three channel edits and
+would have left a track add, a track move, an effect preset load and a sample
+load still stopping the song -- all four go through the same install, and
+`LOOSE_ENDS.md`'s own list names them. The distinction that matters is edit
+versus open, and it falls on the function boundary: every `ProjectEdit` is an
+edit and the three other callers of `install_project_in_ui` are the opens.
+Undo and redo keep the transport too.
+
 ## Open questions
 
 None of these needs Adam before step 04.
 
-- Step 04 changes what a user hears during an edit: the song keeps playing
-  across a paste or a move. That should be listened to, not only tested.
+- **Step 04 has not been listened to.** It changes what a user hears during an
+  edit: the song keeps playing across a paste or a move, with a dropout where
+  the tails are cut. Tested at the executor, not heard. Worth doing before
+  step 05 changes the same moment again.
