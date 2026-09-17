@@ -61,9 +61,36 @@ Confirmed 2026-09-16.
 - Do not run Cargo commands concurrently (`AGENTS.md`). Background one run
   and do something else.
 
+## Commit the report skeleton before the first finding
+
+Confirmed 2026-09-17. `reports/` did not exist in the tree at the start of
+this run: the 2026-09-16 report these notes describe was written but never
+committed, and the container that held it is gone. Commit an empty
+`reports/fable-<date>.md` in the first ten minutes and push after every
+finding. It is Markdown, so it goes on `main` directly.
+
+Two smaller container facts from the same run. `apt-get install` fails with
+a 404 on a stale index; run `apt-get update` first. And `libasound2-dev` is
+not needed — `libjack-jackd2-dev` alone gets `cargo test -p mooloop-engine`
+building, and the suite passes in about twelve seconds once built.
+
+## Read the last two days of `main` before reading the tree
+
+Confirmed 2026-09-17. The one HIGH finding of this run — the Reverb face
+reading `p0..p7` after `EffectSlotRow` switched to id-indexed fill — was
+introduced the previous day by a commit that changed a shared scheme and
+audited it against the one face it was working on. `git log --since='2 days'
+--stat` and a look at every file a scheme change *did not* touch is faster
+than any grep, and it is where a whole-system review can see what a
+single-task session cannot.
+
+CI green is not evidence for a UI row: `source_snapshot.rs` builds its
+`EffectSlotRow`s by hand, so nothing in CI runs `effect_slot_row` for most
+kinds. Check what a test constructs before believing it covers a path.
+
 ## Working method that held up
 
-Confirmed 2026-09-16.
+Confirmed 2026-09-17.
 
 - Three parallel investigators (seams, real-time safety, architecture fit)
   each briefed with the already-known list, then a fresh-context refuter per
