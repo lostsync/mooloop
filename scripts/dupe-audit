@@ -199,13 +199,20 @@ def unit_spelling():
 def twin_names():
     """Two functions whose names say the same thing.
 
-    `mooloop_core::gain::linear_to_db` floors at -60 dB and its inverse
-    returns silence below that; `mooloop_dsp::dynamics::lin_to_db` floors at
-    1e-9, about -180 dB, and its inverse has no floor at all. A hundred and
-    twenty decibels apart at silence, in crates where one depends on the
-    other. The difference is deliberate -- a compressor's detector needs
-    range a fader does not -- and nothing anywhere says so, which is what
-    makes it a trap for whoever decides to tidy the duplicate away.
+    Written for `mooloop_core::gain::linear_to_db`, which floors at -60 dB
+    and whose inverse returns silence below that, and the former
+    `mooloop_dsp::dynamics::lin_to_db`, which floored at 1e-9, about
+    -180 dB, and whose inverse had no floor at all. A hundred and twenty
+    decibels apart at silence, in crates where one depends on the other. The
+    difference is deliberate -- a compressor's detector needs range a fader
+    does not -- and nothing said so, which made it a trap for whoever decided
+    to tidy the duplicate away. Since 2026-09-17 both pairs live in
+    `gain.rs` under names that say which policy they are
+    (`*_unfloored` for the detector's).
+
+    The key sorts a name's words, so an inverse pair in one file
+    (`db_to_linear`/`linear_to_db`) is reported too. Those are usually
+    deliberate; the cross-crate families are the ones worth reading first.
     """
     words = {"lin": "linear", "db": "decibels", "ms": "milliseconds", "freq": "frequency",
              "amp": "amplitude", "pos": "position", "norm": "normalized", "val": "value"}
