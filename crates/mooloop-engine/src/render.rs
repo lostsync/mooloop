@@ -2699,8 +2699,8 @@ impl MidiRouting {
 struct RecordingNote {
     channel: u8,
     velocity: u8,
-    /// Where it landed on the looping playhead: already the position in the
-    /// pattern.
+    /// Where it landed in the selected pattern, folded by
+    /// `Sequencer::recording_tick`.
     start_tick: u32,
     /// Absolute frames at the press. Length is measured from this rather than
     /// from `start_tick`, so a note held across the loop point reports how
@@ -4823,7 +4823,9 @@ impl RenderState {
         else {
             return;
         };
-        let start_tick = self.tick_at(message.offset);
+        let Some(start_tick) = self.sequencer.recording_tick(self.tick_at(message.offset)) else {
+            return;
+        };
         self.recording[usize::from(note & 0x7f)] = Some(RecordingNote {
             channel,
             velocity,
@@ -4856,11 +4858,12 @@ impl RenderState {
     ///
     /// The transport has not advanced yet when MIDI is applied, so this is the
     /// block's start plus the offset's own share -- the position the note was
-    /// actually played at, not the position the block ends at.
-    fn tick_at(&self, offset: u32) -> u32 {
-        let ticks = self.transport.position_ticks
-            + f64::from(offset) * self.transport.ticks_per_sample();
-        ticks.max(0.0) as u32
+    /// actually played at, not the position the block ends at. Unfolded: in
+    /// pattern mode this runs past the pattern's end on every pass after the
+    /// first, which is why recording asks the sequencer where it falls.
+    fn tick_at(&self, offset: u32) -> f64 {
+        (self.transport.position_ticks + f64::from(offset) * self.transport.ticks_per_sample())
+            .max(0.0)
     }
 
     /// The channels this block's queued notes are addressed to, in order.
@@ -6122,6 +6125,114 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         render.apply_midi(&[up(0)]);
         render.process_block(256);
         assert_eq!(std::iter::from_fn(|| render.pop_outgoing()).count(), 0);
+
+        // A note on the second pass lands where it was played *in the
+        // pattern*. The pattern-mode transport never folds -- the sequencer
+        // wraps its own copy of the position -- so the playhead's tick is 144
+        // here, and the session, which takes `start_tick` as a pattern
+        // position, used to clamp that onto the last tick of the pattern.
+        render.apply_command(EngineCommand::Stop);
+        render.apply_command(EngineCommand::SetPatternLength {
+            pattern: 0,
+            length_steps: 4,
+        });
+        render.set_record_armed(true);
+        render.play();
+        // 140 blocks of 256 and an offset of 160 is 36 000 frames: one and a
+        // half quarter notes, which in a 96-tick pattern is tick 48.
+        for _ in 0..140 {
+            render.process_block(256);
+        }
+        render.apply_midi(&[down(160)]);
+        render.process_block(256);
+        render.apply_midi(&[up(0)]);
+        render.process_block(256);
+        let recorded: Vec<_> = std::iter::from_fn(|| render.pop_outgoing()).collect();
+        let [EngineEvent::RecordedNote { start_tick, .. }] = recorded[..] else {
+            panic!("expected exactly one recorded note, got {recorded:?}");
+        };
+        assert_eq!(start_tick, 48, "the second pass folds into the pattern");
+    }
+
+    /// In song mode a note records into the selected pattern at its offset
+    /// inside the placement under the playhead, and is not recorded at all
+    /// where no placement of that pattern is playing.
+    #[test]
+    fn a_note_recorded_in_song_mode_lands_in_the_placement_under_the_playhead() {
+        use mooloop_core::{
+            EngineEvent, MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage, MidiPortId,
+            MidiRouteSource, PlaybackMode, TICKS_PER_BAR,
+        };
+
+        let mut render = two_channel_render();
+        render.attach_midi_routing(Arc::new(ArcSwap::from_pointee(MidiRouting {
+            routes: vec![MidiInputRoute {
+                source: MidiRouteSource::AllPorts,
+                channel: MidiChannelFilter::Omni,
+            }],
+        })));
+        // A one-quarter pattern placed on the second bar, and a second
+        // pattern with no placement at all.
+        render.apply_command(EngineCommand::AddPattern);
+        render.apply_command(EngineCommand::SetPatternLength {
+            pattern: 0,
+            length_steps: 4,
+        });
+        render.apply_command(EngineCommand::SetPlaylistPlacement {
+            pattern: 0,
+            start_tick: TICKS_PER_BAR,
+            on: true,
+        });
+        render.apply_command(EngineCommand::SetPlaybackMode(PlaybackMode::Song));
+        render.set_record_armed(true);
+        render.play();
+
+        // Press `offset` frames into the next block, release a block later,
+        // and return what was reported.
+        let tap = |render: &mut RenderState, offset| {
+            let message = |offset, kind| MidiMessage {
+                offset,
+                port: MidiPortId::FIRST,
+                channel: 0,
+                kind,
+            };
+            render.apply_midi(&[message(
+                offset,
+                MidiKind::NoteOn {
+                    note: 60,
+                    velocity: 90,
+                },
+            )]);
+            render.process_block(256);
+            render.apply_midi(&[message(0, MidiKind::NoteOff { note: 60 })]);
+            render.process_block(256);
+            std::iter::from_fn(|| render.pop_outgoing()).collect::<Vec<_>>()
+        };
+
+        // Tick 144 of the first bar: nothing of pattern 0 is playing.
+        for _ in 0..140 {
+            render.process_block(256);
+        }
+        assert_eq!(tap(&mut render, 160), vec![], "no placement covers the playhead");
+
+        // Tick 432 is 48 ticks into the placement at 384: 108 000 frames, or
+        // 421 blocks of 256 and an offset of 224. 142 blocks have run.
+        for _ in 142..421 {
+            render.process_block(256);
+        }
+        let recorded = tap(&mut render, 224);
+        let [EngineEvent::RecordedNote { start_tick, .. }] = recorded[..] else {
+            panic!("expected exactly one recorded note, got {recorded:?}");
+        };
+        assert_eq!(start_tick, 48, "the offset inside the placement");
+
+        // The same position with pattern 1 selected: pattern 0 is what is
+        // playing, and pattern 1 has no placement here to record into.
+        render.apply_command(EngineCommand::SetCurrentPattern(1));
+        render.apply_command(EngineCommand::Seek {
+            tick: f64::from(TICKS_PER_BAR + 48),
+        });
+        assert_eq!(tap(&mut render, 0), vec![], "the selected pattern is not playing");
     }
 
     /// Auditioning has to work with the transport stopped -- that is the

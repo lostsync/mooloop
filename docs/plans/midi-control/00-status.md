@@ -32,6 +32,13 @@ The engine tests attached routing by hand and passed throughout. The install
 path and startup now share one attach list (`SharedCells::attach`), and
 `install_tests` drives the renderer an install builds.
 
+**Recording was only right on the first pass until 2026-09-17.** The engine
+reported the unfolded transport tick, which in pattern mode grows forever,
+and the session clamped it onto the pattern's last tick. The engine now folds
+it with the sequencer's own wrap (`Sequencer::recording_tick`). In song mode it
+records at the offset into the selected pattern's placement under the
+playhead, and not at all where none covers it.
+
 ## What is not built, and why
 
 - **MIDI output does not exist.** The sidebar's OUT row is inert and says so.

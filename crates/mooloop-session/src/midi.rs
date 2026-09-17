@@ -105,9 +105,10 @@ impl Session {
 
     /// Write a note the engine captured into the pattern it was played over.
     ///
-    /// The engine reports a note when its key comes up, already positioned on
-    /// the looping playhead — so `start_tick` is a position in the pattern and
-    /// needs no further arithmetic. What this adds is the pattern's own
+    /// The engine reports a note when its key comes up, already folded into
+    /// its own selected pattern — so `start_tick` is a position in the pattern
+    /// and needs no further arithmetic. That pattern is assumed to be
+    /// `current_pattern`; the event does not name it. What this adds is the pattern's own
     /// bounds: a note played over the loop point starts where it was played
     /// and is trimmed to the end rather than overhanging into nothing.
     pub fn record_note(

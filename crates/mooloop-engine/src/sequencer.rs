@@ -357,6 +357,36 @@ impl Sequencer {
         self.current
     }
 
+    /// Where a note played at `song_tick` belongs in the selected pattern, or
+    /// `None` when the selected pattern is not what is playing there.
+    ///
+    /// The transport never folds in pattern mode -- scheduling wraps its own
+    /// copy of the position -- so a recorder that reported the playhead as it
+    /// stands would report tick 400 of a 384-tick pattern on the second pass.
+    /// Pattern mode folds with the same [`wrap_tick`] scheduling uses. Song
+    /// mode answers the offset into the placement of the selected pattern
+    /// that covers the playhead, taking the latest-starting one where two
+    /// overlap, the rule [`Self::automation_lane_at`] follows. Where no
+    /// placement of it covers the playhead there is nowhere to record: the
+    /// note would otherwise land in a pattern at a position that was never
+    /// heard against it.
+    pub fn recording_tick(&self, song_tick: f64) -> Option<u32> {
+        let length = self.pattern_length_ticks(self.current)?;
+        match self.playback_mode {
+            PlaybackMode::Pattern => Some(wrap_tick(song_tick, length) as u32),
+            PlaybackMode::Song => {
+                let position = wrap_tick(song_tick, self.song_length_ticks());
+                self.playlist
+                    .iter()
+                    .rev()
+                    .filter(|placement| placement.pattern as usize == self.current)
+                    .map(|placement| position - f64::from(placement.start_tick))
+                    .find(|offset| (0.0..f64::from(length)).contains(offset))
+                    .map(|offset| offset as u32)
+            }
+        }
+    }
+
     /// The `ordinal`-th pattern covering a position, for a caller that has to
     /// ask about a position it has already left.
     ///

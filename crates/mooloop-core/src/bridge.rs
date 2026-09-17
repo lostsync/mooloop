@@ -441,10 +441,12 @@ pub enum EngineEvent {
     /// A note captured while recording, complete: a note is reported when its
     /// key comes up, because until then its length is not known.
     ///
-    /// `start_tick` is where it landed on the looping playhead, so it is
-    /// already the position in the pattern. `length_ticks` is measured in
-    /// frames and converted, so a note held across a loop point reports the
-    /// length it was actually held rather than a negative one.
+    /// `start_tick` is already the position in the selected pattern: the
+    /// engine folds the playhead into it, and in song mode reports nothing
+    /// played where no placement of that pattern is playing. `length_ticks`
+    /// is measured in frames and converted, so a note held across a loop
+    /// point reports the length it was actually held rather than a negative
+    /// one.
     RecordedNote {
         channel: u8,
         note: u8,
