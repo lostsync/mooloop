@@ -8,7 +8,7 @@
   <img src="mooloop-screenshot.png" alt="Mooloop 0.1.4: the step sequencer, the mixer with its channel strips, a Mono Synth into Reverb with a step modulator, and the sample browser" width="900">
 </p>
 
-Mooloop is a Linux-native, pattern-based groove sequencer and instrument. It has a channel rack, piano roll, playlist, mixer, automation, effects, sample playback, and a few small synths. It runs through JACK or PipeWire's JACK layer and is written in Rust with a Slint interface.
+Mooloop is a Linux-native, pattern-based groove sequencer and instrument. It has a channel rack, piano roll, playlist, a console-style mixer, automation and modulation, effects, a sampler, and a handful of synths. It runs through JACK or PipeWire's JACK layer and is written in Rust with a Slint interface.
 
 It started as an experiment with GLM-5.2.
 
@@ -32,21 +32,53 @@ It is Linux-first. There is no web layer, account, cloud service, or plugin stor
 
 ## What It Does
 
-- 256-channel pattern rack with independently sized patterns.
-- Sample playback plus six sources: the sampler, a drum synth, and four
-  synths — the original mono and poly pair, the filter-led ML-M1, and the
-  eight-voice ML-P8 built around a three-oscillator network.
-- Piano roll with 64th-note snap, velocity, note duration, multi-selection, and pattern operations.
-- Playlist arrangement with layered pattern clips and Pattern/Song transport modes.
-- Twelve reorderable insert effects: EQ, modulation, filter, drive, bitcrush,
-  delay, hall and plate reverbs, gate, compressor, limiter, and a
-  retained-audio buffer.
-- Master bus and sixteen insert buses with faders, pan, mute, metering, and ordered routing.
-- Per-parameter automation for channel and mixer effects, plus a per-channel
-  modulation rack of LFO, envelope, step, random, and math modules.
-- Versioned project, kit, channel, and generator preset formats.
-- Optional sample embedding so projects can carry their assets with them.
+**Sequencing**
+
+- A 256-channel pattern rack with independently sized patterns. Channels and tracks have names and colours, and the left sidebar edits the selected one.
+- A piano roll with 64th-note snap, velocity, note length, multi-selection, and pattern operations.
+- A playlist of layered pattern clips, with Pattern and Song transport modes and a loop section.
+
+**Sound sources**
+
+- A sampler with slicing and time-stretch.
+- Two drum synths: the original, and the DS-01, one universal percussion voice.
+- Four synths: the original mono and poly pair (the poly can play as a monosynth), the filter-led ML-M1, and the eight-voice ML-P8 built around a three-oscillator network.
+- Aux In, which plays another channel's audio.
+
+**Effects**
+
+- Thirteen reorderable insert effects: EQ, modulation, filter, preamp, drive, bitcrush, delay, hall and plate reverbs, gate, compressor, limiter, and Buffer.
+- Containers, which blend a whole run of devices and save as one preset.
+- Buffer is always recording the last couple of bars. JUMP, REVERSE, STUTTER and FREEZE turn that history into an instrument, and its playhead can be automated or modulated.
+
+**Mixing**
+
+- A console-style mixer with a master and up to sixteen tracks you create.
+- Sends: a track can send a copy of itself to another track, with latency compensation.
+- Every track has a channel strip (input stage, four-band EQ, compressor, polarity) under one of four voicings (Moo, Grip, Punch, Iron).
+- Analog sum on any track, and solo in place.
+
+**Automation and modulation**
+
+- Per-parameter automation lanes.
+- A per-channel modulation rack of LFO, envelope, step, random, and math modules.
+
+**MIDI**
+
+- Each channel picks its MIDI input port and channel, and a keyboard plays the selected channel.
+- Record-arm captures notes into the playing pattern.
+- Controller learn: press a control, move a knob, and they're bound. Pickup or jump takeover, relative encoders, and transport control are supported.
+
+**Interface**
+
+- The whole application is reachable from the keyboard, and shortcuts can be rebound.
+- Fourteen themes (Dracula, Nord, Gruvbox, Catppuccin and more), plus one that follows your pywal or wallust wallpaper palette. Light, dark, or follow the desktop, with adjustable text size, density and fonts.
+
+**Files and platform**
+
+- Versioned project, kit, channel, device and container preset formats. Sample embedding is optional, so a project can carry its assets with it.
 - WAV and MP3 export.
+- Editing while the song plays: moving, pasting or deleting channels and tracks, and undo and redo, don't stop the transport.
 - JACK integration with the rest of a Linux audio system.
 
 ## What It Doesn't Do
@@ -55,26 +87,23 @@ Mooloop is not a general-purpose recording DAW or a plugin host.
 
 It currently does not:
 
-- record audio into a project;
-- have the composition workflow the retained-audio buffer is for — the
-  device is an ordinary insert and works, but routing a source into it and
-  sequencing the result is still the open product question;
-- have parallel sends and returns;
-- support sidechains or external inputs;
+- record audio. Recording and resampling into the sampler are in progress;
+- host plugins. CLAP is planned, then VST3;
+- take audio from a hardware input, or sidechain one track from another;
+- send MIDI out;
 - export stems;
-- provide full plugin-delay compensation;
-- accept MIDI input, beyond a decoded port that currently reaches nothing;
-- have parameter locks or a tracker-command editor.
+- have parameter locks, probability, microtiming, or a tracker-command editor;
+- autosave, recover from a crash, or relink missing samples through a dialog.
 
-Some basic application workflows are also still unfinished. Undo/redo, menus, shortcuts, and clipboard handling exist but do not reach everywhere; keyboard navigation, crash recovery, autosave, and responsive layout all have rough edges.
+Undo, menus, shortcuts and the clipboard exist but don't reach everywhere yet, and the layout has rough edges at small window sizes.
 
-Linux with JACK or PipeWire/JACK is the supported platform. macOS builds and runs through Core Audio, for development; there are no macOS packages.
+Linux with JACK or PipeWire/JACK is the supported platform. macOS runs through Core Audio and Core MIDI, and each release includes an unsigned Apple Silicon build as a convenience. It is not a supported target.
 
 ## Get It
 
 Packages are available from the [GitHub Releases page](https://github.com/lostsync/mooloop/releases).
 
-Release builds currently include x86_64 `.deb`, `.rpm`, and AppImage packages.
+Each release includes x86_64 `.deb`, `.rpm`, and AppImage packages, and a zipped Apple Silicon `Mooloop.app`.
 
 ```sh
 # Debian / Ubuntu
@@ -86,6 +115,11 @@ sudo dnf install ./mooloop*.rpm
 # AppImage
 chmod +x Mooloop-*.AppImage
 ./Mooloop-*.AppImage
+
+# macOS (Apple Silicon). The app is unsigned, so clear the quarantine flag
+# once, or right-click it and choose Open the first time.
+unzip Mooloop-*-macos-arm64.zip
+xattr -dr com.apple.quarantine Mooloop.app
 ```
 
 Start JACK first, or use PipeWire with JACK compatibility enabled, then run `mooloop`.
@@ -127,7 +161,7 @@ export PATH="$(brew --prefix rustup)/bin:$PATH"
 cargo run --release -p mooloop-app --bin mooloop
 ```
 
-Preferences > Audio lists the system default and every output device. MIDI input is not wired on macOS yet.
+Preferences > Audio lists the system default and every output device. MIDI input comes from Core MIDI, with nothing to set up.
 
 For a shared Cargo cache across worktrees:
 
@@ -150,11 +184,12 @@ The documentation is split between what exists now and what the project is inten
 - [Project format](docs/PROJECT_FORMAT.md) — project files and asset bundles.
 - [Modulation spec](docs/MODULATION.md) — the modulation rack's sources, routes, and destination policy.
 - [Retained-audio buffer](docs/BUFFER_ENGINE.md) — the buffer device's thesis, and what shipped against it.
-- [Focus](docs/FOCUS.md) — the active work sequence; [Scope](docs/SCOPE.md) is everything left before the feature freeze.
+- [Themes](docs/THEMES.md) — how to write a theme.
+- [Scope](docs/SCOPE.md) — everything left before the 0.2.0 feature freeze. [Focus](docs/FOCUS.md) is the active work sequence, and each plan in `docs/plans/` tracks its own steps.
 
 ## Where It's Going
 
-The immediate work is the synths — finishing the ML-M1 and building out the ML-P8 — and then turning the retained-audio buffer from a working device into a composition workflow. `docs/FOCUS.md` is the current sequence.
+0.2.0 is the line: mooloop is 0.2.0 when sound can get in, it can be driven without the mouse, and its devices are ones you would choose rather than tolerate. The work between here and there is recording and resampling into the sampler, CLAP plugin hosting, sampler key zones, a master bus compressor with its own character, and a browser that can be searched and driven from the keyboard. `docs/SCOPE.md` has the whole list, and how big each item is.
 
 The original question was whether someone who understood the instrument but not the implementation could direct AI well enough to build one.
 
