@@ -876,6 +876,24 @@ for it.
 
 ## Consistency questions, not bugs
 
+**Three things left over when Buffer closed, 2026-09-18.** None blocked
+closing `plans/archive/buffer-implementation/`, and all three were
+listed only in its status until it was archived. (A fourth, the locks half of
+acceptance test 8, already has its own entry under "Cannot currently be
+tested".)
+
+- **A quantized Buffer press starts two frames behind the newest frame.**
+  A press landing on a frame's end reads `now` after that frame is written and
+  before the writer advances; `a_frozen_buffer_played_in_reverse_is_the_ring_
+  backward` measures the lag as 2. Inaudible, and unfixed.
+- **`BufferMidiMap` on `ParamAddr` is a second source-to-destination system**
+  beside the general control map (`02-control-and-modulation.md`, step 5).
+  Two ways of saying "this note drives that parameter" is this codebase's
+  characteristic fault waiting for a reason to diverge.
+- **The modulation shelf has no source chip, and a modulated knob draws no
+  arc** (`02`, step 4). Neither is Buffer-specific; Buffer is only where they
+  were first wanted.
+
 **Song-mode swing follows pattern phase, and only a test name says so.**
 `swing_offset_ticks` (`sequencer.rs:867`) takes the offbeat parity from a
 note's position *inside its pattern*, so a clip placed at an odd number of
