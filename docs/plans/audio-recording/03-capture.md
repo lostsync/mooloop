@@ -9,9 +9,19 @@
 ## Build
 
 **On the audio thread**
-- When the engine is armed, the transport is playing, and the input bus is
-  routed to a channel, copy the input frames into a capture ring and nothing
-  else.
+- When the engine is armed, the transport is playing, and
+  `AudioInputRouting` names a recording channel, copy its source buffer into
+  a capture ring and nothing else.
+- **The copy runs once, after the whole block has rendered**, not inside the
+  strip order. Every source buffer -- `ChannelStrip.bus`, a track's
+  `BusStrip.bus`, `master()`, and from step 01 the input bus -- still holds
+  that block's audio at that point, so one read site serves them all and the
+  audio graph's order does not change. That is the reason capture needs
+  nothing from `AudioTapBank` or the outlet machinery.
+- **Check where a channel's buffer sits relative to its compensation delay
+  before writing the read.** A take of one channel and a take of the master
+  should line up with each other; if `ChannelStrip.bus` is read before
+  `compensation`, the channel's take is early by that many frames.
 - **The ring:** a `rtrb` of `[f32; 2]` frames. The engine handle allocates it
   at arm time, off the audio thread, sized for about ten seconds, and it
   reaches the renderer through a structural command. It returns through the
@@ -21,10 +31,13 @@
   position in the pattern, computed the same way the MIDI record fix computes
   it (`fix/midi-routing-and-record-wrap`), so notes and audio agree on where a
   pass starts.
-- **Latency:** subtract the driver's capture latency plus its playback
-  latency from the start position, so a take lines up with what the
-  performer heard. JACK reports both; Core Audio reports what cpal exposes.
-  Record which latencies are and are not accounted for.
+- **Latency:** an app source has none to correct, because it is read in
+  the same block that produced it. A hardware source (step 01) does:
+  subtract the driver's capture latency plus its playback latency from the
+  start position, so a take lines up with what the performer heard. JACK
+  reports both; Core Audio reports what cpal exposes. Record which latencies
+  are and are not accounted for. Only the start position differs between
+  the two; the ring, the drain and the file are the same.
 - **End event:** disarming or stopping the transport emits
   `CaptureEnded { frames }`. The loop point is not an end: the ring keeps
   filling across the wrap, and the take is one continuous file.
@@ -79,14 +92,28 @@ So `channel-identity/05` is a prerequisite for this step, not only for
 what an install does to an open take and make it a counted, visible end
 rather than a silent one.
 
+**Met, 2026-09-18.** `channel-identity/05` carries a channel's strip across
+an install when its id and setup match, and `incremental-structure/02` does
+the same for a track's. Hang the ring on the *recording* channel's strip.
+The source can be a different channel or track, and the routing names it by
+id, so a move of either end re-resolves the seat and the take keeps going.
+Deleting the recording channel ends the take. Deleting its source should end
+it too, visibly, rather than let it keep recording silence.
+
 ## Test
 
 - **Install mid-take:** with `channel-identity/05` landed, a structural edit
   during a take carries the ring with the strip and the take continues across
   the swap, with no gap in the written file and no overflow counted.
-- **Engine:** armed and playing, a known input yields the same frames in the
+- **Engine:** armed and playing, a known source yields the same frames in the
   ring, and a start event at the right tick on the first pass and the second
-  pass. No allocations and no frees in any block.
+  pass. No allocations and no frees in any block. Run it for each kind of
+  app source: a channel, a track and the master.
+- **Resample equals render:** capturing the master for N blocks gives the
+  same samples as an offline render of the same N blocks. That is the
+  cheapest proof that the read site is in the right place.
+- **Resample in place:** a sampler channel recording its own output keeps
+  playing the old sample until the take ends.
 - **Overflow:** a drain that never reads produces a counted overflow and no
   panic.
 - **Drain:** frames written to the ring become a WAV whose samples match them

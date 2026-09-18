@@ -21,8 +21,20 @@ audio, and that choice decides what record-arm captures.
 **Model** (`core/src/midi.rs`, or a new `core/src/input.rs` if the combined
 type outgrows the MIDI module)
 - Add a `ChannelInput` that holds either the existing `ChannelMidiInput`, or
-  `Audio(AudioInputSource)`, where `AudioInputSource` is `Off` or `Port(String)`
-  and the string is the port name, as MIDI ports are stored today.
+  `Audio(AudioInputSource)`.
+- `AudioInputSource` is `Off`, `Channel(ChannelId)`, `Track(TrackId)`,
+  `Master`, or `Port(String)`, where the string is a hardware port name
+  stored as MIDI ports are today. **This step builds every variant except
+  `Port`**, which arrives with step 01; until then there is nothing to list.
+- **App sources are named by id, never by seat.** `channel-identity` spent a
+  week converting fields that named another channel by position, and this is
+  a new field that names another channel. `ChannelId` and `TrackId` both
+  exist. The engine is index-addressed, so the session resolves the id to a
+  seat when it builds `AudioInputRouting`, the way step 06 of that plan does
+  for the envelope gate. A source that has been deleted resolves to nothing
+  and the row shows as missing, as a missing MIDI port does.
+- **The tap point is after the fader and pan** (open question 6 in
+  `00-status.md`): a take of a channel sounds like that channel.
 - `MidiChannelFilter` belongs only to the MIDI arm, so the CH row is hidden
   (or disabled, with a reason) when an audio input is selected.
 
@@ -38,12 +50,18 @@ type outgrows the MIDI module)
 - `picker_rows`, `row` and `from_row` in `midi.rs` define the menu, and their
   round-trip tests pin the row numbers. Extend them in the same place: Follow
   Selection, Off, All Inputs, the MIDI ports, a separator, then the audio
-  inputs.
+  sources -- Master, the tracks, the channels, and (from step 01) the
+  hardware inputs.
+- The channel itself is listed (open question 7: resampling in place is
+  allowed).
+- The rows are generated from the project each time the menu opens, so a
+  renamed track or channel reads correctly without anything being stored.
 - The tests pin the new numbering. Write them before changing the rows.
 
 **Engine routing**
 - A resolved `AudioInputRouting` table (`ArcSwap`, like `MidiRouting`) says
-  which channel, if any, the input bus is routed to.
+  which channel, if any, records, and which buffer it records from: a
+  channel seat, a track seat, the master, or (from step 01) the input bus.
 - **Attach it in `install_project`.** Leaving the MIDI routing cell out of
   that function is exactly the bug found on 2026-09-17, and it must not
   happen twice. Add a test that installs a project and then checks the cell
@@ -64,6 +82,9 @@ type outgrows the MIDI module)
 ## Test
 
 - Picker round-trips for every row.
+- A channel recording from another channel keeps recording from it across a
+  channel move and a track move (it is an id), and shows as missing once that
+  channel is deleted.
 - The audio rows are disabled on every non-sampler source kind, and enabled
   on Sampler.
 - Switching Sampler → any other kind with an audio input selected leaves the

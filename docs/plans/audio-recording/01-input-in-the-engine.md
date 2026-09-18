@@ -1,5 +1,15 @@
 # 01 — Input reaches the engine
 
+**Worked fifth, after 05** (`00-status.md`, decision 4). By then the menu,
+capture, the take and the interface all work with app sources. This step
+adds the one source that comes from outside the app: the input bus becomes
+another buffer that capture reads at the end of the block,
+`AudioInputSource::Port` becomes a real row, and the monitoring toggle and
+the input meter from `05-interface.md` are built here. What remains
+specific to hardware is below: the executor parameter, the two drivers, and
+latency correction on the take's start (`03-capture.md`). Acceptance is
+`05-interface.md`'s second test: a microphone take.
+
 ## The boundary question
 
 `SCOPE.md` §5 says the I/O backend boundary (#7) gates this, because

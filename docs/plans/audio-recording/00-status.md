@@ -8,7 +8,8 @@ current shape lives.
 
 **Written 2026-09-17. Nothing has landed.** This is `SCOPE.md` §2 item 3
 (audio input) together with the audio half of item 5 (recording), in the shape
-Adam settled on 2026-09-17.
+Adam settled on 2026-09-17, and since 2026-09-18 item 6 (resampling) as well,
+which turned out to be the same feature with the source inside the app.
 
 ## Adam's decisions, 2026-09-17
 
@@ -24,6 +25,15 @@ Adam settled on 2026-09-17.
    inputs, becomes the channel's input picker for both kinds. With an audio
    input selected, record-arm on that channel captures audio; with a MIDI
    input selected, it captures notes, as it does today.
+
+4. **Resampling is recording, with the source inside the app** (2026-09-18).
+   *"its the same thing, only the source is different. the workflows would be
+   identical."* So the input menu lists the app's own audio -- a channel, a
+   track, the master -- beside the hardware inputs, and everything after the
+   menu (capture, the take, the interface) is written once for both. Built
+   internal-sources-first: that is the whole pipeline end to end, audible,
+   with no driver work in it. Hardware input then arrives as one more source.
+   `SCOPE.md` §2 item 6 is folded into this plan.
 
 This replaced the report's suggestion of a separate channel-level recording
 tap. The tap bank may still be how the input reaches the recorder inside the
@@ -63,14 +73,31 @@ that the second fix gives notes.
 
 ## Steps
 
+**Worked in the order 02, 03, 04, 05, 01, 06** (decision 4). The files keep
+their numbers so that references to them stay good; this table is in working
+order.
+
 | Step | What | Rung | State |
 | --- | --- | --- | --- |
-| [01](01-input-in-the-engine.md) | Drivers deliver input; the executor carries it; input meters | engine; macOS unverified | not started |
-| [02](02-one-input-menu.md) | `ChannelInput`: MIDI or audio, one picker, saved | core, project, session, UI build | not started |
-| [03](03-capture.md) | Bounded capture on the audio thread, drained to a WAV file off it | engine, session | not started |
+| [02](02-one-input-menu.md) | `ChannelInput`: MIDI, an app source (channel, track, master) or a hardware input; one picker, saved | core, project, session, UI build | not started |
+| [03](03-capture.md) | Bounded capture of the chosen buffer at the end of each block, drained to a WAV file off the audio thread | engine, session | not started |
 | [04](04-the-take.md) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | not started |
-| [05](05-interface.md) | Record button, input meter, monitoring, the non-sampler rule | UI build | not started |
+| [05](05-interface.md) | Record button, source meter, the growing waveform, the non-sampler rule. **Acceptance: resample a loop into a sampler and play it back** | UI build | not started |
+| [01](01-input-in-the-engine.md) | Drivers deliver hardware input into an input bus, which becomes one more source; monitoring | engine; macOS unverified | not started |
 | [06](06-unused-takes.md) | Find and delete takes nothing refers to | session, project, UI build | not started |
+
+**Why internal sources can go first without new scheduling:** capture is a
+sink, not a consumer. It reads a buffer after the whole block has rendered,
+and the take reaches a sampler only after it stops, so nothing inside the
+block depends on it. That is why `OutletTap::Output`'s `TapIsLate` refusal,
+which stops Aux In from hearing a channel's finished output, does not apply.
+Every candidate buffer still holds its audio at the end of the block:
+`ChannelStrip.bus`, each track's `BusStrip.bus` (`track_energy` in
+`render.rs`'s tests reads it that way), and `master()`.
+
+Step 03's prerequisite, a take that survives a structural edit, is met:
+`channel-identity/05` carries channel strips (2026-09-17) and
+`incremental-structure/02` carries track strips (2026-09-18).
 
 ## Open questions for Adam
 
@@ -94,6 +121,21 @@ answered the day the plan was written, and are kept here as a record.
 5. ~~**Where a take lives before the project is saved.**~~ **Answered
    2026-09-17:** a recordings folder. Adam added that takes nobody used need a
    way to be deleted, which is step 06.
+
+Opened by decision 4, 2026-09-18. Each has a default the steps are written
+to, so none of them blocks a step; Adam can overrule any of them.
+
+6. **Where a channel or track is tapped.** Default: **after its fader and
+   pan**, which is what you hear. A resample is "print what is playing", and
+   a microphone is recorded as it arrives, so this is the reading that keeps
+   decision 4's "the workflows would be identical" true. Pre-fader would be
+   a second row per source, and nothing has asked for it. Step 02.
+7. **Recording a channel into itself.** Default: **allowed.** Resampling in
+   place is the ordinary gesture, and it cannot feed back: the take replaces
+   the sample only once it stops. The same holds for recording a track that
+   the destination channel plays into. Step 02.
+8. **Monitoring an app source.** Default: **not offered.** You are already
+   hearing it, so the toggle belongs to hardware inputs only. Step 05.
 
 ## Not in this plan
 
