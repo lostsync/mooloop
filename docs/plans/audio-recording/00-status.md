@@ -35,6 +35,40 @@ which turned out to be the same feature with the source inside the app.
    with no driver work in it. Hardware input then arrives as one more source.
    `SCOPE.md` §2 item 6 is folded into this plan.
 
+**The second round, 2026-09-18, after step 02 landed.** Adam, on reading it:
+
+> *"any channel should accept it (there really shouldnt be "kinds" of
+> channels...the channels are meant to be dumb slots) but if the device in
+> the channel doesn't take audio, it just kinda...ya know, is useless. [...]
+> we should be able to have many channels with an audio input. what if i want
+> to record 2 things at once? or just for the simple fact that i dont want to
+> have to set up the input every single time i go to a diff track to record
+> something. it should just stay set up."*
+
+> *"all i am trying to achieve right now is -- you kno whow recording works in
+> ableton's clip mode? or bitwig's? [...] record audio into clips. the only
+> place i have to house those clips currently is the sampler, so i want to
+> build that workflow in there. maschine allows this almost exactly."*
+
+5. **A channel is a dumb slot.** Any channel holds an audio input; a device
+   that has no use for one ignores it. This withdraws step 02's non-sampler
+   rule and open question 1's answer.
+6. **Many channels hold an audio input, and it stays set.** Several can record
+   at once. This withdraws step 02's one-recorder rule.
+7. **Recording is clip recording, from the sampler's face.** No record-enable
+   and not the global record-arm (which stays MIDI's): the sampler face gets a
+   **Record page** with a live-updating waveform, like Buffer's, and its own
+   record button.
+8. **Clip mode.** On: a recording length is set -- 1 bar, say -- and the take
+   stops by itself when it is reached. Off: it records until stopped.
+9. **Pre-roll: a take starts on the next bar.** If the transport is stopped,
+   pressing record starts it, so the rest of that bar is the count-in (there
+   is no metronome yet).
+10. **The audio input is its own row, AUDIO, beside MIDI IN**, and the two are
+    independent. This withdraws decision 3's "one menu": with recording on the
+    sampler's own button, a sampler recording audio still wants its own
+    keyboard.
+
 This replaced the report's suggestion of a separate channel-level recording
 tap. The tap bank may still be how the input reaches the recorder inside the
 engine, but it is not something the user sees.
@@ -100,6 +134,13 @@ Step 03's prerequisite, a take that survives a structural edit, is met:
 `incremental-structure/02` carries track strips (2026-09-18).
 
 ## What step 02 actually did
+
+> **Reworked the same day, after decisions 5, 6 and 10**: the two fields are
+> independent rather than "one non-default", any channel may hold an audio
+> input, any number may, and the routing is a per-channel table. The IN row
+> went back to MIDI-only; the AUDIO row arrives with 05. What follows is the
+> first version, kept for the record; "The rework" below is what is on
+> `main`.
 
 Everything but the markup, which the step itself sends to 05's contract pass.
 

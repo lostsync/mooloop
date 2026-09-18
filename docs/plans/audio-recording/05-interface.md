@@ -1,15 +1,29 @@
 # 05 — The interface
 
+> **Rewritten 2026-09-18** around decisions 7-10: recording is started from
+> the sampler's face, not the global record button, and the audio input is
+> its own sidebar row.
+
 ## Build
 
 **One `main.slint` contract change, shared with step 02.** Draft everything
-in `scripts/slint-sketch` first.
+in `scripts/slint-sketch` first; the face is sketched at its real size
+before anything else, as every face is.
 
-- **Record button.** The tooltip currently says MIDI. Tooltips here state a
-  value only, so it becomes "Record", and the status bar explains what will be
-  captured: "Records <source> into <channel>'s sampler", where the source is
-  a track, a channel, the master or a hardware input, or "Records notes from
-  <input>".
+- **The AUDIO row** in the channel sidebar, beside MIDI IN and independent of
+  it: Off, the master, every track, every channel. Offered on every channel,
+  whatever its device (decision 5) -- a device that has no use for it ignores
+  it. A deleted source shows as missing, as an unplugged MIDI port does.
+- **A Record page on the sampler face.** Its own record button; a
+  live-updating waveform of the take as it grows, drawn like Buffer's history
+  from the drain thread's peak summary; the state -- idle, waiting for the
+  bar (the pre-roll), recording, with the elapsed length in bars; and the
+  clip controls: a **Clip** toggle and a **Length** on the shared
+  `ModTimeDivision`/bars grid, which ends the take by itself when on and is
+  ignored when off. The global record button stays MIDI's; its tooltip is
+  "Record" and nothing about it changes here.
+- **A take on a channel with no audio input** is refused at the button,
+  with the reason in the status bar.
 - **Source meter.** Show one on the channel's IN row, or beside the record
   button, whenever an audio source is selected, whether or not the channel is
   armed. You need to see a level before you record. For an app source this
@@ -37,19 +51,20 @@ in `scripts/slint-sketch` first.
   - **Feedback:** monitoring through speakers with a live microphone
     feeds back. Default the toggle to off, and never turn it on
     automatically.
-- **The non-sampler rule** from step 02, made visible: greyed-out audio rows,
-  with the reason in the status bar.
 
 ## Acceptance
 
 **Resample a loop.** A drum track plays a pattern. Pick that track as a
-sampler channel's source, arm, record two passes, stop. Then:
+sampler channel's AUDIO input, press record on its Record page with Clip on
+and a length of 2 bars, and let it end by itself. Then:
 - The sampler holds the take, and a pattern that triggers it plays it back.
 - Undo puts back the previous sample.
 - It survives save and reload.
 - It renders offline the same way it plays.
 - Resampling the sampler channel into itself, through a Buffer or a reverb,
   replaces its sample with the processed take.
+- Two sampler channels, each with its own AUDIO input, recording at once,
+  each get their own take.
 
 Run it through the live app (`scripts/mooloop-mcp`) and listen. This is where
 the plan first produces something you can play with, and it involves no

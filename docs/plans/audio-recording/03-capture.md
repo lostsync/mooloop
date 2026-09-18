@@ -1,17 +1,33 @@
 # 03 — Capture
 
-## Adam's answers (2026-09-17)
+## Adam's answers (2026-09-17, amended 2026-09-18)
 
-- **A take runs until it is stopped.** Loop passes don't end it or split it,
-  so a take can be much longer than its pattern.
+- **A take is started by the sampler's own record button**, not by the
+  global record-arm (decision 7). Any number of channels may be recording at
+  once (decision 6), each from its own audio input.
+- **It starts on the next bar** (decision 9). If the transport is stopped,
+  the record press starts it, and the take begins at the next bar line; the
+  press-to-bar wait is the pre-roll.
+- **It ends when it is stopped, or at its clip length** (decision 8). With
+  clip mode off it runs until the record button is pressed again or the
+  transport stops -- loop passes don't end it or split it, so it can be much
+  longer than its pattern. With clip mode on it ends by itself, sample-exact,
+  when its length has been recorded.
 - **Takes go to a recordings folder** until the project is saved.
 
 ## Build
 
 **On the audio thread**
-- When the engine is armed, the transport is playing, and
-  `AudioInputRouting` names a recording channel, copy its source buffer into
-  a capture ring and nothing else.
+- **A take is a per-channel state machine**, driven by a command from the
+  sampler face: `Idle` → (record pressed) `Waiting { starts_at }` → (the
+  block containing the next bar line) `Recording { frames, limit }` →
+  (stopped, transport stopped, or `limit` reached) `Idle`. The bar line and
+  the clip limit are both frame positions inside a block, so a take starts
+  and ends sample-exact rather than on a block boundary. The waiting state is
+  also what the face draws as the pre-roll.
+- While `Recording`, copy the channel's source buffer -- whichever seat
+  `AudioInputRouting` resolves that channel's audio input to -- into its
+  capture ring, and nothing else.
 - **The copy runs once, after the whole block has rendered**, not inside the
   strip order. Every source buffer -- `ChannelStrip.bus`, a track's
   `BusStrip.bus`, `master()`, and from step 01 the input bus -- still holds
@@ -25,9 +41,10 @@
 - **The ring:** a `rtrb` of `[f32; 2]` frames. The engine handle allocates it
   at arm time, off the audio thread, sized for about ten seconds, and it
   reaches the renderer through a structural command. It returns through the
-  reclaim ring on disarm.
+  reclaim ring when the take ends. One ring per recording channel.
 - **Start event:** the first frame of a take emits
-  `EngineEvent::CaptureStarted { channel, tick, frames }`. `tick` is the
+  `EngineEvent::CaptureStarted { channel, tick, frames }`. With a bar-line
+  start, `tick` is that bar line. `tick` is the
   position in the pattern, computed the same way the MIDI record fix computes
   it (`fix/midi-routing-and-record-wrap`), so notes and audio agree on where a
   pass starts.
@@ -38,8 +55,8 @@
   reports both; Core Audio reports what cpal exposes. Record which latencies
   are and are not accounted for. Only the start position differs between
   the two; the ring, the drain and the file are the same.
-- **End event:** disarming or stopping the transport emits
-  `CaptureEnded { frames }`. The loop point is not an end: the ring keeps
+- **End event:** a stop press, the transport stopping, or the clip length
+  being reached emits `CaptureEnded { channel, frames }`. The loop point is not an end: the ring keeps
   filling across the wrap, and the take is one continuous file.
 - **Length:** because a take can run for minutes, the ring only has to cover
   the drain thread's worst stall, never the whole take. The file is what

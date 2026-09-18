@@ -1,5 +1,11 @@
 # 02 — One input menu
 
+> **Amended 2026-09-18 (decisions 5, 6 and 10 in `00-status.md`).** The
+> non-sampler rule, the one-recorder rule and the single menu are withdrawn:
+> any channel holds an audio input, any number may, and it gets its own
+> AUDIO row beside MIDI IN, independent of it. The sections below are kept as
+> written; where they disagree with that, the decisions win.
+
 Adam's decision 3: the sidebar's IN row picks the channel's input, MIDI or
 audio, and that choice decides what record-arm captures.
 
