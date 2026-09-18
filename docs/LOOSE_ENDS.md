@@ -101,8 +101,7 @@ compensation delay (`carry_plan`'s `same_strip`, `mooloop-engine`). What is
 still rebuilt on any track edit is every **track's own strip** -- its chain,
 its EQ and compressor state, its tails -- because a track has no identity
 yet. That half is `incremental-structure/`'s `TrackId` plus a bus-side carry,
-and Adam has parked it: a track move is *"not jarring when it happens during
-production."*
+which is the active plan.
 
 **And the swap itself is still there.** Step 05 removed the destruction, not
 the whole-state swap. Adam asked on 2026-09-17 why there is a swap at all for

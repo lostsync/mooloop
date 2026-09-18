@@ -2,12 +2,13 @@
 
 Linear: [MOO-30](https://linear.app/mooloop/issue/MOO-30/incremental-structure-stop-swapping-the-whole-renderstate-for-an-edit).
 
-**Written 2026-09-17. Parked by Adam 2026-09-18**, after the finished
-`channel-identity` arc: *"im not convinced we're going to make it perfect by
-chasing this thread."* It stays open as a record of the remaining glitch, not
-as queued work. Do not pick it up unprompted; if it is taken up, the cheap half
-below is the whole of it. One piece of that half landed the same day by a
-cheaper route -- see the struck bullet under "What does not".
+**Written 2026-09-17. Active from 2026-09-18.** A note recorded the plan as
+parked on Adam's *"im not convinced we're going to make it perfect by chasing
+this thread"*; he corrected that the same day -- he meant not chasing the glitch
+*beyond* this plan, not shelving it. So this plan is the whole of that thread,
+and anything past step 05 is not to be opened. One piece of "the cheap half"
+landed the same day by a cheaper route -- see the struck bullet under "What
+does not".
 
 It came out of Adam's reaction to `channel-identity/04`, on hearing a channel
 move drop audio:
