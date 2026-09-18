@@ -364,7 +364,7 @@ before any of them existed still loads:
   like any other track. **Nothing names a track by id yet**: a channel's
   `bus`, a track's `output` and sends, and `EffectTarget::Bus` are still
   seats. The id exists so the engine can match a track across an install
-  (`docs/plans/incremental-structure/`).
+  (`docs/plans/archive/incremental-structure/`).
 
 - **Analog sum is one defaulted boolean per track.** `buses[].bus.console`
   says whether that track's output is encoded on its way into its destination,

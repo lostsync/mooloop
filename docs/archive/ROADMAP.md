@@ -203,7 +203,7 @@ Implemented foundation:
   allocation-tracking harness rather than a reading of the code.
 - The exit criterion below that has *not* been tested is the last one, and it
   is the whole point: whether the workflow beats bouncing to a sample. That is
-  `docs/FOCUS.md`'s Buffer step, and `docs/plans/buffer-implementation/` holds
+  `docs/FOCUS.md`'s Buffer step, and `docs/plans/archive/buffer-implementation/` holds
   the build order -- though the device's *shape* is the first thing that step
   has to raise, because `BUFFER_ENGINE.md`'s insert model is not settled.
 

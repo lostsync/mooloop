@@ -1294,7 +1294,7 @@ land on its own when it starts to matter:
   namespace starting at zero, because none of them is that voice with a
   different count. `docs/MODULATION.md` records the approved design;
   build order is in
-  `docs/plans/buffer-implementation/02-control-and-modulation.md`.
+  `docs/plans/archive/buffer-implementation/02-control-and-modulation.md`.
 - The **v1** drum synth was the last one without a table, and the argument
   against giving it one did not survive being checked. It was called a
   mode-union whose ids would change meaning with the Mode switch;

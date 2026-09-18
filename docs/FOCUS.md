@@ -102,6 +102,14 @@ A pane that shows what a menu already showed is not progress either.
 
 ## The sequence
 
+> **Exhausted 2026-09-18.** Buffer, the last step, closed when Adam had no
+> further notes after playing it, and `buffer-implementation/` is in
+> `archive/`. By this document's own rule it is due a rewrite, and the next
+> ordering is Adam's to give; until then the live plans are the ones
+> `plans/README.md` lists as active. Two that were written after this
+> document and never entered it: `incremental-structure/` (finished and
+> archived the same day) and `audio-recording/` (not started).
+
 Set by Adam on 2026-09-12 as: finish the interface iteration, then the EQ, then
 Buffer. **All three of those are now settled.** The interface iteration closed
 2026-09-14. MIDI control, which this document had parked, was built and closed
@@ -140,7 +148,7 @@ move, and nothing in the work order forecloses them, because a lane would drive
 the same published parameters.
 
 That work order is
-`docs/plans/buffer-implementation/03-freeze-and-the-grid.md`: an always-rolling
+`docs/plans/archive/buffer-implementation/03-freeze-and-the-grid.md`: an always-rolling
 history with FREEZE, a Rate parameter that Freeze forces into existence, Offset
 retired in favour of a normalized Position, Length and freeze quantization on
 the shared `ModTimeDivision` grid, and a 2U face whose buttons are macros over

@@ -9,19 +9,13 @@ directory should always contain live work.
 `docs/FOCUS.md` decides which of these is next. This file only says what state
 each one is in.
 
-`incremental-structure/` was added 2026-09-17, **not started**, out of Adam's
-reaction to hearing `channel-identity/04`: the engine already changes its
-graph without missing a sample for every device edit and for adding a channel,
-and ought to do the same for the rest. It is the continuation of
-`channel-identity/` rather than a new idea -- that plan removed most of the
-reason positional identity made this hard.
-
-**Adam is not chasing it** (2026-09-18, after hearing the finished
-`channel-identity/`): *"im not convinced we're going to make it perfect by
-chasing this thread."* It stays here as a record of what the remaining glitch
-is and what would fix it, rather than as queued work; **do not pick it up
-unprompted.** Its own `00-status.md` says which two of its five steps are the
-whole of the audible half, if it is ever taken up.
+`incremental-structure/` **finished 2026-09-18 and is in `archive/`**, the
+same day `buffer-implementation/` was closed and archived. It was the
+continuation of `channel-identity/`: tracks got a `TrackId`, an install carries
+every channel and track strip the edit is not about, and a compensation or send
+ring the same length as the live one keeps the live one. Its steps 03 and 04 --
+audio-thread structural commands -- were decided against in step 05, which
+records why. Adam heard it: *"sounds good. i think you can close it."*
 
 `coreaudio-driver/` was added 2026-09-13 and is **in progress, outside the
 `FOCUS.md` sequence**, because Adam asked for it directly: he wants to develop
@@ -39,10 +33,10 @@ day. Nothing in a song names a channel by its seat now. `plugin-hosting/` step
 
 Adam heard it on 2026-09-18 and accepted it: *"it is still glitchy sounding
 when you move stuff around, but it is a lot better and the audio routing does
-survive moves."* **The residual glitch is not this plan's** -- it is the
-renderer being rebuilt, which is `incremental-structure/` -- and he is
-explicitly not chasing it: *"im not convinced we're going to make it perfect
-by chasing this thread."*
+survive moves."* **The residual glitch was not this plan's** -- it was the
+renderer being rebuilt, which `incremental-structure/` then closed. His *"im
+not convinced we're going to make it perfect by chasing this thread"* meant
+not chasing it *past* that plan.
 
 `audio-recording/` was added the same day and is **not started, outside the
 `FOCUS.md` sequence**. It is `SCOPE.md` items 3 and the audio half of 5, in
@@ -259,7 +253,6 @@ is worth reading before either.
 | Plan | State |
 | --- | --- |
 | `midi-control/` | **All four steps landed 2026-09-15; ready to archive once a keyboard has been plugged into it.** Adam's brief: a channel picks its MIDI input and channel or Omni, CCs assign to knobs and faders, transport controls, record MIDI to a pattern -- with OSC kept in mind. All of it is built: per-channel input routing in the engine, a protocol-free mapping layer whose MIDI half is one of three enum variants, transport gestures carried out in one place wherever they are asked for, note capture into patterns, the sidebar's IN and CH rows, a record-arm button, LEARN beside the transport, and a mapping editor with the transport list on Preferences > MIDI. **None of it has been run against a MIDI device**, which is the only thing between it and the archive. `docs/CONTROL_SURFACES.md` is the design and states where OSC attaches: one `ControlSource` variant, one decoder, and a transport -- nothing else in the layer changes. Three things not to rediscover: JACK presents **one merged MIDI port**, so under JACK keyboards are told apart by MIDI channel rather than by port; the Core MIDI half has never been compiled, because it is behind a macOS `cfg` and this was written on Linux; and step 04 was wrong about this codebase twice in ways worth reading before the next interface pass -- there is no per-control context menu to hang a gesture on, and there is no set of parameter handlers small enough to call `release_control_pickup_for` from. `04-interface.md` says what was done instead. |
-| `buffer-implementation/` | **Stage 1 done, Stage 2 open.** Stage 1's acceptance test 8 (RT allocation hygiene) is still unverified, but **no longer for want of an instrument**: `control-plane-seams/04` added `CountingAllocator::allocations()` to `mooloop-engine` on 2026-09-15 and proved it against a real defect. What is left is coverage -- one block on the preview path is measured, the Buffer operations are not, and the locks half of the claim is not measured at all. |
 | `mono-synth-v2/` | **Complete and played**, one finding deliberately left open (Acid's cutoff corner). Kept out of the archive only because that finding needs Adam's ear, not because a step is unbuilt. |
 | `edit-loop/` | **Steps 01 and 02 landed, 03 closed unstarted, 04 waiting on one measurement.** Six of every ten working hours went on `cargo`. `scripts/antibox` now picks incremental compilation for dev builds and sccache for release builds (64% off `cargo test --workspace`), `AGENTS.md` carries a verification ladder, the mockup tool is behind a Cargo feature, and `scripts/mooloop-run` is one command from edit to running application. Splitting device faces was measured and rejected: 79% of face commits also edit `main.slint`. What is left is `main.slint` itself, which no Slint arrangement reaches -- read `04-decide.md` before `egui-view-layer/`. |
 | `egui-view-layer/` | **Written, not decided; argument 4 tested and upheld; `edit-loop/` now points at it.** `edit-loop/04-decide.md` fixed the Rust half of the loop and found the UI half unreachable from inside Slint, which is the argument this plan was waiting for; one post-change `scripts/loop-profile` run closes it. No longer blocked: `session-layer-extraction/` is done, so a view layer would inherit a session rather than reproduce one. Still gated on step 01's spike. `00-status.md` states the case both ways. Compile cost was assumed to be the argument against and measured as an argument for: `build.rs` expands `ui/main.slint` into a single 39 MB Rust module, which is where the four minutes and the 3.4 GB go. What is left to decide is frame time and interaction feel. |
@@ -285,8 +278,17 @@ writing steps would presume the answer.
 reading before reopening the area it covers, because several record *why* a
 tempting change was rejected:
 
-`eq-v2/` (steps 01-03, closed 2026-09-15 when Adam declined step 04) is the
-newest. It came out of one bug -- the EQ's Shape control was two settings of
+`buffer-implementation/` and `incremental-structure/` are the newest, both
+closed 2026-09-18. Buffer ran three work orders -- the whole device, control
+and modulation, then freeze and the grid -- and a gesture rebuild after the
+first play-through showed the turntable model was the complaint; it closed
+when Adam had no further notes. `incremental-structure/` is summarised at the
+top of this file. Read `buffer-implementation/00-status.md` for the lesson it
+paid most for: a fix can be locally right and still make the device worse,
+when the model it is repairing is the thing being objected to.
+
+`eq-v2/` (steps 01-03, closed 2026-09-15 when Adam declined step 04) came
+before them. It came out of one bug -- the EQ's Shape control was two settings of
 different arity behind one automatable id -- and out of Adam's question about
 what that implied: mooloop intends to host CLAP, a plugin exposes arbitrary
 independently automatable parameters, and our own devices should reach

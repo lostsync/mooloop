@@ -2,9 +2,10 @@
 
 Linear: [MOO-30](https://linear.app/mooloop/issue/MOO-30/incremental-structure-stop-swapping-the-whole-renderstate-for-an-edit).
 
-**Written 2026-09-17. Finished 2026-09-18, not yet heard.** Steps 01, 02
-and 05 landed; 03 and 04 were decided against in 05, with Adam choosing
-between the three ways forward. The archive waits on a listen.
+**Written 2026-09-17. Finished, heard and archived 2026-09-18.** Steps 01,
+02 and 05 landed; 03 and 04 were decided against in 05, with Adam choosing
+between the three ways forward. Adam, on hearing it: *"nice job. sounds
+good. i think you can close it."*
 
 **Active from 2026-09-18.** A note recorded the plan as
 parked on Adam's *"im not convinced we're going to make it perfect by chasing

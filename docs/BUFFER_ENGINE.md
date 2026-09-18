@@ -4,7 +4,7 @@ Status: September 2026. **The device is built; the thesis is not yet
 settled.** Stage 1 shipped — see "What shipped" below — so the engineering
 questions this document poses are answered and the product question it poses
 is not. Do not read the future tense in the rest of this file as a statement
-that nothing exists. `docs/plans/buffer-implementation/` is the build order;
+that nothing exists. `docs/plans/archive/buffer-implementation/` is the build order;
 `docs/FOCUS.md`'s Buffer step is the remaining product test.
 
 **The insert model below was not settled as of 2026-08-30.** Adam's position
@@ -19,7 +19,7 @@ So read what follows as what shipped rather than as what the device should be.
 framing: *"it puts some of my doubts about a device-based implementation to
 rest."* The rack-end placement and the sequencing lane are not ruled out and
 are not foreclosed -- a lane would drive the published parameters either way.
-`docs/plans/buffer-implementation/03-freeze-and-the-grid.md` is the work order
+`docs/plans/archive/buffer-implementation/03-freeze-and-the-grid.md` is the work order
 that follows from it, and it supersedes this document where they disagree.
 
 ## What shipped

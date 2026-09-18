@@ -10,6 +10,13 @@ they disagree with it.
 Added 2026-09-16, late: the plan ran for weeks without one of these, which is
 why `FOCUS.md` had been carrying its state.
 
+**Closed and archived 2026-09-18.** The judgement below -- whether the
+workflow is materially better than bouncing a sample and loading it again --
+was left to Adam's ears, and after playing it he had nothing further: *"i dont
+really have any more notes on the buffer device either."* That is recorded as
+closing the plan, not as a verdict on the comparison; anything he raises about
+Buffer from here is a new plan or a `LOOSE_ENDS.md` entry.
+
 ## Status
 
 | Step | State |
