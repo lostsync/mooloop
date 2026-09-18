@@ -243,19 +243,24 @@ song is not rejected on load: the transport plays the part of it that exists,
 so a song shortened outside the editor loads rather than failing.
 
 `aux_in` is the smallest of them and the only one that names another channel.
-Its `state.params` is three fields: `source_channel` (the producing channel's
-index, or `-1` for none), `source_outlet` (that device's durable outlet id),
-and `level`. All three default, so an Aux In with no source loads as silent
-rather than invalid, which is what the format's defaulted-field rule buys
-here.
+Its `state.params` is four fields: `source_channel` (the producing channel's
+index, or `-1` for none), `source_id` (that channel's durable identity, and
+the field that decides where the index points), `source_outlet` (that device's
+durable outlet id), and `level`. All four default, so an Aux In with no source
+loads as silent rather than invalid, which is what the format's
+defaulted-field rule buys here; `source_id` is also skipped when unassigned,
+so a song with no source is byte-identical to one written before the field
+existed. Why the index stayed an index is under **channels carry a durable
+identity** below.
 
-**The subscription is a channel-scoped address, and channel indices move.**
-Deleting or pasting a channel renumbers every route destination and automation
-lane that named a later one; a subscription goes through that same pass rather
-than growing a repair path of its own. A subscription whose *producer* was the
-deleted channel is retained and pointed at the last addressable index, where
-it is refused visibly, rather than being handed to whichever channel closed
-the gap. The integrity pass checks the three values are in range and
+**The subscription names a channel, and channel indices move.** The index is
+derived from the identity after every structural edit
+(`Project::reseat_channel_references`), and a subscription written before
+identities existed takes one on the way in from the seat it already named. A
+subscription whose *producer* was deleted is retained and pointed at the last
+addressable index, where it is refused visibly, rather than being handed to
+whichever channel closed the gap -- and it keeps saying which channel it lost,
+so restoring that channel makes the edge live again. The integrity pass checks the three values are in range and
 deliberately does not check the subscription's target: whether the named
 channel exists and publishes that outlet is recompiled every time the project
 changes, and repairing it at load would destroy the orphan state the consumer's
@@ -313,10 +318,44 @@ before any of them existed still loads:
   check it replaced: an id of 40 is perfectly ordinary in a song that has
   been edited forty times.
 
-  The other three fields that name another channel -- a control binding's
-  target, the envelope gate's `input_channel`, and Aux In's `source_channel`
-  -- are **still positions**, renumbered on every structural edit.
-  `docs/plans/channel-identity/06` records what each of them is waiting on.
+  **The other three fields that name another channel took identities on
+  2026-09-18**, and each took a different shape because each had a different
+  reason not to be an id outright. `docs/plans/channel-identity/06` records
+  the reasoning; what a file holds is this:
+
+  - A **control binding**'s target stopped being a `ParamAddr` and became a
+    `ParamKey`, whose `scope` is a `ChainKey` -- `Channel(ChannelId)` or
+    `Bus(u8)`. **The saved form did not change one byte.** `ChannelId` is
+    transparent over its `u32` and `EffectTarget::Channel` was already written
+    as `{ channel = 3 }`, so both spellings produce the same TOML, and an
+    older file's index 3 decodes as `ChannelId(3)` -- the same reading
+    `assign_channel_ids` gives that file's channels. Nothing renumbers a
+    binding now. One whose channel is deleted is **not dropped**: it stops
+    resolving, the mapping list draws it as an unavailable parameter, and it
+    works again if that channel comes back.
+  - **Aux In's `source_channel` stays a position**, and a defaulted
+    `source_id` sits beside it as the authoritative field. The seat could not
+    become an id because it is an *addressable parameter*: its descriptor's
+    range is `NO_SOURCE ..= MAX_CHANNELS - 1` and its curve is
+    `Stepped(MAX_CHANNELS + 1)`, so id 47 -- ordinary after enough edits --
+    fits neither. Two fields, each with one meaning, rather than one field
+    with two (Adam, 2026-09-17).
+  - **The envelope gate's `input_channel` stays a position** for a different
+    reason -- it is read on the audio thread as an index into the gate array,
+    and `ModRack` is `Copy` and ships to the engine verbatim -- and takes a
+    defaulted `input_channel_id` beside it the same way. Its parked marker
+    `u8::MAX` is **not** reread as an id, unlike every other old index here:
+    255 is an ordinary `ChannelId`, so a parked gate is decoded as naming
+    nothing.
+
+  Both defaulted ids are skipped when unassigned, so a song with no Aux In and
+  no envelope is byte-identical to one written before they existed. A song
+  that has them is given ids on the way in by
+  `Project::identify_channel_references`, which `assign_channel_ids` ends with
+  so that the two cannot come apart -- a load that handed out channel ids and
+  forgot to identify the references would leave them positional, silently.
+  `Project::reseat_channel_references` is its other half, and runs after every
+  structural edit.
 - **Analog sum is one defaulted boolean per track.** `buses[].bus.console`
   says whether that track's output is encoded on its way into its destination,
   to be decoded there with everything else that opted in. It defaults to

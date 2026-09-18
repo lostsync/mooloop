@@ -516,10 +516,6 @@ impl ChannelSetup {
     }
 }
 
-fn channel_id_is_unassigned(id: &ChannelId) -> bool {
-    !id.is_assigned()
-}
-
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ProjectChannel {
     /// This channel's durable identity, minted from [`Project::next_channel_id`].
@@ -528,7 +524,7 @@ pub struct ProjectChannel {
     /// channels had identities is byte-identical to one saved now with none;
     /// [`Project::assign_channel_ids`] gives such a song id = position on the
     /// way in, which is what everything that said `channel = 3` already meant.
-    #[serde(default, skip_serializing_if = "channel_id_is_unassigned")]
+    #[serde(default, skip_serializing_if = "crate::effect::channel_id_is_unassigned")]
     pub id: ChannelId,
     pub setup: ChannelSetup,
     /// Pattern-indexed note lanes. Notes beyond a pattern's logical length are retained.
@@ -1052,6 +1048,71 @@ impl Project {
                 self.channels[index].id = mint_channel_id(&mut self.next_channel_id);
             }
         }
+        // Every channel now has an identity, which is the precondition for
+        // anything *naming* a channel to take one. Done here rather than at
+        // the caller so that the two cannot come apart: a load that assigned
+        // ids and forgot to identify the references would leave the
+        // references positional and silently so.
+        self.identify_channel_references();
+    }
+
+    /// Give an identity to every field that names another channel by seat and
+    /// does not have one yet.
+    ///
+    /// Two fields reach here -- an Aux In's subscription and an envelope
+    /// gate's input -- and both keep their seat as well, for reasons of their
+    /// own written where they are declared. This is the *adopt* half; the
+    /// seat is recomputed from the identity by
+    /// [`Self::reseat_channel_references`].
+    ///
+    /// Idempotent, and deliberately harmless to call too often: a reference
+    /// that already has an identity is left alone. Calling it too *rarely* is
+    /// the failure this design guards against, which is why
+    /// [`Self::assign_channel_ids`] ends with it and every structural edit
+    /// runs it again.
+    pub fn identify_channel_references(&mut self) {
+        let ids: Vec<ChannelId> = self.channels.iter().map(|channel| channel.id).collect();
+        let id_at = |seat: u8| ids.get(usize::from(seat)).copied();
+        for channel in &mut self.channels {
+            if let Some(state) = channel.setup.source.aux_in_state_mut() {
+                state.params.identify(id_at);
+            }
+            channel.setup.modulation.identify_gates(id_at);
+        }
+    }
+
+    /// Point every identified cross-channel reference at the seat its channel
+    /// now occupies. Returns whether anything moved.
+    ///
+    /// The *reseat* half of [`Self::identify_channel_references`], and the
+    /// reason the two exist as a pair rather than as one function: adoption
+    /// reads the seat and writes the identity, reseating reads the identity
+    /// and writes the seat, and running them in that order after a structural
+    /// edit is correct whichever of the two a given reference needed.
+    pub fn reseat_channel_references(&mut self) -> bool {
+        let seats: Vec<(ChannelId, u8)> = self
+            .channels
+            .iter()
+            .enumerate()
+            .filter_map(|(index, channel)| Some((channel.id, u8::try_from(index).ok()?)))
+            .collect();
+        let seat_of = |id: ChannelId| {
+            if !id.is_assigned() {
+                return None;
+            }
+            seats
+                .iter()
+                .find(|(held, _)| *held == id)
+                .map(|(_, seat)| *seat)
+        };
+        let mut changed = false;
+        for channel in &mut self.channels {
+            if let Some(state) = channel.setup.source.aux_in_state_mut() {
+                changed |= state.params.reseat(seat_of);
+            }
+            changed |= channel.setup.modulation.reseat_gates(seat_of);
+        }
+        changed
     }
 
     /// Where the channel wearing `id` currently sits.
@@ -1444,9 +1505,18 @@ impl Project {
             }
         }
         // The control map is deliberately *not* walked here. A binding names
-        // its channel by `ChannelId` since 2026-09-18, so a channel edit
-        // cannot move one; `rescope_tracks_after` still calls its track twin,
-        // because a track is still a seat.
+        // its channel by `ChannelId`, so a channel edit cannot move one;
+        // `rescope_tracks_after` still calls its track twin, because a track
+        // is still a seat.
+        //
+        // The two cross-channel references above *were* followed positionally
+        // by the walk, and that is what keeps a reference with no identity yet
+        // correct. It is a no-op for one that has an identity, because the
+        // reseat below overwrites its seat anyway. Adopt first, so a reference
+        // the walk has just moved to the right seat takes the identity of the
+        // channel actually sitting there.
+        self.identify_channel_references();
+        self.reseat_channel_references();
     }
 
     /// Creates a concise, deterministic four-piece drum kit ready for sequencing.
@@ -2097,6 +2167,103 @@ mod tests {
         assert!(project.move_channel(9, 0).is_none());
     }
 
+    /// The two fields that name a channel *other than the one they are stored
+    /// in* take an identity on the way in, and the identity is what decides
+    /// where they point afterwards.
+    ///
+    /// Checked against the unfixed tree first, as
+    /// `channel-identity/06` asks: on it the second half fails, because a
+    /// reference whose channel was deleted was parked on a marker and had
+    /// nothing left to say which channel it had named.
+    #[test]
+    fn a_cross_channel_reference_is_identified_on_the_way_in_and_survives_a_delete() {
+        let mut project = Project::default();
+        for index in 1..4 {
+            project.channels.push(ProjectChannel::mlm1(index, 1));
+        }
+        // Channel 0 reads channel 2's outlet, and its envelope gates off
+        // channel 3 -- the two shapes this pass exists for, written as an
+        // older file wrote them: seats, and no identity anywhere.
+        project.channels[0].setup.source = ChannelSource::AuxIn(Default::default());
+        project.channels[0]
+            .setup
+            .source
+            .aux_in_state_mut()
+            .expect("aux in")
+            .params
+            .source_channel = 2;
+        let mut gate = crate::ModEnvelopeParams::default();
+        gate.input_channel = 3;
+        project.channels[0]
+            .setup
+            .modulation
+            .install(0, crate::ModulatorParams::Envelope(gate));
+        // A second envelope, parked. `u8::MAX` is the marker for "the channel
+        // this named is gone" and is *also* an ordinary `ChannelId`, so it
+        // must not be reread as one.
+        let mut parked = crate::ModEnvelopeParams::default();
+        parked.input_channel = u8::MAX;
+        project.channels[1]
+            .setup
+            .modulation
+            .install(0, crate::ModulatorParams::Envelope(parked));
+
+        project.assign_channel_ids();
+        let id_of = |project: &Project, seat: usize| project.channels[seat].id;
+        let subscription = |project: &Project| {
+            project.channels[0]
+                .setup
+                .source
+                .aux_in_state()
+                .expect("aux in")
+                .params
+        };
+        let gate_of = |project: &Project, seat: usize| {
+            match project.channels[seat].setup.modulation.params(0) {
+                Some(crate::ModulatorParams::Envelope(envelope)) => envelope,
+                other => panic!("slot 0 of channel {seat} is {other:?}"),
+            }
+        };
+        assert_eq!(subscription(&project).source_id, id_of(&project, 2));
+        assert_eq!(gate_of(&project, 0).input_channel_id, id_of(&project, 3));
+        assert!(
+            !gate_of(&project, 1).input_channel_id.is_assigned(),
+            "a parked gate names no channel, and 255 is not its identity"
+        );
+
+        // A move: the seats follow, the identities do not budge.
+        let source = id_of(&project, 2);
+        let gated = id_of(&project, 3);
+        assert_eq!(
+            project.move_channel(3, 1),
+            Some(ChannelEdit::Moved { from: 3, to: 1 })
+        );
+        assert_eq!(project.channel_index(source), Some(3));
+        assert_eq!(subscription(&project).source_channel, 3);
+        assert_eq!(subscription(&project).source_id, source);
+        assert_eq!(gate_of(&project, 0).input_channel, 1);
+        assert_eq!(gate_of(&project, 0).input_channel_id, gated);
+
+        // And a delete. Both park, as they always did -- but they still say
+        // which channel they named, which is the half that is new.
+        let removed = project.remove_channel(3).expect("the source is there");
+        assert_eq!(removed.id, source);
+        assert_eq!(subscription(&project).source_channel, crate::aux_in::DEPARTED_SOURCE);
+        assert_eq!(
+            subscription(&project).source_id,
+            source,
+            "a departed subscription still names the channel it lost"
+        );
+
+        // Put that same channel back -- ids intact, which is what restoring a
+        // document does -- and the edge is live again without anybody having
+        // repaired it.
+        project.channels.insert(1, removed);
+        assert!(project.reseat_channel_references());
+        assert_eq!(subscription(&project).source_channel, 1);
+        assert_eq!(gate_of(&project, 0).input_channel_id, gated);
+    }
+
     fn fader_on(controller: u8, key: crate::ParamKey) -> crate::ControlBinding {
         crate::ControlBinding::new(
             crate::ControlSource::Cc {
@@ -2319,8 +2486,22 @@ mod tests {
                 source_channel: 0,
                 source_outlet: crate::mlp8::OUTLET_OSC3,
                 level: 0.5,
+                ..Default::default()
             },
         ));
+        // Written as an older file wrote it -- a seat and no identity -- and
+        // given one on the way in, which is what a load does.
+        project.assign_channel_ids();
+        assert_eq!(
+            project.channels[1]
+                .setup
+                .source
+                .aux_in_state()
+                .expect("aux in")
+                .params
+                .source_id,
+            project.channels[0].id
+        );
         let text = toml::to_string(&project).unwrap();
         let reloaded: Project = toml::from_str(&text).unwrap();
         assert_eq!(reloaded, project);
@@ -2333,5 +2514,10 @@ mod tests {
             toml::from_str("type = \"aux_in\"\n[state.params]\n").expect("an empty Aux In loads");
         assert_eq!(bare.kind(), DeviceKind::AuxIn);
         assert!(bare.audio_subscription().is_none());
+        // A song with no source writes no identity either, so it stays
+        // byte-identical to one written before the field existed.
+        assert!(!toml::to_string(&crate::AuxInParams::default())
+            .unwrap()
+            .contains("source_id"));
     }
 }

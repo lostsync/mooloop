@@ -3402,6 +3402,16 @@ impl Default for ChannelId {
     }
 }
 
+/// `skip_serializing_if` for every field holding a [`ChannelId`].
+///
+/// One predicate rather than one per module: a channel's own `id`, an Aux In's
+/// `source_id` and an envelope gate's `input_channel_id` all mean the same
+/// thing by being absent, and three copies of `!id.is_assigned()` is three
+/// chances for one of them to start meaning something else.
+pub fn channel_id_is_unassigned(id: &ChannelId) -> bool {
+    !id.is_assigned()
+}
+
 /// Persisted state of one slot in a channel's effect chain.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EffectSlotState {

@@ -11671,10 +11671,17 @@ impl AppUi {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
+                    // Both halves of the subscription, from the one place
+                    // that can see both: the row names a seat, and the
+                    // identity beside it is what survives the next reorder.
+                    let source_id = picked
+                        .and_then(|source| st.session.channel_id(usize::from(source)))
+                        .unwrap_or_default();
                     let Some(channel) = st.session.channels.get_mut(consumer) else {
                         return;
                     };
                     channel.aux_in_params.source_channel = picked.map_or(-1, i16::from);
+                    channel.aux_in_params.source_id = source_id;
                     // A fresh pick lands on something rather than on a
                     // refusal: if the outlet it was reading is not published
                     // by the new source, take that source's first.

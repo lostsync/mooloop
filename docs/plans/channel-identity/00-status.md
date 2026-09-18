@@ -1,6 +1,7 @@
 # Channel identity — plan status
 
-**Written 2026-09-17. Steps 01 to 05 landed 2026-09-17.** It came out of the architecture
+**Written 2026-09-17. Finished 2026-09-18: all six steps landed.** It came out
+of the architecture
 section of `reports/fable-2026-09-17.md`, and Adam asked for it the same day:
 a channel gets a durable id, the way a device already has one, before plugin
 hosting starts keying anything by channel position.
@@ -58,12 +59,17 @@ and a control binding is unblocked but needs a decision about how to hold a
 scope that is an id. All three are
 [06](06-the-remaining-cross-channel-addresses.md).
 
-**Corrected 2026-09-18:** the gate half was said to be waiting on step 05,
-because the layer table promised the engine an id-to-strip map there. Step 05
-landed *without* one -- it decides the carry on the control thread from two
-`Project` values, so the strips never learn their ids -- so the gate is still
-blocked, now on `incremental-structure/` step 02. Only the control binding is
-actually ready to build.
+**Corrected twice on 2026-09-18.** First: the gate half was said to be waiting
+on step 05, because the layer table promised the engine an id-to-strip map
+there. Step 05 landed *without* one -- it decides the carry on the control
+thread from two `Project` values, so the strips never learn their ids -- so the
+gate looked blocked on `incremental-structure/` step 02 instead.
+
+Then: **it was not blocked on that either.** Two fields, each with one
+meaning -- the shape Adam had already settled for Aux In the day before -- is
+not the "rewrite the field on the way in" this plan ruled out, and it needs
+nothing from the engine at all. All three landed the same day. [06](06-the-remaining-cross-channel-addresses.md)
+has the three shapes and which of them each field took.
 
 **Which layers change** (the survey counted sites on 2026-09-17):
 
@@ -71,7 +77,7 @@ actually ready to build.
 | --- | --- | --- |
 | Saved document | 7 | The three fields that name *another* channel switch to `ChannelId`: control bindings, the envelope gate's `input_channel`, and Aux In's `source_channel`. `selected_channel` too. Routes and lanes stay as they are: they are nested inside their channel and `integrity::rescoped_home` already forces their scope to it. |
 | Session / control thread | ~20 | Keyed by `ChannelId`. This is where the parallel lists and the fields `rescope_after` misses live. Resolve id → index once, at the point a command is sent. |
-| Engine | ~45 | **Stays a `u8` index.** The engine gains exactly one new thing: a map from `ChannelId` to its strip, used at install time. |
+| Engine | ~45 | **Stays a `u8` index**, and in the end gained nothing at all: step 05 does its matching on the control thread, and step 06's two derived fields reach the engine as the seats they always were. `ChannelId` does not appear in `mooloop-engine`. |
 | UI | ~30 | Slint keeps row positions. The id is resolved at the callback boundary in `ui/src/lib.rs`. |
 
 ## Steps
@@ -83,7 +89,7 @@ actually ready to build.
 | [03](03-session-keys.md) | Session state keyed by id; the parallel sample list folds into the channel | session, UI build | **landed 2026-09-17** |
 | [04](04-keep-the-transport.md) | An install carries the transport across (the interim fix `LOOSE_ENDS.md` names) | engine, UI | **landed 2026-09-17**, listened to |
 | [05](05-strips-by-id.md) | The engine keeps strips whose id and chain survive an install | engine | **landed 2026-09-17**, listened to 2026-09-18 |
-| [06](06-the-remaining-cross-channel-addresses.md) | The other three fields that name another channel | core, session, dsp | not started, and three separate jobs: the control binding is ready (MOO-31), Aux In is decided but unbuilt (MOO-32), the gate waits on `incremental-structure/` 02 (MOO-33) |
+| [06](06-the-remaining-cross-channel-addresses.md) | The other three fields that name another channel | core, session, dsp | **landed 2026-09-18** as MOO-31, MOO-32 and MOO-33 |
 
 Tracks (`BusSetup`) have the same problem under `TrackEdit` and the same
 fix. They are left out of this plan on purpose: channels are what plugins and
@@ -194,6 +200,30 @@ reordered channel would never be heard). `05-strips-by-id.md` has both.
 
 **`plugin-hosting/` step 06 is now unblocked**, which was the other reason
 this plan exists.
+
+## What step 06 actually did
+
+All three fields, in one day, in two shapes. A control binding's target
+**replaced** its seat with a `ParamKey` over a `ChainKey`, because nothing
+downstream of the control map wanted a seat. Aux In's source and the envelope
+gate's input each kept their seat and took an identity **beside** it, for two
+different reasons -- one is an addressable parameter whose descriptor range an
+id does not fit, the other is read on the audio thread.
+
+Three things worth keeping:
+
+- **The saved form of a binding did not move one byte**, which step 02 had
+  worried it would. `ChannelId` is transparent and `EffectTarget::Channel` was
+  already `{ channel = 3 }`, so an old index decodes as the id it already
+  meant.
+- **`ChainKey` moved down into `mooloop-core`.** Step 03 had written it in
+  `mooloop-session`; the control map needed the same enum, and two copies of
+  `Channel(ChannelId) | Bus(u8)` across a crate boundary is the duplication
+  `AGENTS.md` opens with.
+- **The gate's block dissolved rather than being cleared.** It had been
+  recorded twice as waiting on something, and both times the thing it was
+  waiting for was a way for the *engine* to resolve an id. It never needed
+  one.
 
 ## The question this plan did not answer
 

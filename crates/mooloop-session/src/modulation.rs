@@ -174,6 +174,7 @@ impl Session {
     /// Installs a new modulator in the first free slot.
     pub fn add_modulation_source(&mut self, kind: ModulatorKind) -> Option<EngineCommand> {
         let selected = self.selected;
+        let selected_id = self.channel_id(selected).unwrap_or_default();
         let rack = self.rack_mut()?;
         let slot = rack.free_slot()?;
         let mut params = kind.default_params();
@@ -181,6 +182,7 @@ impl Session {
         // only sensible default is set here.
         if let ModulatorParams::Envelope(envelope) = &mut params {
             envelope.input_channel = selected as u8;
+            envelope.input_channel_id = selected_id;
         }
         rack.install(slot, params);
         self.modulation_selected_slot.set(Some(slot as u8));
@@ -238,13 +240,18 @@ impl Session {
     }
 
     /// Points an envelope's gate at a channel.
+    ///
+    /// The picker names a seat, because that is what a row in a list is. Both
+    /// fields are written here: the identity is what survives a structural
+    /// edit, the seat is what the DSP reads, and the one place they are
+    /// allowed to be set is the one place that can see both.
     pub fn set_envelope_input_channel(&mut self, slot: i32, channel: i32) -> Option<EngineCommand> {
         let slot = usize::try_from(slot).ok()?;
         let channel = u8::try_from(channel).ok()?;
-        if channel as usize >= self.channels.len() {
-            return None;
-        }
-        self.modulation_envelope_mut(slot)?.input_channel = channel;
+        let id = self.channel_id(usize::from(channel))?;
+        let envelope = self.modulation_envelope_mut(slot)?;
+        envelope.input_channel = channel;
+        envelope.input_channel_id = id;
         self.install_modulator_command(slot)
     }
 

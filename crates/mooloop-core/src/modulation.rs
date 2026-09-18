@@ -946,8 +946,35 @@ impl Default for ModLfoParams {
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ModEnvelopeParams {
-    /// Channel whose scheduled Note On/Off stream drives this gate.
+    /// Seat of the channel whose scheduled Note On/Off stream drives this
+    /// gate, or `u8::MAX` when that channel is not in the song.
+    ///
+    /// **Read on the audio thread**, as an index into the gate array
+    /// (`mooloop-dsp/src/modulator.rs`). `ModRack` is `Copy` and ships to the
+    /// engine verbatim, so this is the field the DSP reads and it has to stay
+    /// a seat -- which is why the identity lives beside it in
+    /// [`Self::input_channel_id`] rather than replacing it.
     pub input_channel: u8,
+    /// The gated channel's durable identity, and the field that decides where
+    /// [`Self::input_channel`] points.
+    ///
+    /// The same two-fields-one-meaning-each shape
+    /// [`crate::AuxInParams::source_id`] uses, arrived at for a different
+    /// reason: there the seat had to stay because it is an addressable
+    /// parameter, here because it is read by the DSP. The alternative --
+    /// making the single field an id and rewriting it to a seat on the way
+    /// into the engine -- would leave the document's copy and the engine's
+    /// copy holding different things in one integer, which is the Buffer face
+    /// bug and is not done here.
+    ///
+    /// Defaulted, so a rack written before identities existed decodes to
+    /// `UNASSIGNED` and takes its identity from its seat on the way in. The
+    /// old parked value `u8::MAX` **cannot** simply be reread as an id the
+    /// way `selected_channel`'s could -- 255 is an ordinary `ChannelId` --
+    /// so [`crate::Project::identify_channel_references`] refuses it
+    /// explicitly.
+    #[serde(default, skip_serializing_if = "crate::effect::channel_id_is_unassigned")]
+    pub input_channel_id: crate::ChannelId,
     pub attack_seconds: f32,
     pub attack_tempo_sync: bool,
     pub attack_division: ModTimeDivision,
@@ -966,6 +993,7 @@ impl Default for ModEnvelopeParams {
     fn default() -> Self {
         Self {
             input_channel: 0,
+            input_channel_id: crate::ChannelId::UNASSIGNED,
             attack_seconds: 0.01,
             attack_tempo_sync: false,
             attack_division: ModTimeDivision::Sixteenth,
@@ -2063,6 +2091,49 @@ impl ModRack {
     /// silently. `gates.get` is bounded by `MAX_CHANNELS`, so a wrong index
     /// always names *some* channel: there is no inert failure mode to fall
     /// into.
+    /// Adopt an identity for every envelope gate that is still only a seat.
+    /// [`crate::AuxInParams::identify`]'s twin, and run from the same pass.
+    pub fn identify_gates(&mut self, id_at: impl Fn(u8) -> Option<crate::ChannelId>) {
+        for entry in self.slots.iter_mut().flatten() {
+            let ModulatorParams::Envelope(envelope) = &mut entry.params else {
+                continue;
+            };
+            // `u8::MAX` is the parked marker, not a seat. It is also an
+            // ordinary `ChannelId`, which is exactly why it has to be refused
+            // here rather than reread as one.
+            if envelope.input_channel_id.is_assigned() || envelope.input_channel == u8::MAX {
+                continue;
+            }
+            if let Some(id) = id_at(envelope.input_channel) {
+                envelope.input_channel_id = id;
+            }
+        }
+    }
+
+    /// Point every identified envelope gate at wherever its channel now sits.
+    /// Returns whether any seat moved.
+    pub fn reseat_gates(&mut self, seat_of: impl Fn(crate::ChannelId) -> Option<u8>) -> bool {
+        let mut changed = false;
+        for entry in self.slots.iter_mut().flatten() {
+            let ModulatorParams::Envelope(envelope) = &mut entry.params else {
+                continue;
+            };
+            if !envelope.input_channel_id.is_assigned() {
+                continue;
+            }
+            // Parked on the last addressable index rather than left pointing
+            // at whoever closed the gap, exactly as the positional walk did.
+            // `gates.get` finds nothing there, so the envelope stays idle and
+            // inspectable -- and unlike the positional walk, the identity it
+            // is holding means an undo brings the gate back to the channel it
+            // named rather than to a stranger.
+            let moved = seat_of(envelope.input_channel_id).unwrap_or(u8::MAX);
+            changed |= moved != envelope.input_channel;
+            envelope.input_channel = moved;
+        }
+        changed
+    }
+
     pub fn rescope_channels(&mut self, edit: crate::structure::ChannelEdit) -> bool {
         let mut changed = false;
         for entry in self.slots.iter_mut().flatten() {

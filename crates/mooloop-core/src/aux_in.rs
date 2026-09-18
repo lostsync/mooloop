@@ -14,7 +14,7 @@
 //! building is the edge underneath it rather than the breadth of the device on
 //! top.
 
-use crate::effect::{ParamCurve, ParamDescriptor};
+use crate::effect::{channel_id_is_unassigned, ChannelId, ParamCurve, ParamDescriptor};
 use crate::outlet::{AudioSubscription, OutletDescriptor, OutletTap};
 use crate::MAX_CHANNELS;
 
@@ -83,6 +83,26 @@ pub struct AuxInParams {
     /// selector's "none" position has to be a value of the same parameter.
     #[serde(default = "no_source_channel")]
     pub source_channel: i16,
+    /// The producing channel's durable identity, and the field that decides
+    /// where [`Self::source_channel`] points.
+    ///
+    /// **Two fields, each with one meaning.** Adam settled this on
+    /// 2026-09-17, and the reason the seat could not simply become an id is
+    /// that the seat is an *addressable parameter*:
+    /// [`PARAM_SOURCE_CHANNEL`] has a descriptor whose range is
+    /// `NO_SOURCE ..= MAX_CHANNELS - 1` and whose curve is
+    /// `Stepped(MAX_CHANNELS + 1)`, a knob reads it, a lane can automate it
+    /// and a control binding can be learned onto it. Id 47 is ordinary after
+    /// enough edits and fits neither the range nor the step count, so an id
+    /// in that field would leave the descriptor describing something the
+    /// field no longer was.
+    ///
+    /// `UNASSIGNED` means one of two things and they are not worth telling
+    /// apart: nothing is subscribed, or the subscription is a bare seat that
+    /// [`crate::Project::assign_channel_ids`] has not identified yet. Either
+    /// way the seat is what to read until this says otherwise.
+    #[serde(default, skip_serializing_if = "channel_id_is_unassigned")]
+    pub source_id: ChannelId,
     /// Which of that channel's audio outlets, by its durable device-interface
     /// id.
     ///
@@ -113,6 +133,7 @@ impl Default for AuxInParams {
     fn default() -> Self {
         Self {
             source_channel: no_source_channel(),
+            source_id: ChannelId::UNASSIGNED,
             source_outlet: 0,
             level: default_level(),
         }
@@ -152,7 +173,15 @@ impl AuxInParams {
     }
 
     /// Point this Aux In at an outlet, or at nothing.
+    /// Point this Aux In at an outlet, or at nothing.
+    ///
+    /// Names a *seat*, because that is what a subscription is made of and what
+    /// every caller has in hand. The identity beside it is cleared rather than
+    /// guessed: this has no project to ask, and
+    /// [`crate::Project::identify_channel_references`] is the one place that
+    /// question is answered.
     pub fn set_subscription(&mut self, subscription: Option<AudioSubscription>) {
+        self.source_id = ChannelId::UNASSIGNED;
         match subscription {
             Some(subscription) => {
                 self.source_channel = i16::from(subscription.channel);
@@ -160,6 +189,41 @@ impl AuxInParams {
             }
             None => self.source_channel = -1,
         }
+    }
+
+    /// Adopt an identity for a subscription that is still only a seat.
+    ///
+    /// `id_at` is the caller's seat-to-identity map. Does nothing to a
+    /// subscription that already has one, and nothing to one pointing at
+    /// nothing or at [`DEPARTED_SOURCE`] -- a departed source has no channel
+    /// left to take an identity from.
+    pub fn identify(&mut self, id_at: impl FnOnce(u8) -> Option<ChannelId>) {
+        if self.source_id.is_assigned() || self.source_channel == DEPARTED_SOURCE {
+            return;
+        }
+        let Ok(seat) = u8::try_from(self.source_channel) else {
+            return;
+        };
+        if let Some(id) = id_at(seat) {
+            self.source_id = id;
+        }
+    }
+
+    /// Point [`Self::source_channel`] at wherever the identified channel now
+    /// sits, or at [`DEPARTED_SOURCE`] when it is not in the song at all.
+    /// Returns whether the seat moved.
+    ///
+    /// Nothing to do for a subscription with no identity -- one of those is
+    /// still followed positionally by [`Self::rescope`], which is what keeps
+    /// a project built in code rather than loaded from a file correct.
+    pub fn reseat(&mut self, seat_of: impl FnOnce(ChannelId) -> Option<u8>) -> bool {
+        if !self.source_id.is_assigned() {
+            return false;
+        }
+        let moved = seat_of(self.source_id).map_or(DEPARTED_SOURCE, i16::from);
+        let changed = moved != self.source_channel;
+        self.source_channel = moved;
+        changed
     }
 }
 
@@ -226,6 +290,11 @@ pub fn set(params: &mut AuxInParams, id: u32, value: f32) -> bool {
         PARAM_SOURCE_CHANNEL => {
             let index = value.round().clamp(NO_SOURCE, (MAX_CHANNELS - 1) as f32);
             params.source_channel = index as i16;
+            // A lane or a bound fader writes a seat and knows nothing about
+            // identities, so the old one is dropped rather than left to
+            // contradict the seat that was just asked for. The next
+            // `identify_channel_references` adopts whoever is sitting there.
+            params.source_id = ChannelId::UNASSIGNED;
         }
         PARAM_SOURCE_OUTLET => {
             let outlet = value.round().clamp(0.0, MAX_SOURCE_OUTLET as f32);

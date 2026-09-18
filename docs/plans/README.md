@@ -26,11 +26,12 @@ step has landed; the macOS CI job is the one thing that has not yet run.
 the `FOCUS.md` sequence**, from Adam's answers to the architecture section of
 `reports/fable-2026-09-17.md`. `channel-identity/` gives a channel a durable
 id, the way devices already have one, and ends with an engine that keeps
-strips across an install. **All five steps landed 2026-09-17**; step 06,
-three saved fields that still name another channel by position, is what is
-left, and half of it has been waiting on the engine map step 05 built.
-`plugin-hosting/` step 06 is thereby unblocked. `audio-recording/` is not
-started.
+strips across an install. **Finished 2026-09-18**: steps 01-05 landed
+2026-09-17 and step 06, the three saved fields that still named another
+channel by position, landed the next day. Nothing in a song names a channel by
+its seat now. `plugin-hosting/` step 06 is thereby unblocked, and the
+directory is ready to archive once Adam has heard it.
+`audio-recording/` is not started.
 `audio-recording/` is `SCOPE.md` items 3 and the audio half of 5, in Adam's
 shape: a take goes into the channel's sampler, and one input menu chooses
 between audio and MIDI. Its five open questions were all answered by Adam on
