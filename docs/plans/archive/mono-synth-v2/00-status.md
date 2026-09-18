@@ -1,5 +1,11 @@
 # ML-M1 plan status
 
+**Closed and archived 2026-09-18.** The one finding it was held open for, the
+Acid filter's cutoff corner, Adam judged by ear: *"cutoff is fine."* He also
+heard something new: *"for some reason that filter is really quiet."* That is
+a level problem rather than a cutoff one, and it has its own
+`LOOSE_ENDS.md` entry.
+
 In progress. 02-07 are in, restructured. 08's bank and its automated checks
 are in. **Adam played the bank on 2026-08-31**, so 08's listening pass has
 happened; his verdict was that the synth sounds very good. See "Findings from

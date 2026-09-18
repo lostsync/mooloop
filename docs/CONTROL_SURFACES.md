@@ -1,7 +1,7 @@
 # Control surfaces
 
 Status: the design behind `mooloop-core::control`, written 2026-09-15 with
-steps 01–03 of `docs/plans/midi-control/` built and the interface not, and
+steps 01–03 of `docs/plans/archive/midi-control/` built and the interface not, and
 brought up to date the same day when step 04 landed.
 
 `MODULATION.md` owns parameter addressing and the modulator rack. This

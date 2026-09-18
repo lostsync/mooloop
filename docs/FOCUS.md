@@ -106,7 +106,11 @@ A pane that shows what a menu already showed is not progress either.
 > further notes after playing it, and `buffer-implementation/` is in
 > `archive/`. By this document's own rule it is due a rewrite, and the next
 > ordering is Adam's to give; until then the live plans are the ones
-> `plans/README.md` lists as active. Two that were written after this
+> `plans/README.md` lists as active.
+>
+> **Adam, later the same day: recording is next**, starting at
+> `audio-recording/02`. He also wants a layer device (`containers/06`),
+> not yet ordered against it. Two that were written after this
 > document and never entered it: `incremental-structure/` (finished and
 > archived the same day) and `audio-recording/` (not started).
 
@@ -366,7 +370,7 @@ not interrupt this sequence unless one becomes necessary to preserve its work.
 
 **Metronome and the graph editor.** Neither is required to prove the active
 workflows. MIDI configuration was on this list until 2026-09-15, when
-`docs/plans/midi-control/` built it: a channel picks its input, a controller
+`docs/plans/archive/midi-control/` built it: a channel picks its input, a controller
 maps to any parameter, and the transport takes gestures. What is left of it is
 not construction — **none of it has been run against a keyboard**, and that is
 the next MIDI thing to do.

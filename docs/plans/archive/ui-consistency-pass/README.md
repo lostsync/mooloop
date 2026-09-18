@@ -1,5 +1,10 @@
 # UI consistency pass
 
+**Closed and archived 2026-09-18.** The only thing between this plan and the
+archive was Adam playing the result. He wasn't sure what there was to check,
+and said of the app as it stands: *"the app looks really good now tho."* The
+method below is kept so the sweep can be re-run rather than re-invented.
+
 Adam's standing list, 2026-09-08, in `~/Documents/laundry_list.md`. Its first
 item is a sweep rather than a feature:
 

@@ -257,7 +257,7 @@ Still open:
   export?
 - How far should MIDI go past a keyboard playing the selected channel? Adam
   asked for exactly that on 2026-09-13 and it is in. Recording, controller
-  mapping and input choice landed with `plans/midi-control/` on 2026-09-15;
+  mapping and input choice landed with `plans/archive/midi-control/` on 2026-09-15;
   MIDI output is in scope for 0.2.0 and not built.
 
 ## Decision Precedence

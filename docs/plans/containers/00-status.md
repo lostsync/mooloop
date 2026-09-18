@@ -1,5 +1,9 @@
 # Containers plan status
 
+**Step 06 decided 2026-09-18: build a layer device** (Adam: *"i do want a
+layer device"*). It needs a work order; see the note at the top of
+`06-layers-and-selectors.md`. Steps 01-05 are unchanged.
+
 ## Step 01 — a device is an identity, not a position
 
 Landed on `feat/containers` (2026-09-06). A rack device now carries a

@@ -1,5 +1,11 @@
 # 06 — Layers and selectors: the decision, not the build
 
+> **Decided 2026-09-18: Adam wants a layer device.** *"i do want a layer
+> device."* So the layer section below changes from a price on the record to
+> the brief for a build, and needs a work order written against what exists
+> now. Nothing below has been re-checked against the tree since it was
+> written. Selectors are not part of the decision.
+
 The three container kinds get conflated because they sound like one feature
 with three settings. They are not, and this page exists so that saying no to
 two of them is on the record with a price attached rather than being

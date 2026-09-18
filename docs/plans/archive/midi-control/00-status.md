@@ -1,5 +1,8 @@
 # MIDI and control surfaces — status
 
+**Heard and archived 2026-09-18.** The one check left was a real keyboard,
+and Adam ran it: *"midi control worked well."*
+
 Started and finished 2026-09-15. The work `SCOPE.md` §2 item 2 calls "MIDI I/O
 — the configurable half", plus items it does not: controller mapping,
 transport control, and MIDI recording (§2 item 5's first half).

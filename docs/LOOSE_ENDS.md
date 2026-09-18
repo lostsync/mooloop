@@ -332,7 +332,7 @@ exactly like an unmapped one. Drawing the mark is not hard, it is *wide* -- it
 needs a per-parameter `[bool]` on every device face, beside the
 `modulation-route-counts` model that already goes to all of them, which is a
 line in fifty markup files and a `main.slint` crossing for each face that is
-missed. `docs/plans/midi-control/04-interface.md` records the same thing as
+missed. `docs/plans/archive/midi-control/04-interface.md` records the same thing as
 the one piece of step 04 deliberately left out.
 
 **`ParameterFader` cannot be learned, and neither can it be modulated.** The
@@ -875,6 +875,14 @@ for it.
 ---
 
 ## Consistency questions, not bugs
+
+**The ML-M1's Acid filter is really quiet.** Adam, 2026-09-18, closing
+`mono-synth-v2/`: *"cutoff is fine but for some reason that filter is really
+quiet."* Heard, not yet measured. The plan's own open finding was that Acid's
+cutoff compensation constant is load-bearing (0.41x nominal against the other
+two models' 0.65-0.68x), so the first thing to check is whether the level
+drop comes from the same place -- a model voiced by moving its corner that
+never had its output level matched to the other two.
 
 **Three things left over when Buffer closed, 2026-09-18.** None blocked
 closing `plans/archive/buffer-implementation/`, and all three were

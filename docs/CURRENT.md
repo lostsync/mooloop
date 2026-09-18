@@ -502,7 +502,7 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   of the keyboard, but nothing installs one:
   `EngineHandle::set_buffer_midi_map` has no caller outside its own tests.
 - **Per-channel MIDI input, controller mapping, transport control and MIDI
-  recording.** `docs/plans/midi-control/` landed on 2026-09-15. A channel picks
+  recording.** `docs/plans/archive/midi-control/` landed on 2026-09-15. A channel picks
   its input and an Omni-or-1–16 channel filter from the sidebar's IN and CH
   rows, and the engine routes notes by them (only since 2026-09-17: until
   then every project install, the startup one included, handed the audio
