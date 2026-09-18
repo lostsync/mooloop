@@ -813,6 +813,10 @@ pub struct Project {
     /// of them when the mixer became a list rather than a fixed bank.
     #[serde(default = "default_buses")]
     pub buses: Vec<BusSetup>,
+    /// The mint [`BusSetup::id`] comes from, defaulted and raised exactly as
+    /// [`Self::next_channel_id`] is -- see [`Self::assign_track_ids`].
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub next_track_id: u32,
     pub pattern_lengths: Vec<u16>,
     /// Pattern-indexed names and colours, parallel to `pattern_lengths`.
     ///
@@ -983,6 +987,7 @@ impl Default for Project {
             channels: vec![ProjectChannel::sampler(0, 1).with_id(ChannelId(0))],
             next_channel_id: 1,
             buses: default_buses(),
+            next_track_id: 1,
             pattern_lengths: vec![DEFAULT_STEPS],
             // Empty rather than one blank entry per pattern: an entry that
             // says nothing is not worth storing, and a song nobody has named
@@ -1054,6 +1059,44 @@ impl Project {
         // ids and forgot to identify the references would leave the
         // references positional and silently so.
         self.identify_channel_references();
+    }
+
+    /// Give every track an identity, and put the mint past them all.
+    ///
+    /// [`Self::assign_channel_ids`] for the track list, by the same rules: a
+    /// bank with no identities takes its positions, the mint is raised past
+    /// the highest id held, and any track still unassigned after that -- a
+    /// hand-edited file, or a master `sanitize_bank` had to restore -- is
+    /// minted fresh. Nothing *names* a track by id yet, so unlike the channel
+    /// pass there are no references to identify afterwards.
+    pub fn assign_track_ids(&mut self) {
+        if !self.buses.iter().any(|track| track.id.is_assigned()) {
+            for (index, track) in self.buses.iter_mut().enumerate() {
+                track.id = crate::TrackId(index as u32);
+            }
+        }
+        let highest = self
+            .buses
+            .iter()
+            .filter(|track| track.id.is_assigned())
+            .map(|track| track.id.0)
+            .max();
+        if let Some(highest) = highest {
+            self.next_track_id = self.next_track_id.max(highest.saturating_add(1));
+        }
+        for track in &mut self.buses {
+            if !track.id.is_assigned() {
+                track.id = crate::mint_track_id(&mut self.next_track_id);
+            }
+        }
+    }
+
+    /// Where the track with `id` sits, or `None` when no track has it.
+    pub fn track_index(&self, id: crate::TrackId) -> Option<usize> {
+        if !id.is_assigned() {
+            return None;
+        }
+        self.buses.iter().position(|track| track.id == id)
     }
 
     /// Give an identity to every field that names another channel by seat and
@@ -1366,7 +1409,9 @@ impl Project {
             return None;
         }
         let index = self.buses.len();
-        self.buses.push(crate::BusSetup::new(index));
+        let mut track = crate::BusSetup::new(index);
+        track.id = crate::mint_track_id(&mut self.next_track_id);
+        self.buses.push(track);
         Some(index)
     }
 
@@ -1589,6 +1634,9 @@ impl Project {
         // Built as a literal rather than through `insert_channel`, so the
         // four arrive unminted; this is the same pass a loaded song gets.
         project.assign_channel_ids();
+        // And the tracks, for the same reason: `starter_tracks` builds all
+        // but the master by hand.
+        project.assign_track_ids();
         project
     }
 }
@@ -1848,6 +1896,59 @@ mod tests {
         assert_eq!(project.channels[0].id, ChannelId(8));
         assert_eq!(project.channels[2].id, ChannelId(9));
         assert_eq!(project.next_channel_id, 10);
+    }
+
+    /// [`Self::a_bank_with_no_identities_takes_its_positions`] for tracks.
+    #[test]
+    fn a_track_bank_with_no_identities_takes_its_positions() {
+        let mut project = Project {
+            buses: (0..3).map(crate::BusSetup::new).collect(),
+            next_track_id: 0,
+            ..Project::default()
+        };
+        assert!(project.buses.iter().all(|track| !track.id.is_assigned()));
+
+        project.assign_track_ids();
+
+        for (index, track) in project.buses.iter().enumerate() {
+            assert_eq!(track.id, crate::TrackId(index as u32));
+        }
+        assert_eq!(project.next_track_id, 3);
+        let before = project.clone();
+        project.assign_track_ids();
+        assert_eq!(project, before, "not idempotent");
+    }
+
+    /// A removed track's id is not handed to the next one, and a move keeps
+    /// every id with its track -- the property the engine's carry leans on.
+    #[test]
+    fn a_track_id_is_never_reused_and_follows_a_move() {
+        let mut project = Project::default();
+        assert_eq!(project.buses[0].id, crate::TrackId(0), "the master is minted");
+        let first = project.add_track().expect("room");
+        let second = project.add_track().expect("room");
+        let (a, b) = (project.buses[first].id, project.buses[second].id);
+        assert_ne!(a, b);
+
+        project.remove_track(second).expect("not the master");
+        let third = project.add_track().expect("room");
+        assert_ne!(project.buses[third].id, b, "a removed track's id came back");
+
+        project.move_track(first, third).expect("a real move");
+        assert_eq!(project.track_index(a), Some(third));
+        assert_eq!(project.track_index(crate::TrackId::UNASSIGNED), None);
+    }
+
+    /// The starter song builds its tracks by hand, and still arrives with
+    /// every one of them identified.
+    #[test]
+    fn the_starter_kit_identifies_its_tracks() {
+        let project = Project::starter_kit(1);
+        let ids: std::collections::HashSet<_> =
+            project.buses.iter().map(|track| track.id).collect();
+        assert_eq!(ids.len(), project.buses.len(), "{:?}", project.buses);
+        assert!(ids.iter().all(|id| id.is_assigned()));
+        assert!(ids.iter().all(|id| id.0 < project.next_track_id));
     }
 
     /// The id survives a move, and `channel_index` is what says where it went.

@@ -1053,6 +1053,9 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
             // A song with no ids takes positions, which is what those
             // addresses already meant.
             project.assign_channel_ids();
+            // Tracks the same way: a song written before tracks had
+            // identities takes its positions.
+            project.assign_track_ids();
             // And after that, because it looks a lane's buffer up by identity
             // to find how many bars of history the old offset was a fraction
             // of. Before the repair pass, because that pass judges a lane
@@ -1453,6 +1456,10 @@ mod tests {
                 mooloop_core::ProjectChannel::sampler(2, 1),
             ],
             next_channel_id: 0,
+            // Tracks without identities too, which is what makes the
+            // manifest below the file an older version wrote.
+            buses: (0..2).map(mooloop_core::BusSetup::new).collect(),
+            next_track_id: 0,
             ..Project::default()
         };
         save_song_file(&bundle, &project, AssetMode::Embedded).unwrap();
@@ -1474,12 +1481,17 @@ mod tests {
             assert_eq!(channel.id, mooloop_core::ChannelId(index as u32));
         }
         assert_eq!(loaded.next_channel_id, 3, "and the mint is past them");
+        for (index, track) in loaded.buses.iter().enumerate() {
+            assert_eq!(track.id, mooloop_core::TrackId(index as u32));
+        }
+        assert_eq!(loaded.next_track_id, 2, "and the track mint is past them");
 
         // Saving it then writes them, so the second open reads them rather
         // than deriving them again.
         save_song(&bundle, &loaded, AssetMode::Embedded).unwrap();
         let rewritten = fs::read_to_string(&bundle).unwrap();
         assert!(rewritten.contains("next_channel_id = 3"), "{rewritten}");
+        assert!(rewritten.contains("next_track_id = 2"), "{rewritten}");
         let LoadedDocument::Song(reopened) = load_bundle(&bundle).unwrap().document else {
             panic!("expected a song");
         };

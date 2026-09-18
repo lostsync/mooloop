@@ -287,6 +287,14 @@ pub fn mint_channel_id(next: &mut u32) -> ChannelId {
     id
 }
 
+/// Take the next track identity from `next` and advance it -- the same rule
+/// as [`mint_channel_id`], one list over.
+pub fn mint_track_id(next: &mut u32) -> crate::TrackId {
+    let id = crate::TrackId(*next);
+    *next = next.saturating_add(1);
+    id
+}
+
 /// Give every device in `effects` an identity, and put `next_id` past them
 /// all.
 ///

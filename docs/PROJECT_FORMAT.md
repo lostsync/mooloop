@@ -356,6 +356,16 @@ before any of them existed still loads:
   forgot to identify the references would leave them positional, silently.
   `Project::reseat_channel_references` is its other half, and runs after every
   structural edit.
+- **A track carries a durable `id`, and `next_track_id` is its mint** --
+  the channel rule above, one list over, with the same defaulting, the same
+  positions for a bank that has none (`Project::assign_track_ids`, run beside
+  `assign_channel_ids`), and the same uniqueness rule, reported as
+  `track.id.duplicate`. A master the repair pass has to restore is minted
+  like any other track. **Nothing names a track by id yet**: a channel's
+  `bus`, a track's `output` and sends, and `EffectTarget::Bus` are still
+  seats. The id exists so the engine can match a track across an install
+  (`docs/plans/incremental-structure/`).
+
 - **Analog sum is one defaulted boolean per track.** `buses[].bus.console`
   says whether that track's output is encoded on its way into its destination,
   to be decoded there with everything else that opted in. It defaults to

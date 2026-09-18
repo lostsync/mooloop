@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use mooloop_core::{
-    mint_channel_id, sanitize_route, strip_descriptor, BusSetup, ChannelId, ChannelSetup,
+    mint_channel_id, mint_track_id, sanitize_route, strip_descriptor, BusSetup, ChannelId, ChannelSetup,
     ChannelSource, DeviceId, DeviceKind,
     ds01, Ds01Params, DrumSynthParams, EffectKind, EffectSlotState, EffectTarget, MlM1Params,
     MlP8Params, ModRack,
@@ -565,6 +565,33 @@ fn check_channel_ids(doctor: &mut Doctor, project: &mut Project) {
     }
 }
 
+/// [`check_channel_ids`] for the track list.
+fn check_track_ids(doctor: &mut Doctor, project: &mut Project) {
+    // The same two passes for tracks, and for the same reasons. Nothing names
+    // a track by id yet, so a duplicate cannot mislead an address -- but the
+    // engine matches tracks across an install by it, and two tracks wearing
+    // one id would trade each other's live state.
+    project.assign_track_ids();
+    let mut seen = HashSet::new();
+    for index in 0..project.buses.len() {
+        let id = project.buses[index].id;
+        if !id.is_assigned() || seen.insert(id) {
+            continue;
+        }
+        let who = project.buses[index].bus.name.clone();
+        if doctor.correct(
+            "track.id.duplicate",
+            &who,
+            format!("its identity {} already belongs to an earlier track", id.0),
+            "give it a new one".into(),
+        ) {
+            let fresh = mint_track_id(&mut project.next_track_id);
+            project.buses[index].id = fresh;
+            seen.insert(fresh);
+        }
+    }
+}
+
 fn check_project(doctor: &mut Doctor, project: &mut Project) {
     const SONG: &str = "Song settings";
 
@@ -650,6 +677,7 @@ fn check_project(doctor: &mut Doctor, project: &mut Project) {
     }
 
     check_channel_ids(doctor, project);
+    check_track_ids(doctor, project);
 
     // Judged against what survived the checks above, so a selection is
     // repaired against the real bank rather than the broken one. It names a
@@ -776,7 +804,9 @@ fn check_buses(doctor: &mut Doctor, project: &mut Project) {
             "add the master back".into(),
         )
     {
-        project.buses.push(BusSetup::new(MASTER_BUS as usize));
+        let mut master = BusSetup::new(MASTER_BUS as usize);
+        master.id = mint_track_id(&mut project.next_track_id);
+        project.buses.push(master);
     }
     if project.buses.len() > MAX_BUSES {
         let found = project.buses.len();
@@ -2477,6 +2507,38 @@ mod tests {
             assert!(project.next_channel_id > id.0);
         }
         assert!(inspect_project(&project).is_clean());
+    }
+
+    /// [`two_channels_wearing_one_identity_are_told_apart`] for tracks.
+    #[test]
+    fn two_tracks_wearing_one_identity_are_told_apart() {
+        let mut project = Project::default();
+        project.add_track().expect("room");
+        let twin = project.buses[1].clone();
+        project.buses.push(twin);
+
+        assert_eq!(codes(&inspect_project(&project)), ["track.id.duplicate"]);
+
+        let diagnosis = repair_project(&mut project);
+        assert!(diagnosis.is_usable(), "the song opens: {diagnosis:?}");
+        let ids: HashSet<_> = project.buses.iter().map(|track| track.id).collect();
+        assert_eq!(ids.len(), 3, "{:?}", project.buses);
+        assert!(ids.iter().all(|id| id.0 < project.next_track_id));
+        assert!(inspect_project(&project).is_clean());
+    }
+
+    /// A master the repair has to put back is minted like any other track,
+    /// rather than left without the identity the engine matches tracks by.
+    #[test]
+    fn a_restored_master_is_identified() {
+        let mut project = Project {
+            buses: Vec::new(),
+            ..Project::default()
+        };
+        repair_project(&mut project);
+        assert_eq!(project.buses.len(), 1);
+        assert!(project.buses[0].id.is_assigned());
+        assert!(project.buses[0].id.0 < project.next_track_id);
     }
 
     /// A bank with no identities at all is an older document rather than

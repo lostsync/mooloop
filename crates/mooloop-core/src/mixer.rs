@@ -310,6 +310,10 @@ pub fn is_legal_send(from: u8, target: u8) -> bool {
 /// A bus plus the effect chain inserted on it, mirroring `ChannelSetup`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BusSetup {
+    /// This track's durable identity. Absent in a song written before tracks
+    /// had one; `Project::assign_track_ids` gives such a bank its positions.
+    #[serde(default, skip_serializing_if = "crate::track_id_is_unassigned")]
+    pub id: crate::TrackId,
     pub bus: MixerBus,
     #[serde(default)]
     pub effects: Vec<EffectSlotState>,
@@ -328,6 +332,7 @@ pub struct BusSetup {
 impl BusSetup {
     pub fn new(index: usize) -> Self {
         Self {
+            id: crate::TrackId::UNASSIGNED,
             bus: MixerBus::new(index),
             effects: Vec::new(),
             next_device_id: 0,
@@ -360,8 +365,15 @@ impl BusSetup {
 /// The master is not optional -- it is the sink every route eventually
 /// reaches, and a project without one has nowhere to send audio -- so it is
 /// the one entry a bank always has. [`sanitize_bank`] enforces that on load.
+///
+/// The master is minted as track 0 here rather than left for
+/// `Project::assign_track_ids`, so a bank built without a load -- a new song,
+/// a fresh session -- already obeys the rule every loaded one does. A project
+/// holding this bank starts its mint at 1.
 pub fn default_buses() -> Vec<BusSetup> {
-    vec![BusSetup::new(MASTER_BUS as usize)]
+    let mut master = BusSetup::new(MASTER_BUS as usize);
+    master.id = crate::TrackId(0);
+    vec![master]
 }
 
 /// One correction [`sanitize_bank`] made, in enough detail to say which

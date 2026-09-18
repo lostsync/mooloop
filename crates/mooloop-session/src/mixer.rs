@@ -40,7 +40,9 @@ impl Session {
             return None;
         }
         let index = self.buses.len();
-        self.buses.push(BusSetup::new(index));
+        let mut track = BusSetup::new(index);
+        track.id = mooloop_core::mint_track_id(&mut self.next_track_id);
+        self.buses.push(track);
         Some(index)
     }
 
@@ -628,6 +630,27 @@ mod tests {
             session.set_eq_analyzer(1, true),
             Some((EffectTarget::Bus(1), 1))
         );
+    }
+
+    /// A track the session adds is minted, and the id and the mint both
+    /// survive the round trip through a document -- which is what every undo
+    /// and every structural edit's reinstall is. The channel-identity lesson:
+    /// a field carried one way only is lost at the next undo, not the next
+    /// edit.
+    #[test]
+    fn an_added_track_is_identified_and_survives_a_reinstall() {
+        let mut session = Session::default();
+        let index = session.add_track().expect("room");
+        let id = session.buses[index].id;
+        assert!(id.is_assigned());
+        assert_ne!(id, session.buses[0].id, "the new track took the master's id");
+
+        let snapshot = session.project_snapshot(120, 0);
+        let mut reopened = Session::default();
+        reopened.replace_project(&snapshot, &[]);
+        assert_eq!(reopened.buses[index].id, id);
+        let next = reopened.add_track().expect("room");
+        assert_ne!(reopened.buses[next].id, id, "the mint was rewound by the reinstall");
     }
 
     /// A track takes a colour and gives it back, and choosing the one it

@@ -66,11 +66,28 @@ the device edits already demonstrate.
 
 | Step | What |
 | --- | --- |
-| 01 | `TrackId`, minting, load-time assignment — `ChannelId` copied wholesale, including the lesson that `selected_channel`-style fields want it first. **`channel.bus` holding an id is most of the audible win on its own**: a track move then stops touching a channel's setup, so every channel carries through it |
+| 01 | `TrackId`, minting, load-time assignment — `ChannelId` copied wholesale, including the lesson that `selected_channel`-style fields want it first. **`channel.bus` holding an id is most of the audible win on its own**: a track move then stops touching a channel's setup, so every channel carries through it. **Landed 2026-09-18** as identity only; see below |
 | 02 | A `ChannelStrip` records its own `ChannelId`, and a `BusStrip` its `TrackId`. `channel-identity/05` deliberately did not need this, because the control thread did the matching; an incremental edit needs the audio thread to know what it is holding |
 | 03 | `StructuralCommand::{AddTrack, RemoveTrack, MoveTrack}`, mirroring `AddChannel` |
 | 04 | `StructuralCommand::{RemoveChannel, MoveChannel}`, so the three channel edits stop reaching `install_project` at all |
 | 05 | What is left that still needs a whole-state swap — a document open, an undo — and whether it should |
+
+## What step 01 actually did
+
+Identity, and nothing that names a track by it. `BusSetup.id: TrackId`,
+`Project.next_track_id`, `mint_track_id`, `Project::assign_track_ids` (run
+beside `assign_channel_ids` at load and in the integrity pass),
+`Project::track_index`, `track.id.duplicate`, and the session carrying the
+mint both ways. `default_buses` mints the master as track 0, so a bank built
+without a load already obeys the rule.
+
+**`channel.bus` stayed a seat**, which is not what the table asked for, and
+it did not need to move: the carry fix earlier the same day already stops a
+track move from rebuilding the channels that feed it, by comparing their
+setup *except* the bus. Converting `bus`, a track's `output`, its sends and
+`EffectTarget::Bus` to ids is a second channel-identity migration, and
+nothing in steps 02 to 04 needs it -- the engine is index-addressed, and
+`TrackEdit` already renumbers every seat on the control thread.
 
 ## The cheap half
 

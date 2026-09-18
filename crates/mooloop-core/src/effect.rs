@@ -3412,6 +3412,44 @@ pub fn channel_id_is_unassigned(id: &ChannelId) -> bool {
     !id.is_assigned()
 }
 
+/// A track's durable identity: [`ChannelId`] one list over, in the same
+/// shape and for the same reason.
+///
+/// Addresses that name a track -- a channel's `bus`, a track's output and
+/// sends, `EffectTarget::Bus` -- are still seats, renumbered by
+/// [`crate::structure::TrackEdit`]. What needs the identity is the engine: an
+/// install matches the tracks of the outgoing and incoming projects by it, so
+/// a track's live strip survives an edit that moved it
+/// (`docs/plans/incremental-structure/`).
+///
+/// Minted from `Project.next_track_id` and never reused.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct TrackId(pub u32);
+
+impl TrackId {
+    /// Not yet part of a song: a track under construction, or one in a file
+    /// written before tracks had identities.
+    pub const UNASSIGNED: Self = Self(u32::MAX);
+
+    pub const fn is_assigned(self) -> bool {
+        self.0 != Self::UNASSIGNED.0
+    }
+}
+
+impl Default for TrackId {
+    fn default() -> Self {
+        Self::UNASSIGNED
+    }
+}
+
+/// `skip_serializing_if` for a [`TrackId`].
+pub fn track_id_is_unassigned(id: &TrackId) -> bool {
+    !id.is_assigned()
+}
+
 /// Persisted state of one slot in a channel's effect chain.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EffectSlotState {

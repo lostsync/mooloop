@@ -65,6 +65,9 @@ pub struct Session {
     /// project-wide where `next_device_id` is per chain. Installed from the
     /// document and handed back to it, so a round trip never rewinds it.
     pub next_channel_id: u32,
+    /// The mint [`mooloop_core::BusSetup::id`] comes from, travelling both
+    /// ways for the same reason as `next_channel_id`.
+    pub next_track_id: u32,
     /// Destination shown in the piano roll's variable lane. `None` means the
     /// lane is open but empty-handed, which is the state a fresh project is
     /// in; it is not the same as the lane being hidden.
@@ -284,6 +287,8 @@ impl Default for Session {
             // came from a file: every channel in it has an identity.
             channels: vec![ChannelState::new(0).with_id(ChannelId(0))],
             next_channel_id: 1,
+            // `default_buses` mints the master as track 0.
+            next_track_id: 1,
             automation_target: Cell::new(None),
             automation_selected_point: Cell::new(None),
             slice_audition: None,
@@ -571,6 +576,7 @@ impl Session {
             channels,
             next_channel_id: self.next_channel_id,
             buses: self.buses.clone(),
+            next_track_id: self.next_track_id,
             pattern_lengths: self
                 .pattern_lengths
                 .iter()
@@ -1474,6 +1480,7 @@ impl Session {
         // rewound by an install: `ChannelSetup::next_device_id` travels the
         // same way and for the same reason.
         self.next_channel_id = project.next_channel_id;
+        self.next_track_id = project.next_track_id;
         self.pattern_lengths = project
             .pattern_lengths
             .iter()
