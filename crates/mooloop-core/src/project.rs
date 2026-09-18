@@ -1808,9 +1808,11 @@ mod tests {
     /// what makes this a defaulted field rather than a format migration.
     #[test]
     fn a_bank_with_no_identities_takes_its_positions() {
-        let mut project = Project::default();
-        project.channels = vec![ProjectChannel::sampler(0, 1); 4];
-        project.next_channel_id = 0;
+        let mut project = Project {
+            channels: vec![ProjectChannel::sampler(0, 1); 4],
+            next_channel_id: 0,
+            ..Project::default()
+        };
         assert!(project.channels.iter().all(|channel| !channel.id.is_assigned()));
 
         project.assign_channel_ids();
@@ -1833,10 +1835,12 @@ mod tests {
     /// taking positions that are already in use.
     #[test]
     fn a_part_assigned_bank_mints_its_stragglers() {
-        let mut project = Project::default();
-        project.channels = vec![ProjectChannel::sampler(0, 1); 3];
+        let mut project = Project {
+            channels: vec![ProjectChannel::sampler(0, 1); 3],
+            next_channel_id: 0,
+            ..Project::default()
+        };
         project.channels[1].id = ChannelId(7);
-        project.next_channel_id = 0;
 
         project.assign_channel_ids();
 
@@ -2192,8 +2196,10 @@ mod tests {
             .expect("aux in")
             .params
             .source_channel = 2;
-        let mut gate = crate::ModEnvelopeParams::default();
-        gate.input_channel = 3;
+        let gate = crate::ModEnvelopeParams {
+            input_channel: 3,
+            ..Default::default()
+        };
         project.channels[0]
             .setup
             .modulation
@@ -2201,8 +2207,10 @@ mod tests {
         // A second envelope, parked. `u8::MAX` is the marker for "the channel
         // this named is gone" and is *also* an ordinary `ChannelId`, so it
         // must not be reread as one.
-        let mut parked = crate::ModEnvelopeParams::default();
-        parked.input_channel = u8::MAX;
+        let parked = crate::ModEnvelopeParams {
+            input_channel: u8::MAX,
+            ..Default::default()
+        };
         project.channels[1]
             .setup
             .modulation

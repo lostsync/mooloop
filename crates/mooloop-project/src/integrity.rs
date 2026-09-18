@@ -2484,9 +2484,11 @@ mod tests {
     /// address in such a song already meant by `channel = 3`.
     #[test]
     fn a_song_with_no_channel_identities_is_not_damaged() {
-        let mut project = Project::default();
-        project.channels = vec![ProjectChannel::sampler(0, 1); 3];
-        project.next_channel_id = 0;
+        let mut project = Project {
+            channels: vec![ProjectChannel::sampler(0, 1); 3],
+            next_channel_id: 0,
+            ..Project::default()
+        };
 
         assert!(inspect_project(&project).is_clean(), "nothing to report");
 

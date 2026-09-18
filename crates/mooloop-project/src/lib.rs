@@ -1446,13 +1446,15 @@ mod tests {
     fn a_song_with_no_channel_identities_loads_with_its_positions() {
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("old.mooloop");
-        let mut project = Project::default();
-        project.channels = vec![
-            mooloop_core::ProjectChannel::sampler(0, 1),
-            mooloop_core::ProjectChannel::sampler(1, 1),
-            mooloop_core::ProjectChannel::sampler(2, 1),
-        ];
-        project.next_channel_id = 0;
+        let project = Project {
+            channels: vec![
+                mooloop_core::ProjectChannel::sampler(0, 1),
+                mooloop_core::ProjectChannel::sampler(1, 1),
+                mooloop_core::ProjectChannel::sampler(2, 1),
+            ],
+            next_channel_id: 0,
+            ..Project::default()
+        };
         save_song_file(&bundle, &project, AssetMode::Embedded).unwrap();
 
         let manifest = fs::read_to_string(&bundle).unwrap();
