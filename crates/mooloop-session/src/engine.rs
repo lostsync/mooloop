@@ -139,9 +139,10 @@ pub enum PendingEngineMessage {
     /// it is rebuilt on a menu pick rather than in a loop, and a patching
     /// verb would be a second path to the same state.
     MidiRouting(Vec<mooloop_core::MidiInputRoute>),
-    /// Which channel records audio, and from which seat. The audio half of
-    /// the IN row, resolved by `Session::audio_input_route`.
-    AudioInputRouting(Option<mooloop_core::AudioRecordRoute>),
+    /// Every channel's audio input resolved to a seat, in channel order, by
+    /// `Session::audio_input_taps`. A whole table for the reason
+    /// [`Self::MidiRouting`] is one.
+    AudioInputRouting(Vec<Option<mooloop_core::AudioTap>>),
 }
 
 impl PendingEngineMessage {
@@ -240,9 +241,9 @@ impl EngineCommandSender {
 
     /// Install which channel records audio. See
     /// [`PendingEngineMessage::AudioInputRouting`].
-    pub fn send_audio_input_routing(&self, route: Option<mooloop_core::AudioRecordRoute>) -> bool {
+    pub fn send_audio_input_routing(&self, taps: Vec<Option<mooloop_core::AudioTap>>) -> bool {
         self.0
-            .send(PendingEngineMessage::AudioInputRouting(route))
+            .send(PendingEngineMessage::AudioInputRouting(taps))
             .is_ok()
     }
 }
@@ -673,8 +674,8 @@ impl Session {
                 // second edit, and a port appearing must not dirty anything.
                 false
             }
-            PendingEngineMessage::AudioInputRouting(route) => {
-                handle.set_audio_input_routing(route);
+            PendingEngineMessage::AudioInputRouting(taps) => {
+                handle.set_audio_input_routing(taps);
                 // Not an edit, for the reason the MIDI routing is not.
                 false
             }

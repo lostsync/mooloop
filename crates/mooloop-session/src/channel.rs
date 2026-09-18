@@ -29,9 +29,8 @@ pub struct ChannelState {
     pub name: String,
     /// Which MIDI input, and which MIDI channel on it, plays this channel.
     pub midi_input: mooloop_core::ChannelMidiInput,
-    /// Where this channel records audio from. The other half of the IN row;
-    /// `Session::set_channel_input` keeps at most one of the two away from
-    /// its default.
+    /// Where this channel records audio from: the AUDIO row, independent of
+    /// `midi_input`. Kept whatever the channel's device.
     pub audio_input: mooloop_core::AudioInputSource,
     /// The colour the user gave this channel, or `None` for one nobody has
     /// coloured. Content, like the name: it survives a save and it survives a

@@ -1,8 +1,10 @@
 # Audio recording — plan status
 
-Linear: project [Audio recording & resampling](https://linear.app/mooloop/project/audio-recording-and-resampling-18d89cc837e2),
-parent issue [MOO-16](https://linear.app/mooloop/issue/MOO-16). Each step has
-its own issue, numbered in the table below.
+Linear: [MOO-16](https://linear.app/mooloop/issue/MOO-16/audio-recording-one-input-menu-takes-go-into-the-sampler)
+mirrors this file. [MOO-12](https://linear.app/mooloop/issue/MOO-12/audio-input) predates this
+plan (same `SCOPE.md` item, filed before the migration) and is kept open as
+the earlier tracking issue for the input side; MOO-16 is where the plan's
+current shape lives.
 
 **Written 2026-09-17. Step 02 landed 2026-09-18.** This is `SCOPE.md` §2 item 3
 (audio input) together with the audio half of item 5 (recording), in the shape
@@ -111,12 +113,12 @@ order.
 
 | Step | What | Rung | State |
 | --- | --- | --- | --- |
-| [02](02-one-input-menu.md) · [MOO-34](https://linear.app/mooloop/issue/MOO-34) | `ChannelInput`: MIDI, an app source (channel, track, master) or a hardware input; one picker, saved | core, project, session, UI build | **landed 2026-09-18**, UI drawing deferred to 05 -- see below |
-| [03](03-capture.md) · [MOO-35](https://linear.app/mooloop/issue/MOO-35) | Bounded capture of the chosen buffer at the end of each block, drained to a WAV file off the audio thread | engine, session | not started |
-| [04](04-the-take.md) · [MOO-36](https://linear.app/mooloop/issue/MOO-36) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | not started |
-| [05](05-interface.md) · [MOO-37](https://linear.app/mooloop/issue/MOO-37) | Record button, source meter, the growing waveform, the non-sampler rule. **Acceptance: resample a loop into a sampler and play it back** | UI build | not started |
-| [01](01-input-in-the-engine.md) · [MOO-12](https://linear.app/mooloop/issue/MOO-12) | Drivers deliver hardware input into an input bus, which becomes one more source; monitoring | engine; macOS unverified | not started |
-| [06](06-unused-takes.md) · [MOO-38](https://linear.app/mooloop/issue/MOO-38) | Find and delete takes nothing refers to | session, project, UI build | not started |
+| [02](02-one-input-menu.md) | `ChannelInput`: MIDI, an app source (channel, track, master) or a hardware input; one picker, saved | core, project, session, UI build | **landed 2026-09-18**, UI drawing deferred to 05 -- see below |
+| [03](03-capture.md) | Bounded capture of the chosen buffer at the end of each block, drained to a WAV file off the audio thread | engine, session | not started |
+| [04](04-the-take.md) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | not started |
+| [05](05-interface.md) | Record button, source meter, the growing waveform, the non-sampler rule. **Acceptance: resample a loop into a sampler and play it back** | UI build | not started |
+| [01](01-input-in-the-engine.md) | Drivers deliver hardware input into an input bus, which becomes one more source; monitoring | engine; macOS unverified | not started |
+| [06](06-unused-takes.md) | Find and delete takes nothing refers to | session, project, UI build | not started |
 
 **Why internal sources can go first without new scheduling:** capture is a
 sink, not a consumer. It reads a buffer after the whole block has rendered,
@@ -172,6 +174,26 @@ Everything but the markup, which the step itself sends to 05's contract pass.
   produce: an audio input on a non-sampler, both halves set, and a second
   recorder.
 
+## The rework, 2026-09-18
+
+What is on `main` after decisions 5, 6 and 10:
+
+- `AudioInputSource` and `Channel.audio_input` are unchanged, and independent
+  of `midi_input` -- neither resets the other. `ChannelInput` and the combined
+  picker are gone.
+- **No kind rule and no one-recorder rule.** `records_audio`,
+  `settle_input` and the three integrity repairs that enforced them are
+  deleted; any channel holds an audio input, through any change of device,
+  and any number of channels do.
+- `Session::set_channel_audio_input` beside a restored
+  `set_channel_midi_input`, and `audio_input_taps`: every channel resolved to
+  a seat, in bank order. The engine's `AudioInputRouting` is that table, still
+  per generation and still attached in `install_project`.
+- `AudioInputPicker` is the AUDIO row's menu -- Off, Master, the tracks, the
+  channels -- waiting for step 05 to draw it. **The IN row is MIDI-only
+  again**, exactly as before step 02.
+- Kit and channel documents still bring no audio input.
+
 ## Open questions for Adam
 
 Each of these changes what a step builds. They are listed here so the step
@@ -213,7 +235,8 @@ to, so none of them blocks a step; Adam can overrule any of them.
 ## Not in this plan
 
 - Per-track audio clips and anything else DAW-like (decision 1).
-- Recording more than one channel at a time.
+- ~~Recording more than one channel at a time.~~ Withdrawn 2026-09-18
+  (decision 6): several channels may record at once.
 - Separate input ports per MIDI device under JACK (`CONTROL_SURFACES.md`).
 - `#7`, the full `AudioBackend` boundary. Step 01 explains why it is not a
   prerequisite, and what would change that.

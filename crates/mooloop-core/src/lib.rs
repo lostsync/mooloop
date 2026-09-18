@@ -60,8 +60,8 @@ pub use control::{
     ControlSource, ControlTarget, ControlValue, PickupState, Takeover, TransportControl,
 };
 pub use input::{
-    audio_input_is_off, audio_record_route, audio_source_rows, records_audio, settle_input, AudioInputSource,
-    AudioRecordRoute, AudioSourceRow, AudioTap, ChannelInput, InputPicker, InputRow,
+    audio_input_is_off, audio_input_taps, audio_source_rows, AudioInputPicker, AudioInputSource,
+    AudioSourceRow, AudioTap,
 };
 pub use midi::{
     cc_bucket, ChannelMidiInput, MidiChannelFilter, MidiInputRoute, MidiInputSource, MidiKind,

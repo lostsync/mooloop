@@ -4884,31 +4884,29 @@ impl UiState {
     /// here from a list spelled in the markup, or reading a row back into a
     /// value by a `match` written here, would be the second copy.
     fn publish_midi_input(&self, window: &MainWindow, channel: &ChannelState) {
-        use mooloop_core::{ChannelInput, InputPicker, MidiChannelFilter, MIDI_CHANNEL_FILTER_ROWS};
+        use mooloop_core::{MidiChannelFilter, MidiInputSource, MIDI_CHANNEL_FILTER_ROWS};
 
-        // The IN row lists MIDI and audio inputs as one menu
-        // (`audio-recording/02`); `InputPicker` owns both halves' rows.
         let ports = &self.midi_ports;
-        let sources = self.session.audio_source_rows();
-        let picker = InputPicker::new(ports, &sources);
-        let input = ChannelInput::of(&channel.midi_input, channel.audio_input);
-        let rows: Vec<SharedString> = picker.rows().into_iter().map(SharedString::from).collect();
+        let rows: Vec<SharedString> = MidiInputSource::picker_rows(ports)
+            .into_iter()
+            .map(SharedString::from)
+            .collect();
         window.set_midi_input_options(ModelRc::from(Rc::new(VecModel::from(rows))));
-        window.set_midi_input_index(picker.row(&input) as i32);
-        // A port the project names and the system does not have, or an audio
-        // source that has been deleted. The row falls back to a neighbour, so
-        // the panel has to say this out loud or it is misreporting what the
-        // channel is set to.
-        let missing = picker.is_missing(&input);
+        window.set_midi_input_index(channel.midi_input.source.row(ports) as i32);
+        // A port the project names and the system does not have. The row falls
+        // back to "Follow Selection", so the panel has to say this out loud or
+        // it is misreporting what the channel is set to.
+        let missing = channel.midi_input.source.is_missing(ports);
         window.set_midi_input_missing(missing);
-        let missing_name = match (&input, missing) {
-            (_, false) => String::new(),
-            (ChannelInput::Midi(midi), true) => {
-                midi.source.port_name().unwrap_or_default().to_owned()
-            }
-            (ChannelInput::Audio(_), true) => "Deleted source".to_owned(),
-        };
-        window.set_midi_input_missing_name(missing_name.into());
+        window.set_midi_input_missing_name(
+            channel
+                .midi_input
+                .source
+                .port_name()
+                .filter(|_| missing)
+                .unwrap_or_default()
+                .into(),
+        );
         let channels: Vec<SharedString> = (0..MIDI_CHANNEL_FILTER_ROWS)
             .map(|row| SharedString::from(MidiChannelFilter::from_row(row).label()))
             .collect();
@@ -8026,13 +8024,13 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_channel_source_changed(move |value| {
                 let source = device_kind_from_int(value);
-                let (channel, audio_route) = {
+                let channel = {
                     let mut guard = st.borrow_mut();
                     let Some(channel) = guard.session.change_selected_source(source) else {
                         return;
                     };
                     guard.sync_row_flags();
-                    (channel, guard.session.audio_input_route())
+                    channel
                 };
                 if let Some(window) = weak.upgrade() {
                     st.borrow().refresh_editor(&window);
@@ -8043,9 +8041,6 @@ impl AppUi {
                     channel: channel as u8,
                     source,
                 });
-                // Leaving the Sampler drops an audio input (the non-sampler
-                // rule), so the engine's idea of who records may have changed.
-                tx.send_audio_input_routing(audio_route);
             });
         }
         {
@@ -8876,48 +8871,19 @@ impl AppUi {
             let weak = window.as_weak();
             let tx = cmd_tx.clone();
             window.on_midi_input_picked(move |row| {
-                use mooloop_core::{ChannelInput, InputPicker, InputRow};
                 let mut guard = st.borrow_mut();
                 let channel = guard.session.selected;
                 let ports = guard.midi_ports.clone();
-                let sources = guard.session.audio_source_rows();
-                let picked = InputPicker::new(&ports, &sources).pick(row.max(0) as usize);
-                let input = match picked {
-                    InputRow::Midi(source) => {
-                        let mut midi = guard.session.channel_midi_input(channel);
-                        midi.source = source;
-                        Some(ChannelInput::Midi(midi))
-                    }
-                    InputRow::Audio(source) => Some(ChannelInput::Audio(source)),
-                    InputRow::Heading => None,
-                };
-                let refused_audio = matches!(input, Some(ChannelInput::Audio(_)))
-                    && guard
-                        .session
-                        .channels
-                        .get(channel)
-                        .is_some_and(|state| !mooloop_core::records_audio(state.kind));
-                let changed = input
-                    .is_some_and(|input| guard.session.set_channel_input(channel, input));
-                if changed {
-                    guard.session.mark_dirty();
-                    tx.send_routing(guard.session.midi_routing(&ports));
-                    tx.send_audio_input_routing(guard.session.audio_input_route());
+                let mut input = guard.session.channel_midi_input(channel);
+                input.source = mooloop_core::MidiInputSource::from_row(row.max(0) as usize, &ports);
+                if !guard.session.set_channel_midi_input(channel, input) {
+                    return;
                 }
-                // Republished whatever happened: the menu moved its own
-                // highlight to the row that was clicked, and a heading or a
-                // refused row has to put it back.
+                guard.session.mark_dirty();
+                tx.send_routing(guard.session.midi_routing(&ports));
                 if let Some(window) = weak.upgrade() {
-                    if refused_audio {
-                        window.set_status_message(
-                            "Only a Sampler records audio — switch this channel to the Sampler first"
-                                .into(),
-                        );
-                    }
                     guard.refresh_editor(&window);
-                    if changed {
-                        guard.update_document_title(&window);
-                    }
+                    guard.update_document_title(&window);
                 }
             });
         }
@@ -8929,21 +8895,9 @@ impl AppUi {
                 let mut guard = st.borrow_mut();
                 let channel = guard.session.selected;
                 let ports = guard.midi_ports.clone();
-                // The CH row belongs to the MIDI half. With an audio input
-                // selected there is no MIDI channel to filter, so a pick is
-                // refused and the row republished.
-                let mooloop_core::ChannelInput::Midi(mut input) = guard.session.channel_input(channel)
-                else {
-                    if let Some(window) = weak.upgrade() {
-                        guard.refresh_editor(&window);
-                    }
-                    return;
-                };
+                let mut input = guard.session.channel_midi_input(channel);
                 input.channel = mooloop_core::MidiChannelFilter::from_row(row.max(0) as usize);
-                if !guard
-                    .session
-                    .set_channel_input(channel, mooloop_core::ChannelInput::Midi(input))
-                {
+                if !guard.session.set_channel_midi_input(channel, input) {
                     return;
                 }
                 guard.session.mark_dirty();
@@ -13044,15 +12998,7 @@ impl AppUi {
                                 (LoadTarget::Generator { .. }, LoadedDocument::Generator(source)) => {
                                     let mut project = current;
                                     let selected = project.selected_index();
-                                    let channel = &mut project.channels[selected].setup.channel;
-                                    channel.kind = source.kind();
-                                    // The non-sampler rule: a generator preset of
-                                    // another kind is a source switch like any other.
-                                    mooloop_core::settle_input(
-                                        channel.kind,
-                                        &mut channel.midi_input,
-                                        &mut channel.audio_input,
-                                    );
+                                    project.channels[selected].setup.channel.kind = source.kind();
                                     project.channels[selected].setup.source = *source;
                                     let mut samples = current_samples;
                                     samples[selected] = loaded_samples.into_iter().next().flatten();
@@ -14313,7 +14259,7 @@ fn install_project_in_ui(
                 &project,
                 &state.midi_ports,
             ),
-            audio_input: Session::project_audio_input_route(&project),
+            audio_input: Session::project_audio_input_taps(&project),
         }
     };
     if !handle.install_project(Arc::new(project.clone()), audio, input, keep_transport) {

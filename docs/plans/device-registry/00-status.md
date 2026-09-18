@@ -1,7 +1,5 @@
 # Device registry status
 
-Linear: project [Device registry](https://linear.app/mooloop/project/device-registry-c98b5e8712bd).
-
 Nothing has landed and no steps are written. This directory is a survey,
 written 2026-09-11 from the second of two bites taken while adding
 `EffectKind::Preamp`, and `README.md` is the whole of it.

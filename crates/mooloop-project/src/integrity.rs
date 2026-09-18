@@ -565,57 +565,6 @@ fn check_channel_ids(doctor: &mut Doctor, project: &mut Project) {
     }
 }
 
-/// The IN row's three rules, for a file that was not written by this program
-/// (`audio-recording/02`): only a Sampler takes an audio input, a channel
-/// holds at most one of its two inputs away from the default, and only one
-/// channel records audio. Each is repaired toward what the session would
-/// have done with the same gesture.
-fn check_channel_inputs(doctor: &mut Doctor, project: &mut Project) {
-    let mut recorder = None;
-    for index in 0..project.channels.len() {
-        let who = channel_name(index, &project.channels[index].setup);
-        // The source, not `channel.kind`: the source holds the parameters and
-        // is what the kind check below trusts, and judging by it keeps this
-        // rule right whichever of the two passes runs first.
-        let kind = project.channels[index].setup.source.kind();
-        let channel = &mut project.channels[index].setup.channel;
-        if channel.audio_input.is_off() {
-            continue;
-        }
-        if !mooloop_core::records_audio(kind) {
-            if doctor.correct(
-                "channel.input.audio_on_non_sampler",
-                &who,
-                "only a Sampler records audio, and this channel is not one".into(),
-                "set its input to Off".into(),
-            ) {
-                mooloop_core::settle_input(kind, &mut channel.midi_input, &mut channel.audio_input);
-            }
-            continue;
-        }
-        if channel.midi_input != mooloop_core::ChannelMidiInput::default()
-            && doctor.correct(
-                "channel.input.both",
-                &who,
-                "it has both a MIDI and an audio input, and the IN row shows one".into(),
-                "keep the audio input".into(),
-            )
-        {
-            channel.midi_input = mooloop_core::ChannelMidiInput::default();
-        }
-        if recorder.is_none() {
-            recorder = Some(index);
-        } else if doctor.correct(
-            "channel.input.second_recorder",
-            &who,
-            "another channel already records audio, and only one can".into(),
-            "set its audio input to Off".into(),
-        ) {
-            channel.audio_input = mooloop_core::AudioInputSource::Off;
-        }
-    }
-}
-
 /// [`check_channel_ids`] for the track list.
 fn check_track_ids(doctor: &mut Doctor, project: &mut Project) {
     // The same two passes for tracks, and for the same reasons. Nothing names
@@ -729,7 +678,6 @@ fn check_project(doctor: &mut Doctor, project: &mut Project) {
 
     check_channel_ids(doctor, project);
     check_track_ids(doctor, project);
-    check_channel_inputs(doctor, project);
 
     // Judged against what survived the checks above, so a selection is
     // repaired against the real bank rather than the broken one. It names a
@@ -2558,55 +2506,6 @@ mod tests {
         for id in &ids {
             assert!(project.next_channel_id > id.0);
         }
-        assert!(inspect_project(&project).is_clean());
-    }
-
-    /// A hand-edited file can hold three input states the session cannot
-    /// produce, and each is repaired toward what the gesture would have done.
-    #[test]
-    fn a_file_breaking_the_in_row_rules_is_repaired() {
-        use mooloop_core::{AudioInputSource, ChannelMidiInput, DeviceKind, MidiInputSource};
-        let mut project = Project::default();
-        project.channels[0] = ProjectChannel::mono_synth(0, 1);
-        project.channels.push(ProjectChannel::sampler(1, 1));
-        project.channels.push(ProjectChannel::sampler(2, 1));
-        project.assign_channel_ids();
-        let all_ports = ChannelMidiInput {
-            source: MidiInputSource::AllPorts,
-            ..ChannelMidiInput::default()
-        };
-        // A mono synth that records audio.
-        assert_ne!(project.channels[0].setup.channel.kind, DeviceKind::Sampler);
-        project.channels[0].setup.channel.audio_input = AudioInputSource::Master;
-        // A sampler with both halves set.
-        project.channels[1].setup.channel.audio_input = AudioInputSource::Master;
-        project.channels[1].setup.channel.midi_input = all_ports;
-        // A second recorder.
-        project.channels[2].setup.channel.audio_input = AudioInputSource::Master;
-
-        assert_eq!(
-            codes(&inspect_project(&project)),
-            [
-                "channel.input.audio_on_non_sampler",
-                "channel.input.both",
-                "channel.input.second_recorder",
-            ]
-        );
-        let diagnosis = repair_project(&mut project);
-        assert!(diagnosis.is_usable(), "{diagnosis:?}");
-        let inputs: Vec<_> = project
-            .channels
-            .iter()
-            .map(|channel| (channel.setup.channel.midi_input.source.clone(), channel.setup.channel.audio_input))
-            .collect();
-        assert_eq!(
-            inputs,
-            [
-                (MidiInputSource::Off, AudioInputSource::Off),
-                (MidiInputSource::FollowSelection, AudioInputSource::Master),
-                (MidiInputSource::FollowSelection, AudioInputSource::Off),
-            ]
-        );
         assert!(inspect_project(&project).is_clean());
     }
 

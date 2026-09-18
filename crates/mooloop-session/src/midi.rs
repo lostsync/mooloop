@@ -13,8 +13,8 @@
 //! shared.
 
 use mooloop_core::{
-    audio_record_route, audio_source_rows, records_audio, AudioInputSource, AudioRecordRoute,
-    AudioSourceRow, ChannelInput, ChannelMidiInput, ControlBinding, ControlLearn, ControlMode, ControlOutcome, ControlTarget,
+    audio_input_taps, audio_source_rows, AudioInputSource, AudioSourceRow, AudioTap,
+    ChannelMidiInput, ControlBinding, ControlLearn, ControlMode, ControlOutcome, ControlTarget,
     EffectSlotState, EffectTarget, EngineCommand, MidiInputRoute, MidiKind, MidiMessage,
     MidiPortInfo, NoteEvent, ParamAddr, ParamDescriptor, ParamOwner, Project, Takeover,
     TransportControl, STRIP_PARAM_PAN, STRIP_PARAM_VOLUME,
@@ -102,77 +102,61 @@ impl Session {
             .unwrap_or_default()
     }
 
-    /// What a channel's IN row is set to.
-    pub fn channel_input(&self, channel: usize) -> ChannelInput {
-        self.channels
-            .get(channel)
-            .map(|state| ChannelInput::of(&state.midi_input, state.audio_input))
-            .unwrap_or(ChannelInput::Midi(ChannelMidiInput::default()))
-    }
-
-    /// Point a channel at an input, MIDI or audio. Returns whether anything
-    /// changed, so a picker that republishes its own value does not dirty the
-    /// document.
-    ///
-    /// Two rules live here and nowhere else in the session:
-    ///
-    /// - **Only a Sampler takes an audio input** (Adam, 2026-09-17). The rows
-    ///   are shown on every channel and refused here on the rest.
-    /// - **Only one channel records audio at a time**, so picking an audio
-    ///   input clears it from whichever channel had one; that channel goes
-    ///   back to its default, Follow Selection.
-    pub fn set_channel_input(&mut self, channel: usize, input: ChannelInput) -> bool {
-        let Some(state) = self.channels.get(channel) else {
+    /// Point a channel at a MIDI input. Returns whether anything changed, so
+    /// a picker that republishes its own value does not dirty the document.
+    pub fn set_channel_midi_input(&mut self, channel: usize, input: ChannelMidiInput) -> bool {
+        let Some(state) = self.channels.get_mut(channel) else {
             return false;
         };
-        if let ChannelInput::Audio(source) = input {
-            if !source.is_off() && !records_audio(state.kind) {
-                return false;
-            }
-        }
-        let (mut midi, mut audio) = (state.midi_input.clone(), state.audio_input);
-        input.store(&mut midi, &mut audio);
-        if (&midi, audio) == (&state.midi_input, state.audio_input) {
+        if state.midi_input == input {
             return false;
         }
-        if !audio.is_off() {
-            for other in &mut self.channels {
-                other.audio_input = AudioInputSource::Off;
-            }
-        }
-        let state = &mut self.channels[channel];
-        state.midi_input = midi;
-        state.audio_input = audio;
+        state.midi_input = input;
         true
     }
 
-    /// The channel that records audio and where from, resolved to seats for
+    /// Point a channel at an audio source. Independent of its MIDI input, and
+    /// open to every channel and to any number of them at once
+    /// (`audio-recording`, decisions 5, 6 and 10): a channel is a dumb slot,
+    /// and a device with no use for audio simply ignores it.
+    pub fn set_channel_audio_input(&mut self, channel: usize, source: AudioInputSource) -> bool {
+        let Some(state) = self.channels.get_mut(channel) else {
+            return false;
+        };
+        if state.audio_input == source {
+            return false;
+        }
+        state.audio_input = source;
+        true
+    }
+
+    /// Every channel's audio input resolved to a seat, in channel order, for
     /// [`EngineHandle::set_audio_input_routing`].
     ///
     /// [`EngineHandle::set_audio_input_routing`]: mooloop_engine::EngineHandle::set_audio_input_routing
-    pub fn audio_input_route(&self) -> Option<AudioRecordRoute> {
+    pub fn audio_input_taps(&self) -> Vec<Option<AudioTap>> {
         let channels: Vec<_> = self
             .channels
             .iter()
             .map(|channel| (channel.id, channel.audio_input))
             .collect();
         let tracks: Vec<_> = self.buses.iter().map(|track| track.id).collect();
-        audio_record_route(&channels, &tracks)
+        audio_input_taps(&channels, &tracks)
     }
 
     /// The same over a document, for the routing an install carries -- see
     /// [`Self::project_midi_routing`].
-    pub fn project_audio_input_route(project: &Project) -> Option<AudioRecordRoute> {
+    pub fn project_audio_input_taps(project: &Project) -> Vec<Option<AudioTap>> {
         let channels: Vec<_> = project
             .channels
             .iter()
             .map(|channel| (channel.id, channel.setup.channel.audio_input))
             .collect();
         let tracks: Vec<_> = project.buses.iter().map(|track| track.id).collect();
-        audio_record_route(&channels, &tracks)
+        audio_input_taps(&channels, &tracks)
     }
 
-    /// The audio sources the IN row lists, from the bank as it is now.
+    /// The rows the AUDIO picker lists, from the bank as it is now.
     pub fn audio_source_rows(&self) -> Vec<AudioSourceRow> {
         audio_source_rows(
             self.buses.iter().map(|track| (track.id, track.bus.name.as_str())),
@@ -875,65 +859,46 @@ mod tests {
         assert!(note.duration_ticks >= 1);
     }
 
-    /// Only a Sampler takes an audio input; every other kind refuses it and
-    /// keeps what it had.
+    /// A channel is a dumb slot: any channel takes an audio input, whatever
+    /// its device, and keeps it through a change of device -- a device with
+    /// no use for audio ignores it rather than losing it.
     #[test]
-    fn only_a_sampler_takes_an_audio_input() {
+    fn any_channel_takes_an_audio_input_and_keeps_it() {
         let mut session = Session::default();
-        session.channels.push(crate::channel::ChannelState::new(1));
-        session.reset_channel_source(1, mooloop_core::DeviceKind::DrumSynth);
+        session.reset_channel_source(0, mooloop_core::DeviceKind::DrumSynth);
+        assert!(session.set_channel_audio_input(0, AudioInputSource::Master));
+        assert!(!session.set_channel_audio_input(0, AudioInputSource::Master), "not an edit twice");
 
-        assert!(session.set_channel_input(0, ChannelInput::Audio(AudioInputSource::Master)));
-        assert_eq!(session.channel_input(0), ChannelInput::Audio(AudioInputSource::Master));
-        assert!(!session.set_channel_input(1, ChannelInput::Audio(AudioInputSource::Master)));
-        assert!(session.channels[1].audio_input.is_off());
-    }
-
-    /// Only one channel records audio: picking an audio input on one clears
-    /// it from the other, which goes back to following the selection.
-    #[test]
-    fn one_channel_records_audio_at_a_time() {
-        let mut session = Session::default();
-        session.channels.push(crate::channel::ChannelState::new(1));
-        assert!(session.set_channel_input(0, ChannelInput::Audio(AudioInputSource::Master)));
-        let first = session.channels[0].id;
-        assert!(session.set_channel_input(
-            1,
-            ChannelInput::Audio(AudioInputSource::Channel(first))
-        ));
-        assert_eq!(session.channel_input(0), ChannelInput::Midi(ChannelMidiInput::default()));
-        assert_eq!(
-            session.audio_input_route(),
-            Some(mooloop_core::AudioRecordRoute {
-                channel: 1,
-                tap: mooloop_core::AudioTap::Channel(0),
-            })
-        );
-    }
-
-    /// Leaving the Sampler drops an audio input to Off in the same edit, so
-    /// the document an undo restores holds both the old source and the old
-    /// input; switching back does not bring the input back by itself.
-    #[test]
-    fn leaving_the_sampler_drops_the_audio_input_and_an_undo_restores_both() {
-        let mut session = Session::default();
-        assert!(session.set_channel_input(0, ChannelInput::Audio(AudioInputSource::Master)));
-        let before = session.project_snapshot(120, 0);
-
-        session.reset_channel_source(0, mooloop_core::DeviceKind::MlP8);
-        assert!(session.channels[0].audio_input.is_off());
-        assert_eq!(session.channels[0].midi_input.source, MidiInputSource::Off);
         session.reset_channel_source(0, mooloop_core::DeviceKind::Sampler);
-        assert!(session.channels[0].audio_input.is_off(), "restored by a switch back");
+        session.reset_channel_source(0, mooloop_core::DeviceKind::MlP8);
+        assert_eq!(session.channels[0].audio_input, AudioInputSource::Master);
+    }
 
-        session.replace_project(&before, &[]);
-        assert_eq!(session.channels[0].kind, mooloop_core::DeviceKind::Sampler);
-        assert_eq!(session.channel_input(0), ChannelInput::Audio(AudioInputSource::Master));
+    /// Any number of channels hold an audio input at once, and it is
+    /// independent of the MIDI input: setting one leaves the other alone.
+    #[test]
+    fn many_channels_hold_audio_inputs_beside_their_midi_inputs() {
+        let mut session = Session::default();
+        session.channels.push(crate::channel::ChannelState::new(1));
+        let keys = ChannelMidiInput {
+            source: MidiInputSource::AllPorts,
+            ..ChannelMidiInput::default()
+        };
+        assert!(session.set_channel_midi_input(0, keys.clone()));
+        assert!(session.set_channel_audio_input(0, AudioInputSource::Master));
+        let first = session.channels[0].id;
+        assert!(session.set_channel_audio_input(1, AudioInputSource::Channel(first)));
+
+        assert_eq!(session.channels[0].midi_input, keys, "the MIDI input survived");
+        assert_eq!(
+            session.audio_input_taps(),
+            [Some(AudioTap::Master), Some(AudioTap::Channel(0))]
+        );
     }
 
     /// A channel recording another keeps recording *that channel* across a
     /// channel move and a track move, because it names an id; once the
-    /// source is deleted it records nothing, and the picker says it is
+    /// source is deleted it resolves to nothing, and the picker says it is
     /// missing.
     #[test]
     fn a_recording_follows_its_source_by_identity() {
@@ -947,25 +912,22 @@ mod tests {
         project.channels[2].setup.channel.audio_input = AudioInputSource::Channel(source);
 
         project.move_channel(0, 1).expect("a real move");
-        let route = Session::project_audio_input_route(&project).expect("records");
-        assert_eq!(route.tap, mooloop_core::AudioTap::Channel(1));
-        assert_eq!(route.channel, 2);
+        assert_eq!(Session::project_audio_input_taps(&project)[2], Some(AudioTap::Channel(1)));
 
         project.channels[2].setup.channel.audio_input = AudioInputSource::Track(track_id);
         project.add_track().expect("room");
         project.move_track(1, 2).expect("a real move");
-        let route = Session::project_audio_input_route(&project).expect("records");
-        assert_eq!(route.tap, mooloop_core::AudioTap::Track(2));
+        assert_eq!(Session::project_audio_input_taps(&project)[2], Some(AudioTap::Track(2)));
 
         project.channels[2].setup.channel.audio_input = AudioInputSource::Channel(source);
         project.remove_channel(1).expect("the source");
-        assert_eq!(Session::project_audio_input_route(&project), None);
+        assert_eq!(Session::project_audio_input_taps(&project)[1], None);
 
         let mut session = Session::default();
         session.replace_project(&project, &[]);
         let rows = session.audio_source_rows();
-        let picker = mooloop_core::InputPicker::new(&[], &rows);
-        assert!(picker.is_missing(&session.channel_input(1)));
+        let picker = mooloop_core::AudioInputPicker::new(&rows);
+        assert!(picker.is_missing(session.channels[1].audio_input));
     }
 
     /// A channel's input resolves to what the engine runs on, in channel
@@ -974,20 +936,20 @@ mod tests {
     fn routing_is_resolved_in_channel_order() {
         let mut session = Session::default();
         session.channels.push(crate::channel::ChannelState::new(1));
-        assert!(session.set_channel_input(
+        assert!(session.set_channel_midi_input(
             1,
-            ChannelInput::Midi(ChannelMidiInput {
+            ChannelMidiInput {
                 source: MidiInputSource::Port("Launchkey MK3".to_owned()),
                 channel: MidiChannelFilter::One(9),
-            })
+            }
         ));
         // Setting the same thing twice is not an edit.
-        assert!(!session.set_channel_input(
+        assert!(!session.set_channel_midi_input(
             1,
-            ChannelInput::Midi(ChannelMidiInput {
+            ChannelMidiInput {
                 source: MidiInputSource::Port("Launchkey MK3".to_owned()),
                 channel: MidiChannelFilter::One(9),
-            })
+            }
         ));
 
         let routing = session.midi_routing(&ports());

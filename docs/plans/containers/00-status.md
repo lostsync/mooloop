@@ -1,7 +1,5 @@
 # Containers plan status
 
-Linear: project [Containers and the layer device](https://linear.app/mooloop/project/containers-and-the-layer-device-c3b66731e028).
-
 **Step 06 decided 2026-09-18: build a layer device** (Adam: *"i do want a
 layer device"*). It needs a work order; see the note at the top of
 `06-layers-and-selectors.md`. Steps 01-05 are unchanged.

@@ -616,9 +616,9 @@ impl SharedCells {
     }
 
     /// The store behind [`EngineHandle::set_audio_input_routing`].
-    fn set_audio_input_routing(&self, route: Option<mooloop_core::AudioRecordRoute>) {
+    fn set_audio_input_routing(&self, taps: Vec<Option<mooloop_core::AudioTap>>) {
         self.audio_input_routing
-            .store(Arc::new(render::AudioInputRouting { route }));
+            .store(Arc::new(render::AudioInputRouting { taps }));
     }
 
     /// Point `render` at these cells in place of its private ones.
@@ -658,9 +658,9 @@ pub struct InputState {
     /// writes go to that cell once the install is queued -- so neither
     /// renderer ever reads the other's channel order.
     pub midi_routing: Vec<mooloop_core::MidiInputRoute>,
-    /// Which channel of the *incoming* project records audio, and from which
-    /// of its seats -- [`Self::midi_routing`]'s twin, for the same reason.
-    pub audio_input: Option<mooloop_core::AudioRecordRoute>,
+    /// Which of the *incoming* project's seats each of its channels records
+    /// from -- [`Self::midi_routing`]'s twin, for the same reason.
+    pub audio_input: Vec<Option<mooloop_core::AudioTap>>,
 }
 
 /// Which strips `incoming` can take over from the generation built for `live`.
@@ -877,7 +877,7 @@ fn prepare_render_state(
             routes: input.midi_routing.clone(),
         })),
         audio_input_routing: Arc::new(ArcSwap::from_pointee(render::AudioInputRouting {
-            route: input.audio_input,
+            taps: input.audio_input.clone(),
         })),
         ..shared.clone()
     };
@@ -1285,11 +1285,11 @@ impl EngineHandle {
         self.shared.set_midi_routing(routes);
     }
 
-    /// Install which channel records audio and from where, resolved to seats
-    /// by `Session::audio_input_route`. Call it when a channel's input
+    /// Install which seat each channel records from, resolved by
+    /// `Session::audio_input_taps`. Call it when a channel's AUDIO row
     /// changes; an install carries its own in [`InputState::audio_input`].
-    pub fn set_audio_input_routing(&self, route: Option<mooloop_core::AudioRecordRoute>) {
-        self.shared.set_audio_input_routing(route);
+    pub fn set_audio_input_routing(&self, taps: Vec<Option<mooloop_core::AudioTap>>) {
+        self.shared.set_audio_input_routing(taps);
     }
 
     /// The MIDI inputs available to pick from right now.
@@ -1602,11 +1602,11 @@ mod install_tests {
     /// same shape.
     #[test]
     fn an_install_carries_its_own_audio_input_routing() {
-        use mooloop_core::{AudioRecordRoute, AudioTap};
+        use mooloop_core::AudioTap;
         let project = Project::default();
         let startup = SharedCells::new();
-        let before = AudioRecordRoute { channel: 0, tap: AudioTap::Master };
-        let after = AudioRecordRoute { channel: 0, tap: AudioTap::Channel(0) };
+        let before = vec![Some(AudioTap::Master)];
+        let after = vec![Some(AudioTap::Channel(0))];
 
         let (outgoing, live) = prepare_render_state(
             &startup,
@@ -1614,11 +1614,11 @@ mod install_tests {
             render::channel_audio_bank(Vec::new()),
             &project,
             &InputState {
-                audio_input: Some(before),
+                audio_input: before.clone(),
                 ..InputState::default()
             },
         );
-        assert_eq!(outgoing.audio_input_route(), Some(before));
+        assert_eq!(outgoing.audio_input_taps(), before);
 
         let (incoming, live) = prepare_render_state(
             &live,
@@ -1627,13 +1627,13 @@ mod install_tests {
             &project,
             &InputState::default(),
         );
-        assert_eq!(incoming.audio_input_route(), None, "the incoming project's own");
-        assert_eq!(outgoing.audio_input_route(), Some(before), "the outgoing keeps its own");
+        assert!(incoming.audio_input_taps().is_empty(), "the incoming project's own");
+        assert_eq!(outgoing.audio_input_taps(), before, "the outgoing keeps its own");
 
         // A later write -- a picker change -- is about the live project and
         // reaches only its renderer.
-        live.set_audio_input_routing(Some(after));
-        assert_eq!(incoming.audio_input_route(), Some(after));
-        assert_eq!(outgoing.audio_input_route(), Some(before));
+        live.set_audio_input_routing(after.clone());
+        assert_eq!(incoming.audio_input_taps(), after);
+        assert_eq!(outgoing.audio_input_taps(), before);
     }
 }

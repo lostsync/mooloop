@@ -1,7 +1,5 @@
 # theming — status
 
-Linear: project [Theming](https://linear.app/mooloop/project/theming-beb2299b6232).
-
 Unparked 2026-09-15 by Adam, with a brief that is wider than the plan this
 directory was written to:
 

@@ -447,10 +447,6 @@ impl Session {
         // statement about either.
         let named_by_user = channel.name != channel.kind.default_channel_name(index);
         channel.kind = kind;
-        // The non-sampler rule, in the same edit as the change of source so
-        // one undo restores both: an audio input does not survive leaving
-        // the Sampler, and lands on Off rather than Follow Selection.
-        mooloop_core::settle_input(kind, &mut channel.midi_input, &mut channel.audio_input);
         if !named_by_user {
             channel.name = kind.default_channel_name(index);
         }

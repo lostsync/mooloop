@@ -1,7 +1,5 @@
 # Fix the edit loop — plan status
 
-Linear: project [Edit loop](https://linear.app/mooloop/project/edit-loop-f3661f76ed2c).
-
 **Steps 01 and 02 landed 2026-09-04. Step 03 is closed unstarted, on a
 measurement. Step 04 waits on one number that only a future session can
 produce.** Written 2026-09-03, out of a session that went looking for whether

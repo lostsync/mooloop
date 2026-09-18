@@ -150,10 +150,10 @@ pub struct Channel {
     /// configured does not grow a table of defaults on disk.
     #[serde(default, skip_serializing_if = "is_default_midi_input")]
     pub midi_input: crate::midi::ChannelMidiInput,
-    /// Where this channel records audio from, if anywhere. The other half of
-    /// the IN row beside `midi_input`: at most one of the two is away from
-    /// its default -- see [`crate::ChannelInput`]. Defaulted and omitted when
-    /// `Off`, so a song written before it loads and saves byte-identically.
+    /// Where this channel records audio from, if anywhere: the AUDIO row,
+    /// beside and independent of `midi_input`. Any channel may hold one,
+    /// whatever its device. Defaulted and omitted when `Off`, so a song
+    /// written before it loads and saves byte-identically.
     #[serde(default, skip_serializing_if = "crate::audio_input_is_off")]
     pub audio_input: crate::AudioInputSource,
 }
