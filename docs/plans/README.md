@@ -9,18 +9,28 @@ directory should always contain live work.
 `docs/FOCUS.md` decides which of these is next. This file only says what state
 each one is in.
 
+`incremental-structure/` was added 2026-09-17, **not started**, out of Adam's
+reaction to hearing `channel-identity/04`: the engine already changes its
+graph without missing a sample for every device edit and for adding a channel,
+and ought to do the same for the rest. It is the continuation of
+`channel-identity/` rather than a new idea -- that plan removed most of the
+reason positional identity made this hard.
+
 `coreaudio-driver/` was added 2026-09-13 and is **in progress, outside the
 `FOCUS.md` sequence**, because Adam asked for it directly: he wants to develop
 on a Mac as well as on Fedora. It builds a Core Audio driver beside JACK,
 chosen at compile time, and stops short of packaging or a macOS release. Every
 step has landed; the macOS CI job is the one thing that has not yet run.
 
-`channel-identity/` and `audio-recording/` were added 2026-09-17, **not
-started, outside the `FOCUS.md` sequence**, from Adam's answers to the
-architecture section of `reports/fable-2026-09-17.md`. `channel-identity/`
-gives a channel a durable id, the way devices already have one, and ends with
-an engine that keeps strips across an install. That ends "every structural
-edit stops the song", and it has to land before `plugin-hosting/` step 06.
+`channel-identity/` and `audio-recording/` were added 2026-09-17, **outside
+the `FOCUS.md` sequence**, from Adam's answers to the architecture section of
+`reports/fable-2026-09-17.md`. `channel-identity/` gives a channel a durable
+id, the way devices already have one, and ends with an engine that keeps
+strips across an install. **All five steps landed 2026-09-17**; step 06,
+three saved fields that still name another channel by position, is what is
+left, and half of it has been waiting on the engine map step 05 built.
+`plugin-hosting/` step 06 is thereby unblocked. `audio-recording/` is not
+started.
 `audio-recording/` is `SCOPE.md` items 3 and the audio half of 5, in Adam's
 shape: a take goes into the channel's sampler, and one input menu chooses
 between audio and MIDI. Its five open questions were all answered by Adam on
