@@ -62,7 +62,22 @@ The kept one was verified failing against the tree with the copy disabled,
 which is the same discipline `AGENTS.md` asks of a `dupe-audit` check: run it
 before the fix or it is decoration.
 
-## Acceptance
+## Acceptance — listened to 2026-09-17
 
-Not yet listened to. Move a channel while a song plays: the song should keep
-going, and a dropout where the tails are cut is expected until step 05.
+Adam moved a channel with a song playing. **Time is kept**; the song carries
+on from where it was, which is what this step was for. Audio drops out for a
+split second, and his reading was that it sounded like only the reordered
+channel was affected.
+
+**It is not.** Measured at the executor the same day
+(`every_install_silences_every_voice_until_strips_are_kept`): a *null*
+install -- the same project, nothing moved, nothing changed -- takes the
+master to exact silence just as completely as a reorder does. Two channels
+were holding notes and both stopped. A drum channel hides it because the next
+hit arrives within a step, which is why it was hard to tell on one.
+
+So the dropout is the fresh graph, not the reorder, and it is on every
+channel rather than the moved one. That is what step 05 is for, and the
+measurement is kept as a test so the change it makes is provable rather than
+described: when strips survive an install, an install that changes nothing
+should change nothing audible, and that test inverts.

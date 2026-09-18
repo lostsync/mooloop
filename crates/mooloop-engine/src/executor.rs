@@ -468,6 +468,101 @@ mod tests {
         );
     }
 
+    /// **Today, any install silences every voice in the song** -- including
+    /// on channels the edit never touched, and including when the edit
+    /// changed nothing at all.
+    ///
+    /// Measured 2026-09-17, after Adam listened to step 04 and reported that
+    /// a channel move dropped audio and that it sounded like only the moved
+    /// channel was affected. It is not: the null install below, which hands
+    /// the executor the *same project*, silences the master exactly as
+    /// completely as the reorder does. A drum channel hides it because the
+    /// next hit arrives within a step; a sustained sound does not.
+    ///
+    /// The reason is that the incoming renderer is a fresh graph. Voices,
+    /// tails, delay lines and compensation rings all belong to the outgoing
+    /// `RenderState` and leave with it. Step 04 carried the transport across;
+    /// this is the part it deliberately did not fix.
+    ///
+    /// **This test is expected to be inverted by
+    /// `docs/plans/channel-identity/05-strips-by-id.md`**, which keeps the
+    /// node of any chain whose id and contents survive an install. When it
+    /// lands, an install that changes nothing should change nothing audible,
+    /// and this becomes an assertion that the sound *continues*. It is
+    /// written down as a measurement now so that the change is provable
+    /// rather than described.
+    #[test]
+    fn every_install_silences_every_voice_until_strips_are_kept() {
+        let project = two_held_notes();
+
+        let baseline = held_note_rms(&project, None);
+        assert!(baseline > 1e-3, "nothing was sounding to measure: {baseline}");
+
+        let after_null = held_note_rms(&project, Some(project.clone()));
+        let mut reordered = project.clone();
+        reordered.move_channel(0, 1).expect("a real move");
+        let after_move = held_note_rms(&project, Some(reordered));
+
+        assert_eq!(
+            (after_null, after_move),
+            (0.0, 0.0),
+            "an install left something sounding, which is step 05's job and \
+             not yet expected: null {after_null}, move {after_move}"
+        );
+    }
+
+    /// Two channels, each holding a long note, so a cut voice is audible
+    /// rather than being hidden by the next hit.
+    fn two_held_notes() -> Project {
+        let mut project = Project::default();
+        project.channels.push(mooloop_core::ProjectChannel::mono_synth(1, 1));
+        project.pattern_lengths[0] = 16;
+        for (index, channel) in project.channels.iter_mut().enumerate() {
+            channel.setup = mooloop_core::ChannelSetup::mono_synth(format!("held {index}"));
+            channel.notes[0].push(mooloop_core::NoteEvent::new(
+                1,
+                0,
+                96 * 8,
+                60 + index as u8 * 7,
+                100,
+            ));
+        }
+        project.assign_channel_ids();
+        project
+    }
+
+    /// Render `project` until its notes are sounding, optionally swap
+    /// `install` in, and report the level of the block right after.
+    fn held_note_rms(project: &Project, install: Option<Project>) -> f32 {
+        let (mut cmd_tx, cmd_rx) = rtrb::RingBuffer::new(8);
+        let (evt_tx, _evt_rx) = rtrb::RingBuffer::new(8);
+        let (reclaim_tx, _reclaim_rx) = rtrb::RingBuffer::new(8);
+        let mut executor = Executor::new(
+            ExecutorIo { cmd_rx, evt_tx, reclaim_tx },
+            Box::new(RenderState::from_project(SAMPLE_RATE, project, &[])),
+            Arc::new(AtomicU64::new(0)),
+            SAMPLE_RATE,
+            LoadMeters::new(),
+        );
+        let mut out_l = [0.0f32; BLOCK];
+        let mut out_r = [0.0f32; BLOCK];
+        executor.render.play();
+        for _ in 0..40 {
+            executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        }
+        if let Some(install) = install {
+            cmd_tx
+                .push(RealtimeCommand::InstallProject(PreparedProject {
+                    generation: 1,
+                    render: Box::new(RenderState::from_project(SAMPLE_RATE, &install, &[])),
+                    keep_transport: true,
+                }))
+                .expect("room in the ring");
+        }
+        executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        (out_l.iter().map(|s| s * s).sum::<f32>() / out_l.len() as f32).sqrt()
+    }
+
     /// The other half: opening a document stops and rewinds, which is what
     /// opening a document means.
     #[test]
@@ -491,3 +586,4 @@ mod tests {
         assert_eq!(executor.render.transport().position_ticks, 0.0);
     }
 }
+
