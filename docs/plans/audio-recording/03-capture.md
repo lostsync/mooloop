@@ -46,8 +46,44 @@
 - This thread is the only place that does file I/O for a take. It also
   finalizes the WAV header when the take ends.
 
+## What an install mid-take does to the ring
+
+Named here because `reports/fable-2026-09-18.md` found the step did not say.
+The ring reaches the renderer through a structural command, and a project
+install replaces the whole renderer
+(`crates/mooloop-engine/src/executor.rs:226`). Nothing in `InputState`
+(`crates/mooloop-engine/src/lib.rs:574-586`) carries it, so **as written,
+any structural edit during a take silently stops the capture**: the incoming
+renderer has no ring, the drain thread sees a producer that never writes
+again, and the take ends without a `CaptureEnded` — the failure mode this
+plan's overflow rule exists to avoid, arriving by a different door. Today
+every structural edit also stops the transport, so a take cannot survive one
+anyway; `channel-identity/04` removes exactly that, which is when this
+becomes reachable.
+
+Two ways out, and this plan takes the second:
+
+1. The ring travels in `InputState`. One more hand-carried field in the list
+   that has needed patching three times this month (record arm, then routing
+   twice), and it is the wrong shape besides: the ring belongs to a channel,
+   and an edit that renumbers channels is precisely what the carry has to
+   survive.
+2. **Step 03 waits for `channel-identity/05`.** Once a strip is matched by
+   `ChannelId` and moved into the new generation rather than rebuilt, the
+   capture ring is per-channel state on a carried strip and survives the swap
+   for the same reason the strip's delay tail does. A take then ends when the
+   channel is deleted, which is the rule a user would predict.
+
+So `channel-identity/05` is a prerequisite for this step, not only for
+`plugin-hosting/06`. If step 03 is nevertheless built first, it must state
+what an install does to an open take and make it a counted, visible end
+rather than a silent one.
+
 ## Test
 
+- **Install mid-take:** with `channel-identity/05` landed, a structural edit
+  during a take carries the ring with the strip and the take continues across
+  the swap, with no gap in the written file and no overflow counted.
 - **Engine:** armed and playing, a known input yields the same frames in the
   ring, and a start event at the right tick on the first pass and the second
   pass. No allocations and no frees in any block.
