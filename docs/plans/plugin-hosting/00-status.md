@@ -1,5 +1,11 @@
 # Plugin hosting — plan status
 
+Linear: [MOO-11](https://linear.app/mooloop/issue/MOO-11/clap-plugin-hosting-effects-instruments),
+filed before the docs/plans-into-Linear migration and not yet rewritten to
+mirror this file step-for-step the way MOO-5/16/30 do. The GitHub issue
+numbers below (`#10`, `#26`-`#30`) predate Adam's move away from GitHub
+issues; MOO-11 is the live tracking issue.
+
 **Written 2026-09-16. Nothing has landed.** Adam asked for it directly:
 *"let's go ahead and plan out how we'll add CLAP support. Later we'll add
 VST/3 and AU. instrument support as well."* `SCOPE.md` already put CLAP in

@@ -1,5 +1,12 @@
 # Channel identity — plan status
 
+Linear: [MOO-15](https://linear.app/mooloop/issue/MOO-15/channel-identity-give-a-channel-a-durable-channelid)
+(Done). Step 06 split into
+[MOO-31](https://linear.app/mooloop/issue/MOO-31/control-bindings-name-a-channel-by-id-not-by-seat),
+[MOO-32](https://linear.app/mooloop/issue/MOO-32/aux-ins-source-a-durable-identity-beside-the-position-parameter) and
+[MOO-33](https://linear.app/mooloop/issue/MOO-33/the-envelope-gate-names-a-channel-by-id)
+(all Done).
+
 **Written 2026-09-17. Finished, heard and archived 2026-09-18.** All six steps
 landed. Adam, on the finished arc:
 

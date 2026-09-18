@@ -1,5 +1,10 @@
 # Incremental structure — plan status
 
+Linear: [MOO-30](https://linear.app/mooloop/issue/MOO-30/incremental-structure-stop-swapping-the-whole-renderstate-for-an-edit).
+Adam is not chasing this (2026-09-18, after hearing `channel-identity`'s
+finished arc) — it stays open as a record of the remaining glitch, not as
+queued work. If it is picked up, only steps 01-02 ("the cheap half" below).
+
 **Written 2026-09-17. Nothing has landed.** It came out of Adam's reaction to
 `channel-identity/04`, on hearing a channel move drop audio:
 

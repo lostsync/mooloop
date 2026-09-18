@@ -1,5 +1,11 @@
 # Audio recording — plan status
 
+Linear: [MOO-16](https://linear.app/mooloop/issue/MOO-16/audio-recording-one-input-menu-takes-go-into-the-sampler)
+mirrors this file. [MOO-12](https://linear.app/mooloop/issue/MOO-12/audio-input) predates this
+plan (same `SCOPE.md` item, filed before the migration) and is kept open as
+the earlier tracking issue for the input side; MOO-16 is where the plan's
+current shape lives.
+
 **Written 2026-09-17. Nothing has landed.** This is `SCOPE.md` §2 item 3
 (audio input) together with the audio half of item 5 (recording), in the shape
 Adam settled on 2026-09-17.

@@ -1,5 +1,7 @@
 # Plan: The channel buffer device
 
+Linear: [MOO-5](https://linear.app/mooloop/issue/MOO-5/turn-buffer-into-a-composition-workflow).
+
 A retained-audio device that is always recording the last N bars, and a set of
 controls for turning that history into an instrument. `docs/BUFFER_ENGINE.md`
 is the hypothesis; the numbered files here are the work order and win where
