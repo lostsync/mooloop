@@ -78,6 +78,29 @@ than against a memory.
 
 Each of the two hazard fixes was verified failing with its fix disabled.
 
+## Acceptance — listened to 2026-09-18
+
+Adam: *"it's a lot better than it was. there's still a little glitchy sound
+when you move a track but it isnt very bad. not something you'd wanna do
+during a set or while recording but its not jarring when it happens during
+production."*
+
+So the channel cases are closed by ear, and **the remaining glitch is a track
+move**, which is what this step left out. Two things make a track move worse
+than a channel move, and the second was not obvious:
+
+1. Every `BusStrip` is rebuilt, because a track has no identity.
+2. **Every channel feeding a moved track is rebuilt too.**
+   `rescope_tracks_after` renumbers `channel.setup.channel.bus`
+   (`project.rs`), which changes that channel's `ChannelSetup` -- so
+   `carry_plan` rejects it and it loses its voices and tails along with the
+   buses.
+
+The second is worth noticing because it means a `TrackId` buys more than the
+bus strips: with `channel.bus` holding an id, a track move stops touching the
+channel's setup at all and every channel carries. See
+`incremental-structure/`.
+
 ## What is still not done
 
 **Tracks still take the whole-swap path.** A track added, removed or moved

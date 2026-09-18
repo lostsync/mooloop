@@ -82,7 +82,7 @@ actually ready to build.
 | [02](02-cross-channel-addresses.md) | `selected_channel` holds an id | core, project, session | **landed 2026-09-17**, one field of four |
 | [03](03-session-keys.md) | Session state keyed by id; the parallel sample list folds into the channel | session, UI build | **landed 2026-09-17** |
 | [04](04-keep-the-transport.md) | An install carries the transport across (the interim fix `LOOSE_ENDS.md` names) | engine, UI | **landed 2026-09-17**, listened to |
-| [05](05-strips-by-id.md) | The engine keeps strips whose id and chain survive an install | engine | **landed 2026-09-17**, not yet listened to |
+| [05](05-strips-by-id.md) | The engine keeps strips whose id and chain survive an install | engine | **landed 2026-09-17**, listened to 2026-09-18 |
 | [06](06-the-remaining-cross-channel-addresses.md) | The other three fields that name another channel | core, session, dsp | not started, and three separate jobs: the control binding is ready (MOO-31), Aux In is decided but unbuilt (MOO-32), the gate waits on `incremental-structure/` 02 (MOO-33) |
 
 Tracks (`BusSetup`) have the same problem under `TrackEdit` and the same
@@ -214,9 +214,13 @@ could copy whatever 05 learned) and a `ChannelId` on the strip itself.
 
 None of these needs Adam before step 04.
 
-- **Step 05 has not been listened to.** Move and delete channels while a song
-  with delay and reverb tails plays: nothing should cut except the channel
-  deleted, and a channel whose chain you edited.
+- **Step 05 was listened to on 2026-09-18 and the channel cases are closed.**
+  Adam: *"a lot better than it was... not jarring when it happens during
+  production."* What is left is a **track** move, which still glitches --
+  and not only because bus strips are rebuilt: `rescope_tracks_after`
+  renumbers `channel.setup.channel.bus`, so every channel feeding a moved
+  track fails the setup comparison and is rebuilt as well. A `TrackId` fixes
+  both halves at once. `incremental-structure/` has it.
 - **Step 04 was listened to on 2026-09-17 and keeps time.** The dropout is
   still there and is on *every* channel, not the moved one -- a null install
   silences the master exactly as completely as a reorder, measured at the
