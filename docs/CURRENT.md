@@ -120,7 +120,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   eight sources — the sampler, the v1 drum synth, the DS-01, the v1 mono
   synth, the ML-M1, the v1 poly synth, the ML-P8, or Aux In, which plays
   another channel's published audio outlet — and every rack row exposes mute,
-  output volume, and constant-power stereo pan.
+  output volume, and constant-power stereo pan. The rack's `+` offers all
+  eight when adding a channel, which is the same list the source picker offers
+  when changing one.
 - Channels can be reordered by dragging a rack row's name plate. The rows
   between the grab and the landing slide aside, and the gap that opens is the
   drop indicator. Every address in the song that named a channel follows it —

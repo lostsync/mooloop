@@ -29,7 +29,7 @@ import {
     ContainerEnclosure, DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DeviceOutputRail,
     DevicePageButton, DeviceRackMetrics, RackDrag
 } from "device-rack.slint";
-import { ChannelDrag } from "channel-rack.slint";
+import { ChannelDrag, SourceKinds } from "channel-rack.slint";
 import { ChannelSidebar } from "channel-sidebar.slint";
 import { ColorChipButton, ColorChoice } from "color-picker.slint";
 import { DrumDeviceFace } from "drum-device.slint";
@@ -3682,20 +3682,32 @@ export component MainWindow inherits Window {
                                                 x: 0px;
                                                 y: parent.height + 2px;
                                                 width: 156px;
-                                                height: 108px;
+                                                // As tall as the rows it has.
+                                                // The 108px it held was four
+                                                // of them, so a fifth source
+                                                // would have been drawn
+                                                // outside the menu it was in.
+                                                height: add-source-rows.preferred-height;
                                                 close-policy: close-on-click;
                                                 Rectangle {
                                                     background: Theme.surface;
                                                     border-width: Theme.hairline;
                                                     border-color: Theme.border;
                                                     border-radius: Theme.radius-md;
-                                                    VerticalLayout {
+                                                    add-source-rows := VerticalLayout {
                                                         padding: 4px;
                                                         spacing: 1px;
-                                                        ToolButton { text: "Add Sampler"; clicked => { add-source-menu.close(); root.add-channel-clicked(0); } }
-                                                        ToolButton { text: "Add Drum Synth"; clicked => { add-source-menu.close(); root.add-channel-clicked(1); } }
-                                                        ToolButton { text: "Add Mono Synth"; clicked => { add-source-menu.close(); root.add-channel-clicked(2); } }
-                                                        ToolButton { text: "Add Poly Synth"; clicked => { add-source-menu.close(); root.add-channel-clicked(3); } }
+                                                        // The menu's rows are
+                                                        // the picker's options:
+                                                        // the row index is the
+                                                        // kind's number, which
+                                                        // is what
+                                                        // `device_kind_from_int`
+                                                        // decodes.
+                                                        for label[i] in SourceKinds.labels : ToolButton {
+                                                            text: "Add " + label;
+                                                            clicked => { add-source-menu.close(); root.add-channel-clicked(i); }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -3815,7 +3827,7 @@ export component MainWindow inherits Window {
                                 if !root.editing-bus : PickerChip {
                                     width: 96px;
                                     height: 22px;
-                                    options: ["Sampler", "Drum Synth", "Mono Synth", "Poly Synth", "ML-M1", "ML-P8", "DS-01", "Aux In"];
+                                    options: SourceKinds.labels;
                                     selected-index: root.source-kind;
                                     tooltip: "Source device";
                                     picked(i) => {

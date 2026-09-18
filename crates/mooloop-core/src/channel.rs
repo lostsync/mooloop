@@ -83,8 +83,10 @@ impl DeviceKind {
     /// group with it, and both channel-creation paths build a default
     /// channel name out of it.
     ///
-    /// `main.slint`'s source picker holds the same eight strings, because a
-    /// picker row is markup. That copy is the one this cannot reach.
+    /// `main.slint` holds the same eight strings once, in
+    /// `SourceKinds.labels`, because a picker row is markup. That copy this
+    /// cannot reach, but `mooloop-ui`'s `tests/source_kind_menu.rs` reads it
+    /// out of the production markup and holds it against this table.
     pub fn label(self) -> &'static str {
         match self {
             Self::Sampler => "Sampler",
