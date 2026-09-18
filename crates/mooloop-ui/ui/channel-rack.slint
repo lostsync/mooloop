@@ -47,3 +47,20 @@ export global ChannelDrag {
     }
 }
 
+// The source devices a channel can run, in the order the interface offers
+// them -- which is the order `device_kind_to_int` encodes and
+// `root.source-kind` dispatches on, so a label's position in this list *is*
+// its kind's number.
+//
+// One list because there are two places that offer a source, and for four
+// devices they disagreed: the rack's add-channel menu still offered the four
+// kinds that existed when it was written, so a channel could be switched to
+// the ML-M1, the ML-P8, the DS-01 or Aux In but never started as one. Both
+// read this now, and `tests/source_kind_menu.rs` holds it against
+// `DeviceKind::label()` -- the guard a list spelled in markup had never had.
+export global SourceKinds {
+    out property <[string]> labels: [
+        "Sampler", "Drum Synth", "Mono Synth", "Poly Synth",
+        "ML-M1", "ML-P8", "DS-01", "Aux In"
+    ];
+}
