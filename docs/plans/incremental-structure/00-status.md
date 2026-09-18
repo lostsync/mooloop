@@ -1,0 +1,99 @@
+# Incremental structure — plan status
+
+**Written 2026-09-17. Nothing has landed.** It came out of Adam's reaction to
+`channel-identity/04`, on hearing a channel move drop audio:
+
+> *"a real engine would let us dynamically allocate and destroy audio paths at
+> will without missing a sample. it should not make audio skip to add or delete
+> a track if it isnt dsp heavy."*
+
+He is right, and the engine already does it in places. This plan is about
+making the rest of it work the way the parts that already work do.
+
+## What already misses no samples
+
+Every device edit goes through `RealtimeCommand::Structural`: the node is
+built on the control thread, handed over a bounded ring, installed into the
+live graph in place, and the node it displaces travels back through the
+reclaim ring to be freed off-thread. Insert, remove, move, wrap in a
+container, bypass, wet/dry, every knob. Nothing allocates on the callback and
+nothing stops.
+
+**Adding a channel is already incremental too** —
+`StructuralCommand::AddChannel` carries prebuilt storage. It does not swap the
+renderer and it does not drop audio.
+
+## What does not
+
+Everything that reaches `EngineHandle::install_project`: a channel moved,
+pasted or deleted; a track added, removed or moved; a pattern cloned, cleared
+or removed; an effect preset loaded; any undo or redo. Each builds a complete
+new `RenderState` on the control thread and swaps the whole box.
+
+`channel-identity` steps 04 and 05 made that far less destructive — the
+transport carries across, and so does the live strip of every channel the edit
+did not change. What remains is:
+
+- **Tracks are rebuilt unconditionally**, because a track has no identity.
+  A track added while a song plays still empties every bus strip in it.
+- **And so is every channel feeding a moved track.**
+  `Project::rescope_tracks_after` renumbers `channel.setup.channel.bus`, which
+  changes that channel's `ChannelSetup` -- so `channel-identity/05`'s carry
+  rejects it and it loses its voices and tails too. Heard on 2026-09-18: a
+  channel move is now clean and a track move still glitches, and this is half
+  of why.
+- **The swap is still a swap.** Even when every strip is carried, the install
+  goes through prepare-on-control-thread, swap-on-audio-thread, reclaim. For
+  adding a track that is a great deal of machinery for what ought to be one
+  ring command.
+
+## The shape
+
+The same one `channel-identity` used, one list over, plus the incremental path
+the device edits already demonstrate.
+
+| Step | What |
+| --- | --- |
+| 01 | `TrackId`, minting, load-time assignment — `ChannelId` copied wholesale, including the lesson that `selected_channel`-style fields want it first. **`channel.bus` holding an id is most of the audible win on its own**: a track move then stops touching a channel's setup, so every channel carries through it |
+| 02 | A `ChannelStrip` records its own `ChannelId`, and a `BusStrip` its `TrackId`. `channel-identity/05` deliberately did not need this, because the control thread did the matching; an incremental edit needs the audio thread to know what it is holding |
+| 03 | `StructuralCommand::{AddTrack, RemoveTrack, MoveTrack}`, mirroring `AddChannel` |
+| 04 | `StructuralCommand::{RemoveChannel, MoveChannel}`, so the three channel edits stop reaching `install_project` at all |
+| 05 | What is left that still needs a whole-state swap — a document open, an undo — and whether it should |
+
+## The cheap half
+
+Steps 01 and a bus-side `carry_plan` are probably where most of the *audible*
+improvement is, and neither needs the incremental commands in 03 and 04:
+
+- `TrackId` on `channel.bus` stops a track move changing any channel's setup,
+  so every channel carries (the finding above).
+- A `BusStrip` carried the way a `ChannelStrip` already is closes the other
+  half.
+
+That is worth knowing before starting, because it means this plan can be
+stopped after 01-02 with the glitch gone and the swap still in place -- and
+the rest of it is then about machinery rather than about what anybody hears.
+
+## Open questions
+
+- **Does an undo have to be a swap?** It restores a whole document, so it is
+  the one case where "rebuild everything" is honest. But undoing a channel
+  delete mid-song is an edit like any other, and `channel-identity/04` already
+  decided it should keep playing. Probably it becomes a diff against the live
+  project and a sequence of incremental commands, which is a bigger idea than
+  the rest of this plan.
+- **What is the ordering guarantee between a structural command and the value
+  commands around it?** The ring is ordered, which is most of the answer, but
+  a channel removal renumbers the seats every later command names. The install
+  path sidesteps this by being atomic. This needs stating before step 04.
+- **How much of `install_project` survives?** If a document open is the only
+  caller left, the prepare/swap/reclaim machinery is still worth its weight —
+  but the `carry_plan` in `channel-identity/05` would be dead code, and should
+  be deleted rather than left looking load-bearing.
+
+## Why it is worth doing
+
+Not for its own sake. `LOOSE_ENDS.md` has the cost written out: a structural
+edit stops and empties things it has no business touching, and the reason has
+always been that channel and track identity was positional. That reason is now
+mostly gone. The remaining work is finishing the job rather than starting one.
