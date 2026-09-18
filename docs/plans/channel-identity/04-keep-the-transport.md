@@ -74,7 +74,10 @@ is dropped from the take.
 
 So this step carries both, and it carries them the same way it carries the
 transport: **copied from the outgoing state at the swap, on the audio thread,
-not prepared on the control thread.** Both are position-in-time state whose
+not prepared on the control thread.** `RenderState::adopt_transport` became
+`adopt_performance_state` for that reason -- one function whose rule is
+*everything whose value is only correct at the instant of the switch*, so the
+next such field has somewhere obvious to go. Both are position-in-time state whose
 value is only correct at the instant of the switch, which is the same reason
 the transport position cannot be read when the install is prepared. Moving
 them is copying a fixed-size array — no allocation, realtime-safe.
@@ -98,10 +101,19 @@ The kept one was verified failing against the tree with the copy disabled,
 which is the same discipline `AGENTS.md` asks of a `dupe-audit` check: run it
 before the fix or it is decoration.
 
-A second executor-level test for the two fields above: with a note held and a
-capture open, install a structural edit; the incoming state still holds the
-key on the same channel and still has the open note, and the note-off that
-follows closes both. With the flag clear, both are empty.
+Two more for the fields above, added 2026-09-18 when the copy was built.
+`a_swap_carries_the_keys_that_are_down_and_the_notes_being_taken` is the
+render-level one: a key down and a take note open, adopt, and the incoming
+state holds both -- then the note-off that follows lifts the key and closes
+the note, which is the thing that was actually broken.
+`a_kept_install_carries_the_held_keys_and_a_cleared_one_does_not` is the
+executor-level one, and it is there because the render test cannot see
+whether the swap site asks: it also asserts the *cleared* case, since an open
+that inherited a key from the song it replaced would be a new bug in place of
+the old one.
+
+Both were verified failing with the two copies removed, which is the same
+discipline the transport test above was held to.
 
 ## Acceptance — listened to 2026-09-17
 

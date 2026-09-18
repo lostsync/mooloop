@@ -3381,8 +3381,49 @@ impl RenderState {
         self.strips[index].sampler.audio_slot_ptr()
     }
 
-    pub fn adopt_transport(&mut self, outgoing: &Self) {
+    /// Take the outgoing renderer's position-in-time state: where the song is,
+    /// which keys are down, and which notes a take has open.
+    ///
+    /// **Everything whose value is only correct at the instant of the switch
+    /// belongs here**, and that is the rule this function exists to hold. The
+    /// alternative is `InputState`, a hand-maintained list prepared ahead of
+    /// the swap on the control thread, which has needed patching three times
+    /// in a month -- record arm, then routing twice. A field that only the
+    /// swap can fill cannot be prepared early by definition, so putting it
+    /// there is the wrong mechanism as well as the wrong moment.
+    ///
+    /// All three are fixed-size and `Copy`. Nothing allocates, so this is
+    /// callable from the audio thread, which is where it runs.
+    ///
+    /// `held_keys` and `recording` were carried by nothing until 2026-09-18.
+    /// The loss was invisible while a structural edit stopped the song -- the
+    /// old voices went with the old renderer anyway -- and `04-keep-the-transport`
+    /// is what made it audible: once the transport survives the install, a key
+    /// held across a channel move has its note-off delivered to a renderer
+    /// that never saw the press, so the note never lifts. A note captured but
+    /// not yet closed was dropped from the take the same way.
+    pub fn adopt_performance_state(&mut self, outgoing: &Self) {
         self.transport.adopt_running_state(outgoing.transport());
+        self.held_keys = outgoing.held_keys;
+        self.recording = outgoing.recording;
+    }
+
+    /// Whether `note` is held on `channel`, for the tests that assert what a
+    /// swap did to the performance state.
+    #[cfg(test)]
+    pub(crate) fn key_is_held(&self, note: u8, channel: u8) -> bool {
+        self.held_keys.is_held(note, channel)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn any_key_is_held(&self) -> bool {
+        self.held_keys.any_held()
+    }
+
+    /// Whether a take has an open note at `note`, and on which channel.
+    #[cfg(test)]
+    pub(crate) fn capturing(&self, note: u8) -> Option<u8> {
+        self.recording[usize::from(note & 0x7f)].map(|note| note.channel)
     }
 
     /// The transport this renderer is running, for the executor -- which owns
@@ -6153,6 +6194,88 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 EngineEvent::ControlInput(bend),
             ]
         );
+    }
+
+    /// A swap takes the outgoing renderer's held keys and its open take notes,
+    /// not just its transport.
+    ///
+    /// **Verified failing before the fix**, with `adopt_performance_state`
+    /// copying only the transport: the incoming renderer held no key and had
+    /// no open note, which is the tree as it stood on 2026-09-18.
+    ///
+    /// The cost of not carrying them was invisible for as long as a structural
+    /// edit stopped the song -- the voices went with the old renderer anyway.
+    /// `channel-identity/04` is what made it audible: once the transport
+    /// survives, a key held across a channel move has its note-off delivered
+    /// to a renderer that never saw the press, so `held_keys.release` finds
+    /// nothing and the note never lifts.
+    #[test]
+    fn a_swap_carries_the_keys_that_are_down_and_the_notes_being_taken() {
+        use mooloop_core::{
+            MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage, MidiPortId, MidiRouteSource,
+        };
+
+        let routing = || {
+            Arc::new(ArcSwap::from_pointee(MidiRouting {
+                routes: vec![MidiInputRoute {
+                    source: MidiRouteSource::AllPorts,
+                    channel: MidiChannelFilter::Omni,
+                }],
+            }))
+        };
+        let mut outgoing = two_channel_render();
+        outgoing.attach_midi_routing(routing());
+        outgoing.set_record_armed(true);
+        outgoing.play();
+        outgoing.apply_midi(&[MidiMessage {
+            offset: 0,
+            port: MidiPortId::FIRST,
+            channel: 0,
+            kind: MidiKind::NoteOn {
+                note: 60,
+                velocity: 90,
+            },
+        }]);
+        outgoing.process_block(256);
+        assert!(outgoing.key_is_held(60, 0), "the premise: a key is down");
+        assert_eq!(
+            outgoing.capturing(60),
+            Some(0),
+            "the premise: a take has that note open"
+        );
+
+        // What an install builds: a fresh renderer that has seen nothing.
+        let mut incoming = two_channel_render();
+        incoming.attach_midi_routing(routing());
+        assert!(!incoming.any_key_is_held());
+        assert_eq!(incoming.capturing(60), None);
+
+        incoming.adopt_performance_state(&outgoing);
+
+        assert!(
+            incoming.key_is_held(60, 0),
+            "the key went down on channel 0 and the swap lost it"
+        );
+        assert_eq!(
+            incoming.capturing(60),
+            Some(0),
+            "the note was open in the take and the swap dropped it"
+        );
+
+        // And the release lands: it reaches the channel the press went to,
+        // which is the whole point of carrying the set rather than clearing
+        // it. A renderer that never saw the press has nothing to release.
+        incoming.set_record_armed(true);
+        incoming.play();
+        incoming.apply_midi(&[MidiMessage {
+            offset: 0,
+            port: MidiPortId::FIRST,
+            channel: 0,
+            kind: MidiKind::NoteOff { note: 60 },
+        }]);
+        incoming.process_block(256);
+        assert!(!incoming.any_key_is_held(), "the note-off did not lift the key");
+        assert_eq!(incoming.capturing(60), None, "the take note was left open");
     }
 
     /// Recording reports a note when its key comes up, with the position it

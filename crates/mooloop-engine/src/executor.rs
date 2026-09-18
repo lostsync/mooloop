@@ -225,12 +225,14 @@ impl Executor {
             }
             // **Read at the swap, not at preparation.** The song has gone on
             // playing while the incoming renderer was built on the control
-            // thread, so the outgoing transport is the only place the current
-            // position exists. Copying a position captured earlier would step
-            // the song backwards by however long the install took.
+            // thread, so the outgoing renderer is the only place the current
+            // position, the held keys and the open take notes exist. Copying
+            // a position captured earlier would step the song backwards by
+            // however long the install took, and a key pressed during the
+            // install would not be in a set captured before it.
             let mut prepared = prepared;
             if prepared.keep_transport {
-                prepared.render.adopt_transport(&self.render);
+                prepared.render.adopt_performance_state(&self.render);
             }
             // Before the swap, because both generations have to be reachable:
             // the live strips are moved into the incoming state and the ones
@@ -474,6 +476,61 @@ mod tests {
             "the song jumped back to where it was when the install was prepared: \
              {} against {queued_at}",
             executor.render.transport().position_ticks
+        );
+    }
+
+    /// The swap carries the held keys, and it carries them **under the same
+    /// flag as the transport**.
+    ///
+    /// The render-level twin of this
+    /// (`a_swap_carries_the_keys_that_are_down_and_the_notes_being_taken`)
+    /// proves the copy; this proves the executor asks for it, and that an
+    /// *open* -- a document load, a new song -- still starts from nothing.
+    /// Getting that half backwards would leave a key held from the previous
+    /// song sounding into the one just opened.
+    #[test]
+    fn a_kept_install_carries_the_held_keys_and_a_cleared_one_does_not() {
+        use crate::render::MidiRouting;
+        use mooloop_core::{
+            MidiChannelFilter, MidiInputRoute, MidiKind, MidiMessage, MidiPortId, MidiRouteSource,
+        };
+
+        let held_after = |keep_transport: bool| {
+            let (mut executor, mut cmd_tx, _reclaim) = executor();
+            let mut out_l = [0.0f32; BLOCK];
+            let mut out_r = [0.0f32; BLOCK];
+            executor
+                .render
+                .attach_midi_routing(Arc::new(arc_swap::ArcSwap::from_pointee(MidiRouting {
+                    routes: vec![MidiInputRoute {
+                        source: MidiRouteSource::AllPorts,
+                        channel: MidiChannelFilter::Omni,
+                    }],
+                })));
+            executor.render.play();
+            executor.render.apply_midi(&[MidiMessage {
+                offset: 0,
+                port: MidiPortId::FIRST,
+                channel: 0,
+                kind: MidiKind::NoteOn {
+                    note: 60,
+                    velocity: 90,
+                },
+            }]);
+            executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+            assert!(executor.render.key_is_held(60, 0), "the premise: a key is down");
+
+            cmd_tx
+                .push(RealtimeCommand::InstallProject(prepared(1, keep_transport)))
+                .expect("room in the ring");
+            executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+            executor.render.any_key_is_held()
+        };
+
+        assert!(held_after(true), "an edit dropped a key that was still down");
+        assert!(
+            !held_after(false),
+            "an open started holding a key from the song it replaced"
         );
     }
 
