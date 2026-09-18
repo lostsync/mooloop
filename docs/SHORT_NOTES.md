@@ -9,7 +9,7 @@ home. Delete a line when it is done or has moved somewhere better.
 - stuff doesnt resize properly when you bump font size or spacing in theme prefs. if its a slint limitation we need to remove those controls. toolbars etc also dont resize to accomodate changed button sizes
 - if a toolbar is cut off becuase it is too short, e.g. if the pane is split, we should put the cut off items in an overflow menu
 - clicking a preset in the sidebar insta-loads a new instance of that device
-- add new channel menu in seq is stale
+✓ add new channel menu in seq is stale (3fff067)
 - midi recording doesnt loop properly - after 1 playthrough notes just stack at the last tick. should just loop around and start over on the selected pattern. should probably have a toggle for overdub/replace
 - need a device like chain but for layers
 - need one for mid/side that lets you put devices on mid or side and set levels
