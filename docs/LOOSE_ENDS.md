@@ -73,7 +73,7 @@ node, and a move is a relabel the audio thread never sees. That is the
 cheaper interim step is to carry the transport state and position across an
 install, which would stop the rewind and leave the cut tails.
 
-**Planned 2026-09-17 as `plans/channel-identity/`**: step 04 is the interim
+**Planned 2026-09-17 as `plans/archive/channel-identity/`**: step 04 is the interim
 fix and step 05 is the real one. It is also a prerequisite of plugin hosting,
 which would otherwise reload every plugin in the song on any channel edit.
 

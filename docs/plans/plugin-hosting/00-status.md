@@ -197,7 +197,7 @@ this plan.
    offline render that runs no pump still gets its tap plan). A plugin's
    latency is known only after activation and can change while it runs, so a
    latency change that today implies an install implies a tap-bank rebuild
-   too. Both need the identity work of `plans/channel-identity/` step 05
+   too. Both need the identity work of `plans/archive/channel-identity/` step 05
    before a plugin's latency can move without tearing the graph down —
    the same prerequisite blocker 7 records for step 06.
 4. `ChannelStrip` holds its eight generators as concrete fields
@@ -216,7 +216,7 @@ this plan.
    (`LOOSE_ENDS.md`, "Every structural edit stops the song"). `PluginSlotId`
    stops a move from *renumbering* plugins, but not from tearing down every
    plugin processor in the song and loading it again. Solved by
-   `plans/channel-identity/` step 05, which **must land before step 06
+   `plans/archive/channel-identity/` step 05, which **must land before step 06
    here**.
 
 ## Steps

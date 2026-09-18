@@ -3301,7 +3301,7 @@ impl RenderState {
     /// **Voices, tails and delay lines are still cut**, because the incoming
     /// renderer is a fresh graph. The song keeps its place and its clock; what
     /// was ringing at the moment of the edit is not carried across.
-    /// `docs/plans/channel-identity/05-strips-by-id.md` is where that goes.
+    /// `docs/plans/archive/channel-identity/05-strips-by-id.md` is where that goes.
     /// Move the strips listed in `carry` out of `outgoing` and into this
     /// state, so a chain that did not change keeps the node that is making
     /// its sound.

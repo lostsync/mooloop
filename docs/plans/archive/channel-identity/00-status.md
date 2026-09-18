@@ -1,7 +1,26 @@
 # Channel identity — plan status
 
-**Written 2026-09-17. Finished 2026-09-18: all six steps landed.** It came out
-of the architecture
+**Written 2026-09-17. Finished, heard and archived 2026-09-18.** All six steps
+landed. Adam, on the finished arc:
+
+> *"it is still glitchy sounding when you move stuff around, but it is a lot
+> better and the audio routing does survive moves. if we've done the channel id
+> work let's just say it's done."*
+
+**The half this plan is answerable for is the routing, and it passed.** An Aux
+In, an envelope gate and a control binding all keep naming their channel
+rather than whoever took its seat. The residual glitch is the other half --
+the renderer still being rebuilt -- which is `incremental-structure/`, and he
+is deliberately not chasing it: *"im not convinced we're going to make it
+perfect by chasing this thread."*
+
+One thing landed after the acceptance and before the archive:
+`reports/fable-2026-09-18.md` found that step 04 named neither `held_keys` nor
+the in-flight `recording` capture, and the fix for that is in step 04's own
+file. It was step 04 that made the omission matter -- while a structural edit
+stopped the song there was nothing to lose.
+
+It came out of the architecture
 section of `reports/fable-2026-09-17.md`, and Adam asked for it the same day:
 a channel gets a durable id, the way a device already has one, before plugin
 hosting starts keying anything by channel position.

@@ -320,7 +320,7 @@ before any of them existed still loads:
 
   **The other three fields that name another channel took identities on
   2026-09-18**, and each took a different shape because each had a different
-  reason not to be an id outright. `docs/plans/channel-identity/06` records
+  reason not to be an id outright. `docs/plans/archive/channel-identity/06` records
   the reasoning; what a file holds is this:
 
   - A **control binding**'s target stopped being a `ParamAddr` and became a

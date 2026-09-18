@@ -16,34 +16,46 @@ and ought to do the same for the rest. It is the continuation of
 `channel-identity/` rather than a new idea -- that plan removed most of the
 reason positional identity made this hard.
 
+**Adam is not chasing it** (2026-09-18, after hearing the finished
+`channel-identity/`): *"im not convinced we're going to make it perfect by
+chasing this thread."* It stays here as a record of what the remaining glitch
+is and what would fix it, rather than as queued work; **do not pick it up
+unprompted.** Its own `00-status.md` says which two of its five steps are the
+whole of the audible half, if it is ever taken up.
+
 `coreaudio-driver/` was added 2026-09-13 and is **in progress, outside the
 `FOCUS.md` sequence**, because Adam asked for it directly: he wants to develop
 on a Mac as well as on Fedora. It builds a Core Audio driver beside JACK,
 chosen at compile time, and stops short of packaging or a macOS release. Every
 step has landed; the macOS CI job is the one thing that has not yet run.
 
-`channel-identity/` and `audio-recording/` were added 2026-09-17, **outside
-the `FOCUS.md` sequence**, from Adam's answers to the architecture section of
-`reports/fable-2026-09-17.md`. `channel-identity/` gives a channel a durable
-id, the way devices already have one, and ends with an engine that keeps
-strips across an install. **Finished 2026-09-18**: steps 01-05 landed
-2026-09-17 and step 06, the three saved fields that still named another
-channel by position, landed the next day. Nothing in a song names a channel by
-its seat now. `plugin-hosting/` step 06 is thereby unblocked, and the
-directory is ready to archive once Adam has heard it.
-`audio-recording/` is not started.
-`audio-recording/` is `SCOPE.md` items 3 and the audio half of 5, in Adam's
-shape: a take goes into the channel's sampler, and one input menu chooses
-between audio and MIDI. Its five open questions were all answered by Adam on
-2026-09-17, the day the plan was written; they are kept in its `00-status.md`
-as a record beside the step each one settles.
+`channel-identity/` **finished 2026-09-18 and is in `archive/`.** It was added
+2026-09-17 from Adam's answers to the architecture section of
+`reports/fable-2026-09-17.md`, and it gave a channel a durable id the way
+devices already had one: steps 01-05 landed 2026-09-17, and step 06 -- the
+three saved fields that still named another channel by position -- the next
+day. Nothing in a song names a channel by its seat now. `plugin-hosting/` step
+06 and `audio-recording/03` are both thereby unblocked.
 
-The two are **ordered**: `channel-identity/05` comes before
-`audio-recording/03`, not only before `plugin-hosting/` step 06. A capture
-ring is per-channel renderer state, and until a strip survives an install by
-`ChannelId` there is nothing for it to ride across the swap — so step 03 built
-first would end an open take silently on any structural edit.
-`reports/fable-2026-09-18.md` found this; `audio-recording/03-capture.md`
+Adam heard it on 2026-09-18 and accepted it: *"it is still glitchy sounding
+when you move stuff around, but it is a lot better and the audio routing does
+survive moves."* **The residual glitch is not this plan's** -- it is the
+renderer being rebuilt, which is `incremental-structure/` -- and he is
+explicitly not chasing it: *"im not convinced we're going to make it perfect
+by chasing this thread."*
+
+`audio-recording/` was added the same day and is **not started, outside the
+`FOCUS.md` sequence**. It is `SCOPE.md` items 3 and the audio half of 5, in
+Adam's shape: a take goes into the channel's sampler, and one input menu
+chooses between audio and MIDI. Its five open questions were all answered by
+Adam on 2026-09-17, the day the plan was written; they are kept in its
+`00-status.md` as a record beside the step each one settles.
+
+Its step 03 was **ordered after `channel-identity/05`**, which has now landed.
+A capture ring is per-channel renderer state, and until a strip survived an
+install by `ChannelId` there was nothing for it to ride across the swap -- so
+step 03 built first would have ended an open take silently on any structural
+edit. `reports/fable-2026-09-18.md` found this; `audio-recording/03-capture.md`
 states the decision and the alternative it rejected.
 
 `plugin-hosting/` was added 2026-09-16 and is **not started, outside the
