@@ -16,6 +16,13 @@
 //! every envelope stage in the program, which is what the pass that widened
 //! it found: five faces declaring `0 .. 2` linear, or `0 .. 1` and a
 //! five-second display, against one table saying 1 ms to 8 s in ratio.
+//!
+//! The third is every oscillator knob, added 2026-09-18. That group is here
+//! because of *how* it was missing rather than what it said: the shared
+//! oscillator face reads its defaults from the table at run time and spells
+//! only its bounds, so a check looking for a copied `default-value:` saw
+//! nothing to check and a face holding four literal numbers stayed outside
+//! the list for as long as the list has existed.
 
 use mooloop_core::{DeviceKind, EffectKind, EqFaceControl, EqParams, ParamCurve, ParamDescriptor};
 use mooloop_core::{
@@ -31,6 +38,7 @@ const MONO_SLINT: &str = include_str!("../ui/mono-device.slint");
 const POLY_SLINT: &str = include_str!("../ui/poly-device.slint");
 const MLM1_SLINT: &str = include_str!("../ui/mlm1-device.slint");
 const MLP8_SLINT: &str = include_str!("../ui/mlp8-device.slint");
+const OSCILLATOR_SLINT: &str = include_str!("../ui/device-oscillator.slint");
 
 const BITCRUSH_SLINT: &str = include_str!("../ui/bitcrush-device.slint");
 const PREAMP_SLINT: &str = include_str!("../ui/preamp-device.slint");
@@ -227,6 +235,122 @@ fn the_drum_table_agrees_with_its_face() {
     }
 }
 
+
+/// A knob's bounds as the face states them.
+///
+/// Separate from [`knob_in`], which also demands a numeric `default-value:` on
+/// the line. The shared oscillator face has none to give: it reads every
+/// default from the table at run time (`default-value: root.param-defaults[..]`),
+/// which is a copy of nothing, while spelling its *bounds* as literals, which
+/// are copies of something. A face can do one without the other, and that is
+/// the case neither this test nor `scripts/dupe-audit unchecked-face` could
+/// see until 2026-09-18.
+fn face_bounds(markup: &str, file: &str, property: &str) -> (f32, f32) {
+    let marker = format!("root.{property};");
+    let line = markup
+        .lines()
+        .find(|line| line.contains(&marker) && line.contains("minimum:"))
+        .unwrap_or_else(|| panic!("{file} no longer declares bounds for {property}"));
+    (
+        number(line, "minimum:").unwrap_or_else(|| panic!("{file}: {property} has no minimum")),
+        number(line, "maximum:").unwrap_or_else(|| {
+            panic!("{file}: {property} states a minimum and no maximum")
+        }),
+    )
+}
+
+fn assert_bounds_agree(
+    markup: &str,
+    file: &str,
+    property: &str,
+    kind: DeviceKind,
+    id: u32,
+) {
+    let descriptor = kind
+        .descriptor(id)
+        .unwrap_or_else(|| panic!("{kind:?} has no descriptor for {property} (id {id})"));
+    let (min, max) = face_bounds(markup, file, property);
+    assert!(
+        (descriptor.min - min).abs() < 1e-4,
+        "{file}: {kind:?} {property} face min {min}, table min {}",
+        descriptor.min
+    );
+    assert!(
+        (descriptor.max - max).abs() < 1e-4,
+        "{file}: {kind:?} {property} face max {max}, table max {}",
+        descriptor.max
+    );
+}
+
+/// The oscillator knobs whose travel the shared face spells as literals, by
+/// the offset in an oscillator's five-control block that addresses them.
+///
+/// Level is absent deliberately: `device-oscillator.slint` draws it with a
+/// `TrimKnob` in dB (`maximum: 0`, converted from the table's linear value),
+/// so its bounds are not a second copy of the descriptor's `0 .. 1` and
+/// comparing the two would be comparing two units.
+const OSCILLATOR_BOUNDS: [(&str, u32); 3] = [
+    ("semitones", mooloop_core::OSC_OFFSET_SEMITONES),
+    ("cents", mooloop_core::OSC_OFFSET_CENTS),
+    ("pulse-width", mooloop_core::OSC_OFFSET_PULSE_WIDTH),
+];
+
+/// The same four controls on the ML-P8's own face, which states a level range
+/// in the table's units and so can be held to it.
+const MLP8_OSCILLATOR_BOUNDS: [(&str, u32); 4] = [
+    ("semitones", mooloop_core::mlp8::OSC_OFFSET_SEMITONES),
+    ("cents", mooloop_core::mlp8::OSC_OFFSET_CENTS),
+    ("level", mooloop_core::mlp8::OSC_OFFSET_LEVEL),
+    ("pulse-width", mooloop_core::mlp8::OSC_OFFSET_PULSE_WIDTH),
+];
+
+/// Every oscillator knob's travel, against the table that addresses it.
+///
+/// `-48 .. 48` semitones and `-100 .. 100` cents were spelled in four places
+/// -- `generator.rs`, `mlp8.rs`, and both faces -- with no test on any pair.
+/// The two Rust copies became one constant on 2026-09-18
+/// (`mooloop_core::OSC_SEMITONE_RANGE`); this is what holds the markup to it.
+///
+/// The descriptor's own comment says why a disagreement would matter and why
+/// it would be quiet: a modulation depth is a fraction of the *declared*
+/// range, so a table narrower than the knob makes a full-depth route sweep
+/// less than the control visibly offers. Nothing panics and nothing looks
+/// wrong; the synth is simply less modulated than it says.
+#[test]
+fn every_oscillator_knob_agrees_with_its_table() {
+    // One face, instantiated by all three of the v1-era synths with a
+    // `param-base`. Every oscillator in a device has the same travel, so
+    // oscillator 0 carries the whole claim -- and all three devices share
+    // `generator::osc_descriptors`, so a disagreement would be in the markup.
+    for kind in [
+        DeviceKind::MonoSynth,
+        DeviceKind::PolySynth,
+        DeviceKind::MlM1,
+    ] {
+        for (property, offset) in OSCILLATOR_BOUNDS {
+            assert_bounds_agree(
+                OSCILLATOR_SLINT,
+                "device-oscillator.slint",
+                property,
+                kind,
+                mooloop_core::synth_osc_param(0, offset),
+            );
+        }
+    }
+
+    // The ML-P8 draws its own oscillator strip with `P8Knob` rather than
+    // instantiating the shared face, which is the reason it needs saying
+    // twice here: it is a fourth copy of the same two ranges.
+    for (property, offset) in MLP8_OSCILLATOR_BOUNDS {
+        assert_bounds_agree(
+            MLP8_SLINT,
+            "mlp8-device.slint",
+            property,
+            DeviceKind::MlP8,
+            mooloop_core::mlp8::osc_param(0, offset),
+        );
+    }
+}
 
 /// Every envelope stage on every face that draws one, with the parameter it
 /// addresses. Attack, decay and release only: sustain is a level and glide is

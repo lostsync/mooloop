@@ -274,6 +274,25 @@ def unchecked_face():
     descriptor-backed at all has nowhere else for its number to live. What the
     list is for is the other kind.
 
+    **A default is not the only number a face copies, and until 2026-09-18 it
+    was the only one this looked for.** A knob states its *bounds* as well,
+    and the two are written independently: `device-oscillator.slint`'s Semi
+    knob reads its default from the table (`root.param-defaults[...]`, so
+    nothing to drift) while spelling `minimum: -48; maximum: 48` inline --
+    the same two numbers that `generator.rs` and `mlp8.rs` each held a copy
+    of, with no test on any pair. Keying on `default-value:` alone made that
+    face invisible here: the one property it did not copy was the one being
+    searched for. So `minimum:` and `maximum:` are searched too, and every
+    match on a line counts rather than the first, because these faces put a
+    knob's whole control block on one line.
+
+    Bounds are searched only inside an instantiated widget. A `minimum:` in a
+    `component X inherits Y { .. }` body is the component's own travel, not a
+    copy of a descriptor's -- DS-01 declares `minimum: 0; maximum: 1` because
+    its paged knobs work in normalized space whatever parameter they show --
+    and a lead that can never be acted on is worse than a narrow check,
+    because a check that is never clean stops being read.
+
     **It also reports what the guard cannot reach.** The agreement test walks
     `ParameterKnob` blocks and nothing else, so a number stated by a
     `MiniKnob`, a `MixerFader` or any other widget cannot be added to it
@@ -301,7 +320,13 @@ def unchecked_face():
         "device-rack.slint",
     }
 
-    literal = re.compile(r"default-value:\s*(-?[0-9][0-9_.]*)\s*;")
+    # `default-value:` states a number the descriptor table already states;
+    # `minimum:`/`maximum:` state its *range*, which the table states too. Both
+    # are searched, because a face can spell a literal range while reading its
+    # default from the table -- which is how `device-oscillator.slint`'s
+    # -48..48 semitones stayed invisible to this check until 2026-09-18, with
+    # the same numbers in two Rust tables and no test on any pair.
+    literal = re.compile(r"(default-value|minimum|maximum):\s*(-?[0-9][0-9_.]*)\s*;")
     # The widget a literal sits inside: the nearest `Name {` above it. This is
     # what decides reachability, because `face_knobs` walks `ParameterKnob`
     # blocks and ignores every other widget.
@@ -314,14 +339,27 @@ def unchecked_face():
         lines = path.read_text().splitlines()
         spelled = []
         for index, line in enumerate(lines, start=1):
-            match = literal.search(line)
-            if not match:
+            # Every match on the line, not the first: these faces put a knob's
+            # whole control block on one line, so a `search` for `minimum:`
+            # stops before the `maximum:` beside it and counts one copy where
+            # there are two.
+            matches = list(literal.finditer(line))
+            if not matches:
                 continue
             widget = next(
                 (m.group(1) for above in reversed(lines[:index]) if (m := opener.match(above))),
                 "?",
             )
-            spelled.append((index, match.group(1), widget))
+            for match in matches:
+                # A bound stated where no widget encloses it belongs to the
+                # component being *defined*, not to an instance of one, and a
+                # component's own travel is not a copy of a descriptor's: DS-01
+                # declares `minimum: 0; maximum: 1` because its paged knobs
+                # work in normalized space whatever parameter they are showing.
+                # Reporting that every run is how a check stops being read.
+                if match.group(1) != "default-value" and widget == "?":
+                    continue
+                spelled.append((index, match.group(2), widget))
         if not spelled:
             continue
         unreachable = sorted({w for _, _, w in spelled if w != "ParameterKnob"})

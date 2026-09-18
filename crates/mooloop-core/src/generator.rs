@@ -387,6 +387,24 @@ pub const OSC_OFFSET_CENTS: u32 = 2;
 pub const OSC_OFFSET_LEVEL: u32 = 3;
 pub const OSC_OFFSET_PULSE_WIDTH: u32 = 4;
 
+/// An oscillator's coarse tuning range, in semitones: `(min, max)`.
+///
+/// **One definition for every oscillator in the project.** This function's
+/// table and the ML-P8's ([`crate::mlp8::osc_descriptors`]) spelled the same
+/// two numbers independently until 2026-09-18, with nothing reading either
+/// against the other. The faces spell them a third and fourth time --
+/// `ui/device-oscillator.slint` and `ui/mlp8-device.slint` -- and
+/// `mooloop-ui/tests/slint_face_agreement.rs` is what holds those to this.
+///
+/// The range must match the knob's own travel. A depth is a fraction of this
+/// range, so a narrower declaration would make a full-depth modulation route
+/// sweep less than the control visibly offers.
+pub const OSC_SEMITONE_RANGE: (f32, f32) = (-48.0, 48.0);
+
+/// An oscillator's fine tuning range, in cents: `(min, max)`. Shared for the
+/// reason [`OSC_SEMITONE_RANGE`] gives.
+pub const OSC_CENT_RANGE: (f32, f32) = (-100.0, 100.0);
+
 pub const SYNTH_PARAM_GLIDE: u32 = 0;
 pub const SYNTH_PARAM_ATTACK: u32 = 1;
 pub const SYNTH_PARAM_DECAY: u32 = 2;
@@ -450,11 +468,8 @@ const fn osc_descriptors(n: u32, name: &'static str) -> [ParamDescriptor; 5] {
             id: synth_osc_param(n, OSC_OFFSET_SEMITONES),
             name: "Semis",
             unit: "st",
-            // Matches the knob's own travel. A depth is a fraction of this
-            // range, so a narrower declaration would make a full-depth route
-            // sweep less than the control visibly offers.
-            min: -48.0,
-            max: 48.0,
+            min: OSC_SEMITONE_RANGE.0,
+            max: OSC_SEMITONE_RANGE.1,
             curve: ParamCurve::Linear,
             default: semitones,
         },
@@ -462,8 +477,8 @@ const fn osc_descriptors(n: u32, name: &'static str) -> [ParamDescriptor; 5] {
             id: synth_osc_param(n, OSC_OFFSET_CENTS),
             name: "Cents",
             unit: "ct",
-            min: -100.0,
-            max: 100.0,
+            min: OSC_CENT_RANGE.0,
+            max: OSC_CENT_RANGE.1,
             curve: ParamCurve::Linear,
             default: cents,
         },
