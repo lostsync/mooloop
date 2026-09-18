@@ -1606,7 +1606,8 @@ land on its own when it starts to matter:
   reserved rather than answered, and this inherits its answer.
 - A canonical action registry drives the menu bar and rebindable shortcuts.
   Note multi-selection supports Select All and bulk deletion. **Undo is not
-  universal**: channel structure, pattern clone/remove/clear, note edits,
+  universal**: channel structure (except the toolbar's Add Channel, which
+  records nothing), pattern clone/remove/clear, note edits,
   modulation, effect presets and the sampler's five slice verbs feed a
   project-snapshot undo/redo stack, while device and generator *parameters*,
   step-grid edits, pattern length, add-pattern, playlist placements and the

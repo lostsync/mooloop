@@ -1165,8 +1165,11 @@ states.** `scripts/dupe-audit unchecked-face` names it. The count was eight
 faces and twenty-three numbers when the check was written on 2026-09-12; it is
 `bus-device.slint` and two numbers now. The test's parser became block-based
 -- which is what the entry here said had to come first -- and its list then
-grew to take `modulation-device`, `device-oscillator`, `eq-device`,
-`filter-device`, `buffer-device` and `container-device`. `aux-in-device`
+grew to take `modulation-device`, `eq-device`, `filter-device`,
+`buffer-device` and `container-device` -- not `device-oscillator`, which this
+entry claimed until 2026-09-18 and which the test has never included; its
+`-48..48` semitone range is spelled in four places with no reader
+(`reports/fable-2026-09-18.md`, finding 3). `aux-in-device`
 followed on 2026-09-13, and needed a test of its own rather than a longer
 list, because Aux In is not an `EffectKind`. DS-01 is still absent and still
 correctly so: its paged face reads the table at run time
