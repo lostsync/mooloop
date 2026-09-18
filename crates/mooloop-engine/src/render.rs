@@ -3354,6 +3354,11 @@ impl RenderState {
             // for it; put the freshly computed delay onto the one that will
             // be heard.
             std::mem::swap(&mut fresh.compensation, &mut live.compensation);
+            // The same for the track it feeds: `carry_plan` ignores the bus
+            // so that a track move can carry the channels routed to it, and
+            // a carried strip would otherwise go on summing into the seat its
+            // track used to have.
+            std::mem::swap(&mut fresh.destination, &mut live.destination);
             // The modulator rack is the other half of "still sounding": a
             // free-running LFO that restarted its phase would step every
             // destination it drives at the moment of an unrelated edit. Its
@@ -3379,6 +3384,11 @@ impl RenderState {
     #[cfg(test)]
     pub(crate) fn strip_audio_slot_ptr(&self, index: usize) -> usize {
         self.strips[index].sampler.audio_slot_ptr()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn strip_destination(&self, index: usize) -> u8 {
+        self.strips[index].destination
     }
 
     /// Take the outgoing renderer's position-in-time state: where the song is,

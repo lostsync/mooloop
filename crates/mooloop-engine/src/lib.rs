@@ -648,13 +648,58 @@ pub(crate) fn carry_plan(
             .channels
             .iter()
             .take(MAX_CHANNELS)
-            .position(|held| held.id == channel.id && held.setup == channel.setup)
+            .position(|held| held.id == channel.id && same_strip(&held.setup, &channel.setup))
         else {
             continue;
         };
         plan.push((from as u8, to as u8));
     }
     plan
+}
+
+/// Whether a strip built for `held` can stand in for one built for
+/// `incoming`: every field of the setup equal **except the track it feeds**.
+///
+/// A track is still a seat, so a track move renumbers `channel.bus` on every
+/// channel feeding a track that moved. Comparing it made each of those
+/// channels look edited, and they were rebuilt -- which was half of the
+/// glitch Adam heard on a track move on 2026-09-18. The destination is not
+/// strip content: it is re-read from the incoming project by
+/// [`RenderState::carry_strips_from`], the way the compensation delay is.
+///
+/// Destructured rather than compared through a clone with the bus zeroed, so
+/// that a field added to either struct fails to compile here until somebody
+/// decides whether it belongs to the strip.
+fn same_strip(held: &mooloop_core::ChannelSetup, incoming: &mooloop_core::ChannelSetup) -> bool {
+    let mooloop_core::ChannelSetup {
+        channel,
+        source,
+        effects,
+        modulation,
+        next_device_id,
+    } = held;
+    let mooloop_core::Channel {
+        name,
+        kind,
+        muted,
+        volume,
+        pan,
+        bus: _,
+        color,
+        midi_input,
+    } = channel;
+    let other = &incoming.channel;
+    *name == other.name
+        && *kind == other.kind
+        && *muted == other.muted
+        && *volume == other.volume
+        && *pan == other.pan
+        && *color == other.color
+        && *midi_input == other.midi_input
+        && *source == incoming.source
+        && *effects == incoming.effects
+        && *modulation == incoming.modulation
+        && *next_device_id == incoming.next_device_id
 }
 
 /// The renderer a project install hands the audio thread, built and attached

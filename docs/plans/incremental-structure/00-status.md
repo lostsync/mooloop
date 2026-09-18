@@ -1,12 +1,16 @@
 # Incremental structure — plan status
 
 Linear: [MOO-30](https://linear.app/mooloop/issue/MOO-30/incremental-structure-stop-swapping-the-whole-renderstate-for-an-edit).
-Adam is not chasing this (2026-09-18, after hearing `channel-identity`'s
-finished arc) — it stays open as a record of the remaining glitch, not as
-queued work. If it is picked up, only steps 01-02 ("the cheap half" below).
 
-**Written 2026-09-17. Nothing has landed.** It came out of Adam's reaction to
-`channel-identity/04`, on hearing a channel move drop audio:
+**Written 2026-09-17. Parked by Adam 2026-09-18**, after the finished
+`channel-identity` arc: *"im not convinced we're going to make it perfect by
+chasing this thread."* It stays open as a record of the remaining glitch, not
+as queued work. Do not pick it up unprompted; if it is taken up, the cheap half
+below is the whole of it. One piece of that half landed the same day by a
+cheaper route -- see the struck bullet under "What does not".
+
+It came out of Adam's reaction to `channel-identity/04`, on hearing a channel
+move drop audio:
 
 > *"a real engine would let us dynamically allocate and destroy audio paths at
 > will without missing a sample. it should not make audio skip to add or delete
@@ -41,12 +45,14 @@ did not change. What remains is:
 
 - **Tracks are rebuilt unconditionally**, because a track has no identity.
   A track added while a song plays still empties every bus strip in it.
-- **And so is every channel feeding a moved track.**
-  `Project::rescope_tracks_after` renumbers `channel.setup.channel.bus`, which
-  changes that channel's `ChannelSetup` -- so `channel-identity/05`'s carry
-  rejects it and it loses its voices and tails too. Heard on 2026-09-18: a
-  channel move is now clean and a track move still glitches, and this is half
-  of why.
+- ~~**And so is every channel feeding a moved track.**~~ **Fixed
+  2026-09-18 without a `TrackId`.** `Project::rescope_tracks_after` renumbers
+  `channel.setup.channel.bus`, which made `channel-identity/05`'s carry reject
+  every channel routed to a moved track. The carry now compares the setup
+  *except* the bus (`same_strip` in `mooloop-engine/src/lib.rs`) and re-reads
+  the destination from the incoming project after the swap, as it already did
+  for the compensation delay. So the first bullet of "the cheap half" below
+  is done by other means, and only the bus-side carry is left of it.
 - **The swap is still a swap.** Even when every strip is carried, the install
   goes through prepare-on-control-thread, swap-on-audio-thread, reclaim. For
   adding a track that is a great deal of machinery for what ought to be one
@@ -70,8 +76,9 @@ the device edits already demonstrate.
 Steps 01 and a bus-side `carry_plan` are probably where most of the *audible*
 improvement is, and neither needs the incremental commands in 03 and 04:
 
-- `TrackId` on `channel.bus` stops a track move changing any channel's setup,
-  so every channel carries (the finding above).
+- ~~`TrackId` on `channel.bus` stops a track move changing any channel's setup,
+  so every channel carries (the finding above).~~ Done 2026-09-18 by making
+  the carry ignore the bus instead; a `TrackId` is no longer needed for it.
 - A `BusStrip` carried the way a `ChannelStrip` already is closes the other
   half.
 

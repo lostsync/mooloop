@@ -699,6 +699,70 @@ mod tests {
         );
     }
 
+    /// **A track move carries the channels that feed the tracks it moved**,
+    /// and each carried strip sums into its track's new seat.
+    ///
+    /// A track is a seat, so moving one renumbers `channel.bus` on every
+    /// channel routed to it. The carry used to compare that field, so those
+    /// channels were rebuilt and cut -- half of the glitch Adam heard on a
+    /// track move on 2026-09-18. The seat assertion is the other half of the
+    /// fix: a strip carried without its destination would go on feeding the
+    /// seat its track had vacated, which is some *other* track now.
+    #[test]
+    fn a_track_move_carries_its_feeders_to_the_new_seat() {
+        let project = two_routed_notes();
+        let mut moved = project.clone();
+        moved.move_track(1, 2).expect("a real move");
+        assert_eq!(
+            (moved.channels[0].setup.channel.bus, moved.channels[1].setup.channel.bus),
+            (2, 1),
+            "the premise: the move renumbered both channels' destinations"
+        );
+
+        let plan = crate::carry_plan(&project, &moved);
+        assert_eq!(plan, vec![(0, 0), (1, 1)], "a track move rebuilt a channel strip");
+
+        let mut live = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        let mut incoming = RenderState::from_project(SAMPLE_RATE, &moved, &[]);
+        incoming.carry_strips_from(&mut live, &plan);
+        assert_eq!(
+            (incoming.strip_destination(0), incoming.strip_destination(1)),
+            (2, 1),
+            "a carried strip kept feeding the seat its track moved out of"
+        );
+    }
+
+    /// The same move, measured at the master rather than in the plan.
+    #[test]
+    fn a_track_move_keeps_the_voices_routed_through_it() {
+        let project = two_routed_notes();
+        let baseline = held_note_rms(&project, None);
+        assert!(baseline > 1e-3, "nothing was sounding to measure: {baseline}");
+
+        let mut moved = project.clone();
+        moved.move_track(1, 2).expect("a real move");
+        let after = held_note_rms(&project, Some(moved.clone()));
+        assert!(
+            after > baseline * 0.5,
+            "a track move cut the song: {after} against a baseline of {baseline}"
+        );
+
+        let without_carry = held_note_rms_with(&project, Some(moved), false);
+        assert_eq!(
+            without_carry, 0.0,
+            "the comparison is not measuring what it claims to"
+        );
+    }
+
+    /// [`two_held_notes`], with each channel feeding a track of its own.
+    fn two_routed_notes() -> Project {
+        let mut project = two_held_notes();
+        project.ensure_tracks(3);
+        project.channels[0].setup.channel.bus = 1;
+        project.channels[1].setup.channel.bus = 2;
+        project
+    }
+
     /// Two channels, each holding a long note, so a cut voice is audible
     /// rather than being hidden by the next hit.
     fn two_held_notes() -> Project {

@@ -93,10 +93,16 @@ or an undo keeps every voice, tail and delay line on every channel it is not
 about. The channel the edit *was* about is rebuilt and still cuts, which is
 the one place a discontinuity is not surprising.
 
-**Still open for tracks.** Adding, removing or moving a *track* rebuilds every
-strip in the song, because a track has no identity yet: `channel-identity`
-deliberately left `TrackId` until step 05 existed to be copied from, and now
-it does.
+**Half closed for tracks, 2026-09-18.** A track edit carries every *channel*
+strip now, including the ones routed to a track that moved or went: the
+carry ignores `channel.bus`, which a track edit renumbers, and re-reads the
+destination from the incoming project the way it already re-reads the
+compensation delay (`carry_plan`'s `same_strip`, `mooloop-engine`). What is
+still rebuilt on any track edit is every **track's own strip** -- its chain,
+its EQ and compressor state, its tails -- because a track has no identity
+yet. That half is `incremental-structure/`'s `TrackId` plus a bus-side carry,
+and Adam has parked it: a track move is *"not jarring when it happens during
+production."*
 
 **And the swap itself is still there.** Step 05 removed the destruction, not
 the whole-state swap. Adam asked on 2026-09-17 why there is a swap at all for
