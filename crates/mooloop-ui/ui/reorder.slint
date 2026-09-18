@@ -8,8 +8,7 @@
 // deciding which slots slide. That three-way test is the part that could
 // drift, so it is written once, here.
 //
-// The mixer uses it. The device rack and the channel rack still spell it
-// inline; moving them over is recorded in `docs/LOOSE_ENDS.md`.
+// The mixer, the device rack and the channel rack all call it now.
 
 export global ReorderMath {
     // How far slot `i` slides while the slot at `source` is held over

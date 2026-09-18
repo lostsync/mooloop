@@ -1119,14 +1119,6 @@ the reason to do it is sharing those tests, not the line count.
 
 ## Numbers nothing is watching
 
-**Two of the three reorder lists still spell the slide rule inline.**
-`ReorderMath.shift` (`reorder.slint`) is the three-way test that decides which
-slots slide during a drag, written once when the mixer reorder landed on
-2026-09-16, and only `mixer.slint` calls it. The device rack's rows and the
-channel rack's rows in `main.slint` each still carry their own copy, and so
-does `channel_reorder.rs`'s harness. They agree today. Moving the two racks
-over is small, but it is a `main.slint` change and wants its own build.
-
 **Two spellings of the meter floor are kept as literals on purpose, and the
 reason is a guard that wants them that way.** The floor moved into
 `GainMath.min-db` on 2026-09-13 and fifty literal `-60`s across ten `.slint`
@@ -1348,3 +1340,6 @@ Kept briefly so the same thing is not re-reported. Delete freely once stale.
 - The limiter's doc comment claimed lookahead was blocked on delay
   compensation that shipped 2026-09-05 — corrected to match `CURRENT.md`'s
   "open decision, not a settled no" (`dynamics.rs`).
+- The device rack's and channel rack's rows in `main.slint` each spelled the
+  reorder slide rule inline instead of calling `ReorderMath.shift` — both now
+  call it, matching the mixer (`reorder.slint`, `main.slint`).
