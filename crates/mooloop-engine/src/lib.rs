@@ -426,6 +426,31 @@ pub(crate) struct PreparedProject {
 pub struct CarryPlan {
     pub channels: Vec<(u8, u8)>,
     pub tracks: Vec<(u8, u8)>,
+    /// Where every channel that survives the edit went, whether or not its
+    /// strip is carried. `channels` is the subset whose setup is unchanged.
+    ///
+    /// The sends need the whole map rather than the carried subset: a send's
+    /// ring holds its producer's past audio, which is still right when the
+    /// producer's chain was just edited, so an edge is matched by where its
+    /// two ends went rather than by whether either was rebuilt.
+    pub channel_seats: Vec<(u8, u8)>,
+    /// `channel_seats` for the track list.
+    pub track_seats: Vec<(u8, u8)>,
+}
+
+impl CarryPlan {
+    /// Where `seat` in the outgoing generation sits in the incoming one, or
+    /// `None` when it did not survive. Audio thread: a scan of at most
+    /// `MAX_BUSES` pairs, no allocation.
+    pub(crate) fn seat(&self, seat: EffectTarget) -> Option<EffectTarget> {
+        let find = |seats: &[(u8, u8)], from: u8| {
+            seats.iter().find(|(was, _)| *was == from).map(|&(_, now)| now)
+        };
+        match seat {
+            EffectTarget::Channel(from) => find(&self.channel_seats, from).map(EffectTarget::Channel),
+            EffectTarget::Bus(from) => find(&self.track_seats, from).map(EffectTarget::Bus),
+        }
+    }
 }
 
 /// The ordered control stream consumed at block boundaries. Project swaps
@@ -649,7 +674,34 @@ pub(crate) fn carry_plan(
     CarryPlan {
         channels: carry_channels(live, incoming),
         tracks: carry_tracks(live, incoming),
+        channel_seats: seats(
+            live.channels.iter().take(MAX_CHANNELS).map(|channel| channel.id),
+            incoming.channels.iter().take(MAX_CHANNELS).map(|channel| channel.id),
+            mooloop_core::ChannelId::is_assigned,
+        ),
+        track_seats: seats(
+            live.buses.iter().take(mooloop_core::MAX_BUSES).map(|track| track.id),
+            incoming.buses.iter().take(mooloop_core::MAX_BUSES).map(|track| track.id),
+            mooloop_core::TrackId::is_assigned,
+        ),
     }
+}
+
+/// `(outgoing seat, incoming seat)` for every assigned id present in both.
+fn seats<Id: PartialEq + Copy>(
+    live: impl Iterator<Item = Id> + Clone,
+    incoming: impl Iterator<Item = Id>,
+    assigned: fn(Id) -> bool,
+) -> Vec<(u8, u8)> {
+    incoming
+        .enumerate()
+        .filter(|&(_, id)| assigned(id))
+        .filter_map(|(to, id)| {
+            live.clone()
+                .position(|held| held == id)
+                .map(|from| (from as u8, to as u8))
+        })
+        .collect()
 }
 
 fn carry_channels(

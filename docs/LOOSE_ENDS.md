@@ -104,19 +104,21 @@ track has a `TrackId`, and an install carries every track whose id and setup
 survived -- its chain, its strip's filter and envelope state, its fader, its
 tails -- at its new seat, the way it carries channels. Where a track sends
 its audio is not compared, for the reason a channel's `bus` is not: the bus
-graph, the send bank, the solo verdict and the compensation rings are
-compiled from the incoming project whole and stay with the fresh strip.
+graph, the send bank, the solo verdict and the compensation lengths are
+compiled from the incoming project whole.
 
-What a swap still empties is exactly that compiled half: every **send's**
-state and every **compensation ring**, on channels and tracks alike. Only a
-song with a latency-reporting device or a send hears it, and only if audio
-is in flight through one at the moment of the edit.
+**And the rings, the same day** (`incremental-structure/05`). A swap
+used to empty every compensation ring and every send's ring, because those are
+compiled from the whole project and the session resends them after every
+install. The engine now keeps any live ring the arriving one would only
+duplicate in length -- across an install, a `SetCompensation` and a send bank
+-- so a structural edit empties nothing it is not about.
 
-**And the swap itself is still there.** Step 05 removed the destruction, not
-the whole-state swap. Adam asked on 2026-09-17 why there is a swap at all for
-something as cheap as adding a track, when adding a *channel* is already an
-incremental `StructuralCommand::AddChannel` that misses no samples. That is
-the right question, and `incremental-structure/` 03-05 is the plan for it.
+**The swap itself stays**, by decision rather than neglect: Adam asked on
+2026-09-17 why there is a swap at all for something as cheap as adding a
+track, and `incremental-structure/05` records the answer -- incremental
+commands would renumber twenty structures on the audio thread to save a
+control-thread cost nobody hears. Read it before reopening this.
 
 
 **A mixer drag does not scroll the mixer, and a turned strip stays at its

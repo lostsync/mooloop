@@ -336,6 +336,36 @@ fn producer_slot(producer: EffectTarget) -> usize {
 
 const PRODUCER_SLOTS: usize = MAX_CHANNELS + MAX_BUSES;
 
+/// [`producer_slot`] read backwards.
+fn producer_at(slot: usize) -> EffectTarget {
+    if slot < MAX_CHANNELS {
+        EffectTarget::Channel(slot as u8)
+    } else {
+        EffectTarget::Bus((slot - MAX_CHANNELS) as u8)
+    }
+}
+
+/// How many frames a compensation ring holds, with no ring holding none.
+fn ring_frames(ring: &Option<Box<IntegerDelay>>) -> usize {
+    ring.as_ref().map_or(0, |ring| ring.frames())
+}
+
+/// Put back whichever of two compensation rings is live, when both are the
+/// same length.
+///
+/// **A ring the same length as the live one is the live one's job, and the
+/// live one is already doing it with the right audio in it.** A fresh ring
+/// starts empty, so installing it plays silence for the length of the delay
+/// -- the gap a structural edit still left on any path with a latency after
+/// `incremental-structure/02`. `incoming` is the ring about to be installed
+/// and `live` the one it would displace; after this, `incoming` holds
+/// whichever should be heard and `live` whichever should be reclaimed.
+fn keep_live_ring(incoming: &mut Option<Box<IntegerDelay>>, live: &mut Option<Box<IntegerDelay>>) {
+    if ring_frames(incoming) == ring_frames(live) {
+        std::mem::swap(incoming, live);
+    }
+}
+
 impl SendBank {
     /// Prepare `specs` for the audio thread. Control thread only: this is
     /// where the rings and the scratch are allocated.
@@ -386,6 +416,59 @@ impl SendBank {
 
     fn is_empty(&self) -> bool {
         self.sends.is_empty()
+    }
+
+    /// Take over `old`'s compensation rings for every send that is the same
+    /// edge in both banks, so a bank arriving does not empty the delays of
+    /// the sends it did not change.
+    ///
+    /// `seat` says where a producer or target of `old` sits in this bank, or
+    /// `None` when it is gone: the identity for a reconciler's resend, the
+    /// install's seat map for a structural edit. A producer's sends are
+    /// matched in authored order by target and tap -- the *n*th send from a
+    /// producer to a target on a tap is the *n*th in both -- and only a ring
+    /// of the same length is taken; see [`keep_live_ring`].
+    ///
+    /// Audio thread. Swaps boxes and counts; allocates nothing.
+    fn adopt_rings_from(
+        &mut self,
+        old: &mut SendBank,
+        seat: impl Fn(EffectTarget) -> Option<EffectTarget>,
+    ) {
+        if self.is_empty() || old.is_empty() {
+            return;
+        }
+        for slot in 0..PRODUCER_SLOTS {
+            let producer = producer_at(slot);
+            let was = old.range(producer);
+            if was.is_empty() {
+                continue;
+            }
+            let Some(now) = seat(producer).map(|producer| self.range(producer)) else {
+                continue;
+            };
+            for index in was.clone() {
+                let (target, tap) = (old.sends[index].target, old.sends[index].tap);
+                let Some(EffectTarget::Bus(new_target)) = seat(EffectTarget::Bus(target)) else {
+                    continue;
+                };
+                let nth = old.sends[was.start..index]
+                    .iter()
+                    .filter(|send| send.target == target && send.tap == tap)
+                    .count();
+                let Some(matched) = now
+                    .clone()
+                    .filter(|&at| self.sends[at].target == new_target && self.sends[at].tap == tap)
+                    .nth(nth)
+                else {
+                    continue;
+                };
+                keep_live_ring(
+                    &mut self.sends[matched].compensation,
+                    &mut old.sends[index].compensation,
+                );
+            }
+        }
     }
 
     fn range(&self, producer: EffectTarget) -> std::ops::Range<usize> {
@@ -3320,15 +3403,17 @@ impl RenderState {
     /// state to be freed off-thread. No allocation, no comparison, no
     /// reasoning on the audio thread.
     ///
-    /// **The compensation ring goes the other way**, and that is not a
+    /// **The compensation ring is decided by its length**, and that is not a
     /// detail. Every other setting on a strip comes from its own channel's
     /// setup, which is equal by construction or the pair would not be in
     /// `carry`. Compensation does not: `install_compensation` derives it from
     /// the *whole* project, so a channel that did not change can still be
     /// owed a different delay because some other channel altered the longest
-    /// path into their shared bus. The freshly built strip has the right one,
-    /// so it is swapped onto the carried strip and the stale ring leaves with
-    /// the discarded one.
+    /// path into their shared bus. When it is owed a different one, the fresh
+    /// ring goes onto the carried strip and the stale one leaves; when it is
+    /// owed the same, the live ring stays, full, rather than restarting the
+    /// path from silence -- [`keep_live_ring`]. The sends' rings follow the
+    /// same rule, matched through `carry`'s seat maps.
     pub fn carry_strips_from(&mut self, outgoing: &mut Self, carry: &crate::CarryPlan) {
         for &(from, to) in &carry.channels {
             let (from, to) = (usize::from(from), usize::from(to));
@@ -3351,9 +3436,11 @@ impl RenderState {
             // why.
             fresh.sampler.swap_audio_slot_with(&mut live.sampler);
             // `fresh` now holds the carried strip and `live` the one built
-            // for it; put the freshly computed delay onto the one that will
-            // be heard.
-            std::mem::swap(&mut fresh.compensation, &mut live.compensation);
+            // for it. The carried strip has the live ring; give it the fresh
+            // one only if the delay it is owed changed.
+            if ring_frames(&fresh.compensation) != ring_frames(&live.compensation) {
+                std::mem::swap(&mut fresh.compensation, &mut live.compensation);
+            }
             // The same for the track it feeds: `carry_plan` ignores the bus
             // so that a track move can carry the channels routed to it, and
             // a carried strip would otherwise go on summing into the seat its
@@ -3388,12 +3475,17 @@ impl RenderState {
                 continue;
             };
             std::mem::swap(live, fresh);
-            std::mem::swap(&mut fresh.compensation, &mut live.compensation);
+            if ring_frames(&fresh.compensation) != ring_frames(&live.compensation) {
+                std::mem::swap(&mut fresh.compensation, &mut live.compensation);
+            }
             std::mem::swap(&mut fresh.solo_silenced, &mut live.solo_silenced);
             std::mem::swap(&mut fresh.console, &mut live.console);
             std::mem::swap(&mut fresh.console_sum, &mut live.console_sum);
             std::mem::swap(&mut fresh.console_dirty, &mut live.console_dirty);
         }
+        // The sends are compiled whole from the incoming project, so their
+        // rings are matched by edge rather than carried with a strip.
+        self.sends.adopt_rings_from(&mut outgoing.sends, |seat| carry.seat(seat));
     }
 
     /// The identity of the audio slot in this generation's bank at `index`,
@@ -4273,6 +4365,11 @@ impl RenderState {
                     // free memory on it.
                     return delay.map(StructuralReclaim::Compensation);
                 };
+                // A resend of the length already installed -- which is what
+                // the session's reconciler does after every install, having
+                // forgotten what it sent -- keeps the live ring.
+                let mut delay = delay;
+                keep_live_ring(&mut delay, slot);
                 std::mem::replace(slot, delay).map(StructuralReclaim::Compensation)
             }
             StructuralCommand::SetConsoleSum { bus, buffer } => {
@@ -4290,11 +4387,16 @@ impl RenderState {
                 std::mem::replace(&mut strip.console_sum, buffer)
                     .map(StructuralReclaim::ConsoleSum)
             }
-            StructuralCommand::SetTrackGraph { graph, sends } => {
+            StructuralCommand::SetTrackGraph { graph, mut sends } => {
                 // One swap, for the reason `SetAudioGraph` is one: a send
                 // whose target the render order has not been told about would
                 // arrive a block late, and the two must never be observed
                 // from different generations.
+                //
+                // The seats did not move -- a reconciler resends against the
+                // document it already installed -- so every edge is matched
+                // where it stands.
+                sends.adopt_rings_from(&mut self.sends, Some);
                 self.bus_graph = graph;
                 Some(StructuralReclaim::TrackGraph(std::mem::replace(
                     &mut self.sends,
@@ -11512,3 +11614,180 @@ mod footprint {
 
 }
 
+
+/// A compensation ring the same length as the live one keeps the live one --
+/// across an install, a reconciler's resend, and a send bank arriving.
+/// `incremental-structure/`'s option 1: what a structural edit still emptied
+/// after step 02 was exactly these rings.
+///
+/// Asserted on the ring's address rather than on audio. A kept ring and a
+/// fresh one are indistinguishable until the delay's length has played out,
+/// and the address is the property the fix actually holds.
+#[cfg(test)]
+mod kept_rings {
+    use super::*;
+    use mooloop_core::{EffectKind, EffectSlotState, ProjectChannel};
+
+    fn ring(ring: &Option<Box<IntegerDelay>>) -> Option<usize> {
+        ring.as_ref().map(|ring| &**ring as *const IntegerDelay as usize)
+    }
+
+    /// Two channels on two tracks, and a Drive on the first: its oversampler
+    /// is a latency, so the *other* track is owed a ring into the master.
+    fn one_late_path() -> Project {
+        let mut project = Project::default();
+        project.channels.push(ProjectChannel::mono_synth(1, 1));
+        project.assign_channel_ids();
+        project.ensure_tracks(3);
+        project.channels[0].setup.channel.bus = 1;
+        project.channels[1].setup.channel.bus = 2;
+        project.channels[0]
+            .setup
+            .push_effect(EffectSlotState::of_kind(EffectKind::Drive))
+            .expect("room in the chain");
+        project
+    }
+
+    #[test]
+    fn a_track_move_keeps_a_ring_it_is_still_owed() {
+        let project = one_late_path();
+        let live = RenderState::from_project(48_000, &project, &[]);
+        let held = ring(&live.buses[2].compensation);
+        assert!(held.is_some(), "the premise: track 2 is owed a delay");
+
+        let mut moved = project.clone();
+        moved.move_track(1, 2).expect("a real move");
+        let mut live = live;
+        let mut incoming = RenderState::from_project(48_000, &moved, &[]);
+        incoming.carry_strips_from(&mut live, &crate::carry_plan(&project, &moved));
+
+        assert_eq!(
+            ring(&incoming.buses[1].compensation),
+            held,
+            "the carried track restarted its delay from silence"
+        );
+    }
+
+    /// The channel side of the same rule: two channels into one track, the
+    /// Drive on the first, so the second is owed a ring -- and keeps it
+    /// through a channel move.
+    #[test]
+    fn a_channel_move_keeps_a_ring_it_is_still_owed() {
+        let mut project = one_late_path();
+        project.channels[1].setup.channel.bus = 1;
+        let mut live = RenderState::from_project(48_000, &project, &[]);
+        let held = ring(&live.strips[1].compensation);
+        assert!(held.is_some(), "the premise: channel 1 is owed a delay");
+
+        let mut moved = project.clone();
+        moved.move_channel(1, 0).expect("a real move");
+        let mut incoming = RenderState::from_project(48_000, &moved, &[]);
+        incoming.carry_strips_from(&mut live, &crate::carry_plan(&project, &moved));
+
+        assert_eq!(
+            ring(&incoming.strips[0].compensation),
+            held,
+            "the carried channel restarted its delay from silence"
+        );
+    }
+
+    /// The other side of the rule: a track owed a *different* delay gets the
+    /// ring built for it, full of nothing, because the one it had is the
+    /// wrong length and its contents are aligned to a path that has changed.
+    #[test]
+    fn a_ring_of_the_wrong_length_is_replaced() {
+        let project = one_late_path();
+        let mut live = RenderState::from_project(48_000, &project, &[]);
+        let held = ring(&live.buses[2].compensation);
+
+        let mut longer = project.clone();
+        longer.channels[0]
+            .setup
+            .push_effect(EffectSlotState::of_kind(EffectKind::Drive))
+            .expect("room in the chain");
+        let mut incoming = RenderState::from_project(48_000, &longer, &[]);
+        let built = ring(&incoming.buses[2].compensation);
+        incoming.carry_strips_from(&mut live, &crate::carry_plan(&project, &longer));
+
+        assert_ne!(held, built);
+        assert_eq!(ring(&incoming.buses[2].compensation), built);
+    }
+
+    /// The session forgets what it sent on every install and resends the
+    /// whole plan a tick later, each ring freshly built. The same length is a
+    /// no-op; the arriving ring goes back for reclaim.
+    #[test]
+    fn a_resent_ring_of_the_same_length_is_handed_back() {
+        let project = one_late_path();
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        let held = ring(&render.buses[2].compensation);
+        let frames = ring_frames(&render.buses[2].compensation) as u32;
+
+        let returned = render.apply_structural(StructuralCommand::SetCompensation {
+            target: EffectTarget::Bus(2),
+            delay: IntegerDelay::new(frames).map(Box::new),
+        });
+        assert!(
+            matches!(returned, Some(StructuralReclaim::Compensation(_))),
+            "the arriving ring was not handed back"
+        );
+        assert_eq!(ring(&render.buses[2].compensation), held);
+
+        let returned = render.apply_structural(StructuralCommand::SetCompensation {
+            target: EffectTarget::Bus(2),
+            delay: IntegerDelay::new(frames + 1).map(Box::new),
+        });
+        assert!(matches!(returned, Some(StructuralReclaim::Compensation(_))));
+        assert_ne!(ring(&render.buses[2].compensation), held, "a new length was refused");
+    }
+
+    fn send(producer: u8, target: u8, delay: u32) -> SendSpec {
+        SendSpec {
+            producer: EffectTarget::Bus(producer),
+            target,
+            tap: SendTap::PostFader,
+            enabled: true,
+            level: 1.0,
+            delay,
+        }
+    }
+
+    /// A send bank arriving keeps the rings of the edges it did not change,
+    /// found where their two ends went -- here both ends swapped seats.
+    #[test]
+    fn a_send_keeps_its_ring_through_a_move_of_both_ends() {
+        let mut old = SendBank::new(&[send(1, 2, 64), send(1, 3, 32)], 48_000);
+        let held = ring(&old.sends[0].compensation);
+        let mut new = SendBank::new(&[send(2, 1, 64), send(2, 3, 32)], 48_000);
+        let other = ring(&old.sends[1].compensation);
+
+        let swap = |seat: EffectTarget| match seat {
+            EffectTarget::Bus(1) => Some(EffectTarget::Bus(2)),
+            EffectTarget::Bus(2) => Some(EffectTarget::Bus(1)),
+            other => Some(other),
+        };
+        new.adopt_rings_from(&mut old, swap);
+
+        let range = new.range(EffectTarget::Bus(2));
+        let to_one = range.clone().find(|&at| new.sends[at].target == 1).expect("the edge");
+        let to_three = range.clone().find(|&at| new.sends[at].target == 3).expect("the edge");
+        assert_eq!(ring(&new.sends[to_one].compensation), held);
+        assert_eq!(ring(&new.sends[to_three].compensation), other);
+    }
+
+    /// And through the reconciler's own resend, where nothing moved.
+    #[test]
+    fn a_resent_send_bank_keeps_its_rings() {
+        let project = one_late_path();
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        *render.sends = SendBank::new(&[send(1, 2, 64)], 48_000);
+        let held = ring(&render.sends.sends[0].compensation);
+
+        let returned = render.apply_structural(StructuralCommand::SetTrackGraph {
+            graph: render.bus_graph,
+            sends: Box::new(SendBank::new(&[send(1, 2, 64)], 48_000)),
+        });
+        assert!(matches!(returned, Some(StructuralReclaim::TrackGraph(_))));
+        assert_eq!(ring(&render.sends.sends[0].compensation), held);
+    }
+}

@@ -2,7 +2,11 @@
 
 Linear: [MOO-30](https://linear.app/mooloop/issue/MOO-30/incremental-structure-stop-swapping-the-whole-renderstate-for-an-edit).
 
-**Written 2026-09-17. Active from 2026-09-18.** A note recorded the plan as
+**Written 2026-09-17. Finished 2026-09-18, not yet heard.** Steps 01, 02
+and 05 landed; 03 and 04 were decided against in 05, with Adam choosing
+between the three ways forward. The archive waits on a listen.
+
+**Active from 2026-09-18.** A note recorded the plan as
 parked on Adam's *"im not convinced we're going to make it perfect by chasing
 this thread"*; he corrected that the same day -- he meant not chasing the glitch
 *beyond* this plan, not shelving it. So this plan is the whole of that thread,
@@ -68,9 +72,9 @@ the device edits already demonstrate.
 | --- | --- |
 | 01 | `TrackId`, minting, load-time assignment — `ChannelId` copied wholesale, including the lesson that `selected_channel`-style fields want it first. **`channel.bus` holding an id is most of the audible win on its own**: a track move then stops touching a channel's setup, so every channel carries through it. **Landed 2026-09-18** as identity only; see below |
 | 02 | A `ChannelStrip` records its own `ChannelId`, and a `BusStrip` its `TrackId`. `channel-identity/05` deliberately did not need this, because the control thread did the matching; an incremental edit needs the audio thread to know what it is holding **Landed 2026-09-18** as the bus-side carry; the strips do not record their ids yet -- see below |
-| 03 | `StructuralCommand::{AddTrack, RemoveTrack, MoveTrack}`, mirroring `AddChannel` |
-| 04 | `StructuralCommand::{RemoveChannel, MoveChannel}`, so the three channel edits stop reaching `install_project` at all |
-| 05 | What is left that still needs a whole-state swap — a document open, an undo — and whether it should |
+| 03 | `StructuralCommand::{AddTrack, RemoveTrack, MoveTrack}`, mirroring `AddChannel` **Not built, by decision 2026-09-18** -- see step 05 |
+| 04 | `StructuralCommand::{RemoveChannel, MoveChannel}`, so the three channel edits stop reaching `install_project` at all **Not built, by decision 2026-09-18** -- see step 05 |
+| 05 | What is left that still needs a whole-state swap — a document open, an undo — and whether it should **Decided 2026-09-18**: the swap stays, and loses nothing it did not have to -- see below |
 
 ## What step 01 actually did
 
@@ -116,6 +120,43 @@ holds. The carry decides on the control thread and did not.
 fresh strip: every send's state and every compensation ring. Audible only in
 a song with a send or a latency-reporting device, with audio in flight
 through one at the moment of the edit.
+
+## Step 05: what still swaps, and why it stays
+
+**Every edit still reaches `install_project`, and nothing it is not about is
+emptied.** After 02 the one thing a swap still lost was the compiled half of
+the graph: every compensation ring and every send's ring started from silence,
+because the carry deliberately took those from the incoming project. The
+session made it worse than it looked -- it forgets what it sent on every
+install and resends the whole plan a tick later, each ring freshly built, so
+carrying a ring through the install alone would have been undone one tick
+later.
+
+So the rule went into the engine, in the three places a ring arrives: **a
+ring the same length as the live one is the live one's job, and the live one
+stays** (`keep_live_ring` in `render.rs`). The install carry keeps a carried
+strip's ring when the delay it is owed did not change; `SetCompensation`
+hands a same-length ring straight back for reclaim; and a send bank arriving
+-- by install or by `SetTrackGraph` -- adopts the old bank's ring for every
+edge that is the same edge, found through `CarryPlan`'s seat maps, which
+cover every surviving channel and track rather than only the carried ones.
+`render::kept_rings` holds all five cases and was checked against a tree
+without the rule.
+
+**Why 03 and 04 were not built.** Structural commands for channel and track
+edits would renumber around twenty index-keyed structures on the audio thread
+at once -- strips, event lists, control outputs, mod racks, every pattern's
+note lists, the gate table, recording state, the audio-slot bank -- plus the
+handle's mirrors, where the install does it atomically on the control thread
+today. After 02 and this, that risk would buy machinery rather than anything
+audible: the only difference left between an edit and no edit is the
+control-thread cost of preparing a `RenderState`, and nobody has heard that.
+Adam chose this over building them (2026-09-18).
+
+**What that leaves true, for whoever reopens it:** the answers to the open
+questions below are unchanged by this decision rather than settled by it. An
+undo is still a swap, the ordering question never arose, and the `carry_plan`
+is load-bearing rather than dead code.
 
 ## The cheap half
 

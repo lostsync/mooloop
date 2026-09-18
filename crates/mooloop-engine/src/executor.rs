@@ -629,7 +629,9 @@ mod tests {
     /// ceiling: it proves this path does not allocate, not that no path does.
     #[test]
     fn carrying_strips_allocates_nothing() {
-        let project = two_routed_notes();
+        let mut project = two_routed_notes();
+        // A send, so the send bank's edge matching is on the measured path.
+        project.buses[1].sends.push(mooloop_core::AuxSend::new(2));
         let mut reordered = project.clone();
         reordered.move_channel(0, 1).expect("a real move");
         reordered.move_track(1, 2).expect("a real move");
@@ -811,8 +813,8 @@ mod tests {
         let untouched = rms_after_install(&project, None);
         let full = crate::carry_plan(&project, &moved);
         let channels_only = crate::CarryPlan {
-            channels: full.channels.clone(),
             tracks: Vec::new(),
+            ..full.clone()
         };
         let carried = rms_after_install(&project, Some((moved.clone(), full)));
         let rebuilt = rms_after_install(&project, Some((moved, channels_only)));
