@@ -1,5 +1,7 @@
 # egui view layer — plan status
 
+Linear: project [egui view layer](https://linear.app/mooloop/project/egui-view-layer-3c7c01875514).
+
 Not started, and **not yet decided**. Written 2026-09-02, out of
 `docs/archive/ARCHITECTURE_REVIEW.md`.
 

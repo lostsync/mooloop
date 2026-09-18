@@ -1,5 +1,7 @@
 # Core Audio driver status
 
+Linear: project [Core Audio driver](https://linear.app/mooloop/project/core-audio-driver-15b373205661).
+
 Written 2026-09-13. Adam wants to develop mooloop on a Mac as well as on
 Fedora, and asked for it to build and run there. It does, as of the same day,
 and every step has landed. Step 03 grew on the way in: Adam asked for a MIDI

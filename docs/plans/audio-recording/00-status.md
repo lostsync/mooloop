@@ -1,10 +1,8 @@
 # Audio recording — plan status
 
-Linear: [MOO-16](https://linear.app/mooloop/issue/MOO-16/audio-recording-one-input-menu-takes-go-into-the-sampler)
-mirrors this file. [MOO-12](https://linear.app/mooloop/issue/MOO-12/audio-input) predates this
-plan (same `SCOPE.md` item, filed before the migration) and is kept open as
-the earlier tracking issue for the input side; MOO-16 is where the plan's
-current shape lives.
+Linear: project [Audio recording & resampling](https://linear.app/mooloop/project/audio-recording-and-resampling-18d89cc837e2),
+parent issue [MOO-16](https://linear.app/mooloop/issue/MOO-16). Each step has
+its own issue, numbered in the table below.
 
 **Written 2026-09-17. Step 02 landed 2026-09-18.** This is `SCOPE.md` §2 item 3
 (audio input) together with the audio half of item 5 (recording), in the shape
@@ -113,12 +111,12 @@ order.
 
 | Step | What | Rung | State |
 | --- | --- | --- | --- |
-| [02](02-one-input-menu.md) | `ChannelInput`: MIDI, an app source (channel, track, master) or a hardware input; one picker, saved | core, project, session, UI build | **landed 2026-09-18**, UI drawing deferred to 05 -- see below |
-| [03](03-capture.md) | Bounded capture of the chosen buffer at the end of each block, drained to a WAV file off the audio thread | engine, session | not started |
-| [04](04-the-take.md) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | not started |
-| [05](05-interface.md) | Record button, source meter, the growing waveform, the non-sampler rule. **Acceptance: resample a loop into a sampler and play it back** | UI build | not started |
-| [01](01-input-in-the-engine.md) | Drivers deliver hardware input into an input bus, which becomes one more source; monitoring | engine; macOS unverified | not started |
-| [06](06-unused-takes.md) | Find and delete takes nothing refers to | session, project, UI build | not started |
+| [02](02-one-input-menu.md) · [MOO-34](https://linear.app/mooloop/issue/MOO-34) | `ChannelInput`: MIDI, an app source (channel, track, master) or a hardware input; one picker, saved | core, project, session, UI build | **landed 2026-09-18**, UI drawing deferred to 05 -- see below |
+| [03](03-capture.md) · [MOO-35](https://linear.app/mooloop/issue/MOO-35) | Bounded capture of the chosen buffer at the end of each block, drained to a WAV file off the audio thread | engine, session | not started |
+| [04](04-the-take.md) · [MOO-36](https://linear.app/mooloop/issue/MOO-36) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | not started |
+| [05](05-interface.md) · [MOO-37](https://linear.app/mooloop/issue/MOO-37) | Record button, source meter, the growing waveform, the non-sampler rule. **Acceptance: resample a loop into a sampler and play it back** | UI build | not started |
+| [01](01-input-in-the-engine.md) · [MOO-12](https://linear.app/mooloop/issue/MOO-12) | Drivers deliver hardware input into an input bus, which becomes one more source; monitoring | engine; macOS unverified | not started |
+| [06](06-unused-takes.md) · [MOO-38](https://linear.app/mooloop/issue/MOO-38) | Find and delete takes nothing refers to | session, project, UI build | not started |
 
 **Why internal sources can go first without new scheduling:** capture is a
 sink, not a consumer. It reads a buffer after the whole block has rendered,
