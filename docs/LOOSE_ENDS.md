@@ -1163,26 +1163,50 @@ That is a bigger change than a test, and the test is what was missing.
 **One device face still spells a number the descriptor table already
 states.** `scripts/dupe-audit unchecked-face` names it. The count was eight
 faces and twenty-three numbers when the check was written on 2026-09-12; it is
-`bus-device.slint` and two numbers now. The test's parser became block-based
+`bus-device.slint` and four numbers now. The test's parser became block-based
 -- which is what the entry here said had to come first -- and its list then
 grew to take `modulation-device`, `eq-device`, `filter-device`,
-`buffer-device` and `container-device` -- not `device-oscillator`, which this
-entry claimed until 2026-09-18 and which the test has never included; its
-`-48..48` semitone range is spelled in four places with no reader
-(`reports/fable-2026-09-18.md`, finding 3). `aux-in-device`
+`buffer-device` and `container-device`. `aux-in-device`
 followed on 2026-09-13, and needed a test of its own rather than a longer
 list, because Aux In is not an `EffectKind`. DS-01 is still absent and still
 correctly so: its paged face reads the table at run time
 (`default-value: root.defaults[root.param]`), which is a copy of nothing.
 
-What is left needs the parser widened first, and may not be worth it.
-`bus-device`'s two numbers are a `MiniKnob`'s pan range (`-1..1`, resting at
-`0`) and a `MixerFader`'s `default-value: 1.0`, whose `maximum` already reads
-`GainMath.fader-db[0]` rather than spelling one. `face_knobs` walks
-`ParameterKnob` blocks and nothing else, so neither is reachable -- and
-neither is descriptor-backed, so there is no table entry for a widened parser
-to compare them against. Unity and centre are the kind of literal that has
-nowhere else to live.
+`device-oscillator` was **claimed by this entry and absent from the test**
+until 2026-09-18, when `reports/fable-2026-09-18.md` finding 3 read the list
+and found it had never been there -- a claim the source did not support,
+sitting in the document whose job is to be trusted about exactly this. It is
+in the test now, and so is the rest of the shape behind it:
+
+- `-48..48` semitones and `-100..100` cents were spelled four times, in
+  `generator.rs`, `mlp8.rs`, `device-oscillator.slint` and
+  `mlp8-device.slint`, with no test on any pair. The two Rust copies are one
+  constant now (`generator::OSC_SEMITONE_RANGE`, `OSC_CENT_RANGE`), and
+  `every_oscillator_knob_agrees_with_its_table` holds both faces to it.
+- **Why the check could not see it, which is the part worth remembering.**
+  `unchecked-face` keyed on `default-value:` literals, and the oscillator
+  knobs read their defaults from the table (`root.param-defaults[..]`) while
+  spelling their *bounds* inline. The one property the face did not copy was
+  the only one being searched for, so a face holding four literal numbers
+  looked clean. The check now reads `minimum:`/`maximum:` too, and counts
+  every match on a line rather than the first -- these faces put a knob's
+  whole control block on one line, so a search for `minimum:` had been
+  stopping before the `maximum:` beside it.
+
+What is left may not be worth it. `bus-device`'s four numbers are a
+`MiniKnob`'s pan range (`-1..1`, resting at `0`) and a `MixerFader`'s
+`default-value: 1.0`, whose `maximum` already reads `GainMath.fader-db[0]`
+rather than spelling one. `face_knobs` walks `ParameterKnob` blocks and
+nothing else, so neither is reachable -- and neither is descriptor-backed, so
+there is no table entry for a widened parser to compare them against. Unity
+and centre are the kind of literal that has nowhere else to live.
+
+**A smaller copy found on the way and left alone:** `mlp8.rs:207-211` declares
+its own `OSC_OFFSET_WAVE .. OSC_OFFSET_PULSE_WIDTH`, the same five values
+`generator.rs:384-388` declares. They are offsets into a device's own block
+rather than a shared address space, so the two being equal is a coincidence
+the devices are entitled to break; a merge would state a relationship that
+does not exist. Recorded because the next reader will see it too.
 
 ## Housekeeping
 

@@ -191,9 +191,22 @@ this plan.
 2. `EffectParams` is a closed enum and it is `Copy`. **Step 02**, through
    the side table.
 3. Latency comes from the effect kind. **Step 04.**
+   Added 2026-09-18 from `reports/fable-2026-09-18.md`: compensation is not
+   the only per-install table this touches. `AudioTapBank` is **rebuilt whole
+   on every install** (`engine/src/render.rs:3379`, deliberately, so an
+   offline render that runs no pump still gets its tap plan). A plugin's
+   latency is known only after activation and can change while it runs, so a
+   latency change that today implies an install implies a tap-bank rebuild
+   too. Both need the identity work of `plans/channel-identity/` step 05
+   before a plugin's latency can move without tearing the graph down —
+   the same prerequisite blocker 7 records for step 06.
 4. `ChannelStrip` holds its eight generators as concrete fields
-   (`engine/src/render.rs:2154`) and has no slot for a boxed source.
-   **Step 09.**
+   (`engine/src/render.rs:2189`; the citation read `:2154` until 2026-09-18,
+   when it had drifted) and has no slot for a boxed source. **Step 09.**
+   Note delivery to those eight is a closed match calling three different
+   method shapes rather than one trait method, and unifying it is worth
+   doing while every source is still native --
+   `reports/fable-2026-09-18.md`, Plan D.
 5. Once a node is installed, the control thread has no handle to it, and
    nothing lets the audio thread ask for main-thread work. **Step 04.**
 6. The effect menu (`device-rack.slint:172-196`, 14 hard-coded rows) and the
