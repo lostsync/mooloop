@@ -3,7 +3,7 @@
 //! A separate instrument from [`crate::MonoSynthParams`], not an extension of
 //! it. The v1 mono synth is Poly with the voice count set to one; this one is
 //! a filter and performance instrument, per
-//! `docs/plans/mono-synth-v2/01-what-mono-is.md`. It keeps the three-
+//! `docs/plans/archive/mono-synth-v2/01-what-mono-is.md`. It keeps the three-
 //! oscillator front end because that is genuinely shared, and diverges
 //! everywhere else:
 //!

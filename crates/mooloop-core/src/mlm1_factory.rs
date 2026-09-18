@@ -8,7 +8,7 @@
 //! of it, not the other way round.
 //!
 //! Each patch exists to prove something, per
-//! `docs/plans/mono-synth-v2/08-mono-factory-patches.md`, and the step's
+//! `docs/plans/archive/mono-synth-v2/08-mono-factory-patches.md`, and the step's
 //! standing requirement is that every one of them stays a few knob moves from
 //! the default saw. Where a patch needed a setting the defaults made awkward
 //! to reach, that is recorded in `00-status.md` as a finding rather than

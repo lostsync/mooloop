@@ -11,7 +11,7 @@
 //! That is exactly what `KnobStack` did from the day it was written: 85 knobs
 //! across ML-P8 and DS-01, every one of them silent, while its sibling
 //! `KnobField` forwarded the line correctly. Nothing caught it — the tooltip
-//! sweep in `docs/plans/ui-consistency-pass/` audited what tooltip *strings*
+//! sweep in `docs/plans/archive/ui-consistency-pass/` audited what tooltip *strings*
 //! said and never asked whether a rendered tooltip resolved to anything at
 //! all, and no test in the workspace mentions a tooltip.
 //!

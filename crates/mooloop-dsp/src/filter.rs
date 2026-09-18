@@ -444,7 +444,7 @@ pub struct Acid {
 /// non-monotonic and its range collapses from 12 dB to under 3, and no value
 /// of [`ACID_MAX_FEEDBACK`] recovers it. Lining the corners up means
 /// re-deriving the filter, not retuning a constant. Recorded in
-/// `docs/plans/mono-synth-v2/00-status.md`.
+/// `docs/plans/archive/mono-synth-v2/00-status.md`.
 const ACID_POLE_COMPENSATION: f32 = 0.8;
 
 /// Half the ladder's, so the low end still thins as resonance rises -- that is

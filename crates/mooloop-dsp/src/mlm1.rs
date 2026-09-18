@@ -3,7 +3,7 @@
 //!
 //! Deliberately not a variant of [`crate::monosynth`]. That device is the poly
 //! synth with the voice count set to one; this one is built around the filter
-//! and around note behaviour, per `docs/plans/mono-synth-v2/01-what-mono-is.md`.
+//! and around note behaviour, per `docs/plans/archive/mono-synth-v2/01-what-mono-is.md`.
 //! What is here now:
 //!
 //! - a separate amplitude ADSR and filter ADSR, so a pluck (fast filter decay
@@ -1512,7 +1512,7 @@ mod tests {
 
     // --- The factory bank -------------------------------------------------
     //
-    // `docs/plans/mono-synth-v2/08-mono-factory-patches.md` asks for these
+    // `docs/plans/archive/mono-synth-v2/08-mono-factory-patches.md` asks for these
     // checks once the bank exists, on the grounds that they are cheapest to
     // catch here. They run over the shipped patches rather than over invented
     // ones deliberately: a bound that holds for a test patch and not for
