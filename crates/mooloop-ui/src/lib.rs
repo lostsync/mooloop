@@ -4480,6 +4480,28 @@ impl UiState {
         true
     }
 
+    /// [`Self::learn_if_armed`] for a parameter, which has to be named
+    /// durably before it can be stored.
+    ///
+    /// Every one of the three faces that reaches here has a `ParamAddr` in
+    /// hand, because that is what a press on a knob produces and what the
+    /// modulation edit beside it needs. Turning it into the [`ParamKey`] a
+    /// binding holds is a question only the session can answer, so it is
+    /// asked once here rather than at each face. An address whose seat has no
+    /// channel in it is not a learn gesture at all -- there is nothing to
+    /// learn onto -- and the press falls through to the modulation edit.
+    fn learn_param_if_armed(
+        &mut self,
+        window: &MainWindow,
+        binds_port: bool,
+        address: ParamAddr,
+    ) -> bool {
+        let Some(key) = self.session.param_key(address) else {
+            return false;
+        };
+        self.learn_if_armed(window, binds_port, ControlTarget::Param(key))
+    }
+
     /// Wait for a control to bind to `target`, and say so.
     ///
     /// Three surfaces ask for this — a press on a control, a mapping row's
@@ -9392,7 +9414,7 @@ impl AppUi {
                     param,
                 };
                 let binds_port = settings.borrow().midi.learn_binds_port;
-                if state.learn_if_armed(&window, binds_port, ControlTarget::Param(address)) {
+                if state.learn_param_if_armed(&window, binds_port, address) {
                     return;
                 }
                 state.begin_modulation_edit(&window);
@@ -9450,7 +9472,7 @@ impl AppUi {
                 let address =
                     ParamAddr::strip(EffectTarget::Channel(state.session.selected as u8), param);
                 let binds_port = settings.borrow().midi.learn_binds_port;
-                if state.learn_if_armed(&window, binds_port, ControlTarget::Param(address)) {
+                if state.learn_param_if_armed(&window, binds_port, address) {
                     return;
                 }
                 state.begin_modulation_edit(&window);
@@ -9527,7 +9549,7 @@ impl AppUi {
                 };
                 let Some(address) = address else { return };
                 let binds_port = settings.borrow().midi.learn_binds_port;
-                if state.learn_if_armed(&window, binds_port, ControlTarget::Param(address)) {
+                if state.learn_param_if_armed(&window, binds_port, address) {
                     return;
                 }
                 state.begin_modulation_edit(&window);

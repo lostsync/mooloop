@@ -1603,14 +1603,17 @@ mod tests {
             source: MidiInputSource::Port("Launchkey MK3".to_owned()),
             channel: MidiChannelFilter::One(9),
         };
+        // A binding names its channel by identity, so the song has to have
+        // handed one out before there is anything to learn onto.
+        project.assign_channel_ids();
         project.control_map.bind(ControlBinding::new(
             ControlSource::Cc {
                 port: MidiPortFilter::Named("Faderfox".to_owned()),
                 channel: MidiChannelFilter::Omni,
                 controller: 74,
             },
-            ControlTarget::Param(ParamAddr::strip(
-                mooloop_core::EffectTarget::Channel(0),
+            ControlTarget::Param(mooloop_core::ParamKey::strip(
+                mooloop_core::ChainKey::Channel(project.channels[0].id),
                 mooloop_core::STRIP_PARAM_VOLUME,
             )),
         ));

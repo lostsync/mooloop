@@ -45,6 +45,45 @@ pub enum EffectTarget {
     Bus(u8),
 }
 
+/// Where an effect chain lives, named so that a structural edit cannot move
+/// it: [`EffectTarget`]'s durable twin.
+///
+/// The asymmetry between the two arms is the whole state of the channel/track
+/// identity migration in one type. A channel has a [`ChannelId`] and so a
+/// chain on one survives any reordering of `Project.channels` untouched. A
+/// track is still only its seat, so the bus arm is still a seat and still has
+/// to be renumbered by a [`TrackEdit`] -- see [`Self::after_track`].
+///
+/// Serializes exactly as [`EffectTarget`] does: `ChannelId` is transparent
+/// over its `u32`, so `{"channel": 3}` is what both write. A file saved before
+/// channels had identities therefore decodes its old *index* 3 as
+/// `ChannelId(3)`, which is the same reading [`Project::assign_channel_ids`]
+/// gives that file's channels -- the two agree without a migration step.
+///
+/// [`ChannelId`]: crate::ChannelId
+/// [`TrackEdit`]: crate::structure::TrackEdit
+/// [`Project::assign_channel_ids`]: crate::Project::assign_channel_ids
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChainKey {
+    Channel(crate::ChannelId),
+    Bus(u8),
+}
+
+impl ChainKey {
+    /// Where this chain points after a **track** edit, or `None` when the
+    /// track it named was the one removed.
+    ///
+    /// A channel is named by identity and so cannot be moved by a track edit;
+    /// a bus is a seat and follows.
+    pub fn after_track(self, edit: crate::structure::TrackEdit) -> Option<Self> {
+        match self {
+            Self::Channel(_) => Some(self),
+            Self::Bus(bus) => edit.track(bus).map(Self::Bus),
+        }
+    }
+}
+
 /// Where a track's channel strip sits in that track's chain.
 ///
 /// Adam, 2026-09-10, asking for the strip's processing to be reachable from

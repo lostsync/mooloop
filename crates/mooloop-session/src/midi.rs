@@ -238,7 +238,10 @@ impl Session {
         let outcomes = {
             let session = &*self;
             state.apply(&map, message, |target| match target {
-                ControlTarget::Param(address) => session.param_normalized(*address).unwrap_or(0.0),
+                ControlTarget::Param(key) => session
+                    .param_addr(*key)
+                    .and_then(|address| session.param_normalized(address))
+                    .unwrap_or(0.0),
                 ControlTarget::Transport(_) => 0.0,
             })
         };
@@ -255,7 +258,13 @@ impl Session {
                         .commands
                         .extend(self.apply_transport_control(gesture, playing));
                 }
-                (ControlTarget::Param(address), ControlOutcome::Set(value)) => {
+                (ControlTarget::Param(key), ControlOutcome::Set(value)) => {
+                    // A binding onto a channel this song does not have is
+                    // inert: it resolves to nothing and moves nothing, rather
+                    // than falling back on whichever channel holds that seat.
+                    let Some(address) = self.param_addr(key) else {
+                        continue;
+                    };
                     if let Some(command) = self.set_param_normalized(address, value) {
                         effects.commands.push(command);
                     }
@@ -296,7 +305,10 @@ impl Session {
             ControlTarget::Transport(gesture) => {
                 return format!("Transport \u{b7} {}", gesture.label())
             }
-            ControlTarget::Param(address) => *address,
+            ControlTarget::Param(key) => match self.param_addr(*key) {
+                Some(address) => address,
+                None => return "Unavailable parameter".to_owned(),
+            },
         };
         let Some(descriptor) = self.param_descriptor(address) else {
             return "Unavailable parameter".to_owned();
@@ -677,9 +689,9 @@ mod tests {
     use super::*;
 
     use mooloop_core::{
-        ControlMode, ControlSource, DeviceId, EffectTarget, MidiChannelFilter, MidiInputSource,
-        MidiKind, MidiPortFilter, MidiPortId, MidiRouteSource, ParamCurve, Takeover,
-        SYSTEM_CHANNEL, TICKS_PER_STEP,
+        ChainKey, ChannelId, ControlMode, ControlSource, DeviceId, EffectTarget,
+        MidiChannelFilter, MidiInputSource, MidiKind, MidiPortFilter, MidiPortId, MidiRouteSource,
+        ParamCurve, ParamKey, Takeover, SYSTEM_CHANNEL, TICKS_PER_STEP,
     };
 
     fn ports() -> Vec<MidiPortInfo> {
@@ -707,7 +719,18 @@ mod tests {
         }
     }
 
-    const VOLUME: ParamAddr = ParamAddr::strip(EffectTarget::Channel(0), STRIP_PARAM_VOLUME);
+    /// The first channel's fader, named the way a binding names it. Every
+    /// test session's channel 0 wears `ChannelId(0)` -- `Session::default`
+    /// mints it rather than leaving it unassigned, for exactly this reason.
+    const VOLUME: ParamKey =
+        ParamKey::strip(ChainKey::Channel(ChannelId(0)), STRIP_PARAM_VOLUME);
+
+    /// Where a binding's target currently sits. The tests read parameters
+    /// through the session's own addresses, and a binding names a channel
+    /// rather than a seat, so the two meet here.
+    fn seat_of(session: &Session, key: ParamKey) -> ParamAddr {
+        session.param_addr(key).expect("channel 0 has an identity")
+    }
 
     /// A recorded note lands in the pattern at the position it was played and
     /// for the length it was held, on the channel the engine says -- not on
@@ -842,7 +865,7 @@ mod tests {
         session.resolve_control_map(&ports());
 
         let effects = session.apply_control_input(&cc(7, 127), &ports(), false);
-        assert_eq!(effects.moved, vec![VOLUME]);
+        assert_eq!(effects.moved, vec![seat_of(&session, VOLUME)]);
         assert!(effects.edits);
         assert!(matches!(
             effects.commands[0],
@@ -850,11 +873,11 @@ mod tests {
         ));
         // The descriptor's top, and the project is holding it.
         assert!(session.channels[0].volume > 1.0);
-        assert_eq!(session.param_normalized(VOLUME), Some(1.0));
+        assert_eq!(session.param_normalized(seat_of(&session, VOLUME)), Some(1.0));
 
         // And back down.
         let effects = session.apply_control_input(&cc(7, 0), &ports(), false);
-        assert_eq!(effects.moved, vec![VOLUME]);
+        assert_eq!(effects.moved, vec![seat_of(&session, VOLUME)]);
         assert_eq!(session.channels[0].volume, 0.0);
     }
 
@@ -883,7 +906,7 @@ mod tests {
 
         // All the way up crosses it, and from there it drives.
         let effects = session.apply_control_input(&cc(7, 127), &ports(), false);
-        assert_eq!(effects.moved, vec![VOLUME]);
+        assert_eq!(effects.moved, vec![seat_of(&session, VOLUME)]);
     }
 
     /// A transport message from outside starts and pauses the transport with
@@ -986,8 +1009,8 @@ mod tests {
         session.control_map.bind(binding);
         session.resolve_control_map(&ports());
 
-        let pan = ControlTarget::Param(ParamAddr::strip(
-            EffectTarget::Channel(0),
+        let pan = ControlTarget::Param(ParamKey::strip(
+            ChainKey::Channel(ChannelId(0)),
             mooloop_core::STRIP_PARAM_PAN,
         ));
         session.begin_control_learn(pan, false);
@@ -1126,15 +1149,16 @@ mod tests {
         // Catch the value: the fader sweeps past wherever the parameter is.
         session.apply_control_input(&cc(7, 0), &ports(), false);
         session.apply_control_input(&cc(7, 127), &ports(), false);
-        assert_eq!(session.param_normalized(VOLUME), Some(1.0));
+        assert_eq!(session.param_normalized(seat_of(&session, VOLUME)), Some(1.0));
         // Caught: a small move now follows the fader.
         session.apply_control_input(&cc(7, 100), &ports(), false);
-        let followed = session.param_normalized(VOLUME).expect("volume exists");
+        let followed = session.param_normalized(seat_of(&session, VOLUME)).expect("volume exists");
         assert!(followed < 1.0 && followed > 0.5, "followed to {followed}");
 
         // The mouse moves the same parameter somewhere else.
-        session.set_param_normalized(VOLUME, 0.1);
-        assert_eq!(session.param_normalized(VOLUME), Some(0.1));
+        let volume = seat_of(&session, VOLUME);
+        session.set_param_normalized(volume, 0.1);
+        assert_eq!(session.param_normalized(seat_of(&session, VOLUME)), Some(0.1));
 
         // The fader's next message must not snatch it back.
         let effects = session.apply_control_input(&cc(7, 101), &ports(), false);
@@ -1142,11 +1166,11 @@ mod tests {
             effects.moved.is_empty(),
             "a released control has to catch the value again"
         );
-        assert_eq!(session.param_normalized(VOLUME), Some(0.1));
+        assert_eq!(session.param_normalized(seat_of(&session, VOLUME)), Some(0.1));
 
         // And it catches again on the way past.
         session.apply_control_input(&cc(7, 0), &ports(), false);
-        assert_eq!(session.param_normalized(VOLUME), Some(0.0));
+        assert_eq!(session.param_normalized(seat_of(&session, VOLUME)), Some(0.0));
     }
 
     /// Following a control does not release it. The read-back is compared
@@ -1181,7 +1205,7 @@ mod tests {
                 channel: MidiChannelFilter::Omni,
                 controller: 7,
             },
-            ControlTarget::Param(stepped),
+            ControlTarget::Param(session.param_key(stepped).expect("channel 0 has an identity")),
         ));
         session.resolve_control_map(&ports());
 
@@ -1260,8 +1284,8 @@ mod tests {
                 channel: MidiChannelFilter::Omni,
                 controller: 1,
             },
-            ControlTarget::Param(ParamAddr::effect(
-                EffectTarget::Channel(0),
+            ControlTarget::Param(ParamKey::effect(
+                ChainKey::Channel(ChannelId(0)),
                 DeviceId(99),
                 0,
             )),
@@ -1309,7 +1333,7 @@ mod tests {
         // Inversion is the range's ends, and a knob at the top now asks for
         // the bottom of the parameter.
         let effects = session.apply_control_input(&cc(7, 127), &ports(), false);
-        assert_eq!(session.param_normalized(VOLUME), Some(0.0));
+        assert_eq!(session.param_normalized(seat_of(&session, VOLUME)), Some(0.0));
         assert!(effects.edits);
 
         assert!(session.remove_control_binding(0, &ports()));

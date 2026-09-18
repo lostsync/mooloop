@@ -24,7 +24,7 @@
 
 use crate::midi::{MidiChannelFilter, MidiPortFilter, MidiPortInfo, MidiPortMatch, MidiPortId};
 use crate::midi::{MidiKind, MidiMessage, RelativeEncoding};
-use crate::ParamAddr;
+use crate::ParamKey;
 
 /// What a surface did, with the protocol taken off.
 ///
@@ -201,10 +201,20 @@ impl ControlSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ControlTarget {
-    /// Any parameter in the project, by the address automation and modulation
-    /// already use. A fader, a knob, a stepped switch — the descriptor says
-    /// which, and the binding does not have to know.
-    Param(ParamAddr),
+    /// Any parameter in the project, by the durable name of its scope.
+    /// A fader, a knob, a stepped switch — the descriptor says which, and the
+    /// binding does not have to know.
+    ///
+    /// A [`ParamKey`] rather than the [`ParamAddr`] automation and modulation
+    /// use, because a binding outlives the edits those do not: a lane lives
+    /// *on* its channel and travels with it, where a desk fader learned onto
+    /// channel 3's volume is stored once for the whole project and used to
+    /// start moving channel 4's the moment channel 1 was deleted. Nothing
+    /// renumbers a binding now; resolving one is [`ParamKey::resolve`], and a
+    /// binding that resolves to nothing is inert rather than dropped.
+    ///
+    /// [`ParamAddr`]: crate::ParamAddr
+    Param(ParamKey),
     /// The transport.
     Transport(TransportControl),
 }
@@ -730,34 +740,29 @@ impl ControlMap {
         before - self.bindings.len()
     }
 
-    /// Re-scope every parameter binding after a channel edit, dropping those
-    /// whose channel is gone. Returns whether anything changed.
+    /// Re-scope every parameter binding after a **track** edit, dropping
+    /// those whose track is gone. Returns whether anything changed.
     ///
-    /// A binding names its channel by position, as a lane does, and is
-    /// dropped for the reason a lane is: one left on a vacated seat would
-    /// start moving whatever slid into it. Until 2026-09-16 nothing called
-    /// this, so a desk fader learned onto channel 3 moved channel 4's once
-    /// channel 1 was deleted, or once channel 3 was dragged.
-    pub fn rescope_channels(&mut self, edit: crate::structure::ChannelEdit) -> bool {
-        self.rescope_params(|address| edit.address(address))
-    }
-
-    /// Re-scope every parameter binding after a track edit. The twin of
-    /// [`Self::rescope_channels`].
+    /// There is no channel twin, and its absence is the point. A binding
+    /// named its channel by position until 2026-09-18 and was renumbered here
+    /// exactly as a lane is; a [`ChannelId`] means a channel edit moves no
+    /// binding at all, so `Project::rescope_after` no longer calls into this
+    /// file. A track is still a seat, so this half remains.
+    ///
+    /// A binding whose track was removed is **dropped**, where one whose
+    /// channel is deleted now survives inert. That is not an inconsistency:
+    /// the removed track has no identity to come back as, so the binding has
+    /// nothing left to name, while the deleted channel's id is exactly what
+    /// undo restores it under.
+    ///
+    /// [`ChannelId`]: crate::ChannelId
     pub fn rescope_tracks(&mut self, edit: crate::structure::TrackEdit) -> bool {
-        self.rescope_params(|address| edit.address(address))
-    }
-
-    /// The one walk both rescopes share, so a binding kind added later is
-    /// followed by both lists or by neither. A transport binding names no
-    /// seat and is untouched.
-    fn rescope_params(&mut self, address: impl Fn(ParamAddr) -> Option<ParamAddr>) -> bool {
         let mut changed = false;
         self.bindings.retain_mut(|binding| {
             let ControlTarget::Param(old) = binding.target else {
                 return true;
             };
-            match address(old) {
+            match old.after_track(edit) {
                 Some(new) => {
                     changed |= new != old;
                     binding.target = ControlTarget::Param(new);
@@ -851,7 +856,7 @@ fn port_name(port: MidiPortId, ports: &[MidiPortInfo]) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::midi::{MidiPortId, SYSTEM_CHANNEL};
-    use crate::{DeviceId, EffectTarget};
+    use crate::{ChainKey, DeviceId};
 
     fn ports() -> Vec<MidiPortInfo> {
         vec![
@@ -943,8 +948,8 @@ mod tests {
         }
     }
 
-    const CUTOFF: ControlTarget = ControlTarget::Param(ParamAddr::effect(
-        EffectTarget::Channel(0),
+    const CUTOFF: ControlTarget = ControlTarget::Param(ParamKey::effect(
+        ChainKey::Channel(crate::ChannelId(0)),
         DeviceId(0),
         3,
     ));
@@ -1224,7 +1229,8 @@ mod tests {
     fn learning_a_knob_twice_displaces_the_first_binding() {
         let mut map = ControlMap::default();
         assert!(map.bind(param_binding(74)).is_empty());
-        let volume = ControlTarget::Param(ParamAddr::strip(EffectTarget::Channel(1), 0));
+        let volume =
+            ControlTarget::Param(ParamKey::strip(ChainKey::Channel(crate::ChannelId(1)), 0));
         let mut second = param_binding(74);
         second.target = volume;
         let displaced = map.bind(second);
@@ -1306,7 +1312,8 @@ mod tests {
         };
         map.bind(jump);
         let mut other = param_binding(75);
-        other.target = ControlTarget::Param(ParamAddr::strip(EffectTarget::Channel(1), 0));
+        other.target =
+            ControlTarget::Param(ParamKey::strip(ChainKey::Channel(crate::ChannelId(1)), 0));
         other.mode = ControlMode::Absolute {
             takeover: Takeover::Jump,
         };

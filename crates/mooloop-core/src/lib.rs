@@ -76,7 +76,7 @@ pub use modulation::{
     step_value_index, strip_descriptor, ModEnvelopeParams, ModLfoParams, ModLfoWaveform,
     ModMathOp, ModMathParams, ModPolarity, ModRack, ModRandomParams, ModRandomTrigger, ModRoute,
     ModStepParams, ModStepTrigger, ModTimeDivision, ModulatorKind, ModulatorParams, ParamAddr,
-    ParamOwner,
+    ParamKey, ParamOwner,
     ENVELOPE_DESCRIPTORS, ENV_PARAM_AMOUNT, ENV_PARAM_ATTACK_DIVISION, ENV_PARAM_ATTACK_S,
     ENV_PARAM_ATTACK_SYNC, ENV_PARAM_DECAY_DIVISION, ENV_PARAM_DECAY_S, ENV_PARAM_DECAY_SYNC,
     ENV_PARAM_RELEASE_DIVISION, ENV_PARAM_RELEASE_S, ENV_PARAM_RELEASE_SYNC, ENV_PARAM_SUSTAIN,
@@ -189,8 +189,8 @@ pub use mixer::{
     sanitize_bank, sanitize_route, send_edges, sends_are_compensable,
     would_create_cycle, AudioEdge, AudioOrder, AuxSend, BankRepair, BusSetup, CompiledAudioGraph,
     CompiledBusGraph,
-    CompiledLatency, EdgeRefusal, EffectTarget, MixerBus, RenderOrder, SanitizedBank, SendEdge,
-    SendTap,
+    ChainKey, CompiledLatency, EdgeRefusal, EffectTarget, MixerBus, RenderOrder, SanitizedBank,
+    SendEdge, SendTap,
     INSERT_BUSES, MASTER_BUS, MAX_BUSES,
 };
 pub use pattern::{

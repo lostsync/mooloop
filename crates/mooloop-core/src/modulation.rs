@@ -14,7 +14,7 @@ use crate::effect::{ParamCurve, ParamDescriptor};
 use crate::gain::MAX_LINEAR_GAIN;
 use crate::effect::DeviceId;
 use crate::mod_metadata::{ModDestinationDescriptor, ModSourceId, ModSourceRef};
-use crate::EffectTarget;
+use crate::{ChainKey, EffectTarget};
 
 /// Which device inside a channel or bus owns the parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -101,6 +101,84 @@ impl ParamAddr {
             owner: ParamOwner::Strip,
             param,
         }
+    }
+}
+
+/// A parameter named so that a structural edit cannot move it:
+/// [`ParamAddr`]'s durable twin.
+///
+/// Same three fields, and only the first of them differs -- the scope is a
+/// [`ChainKey`] rather than an [`EffectTarget`], so a channel is named by its
+/// identity. The owner and the parameter were always identities: a
+/// [`DeviceId`] is durable already and a descriptor id is never renumbered.
+///
+/// **Not interchangeable with `ParamAddr`, deliberately.** Everything that
+/// reaches the engine or the session's seat-indexed state takes a `ParamAddr`,
+/// and the only way to get one from here is [`Self::resolve`], which can fail
+/// -- because a binding onto a channel that has been deleted names something
+/// that is not there. Storing the pair and agreeing to ignore half of it is
+/// the shape `AGENTS.md`'s "Parameter identity across the session boundary"
+/// warns about; two types that do not convert silently is the answer to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct ParamKey {
+    pub scope: ChainKey,
+    pub owner: ParamOwner,
+    /// The owning kind's stable descriptor id, exactly as [`ParamAddr::param`].
+    pub param: u32,
+}
+
+impl ParamKey {
+    pub const fn new(scope: ChainKey, owner: ParamOwner, param: u32) -> Self {
+        Self {
+            scope,
+            owner,
+            param,
+        }
+    }
+
+    pub const fn strip(scope: ChainKey, param: u32) -> Self {
+        Self::new(scope, ParamOwner::Strip, param)
+    }
+
+    pub const fn effect(scope: ChainKey, device: DeviceId, param: u32) -> Self {
+        Self::new(scope, ParamOwner::Effect { device }, param)
+    }
+
+    /// The addressable form, against whoever can say where a channel sits.
+    ///
+    /// `seat` is the caller's `ChainKey -> EffectTarget` map --
+    /// `Project::chain_target` or `Session::chain_target`. `None` means the
+    /// channel this names is not in that project: the binding is inert, which
+    /// is what a mapping row showing "Unavailable parameter" is drawn from.
+    pub fn resolve(self, seat: impl FnOnce(ChainKey) -> Option<EffectTarget>) -> Option<ParamAddr> {
+        Some(ParamAddr {
+            scope: seat(self.scope)?,
+            owner: self.owner,
+            param: self.param,
+        })
+    }
+
+    /// The durable form of an address, against whoever can name a seat's
+    /// channel. The inverse of [`Self::resolve`], and `None` for the same
+    /// reason: a seat that is not occupied has no identity to record.
+    pub fn of(
+        address: ParamAddr,
+        key: impl FnOnce(EffectTarget) -> Option<ChainKey>,
+    ) -> Option<Self> {
+        Some(Self {
+            scope: key(address.scope)?,
+            owner: address.owner,
+            param: address.param,
+        })
+    }
+
+    /// Where this points after a track edit, or `None` when its track went.
+    /// There is no channel twin, which is the point of the type.
+    pub fn after_track(self, edit: crate::structure::TrackEdit) -> Option<Self> {
+        Some(Self {
+            scope: self.scope.after_track(edit)?,
+            ..self
+        })
     }
 }
 

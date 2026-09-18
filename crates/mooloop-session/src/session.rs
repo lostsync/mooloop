@@ -36,37 +36,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// One effect chain in the song, named durably.
-///
-/// [`EffectTarget`]'s twin for **session** state. An `EffectTarget` is a
-/// seat -- it is what the engine addresses, what every `ParamAddr` carries,
-/// and what a Slint callback hands over -- and a seat is renumbered by every
-/// structural edit. This names the chain itself, so a key made of one does
-/// not have to be rewritten when the rack is reordered, and cannot be made
-/// to point at a stranger by forgetting to rewrite it.
-///
-/// **A bus is still a position**, because a track has no identity yet.
-/// `docs/plans/channel-identity/00-status.md` records why a `TrackId` is
-/// deliberately left until step 05 has been built and can be copied.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ChainKey {
-    Channel(ChannelId),
-    Bus(u8),
-}
-
-impl ChainKey {
-    /// Where this chain points after a **track** edit.
-    ///
-    /// A channel is named by identity and so cannot be moved by one; a bus is
-    /// a seat and follows. The asymmetry is the whole state of the migration
-    /// in one match arm.
-    fn after_track(self, edit: mooloop_core::TrackEdit) -> Option<Self> {
-        match self {
-            Self::Channel(_) => Some(self),
-            Self::Bus(bus) => edit.track(bus).map(Self::Bus),
-        }
-    }
-}
+// `ChainKey` moved into `mooloop-core` on 2026-09-18, when the control map
+// came to need the same type: a persisted binding names a chain durably for
+// the reason a session key does, and two enums spelled `Channel(ChannelId) |
+// Bus(u8)` on either side of the crate boundary is the duplication
+// `AGENTS.md` opens with. Re-exported here because most of its callers are
+// session-side and reach for it through this module.
+pub use mooloop_core::ChainKey;
 
 /// Which preset kind a save dialog in flight is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -424,6 +400,21 @@ impl Session {
                 .map(EffectTarget::Channel),
             ChainKey::Bus(bus) => Some(EffectTarget::Bus(bus)),
         }
+    }
+
+    /// A control binding's target as something addressable. `None` when the
+    /// channel it names is not in this song -- deleted, or belonging to
+    /// another document -- in which case the binding is inert and the mapping
+    /// list draws it as an unavailable parameter.
+    pub fn param_addr(&self, key: mooloop_core::ParamKey) -> Option<ParamAddr> {
+        key.resolve(|scope| self.chain_target(scope))
+    }
+
+    /// An address as a control binding stores it, for a learn gesture. `None`
+    /// when it names a seat with no channel in it: there is nothing to learn
+    /// onto.
+    pub fn param_key(&self, address: ParamAddr) -> Option<mooloop_core::ParamKey> {
+        mooloop_core::ParamKey::of(address, |scope| self.chain_key(scope))
     }
 
     pub fn reset_channel_source(&mut self, index: usize, kind: DeviceKind) {

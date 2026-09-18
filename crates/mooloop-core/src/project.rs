@@ -1078,6 +1078,44 @@ impl Project {
         self.channel_index(self.selected_channel).unwrap_or(0)
     }
 
+    /// The durable name of an effect chain's seat, or `None` when that seat
+    /// is empty. [`Self::chain_target`]'s inverse.
+    pub fn chain_key(&self, target: crate::EffectTarget) -> Option<crate::ChainKey> {
+        match target {
+            crate::EffectTarget::Channel(channel) => self
+                .channels
+                .get(usize::from(channel))
+                .map(|channel| crate::ChainKey::Channel(channel.id)),
+            crate::EffectTarget::Bus(bus) => Some(crate::ChainKey::Bus(bus)),
+        }
+    }
+
+    /// The addressable form of a durable chain name, or `None` when this song
+    /// has no such channel.
+    ///
+    /// The session has the same pair over its own channel list
+    /// (`Session::chain_key` / `Session::chain_target`); both are one line
+    /// over [`Self::channel_index`] rather than a second search.
+    pub fn chain_target(&self, key: crate::ChainKey) -> Option<crate::EffectTarget> {
+        match key {
+            crate::ChainKey::Channel(id) => u8::try_from(self.channel_index(id)?)
+                .ok()
+                .map(crate::EffectTarget::Channel),
+            crate::ChainKey::Bus(bus) => Some(crate::EffectTarget::Bus(bus)),
+        }
+    }
+
+    /// A control binding's target as something addressable, or `None` when it
+    /// names a channel this song does not have.
+    pub fn param_addr(&self, key: crate::ParamKey) -> Option<crate::ParamAddr> {
+        key.resolve(|scope| self.chain_target(scope))
+    }
+
+    /// An address as a control binding would store it.
+    pub fn param_key(&self, address: crate::ParamAddr) -> Option<crate::ParamKey> {
+        crate::ParamKey::of(address, |scope| self.chain_key(scope))
+    }
+
     /// Point every lane and route that still names the Buffer's retired
     /// `Offset` at `Position` instead, in the new coordinate.
     ///
@@ -1405,7 +1443,10 @@ impl Project {
                 rescope_lanes(lanes, edit);
             }
         }
-        self.control_map.rescope_channels(edit);
+        // The control map is deliberately *not* walked here. A binding names
+        // its channel by `ChannelId` since 2026-09-18, so a channel edit
+        // cannot move one; `rescope_tracks_after` still calls its track twin,
+        // because a track is still a seat.
     }
 
     /// Creates a concise, deterministic four-piece drum kit ready for sequencing.
@@ -1911,7 +1952,18 @@ mod tests {
             crate::STRIP_PARAM_VOLUME,
         );
         let bus = crate::ParamAddr::strip(crate::EffectTarget::Bus(2), crate::STRIP_PARAM_PAN);
+        // Pushed straight onto the list rather than inserted, so nothing has
+        // minted them an identity yet. A load does this; a binding cannot be
+        // learned onto a channel that has none.
+        project.assign_channel_ids();
+        let fader = |project: &Project, channel: u8| {
+            crate::ParamKey::strip(
+                crate::ChainKey::Channel(project.channels[channel as usize].id),
+                crate::STRIP_PARAM_VOLUME,
+            )
+        };
         for index in 0..4u8 {
+            let learned = fader(&project, index);
             let channel = &mut project.channels[index as usize];
             channel.setup.modulation.install(0, crate::ModulatorParams::Lfo(Default::default()));
             channel
@@ -1924,28 +1976,46 @@ mod tests {
             // A desk fader per channel, told apart by its controller number,
             // which is the channel it was learned on.
             channel.setup.channel.name = format!("ch{index}");
-            project.control_map.bind(fader_on(index, strip(index)));
+            project.control_map.bind(fader_on(index, learned));
         }
-        // Each binding still moves the channel it was learned on, by name, and
-        // the one learned on a removed channel is gone.
+        // Each binding still moves the channel it was learned on, by name.
+        //
+        // **Nothing in this closure runs a rescope**, and that is what it is
+        // here to show: a binding names a `ChannelId`, so a channel edit is
+        // not an event it can observe and there is nothing to renumber. The
+        // one learned on a removed channel stops *resolving* -- it is not
+        // dropped, because the id is what an undo brings the channel back
+        // under, and an inert row saying "Unavailable parameter" is a better
+        // answer than a mapping silently thrown away.
         let bindings_follow = |project: &Project, gone: &[u8]| {
-            let mut learned = Vec::new();
+            let mut live = Vec::new();
             for binding in &project.control_map.bindings {
-                let (controller, crate::EffectTarget::Channel(seat)) =
-                    (controller_of(binding), bound_scope(binding))
-                else {
+                let controller = controller_of(binding);
+                let crate::ChainKey::Channel(id) = bound_key(binding) else {
                     panic!("a channel binding became {:?}", binding.target);
                 };
+                let Some(seat) = project.channel_index(id) else {
+                    assert!(
+                        gone.contains(&controller),
+                        "the fader learned on ch{controller} stopped resolving"
+                    );
+                    continue;
+                };
                 assert_eq!(
-                    project.channels[seat as usize].setup.channel.name,
+                    project.channels[seat].setup.channel.name,
                     format!("ch{controller}"),
                     "the fader learned on ch{controller} now moves seat {seat}"
                 );
-                learned.push(controller);
+                live.push(controller);
             }
-            learned.sort_unstable();
+            live.sort_unstable();
             let expected: Vec<u8> = (0..4).filter(|index| !gone.contains(index)).collect();
-            assert_eq!(learned, expected);
+            assert_eq!(live, expected);
+            assert_eq!(
+                project.control_map.bindings.len(),
+                4,
+                "a channel edit drops no binding"
+            );
         };
 
         let removed = project.remove_channel(1).expect("channel 1 exists");
@@ -2027,14 +2097,14 @@ mod tests {
         assert!(project.move_channel(9, 0).is_none());
     }
 
-    fn fader_on(controller: u8, address: crate::ParamAddr) -> crate::ControlBinding {
+    fn fader_on(controller: u8, key: crate::ParamKey) -> crate::ControlBinding {
         crate::ControlBinding::new(
             crate::ControlSource::Cc {
                 port: Default::default(),
                 channel: Default::default(),
                 controller,
             },
-            crate::ControlTarget::Param(address),
+            crate::ControlTarget::Param(key),
         )
     }
 
@@ -2045,9 +2115,12 @@ mod tests {
         }
     }
 
-    fn bound_scope(binding: &crate::ControlBinding) -> crate::EffectTarget {
+    /// What a binding names, before anything resolves it. A `ChainKey` rather
+    /// than an `EffectTarget`, which is the whole difference the tests below
+    /// are about: a channel arm is an identity and has no seat in it to read.
+    fn bound_key(binding: &crate::ControlBinding) -> crate::ChainKey {
         match binding.target {
-            crate::ControlTarget::Param(address) => address.scope,
+            crate::ControlTarget::Param(key) => key.scope,
             other => panic!("not a parameter binding: {other:?}"),
         }
     }
@@ -2083,11 +2156,18 @@ mod tests {
         rack.install(0, crate::ModulatorParams::Lfo(Default::default()));
         rack.add_route(crate::ModRoute::to_slot(0, volume(3), 0.5, Default::default()))
             .unwrap();
-        project.control_map.bind(fader_on(3, volume(3)));
-        project.control_map.bind(fader_on(1, volume(1)));
+        project.assign_channel_ids();
+        let track_fader = |track: u8| {
+            crate::ParamKey::strip(crate::ChainKey::Bus(track), crate::STRIP_PARAM_VOLUME)
+        };
+        project.control_map.bind(fader_on(3, track_fader(3)));
+        project.control_map.bind(fader_on(1, track_fader(1)));
         project.control_map.bind(fader_on(
             100,
-            crate::ParamAddr::strip(crate::EffectTarget::Channel(0), crate::STRIP_PARAM_VOLUME),
+            crate::ParamKey::strip(
+                crate::ChainKey::Channel(project.channels[0].id),
+                crate::STRIP_PARAM_VOLUME,
+            ),
         ));
 
         let edges = |project: &Project| {
@@ -2129,9 +2209,13 @@ mod tests {
             "a route on it"
         );
         for binding in &project.control_map.bindings {
-            match (controller_of(binding), bound_scope(binding)) {
-                (100, scope) => assert_eq!(scope, crate::EffectTarget::Channel(0)),
-                (controller, crate::EffectTarget::Bus(seat)) => {
+            match (controller_of(binding), bound_key(binding)) {
+                (100, scope) => assert_eq!(
+                    scope,
+                    crate::ChainKey::Channel(project.channels[0].id),
+                    "a channel binding is untouched by a track edit"
+                ),
+                (controller, crate::ChainKey::Bus(seat)) => {
                     assert_eq!(name_of(&project, seat), format!("Bus {controller}"), "a binding")
                 }
                 (_, other) => panic!("a track binding became {other:?}"),
@@ -2164,7 +2248,7 @@ mod tests {
         learned.sort_unstable();
         assert_eq!(learned, [1, 100], "its binding goes");
         for binding in &project.control_map.bindings {
-            if let crate::EffectTarget::Bus(seat) = bound_scope(binding) {
+            if let crate::ChainKey::Bus(seat) = bound_key(binding) {
                 assert_eq!(name_of(&project, seat), "Bus 1");
             }
         }
