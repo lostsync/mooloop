@@ -1,6 +1,6 @@
 # Channel identity — plan status
 
-**Written 2026-09-17. Steps 01 to 04 landed 2026-09-17.** It came out of the architecture
+**Written 2026-09-17. Steps 01 to 05 landed 2026-09-17.** It came out of the architecture
 section of `reports/fable-2026-09-17.md`, and Adam asked for it the same day:
 a channel gets a durable id, the way a device already has one, before plugin
 hosting starts keying anything by channel position.
@@ -75,7 +75,7 @@ scope that is an id. All three are
 | [02](02-cross-channel-addresses.md) | `selected_channel` holds an id | core, project, session | **landed 2026-09-17**, one field of four |
 | [03](03-session-keys.md) | Session state keyed by id; the parallel sample list folds into the channel | session, UI build | **landed 2026-09-17** |
 | [04](04-keep-the-transport.md) | An install carries the transport across (the interim fix `LOOSE_ENDS.md` names) | engine, UI | **landed 2026-09-17**, listened to |
-| [05](05-strips-by-id.md) | The engine keeps strips whose id and chain survive an install | engine | not started |
+| [05](05-strips-by-id.md) | The engine keeps strips whose id and chain survive an install | engine | **landed 2026-09-17**, not yet listened to |
 | [06](06-the-remaining-cross-channel-addresses.md) | The other three fields that name another channel | core, session, dsp | not started; the gate half waits on 05 |
 
 Tracks (`BusSetup`) have the same problem under `TrackEdit` and the same
@@ -170,10 +170,46 @@ versus open, and it falls on the function boundary: every `ProjectEdit` is an
 edit and the three other callers of `install_project_in_ui` are the opens.
 Undo and redo keep the transport too.
 
+## What step 05 actually did
+
+All of it, for channels, and with less machinery than it asked for. The match
+is `ChannelId` plus `ChannelSetup` equality rather than structural equivalence
+plus parameter replay, and the decision is made on the control thread, so the
+audio thread only swaps boxes. The strip does not record its own id, which the
+plan wanted; that is only needed if the *audio thread* does the matching, and
+it will be needed by the incremental work below.
+
+Two hazards, both silent, both found by asking what a carried strip holds that
+does not come from its own channel's setup: the compensation ring (derived from
+the whole project) and the audio slot (rebound every install -- a carried strip
+would keep reading the retired generation's, so a sample loaded onto a
+reordered channel would never be heard). `05-strips-by-id.md` has both.
+
+**`plugin-hosting/` step 06 is now unblocked**, which was the other reason
+this plan exists.
+
+## The question this plan did not answer
+
+Adam, 2026-09-17, on hearing step 04: *"a real engine would let us dynamically
+allocate and destroy audio paths at will without missing a sample. it should
+not make audio skip to add or delete a track if it isnt dsp heavy."*
+
+He is right, and the engine already does it in places -- every device edit, and
+adding a *channel*, go through `StructuralCommand` and miss no samples. Adding
+a **track** does not, and neither does anything else that reaches
+`install_project`. Step 05 removed the destruction; the swap is still there.
+
+Making track edits incremental, the way channel adds already are, wants a plan
+of its own. It needs a `TrackId` (which this plan deliberately deferred so it
+could copy whatever 05 learned) and a `ChannelId` on the strip itself.
+
 ## Open questions
 
 None of these needs Adam before step 04.
 
+- **Step 05 has not been listened to.** Move and delete channels while a song
+  with delay and reverb tails plays: nothing should cut except the channel
+  deleted, and a channel whose chain you edited.
 - **Step 04 was listened to on 2026-09-17 and keeps time.** The dropout is
   still there and is on *every* channel, not the moved one -- a null install
   silences the master exactly as completely as a reorder, measured at the

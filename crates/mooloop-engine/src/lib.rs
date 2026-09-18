@@ -409,6 +409,16 @@ pub(crate) struct PreparedProject {
     /// own install. The executor reads the outgoing transport at the instant
     /// it swaps.
     pub keep_transport: bool,
+    /// `(outgoing strip index, incoming strip index)` pairs whose channel did
+    /// not change, so the live node can be moved across instead of rebuilt.
+    ///
+    /// Decided on the control thread by [`EngineHandle::carry_plan`], because
+    /// that is the only place both projects exist. The audio thread swaps
+    /// boxes and does not compare anything; see
+    /// [`RenderState::carry_strips_from`].
+    ///
+    /// Bounded by `MAX_CHANNELS`, and allocated here off-thread.
+    pub carry: Vec<(u8, u8)>,
 }
 
 /// The ordered control stream consumed at block boundaries. Project swaps
@@ -513,6 +523,9 @@ impl Engine {
                 audio_slots,
                 sample_rate,
                 install_generation: 0,
+            // Nothing has been installed, so nothing can be carried: the
+            // startup generation is built rather than swapped in.
+            last_installed: None,
                 driver,
                 load,
             },
@@ -604,6 +617,46 @@ pub struct InputState {
     pub midi_routing: Vec<mooloop_core::MidiInputRoute>,
 }
 
+/// Which strips `incoming` can take over from the generation built for `live`.
+///
+/// A channel qualifies when it is **the same channel** -- matched by
+/// `ChannelId`, which is what `channel-identity` steps 01 to 03 built -- **and
+/// its setup is unchanged**.
+///
+/// Comparing the whole `ChannelSetup` rather than the shape of its chain is
+/// deliberate, and simpler than `05-strips-by-id.md` asked for. The plan
+/// proposed matching structure and then replaying the incoming parameter
+/// values onto the carried strip as events, which is a second mechanism to
+/// get wrong in exchange for nothing: if anything about a channel differs it
+/// is rebuilt, and a channel that differs is by definition the one the user
+/// just edited. Every case that makes a song audibly stutter still carries --
+/// a move, a paste, a delete, a track added, an undo -- because none of them
+/// change the setup of the channels they are not about.
+///
+/// A free function rather than a method so the tests can ask the same
+/// question the handle asks, of two projects they built themselves.
+pub(crate) fn carry_plan(
+    live: &mooloop_core::Project,
+    incoming: &mooloop_core::Project,
+) -> Vec<(u8, u8)> {
+    let mut plan = Vec::new();
+    for (to, channel) in incoming.channels.iter().take(MAX_CHANNELS).enumerate() {
+        if !channel.id.is_assigned() {
+            continue;
+        }
+        let Some(from) = live
+            .channels
+            .iter()
+            .take(MAX_CHANNELS)
+            .position(|held| held.id == channel.id && held.setup == channel.setup)
+        else {
+            continue;
+        };
+        plan.push((from as u8, to as u8));
+    }
+    plan
+}
+
 /// The renderer a project install hands the audio thread, built and attached
 /// on the calling thread. Separate from [`EngineHandle::install_project`]
 /// because a handle cannot be built without opening an audio driver, and what
@@ -687,6 +740,20 @@ pub struct EngineHandle {
     audio_slots: render::ChannelAudioBank,
     sample_rate: u32,
     install_generation: u64,
+    /// The project the live generation was built from, for deciding what an
+    /// install can carry across.
+    ///
+    /// Only the control thread reads it and only a *successful* install
+    /// replaces it, so it always describes the generation the audio thread is
+    /// either running or about to run.
+    ///
+    /// **It can be stale against the live graph, and only ever in the safe
+    /// direction.** Incremental structural commands -- a device dragged in the
+    /// rack, a channel added -- change the engine without an install, and are
+    /// mirrored into the session, so the *next* project to arrive here carries
+    /// them and compares as different. That costs a rebuild that was not
+    /// strictly needed; it cannot carry a strip whose chain has moved on.
+    last_installed: Option<Arc<mooloop_core::Project>>,
     driver: Arc<Driver>,
     load: Arc<load::LoadMeters>,
 }
@@ -830,6 +897,28 @@ impl EngineHandle {
     /// The displaced executor returns through the reclaim ring and is dropped
     /// by `poll`, never by the audio callback.
     #[must_use]
+    /// Which strips the incoming project can take over from the live one.
+    ///
+    /// A channel qualifies when it is **the same channel** -- matched by
+    /// `ChannelId`, which is what `channel-identity` steps 01 to 03 built --
+    /// **and its setup is unchanged**. Equality of the whole `ChannelSetup`
+    /// rather than of the chain's shape is deliberate, and simpler than the
+    /// plan asked for: the plan proposed matching structure and then replaying
+    /// the incoming parameter values onto the carried strip as events, which
+    /// is a second mechanism to get wrong for no gain. If anything about a
+    /// channel differs, that channel is rebuilt -- and the channel that
+    /// differs is, by definition, the one the user just edited.
+    ///
+    /// Every case that makes a song audibly stutter still carries: a move, a
+    /// paste, a delete, a track added, an undo -- none of them change the
+    /// setup of the channels they are not about.
+    fn carry_plan(&self, incoming: &mooloop_core::Project) -> Vec<(u8, u8)> {
+        match self.last_installed.as_ref() {
+            Some(live) => carry_plan(live, incoming),
+            None => Vec::new(),
+        }
+    }
+
     /// `keep_transport` carries the song across the swap rather than stopping
     /// and rewinding it; see [`PreparedProject::keep_transport`]. A structural
     /// edit sets it, opening a document does not.
@@ -860,10 +949,12 @@ impl EngineHandle {
             &project,
             &input,
         );
+        let carry = self.carry_plan(&project);
         let prepared = PreparedProject {
             generation,
             render: Box::new(render),
             keep_transport,
+            carry,
         };
         // A full queue leaves `prepared` on this thread, so dropping it is
         // realtime-safe. Project loads are rare and the queue has the same
@@ -887,6 +978,7 @@ impl EngineHandle {
             // comes back through the reclaim ring and `poll` drops both here,
             // on this thread.
             self.audio_slots = bank;
+            self.last_installed = Some(project);
             true
         } else {
             // `bank` is dropped here with `prepared`, and `self.audio_slots`

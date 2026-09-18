@@ -484,6 +484,27 @@ pub struct Sampler {
 }
 
 impl Sampler {
+    /// Exchange the slot this sampler reads its audio from.
+    ///
+    /// For a project install that **carries a live strip across** rather than
+    /// rebuilding it: every generation gets a fresh bank, so a strip that
+    /// survives an install is still bound to the retired generation's slot
+    /// and would never see anything published afterwards -- a sample loaded
+    /// onto that channel would be silent, forever, with nothing to say why.
+    ///
+    /// A swap rather than an assignment so the audio thread changes no
+    /// reference count and frees nothing: the retired slot leaves with the
+    /// strip that is being discarded.
+    /// Which slot this sampler reads, by identity, for the engine's test that
+    /// a carried strip was re-pointed at the incoming generation's bank.
+    pub fn audio_slot_ptr(&self) -> usize {
+        Arc::as_ptr(&self.audio_slot) as usize
+    }
+
+    pub fn swap_audio_slot_with(&mut self, other: &mut Self) {
+        std::mem::swap(&mut self.audio_slot, &mut other.audio_slot);
+    }
+
     /// Construct with a shared channel-audio slot. The engine publishes a
     /// whole [`ChannelAudioSnapshot`] into it from the non-RT thread.
     pub fn new(

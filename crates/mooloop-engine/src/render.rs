@@ -3302,6 +3302,85 @@ impl RenderState {
     /// renderer is a fresh graph. The song keeps its place and its clock; what
     /// was ringing at the moment of the edit is not carried across.
     /// `docs/plans/channel-identity/05-strips-by-id.md` is where that goes.
+    /// Move the strips listed in `carry` out of `outgoing` and into this
+    /// state, so a chain that did not change keeps the node that is making
+    /// its sound.
+    ///
+    /// **This is the whole of what stops the dropout.** A voice, a delay
+    /// line, a reverb tail and a compressor's envelope all live inside a
+    /// `ChannelStrip`, and until now every install built new ones and let the
+    /// old ones leave with the retired generation -- so any structural edit
+    /// silenced every channel in the song, including the ones it never
+    /// touched (`every_install_silences_every_voice_until_strips_are_kept`).
+    ///
+    /// `carry` is `(outgoing index, incoming index)` and is decided on the
+    /// **control thread**, which is the only place both projects are
+    /// available. All this does is swap boxes: the live strip comes here, the
+    /// freshly built one goes back in its place and leaves with the retired
+    /// state to be freed off-thread. No allocation, no comparison, no
+    /// reasoning on the audio thread.
+    ///
+    /// **The compensation ring goes the other way**, and that is not a
+    /// detail. Every other setting on a strip comes from its own channel's
+    /// setup, which is equal by construction or the pair would not be in
+    /// `carry`. Compensation does not: `install_compensation` derives it from
+    /// the *whole* project, so a channel that did not change can still be
+    /// owed a different delay because some other channel altered the longest
+    /// path into their shared bus. The freshly built strip has the right one,
+    /// so it is swapped onto the carried strip and the stale ring leaves with
+    /// the discarded one.
+    pub fn carry_strips_from(&mut self, outgoing: &mut Self, carry: &[(u8, u8)]) {
+        for &(from, to) in carry {
+            let (from, to) = (usize::from(from), usize::from(to));
+            let Some(live) = outgoing.strips.get_mut(from) else {
+                continue;
+            };
+            let Some(fresh) = self.strips.get_mut(to) else {
+                continue;
+            };
+            std::mem::swap(live, fresh);
+            // **The audio slot has to come across too.** Every install builds
+            // a fresh `ChannelAudioBank`, and a strip binds to its slot at
+            // construction -- so a carried strip is still reading the retired
+            // generation's slot, at the index it used to occupy. It sounds
+            // right immediately, because the sample it is playing has not
+            // changed; what breaks is everything published *afterwards*. The
+            // handle addresses the new bank, so a sample loaded onto that
+            // channel would land somewhere the strip never looks and the
+            // channel would go on playing the old file with nothing to say
+            // why.
+            fresh.sampler.swap_audio_slot_with(&mut live.sampler);
+            // `fresh` now holds the carried strip and `live` the one built
+            // for it; put the freshly computed delay onto the one that will
+            // be heard.
+            std::mem::swap(&mut fresh.compensation, &mut live.compensation);
+            // The modulator rack is the other half of "still sounding": a
+            // free-running LFO that restarted its phase would step every
+            // destination it drives at the moment of an unrelated edit. Its
+            // *configuration* is equal -- the channel's setup matched -- so
+            // only the phase travels.
+            if let (Some(live_rack), Some(fresh_rack)) = (
+                outgoing.modulators.get_mut(from),
+                self.modulators.get_mut(to),
+            ) {
+                std::mem::swap(live_rack, fresh_rack);
+            }
+        }
+    }
+
+    /// The identity of the audio slot in this generation's bank at `index`,
+    /// and the one the strip there is actually reading. Two answers that must
+    /// agree; see `a_carried_strip_reads_the_new_generations_audio_slot`.
+    #[cfg(test)]
+    pub(crate) fn audio_slot_ptr(&self, index: usize) -> usize {
+        Arc::as_ptr(&self.audio_slots[index]) as usize
+    }
+
+    #[cfg(test)]
+    pub(crate) fn strip_audio_slot_ptr(&self, index: usize) -> usize {
+        self.strips[index].sampler.audio_slot_ptr()
+    }
+
     pub fn adopt_transport(&mut self, outgoing: &Self) {
         self.transport.adopt_running_state(outgoing.transport());
     }

@@ -232,6 +232,13 @@ impl Executor {
             if prepared.keep_transport {
                 prepared.render.adopt_transport(&self.render);
             }
+            // Before the swap, because both generations have to be reachable:
+            // the live strips are moved into the incoming state and the ones
+            // built for it go back, to leave with the retired generation and
+            // be freed off this thread.
+            prepared
+                .render
+                .carry_strips_from(&mut self.render, &prepared.carry);
             let retired = std::mem::replace(&mut self.render, prepared.render);
             match self
                 .reclaim_tx
@@ -425,6 +432,8 @@ mod tests {
                 &[],
             )),
             keep_transport,
+            // The transport tests are about the clock, not the strips.
+            carry: Vec::new(),
         }
     }
 
@@ -468,46 +477,168 @@ mod tests {
         );
     }
 
-    /// **Today, any install silences every voice in the song** -- including
-    /// on channels the edit never touched, and including when the edit
-    /// changed nothing at all.
+    /// **An install no longer silences the song.** The measurement from
+    /// 2026-09-17, inverted by this step exactly as its doc comment said it
+    /// should be.
     ///
-    /// Measured 2026-09-17, after Adam listened to step 04 and reported that
-    /// a channel move dropped audio and that it sounded like only the moved
-    /// channel was affected. It is not: the null install below, which hands
-    /// the executor the *same project*, silences the master exactly as
-    /// completely as the reorder does. A drum channel hides it because the
-    /// next hit arrives within a step; a sustained sound does not.
+    /// Adam listened to step 04 and reported that a channel move kept time
+    /// but dropped audio. Measured at the executor, a *null* install -- the
+    /// same project, nothing moved -- silenced the master as completely as a
+    /// reorder did, because the incoming renderer was a fresh graph and every
+    /// voice, tail and delay line left with the outgoing one. That was on
+    /// every channel, not the moved one; a drum channel merely hid it,
+    /// because its next hit arrives within a step.
     ///
-    /// The reason is that the incoming renderer is a fresh graph. Voices,
-    /// tails, delay lines and compensation rings all belong to the outgoing
-    /// `RenderState` and leave with it. Step 04 carried the transport across;
-    /// this is the part it deliberately did not fix.
-    ///
-    /// **This test is expected to be inverted by
-    /// `docs/plans/channel-identity/05-strips-by-id.md`**, which keeps the
-    /// node of any chain whose id and contents survive an install. When it
-    /// lands, an install that changes nothing should change nothing audible,
-    /// and this becomes an assertion that the sound *continues*. It is
-    /// written down as a measurement now so that the change is provable
-    /// rather than described.
+    /// Now a channel whose id and setup are unchanged has its live strip
+    /// moved across, so both cases go on sounding. The `without_carry` arm is
+    /// kept beside them as the control: it is the old behaviour, and it shows
+    /// the difference is the carry rather than anything else about the block.
     #[test]
-    fn every_install_silences_every_voice_until_strips_are_kept() {
+    fn an_install_keeps_the_voices_of_every_channel_it_did_not_change() {
         let project = two_held_notes();
-
         let baseline = held_note_rms(&project, None);
         assert!(baseline > 1e-3, "nothing was sounding to measure: {baseline}");
 
         let after_null = held_note_rms(&project, Some(project.clone()));
         let mut reordered = project.clone();
         reordered.move_channel(0, 1).expect("a real move");
-        let after_move = held_note_rms(&project, Some(reordered));
+        let after_move = held_note_rms(&project, Some(reordered.clone()));
+
+        for (what, level) in [("a null install", after_null), ("a reorder", after_move)] {
+            assert!(
+                level > baseline * 0.5,
+                "{what} cut the song: {level} against a baseline of {baseline}"
+            );
+        }
+
+        // The control: the same swap, refusing to carry, is the behaviour
+        // this step replaced.
+        let without_carry = held_note_rms_with(&project, Some(reordered), false);
+        assert_eq!(
+            without_carry, 0.0,
+            "the comparison is not measuring what it claims to"
+        );
+    }
+
+    /// **A carried strip must read the incoming generation's audio slot.**
+    ///
+    /// Every install builds a fresh `ChannelAudioBank`, and a strip binds to
+    /// its slot when it is constructed. A strip that survives an install is
+    /// therefore still holding the *retired* generation's slot, at the index
+    /// it used to occupy -- and the handle publishes into the new bank. Left
+    /// alone, a sample loaded onto that channel after a reorder would land
+    /// somewhere the strip never looks: the channel would go on playing the
+    /// old file, indefinitely, with nothing anywhere to say why.
+    ///
+    /// It sounds right at the moment of the swap, which is what makes it the
+    /// dangerous kind of bug, so this asserts against the slot rather than
+    /// against the audio.
+    #[test]
+    fn a_carried_strip_reads_the_new_generations_audio_slot() {
+        let project = two_held_notes();
+        let mut reordered = project.clone();
+        reordered.move_channel(0, 1).expect("a real move");
+
+        let mut live = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        let mut incoming = RenderState::from_project(SAMPLE_RATE, &reordered, &[]);
+        // The banks are per generation, so no slot is shared between them.
+        let wanted = incoming.audio_slot_ptr(1);
+        assert_ne!(
+            wanted,
+            live.audio_slot_ptr(0),
+            "the two generations were handed the same bank, so this proves nothing"
+        );
+
+        incoming.carry_strips_from(&mut live, &crate::carry_plan(&project, &reordered));
 
         assert_eq!(
-            (after_null, after_move),
-            (0.0, 0.0),
-            "an install left something sounding, which is step 05's job and \
-             not yet expected: null {after_null}, move {after_move}"
+            incoming.strip_audio_slot_ptr(1),
+            wanted,
+            "the carried strip kept the retired generation's slot, so anything \
+             published for it after this install would be inaudible"
+        );
+    }
+
+    /// **The swap allocates and frees nothing on the audio thread.**
+    ///
+    /// The whole point of deciding the carry on the control thread is that
+    /// this one does no work beyond moving boxes: no comparison, no
+    /// reasoning, and above all no allocation. A carried strip is a pointer
+    /// exchanged with the one built for it, and the strip it displaces leaves
+    /// through the reclaim ring to be dropped elsewhere.
+    ///
+    /// Measured rather than reasoned, in the manner of
+    /// `no_buffer_operation_allocates_on_the_callback`. A floor rather than a
+    /// ceiling: it proves this path does not allocate, not that no path does.
+    #[test]
+    fn carrying_strips_allocates_nothing() {
+        let project = two_held_notes();
+        let mut reordered = project.clone();
+        reordered.move_channel(0, 1).expect("a real move");
+        let plan = crate::carry_plan(&project, &reordered);
+        assert!(!plan.is_empty(), "nothing would be carried, so nothing is measured");
+
+        // Everything that allocates happens before the counter is read.
+        let mut live = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        let mut incoming = RenderState::from_project(SAMPLE_RATE, &reordered, &[]);
+
+        let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        incoming.carry_strips_from(&mut live, &plan);
+        let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+
+        assert_eq!(
+            after, before,
+            "the swap allocated or freed on the thread that would be the callback"
+        );
+    }
+
+    /// The channel the edit was *about* is still rebuilt, and still cuts.
+    ///
+    /// That is the deliberate limit: a chain that changed needs new nodes, and
+    /// there is nothing of its old sound to carry into them. It is also the
+    /// channel the user just edited, which is the one place a discontinuity is
+    /// least surprising.
+    #[test]
+    fn a_channel_whose_chain_changed_is_rebuilt() {
+        let project = two_held_notes();
+        let mut edited = project.clone();
+        edited.channels[0]
+            .setup
+            .push_effect(mooloop_core::EffectSlotState::of_kind(
+                mooloop_core::EffectKind::Filter,
+            ))
+            .expect("room in the chain");
+
+        let plan = crate::carry_plan(&project, &edited);
+        assert_eq!(
+            plan,
+            vec![(1, 1)],
+            "only the untouched channel should be carried"
+        );
+    }
+
+    /// A deleted channel is not carried, and the survivors are -- at their new
+    /// seats, which is the case a positional scheme could not express at all.
+    #[test]
+    fn a_deleted_channel_is_dropped_and_the_rest_move_down() {
+        let mut project = two_held_notes();
+        project
+            .insert_channel(2, mooloop_core::ProjectChannel::mono_synth(2, 1))
+            .expect("room");
+        let gone = project.channels[0].id;
+
+        let mut after = project.clone();
+        after.remove_channel(0).expect("channel 0 exists");
+
+        let plan = crate::carry_plan(&project, &after);
+        assert_eq!(
+            plan,
+            vec![(1, 0), (2, 1)],
+            "the survivors did not follow their channels down a seat"
+        );
+        assert!(
+            after.channel_index(gone).is_none(),
+            "the deleted channel is gone, so nothing can carry its strip"
         );
     }
 
@@ -534,6 +665,12 @@ mod tests {
     /// Render `project` until its notes are sounding, optionally swap
     /// `install` in, and report the level of the block right after.
     fn held_note_rms(project: &Project, install: Option<Project>) -> f32 {
+        held_note_rms_with(project, install, true)
+    }
+
+    /// `carry` says whether the install is allowed to take the live strips
+    /// over, so a test can measure both sides of the same swap.
+    fn held_note_rms_with(project: &Project, install: Option<Project>, carry: bool) -> f32 {
         let (mut cmd_tx, cmd_rx) = rtrb::RingBuffer::new(8);
         let (evt_tx, _evt_rx) = rtrb::RingBuffer::new(8);
         let (reclaim_tx, _reclaim_rx) = rtrb::RingBuffer::new(8);
@@ -551,11 +688,17 @@ mod tests {
             executor.process(std::iter::empty(), &mut out_l, &mut out_r);
         }
         if let Some(install) = install {
+            let plan = if carry {
+                crate::carry_plan(project, &install)
+            } else {
+                Vec::new()
+            };
             cmd_tx
                 .push(RealtimeCommand::InstallProject(PreparedProject {
                     generation: 1,
                     render: Box::new(RenderState::from_project(SAMPLE_RATE, &install, &[])),
                     keep_transport: true,
+                    carry: plan,
                 }))
                 .expect("room in the ring");
         }

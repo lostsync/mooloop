@@ -86,11 +86,25 @@ the control thread, so a position captured earlier would step the song back by
 the length of its own install. Opening a document still stops and rewinds,
 which is what opening a document means.
 
-**The tails are still cut.** Every voice, delay line, reverb tail and
-compensation ring is still emptied by any edit, because the incoming renderer
-is still a fresh graph. That is step 05, and it is what the second paragraph
-above is about. So the entry stays open, and what is left of it is exactly the
-part that needs strips keyed by id.
+**Closed for channels, 2026-09-17 (step 05).** An install carries the live
+strip of any channel it did not change -- matched by `ChannelId` and
+`ChannelSetup` equality on the control thread -- so a move, a paste, a delete
+or an undo keeps every voice, tail and delay line on every channel it is not
+about. The channel the edit *was* about is rebuilt and still cuts, which is
+the one place a discontinuity is not surprising.
+
+**Still open for tracks.** Adding, removing or moving a *track* rebuilds every
+strip in the song, because a track has no identity yet: `channel-identity`
+deliberately left `TrackId` until step 05 existed to be copied from, and now
+it does.
+
+**And the swap itself is still there.** Step 05 removed the destruction, not
+the whole-state swap. Adam asked on 2026-09-17 why there is a swap at all for
+something as cheap as adding a track, when adding a *channel* is already an
+incremental `StructuralCommand::AddChannel` that misses no samples. That is
+the right question and it has no plan yet. The answer is the same one this
+entry has always given -- positional identity -- and steps 01 to 05 have now
+removed most of the reason it was hard.
 
 
 **A mixer drag does not scroll the mixer, and a turned strip stays at its
