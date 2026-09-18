@@ -234,8 +234,9 @@ thirteen sit downstream of, or that the definition in §1 forces.
   model they needed is `Surface` in `actions.rs`, and the browser tree is
   navigable without the mouse. `archive/ROADMAP.md`'s account of the focus defect is
   still stale; the real remaining defects are listed in §8.
-- **Ship 0.1.4 first.** `v0.1.3` was tagged 2026-09-08 and `main` is **167
-  commits** past it — the whole console pass, the channel strip, sends, solo
+- ~~**Ship 0.1.4 first.**~~ **Shipped 2026-09-18**, 347 commits past
+  `v0.1.3`; see §9. What this bullet said when it was written: `v0.1.3` was
+  tagged 2026-09-08 and `main` is **167 commits** past it — the whole console pass, the channel strip, sends, solo
   in place, the left sidebar, colours and three days of correctness work.
   Adam has since defined what 0.1.4 carries beyond that backlog: the mixer at
   a stopping point, the macOS menubar, and configurable MIDI input. **§9.**
@@ -524,6 +525,13 @@ because nothing was driving off those milestones.
 
 Set by Adam, 2026-09-14. This is **not** the freeze; it is the release that
 closes what is currently in flight, and it is close.
+
+**Cut 2026-09-18**, 347 commits and 57 features past `v0.1.3`, on Adam's
+"release when enough has accumulated". Two of the three threads below were
+closed; **the macOS menubar was not started and moved out**. It was never
+sized, and it can only be built and checked on the Mac, so it goes to whichever
+release comes next. Audio recording had its first step on `main` by then, as
+model only with nothing drawn, so the release carries no half-built surface.
 
 | Thread | State |
 | --- | --- |
