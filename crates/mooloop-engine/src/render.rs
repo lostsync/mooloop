@@ -3329,8 +3329,8 @@ impl RenderState {
     /// path into their shared bus. The freshly built strip has the right one,
     /// so it is swapped onto the carried strip and the stale ring leaves with
     /// the discarded one.
-    pub fn carry_strips_from(&mut self, outgoing: &mut Self, carry: &[(u8, u8)]) {
-        for &(from, to) in carry {
+    pub fn carry_strips_from(&mut self, outgoing: &mut Self, carry: &crate::CarryPlan) {
+        for &(from, to) in &carry.channels {
             let (from, to) = (usize::from(from), usize::from(to));
             let Some(live) = outgoing.strips.get_mut(from) else {
                 continue;
@@ -3371,6 +3371,29 @@ impl RenderState {
                 std::mem::swap(live_rack, fresh_rack);
             }
         }
+        // A track's live strip, for a track whose id and setup survived: its
+        // chain, its channel strip's filter and envelope state, its fader's
+        // smoothing and its tails. `incremental-structure/02`.
+        //
+        // What does not come across is everything `load_project` derives from
+        // the *whole* graph rather than from this track's own setup -- the
+        // compensation ring, the solo verdict and the console accumulator --
+        // for the reason a channel's compensation stays behind above: an
+        // untouched track can still be owed a different answer because the
+        // graph around it moved.
+        for &(from, to) in &carry.tracks {
+            let (from, to) = (usize::from(from), usize::from(to));
+            let (Some(live), Some(fresh)) = (outgoing.buses.get_mut(from), self.buses.get_mut(to))
+            else {
+                continue;
+            };
+            std::mem::swap(live, fresh);
+            std::mem::swap(&mut fresh.compensation, &mut live.compensation);
+            std::mem::swap(&mut fresh.solo_silenced, &mut live.solo_silenced);
+            std::mem::swap(&mut fresh.console, &mut live.console);
+            std::mem::swap(&mut fresh.console_sum, &mut live.console_sum);
+            std::mem::swap(&mut fresh.console_dirty, &mut live.console_dirty);
+        }
     }
 
     /// The identity of the audio slot in this generation's bank at `index`,
@@ -3389,6 +3412,11 @@ impl RenderState {
     #[cfg(test)]
     pub(crate) fn strip_destination(&self, index: usize) -> u8 {
         self.strips[index].destination
+    }
+
+    #[cfg(test)]
+    pub(crate) fn track_solo_silenced(&self, index: usize) -> bool {
+        self.buses[index].solo_silenced
     }
 
     /// Take the outgoing renderer's position-in-time state: where the song is,

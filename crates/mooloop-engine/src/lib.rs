@@ -409,16 +409,23 @@ pub(crate) struct PreparedProject {
     /// own install. The executor reads the outgoing transport at the instant
     /// it swaps.
     pub keep_transport: bool,
-    /// `(outgoing strip index, incoming strip index)` pairs whose channel did
-    /// not change, so the live node can be moved across instead of rebuilt.
-    ///
-    /// Decided on the control thread by [`EngineHandle::carry_plan`], because
-    /// that is the only place both projects exist. The audio thread swaps
-    /// boxes and does not compare anything; see
-    /// [`RenderState::carry_strips_from`].
-    ///
-    /// Bounded by `MAX_CHANNELS`, and allocated here off-thread.
-    pub carry: Vec<(u8, u8)>,
+    /// The live strips the incoming renderer takes over rather than
+    /// rebuilding; see [`CarryPlan`].
+    pub carry: CarryPlan,
+}
+
+/// `(outgoing index, incoming index)` pairs of strips whose channel or track
+/// did not change, so the live one can be moved across instead of rebuilt.
+///
+/// Decided on the control thread by [`EngineHandle::carry_plan`], because
+/// that is the only place both projects exist. The audio thread swaps boxes
+/// and does not compare anything; see [`RenderState::carry_strips_from`].
+///
+/// Bounded by `MAX_CHANNELS` and `MAX_BUSES`, and allocated here off-thread.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CarryPlan {
+    pub channels: Vec<(u8, u8)>,
+    pub tracks: Vec<(u8, u8)>,
 }
 
 /// The ordered control stream consumed at block boundaries. Project swaps
@@ -638,6 +645,16 @@ pub struct InputState {
 pub(crate) fn carry_plan(
     live: &mooloop_core::Project,
     incoming: &mooloop_core::Project,
+) -> CarryPlan {
+    CarryPlan {
+        channels: carry_channels(live, incoming),
+        tracks: carry_tracks(live, incoming),
+    }
+}
+
+fn carry_channels(
+    live: &mooloop_core::Project,
+    incoming: &mooloop_core::Project,
 ) -> Vec<(u8, u8)> {
     let mut plan = Vec::new();
     for (to, channel) in incoming.channels.iter().take(MAX_CHANNELS).enumerate() {
@@ -655,6 +672,75 @@ pub(crate) fn carry_plan(
         plan.push((from as u8, to as u8));
     }
     plan
+}
+
+/// The tracks `incoming` can take over from the generation built for `live`:
+/// [`carry_channels`] one list over, matched by `TrackId`
+/// (`incremental-structure/01`) and compared by [`same_track`].
+fn carry_tracks(
+    live: &mooloop_core::Project,
+    incoming: &mooloop_core::Project,
+) -> Vec<(u8, u8)> {
+    let mut plan = Vec::new();
+    for (to, track) in incoming.buses.iter().take(mooloop_core::MAX_BUSES).enumerate() {
+        if !track.id.is_assigned() {
+            continue;
+        }
+        let Some(from) = live
+            .buses
+            .iter()
+            .take(mooloop_core::MAX_BUSES)
+            .position(|held| held.id == track.id && same_track(held, track))
+        else {
+            continue;
+        };
+        plan.push((from as u8, to as u8));
+    }
+    plan
+}
+
+/// Whether a track strip built for `held` can stand in for one built for
+/// `incoming`: [`same_strip`]'s question for a track.
+///
+/// Where a track sends its audio is left out -- its `output` and its sends --
+/// and so is its solo. None of them is strip content: the bus graph, the send
+/// bank and the solo verdict are compiled from the incoming project whole,
+/// and `carry_strips_from` leaves what they derive with the fresh strip. A
+/// track move renumbers the first two on every track that routes to a moved
+/// one, which is the case this exists for.
+///
+/// Destructured for [`same_strip`]'s reason.
+fn same_track(held: &mooloop_core::BusSetup, incoming: &mooloop_core::BusSetup) -> bool {
+    let mooloop_core::BusSetup {
+        id: _,
+        bus,
+        effects,
+        next_device_id,
+        sends: _,
+    } = held;
+    let mooloop_core::MixerBus {
+        name,
+        muted,
+        volume,
+        pan,
+        output: _,
+        console,
+        polarity,
+        solo: _,
+        strip,
+        color,
+    } = bus;
+    let other = &incoming.bus;
+    *name == other.name
+        && *muted == other.muted
+        && *volume == other.volume
+        && *pan == other.pan
+        && *console == other.console
+        && *polarity == other.polarity
+        && *strip == other.strip
+        && *color == other.color
+        && *effects == incoming.effects
+        && *next_device_id == incoming.next_device_id
 }
 
 /// Whether a strip built for `held` can stand in for one built for
@@ -957,10 +1043,10 @@ impl EngineHandle {
     /// Every case that makes a song audibly stutter still carries: a move, a
     /// paste, a delete, a track added, an undo -- none of them change the
     /// setup of the channels they are not about.
-    fn carry_plan(&self, incoming: &mooloop_core::Project) -> Vec<(u8, u8)> {
+    fn carry_plan(&self, incoming: &mooloop_core::Project) -> CarryPlan {
         match self.last_installed.as_ref() {
             Some(live) => carry_plan(live, incoming),
-            None => Vec::new(),
+            None => CarryPlan::default(),
         }
     }
 

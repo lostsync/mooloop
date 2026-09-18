@@ -97,19 +97,26 @@ the one place a discontinuity is not surprising.
 strip now, including the ones routed to a track that moved or went: the
 carry ignores `channel.bus`, which a track edit renumbers, and re-reads the
 destination from the incoming project the way it already re-reads the
-compensation delay (`carry_plan`'s `same_strip`, `mooloop-engine`). What is
-still rebuilt on any track edit is every **track's own strip** -- its chain,
-its EQ and compressor state, its tails -- because a track has no identity
-yet. That half is `incremental-structure/`'s `TrackId` plus a bus-side carry,
-which is the active plan.
+compensation delay (`carry_plan`'s `same_strip`, `mooloop-engine`).
+
+**Closed for tracks too, the same day** (`incremental-structure/` 01-02). A
+track has a `TrackId`, and an install carries every track whose id and setup
+survived -- its chain, its strip's filter and envelope state, its fader, its
+tails -- at its new seat, the way it carries channels. Where a track sends
+its audio is not compared, for the reason a channel's `bus` is not: the bus
+graph, the send bank, the solo verdict and the compensation rings are
+compiled from the incoming project whole and stay with the fresh strip.
+
+What a swap still empties is exactly that compiled half: every **send's**
+state and every **compensation ring**, on channels and tracks alike. Only a
+song with a latency-reporting device or a send hears it, and only if audio
+is in flight through one at the moment of the edit.
 
 **And the swap itself is still there.** Step 05 removed the destruction, not
 the whole-state swap. Adam asked on 2026-09-17 why there is a swap at all for
 something as cheap as adding a track, when adding a *channel* is already an
 incremental `StructuralCommand::AddChannel` that misses no samples. That is
-the right question and it has no plan yet. The answer is the same one this
-entry has always given -- positional identity -- and steps 01 to 05 have now
-removed most of the reason it was hard.
+the right question, and `incremental-structure/` 03-05 is the plan for it.
 
 
 **A mixer drag does not scroll the mixer, and a turned strip stays at its

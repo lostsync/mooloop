@@ -435,7 +435,7 @@ mod tests {
             )),
             keep_transport,
             // The transport tests are about the clock, not the strips.
-            carry: Vec::new(),
+            carry: crate::CarryPlan::default(),
         }
     }
 
@@ -629,11 +629,15 @@ mod tests {
     /// ceiling: it proves this path does not allocate, not that no path does.
     #[test]
     fn carrying_strips_allocates_nothing() {
-        let project = two_held_notes();
+        let project = two_routed_notes();
         let mut reordered = project.clone();
         reordered.move_channel(0, 1).expect("a real move");
+        reordered.move_track(1, 2).expect("a real move");
         let plan = crate::carry_plan(&project, &reordered);
-        assert!(!plan.is_empty(), "nothing would be carried, so nothing is measured");
+        assert!(
+            !plan.channels.is_empty() && plan.tracks.len() > 1,
+            "nothing would be carried, so nothing is measured: {plan:?}"
+        );
 
         // Everything that allocates happens before the counter is read.
         let mut live = RenderState::from_project(SAMPLE_RATE, &project, &[]);
@@ -668,7 +672,7 @@ mod tests {
 
         let plan = crate::carry_plan(&project, &edited);
         assert_eq!(
-            plan,
+            plan.channels,
             vec![(1, 1)],
             "only the untouched channel should be carried"
         );
@@ -689,7 +693,7 @@ mod tests {
 
         let plan = crate::carry_plan(&project, &after);
         assert_eq!(
-            plan,
+            plan.channels,
             vec![(1, 0), (2, 1)],
             "the survivors did not follow their channels down a seat"
         );
@@ -720,7 +724,7 @@ mod tests {
         );
 
         let plan = crate::carry_plan(&project, &moved);
-        assert_eq!(plan, vec![(0, 0), (1, 1)], "a track move rebuilt a channel strip");
+        assert_eq!(plan.channels, vec![(0, 0), (1, 1)], "a track move rebuilt a channel strip");
 
         let mut live = RenderState::from_project(SAMPLE_RATE, &project, &[]);
         let mut incoming = RenderState::from_project(SAMPLE_RATE, &moved, &[]);
@@ -751,6 +755,103 @@ mod tests {
         assert_eq!(
             without_carry, 0.0,
             "the comparison is not measuring what it claims to"
+        );
+    }
+
+    /// **A track move carries the tracks too**, matched by `TrackId`: every
+    /// one of them, at its new seat. `incremental-structure/02`.
+    #[test]
+    fn a_track_move_carries_every_track_to_its_new_seat() {
+        let project = two_routed_notes();
+        let mut moved = project.clone();
+        moved.move_track(1, 2).expect("a real move");
+
+        let plan = crate::carry_plan(&project, &moved);
+        assert_eq!(plan.tracks, vec![(0, 0), (2, 1), (1, 2)]);
+    }
+
+    /// A track whose own setup changed is rebuilt, and only that one -- the
+    /// channel rule, one list over.
+    #[test]
+    fn a_track_whose_chain_changed_is_rebuilt() {
+        let project = two_routed_notes();
+        let mut edited = project.clone();
+        edited.buses[2]
+            .push_effect(mooloop_core::EffectSlotState::of_kind(
+                mooloop_core::EffectKind::Filter,
+            ))
+            .expect("room in the chain");
+
+        let plan = crate::carry_plan(&project, &edited);
+        assert_eq!(plan.tracks, vec![(0, 0), (1, 1)]);
+    }
+
+    /// **A track's tail survives a track move.** The other half of the glitch
+    /// Adam heard on 2026-09-18: with the channels carried, what still cut
+    /// was each track's own strip -- here a reverb ringing after its note has
+    /// ended, which a rebuilt track would start from silence.
+    ///
+    /// Measured three ways against one swap: carrying everything, carrying
+    /// only the channels (what the engine did before this step), and not
+    /// swapping at all. The first must sound like the third.
+    #[test]
+    fn a_track_move_keeps_the_tail_on_the_track() {
+        let mut project = two_routed_notes();
+        for channel in &mut project.channels {
+            for note in &mut channel.notes[0] {
+                note.duration_ticks = 24;
+            }
+        }
+        let mut reverb = mooloop_core::EffectSlotState::of_kind(mooloop_core::EffectKind::Reverb);
+        reverb.wet_dry = 1.0;
+        project.buses[1].push_effect(reverb).expect("room in the chain");
+        let mut moved = project.clone();
+        moved.move_track(1, 2).expect("a real move");
+
+        let untouched = rms_after_install(&project, None);
+        let full = crate::carry_plan(&project, &moved);
+        let channels_only = crate::CarryPlan {
+            channels: full.channels.clone(),
+            tracks: Vec::new(),
+        };
+        let carried = rms_after_install(&project, Some((moved.clone(), full)));
+        let rebuilt = rms_after_install(&project, Some((moved, channels_only)));
+
+        assert!(untouched > 1e-4, "no tail to measure: {untouched}");
+        assert!(
+            (carried - untouched).abs() <= untouched * 0.01,
+            "the carried track does not sound like the untouched one: \
+             {carried} against {untouched}"
+        );
+        assert!(
+            rebuilt < untouched * 0.5,
+            "rebuilding the track did not cut its tail, so this measures nothing: \
+             {rebuilt} against {untouched}"
+        );
+    }
+
+    /// What a carried track keeps is its own state; what the **graph**
+    /// decides about it comes from the incoming project. Removing the soloed
+    /// track leaves its sibling unchanged -- so carried -- but no longer
+    /// silenced by anybody's solo, and a carry that kept the live verdict
+    /// would leave it muted by a track that is not there.
+    #[test]
+    fn a_carried_track_takes_the_new_graphs_solo_verdict() {
+        let mut project = two_routed_notes();
+        project.buses[1].bus.solo = true;
+        let mut after = project.clone();
+        after.remove_track(1).expect("not the master");
+
+        let plan = crate::carry_plan(&project, &after);
+        assert!(plan.tracks.contains(&(2, 1)), "the sibling was not carried: {plan:?}");
+
+        let mut live = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        assert!(live.track_solo_silenced(2), "the premise: the sibling starts silenced");
+        let mut incoming = RenderState::from_project(SAMPLE_RATE, &after, &[]);
+        incoming.carry_strips_from(&mut live, &plan);
+        assert!(
+            !incoming.track_solo_silenced(1),
+            "a carried track kept the solo verdict of a graph that is gone"
         );
     }
 
@@ -792,6 +893,20 @@ mod tests {
     /// `carry` says whether the install is allowed to take the live strips
     /// over, so a test can measure both sides of the same swap.
     fn held_note_rms_with(project: &Project, install: Option<Project>, carry: bool) -> f32 {
+        let install = install.map(|install| {
+            let plan = if carry {
+                crate::carry_plan(project, &install)
+            } else {
+                crate::CarryPlan::default()
+            };
+            (install, plan)
+        });
+        rms_after_install(project, install)
+    }
+
+    /// Render `project` for forty blocks, optionally swap `install` in under
+    /// the given plan, and report the level of the block right after.
+    fn rms_after_install(project: &Project, install: Option<(Project, crate::CarryPlan)>) -> f32 {
         let (mut cmd_tx, cmd_rx) = rtrb::RingBuffer::new(8);
         let (evt_tx, _evt_rx) = rtrb::RingBuffer::new(8);
         let (reclaim_tx, _reclaim_rx) = rtrb::RingBuffer::new(8);
@@ -808,12 +923,7 @@ mod tests {
         for _ in 0..40 {
             executor.process(std::iter::empty(), &mut out_l, &mut out_r);
         }
-        if let Some(install) = install {
-            let plan = if carry {
-                crate::carry_plan(project, &install)
-            } else {
-                Vec::new()
-            };
+        if let Some((install, plan)) = install {
             cmd_tx
                 .push(RealtimeCommand::InstallProject(PreparedProject {
                     generation: 1,

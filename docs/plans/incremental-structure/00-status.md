@@ -67,7 +67,7 @@ the device edits already demonstrate.
 | Step | What |
 | --- | --- |
 | 01 | `TrackId`, minting, load-time assignment — `ChannelId` copied wholesale, including the lesson that `selected_channel`-style fields want it first. **`channel.bus` holding an id is most of the audible win on its own**: a track move then stops touching a channel's setup, so every channel carries through it. **Landed 2026-09-18** as identity only; see below |
-| 02 | A `ChannelStrip` records its own `ChannelId`, and a `BusStrip` its `TrackId`. `channel-identity/05` deliberately did not need this, because the control thread did the matching; an incremental edit needs the audio thread to know what it is holding |
+| 02 | A `ChannelStrip` records its own `ChannelId`, and a `BusStrip` its `TrackId`. `channel-identity/05` deliberately did not need this, because the control thread did the matching; an incremental edit needs the audio thread to know what it is holding **Landed 2026-09-18** as the bus-side carry; the strips do not record their ids yet -- see below |
 | 03 | `StructuralCommand::{AddTrack, RemoveTrack, MoveTrack}`, mirroring `AddChannel` |
 | 04 | `StructuralCommand::{RemoveChannel, MoveChannel}`, so the three channel edits stop reaching `install_project` at all |
 | 05 | What is left that still needs a whole-state swap — a document open, an undo — and whether it should |
@@ -88,6 +88,34 @@ setup *except* the bus. Converting `bus`, a track's `output`, its sends and
 `EffectTarget::Bus` to ids is a second channel-identity migration, and
 nothing in steps 02 to 04 needs it -- the engine is index-addressed, and
 `TrackEdit` already renumbers every seat on the control thread.
+
+## What step 02 actually did
+
+The bus-side carry, and not the half of the row that puts an id on each strip.
+
+`CarryPlan { channels, tracks }` replaces the bare channel list.
+`carry_tracks` matches by `TrackId` and compares with `same_track`, which is
+`same_strip`'s question for a track: everything but where the track sends
+its audio (`output`, `sends`) and its `solo`, because none of those is strip
+content. `carry_strips_from` then moves the live `BusStrip` across and hands
+back what the incoming project compiles from the *whole* graph -- the
+compensation ring, the solo verdict, the console switch and its accumulator.
+`a_carried_track_takes_the_new_graphs_solo_verdict` guards that half, and was
+checked against a tree without the swap-back.
+
+`a_track_move_keeps_the_tail_on_the_track` is the acceptance case: a reverb
+ringing on a track after its note has ended sounds the same across a track
+move as with no edit at all, and is cut to under half by the channel-only
+carry this step replaced.
+
+**Strips recording their own ids** was the row's other half, and it belongs
+to whichever of 03 and 04 turns out to need the audio thread to know what it
+holds. The carry decides on the control thread and did not.
+
+**What a swap still empties** is what the carry deliberately leaves with the
+fresh strip: every send's state and every compensation ring. Audible only in
+a song with a send or a latency-reporting device, with audio in flight
+through one at the moment of the edit.
 
 ## The cheap half
 
