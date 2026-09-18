@@ -2777,6 +2777,19 @@ impl MidiRouting {
     }
 }
 
+/// Which channel records audio this generation, and which buffer it records.
+///
+/// `audio-recording/02`. The audio half of the IN row, resolved on the control
+/// thread from the channels' stored `AudioInputSource`s -- identities -- to
+/// seats in this generation's bank, and swapped in whole like
+/// [`MidiRouting`]. It is per generation for the same reason: a channel edit
+/// renumbers seats, so the outgoing renderer must keep the routing it was
+/// built for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AudioInputRouting {
+    pub route: Option<mooloop_core::AudioRecordRoute>,
+}
+
 /// One note being recorded, from its press until its release.
 #[derive(Clone, Copy)]
 struct RecordingNote {
@@ -2987,6 +3000,13 @@ pub(crate) struct RenderState {
     /// How each channel takes MIDI input. Shared with the control layer,
     /// which rebuilds it when a channel's setting changes or a port appears.
     midi_routing: Arc<ArcSwap<MidiRouting>>,
+    /// Which channel records audio, and from where. Shared with the control
+    /// layer like `midi_routing`. Nothing reads it on the audio thread until
+    /// step 03's capture does; it is attached now so that the one bug this
+    /// cell could have -- an install that forgets it, which is exactly what
+    /// happened to `midi_routing` -- is tested before anything depends on it.
+    #[cfg_attr(not(test), allow(dead_code))]
+    audio_input_routing: Arc<ArcSwap<AudioInputRouting>>,
     /// Which channels are holding each MIDI note down. The release goes where
     /// the press went: a key held while the selection moves would otherwise
     /// send its note-off to a channel that never started it and leave the
@@ -3123,6 +3143,7 @@ impl RenderState {
             buffer_cc: BufferCcState::default(),
             keyboard_channel: Arc::new(AtomicU8::new(NO_KEYBOARD_CHANNEL)),
             midi_routing: Arc::new(ArcSwap::from_pointee(MidiRouting::default())),
+            audio_input_routing: Arc::new(ArcSwap::from_pointee(AudioInputRouting::default())),
             held_keys: HeldKeys::new(),
             record_armed: false,
             recording: [None; 128],
@@ -4878,6 +4899,17 @@ impl RenderState {
     /// here.
     pub(crate) fn attach_midi_routing(&mut self, routing: Arc<ArcSwap<MidiRouting>>) {
         self.midi_routing = routing;
+    }
+
+    /// Share the control layer's audio input routing cell. Same transport as
+    /// the MIDI routing.
+    pub(crate) fn attach_audio_input_routing(&mut self, routing: Arc<ArcSwap<AudioInputRouting>>) {
+        self.audio_input_routing = routing;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn audio_input_route(&self) -> Option<mooloop_core::AudioRecordRoute> {
+        self.audio_input_routing.load().route
     }
 
     /// Arm or disarm recording.

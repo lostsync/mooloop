@@ -14,6 +14,19 @@ use serde::{Deserialize, Serialize};
 
 pub mod factory;
 pub mod integrity;
+
+/// A kit or channel document brings no audio input.
+///
+/// An audio input names a track or channel of the song it was saved in, by
+/// identity, and those identities mean nothing in the song a preset lands in
+/// -- the same reason these documents carry no channel id
+/// (`PROJECT_FORMAT.md`). Cleared on the way in rather than refused, and
+/// silently, because it is normalization of a field the preset had no
+/// business keeping rather than damage to report.
+fn forget_audio_input(setup: &mut mooloop_core::ChannelSetup) {
+    setup.channel.audio_input = mooloop_core::AudioInputSource::Off;
+}
+
 #[cfg(test)]
 mod io_cost;
 
@@ -1071,12 +1084,14 @@ pub fn load_bundle(path: &Path) -> Result<LoadReport, Error> {
         LoadedDocument::Kit(kit) => {
             for (index, setup) in kit.channels.iter_mut().enumerate() {
                 setup.assign_device_ids();
+                forget_audio_input(setup);
                 resolve_setup_asset(path, index, &mut setup.source, &mut warnings)?;
             }
             integrity::repair_setups(DocumentKind::Kit, &mut kit.channels)
         }
         LoadedDocument::Channel(setup) => {
             setup.assign_device_ids();
+            forget_audio_input(setup);
             resolve_setup_asset(path, 0, &mut setup.source, &mut warnings)?;
             integrity::repair_setups(DocumentKind::Channel, std::slice::from_mut(setup.as_mut()))
         }
@@ -1587,6 +1602,37 @@ mod tests {
     /// is asserted here against the serialized text rather than against a
     /// struct, because a `skip_serializing_if` nobody checks the output of is
     /// not evidence of anything.
+    /// An audio input saves and reloads as it was, an old song with only a
+    /// MIDI input writes nothing about audio, and a channel preset never
+    /// brings one -- it would name a channel of another song.
+    #[test]
+    fn an_audio_input_round_trips_and_a_preset_never_brings_one() {
+        use mooloop_core::AudioInputSource;
+        let temp = tempdir().unwrap();
+        let bundle = temp.path().join("song.mooloop");
+        let mut project = Project::default();
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        assert!(!fs::read_to_string(&bundle).unwrap().contains("audio_input"));
+
+        let source = project.channels[0].id;
+        project.channels[0].setup.channel.audio_input = AudioInputSource::Channel(source);
+        save_song(&bundle, &project, AssetMode::Embedded).unwrap();
+        let LoadedDocument::Song(loaded) = load_bundle(&bundle).unwrap().document else {
+            panic!("expected a song");
+        };
+        assert_eq!(
+            loaded.channels[0].setup.channel.audio_input,
+            AudioInputSource::Channel(source)
+        );
+
+        let preset = temp.path().join("channel.mooloop");
+        save_channel(&preset, &project.channels[0].setup, AssetMode::Embedded).unwrap();
+        let LoadedDocument::Channel(setup) = load_bundle(&preset).unwrap().document else {
+            panic!("expected a channel");
+        };
+        assert!(setup.channel.audio_input.is_off());
+    }
+
     #[test]
     fn midi_input_and_control_bindings_round_trip_and_cost_nothing_unused() {
         use mooloop_core::{

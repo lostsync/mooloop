@@ -21,7 +21,14 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   It holds the selected **channel or track**'s name and colour -- following
   the same selection the device rack does, so the two cannot describe
   different things -- plus three MIDI rows for a channel: IN and CH are live,
-  and OUT is inert because MIDI output does not exist. A track draws no MIDI
+  and OUT is inert because MIDI output does not exist. **IN lists audio
+  sources too** since 2026-09-18 (`audio-recording/02`): under a heading, the
+  master, every track and every channel, the channel itself included. Picking
+  one sets where the channel will record audio from; nothing records yet
+  (step 03), only a Sampler accepts one -- the rows are offered everywhere and
+  a pick elsewhere is refused with a status-bar message, until step 05 greys
+  them out -- and only one channel holds one at a time. CH does nothing while
+  an audio input is picked. A track draws no MIDI
   rows at all rather than disabled ones: disabled means "not configurable
   yet", which is true of OUT and would be a lie about a track, which has no
   MIDI input to configure. It is hidden until the status

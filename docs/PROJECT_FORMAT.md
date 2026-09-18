@@ -356,6 +356,20 @@ before any of them existed still loads:
   forgot to identify the references would leave them positional, silently.
   `Project::reseat_channel_references` is its other half, and runs after every
   structural edit.
+- **A channel's input is two fields, and at most one of them is set**
+  (`audio-recording/02`). `midi_input` is as it was; `audio_input` beside it
+  names where the channel records audio from: `"master"`, `{ track = 4 }` or
+  `{ channel = 7 }`, a **track or channel id** rather than a seat, so it
+  survives a move and a deleted source resolves to nothing. Omitted when `off`,
+  so a song written before it is byte-identical. The IN row is one menu over
+  the pair, and the session keeps the other field at its default. Three rules
+  the integrity pass enforces on a hand-edited file: only a Sampler has an
+  audio input (`channel.input.audio_on_non_sampler`, repaired to MIDI `off`),
+  a channel does not hold both (`channel.input.both`, the audio input is
+  kept), and only one channel records (`channel.input.second_recorder`, the
+  first keeps it). **A kit or channel document brings no audio input** -- it
+  would name a channel of another song -- and one is cleared silently on load.
+
 - **A track carries a durable `id`, and `next_track_id` is its mint** --
   the channel rule above, one list over, with the same defaulting, the same
   positions for a bank that has none (`Project::assign_track_ids`, run beside

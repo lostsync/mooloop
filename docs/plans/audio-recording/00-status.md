@@ -6,7 +6,7 @@ plan (same `SCOPE.md` item, filed before the migration) and is kept open as
 the earlier tracking issue for the input side; MOO-16 is where the plan's
 current shape lives.
 
-**Written 2026-09-17. Nothing has landed.** This is `SCOPE.md` §2 item 3
+**Written 2026-09-17. Step 02 landed 2026-09-18.** This is `SCOPE.md` §2 item 3
 (audio input) together with the audio half of item 5 (recording), in the shape
 Adam settled on 2026-09-17, and since 2026-09-18 item 6 (resampling) as well,
 which turned out to be the same feature with the source inside the app.
@@ -79,7 +79,7 @@ order.
 
 | Step | What | Rung | State |
 | --- | --- | --- | --- |
-| [02](02-one-input-menu.md) | `ChannelInput`: MIDI, an app source (channel, track, master) or a hardware input; one picker, saved | core, project, session, UI build | not started |
+| [02](02-one-input-menu.md) | `ChannelInput`: MIDI, an app source (channel, track, master) or a hardware input; one picker, saved | core, project, session, UI build | **landed 2026-09-18**, UI drawing deferred to 05 -- see below |
 | [03](03-capture.md) | Bounded capture of the chosen buffer at the end of each block, drained to a WAV file off the audio thread | engine, session | not started |
 | [04](04-the-take.md) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | not started |
 | [05](05-interface.md) | Record button, source meter, the growing waveform, the non-sampler rule. **Acceptance: resample a loop into a sampler and play it back** | UI build | not started |
@@ -98,6 +98,40 @@ Every candidate buffer still holds its audio at the end of the block:
 Step 03's prerequisite, a take that survives a structural edit, is met:
 `channel-identity/05` carries channel strips (2026-09-17) and
 `incremental-structure/02` carries track strips (2026-09-18).
+
+## What step 02 actually did
+
+Everything but the markup, which the step itself sends to 05's contract pass.
+
+- **Core** (`core/src/input.rs`): `AudioInputSource` (`Off`, `Master`,
+  `Track(TrackId)`, `Channel(ChannelId)`; `Port` waits for step 01),
+  `Channel.audio_input` beside `midi_input`, `ChannelInput` over the pair with
+  the "at most one non-default" rule in `store`, `settle_input` for the
+  non-sampler rule, `InputPicker` for the rows, and `audio_record_route`,
+  which resolves ids to seats for the engine.
+- **The menu** is the MIDI rows unchanged, a `── Audio ──` heading, then
+  Master, `Track · <name>` for every track but the master, and
+  `Channel · <name>` for every channel. The heading is a row -- `MenuField` has
+  no separators -- and picking it changes nothing.
+- **Session**: `set_channel_input` replaced `set_channel_midi_input`, and it
+  holds both rules: only a Sampler takes an audio input, and picking one clears
+  it from any other channel. `reset_channel_source` applies the non-sampler
+  rule in the same edit, so an undo restores source and input together; so
+  does loading a generator preset of another kind.
+- **Engine**: `AudioInputRouting`, a per-generation cell like `MidiRouting`,
+  carried by `InputState::audio_input` and attached in `install_project`.
+  `an_install_carries_its_own_audio_input_routing` was checked against a tree
+  that did not attach it. Nothing reads it on the audio thread yet.
+- **Not built here, on purpose.** The greyed-out audio rows and a hidden CH
+  row need new properties across `main.slint`, and the step batches that with
+  05's. Until then the rows show everywhere and a pick on a non-sampler is
+  refused with a status-bar message; a CH pick with an audio input is ignored.
+  `InputPicker::is_enabled` is the rule the markup will draw.
+- **Two things the step did not name.** A kit or channel document brings no
+  audio input -- it would name a channel of another song -- and one is cleared
+  on load. And the integrity pass repairs the three states the session cannot
+  produce: an audio input on a non-sampler, both halves set, and a second
+  recorder.
 
 ## Open questions for Adam
 

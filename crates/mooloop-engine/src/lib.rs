@@ -582,6 +582,7 @@ struct SharedCells {
     buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>>,
     keyboard_channel: Arc<AtomicU8>,
     midi_routing: Arc<ArcSwap<render::MidiRouting>>,
+    audio_input_routing: Arc<ArcSwap<render::AudioInputRouting>>,
     playhead_meters: Arc<PlayheadMeters>,
     modulator_meters: Arc<ModulatorMeters>,
     preview_gain: Arc<AtomicU32>,
@@ -596,6 +597,9 @@ impl SharedCells {
             buffer_midi_map: Arc::new(ArcSwapOption::empty()),
             keyboard_channel: Arc::new(AtomicU8::new(render::NO_KEYBOARD_CHANNEL)),
             midi_routing: Arc::new(ArcSwap::from_pointee(render::MidiRouting::default())),
+            audio_input_routing: Arc::new(ArcSwap::from_pointee(
+                render::AudioInputRouting::default(),
+            )),
             playhead_meters: PlayheadMeters::new(),
             modulator_meters: ModulatorMeters::new(),
             preview_gain: Arc::new(AtomicU32::new(
@@ -611,6 +615,12 @@ impl SharedCells {
             .store(Arc::new(render::MidiRouting { routes }));
     }
 
+    /// The store behind [`EngineHandle::set_audio_input_routing`].
+    fn set_audio_input_routing(&self, route: Option<mooloop_core::AudioRecordRoute>) {
+        self.audio_input_routing
+            .store(Arc::new(render::AudioInputRouting { route }));
+    }
+
     /// Point `render` at these cells in place of its private ones.
     fn attach(&self, render: &mut RenderState) {
         render.attach_meters(self.bus_meters.clone());
@@ -619,6 +629,7 @@ impl SharedCells {
         render.attach_buffer_midi_map(self.buffer_midi_map.clone());
         render.attach_keyboard_channel(self.keyboard_channel.clone());
         render.attach_midi_routing(self.midi_routing.clone());
+        render.attach_audio_input_routing(self.audio_input_routing.clone());
         render.attach_playhead_meters(self.playhead_meters.clone());
         render.attach_modulator_meters(self.modulator_meters.clone());
         render.attach_preview_gain(self.preview_gain.clone());
@@ -647,6 +658,9 @@ pub struct InputState {
     /// writes go to that cell once the install is queued -- so neither
     /// renderer ever reads the other's channel order.
     pub midi_routing: Vec<mooloop_core::MidiInputRoute>,
+    /// Which channel of the *incoming* project records audio, and from which
+    /// of its seats -- [`Self::midi_routing`]'s twin, for the same reason.
+    pub audio_input: Option<mooloop_core::AudioRecordRoute>,
 }
 
 /// Which strips `incoming` can take over from the generation built for `live`.
@@ -825,6 +839,9 @@ fn same_strip(held: &mooloop_core::ChannelSetup, incoming: &mooloop_core::Channe
         bus: _,
         color,
         midi_input,
+        // Where the channel records audio from is routing, held in the
+        // engine's own audio input cell, not strip content.
+        audio_input: _,
     } = channel;
     let other = &incoming.channel;
     *name == other.name
@@ -852,12 +869,15 @@ fn prepare_render_state(
     input: &InputState,
 ) -> (RenderState, SharedCells) {
     let mut render = RenderState::new(sample_rate, bank);
-    // Every cell but the routing is shared with the outgoing generation,
-    // because what they carry does not depend on which project's channel
-    // order is live.
+    // Every cell but the two routings is shared with the outgoing
+    // generation, because what they carry does not depend on which project's
+    // channel order is live.
     let cells = SharedCells {
         midi_routing: Arc::new(ArcSwap::from_pointee(render::MidiRouting {
             routes: input.midi_routing.clone(),
+        })),
+        audio_input_routing: Arc::new(ArcSwap::from_pointee(render::AudioInputRouting {
+            route: input.audio_input,
         })),
         ..shared.clone()
     };
@@ -1265,6 +1285,13 @@ impl EngineHandle {
         self.shared.set_midi_routing(routes);
     }
 
+    /// Install which channel records audio and from where, resolved to seats
+    /// by `Session::audio_input_route`. Call it when a channel's input
+    /// changes; an install carries its own in [`InputState::audio_input`].
+    pub fn set_audio_input_routing(&self, route: Option<mooloop_core::AudioRecordRoute>) {
+        self.shared.set_audio_input_routing(route);
+    }
+
     /// The MIDI inputs available to pick from right now.
     ///
     /// Under JACK this is one merged port; under Core MIDI it is one entry per
@@ -1566,5 +1593,47 @@ mod install_tests {
         outgoing.apply_midi(&note_on_ten(62));
         assert_eq!(incoming.audition_channels(), Vec::<u8>::new(), "nothing listens on 10 now");
         assert_eq!(outgoing.audition_channels(), vec![0]);
+    }
+
+    /// **The audio input routing is attached by the install**, and it is the
+    /// incoming generation's own. `audio-recording/02` asks for this test
+    /// before anything reads the cell, because leaving the MIDI routing cell
+    /// out of the install is the bug 2026-09-17 found, and this cell has the
+    /// same shape.
+    #[test]
+    fn an_install_carries_its_own_audio_input_routing() {
+        use mooloop_core::{AudioRecordRoute, AudioTap};
+        let project = Project::default();
+        let startup = SharedCells::new();
+        let before = AudioRecordRoute { channel: 0, tap: AudioTap::Master };
+        let after = AudioRecordRoute { channel: 0, tap: AudioTap::Channel(0) };
+
+        let (outgoing, live) = prepare_render_state(
+            &startup,
+            48_000,
+            render::channel_audio_bank(Vec::new()),
+            &project,
+            &InputState {
+                audio_input: Some(before),
+                ..InputState::default()
+            },
+        );
+        assert_eq!(outgoing.audio_input_route(), Some(before));
+
+        let (incoming, live) = prepare_render_state(
+            &live,
+            48_000,
+            render::channel_audio_bank(Vec::new()),
+            &project,
+            &InputState::default(),
+        );
+        assert_eq!(incoming.audio_input_route(), None, "the incoming project's own");
+        assert_eq!(outgoing.audio_input_route(), Some(before), "the outgoing keeps its own");
+
+        // A later write -- a picker change -- is about the live project and
+        // reaches only its renderer.
+        live.set_audio_input_routing(Some(after));
+        assert_eq!(incoming.audio_input_route(), Some(after));
+        assert_eq!(outgoing.audio_input_route(), Some(before));
     }
 }

@@ -17,6 +17,7 @@ pub mod effect_factory;
 pub mod gain;
 pub mod generator;
 pub mod log;
+pub mod input;
 pub mod midi;
 pub mod modulation;
 pub mod mixer;
@@ -57,6 +58,10 @@ pub use buffer::{BufferDuration, BufferEvent};
 pub use control::{
     ControlBinding, ControlLearn, ControlMap, ControlMapState, ControlMode, ControlOutcome,
     ControlSource, ControlTarget, ControlValue, PickupState, Takeover, TransportControl,
+};
+pub use input::{
+    audio_input_is_off, audio_record_route, audio_source_rows, records_audio, settle_input, AudioInputSource,
+    AudioRecordRoute, AudioSourceRow, AudioTap, ChannelInput, InputPicker, InputRow,
 };
 pub use midi::{
     cc_bucket, ChannelMidiInput, MidiChannelFilter, MidiInputRoute, MidiInputSource, MidiKind,
