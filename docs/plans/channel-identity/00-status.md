@@ -83,7 +83,7 @@ actually ready to build.
 | [03](03-session-keys.md) | Session state keyed by id; the parallel sample list folds into the channel | session, UI build | **landed 2026-09-17** |
 | [04](04-keep-the-transport.md) | An install carries the transport across (the interim fix `LOOSE_ENDS.md` names) | engine, UI | **landed 2026-09-17**, listened to |
 | [05](05-strips-by-id.md) | The engine keeps strips whose id and chain survive an install | engine | **landed 2026-09-17**, not yet listened to |
-| [06](06-the-remaining-cross-channel-addresses.md) | The other three fields that name another channel | core, session, dsp | not started; the control binding is ready, Aux In is decided, the gate waits on `incremental-structure/` 02 |
+| [06](06-the-remaining-cross-channel-addresses.md) | The other three fields that name another channel | core, session, dsp | not started, and three separate jobs: the control binding is ready (MOO-31), Aux In is decided but unbuilt (MOO-32), the gate waits on `incremental-structure/` 02 (MOO-33) |
 
 Tracks (`BusSetup`) have the same problem under `TrackEdit` and the same
 fix. They are left out of this plan on purpose: channels are what plugins and

@@ -10,6 +10,13 @@ on every structural edit. That works -- the existing tests cover it -- and
 the cost of leaving them is that a missed case is silent, not that anything
 is broken right now.
 
+**Tracked as three Linear issues since 2026-09-18**, because one "not started"
+covering all three hid which of them anybody could pick up: control bindings
+are [MOO-31](https://linear.app/mooloop/issue/MOO-31) and are ready, Aux In is
+[MOO-32](https://linear.app/mooloop/issue/MOO-32) and is decided but unbuilt,
+the gate is [MOO-33](https://linear.app/mooloop/issue/MOO-33) and is blocked.
+This file stays the source of truth; the issues mirror it.
+
 ## Control bindings — unblocked, needs one decision
 
 `ControlBinding.target` is `ControlTarget::Param(ParamAddr)`, and a
