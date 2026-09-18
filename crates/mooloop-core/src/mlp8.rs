@@ -25,7 +25,7 @@
 //! from the start rather than acquiring it after the first field addition
 //! breaks every saved project.
 
-use crate::generator::{seconds, stepped, unit};
+use crate::generator::{seconds, stepped, unit, OSC_CENT_RANGE, OSC_SEMITONE_RANGE};
 use crate::mod_metadata::SignalShape;
 use crate::modulation::ModTimeDivision;
 use crate::outlet::{OutletDescriptor, OutletTap};
@@ -1232,8 +1232,8 @@ const fn osc_descriptors(n: u32, wave_name: &'static str) -> [ParamDescriptor; 5
             id: osc_param(n, OSC_OFFSET_SEMITONES),
             name: "Semis",
             unit: "st",
-            min: -48.0,
-            max: 48.0,
+            min: OSC_SEMITONE_RANGE.0,
+            max: OSC_SEMITONE_RANGE.1,
             curve: ParamCurve::Linear,
             default: semitones,
         },
@@ -1241,8 +1241,8 @@ const fn osc_descriptors(n: u32, wave_name: &'static str) -> [ParamDescriptor; 5
             id: osc_param(n, OSC_OFFSET_CENTS),
             name: "Cents",
             unit: "ct",
-            min: -100.0,
-            max: 100.0,
+            min: OSC_CENT_RANGE.0,
+            max: OSC_CENT_RANGE.1,
             curve: ParamCurve::Linear,
             default: cents,
         },

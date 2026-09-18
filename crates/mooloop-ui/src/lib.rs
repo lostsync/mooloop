@@ -2254,18 +2254,24 @@ pub fn device_kind_to_int(kind: DeviceKind) -> i32 {
 /// out of -- was found to have drifted on three of the eight kinds. This stays
 /// as the name the preset browser calls to title a group.
 ///
-/// `main.slint`'s source picker still holds the same eight strings, because a
-/// picker row is markup, and that copy is the one no Rust table can reach.
+/// `main.slint` holds the same eight strings once, in `SourceKinds.labels`,
+/// because a picker row is markup. That copy no Rust table can reach, but
+/// `tests/source_kind_menu.rs` reads it out of the production markup and
+/// holds it against this one -- which is what the add-channel menu, spelling
+/// its own four of them, never had.
 fn device_kind_label(kind: DeviceKind) -> &'static str {
     kind.label()
 }
 
-/// Every device kind that can hold a generator preset, in picker order.
+/// Every source device, in the order the interface offers them -- which is
+/// the order [`device_kind_to_int`] encodes, so a kind's position here is its
+/// number on the other side of the markup boundary.
 ///
 /// `DeviceKind` has no `ALL` of its own and this is the only place that wants
 /// one; adding it to `mooloop-core` for one caller would be putting a UI
-/// concern in the model.
-const PRESET_DEVICE_KINDS: [DeviceKind; 8] = [
+/// concern in the model. Public because `tests/source_kind_menu.rs` needs the
+/// same eight kinds to hold `SourceKinds.labels` against.
+pub const SOURCE_KINDS_IN_PICKER_ORDER: [DeviceKind; 8] = [
     DeviceKind::Sampler,
     DeviceKind::DrumSynth,
     DeviceKind::MonoSynth,
@@ -14661,7 +14667,7 @@ fn scan_preset_catalog() -> Vec<PresetGroup> {
         });
     }
 
-    for kind in PRESET_DEVICE_KINDS {
+    for kind in SOURCE_KINDS_IN_PICKER_ORDER {
         let dir = settings::generator_presets_dir(kind);
         let presets = mooloop_project::list_presets(&dir);
         if !presets.is_empty() {

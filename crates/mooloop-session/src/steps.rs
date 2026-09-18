@@ -162,7 +162,8 @@ impl Session {
     pub fn paint_step(&mut self, channel: i32, step: i32, on: bool) -> Option<StepEdit> {
         let cell = self.cell(channel, step)?;
         let ids = self.ids_in(&cell);
-        if on == !ids.is_empty() {
+        let occupied = !ids.is_empty();
+        if on == occupied {
             return None;
         }
         let commands = if on {

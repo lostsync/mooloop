@@ -38,6 +38,14 @@ between audio and MIDI. Its five open questions were all answered by Adam on
 2026-09-17, the day the plan was written; they are kept in its `00-status.md`
 as a record beside the step each one settles.
 
+The two are **ordered**: `channel-identity/05` comes before
+`audio-recording/03`, not only before `plugin-hosting/` step 06. A capture
+ring is per-channel renderer state, and until a strip survives an install by
+`ChannelId` there is nothing for it to ride across the swap — so step 03 built
+first would end an open take silently on any structural edit.
+`reports/fable-2026-09-18.md` found this; `audio-recording/03-capture.md`
+states the decision and the alternative it rejected.
+
 `plugin-hosting/` was added 2026-09-16 and is **not started, outside the
 `FOCUS.md` sequence**, because Adam asked for it directly: CLAP effects and
 instruments now, then VST3, then AU if ever. Thirteen steps. The first four
