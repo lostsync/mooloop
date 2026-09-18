@@ -50,15 +50,27 @@ document holds is the field the DSP reads.
 
 Converting it therefore needs one of:
 
-- the `ChannelId -> strip` map [05](05-strips-by-id.md) gives the engine, so
-  the engine can resolve it itself; or
+- an id-to-strip resolution in the engine, so the engine can resolve the field
+  itself; or
 - the session rewriting the field to an index on the way in, which leaves the
   document's copy and the engine's copy holding different things in one
   integer. That is the Buffer face bug again and should not be done.
 
-So **this one comes after 05**, not before it. The plan's own layer table
-already said the engine gains its map in 05; what it missed is that this step
-depends on that one.
+**05 landed and did not deliver this.** This file, and the status file, said
+the gate half was waiting on step 05 because the plan's layer table promised
+the engine "a map from `ChannelId` to its strip, used at install time". Step
+05 then found it did not need one: the carry is decided on the *control*
+thread by comparing two `Project` values, so the audio thread only swaps
+boxes and the strips never learn their ids. `ChannelId` does not appear in
+`mooloop-engine` at all except in prose. Corrected 2026-09-18, after the
+claim "so all three are unblocked" had been written into three places.
+
+So the gate half is still blocked, on the same thing it was always blocked
+on -- and that is now
+[`incremental-structure/` step 02](../incremental-structure/00-status.md),
+which gives a `ChannelStrip` its own `ChannelId` because an incremental edit
+needs the audio thread to know what it is holding. Whoever does that step
+should expect this one to follow it.
 
 Its sentinel needs a decode rule too. Parked is `u8::MAX` = 255, and 255 is
 an ordinary `ChannelId` -- so unlike the selection, the old number cannot

@@ -58,6 +58,13 @@ and a control binding is unblocked but needs a decision about how to hold a
 scope that is an id. All three are
 [06](06-the-remaining-cross-channel-addresses.md).
 
+**Corrected 2026-09-18:** the gate half was said to be waiting on step 05,
+because the layer table promised the engine an id-to-strip map there. Step 05
+landed *without* one -- it decides the carry on the control thread from two
+`Project` values, so the strips never learn their ids -- so the gate is still
+blocked, now on `incremental-structure/` step 02. Only the control binding is
+actually ready to build.
+
 **Which layers change** (the survey counted sites on 2026-09-17):
 
 | Layer | Sites | Decision |
@@ -76,7 +83,7 @@ scope that is an id. All three are
 | [03](03-session-keys.md) | Session state keyed by id; the parallel sample list folds into the channel | session, UI build | **landed 2026-09-17** |
 | [04](04-keep-the-transport.md) | An install carries the transport across (the interim fix `LOOSE_ENDS.md` names) | engine, UI | **landed 2026-09-17**, listened to |
 | [05](05-strips-by-id.md) | The engine keeps strips whose id and chain survive an install | engine | **landed 2026-09-17**, not yet listened to |
-| [06](06-the-remaining-cross-channel-addresses.md) | The other three fields that name another channel | core, session, dsp | not started; the gate half waits on 05 |
+| [06](06-the-remaining-cross-channel-addresses.md) | The other three fields that name another channel | core, session, dsp | not started; the control binding is ready, Aux In is decided, the gate waits on `incremental-structure/` 02 |
 
 Tracks (`BusSetup`) have the same problem under `TrackEdit` and the same
 fix. They are left out of this plan on purpose: channels are what plugins and
