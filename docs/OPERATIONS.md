@@ -687,7 +687,13 @@ git -C /home/adam/projects/mooloop push origin vX.Y.Z
 ```
 
 A pushed tag matching `v*.*.*` starts the release workflow. It produces the
-`.deb`, `.rpm`, and AppImage packages and attaches them to a GitHub Release.
+`.deb`, `.rpm`, and AppImage packages, plus `Mooloop-<version>-macos-arm64.zip`
+(an unsigned Apple Silicon `.app`, ad-hoc signed, built on `macos-latest`), and
+attaches them to a GitHub Release. Because the app is not notarized, macOS
+refuses the first double-click. Right-click > Open once, or run
+`xattr -dr com.apple.quarantine Mooloop.app`. Every job also runs, without
+publishing, from **Run workflow** (`workflow_dispatch`), which is how to check a
+workflow change before tagging.
 The release workflow does the distribution build against Ubuntu 20.04 for a
 glibc 2.31 baseline; the local release build is a useful check, not a
 substitute for those artifacts.

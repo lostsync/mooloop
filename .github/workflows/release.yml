@@ -1,7 +1,7 @@
 name: Release
 
-# Builds Linux packages (.deb, .rpm, AppImage) and attaches them to a GitHub
-# Release. Fires on a `v*.*.*` tag push, or manually via workflow_dispatch
+# Builds Linux packages (.deb, .rpm, AppImage) and an unsigned Apple Silicon
+# macOS app (zipped .app) and attaches them to a GitHub Release. Fires on a `v*.*.*` tag push, or manually via workflow_dispatch
 # for a dry run (no tag needed; the publish job still requires a real tag).
 on:
   push:
@@ -227,10 +227,84 @@ jobs:
           name: mooloop-appimage
           path: Mooloop-*.AppImage
 
+  # An unsigned Apple Silicon .app, zipped. Ad-hoc signed only: signing and
+  # notarization are out of scope (SCOPE.md §4), so Gatekeeper asks once on
+  # first open. Intel is not built: cross-compiling mp3lame-sys's autoconf
+  # build to x86_64 is untested.
+  package-macos:
+    name: Build macOS app
+    runs-on: macos-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos
+
+      - name: Build release binary
+        run: cargo build --release -p mooloop-app
+
+      - name: Assemble Mooloop.app
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
+          test -n "$VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+          APP=Mooloop.app
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp target/release/mooloop "$APP/Contents/MacOS/mooloop"
+          strip -S "$APP/Contents/MacOS/mooloop"
+
+          ICONSET=mooloop.iconset
+          mkdir -p "$ICONSET"
+          for size in 16 32 128 256; do
+            sips -z "$size" "$size" packaging/mooloop.png --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+            double=$((size * 2))
+            sips -z "$double" "$double" packaging/mooloop.png --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+          done
+          iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/mooloop.icns"
+
+          cat > "$APP/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>Mooloop</string>
+            <key>CFBundleDisplayName</key><string>Mooloop</string>
+            <key>CFBundleIdentifier</key><string>io.github.lostsync.mooloop</string>
+            <key>CFBundleExecutable</key><string>mooloop</string>
+            <key>CFBundleIconFile</key><string>mooloop</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+            <key>NSMicrophoneUsageDescription</key><string>Mooloop records audio from the input you choose.</string>
+          </dict>
+          </plist>
+          PLIST
+          plutil -lint "$APP/Contents/Info.plist"
+
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --verbose=2 "$APP"
+          lipo -archs "$APP/Contents/MacOS/mooloop"
+
+          ditto -c -k --keepParent "$APP" "Mooloop-${VERSION}-macos-arm64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mooloop-macos
+          path: Mooloop-*-macos-arm64.zip
+
   publish:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [package-deb, package-rpm, package-appimage]
+    needs: [package-deb, package-rpm, package-appimage, package-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write

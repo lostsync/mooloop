@@ -301,8 +301,12 @@ earlier, not by leaving scope.
   reason does not expire, so it is out for 0.2 and should not stay out
   forever.
 - **Windows and macOS as release targets** (#23, #24, #25). macOS builds and
-  runs for development; packaging and signing are out. `PRODUCT.md` is
-  unambiguous that Linux is the platform.
+  runs for development; signing and notarization are out. `PRODUCT.md` is
+  unambiguous that Linux is the platform. **Amended 2026-09-18 (Adam):** from
+  0.1.4, every release also attaches an unsigned, ad-hoc-signed Apple Silicon
+  `Mooloop.app`, zipped, so the Mac can run a release build without building
+  one. It is a convenience build, not a supported target, and there is no
+  Intel build.
 - **The modulation-rack move and the tracker question.** Genuinely undecided —
   `IDEAS.md` shows it is a three-way fork (automation events, modulators, song
   automation) and answering it separately is how a project ends up with two
