@@ -1,7 +1,7 @@
 //! The Buffer workflow, end to end, as far as a test can carry it.
 //!
 //! `docs/FOCUS.md`'s step 2 sets the acceptance case and
-//! `docs/plans/buffer-implementation/03-freeze-and-the-grid.md` closes on it:
+//! `docs/plans/archive/buffer-implementation/03-freeze-and-the-grid.md` closes on it:
 //!
 //! > generate or load sound, capture it continuously at a chosen insert
 //! > point, sequence an audible jump/reverse/repeat transformation, show what

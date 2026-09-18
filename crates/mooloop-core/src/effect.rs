@@ -3420,7 +3420,7 @@ pub fn channel_id_is_unassigned(id: &ChannelId) -> bool {
 /// [`crate::structure::TrackEdit`]. What needs the identity is the engine: an
 /// install matches the tracks of the outgoing and incoming projects by it, so
 /// a track's live strip survives an edit that moved it
-/// (`docs/plans/incremental-structure/`).
+/// (`docs/plans/archive/incremental-structure/`).
 ///
 /// Minted from `Project.next_track_id` and never reused.
 #[derive(

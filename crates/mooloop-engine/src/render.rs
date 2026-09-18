@@ -6941,7 +6941,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
     }
 
     /// Acceptance test 8 for the Buffer's own operations, from
-    /// `docs/plans/buffer-implementation/01-the-whole-thing.md`: **no
+    /// `docs/plans/archive/buffer-implementation/01-the-whole-thing.md`: **no
     /// allocations in the callback**, measured rather than reasoned.
     ///
     /// It lives in this crate because `CountingAllocator` does -- it is the
