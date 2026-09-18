@@ -1,6 +1,7 @@
 import { ComboBox, HorizontalBox, ScrollView, SpinBox, VerticalBox } from "std-widgets.slint";
 import { Theme, Motion, StatusHint } from "theme.slint";
 import { GainMath } from "gain.slint";
+import { ReorderMath } from "reorder.slint";
 export { DisplayPrefs, Motion } from "theme.slint";
 import {
     AudioOrientation, IconButton, InstrumentModule, MiniKnob, NoteFormat, ParameterFader,
@@ -3339,15 +3340,8 @@ export component MainWindow inherits Window {
                                         // exactly one row's pitch, where the dragged row is
                                         // about to sit, so there is nothing to reconcile
                                         // between a marker and the result.
-                                        property <length> shift:
-                                            !ChannelDrag.active || ChannelDrag.target < 0 || self.dragging ? 0px
-                                            : (ChannelDrag.source < ChannelDrag.target
-                                                && ch > ChannelDrag.source
-                                                && ch <= ChannelDrag.target) ? -ChannelDrag.source-height
-                                            : (ChannelDrag.target < ChannelDrag.source
-                                                && ch >= ChannelDrag.target
-                                                && ch < ChannelDrag.source) ? ChannelDrag.source-height
-                                            : 0px;
+                                        property <length> shift: ReorderMath.shift(
+                                            ch, ChannelDrag.source, ChannelDrag.target, ChannelDrag.source-height);
                                         animate shift { duration: Motion.duration; easing: Motion.curve; }
                                         // No `z` here to lift the dragged row over the ones
                                         // it passes: Slint 1.17 requires `z` to be a number
@@ -4568,15 +4562,8 @@ export component MainWindow inherits Window {
                                             // there is nothing to reconcile between a marker and the
                                             // result -- and it opens inside a container's box when the
                                             // drop lands inside one.
-                                            property <length> shift:
-                                                !RackDrag.active || RackDrag.target < 0 || self.dragging ? 0px
-                                                : (RackDrag.source < RackDrag.target
-                                                    && index > RackDrag.source
-                                                    && index <= RackDrag.target) ? -RackDrag.source-width
-                                                : (RackDrag.target < RackDrag.source
-                                                    && index >= RackDrag.target
-                                                    && index < RackDrag.source) ? RackDrag.source-width
-                                                : 0px;
+                                            property <length> shift: ReorderMath.shift(
+                                                index, RackDrag.source, RackDrag.target, RackDrag.source-width);
                                             animate shift { duration: Motion.duration; easing: Motion.curve; }
 
                                             width: self.frame-width + self.tail-width
