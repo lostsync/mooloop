@@ -32,7 +32,8 @@
 // list, which is the fault `AGENTS.md` opens on.
 
 import { Theme } from "theme.slint";
-import { SectionLabel } from "controls.slint";
+import { PeakMeter, SectionLabel, ToggleButton } from "controls.slint";
+import { GainMath } from "gain.slint";
 import { MenuField, NameField } from "toolbar.slint";
 import { ColorChipButton, ColorChoice } from "color-picker.slint";
 // The same row the mixer strip draws, not a second one. A send has one model
@@ -101,10 +102,19 @@ export component ChannelSidebar inherits Rectangle {
     in property <int> audio-input-index;
     // Set when the stored source is a track or channel that has been deleted.
     in property <bool> audio-input-missing;
+    // The hardware input is picked: the monitoring toggle and its meter show.
+    in property <bool> audio-input-is-hardware;
+    // Hearing the hardware input through this channel. Off by default, and
+    // nothing but this toggle turns it on: a live microphone monitored
+    // through speakers feeds back.
+    in property <bool> audio-monitor;
+    in property <float> audio-input-level-db: GainMath.min-db;
+    in property <float> audio-input-held-db: GainMath.min-db;
 
     callback midi-input-picked(int);
     callback midi-channel-picked(int);
     callback audio-input-picked(int);
+    callback audio-monitor-toggled(bool);
     callback renamed(string);
     callback send-added(int);
     callback send-removed(int);
@@ -353,6 +363,27 @@ export component ChannelSidebar inherits Rectangle {
                         tooltip: root.audio-input-missing ? "Audio input — deleted" : "Audio input";
                         hint: "What this channel records from when its sampler's REC is pressed.";
                         selected(index) => { root.audio-input-picked(index); }
+                    }
+                    if root.audio-input-is-hardware : HorizontalLayout {
+                        spacing: 6px;
+                        ToggleButton {
+                            width: 44px;
+                            height: 22px;
+                            text: "MON";
+                            tooltip: "Monitor";
+                            hint: "Hear the input through this channel. Off by default: a live microphone through speakers feeds back.";
+                            checked: root.audio-monitor;
+                            toggled(on) => { root.audio-monitor-toggled(on); }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            PeakMeter {
+                                width: 84px;
+                                height: 6px;
+                                level-db: root.audio-input-level-db;
+                                held-db: root.audio-input-held-db;
+                            }
+                        }
                     }
                     if root.audio-input-missing : Text {
                         text: "Its source was deleted";

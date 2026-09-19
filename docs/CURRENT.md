@@ -706,8 +706,15 @@ sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
   is written into a pattern; the take is heard through whatever triggers the
   sampler. Takes are written to `recordings/` beside the settings file, and a
   save copies a take into the song whichever asset mode it uses.
-- **Not yet:** hardware inputs (a microphone) as an AUDIO source, and
-  deleting takes nothing uses -- steps 01 and 06.
+- **The hardware input is an AUDIO source** under JACK, since 2026-09-19:
+  "Audio In", `mooloop:in_l`/`in_r` wired to the first physical capture pair.
+  A take from it starts the JACK round-trip latency after its bar, so it lines
+  up with what was played. With it picked, the AUDIO row shows a peak meter
+  and **MON**, which plays the input through the channel -- off by default,
+  not saved, and never switched on by anything else, because a microphone
+  through speakers feeds back.
+- **Not yet:** Core Audio input (the Mac), and deleting takes nothing uses
+  (step 06).
 
 ### Sampler Slicing And Stretch
 

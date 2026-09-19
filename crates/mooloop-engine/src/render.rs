@@ -3025,6 +3025,10 @@ pub(crate) struct RenderState {
     /// Whether `input` may hold anything but zeros, so a block with no input
     /// empties it once rather than every time.
     input_dirty: bool,
+    /// Which channels play the hardware input through their strip
+    /// (`audio-recording/01`, monitoring). Only a channel whose AUDIO input is
+    /// the hardware input hears it; the flag on any other does nothing.
+    monitor: [bool; MAX_CHANNELS],
     /// Which channels are holding each MIDI note down. The release goes where
     /// the press went: a key held while the selection moves would otherwise
     /// send its note-off to a channel that never started it and leave the
@@ -3164,6 +3168,7 @@ impl RenderState {
             audio_input_routing: Box::new(AudioInputRouting::default()),
             input: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             input_dirty: false,
+            monitor: [false; MAX_CHANNELS],
             held_keys: HeldKeys::new(),
             record_armed: false,
             recording: [None; 128],
@@ -4479,6 +4484,11 @@ impl RenderState {
             EngineCommand::Pause => self.transport.pause(),
             EngineCommand::Stop => self.transport.stop(),
             EngineCommand::SetRecordArmed(armed) => self.set_record_armed(armed),
+            EngineCommand::SetInputMonitor { channel, on } => {
+                if let Some(flag) = self.monitor.get_mut(usize::from(channel)) {
+                    *flag = on;
+                }
+            }
             EngineCommand::StopTake { channel } => {
                 if let Some(take) = self
                     .strips
@@ -4972,6 +4982,25 @@ impl RenderState {
         self.input.l[copied..frames].fill(0.0);
         self.input.r[copied..frames].fill(0.0);
         self.input_dirty = true;
+        let (peak_l, peak_r) = self.input.peak(frames);
+        self.meters.publish_input(peak_l, peak_r);
+    }
+
+    /// Set which channels monitor the hardware input, by seat, for an
+    /// install: the incoming project's own, for the reason the routings are.
+    pub(crate) fn set_input_monitors(&mut self, monitors: &[bool]) {
+        self.monitor = [false; MAX_CHANNELS];
+        for (seat, on) in monitors.iter().take(MAX_CHANNELS).enumerate() {
+            self.monitor[seat] = *on;
+        }
+    }
+
+    /// Whether the channel at `index` is hearing the hardware input this
+    /// block: its flag is on and its AUDIO input is the hardware input.
+    fn monitors_input(&self, index: usize) -> bool {
+        self.monitor.get(index).copied().unwrap_or(false)
+            && self.audio_input_routing.taps.get(index).copied().flatten()
+                == Some(mooloop_core::AudioTap::Input)
     }
 
     #[cfg(test)]
@@ -5697,7 +5726,14 @@ impl RenderState {
             // to the bit. A channel whose source is being driven therefore
             // keeps rendering, which is also the honest reading: something is
             // still moving in it.
-            if skip_idle && self.events[index].is_empty() && self.strips[index].is_idle() {
+            // A monitored channel never sleeps: its input can start at any
+            // moment, and the generator's own silence says nothing about it.
+            let monitored = self.monitors_input(index);
+            if skip_idle
+                && !monitored
+                && self.events[index].is_empty()
+                && self.strips[index].is_idle()
+            {
                 self.strips[index].sleep(&context);
                 self.slept_strip_blocks += 1;
                 // Positions are stored rather than peak-held, so unlike the
@@ -5728,6 +5764,12 @@ impl RenderState {
                     source.then_some(&self.aux_scratch),
                     &mut ports,
                 );
+            }
+            // Monitoring: the hardware input joins the generator's output
+            // before the channel's devices, fader and pan, so it is heard
+            // through the channel exactly as the channel is heard.
+            if monitored {
+                self.strips[index].bus.add_from(&self.input, frames);
             }
             if muted {
                 // Its tap is filled and its bus is not read: a muted producer

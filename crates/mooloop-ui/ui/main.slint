@@ -1049,6 +1049,7 @@ export component MainWindow inherits Window {
     callback midi-input-picked(int);
     callback midi-channel-picked(int);
     callback audio-input-picked(int);
+    callback audio-monitor-toggled(bool);
     callback sampler-record-clicked();
     callback sampler-record-clip-changed(bool);
     callback sampler-record-bars-changed(int);
@@ -1853,6 +1854,10 @@ export component MainWindow inherits Window {
     in-out property <[string]> audio-input-options;
     in-out property <int> audio-input-index;
     in-out property <bool> audio-input-missing;
+    in-out property <bool> audio-input-is-hardware;
+    in-out property <bool> audio-monitor;
+    in-out property <float> audio-input-level-db: -96;
+    in-out property <float> audio-input-held-db: -96;
     // The selected sampler's RECORD page; see `sampler-device.slint`.
     in-out property <int> sampler-record-state;
     in-out property <string> sampler-record-elapsed;
@@ -2990,6 +2995,11 @@ export component MainWindow inherits Window {
                             audio-input-options: root.audio-input-options;
                             audio-input-index: root.audio-input-index;
                             audio-input-missing: root.audio-input-missing;
+                            audio-input-is-hardware: root.audio-input-is-hardware;
+                            audio-monitor: root.audio-monitor;
+                            audio-input-level-db: root.audio-input-level-db;
+                            audio-input-held-db: root.audio-input-held-db;
+                            audio-monitor-toggled(on) => { root.audio-monitor-toggled(on); }
                             midi-input-picked(row) => { root.midi-input-picked(row); }
                             midi-channel-picked(row) => { root.midi-channel-picked(row); }
                             audio-input-picked(row) => { root.audio-input-picked(row); }

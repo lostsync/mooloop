@@ -22,6 +22,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime};
 
 use mooloop_core::ChannelId;
+use mooloop_core::EngineCommand;
 use mooloop_engine::{StructuralCommand, Take, TakeFrame, TakePhase, TakeStatus};
 
 /// Frames per entry of a take's peak summary: about 21 ms at 48 kHz, which is
@@ -252,6 +253,38 @@ impl crate::session::Session {
                 from_input: channel.audio_input == mooloop_core::AudioInputSource::Input,
             }
         })
+    }
+
+    /// Whether the channel at `seat` is monitoring the hardware input.
+    pub fn is_monitoring(&self, seat: usize) -> bool {
+        self.channels
+            .get(seat)
+            .is_some_and(|channel| self.input_monitor.contains(&channel.id))
+    }
+
+    /// Monitor the hardware input on the channel at `seat`, or stop. Returns
+    /// the command for the engine when anything changed.
+    pub fn set_input_monitor(&mut self, seat: usize, on: bool) -> Option<EngineCommand> {
+        let id = self.channels.get(seat)?.id;
+        let changed = if on {
+            self.input_monitor.insert(id)
+        } else {
+            self.input_monitor.remove(&id)
+        };
+        changed.then_some(EngineCommand::SetInputMonitor {
+            channel: seat as u8,
+            on,
+        })
+    }
+
+    /// Which of `project`'s channels monitor the hardware input, by seat, for
+    /// an install's `InputState`.
+    pub fn monitor_seats(&self, project: &mooloop_core::Project) -> Vec<bool> {
+        project
+            .channels
+            .iter()
+            .map(|channel| self.input_monitor.contains(&channel.id))
+            .collect()
     }
 
     /// Turn the Record page's Clip on or off. Returns whether it changed.
@@ -525,6 +558,26 @@ mod tests {
         let mut reopened = crate::session::Session::default();
         reopened.replace_project(&snapshot, &[]);
         assert_eq!(reopened.channels[0].record, session.channels[0].record);
+    }
+
+    /// Monitoring is kept by identity: a channel move keeps it, the seats an
+    /// install gets follow the channel, and it is never on by default.
+    #[test]
+    fn monitoring_follows_its_channel() {
+        let mut session = crate::session::Session::default();
+        session.channels.push(crate::channel::ChannelState::new(1));
+        session.channels[1].id = mooloop_core::ChannelId(7);
+        assert!(!session.is_monitoring(0) && !session.is_monitoring(1));
+        assert_eq!(
+            session.set_input_monitor(1, true),
+            Some(EngineCommand::SetInputMonitor { channel: 1, on: true })
+        );
+        assert_eq!(session.set_input_monitor(1, true), None, "not a change twice");
+
+        let mut project = session.project_snapshot(120, 0);
+        assert_eq!(session.monitor_seats(&project), [false, true]);
+        project.move_channel(1, 0).expect("a real move");
+        assert_eq!(session.monitor_seats(&project), [true, false]);
     }
 
     #[test]

@@ -39,6 +39,10 @@ pub struct BusMeters {
     /// A strip whose compressor is out publishes nothing, so the cell falls
     /// to zero on the next read and the lamp goes dark.
     reduction: Vec<AtomicU32>,
+    /// The hardware input's held peak, left and right (`audio-recording/01`).
+    /// Here rather than in a struct of its own because it is read at the same
+    /// cadence as the bus peaks, by the same pump, with the same ballistics.
+    input: [AtomicU32; 2],
 }
 
 /// Held input/output peaks for every visible device, plus the held detector
@@ -563,6 +567,7 @@ impl BusMeters {
         Arc::new(Self {
             cells: (0..MAX_BUSES * 2).map(|_| AtomicU32::new(0)).collect(),
             reduction: (0..MAX_BUSES).map(|_| AtomicU32::new(0)).collect(),
+            input: [AtomicU32::new(0), AtomicU32::new(0)],
         })
     }
 
@@ -579,6 +584,20 @@ impl BusMeters {
         if let Some(cell) = self.cells.get(base + 1) {
             cell.fetch_max(peak_r.max(0.0).to_bits(), Ordering::Relaxed);
         }
+    }
+
+    /// Raise the hardware input's held peak. Audio thread, once per block.
+    pub fn publish_input(&self, peak_l: f32, peak_r: f32) {
+        self.input[0].fetch_max(peak_l.max(0.0).to_bits(), Ordering::Relaxed);
+        self.input[1].fetch_max(peak_r.max(0.0).to_bits(), Ordering::Relaxed);
+    }
+
+    /// Read and clear the hardware input's held peak. GUI thread.
+    pub fn take_input(&self) -> (f32, f32) {
+        (
+            f32::from_bits(self.input[0].swap(0, Ordering::Relaxed)),
+            f32::from_bits(self.input[1].swap(0, Ordering::Relaxed)),
+        )
     }
 
     /// Raise `bus`'s held gain reduction, given the reduction in dB the way

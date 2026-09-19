@@ -244,3 +244,43 @@ fn a_take_from_the_input_records_the_input_after_its_latency() {
     assert_eq!(take.first().map(|f| f[0]), Some((BAR_FRAMES + LATENCY as usize) as f32));
     assert!(take.windows(2).all(|pair| pair[1][0] == pair[0][0] + 1.0), "a gap in the input");
 }
+
+/// **Monitoring plays the hardware input through its channel** -- and only
+/// when the flag is on *and* the channel's AUDIO input is the hardware
+/// input. A silent project, so anything at the master is the input -- and
+/// the input starts after two seconds of silence, which is what puts an idle
+/// strip to sleep: a monitored one must not be.
+#[test]
+fn monitoring_plays_the_input_through_its_channel_and_nothing_else_does() {
+    let mut project = Project::default();
+    project.channels.push(ProjectChannel::sampler(1, 1));
+    project.assign_channel_ids();
+    let master_level = |taps: Vec<Option<AudioTap>>, monitors: &[bool]| {
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        route(&mut render, taps);
+        render.set_input_monitors(monitors);
+        // Silence first, long enough for an idle strip to fall asleep, then
+        // the input starts: a monitored channel must be awake to hear it.
+        let silence = vec![0.0f32; BLOCK];
+        for _ in 0..(SAMPLE_RATE as usize * 2 / BLOCK) {
+            render.load_input(&silence, &silence, BLOCK);
+            render.process_block(BLOCK);
+        }
+        let tone: Vec<f32> = (0..BLOCK).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
+        let mut peak = 0.0f32;
+        for _ in 0..8 {
+            render.load_input(&tone, &tone, BLOCK);
+            render.process_block(BLOCK);
+            peak = peak.max(render.master().peak(BLOCK).0);
+        }
+        peak
+    };
+    let input = || vec![Some(AudioTap::Input), None];
+    assert!(master_level(input(), &[true, false]) > 0.05, "monitoring was not heard");
+    assert_eq!(master_level(input(), &[false, false]), 0.0, "heard without monitoring");
+    assert_eq!(
+        master_level(vec![Some(AudioTap::Master), None], &[true, false]),
+        0.0,
+        "a channel not recording the input monitored it"
+    );
+}

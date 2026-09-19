@@ -68,6 +68,12 @@ pub struct Session {
     /// The mint [`mooloop_core::BusSetup::id`] comes from, travelling both
     /// ways for the same reason as `next_channel_id`.
     pub next_track_id: u32,
+    /// The channels monitoring the hardware input (`audio-recording/01`), by
+    /// identity so a channel move keeps its toggle. Performance state: never
+    /// saved, off for every channel of a song that has just opened, and never
+    /// switched on by anything but the user, because a live microphone
+    /// monitored through speakers feeds back.
+    pub input_monitor: std::collections::BTreeSet<ChannelId>,
     /// Destination shown in the piano roll's variable lane. `None` means the
     /// lane is open but empty-handed, which is the state a fresh project is
     /// in; it is not the same as the lane being hidden.
@@ -289,6 +295,7 @@ impl Default for Session {
             next_channel_id: 1,
             // `default_buses` mints the master as track 0.
             next_track_id: 1,
+            input_monitor: std::collections::BTreeSet::new(),
             automation_target: Cell::new(None),
             automation_selected_point: Cell::new(None),
             slice_audition: None,

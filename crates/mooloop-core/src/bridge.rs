@@ -86,6 +86,10 @@ pub enum EngineCommand {
     /// Starting one carries a ring, so it is a structural command
     /// (`mooloop_engine::StructuralCommand::StartTake`) rather than this.
     StopTake { channel: u8 },
+    /// Hear a channel's hardware input through its strip, or stop. Performance
+    /// state, never saved and off by default: monitoring a live microphone
+    /// through speakers feeds back, so nothing turns it on but the user.
+    SetInputMonitor { channel: u8, on: bool },
     // There is no incremental channel removal. Removing a channel rebuilds
     // the whole render state (`EngineHandle::install_project`); the unsent
     // `RemoveChannel` that used to sit here cleared a chain on the audio

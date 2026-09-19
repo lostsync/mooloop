@@ -685,6 +685,10 @@ pub struct InputState {
     /// Which of the *incoming* project's seats each of its channels records
     /// from -- [`Self::midi_routing`]'s twin, for the same reason.
     pub audio_input: Vec<Option<mooloop_core::AudioTap>>,
+    /// Which of the *incoming* project's channels monitor the hardware input,
+    /// by seat. Performance state, so it travels here rather than in the
+    /// document; `Session::monitor_seats` builds it from identities.
+    pub monitor: Vec<bool>,
 }
 
 /// Which strips `incoming` can take over from the generation built for `live`.
@@ -912,6 +916,7 @@ fn prepare_render_state(
     })));
     render.load_project(project);
     render.set_record_armed(input.record_armed);
+    render.set_input_monitors(&input.monitor);
     (render, cells)
 }
 
@@ -1227,6 +1232,11 @@ impl EngineHandle {
     /// this is an atomic array rather than another event.
     pub fn take_bus_peak(&self, bus: usize) -> (f32, f32) {
         self.shared.bus_meters.take(bus)
+    }
+
+    /// Read and clear the hardware input's held peak.
+    pub fn take_input_peak(&self) -> (f32, f32) {
+        self.shared.bus_meters.take_input()
     }
 
     /// Read and clear how much gain reduction a track's channel strip took,

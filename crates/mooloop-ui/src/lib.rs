@@ -4908,6 +4908,9 @@ impl UiState {
         window.set_audio_input_index(picker.row(channel.audio_input) as i32);
         let missing = picker.is_missing(channel.audio_input);
         window.set_audio_input_missing(missing);
+        let hardware = channel.audio_input == mooloop_core::AudioInputSource::Input;
+        window.set_audio_input_is_hardware(hardware && !missing);
+        window.set_audio_monitor(self.session.input_monitor.contains(&channel.id));
         let source = if channel.audio_input.is_off() || missing {
             String::new()
         } else {
@@ -8989,6 +8992,23 @@ impl AppUi {
                 }
             });
         }
+        // Monitoring the hardware input. Not an edit: it is performance
+        // state, and a song does not reopen monitoring.
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            let tx = cmd_tx.clone();
+            window.on_audio_monitor_toggled(move |on| {
+                let mut guard = st.borrow_mut();
+                let channel = guard.session.selected;
+                if let Some(command) = guard.session.set_input_monitor(channel, on) {
+                    let _ = tx.send(command);
+                }
+                if let Some(window) = weak.upgrade() {
+                    window.set_audio_monitor(guard.session.is_monitoring(channel));
+                }
+            });
+        }
         {
             let st = state.clone();
             let weak = window.as_weak();
@@ -12794,6 +12814,7 @@ impl AppUi {
         // *always-visible* meter was the lossy one while the atomic cell
         // cannot drop a block -- and clicking one clip lamp did not clear the
         // other. Both read bus 0 through this pair now.
+        let mut input_meter = (MeterBallistics::default(), MeterBallistics::default());
         let mut bus_meters: Vec<(MeterBallistics, MeterBallistics)> =
             (0..MAX_BUSES).map(|_| Default::default()).collect();
         let mut last_meter_update = std::time::Instant::now();
@@ -14005,6 +14026,17 @@ impl AppUi {
                 // different rate from its neighbour would be the thing this
                 // whole indirection exists to prevent.
                 let falloff = meter::falloff_db_per_second(w.global::<MeterPrefs>().get_falloff());
+                // The hardware input's meter, beside the AUDIO row. Read every
+                // tick so the cell does not hold a peak from before the row was
+                // shown; one reading, the louder side, because the row is one
+                // bar wide.
+                {
+                    let (peak_l, peak_r) = handle.take_input_peak();
+                    let left = input_meter.0.update(peak_l, elapsed, falloff);
+                    let right = input_meter.1.update(peak_r, elapsed, falloff);
+                    w.set_audio_input_level_db(left.level_db.max(right.level_db));
+                    w.set_audio_input_held_db(left.held_db.max(right.held_db));
+                }
                 for (bus, meters) in bus_meters.iter_mut().enumerate() {
                     let strip_clip_cleared = bus_clip_clear_in
                         .borrow_mut()
@@ -14595,6 +14627,7 @@ fn install_project_in_ui(
                 &state.midi_ports,
             ),
             audio_input: Session::project_audio_input_taps(&project),
+            monitor: state.session.monitor_seats(&project),
         }
     };
     if !handle.install_project(Arc::new(project.clone()), audio, input, keep_transport) {

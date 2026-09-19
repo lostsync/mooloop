@@ -117,7 +117,7 @@ order.
 | [03](03-capture.md) | Bounded capture of the chosen buffer at the end of each block, drained to a WAV file off the audio thread | engine, session | **landed 2026-09-18** -- see below |
 | [04](04-the-take.md) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | **landed 2026-09-18** -- see below |
 | [05](05-interface.md) | Record button, source meter, the growing waveform, the non-sampler rule. **Acceptance: resample a loop into a sampler and play it back** | UI build | **landed 2026-09-18** -- see below |
-| [01](01-input-in-the-engine.md) | Drivers deliver hardware input into an input bus, which becomes one more source; monitoring | engine; macOS unverified | **JACK half landed 2026-09-19**; monitoring, the input meter and Core Audio are left -- see below |
+| [01](01-input-in-the-engine.md) | Drivers deliver hardware input into an input bus, which becomes one more source; monitoring | engine; macOS unverified | **Landed 2026-09-19 under JACK**, with monitoring and the input meter; Core Audio's input stream is left -- see below |
 | [06](06-unused-takes.md) | Find and delete takes nothing refers to | session, project, UI build | not started |
 
 **Why internal sources can go first without new scheduling:** capture is a
@@ -299,10 +299,19 @@ What is on `main` after decisions 5, 6 and 10:
   tone played by `pw-cat` and connected to `mooloop:in_l`/`in_r` arrived at
   exactly its generated peak (0.2441). Patching mooloop's own output into its
   input records silence -- PipeWire breaks the loop -- which is not a fault.
-- **Left:** the monitoring toggle and the input meter (both need new markup,
-  so they wait for one UI pass), and Core Audio's input stream, which is the
-  Mac side's -- the Core Audio driver reports no input, so the menu shows no
-  input row there.
+- **Monitoring and the input meter**, landed the same day: a MON toggle and a
+  peak meter under the AUDIO row, shown when the hardware input is picked.
+  Monitoring is per channel, kept by `ChannelId` in the session, never saved,
+  off by default and never switched on by anything but the toggle; it reaches
+  the engine as `EngineCommand::SetInputMonitor` and rides `InputState`
+  across an install. A monitored channel adds the input bus before its
+  devices, fader and pan, and **never sleeps** -- the one finding here:
+  `monitoring_plays_the_input_through_its_channel_and_nothing_else_does` first
+  passed without that guard, because a sounding input keeps its own strip
+  awake; the version that starts the input after two seconds of silence fails
+  without it.
+- **Left:** Core Audio's input stream, which is the Mac side's -- the Core
+  Audio driver reports no input, so the menu shows no input row there.
 
 ## Open questions for Adam
 
