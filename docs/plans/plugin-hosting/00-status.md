@@ -332,6 +332,17 @@ change made in one pass, so if both are in flight, **batch their
 (`AGENTS.md`: a `mooloop-ui` build is about four minutes for any edit at all).
 
 Step 09 depends only on step 03 and can run beside steps 05–08.
+
+Step 10 builds against the pattern-note ceiling, and it is a decision rather
+than an omission. A hosted CLAP instrument has no per-track clip to record a
+long part into: `MAX_NOTES_PER_CHANNEL_PATTERN` is 1024 and is derived from
+`MAX_PATTERN_STEPS` (`crates/mooloop-core/src/pattern.rs:13` and `:27`), so
+the two ceilings cannot be raised separately. Adam settled the model question
+in favour of the groovebox on 2026-09-17 -- patterns stay, there are no
+per-track clips -- and `docs/CAPACITY_POLICY.md` records why, and what has to
+happen first if a part ever genuinely needs more than sixteen bars. Do not
+answer it here by inventing a clip.
+
 Steps 12 and 13 are outlines on purpose. They are written in detail once
 step 07 has shown which parts of the neutral types held.
 
