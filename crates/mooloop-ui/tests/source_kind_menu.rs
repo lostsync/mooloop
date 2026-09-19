@@ -140,3 +140,42 @@ fn the_add_channel_menu_is_as_tall_as_its_rows() {
          written down once: found `{height}`"
     );
 }
+
+/// The device rack's header names the source from the same list.
+///
+/// It spelled its own eight strings as a ternary ladder on `source-kind`,
+/// and nothing read it -- `the_markup_source_list_is_the_rust_labels_in_picker_order`
+/// holds `SourceKinds.labels` to `DeviceKind::label()`, the picker and the
+/// menu are held to the list, and the header was outside all three. A ninth
+/// kind would have extended two guarded lists and a compile-time match while
+/// the header went on saying "Aux In" for everything past the seventh.
+#[test]
+fn the_source_device_header_reads_the_one_list() {
+    let header = block(MAIN_SLINT, "if !root.editing-bus : DeviceHeader {");
+    assert!(
+        header.contains("SourceKinds.labels[root.source-kind]"),
+        "the source device header should take its name from SourceKinds.labels"
+    );
+    for kind in SOURCE_KINDS_IN_PICKER_ORDER {
+        let hand_written = format!("\"{}\"", kind.label());
+        assert!(
+            !header.contains(&hand_written),
+            "the source device header still spells {hand_written} by hand"
+        );
+    }
+}
+
+/// `SourceKinds.labels` is the only place a source kind is named.
+///
+/// The ladder's last arm was the bare fallback `: "Aux In"`, which is how a
+/// ninth kind would have been mislabelled silently rather than caught. The
+/// label belongs to `channel-rack.slint`; a copy of it in `main.slint` is the
+/// fault returning.
+#[test]
+fn main_slint_names_no_source_kind_of_its_own() {
+    assert!(
+        !MAIN_SLINT.contains("\"Aux In\""),
+        "main.slint spells a source kind's label; it should read \
+         SourceKinds.labels instead"
+    );
+}
