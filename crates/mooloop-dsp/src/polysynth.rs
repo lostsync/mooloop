@@ -14,7 +14,9 @@ use crate::osc::Osc;
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
 use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
-use mooloop_core::{EnvTrigger, PolySynthParams, MAX_POLY_VOICES};
+use mooloop_core::{
+    EnvTrigger, PolySynthParams, MAX_POLY_VOICES, OSC_CENT_RANGE, OSC_SEMITONE_RANGE,
+};
 
 /// The voice's absolute output reference, set so one oscillator at its 0 dB
 /// top (which the default patch runs at) peaks within a dB of
@@ -401,7 +403,8 @@ impl PolySynth {
         // Per-oscillator pitch ratios from semitone/cent offsets.
         let mut ratio = [0.0_f32; 3];
         for (index, osc) in params.osc.iter().enumerate() {
-            let semis = osc.semitones.clamp(-48.0, 48.0) + osc.cents.clamp(-100.0, 100.0) / 100.0;
+            let semis = osc.semitones.clamp(OSC_SEMITONE_RANGE.0, OSC_SEMITONE_RANGE.1)
+                + osc.cents.clamp(OSC_CENT_RANGE.0, OSC_CENT_RANGE.1) / 100.0;
             ratio[index] = 2.0_f32.powf(semis / 12.0);
         }
 

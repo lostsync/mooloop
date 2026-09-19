@@ -4,7 +4,7 @@ Adam's quick notes: things worth doing that have no plan yet and no obvious
 home. Delete a line when it is done or has moved somewhere better.
 
 - add option to swap alt/super or recognize super as alt
-- should be able to assign mixer track from channel sidebar
+✓ should be able to assign mixer track from channel sidebar (49c7a6a)
 - in the sequencer, let's split the mute button (figuratively) and have a yellow half-height solo button above it. we can remove the M and S from these.
 - stuff doesnt resize properly when you bump font size or spacing in theme prefs. if its a slint limitation we need to remove those controls. toolbars etc also dont resize to accomodate changed button sizes
 - if a toolbar is cut off becuase it is too short, e.g. if the pane is split, we should put the cut off items in an overflow menu

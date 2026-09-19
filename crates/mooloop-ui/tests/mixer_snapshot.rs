@@ -658,6 +658,119 @@ const CHANNEL_ROW_Y: f32 = 116.0;
 /// 22px owner and each option is 21px tall after 4px top padding.
 const CHANNEL_MENU_BUS_3_Y: f32 = 216.0;
 
+/// The channel sidebar with a channel selected, which is where a channel's
+/// mixer destination can be set without the rack row in front of you.
+///
+/// `headless` already hands the window a rack whose first channel is
+/// selected and feeds Bus 3, so this only has to open the panel and say that
+/// the selection is a channel rather than a track -- the one flag that
+/// decides which half of the panel is drawn.
+fn face_with_channel_output() -> MainWindow {
+    let ui = headless();
+    ui.invoke_show_view(view::STEPS);
+    ui.set_channel_sidebar_visible(true);
+    ui.set_channel_sidebar_width(260.0);
+    ui.set_editing_bus(false);
+    ui.set_selected_channel(0);
+    ui
+}
+
+/// The OUTPUT chip in the channel sidebar, and Master in the popup it opens.
+///
+/// Measured from `MOOLOOP_CHANNEL_OUTPUT_SNAPSHOT` rather than derived, for
+/// the reason the send rows' constants above record at length: the panel
+/// stacks a label and a field above this one and the heights of both are the
+/// renderer's, not the markup's. The chip is 96px wide and spans x 16..111
+/// in a panel whose own left edge is the window's 8px inset plus 8px of
+/// padding, so this is its centre; the popup hangs 2px under it.
+const CHANNEL_OUTPUT_PICKER_X: f32 = 64.0;
+const CHANNEL_OUTPUT_PICKER_Y: f32 = 174.0;
+const CHANNEL_OUTPUT_MENU_MASTER_Y: f32 = 202.0;
+
+/// The panel **with its menu open**, which is what the three constants above
+/// are read off. A render of the closed chip would show where to click once
+/// and say nothing about where the rows land.
+#[test]
+fn render_a_channels_output_picker() {
+    let ui = face_with_channel_output();
+    click(&ui, CHANNEL_OUTPUT_PICKER_X, CHANNEL_OUTPUT_PICKER_Y);
+    let snapshot = ui.window().take_snapshot().unwrap();
+    write_snapshot(&snapshot, "MOOLOOP_CHANNEL_OUTPUT_SNAPSHOT");
+    assert!(snapshot.width() > 0 && snapshot.height() > 0);
+}
+
+/// Which row of the open OUTPUT menu is lit, read off a render.
+///
+/// The active row is drawn in the accent, which is green, and every other
+/// row's background is a neutral grey -- so "more green than red" separates
+/// them without this file keeping a copy of the theme's colour. Sampled 40px
+/// left of the chip's centre, which is inside the row and clear of its
+/// centred text.
+fn lit_menu_row(snapshot: &slint::SharedPixelBuffer<slint::Rgba8Pixel>) -> Option<usize> {
+    let pixels = snapshot.as_bytes().as_chunks::<4>().0;
+    let x = CHANNEL_OUTPUT_PICKER_X as u32 - 40;
+    (0..MAX_BUSES).find(|row| {
+        let y = CHANNEL_OUTPUT_MENU_MASTER_Y as u32 + 21 * *row as u32;
+        let pixel = pixels[(y * snapshot.width() + x) as usize];
+        i32::from(pixel[1]) - i32::from(pixel[0]) > 20
+    })
+}
+
+/// The panel names **this channel's** destination, not a default and not its
+/// neighbour's.
+///
+/// `channel-bus` is the half of this the test below cannot see: a picker
+/// wired to the wrong row would still report the track that was clicked
+/// while describing the wrong one, and a description is what a routing
+/// decision gets made from. The lit row in the open menu *is* the value the
+/// chip was handed, so this reads it off the render rather than trusting a
+/// property it set itself.
+#[test]
+fn the_channel_sidebars_output_names_the_track_that_channel_feeds() {
+    // `rack_rows`: Kick and Snare on Bus 3, Bass on Bus 5, Pad on the
+    // master. Three channels rather than one, because a binding stuck on a
+    // constant agrees with any single case.
+    for (channel, bus) in [(0, 3), (2, 5), (3, 0)] {
+        let ui = face_with_channel_output();
+        ui.set_selected_channel(channel);
+        click(&ui, CHANNEL_OUTPUT_PICKER_X, CHANNEL_OUTPUT_PICKER_Y);
+        let snapshot = ui.window().take_snapshot().unwrap();
+        assert_eq!(
+            lit_menu_row(&snapshot),
+            Some(bus),
+            "the sidebar drew channel {channel} feeding something other than bus {bus}"
+        );
+    }
+}
+
+/// The sidebar's OUTPUT picker moves **the selected channel**, and reports
+/// the track that was clicked.
+///
+/// The picker in the rack row beside the steps has the same job and its own
+/// test above; this is a second instance of one control, which in this
+/// codebase is the arrangement that drifts. What it would look like is a
+/// panel that sets somebody else's destination, or sets nothing at all --
+/// `channel_bus_picker_reports_the_selected_destination` records the popup
+/// closing over its own click and every channel appearing stuck on Master,
+/// which is the failure this shape produces.
+#[test]
+fn the_channel_sidebar_picks_a_mixer_track() {
+    let ui = face_with_channel_output();
+
+    let picked = Rc::new(Cell::new((-1, -1)));
+    let sink = picked.clone();
+    ui.on_channel_bus_changed(move |channel, bus| sink.set((channel, bus)));
+
+    ui.set_selected_channel(2);
+    click(&ui, CHANNEL_OUTPUT_PICKER_X, CHANNEL_OUTPUT_PICKER_Y);
+    click(&ui, CHANNEL_OUTPUT_PICKER_X, CHANNEL_OUTPUT_MENU_MASTER_Y);
+    assert_eq!(
+        picked.get(),
+        (2, 0),
+        "the sidebar's OUTPUT picker did not move the selected channel to the master"
+    );
+}
+
 /// The three sends a track is given, drawn in the real window and the real
 /// layout.
 ///

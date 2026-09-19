@@ -1033,7 +1033,7 @@ export component MainWindow inherits Window {
     callback channel-volume-changed(int, float);
     callback channel-pan-changed(int, float);
     callback channel-bus-changed(int, int); // channel, bus
-    callback add-channel-clicked(int); // 0=Sampler, 1=Drum, 2=Mono, 3=Poly
+    callback add-channel-clicked(int); // a `SourceKinds.labels` index
     callback remove-channel-clicked();
     // A channel was dragged from one row to another. Both indices, because a
     // reorder is a relationship between two seats and the drag knows both --
@@ -2996,6 +2996,17 @@ export component MainWindow inherits Window {
                             // same callbacks the face used to raise.
                             sends: root.editing-bus-sends;
                             bus-names: root.bus-names;
+                            // The channel's mixer destination, read out of
+                            // the rack's own row rather than published a
+                            // second time: `sync_row_flags` already keeps
+                            // `bus` current for the picker the rack row
+                            // draws, and two publishes of one routing
+                            // decision is how the copies in this codebase
+                            // start.
+                            channel-bus: root.channels[root.selected-channel].bus;
+                            bus-picked(b) => {
+                                root.channel-bus-changed(root.selected-channel, b);
+                            }
                             send-allowed: root.editing-bus-send-allowed;
                             track-index: root.editing-bus-index;
                             is-master: root.editing-bus-is-master;
@@ -4482,13 +4493,13 @@ export component MainWindow inherits Window {
 
                                             if !root.editing-bus : DeviceHeader {
                                                 x: DeviceRackMetrics.rail-width; y: 0px; width: parent.content-width;
-                                                name: root.source-kind == 0 ? "Sampler"
-                                                    : root.source-kind == 1 ? "Drum Synth"
-                                                    : root.source-kind == 2 ? "Mono Synth"
-                                                    : root.source-kind == 3 ? "Poly Synth"
-                                                    : root.source-kind == 4 ? "ML-M1"
-                                                    : root.source-kind == 5 ? "ML-P8"
-                                                    : root.source-kind == 6 ? "DS-01" : "Aux In";
+                                                // The one kind-label list, as the picker and the
+                                                // add-channel menu read it. This was eight strings
+                                                // in a ternary ladder whose last arm was a bare
+                                                // fallback, so a ninth kind would have been headed
+                                                // with the eighth's label, and nothing read the
+                                                // ladder to report it.
+                                                name: SourceKinds.labels[root.source-kind];
                                                 kind: "SOURCE / " + source-device.source-units + "U";
                                                 preset: root.source-preset-name;
                                                 device-color: Theme.accent;

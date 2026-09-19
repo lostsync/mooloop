@@ -56,6 +56,7 @@ use mooloop_core::{
     ParamCurve, ParamDescriptor, ParamOwner, PointId,
     Project, ProjectChannel, RetriggerMode, SampleReference,
     PlayMode, SamplerParams, SnareCharacter, StretchMode,
+    SAMPLER_TUNE_SEMITONE_CLAMP,
     VoiceMode, MAX_SLICES,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES,
     MAX_CHANNELS, MAX_MODULATORS_PER_CHANNEL,
@@ -95,9 +96,9 @@ use mooloop_session::document::{
     DocumentResult, LoadTarget, PresetNaming, ResolvedDocument,
 };
 use mooloop_session::engine::{
-    publish_channel_audio_to, AudioAction, AudioActionSender, ChannelAudio, ChannelAudioSender,
-    EngineCommandSender, PendingEngineMessage, PreviewSender, ProjectEditSender,
-    StructuralCommandSender, TelemetryAction, TelemetryActionSender,
+    discard_document_messages, publish_channel_audio_to, AudioAction, AudioActionSender,
+    ChannelAudio, ChannelAudioSender, EngineCommandSender, PendingEngineMessage, PreviewSender,
+    ProjectEditSender, StructuralCommandSender, TelemetryAction, TelemetryActionSender,
 };
 use mooloop_session::history::Entry as HistoryEntry;
 use mooloop_session::roll::NoteEdit;
@@ -11178,7 +11179,8 @@ impl AppUi {
                 as u16;
         });
         wire_typed_stretch_field!(on_tune_typed, |p: &mut SamplerParams, v: f32| {
-            p.tune_semitones = v.clamp(-48.0, 48.0);
+            p.tune_semitones =
+                v.clamp(SAMPLER_TUNE_SEMITONE_CLAMP.0, SAMPLER_TUNE_SEMITONE_CLAMP.1);
         });
 
         {
@@ -12700,6 +12702,16 @@ impl AppUi {
                         }
                         DocumentResult::NewSong(project) => {
                             let samples = vec![None; project.channels.len()];
+                            // The same guard the Open path runs, and for the
+                            // same reason: this is an install, so anything
+                            // still queued is addressed to the song being
+                            // replaced. Without it a routing table indexed by
+                            // the outgoing channel order, or a `sample_reset`
+                            // naming a channel that is now somebody else,
+                            // lands on top of the starter kit -- the drains
+                            // below this arm run later in the same tick.
+                            discard_document_messages(&pending_rx, &requeue_tx);
+                            while sample_reset_rx.try_recv().is_ok() {}
                             install_project_in_ui(
                                 &mut handle,
                                 default_sample_for_pump.as_ref(),
@@ -13021,14 +13033,11 @@ impl AppUi {
                                 // song load, deliberately supersedes them).
                                 // What is addressed to the machine rather
                                 // than the document goes back on the queue,
-                                // in order, for the drain below.
-                                let kept: Vec<_> = pending_rx
-                                    .try_iter()
-                                    .filter(PendingEngineMessage::survives_project_load)
-                                    .collect();
-                                for message in kept {
-                                    let _ = requeue_tx.send(message);
-                                }
+                                // in order, for the drain below. New Song
+                                // runs the same two lines, which is why they
+                                // are a function in `mooloop-session` and not
+                                // written out here.
+                                discard_document_messages(&pending_rx, &requeue_tx);
                                 while sample_reset_rx.try_recv().is_ok() {}
                                 if !install_project_in_ui(
                                     &mut handle,
