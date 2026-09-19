@@ -21,7 +21,13 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   It holds the selected **channel or track**'s name and colour -- following
   the same selection the device rack does, so the two cannot describe
   different things -- plus three MIDI rows for a channel: IN and CH are live,
-  and OUT is inert because MIDI output does not exist. A track draws no MIDI
+  and OUT is inert because MIDI output does not exist. A channel also carries
+  an **OUTPUT** picker naming the mixer track it feeds, as of 2026-09-19. It
+  is the same edit the rack row's chip makes, reading the same model row, so
+  the two cannot disagree -- but it says `Bus 3` where a 30px chip in a run of
+  steps can only say an arrow and a number, and it is to hand when the step
+  grid is not on screen. A track's destination is not there: it lives on the
+  track's own mixer strip, beside the analog-sum switch it is a property of. A track draws no MIDI
   rows at all rather than disabled ones: disabled means "not configurable
   yet", which is true of OUT and would be a lie about a track, which has no
   MIDI input to configure. It is hidden until the status

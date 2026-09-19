@@ -1,5 +1,6 @@
 // The left sidebar: what the selected thing is called, what colour it is, and
-// -- for a channel -- where its MIDI comes from.
+// -- for a channel -- where its MIDI comes from and which mixer track its
+// audio goes to.
 //
 // **It follows the selection the device rack already has** rather than keeping
 // one of its own. `effect_target` is either a channel or a track and decides
@@ -73,6 +74,9 @@ export component ChannelSidebar inherits Rectangle {
     // apart.
     in property <[MixerSendRow]> sends;
     in property <[string]> bus-names;
+    // The mixer track a *channel* feeds. Unused for a track, whose
+    // destination is the picker on its own mixer strip.
+    in property <int> channel-bus;
     in property <[bool]> send-allowed;
     in property <int> track-index;
     in property <bool> is-master;
@@ -97,6 +101,8 @@ export component ChannelSidebar inherits Rectangle {
     callback send-level-changed(int, float);
     callback send-tap-picked(int, int);
     callback send-enable-toggled(int);
+    // The mixer track picked for this channel, by index into `bus-names`.
+    callback bus-picked(int);
     // The hex the project should store, or "" for no colour at all. A string
     // rather than a `color` because a colour is what Slint draws and a hex is
     // what the song keeps -- and because Rust is the only thing here that can
@@ -177,6 +183,38 @@ export component ChannelSidebar inherits Rectangle {
                         tooltip: root.is-track ? "Color this track" : "Color this channel";
                         chosen(value) => { root.color-chosen(value); }
                     }
+                }
+            }
+
+            // Where this channel lands in the mixer.
+            //
+            // It is the same edit the rack row's picker makes, off the same
+            // model row that draws it -- not a second copy of the channel's
+            // destination, which would be this repository's characteristic
+            // fault applied to a routing decision. A channel's output is a
+            // property of the channel, so the panel that describes a channel
+            // is where it belongs; the rack row keeps its picker because a
+            // step row wants the destination to hand without a selection.
+            //
+            // A track's destination is not drawn here. It has one, but it
+            // lives on the track's own mixer strip beside the analog-sum
+            // switch it is a property of, and a second editor for it is
+            // exactly what moving the sends off the device face undid.
+            if !root.is-track : SidebarField {
+                label: "OUTPUT";
+                BusPicker {
+                    bus-names: root.bus-names;
+                    value: root.channel-bus;
+                    // `label` is the picker's static-text escape hatch, and
+                    // what it is handed here is the destination's own name --
+                    // so the chip still reports the value rather than
+                    // replacing it, and reports it in words. "\u{2192}3" is
+                    // what a 30px chip in a run of steps can say; a panel has
+                    // the room to say "REVERB".
+                    label: root.bus-names[root.channel-bus];
+                    chip-width: 96px;
+                    tooltip: "Mixer track this channel feeds";
+                    picked(b) => { root.bus-picked(b); }
                 }
             }
 
