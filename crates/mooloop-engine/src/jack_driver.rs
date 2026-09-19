@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use jack::{
-    AudioOut, Client, ClientOptions, Control, MidiIn, Port, PortFlags, PortId, ProcessHandler,
+    AudioIn, AudioOut, Client, ClientOptions, Control, LatencyType, MidiIn, Port, PortFlags,
+    PortId, ProcessHandler,
     ProcessScope,
 };
 
@@ -47,10 +48,14 @@ const MIDI_PORT_TYPE: &str = "8 bit raw midi";
 
 struct Graph {
     executor: Executor,
+    in_l: Port<AudioIn>,
+    in_r: Port<AudioIn>,
     out_l: Port<AudioOut>,
     out_r: Port<AudioOut>,
     midi_in: Port<MidiIn>,
 }
+
+const IN_L_NAME: &str = "mooloop:in_l";
 
 impl ProcessHandler for Graph {
     fn process(&mut self, _client: &Client, scope: &ProcessScope) -> Control {
@@ -61,8 +66,10 @@ impl ProcessHandler for Graph {
             .midi_in
             .iter(scope)
             .map(|raw| (MidiPortId::FIRST, raw.time, raw.bytes));
-        self.executor.process(
+        self.executor.process_with_input(
             midi,
+            self.in_l.as_slice(scope),
+            self.in_r.as_slice(scope),
             self.out_l.as_mut_slice(scope),
             self.out_r.as_mut_slice(scope),
         );
@@ -149,6 +156,30 @@ fn connect_midi_source(client: &Client, source: &str) {
     }
 }
 
+/// Wire the first two physical capture ports into `in_l` and `in_r`, so a
+/// microphone is recordable without a patchbay. Best effort: a machine with
+/// no capture ports simply records silence from the input.
+fn connect_audio_input(client: &Client) {
+    let sources = client.ports(
+        None,
+        Some(AUDIO_PORT_TYPE),
+        PortFlags::IS_OUTPUT | PortFlags::IS_PHYSICAL,
+    );
+    let right = sources.get(1).or(sources.first());
+    for (source, destination) in [(sources.first(), IN_L_NAME), (right, "mooloop:in_r")] {
+        let Some(source) = source else {
+            continue;
+        };
+        if let Err(error) = client.connect_ports_by_name(source, destination) {
+            mooloop_core::log_warn!(
+                "audio",
+                "could not connect {source} to {destination} ({error}); connect the \
+                 input in a patchbay to record from it"
+            );
+        }
+    }
+}
+
 /// Listen to every hardware MIDI source in the graph. Without this a keyboard
 /// plays nothing until it is wired in a patchbay, which is not where anybody
 /// looks when a key makes no sound.
@@ -212,8 +243,19 @@ impl Opening {
         let midi_in = client
             .register_port("midi_in", MidiIn::default())
             .map_err(|e| Error::PortRegister(e.to_string()))?;
+        // The hardware input (`audio-recording/01`): one stereo pair, wired to
+        // the system capture ports below, and chosen in the JACK graph from
+        // then on, as the MIDI input is.
+        let in_l = client
+            .register_port("in_l", AudioIn::default())
+            .map_err(|e| Error::PortRegister(e.to_string()))?;
+        let in_r = client
+            .register_port("in_r", AudioIn::default())
+            .map_err(|e| Error::PortRegister(e.to_string()))?;
         let graph = Graph {
             executor,
+            in_l,
+            in_r,
             out_l,
             out_r,
             midi_in,
@@ -306,6 +348,8 @@ impl Opening {
             }
         }
 
+        connect_audio_input(async_client.as_client());
+
         Ok(JackDriver {
             client: async_client,
             output_target,
@@ -329,6 +373,27 @@ impl JackDriver {
             id: MidiPortId::FIRST,
             name: MIDI_IN_LABEL.to_owned(),
         }]
+    }
+
+    /// What the AUDIO menu calls the hardware input. One, under JACK, for the
+    /// reason there is one MIDI input: what feeds it is chosen in the graph.
+    pub(crate) fn audio_input_label(&self) -> Option<String> {
+        Some(crate::AUDIO_IN_LABEL.to_owned())
+    }
+
+    /// Frames between a sound leaving `out_l` and the same moment arriving
+    /// back at `in_l`: the output's playback latency plus the input's capture
+    /// latency, as JACK reports them. A take from the input starts this much
+    /// after its bar line, so it lines up with what the performer heard.
+    pub(crate) fn input_latency_frames(&self) -> u32 {
+        let client = self.client.as_client();
+        let capture = client
+            .port_by_name(IN_L_NAME)
+            .map_or(0, |port| port.get_latency_range(LatencyType::Capture).1);
+        let playback = client
+            .port_by_name(OUT_L_NAME)
+            .map_or(0, |port| port.get_latency_range(LatencyType::Playback).1);
+        capture.saturating_add(playback)
     }
 
     pub(crate) fn available_output_targets(&self) -> Vec<OutputTarget> {

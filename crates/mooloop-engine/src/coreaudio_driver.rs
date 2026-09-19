@@ -446,6 +446,17 @@ impl CoreAudioDriver {
     /// Core MIDI connects to each source separately, so this really is a list
     /// of devices rather than JACK's single merged port -- and a project that
     /// names one of them is naming a keyboard.
+    /// No hardware input yet: Core Audio needs a second stream on its own
+    /// clock (`audio-recording/01-input-in-the-engine.md`), which is the Mac
+    /// side's to build. Until then the AUDIO menu offers no input row.
+    pub(crate) fn audio_input_label(&self) -> Option<String> {
+        None
+    }
+
+    pub(crate) fn input_latency_frames(&self) -> u32 {
+        0
+    }
+
     pub(crate) fn midi_ports(&self) -> Vec<MidiPortInfo> {
         lock(&self.midi)
             .connections

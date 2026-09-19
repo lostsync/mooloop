@@ -289,6 +289,11 @@ number of channels may hold one.
   pan and compensation, a track's after its balance and compensation, the
   master. So one read site serves every source, the render order does not
   change, and a resample of the master is the render bit for bit.
+- **The hardware input** is one more source: a preallocated input bus the
+  executor fills from the driver before the block renders
+  (`process_with_input`), silent for a driver with no input and for every
+  offline render. A take from it starts the driver's round-trip latency after
+  its bar line.
 - **Silence, not stale audio.** A channel that did not reach its output this
   block (muted, asleep), a muted or solo-silenced track, and a source that no
   longer exists are recorded as silence.

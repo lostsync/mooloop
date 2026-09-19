@@ -123,6 +123,7 @@ impl TakeRecorder {
         name: &str,
         clip_ticks: Option<u32>,
         sample_rate: u32,
+        start_delay_frames: u32,
     ) -> Result<StructuralCommand, String> {
         std::fs::create_dir_all(&self.dir)
             .map_err(|error| format!("could not create {}: {error}", self.dir.display()))?;
@@ -154,7 +155,7 @@ impl TakeRecorder {
         });
         Ok(StructuralCommand::StartTake {
             channel: seat,
-            take: Take::new(producer, status, clip_ticks),
+            take: Take::new(producer, status, clip_ticks, start_delay_frames),
         })
     }
 
@@ -223,6 +224,10 @@ pub enum RecordPress {
         seat: u8,
         name: String,
         clip_ticks: Option<u32>,
+        /// Whether the take records the hardware input, whose round-trip
+        /// latency the caller passes to [`TakeRecorder::arm`] as its start
+        /// delay.
+        from_input: bool,
     },
     /// The channel has no AUDIO input, so there is nothing to record.
     NoInput,
@@ -244,6 +249,7 @@ impl crate::session::Session {
                 seat: seat_u8,
                 name: channel.name.clone(),
                 clip_ticks: channel.record.clip_ticks(),
+                from_input: channel.audio_input == mooloop_core::AudioInputSource::Input,
             }
         })
     }
@@ -396,7 +402,7 @@ mod tests {
     /// Stand in for the engine: push `frames` into the take's ring, then end
     /// it or abandon it.
     fn run(recorder: &mut TakeRecorder, frames: &[TakeFrame], end: bool) -> FinishedTake {
-        let command = recorder.arm(ChannelId(3), 0, "Kick 1", None, 48_000).expect("armed");
+        let command = recorder.arm(ChannelId(3), 0, "Kick 1", None, 48_000, 0).expect("armed");
         let StructuralCommand::StartTake { take, .. } = command else {
             panic!("expected a take");
         };
@@ -468,7 +474,7 @@ mod tests {
     fn a_take_that_recorded_nothing_leaves_no_file() {
         let dir = tempfile::tempdir().unwrap();
         let mut recorder = TakeRecorder::new(dir.path());
-        let command = recorder.arm(ChannelId(0), 0, "Empty", None, 48_000).unwrap();
+        let command = recorder.arm(ChannelId(0), 0, "Empty", None, 48_000, 0).unwrap();
         drop(command);
         let deadline = Instant::now() + Duration::from_secs(10);
         while !recorder.running.is_empty() {
@@ -501,6 +507,7 @@ mod tests {
                 seat: 0,
                 name: session.channels[0].name.clone(),
                 clip_ticks: Some(2 * mooloop_core::TICKS_PER_BAR),
+                from_input: false,
             })
         );
         assert_eq!(session.record_press(0, true), Some(RecordPress::Stop { seat: 0 }));

@@ -95,7 +95,12 @@ enum State {
     Waiting,
     /// `remaining` is the clip length still to record, in frames, or `None`
     /// when the take runs until it is stopped.
-    Recording { remaining: Option<u64> },
+    Recording {
+        remaining: Option<u64>,
+        /// Frames still to skip before the first one is written: the start
+        /// delay, counted down across block boundaries.
+        skip: u64,
+    },
     Ended,
 }
 
@@ -107,6 +112,11 @@ pub struct Take {
     /// The clip length in ticks, turned into frames at the bar line where the
     /// take starts, at that block's tempo.
     clip_ticks: Option<f64>,
+    /// Frames to wait after the bar line before recording starts: the round
+    /// trip latency of a hardware input, so a take lines up with what the
+    /// performer heard (`03-capture.md`, "Latency"). Zero for an app source,
+    /// which is read in the block that produced it.
+    start_delay: u64,
     state: State,
 }
 
@@ -115,12 +125,14 @@ impl Take {
         producer: Producer<TakeFrame>,
         status: Arc<TakeStatus>,
         clip_ticks: Option<u32>,
+        start_delay_frames: u32,
     ) -> Box<Self> {
         status.set_phase(TakePhase::Waiting);
         Box::new(Self {
             producer,
             status,
             clip_ticks: clip_ticks.map(f64::from),
+            start_delay: u64::from(start_delay_frames),
             state: State::Waiting,
         })
     }
@@ -142,7 +154,10 @@ impl Take {
     #[doc(hidden)]
     pub fn push_for_test(&mut self, frames: &[TakeFrame]) {
         if self.state == State::Waiting {
-            self.state = State::Recording { remaining: None };
+            self.state = State::Recording {
+                remaining: None,
+                skip: 0,
+            };
             self.status.set_phase(TakePhase::Recording);
         }
         for frame in frames {
@@ -201,15 +216,31 @@ impl Take {
                 let remaining = self
                     .clip_ticks
                     .map(|ticks| (ticks / ticks_per_sample).round() as u64);
-                self.state = State::Recording { remaining };
+                self.state = State::Recording {
+                    remaining,
+                    skip: self.start_delay,
+                };
                 self.status
                     .start_tick
                     .store(next.to_bits(), Ordering::Release);
                 self.status.set_phase(TakePhase::Recording);
             }
-            let State::Recording { remaining } = self.state else {
+            let State::Recording { remaining, skip } = self.state else {
                 continue;
             };
+            // The start delay first: it moves where the take begins, and the
+            // clip length counts from there.
+            let skipped = skip.min((end - from) as u64);
+            from += skipped as usize;
+            if skip > 0 {
+                self.state = State::Recording {
+                    remaining,
+                    skip: skip - skipped,
+                };
+                if skipped < skip {
+                    continue;
+                }
+            }
             let mut count = (end - from) as u64;
             if let Some(remaining) = remaining {
                 count = count.min(remaining);
@@ -223,6 +254,7 @@ impl Take {
                 Some(remaining) => {
                     self.state = State::Recording {
                         remaining: Some(remaining - count),
+                        skip: 0,
                     };
                 }
                 None => {}
@@ -280,7 +312,7 @@ mod tests {
 
     fn take(capacity: usize, clip: Option<u32>) -> (Box<Take>, rtrb::Consumer<TakeFrame>) {
         let (producer, consumer) = rtrb::RingBuffer::new(capacity);
-        (Take::new(producer, TakeStatus::new(), clip), consumer)
+        (Take::new(producer, TakeStatus::new(), clip, 0), consumer)
     }
 
     /// Pressed mid-bar, the take starts on the next bar line, at the frame
@@ -339,6 +371,28 @@ mod tests {
         take.advance(&[span(0, 64, 383.0, 1.0)], true, 1.0, BAR, Some(&bus));
         assert_eq!(take.status.frames(), 10);
         assert_eq!(take.status.dropped(), 53);
+    }
+
+    /// A hardware input's start is delayed by its round trip, across a block
+    /// boundary if need be, and the clip length counts from there.
+    #[test]
+    fn a_start_delay_moves_the_first_frame_and_the_clip_counts_from_it() {
+        let (producer, mut rx) = rtrb::RingBuffer::new(1024);
+        let mut take = Take::new(producer, TakeStatus::new(), Some(40), 30);
+        let bus = ramp(64);
+        // Bar line at frame 14; the take starts 30 frames later, at 44.
+        take.advance(&[span(0, 64, 370.0, 1.0)], true, 1.0, BAR, Some(&bus));
+        assert_eq!(rx.pop().unwrap(), [44.0, -44.0]);
+        assert_eq!(take.status.frames(), 20);
+        // A delay longer than the rest of the block carries into the next.
+        let (producer, mut rx) = rtrb::RingBuffer::new(1024);
+        let mut late = Take::new(producer, TakeStatus::new(), None, 60);
+        late.advance(&[span(0, 64, 370.0, 1.0)], true, 1.0, BAR, Some(&bus));
+        assert_eq!(late.status.frames(), 0, "still inside the delay");
+        late.advance(&[span(0, 64, 434.0, 1.0)], true, 1.0, BAR, Some(&bus));
+        assert_eq!(rx.pop().unwrap(), [10.0, -10.0], "the last 10 frames of the delay, then block 2 from frame 10");
+        take.advance(&[span(0, 64, 434.0, 1.0)], true, 1.0, BAR, Some(&bus));
+        assert_eq!(take.status.frames(), 40, "the clip counted from the delayed start");
     }
 
     /// A muted, asleep or missing source records silence rather than stale

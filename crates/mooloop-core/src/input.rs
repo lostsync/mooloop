@@ -27,6 +27,12 @@ pub enum AudioInputSource {
     /// this field existed holds.
     #[default]
     Off,
+    /// The hardware input: what the audio driver delivers into the app
+    /// (`audio-recording/01`). One stereo pair for now -- under JACK what
+    /// feeds it is chosen in the JACK graph, as the MIDI input is -- so it is
+    /// one value rather than a port name. When a driver offers several, this
+    /// grows a name the way a MIDI port has one.
+    Input,
     /// The master's output.
     Master,
     /// A track's output, after its fader and pan.
@@ -52,6 +58,7 @@ impl AudioInputSource {
     ) -> Option<AudioTap> {
         match self {
             Self::Off => None,
+            Self::Input => Some(AudioTap::Input),
             Self::Master => Some(AudioTap::Master),
             Self::Channel(id) => seat_of(channels, id).map(AudioTap::Channel),
             Self::Track(id) => seat_of(tracks, id).map(AudioTap::Track),
@@ -77,6 +84,9 @@ fn seat_of<Id: PartialEq>(ids: impl IntoIterator<Item = Id>, id: Id) -> Option<u
 /// channel move, this one is `Copy` and indexes the engine directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioTap {
+    /// The engine's input bus, filled from the driver at the top of each
+    /// block.
+    Input,
     Master,
     Track(u8),
     Channel(u8),
@@ -108,27 +118,32 @@ pub struct AudioSourceRow {
     pub label: String,
 }
 
-/// The rows the AUDIO picker lists: Off, the master, every track but the
-/// master, then every channel -- the channel itself included, because
-/// resampling in place is allowed.
+/// The rows the AUDIO picker lists: Off, the hardware input when the driver
+/// has one (`input`, its label), the master, every track but the master, then
+/// every channel -- the channel itself included, because resampling in place
+/// is allowed. A channel set to the input on a driver that has none shows it
+/// as missing, as an unplugged MIDI port does.
 ///
 /// Generated from the project each time the menu opens, so a renamed track or
 /// channel reads correctly without anything being stored. `tracks` includes
 /// the master, first, as a bank does; it is listed once, as `Master`.
 pub fn audio_source_rows<'a>(
+    input: Option<&str>,
     tracks: impl IntoIterator<Item = (TrackId, &'a str)>,
     channels: impl IntoIterator<Item = (ChannelId, &'a str)>,
 ) -> Vec<AudioSourceRow> {
-    let mut rows = vec![
-        AudioSourceRow {
-            source: AudioInputSource::Off,
-            label: "Off".to_owned(),
-        },
-        AudioSourceRow {
-            source: AudioInputSource::Master,
-            label: "Master".to_owned(),
-        },
-    ];
+    let mut rows = vec![AudioSourceRow {
+        source: AudioInputSource::Off,
+        label: "Off".to_owned(),
+    }];
+    rows.extend(input.map(|label| AudioSourceRow {
+        source: AudioInputSource::Input,
+        label: label.to_owned(),
+    }));
+    rows.push(AudioSourceRow {
+        source: AudioInputSource::Master,
+        label: "Master".to_owned(),
+    });
     rows.extend(tracks.into_iter().skip(1).map(|(id, name)| AudioSourceRow {
         source: AudioInputSource::Track(id),
         label: format!("Track · {name}"),
@@ -221,17 +236,18 @@ mod tests {
 
     fn rows() -> Vec<AudioSourceRow> {
         audio_source_rows(
+            Some("System Capture"),
             [(TrackId(0), "Master"), (TrackId(4), "Drums")],
             [(ChannelId(7), "Kick"), (ChannelId(2), "Bass")],
         )
     }
 
     #[test]
-    fn the_rows_are_off_the_master_the_tracks_then_the_channels() {
+    fn the_rows_are_off_the_input_the_master_the_tracks_then_the_channels() {
         let rows = rows();
         assert_eq!(
             AudioInputPicker::new(&rows).labels(),
-            ["Off", "Master", "Track · Drums", "Channel · Kick", "Channel · Bass"]
+            ["Off", "System Capture", "Master", "Track · Drums", "Channel · Kick", "Channel · Bass"]
         );
     }
 
@@ -251,6 +267,7 @@ mod tests {
     fn a_source_is_found_by_identity_and_a_deleted_one_is_missing() {
         let kick = AudioInputSource::Channel(ChannelId(7));
         let reordered = audio_source_rows(
+            None,
             [(TrackId(0), "Master")],
             [(ChannelId(2), "Bass"), (ChannelId(7), "Kick")],
         );
@@ -258,7 +275,9 @@ mod tests {
         assert_eq!(picker.labels()[picker.row(kick)], "Channel · Kick");
         assert!(!picker.is_missing(kick));
 
-        let gone = audio_source_rows([(TrackId(0), "Master")], [(ChannelId(2), "Bass")]);
+        let gone = audio_source_rows(None, [(TrackId(0), "Master")], [(ChannelId(2), "Bass")]);
+        // No driver input: a channel set to it says it is missing.
+        assert!(AudioInputPicker::new(&gone).is_missing(AudioInputSource::Input));
         let picker = AudioInputPicker::new(&gone);
         assert!(picker.is_missing(kick));
         assert_eq!(picker.row(kick), 0);
@@ -277,6 +296,7 @@ mod tests {
             (ChannelId(3), AudioInputSource::Track(TrackId(4))),
             (ChannelId(5), AudioInputSource::Channel(ChannelId(9))),
             (ChannelId(6), AudioInputSource::Off),
+            (ChannelId(8), AudioInputSource::Input),
         ];
         assert_eq!(
             audio_input_taps(&channels, &tracks),
@@ -286,6 +306,7 @@ mod tests {
                 Some(AudioTap::Track(1)),
                 None,
                 None,
+                Some(AudioTap::Input),
             ]
         );
 

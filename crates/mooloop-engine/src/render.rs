@@ -3018,6 +3018,13 @@ pub(crate) struct RenderState {
     /// Which buffer each channel records from, read every block by
     /// [`Self::advance_takes`]. Swapped in whole like `midi_routing`.
     audio_input_routing: Box<AudioInputRouting>,
+    /// The hardware input, filled from the driver at the top of each block by
+    /// [`Self::load_input`] (`audio-recording/01`). Preallocated; a driver
+    /// with no input, and every offline render, leaves it silent.
+    input: StereoBus,
+    /// Whether `input` may hold anything but zeros, so a block with no input
+    /// empties it once rather than every time.
+    input_dirty: bool,
     /// Which channels are holding each MIDI note down. The release goes where
     /// the press went: a key held while the selection moves would otherwise
     /// send its note-off to a channel that never started it and leave the
@@ -3155,6 +3162,8 @@ impl RenderState {
             keyboard_channel: Arc::new(AtomicU8::new(NO_KEYBOARD_CHANNEL)),
             midi_routing: Box::new(MidiRouting::default()),
             audio_input_routing: Box::new(AudioInputRouting::default()),
+            input: StereoBus::with_capacity(MAX_BLOCK_SIZE),
+            input_dirty: false,
             held_keys: HeldKeys::new(),
             record_armed: false,
             recording: [None; 128],
@@ -4945,6 +4954,31 @@ impl RenderState {
         std::mem::replace(&mut self.audio_input_routing, routing)
     }
 
+    /// Copy the driver's input for the next block into the input bus. Empty
+    /// slices -- a driver with no input, an offline render -- leave it
+    /// silent. Audio thread: copies, never allocates.
+    pub(crate) fn load_input(&mut self, left: &[f32], right: &[f32], frames: usize) {
+        let frames = frames.min(MAX_BLOCK_SIZE);
+        let copied = frames.min(left.len()).min(right.len());
+        if copied == 0 {
+            if self.input_dirty {
+                self.input.clear(frames);
+                self.input_dirty = false;
+            }
+            return;
+        }
+        self.input.l[..copied].copy_from_slice(&left[..copied]);
+        self.input.r[..copied].copy_from_slice(&right[..copied]);
+        self.input.l[copied..frames].fill(0.0);
+        self.input.r[copied..frames].fill(0.0);
+        self.input_dirty = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn input_bus(&self) -> &StereoBus {
+        &self.input
+    }
+
     #[cfg(test)]
     pub(crate) fn audio_input_taps(&self) -> Vec<Option<mooloop_core::AudioTap>> {
         self.audio_input_routing.taps.clone()
@@ -6025,6 +6059,7 @@ impl RenderState {
                     Some(mooloop_core::AudioTap::Master) => {
                         Some(&self.buses[MASTER_BUS as usize].bus)
                     }
+                    Some(mooloop_core::AudioTap::Input) => Some(&self.input),
                     None => None,
                 };
                 take.advance(spans, playing, ticks_per_sample, ticks_per_bar, source);

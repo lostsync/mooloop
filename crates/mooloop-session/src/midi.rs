@@ -156,9 +156,11 @@ impl Session {
         audio_input_taps(&channels, &tracks)
     }
 
-    /// The rows the AUDIO picker lists, from the bank as it is now.
-    pub fn audio_source_rows(&self) -> Vec<AudioSourceRow> {
+    /// The rows the AUDIO picker lists, from the bank as it is now. `input` is
+    /// the driver's label for its hardware input, or `None` when it has none.
+    pub fn audio_source_rows(&self, input: Option<&str>) -> Vec<AudioSourceRow> {
         audio_source_rows(
+            input,
             self.buses.iter().map(|track| (track.id, track.bus.name.as_str())),
             self.channels.iter().map(|channel| (channel.id, channel.name.as_str())),
         )
@@ -925,7 +927,7 @@ mod tests {
 
         let mut session = Session::default();
         session.replace_project(&project, &[]);
-        let rows = session.audio_source_rows();
+        let rows = session.audio_source_rows(None);
         let picker = mooloop_core::AudioInputPicker::new(&rows);
         assert!(picker.is_missing(session.channels[1].audio_input));
     }

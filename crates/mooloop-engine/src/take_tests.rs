@@ -46,11 +46,20 @@ fn arm(
     channel: u8,
     clip_ticks: Option<u32>,
 ) -> (Arc<TakeStatus>, rtrb::Consumer<TakeFrame>) {
+    arm_delayed(render, channel, clip_ticks, 0)
+}
+
+fn arm_delayed(
+    render: &mut RenderState,
+    channel: u8,
+    clip_ticks: Option<u32>,
+    delay: u32,
+) -> (Arc<TakeStatus>, rtrb::Consumer<TakeFrame>) {
     let (producer, consumer) = rtrb::RingBuffer::new(1 << 19);
     let status = TakeStatus::new();
     let returned = render.apply_structural(StructuralCommand::StartTake {
         channel,
-        take: Take::new(producer, status.clone(), clip_ticks),
+        take: Take::new(producer, status.clone(), clip_ticks, delay),
     });
     assert!(returned.is_none(), "a take displaced nothing");
     (status, consumer)
@@ -208,4 +217,30 @@ fn a_take_rides_its_strip_across_an_install() {
     let carried = incoming.take_status(1).expect("the take moved with its channel");
     assert!(Arc::ptr_eq(&carried, &status));
     assert!(incoming.take_status(0).is_none());
+}
+
+/// **A take from the hardware input records the input**, starting its
+/// round-trip latency after the bar line, so what lands is what the
+/// performer played against the beat they heard (`audio-recording/01`).
+#[test]
+fn a_take_from_the_input_records_the_input_after_its_latency() {
+    let project = sounding(1);
+    let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+    route(&mut render, vec![Some(AudioTap::Input)]);
+    const LATENCY: u32 = 300;
+    let (status, mut ring) = arm_delayed(&mut render, 0, None, LATENCY);
+    render.play();
+    // The input is the running frame count, so each recorded frame says
+    // which frame of the song it came from.
+    let mut frame = 0usize;
+    for _ in 0..(BAR_FRAMES / BLOCK + 8) {
+        let left: Vec<f32> = (frame..frame + BLOCK).map(|f| f as f32).collect();
+        render.load_input(&left, &left, BLOCK);
+        render.process_block(BLOCK);
+        frame += BLOCK;
+    }
+    assert_eq!(status.phase(), TakePhase::Recording);
+    let take = drain(&mut ring);
+    assert_eq!(take.first().map(|f| f[0]), Some((BAR_FRAMES + LATENCY as usize) as f32));
+    assert!(take.windows(2).all(|pair| pair[1][0] == pair[0][0] + 1.0), "a gap in the input");
 }

@@ -133,6 +133,10 @@ pub(crate) static COUNTING: CountingAllocator = CountingAllocator {
 /// connects per source, so nothing there ever carries it.
 pub const MERGED_MIDI_IN_LABEL: &str = "All Hardware Inputs";
 
+/// What the AUDIO menu calls the hardware input under JACK, where one stereo
+/// pair is wired in the graph -- the audio twin of [`MERGED_MIDI_IN_LABEL`].
+pub const AUDIO_IN_LABEL: &str = "Audio In";
+
 #[cfg(target_os = "macos")]
 mod coreaudio_driver;
 mod driver;
@@ -1335,6 +1339,18 @@ impl EngineHandle {
     /// it is rather than pretending they are the same.
     pub fn midi_ports(&self) -> Vec<mooloop_core::MidiPortInfo> {
         self.driver.midi_ports()
+    }
+
+    /// The hardware input's name for the AUDIO menu, or `None` when the driver
+    /// has none.
+    pub fn audio_input_label(&self) -> Option<String> {
+        self.driver.audio_input_label()
+    }
+
+    /// The round trip a take from the hardware input is delayed by; see
+    /// `Take::new`.
+    pub fn input_latency_frames(&self) -> u32 {
+        self.driver.input_latency_frames()
     }
 
     /// Arm or disarm recording.

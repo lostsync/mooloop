@@ -128,9 +128,27 @@ impl Executor {
     /// driver with one input port passes [`MidiPortId::FIRST`] for every
     /// message. At most [`MAX_BLOCK_SIZE`] frames are rendered; anything past
     /// that in the buffers is silenced.
+    // The drivers without an input -- Core Audio, until its input stream
+    // exists -- and the tests; on Linux outside the tests nothing calls it.
+    #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
     pub(crate) fn process<'m>(
         &mut self,
         midi: impl IntoIterator<Item = (MidiPortId, u32, &'m [u8])>,
+        out_l: &mut [f32],
+        out_r: &mut [f32],
+    ) {
+        self.process_with_input(midi, &[], &[], out_l, out_r);
+    }
+
+    /// [`Self::process`] with the driver's audio input for this block
+    /// (`audio-recording/01`). The input is copied into the renderer's input
+    /// bus before anything renders, so a take reading it sees this block's
+    /// input. Empty slices mean no input, and the bus stays silent.
+    pub(crate) fn process_with_input<'m>(
+        &mut self,
+        midi: impl IntoIterator<Item = (MidiPortId, u32, &'m [u8])>,
+        in_l: &[f32],
+        in_r: &[f32],
         out_l: &mut [f32],
         out_r: &mut [f32],
     ) {
@@ -273,6 +291,7 @@ impl Executor {
         }
         self.render.apply_midi(&self.midi_scratch[..midi_len]);
 
+        self.render.load_input(in_l, in_r, frames);
         let report = self.render.process_block(frames);
         // Finished preview samples return to the UI thread for disposal,
         // the same ownership round trip displaced effect nodes take. The
@@ -706,6 +725,29 @@ mod tests {
             after, before,
             "the install allocated or freed on the thread that would be the callback"
         );
+    }
+
+    /// **The driver's input reaches the input bus**, whole, before anything
+    /// renders, and a block with no input leaves it silent -- all without
+    /// allocating (`audio-recording/01`).
+    #[test]
+    fn a_blocks_input_reaches_the_input_bus_without_allocating() {
+        let (mut executor, _cmd_tx, _reclaim) = executor();
+        let mut out_l = [0.0f32; BLOCK];
+        let mut out_r = [0.0f32; BLOCK];
+        let in_l: Vec<f32> = (0..BLOCK).map(|i| i as f32 / BLOCK as f32).collect();
+        let in_r: Vec<f32> = in_l.iter().map(|x| -x).collect();
+        executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+
+        let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        executor.process_with_input(std::iter::empty(), &in_l, &in_r, &mut out_l, &mut out_r);
+        let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        assert_eq!(after, before, "the input allocated on the callback");
+        assert_eq!(&executor.render.input_bus().l[..BLOCK], &in_l[..]);
+        assert_eq!(&executor.render.input_bus().r[..BLOCK], &in_r[..]);
+
+        executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        assert!(executor.render.input_bus().l[..BLOCK].iter().all(|x| *x == 0.0));
     }
 
     /// **A routing change frees nothing on the callback.** The table it

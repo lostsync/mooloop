@@ -3176,6 +3176,12 @@ struct UiState {
     /// Every take that is running or waiting to be turned into a sample
     /// (`audio-recording/03` and `04`). Runtime state, never saved.
     takes: TakeRecorder,
+    /// The driver's name for its hardware input, or `None` when it has none:
+    /// the AUDIO menu's input row.
+    audio_input_label: Option<String>,
+    /// The hardware input's round trip, in frames, refreshed by the pump. A
+    /// take from the input starts this much after its bar line.
+    input_latency_frames: u32,
     /// The MIDI inputs the driver is offering, as of the last scan. Cached
     /// rather than asked per use: under Core MIDI the answer is a lock and a
     /// list of `String` clones, and the input picker, the routing table and
@@ -4894,7 +4900,7 @@ impl UiState {
     /// (`publish_take`), because it moves while nothing is edited.
     fn publish_audio_input(&self, window: &MainWindow, channel: &ChannelState) {
         use mooloop_core::AudioInputPicker;
-        let rows = self.session.audio_source_rows();
+        let rows = self.session.audio_source_rows(self.audio_input_label.as_deref());
         let picker = AudioInputPicker::new(&rows);
         let labels: Vec<SharedString> =
             picker.labels().into_iter().map(SharedString::from).collect();
@@ -5511,6 +5517,8 @@ impl AppUi {
             // path for "the ports changed", and the first pump is 16 ms away.
             midi_ports: Vec::new(),
             takes: TakeRecorder::new(settings::config_dir().join("recordings")),
+            audio_input_label: handle.audio_input_label(),
+            input_latency_frames: handle.input_latency_frames(),
             midi_learn_armed: false,
             session: Session {
                 channels: vec![first],
@@ -8967,7 +8975,7 @@ impl AppUi {
             window.on_audio_input_picked(move |row| {
                 let mut guard = st.borrow_mut();
                 let channel = guard.session.selected;
-                let rows = guard.session.audio_source_rows();
+                let rows = guard.session.audio_source_rows(guard.audio_input_label.as_deref());
                 let source = mooloop_core::AudioInputPicker::new(&rows).pick(row.max(0) as usize);
                 if guard.session.set_channel_audio_input(channel, source) {
                     guard.session.mark_dirty();
@@ -9045,9 +9053,10 @@ impl AppUi {
                             "Pick an AUDIO input in the channel sidebar to record".into(),
                         );
                     }
-                    Some(RecordPress::Arm { channel, seat, name, clip_ticks }) => {
+                    Some(RecordPress::Arm { channel, seat, name, clip_ticks, from_input }) => {
                         let sample_rate = guard.audio_sample_rate;
-                        match guard.takes.arm(channel, seat, &name, clip_ticks, sample_rate) {
+                        let delay = if from_input { guard.input_latency_frames } else { 0 };
+                        match guard.takes.arm(channel, seat, &name, clip_ticks, sample_rate, delay) {
                             Ok(command) => {
                                 // The routing first, so the take reads the
                                 // source this channel names now; then the
@@ -13871,6 +13880,9 @@ impl AppUi {
                 if now.duration_since(last_port_scan) >= std::time::Duration::from_secs(1) {
                     last_port_scan = now;
                     let ports = handle.midi_ports();
+                    // The round trip moves with the buffer size, so it is read
+                    // again at the same cadence as the ports.
+                    st.borrow_mut().input_latency_frames = handle.input_latency_frames();
                     let changed = st.borrow().midi_ports != ports;
                     if changed {
                         let mut state = st.borrow_mut();
@@ -14376,18 +14388,34 @@ impl AppUi {
         // pre-roll and the take, and whether the take became the sampler's
         // sample as one undo step. Run it with `MOOLOOP_CONFIG_DIR` pointed
         // somewhere disposable: the take is written to its recordings folder.
-        if std::env::var("MOOLOOP_AUTODRIVE_RECORD").is_ok() {
+        if let Ok(which) = std::env::var("MOOLOOP_AUTODRIVE_RECORD") {
+            // `input` records the hardware input instead of the master --
+            // `audio-recording/01`'s check, with whatever the capture ports
+            // hear.
+            let wanted = if which == "input" {
+                mooloop_core::AudioInputSource::Input
+            } else {
+                mooloop_core::AudioInputSource::Master
+            };
             let seen = Rc::new(Cell::new((false, false, 0usize)));
             {
                 let weak = window.as_weak();
+                let st = state.clone();
                 slint::Timer::single_shot(std::time::Duration::from_millis(300), move || {
                     let Some(w) = weak.upgrade() else { return };
                     for step in [0, 4, 8, 12] {
                         w.invoke_step_clicked(0, step);
                     }
                     w.invoke_add_channel_clicked(0);
-                    // Row 1 of the AUDIO menu is the master.
-                    w.invoke_audio_input_picked(1);
+                    // The row is looked up rather than assumed: whether the
+                    // input row exists depends on the driver.
+                    let row = {
+                        let st = st.borrow();
+                        let rows = st.session.audio_source_rows(st.audio_input_label.as_deref());
+                        rows.iter().position(|row| row.source == wanted).unwrap_or(0)
+                    };
+                    println!("recording from AUDIO row {row} ({wanted:?})");
+                    w.invoke_audio_input_picked(row as i32);
                     w.invoke_sampler_record_clip_changed(true);
                     w.invoke_sampler_record_bars_changed(1);
                     w.invoke_sampler_record_clicked();

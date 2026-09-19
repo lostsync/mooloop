@@ -6,7 +6,7 @@ plan (same `SCOPE.md` item, filed before the migration) and is kept open as
 the earlier tracking issue for the input side; MOO-16 is where the plan's
 current shape lives.
 
-**Written 2026-09-17. Steps 02-05 landed 2026-09-18; 01 and 06 are left.** This is `SCOPE.md` §2 item 3
+**Written 2026-09-17. Steps 02-05 landed 2026-09-18, and 01's JACK half 2026-09-19; the rest of 01 and all of 06 are left.** This is `SCOPE.md` §2 item 3
 (audio input) together with the audio half of item 5 (recording), in the shape
 Adam settled on 2026-09-17, and since 2026-09-18 item 6 (resampling) as well,
 which turned out to be the same feature with the source inside the app.
@@ -117,7 +117,7 @@ order.
 | [03](03-capture.md) | Bounded capture of the chosen buffer at the end of each block, drained to a WAV file off the audio thread | engine, session | **landed 2026-09-18** -- see below |
 | [04](04-the-take.md) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | **landed 2026-09-18** -- see below |
 | [05](05-interface.md) | Record button, source meter, the growing waveform, the non-sampler rule. **Acceptance: resample a loop into a sampler and play it back** | UI build | **landed 2026-09-18** -- see below |
-| [01](01-input-in-the-engine.md) | Drivers deliver hardware input into an input bus, which becomes one more source; monitoring | engine; macOS unverified | not started |
+| [01](01-input-in-the-engine.md) | Drivers deliver hardware input into an input bus, which becomes one more source; monitoring | engine; macOS unverified | **JACK half landed 2026-09-19**; monitoring, the input meter and Core Audio are left -- see below |
 | [06](06-unused-takes.md) | Find and delete takes nothing refers to | session, project, UI build | not started |
 
 **Why internal sources can go first without new scheduling:** capture is a
@@ -272,6 +272,37 @@ What is on `main` after decisions 5, 6 and 10:
   sample (the ordinary path). Undo was checked as the history entry, not by
   pressing it.
 - **Not heard.** Nobody has listened to a take yet.
+
+## What step 01 actually did (so far)
+
+- **The input bus.** `Executor::process_with_input` copies the driver's input
+  into a preallocated `StereoBus` on the renderer before anything renders;
+  `process` passes none, so offline renders and every existing caller are
+  unchanged and silent on it. Tested for content and for no allocation.
+- **JACK:** `mooloop:in_l` and `in_r`, auto-connected to the first two
+  physical capture ports as `midi_in` is to the MIDI sources. The AUDIO menu
+  lists one input, "Audio In", for the reason the MIDI menu lists one merged
+  input: what feeds it is chosen in the JACK graph.
+- **`AudioInputSource::Input` is one value, not `Port(String)`** as the step
+  asked. There is one input pair, and a name would have cost `Copy` on a type
+  copied everywhere for nothing it could yet distinguish. When a driver offers
+  several, it grows the name.
+- **Latency.** A take from the input starts the JACK round trip (the output's
+  playback latency plus the input's capture latency) after its bar line, and
+  the clip length counts from there, so the take lines up with what the
+  performer heard. `a_take_from_the_input_records_the_input_after_its_latency`
+  feeds a frame counter and checks the first frame is the bar plus the delay.
+- **Run live under JACK (PipeWire), 2026-09-19**, with
+  `MOOLOOP_AUTODRIVE_RECORD=input`: `in_l`/`in_r` connected to the laptop's
+  digital microphone, capture latency 1,056 frames and playback 1,048. The
+  microphone was muted in the OS, so that take was silent, correctly; a 440 Hz
+  tone played by `pw-cat` and connected to `mooloop:in_l`/`in_r` arrived at
+  exactly its generated peak (0.2441). Patching mooloop's own output into its
+  input records silence -- PipeWire breaks the loop -- which is not a fault.
+- **Left:** the monitoring toggle and the input meter (both need new markup,
+  so they wait for one UI pass), and Core Audio's input stream, which is the
+  Mac side's -- the Core Audio driver reports no input, so the menu shows no
+  input row there.
 
 ## Open questions for Adam
 
