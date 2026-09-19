@@ -3424,6 +3424,10 @@ impl RenderState {
     /// state to be freed off-thread. No allocation, no comparison, no
     /// reasoning on the audio thread.
     ///
+    /// `carry` is borrowed here and freed nowhere near here: the executor
+    /// sends the plan out on the reclaim ring alongside the generation it
+    /// retired, so its four `Vec`s are destroyed on the control thread.
+    ///
     /// **The compensation ring is decided by its length**, and that is not a
     /// detail. Every other setting on a strip comes from its own channel's
     /// setup, which is equal by construction or the pair would not be in
