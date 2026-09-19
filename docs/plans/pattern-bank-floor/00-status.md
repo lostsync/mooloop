@@ -42,3 +42,29 @@ against is that the memory is reserved rather than used, the machine
 showed no pressure, and nothing a user does is broken by it. The honest
 argument for is that a 20 ms edit is felt every time anybody drags anything,
 and it gets worse with every channel added to a song.
+
+## What else now waits on it, 2026-09-17
+
+An architecture pass asked whether mooloop should grow per-track clips, on the
+strength of one case: an instrument track -- one channel, a four-minute part,
+two thousand notes -- fits neither `MAX_PATTERN_STEPS` nor
+`MAX_NOTES_PER_CHANNEL_PATTERN`, and a `PatternPlacement` places every channel's
+whole pattern at once (`crates/mooloop-core/src/playlist.rs:29`), so there is no
+per-channel clip for it to live in either. **Adam settled it the same day in
+favour of the groovebox: patterns stay, and there are no per-track clips.**
+`docs/CAPACITY_POLICY.md` carries the decision and the constants it rests on.
+
+That turns this plan from a memory bug into a prerequisite. With clips ruled
+out, the only remaining answer to a part that is genuinely too long is to raise
+`MAX_PATTERN_STEPS` -- and `MAX_NOTES_PER_CHANNEL_PATTERN` is
+`MAX_PATTERN_STEPS * 4` rather than a number of its own
+(`crates/mooloop-core/src/pattern.rs:13` and `:27`), so raising one raises both
+and the 1.00 GiB `README.md` measures scales with it. Sixty-four-bar patterns
+would reserve 4 GiB; a four-minute pattern at 120 BPM about 7.5 GiB. Sizing the
+bank from the project is what makes the ceiling liftable at all, so this lands
+before anyone raises it.
+
+This does not unpark the plan. Nothing has yet asked for a pattern longer than
+sixteen bars, and the parking argument above is unchanged. It is here so that
+the day something does ask -- a hosted CLAP instrument is the likeliest -- the
+order is already decided rather than argued then.
