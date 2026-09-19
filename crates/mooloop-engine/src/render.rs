@@ -2318,6 +2318,10 @@ pub struct ChannelStrip {
     /// once-off tidying that falling asleep needs -- emptying the bus and the
     /// compensation ring -- rather than repeating it every idle block.
     sleeping: bool,
+    /// This channel's take, if its record button has armed one. On the strip
+    /// so that an install carrying the strip carries the take with it; see
+    /// `take.rs`.
+    take: Option<Box<crate::take::Take>>,
 }
 
 impl ChannelStrip {
@@ -2341,6 +2345,7 @@ impl ChannelStrip {
             compensation: None,
             source_silent_frames: 0,
             sleeping: false,
+            take: None,
         }
     }
 
@@ -3001,11 +3006,7 @@ pub(crate) struct RenderState {
     /// which rebuilds it when a channel's setting changes or a port appears.
     midi_routing: Arc<ArcSwap<MidiRouting>>,
     /// Which buffer each channel records from. Shared with the control layer
-    /// like `midi_routing`. Nothing reads it on the audio thread until
-    /// step 03's capture does; it is attached now so that the one bug this
-    /// cell could have -- an install that forgets it, which is exactly what
-    /// happened to `midi_routing` -- is tested before anything depends on it.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// like `midi_routing`, and read by [`Self::advance_takes`].
     audio_input_routing: Arc<ArcSwap<AudioInputRouting>>,
     /// Which channels are holding each MIDI note down. The release goes where
     /// the press went: a key held while the selection moves would otherwise
@@ -4408,6 +4409,14 @@ impl RenderState {
                 std::mem::replace(&mut strip.console_sum, buffer)
                     .map(StructuralReclaim::ConsoleSum)
             }
+            StructuralCommand::StartTake { channel, take } => {
+                let Some(strip) = self.strips.get_mut(channel as usize) else {
+                    // Nothing to record on. Handed straight back, so the
+                    // drain sees its ring abandoned rather than waiting on it.
+                    return Some(StructuralReclaim::Take(take));
+                };
+                strip.take.replace(take).map(StructuralReclaim::Take)
+            }
             StructuralCommand::SetTrackGraph { graph, mut sends } => {
                 // One swap, for the reason `SetAudioGraph` is one: a send
                 // whose target the render order has not been told about would
@@ -4442,6 +4451,15 @@ impl RenderState {
             EngineCommand::Pause => self.transport.pause(),
             EngineCommand::Stop => self.transport.stop(),
             EngineCommand::SetRecordArmed(armed) => self.set_record_armed(armed),
+            EngineCommand::StopTake { channel } => {
+                if let Some(take) = self
+                    .strips
+                    .get_mut(channel as usize)
+                    .and_then(|strip| strip.take.as_mut())
+                {
+                    take.stop();
+                }
+            }
             EngineCommand::SetTempo(bpm) => self.transport.set_tempo(bpm),
             EngineCommand::SetSwing(percent) => self.sequencer.set_swing(percent),
             EngineCommand::SetCurrentPattern(pattern) => {
@@ -5438,6 +5456,10 @@ impl RenderState {
         // modulator's phase must not depend on a subscription somebody made
         // on another channel, so the two passes are separate and only this
         // one is scheduled.
+        // Which channels reached their output this block, for a take reading
+        // one: a muted or sleeping channel's buffer holds stale or pre-fader
+        // audio, and what a take of it should hear is silence.
+        let mut heard = [false; MAX_CHANNELS];
         for slot in 0..MAX_CHANNELS {
             let index = self.audio.graph.order()[slot] as usize;
             if index >= active_channels {
@@ -5716,6 +5738,7 @@ impl RenderState {
             if let Some(delay) = strip.compensation.as_mut() {
                 delay.process(&mut strip.bus.l[..frames], &mut strip.bus.r[..frames]);
             }
+            heard[index] = true;
             if let Some(destination) = self.buses.get_mut(strip.destination as usize) {
                 // Always linear. A channel is what reaches a track, not a
                 // console strip of its own -- analog sum is a track's switch
@@ -5928,6 +5951,10 @@ impl RenderState {
         }
         // After the walk on purpose: the preview bypasses every chain, so it
         // is heard raw and does not move the mixer's meters.
+        // After every strip and track has rendered, so each source buffer
+        // holds this block's audio; before the preview, so a resample of the
+        // master never records a browser audition.
+        self.advance_takes(&spans[..span_count], ticks_per_sample, &heard);
         self.render_preview(frames);
         let (peak_l, peak_r) = master_peak;
         RenderReport {
@@ -5937,6 +5964,61 @@ impl RenderState {
             peak_l,
             peak_r,
         }
+    }
+
+    /// Run every live take for this block (`audio-recording/03`).
+    ///
+    /// Each reads its channel's audio input where the block left it: a
+    /// channel's output after its fader, pan and compensation (so it lines up
+    /// with the track it feeds), a track's after its balance and
+    /// compensation, or the master. A source that did not sound -- a muted
+    /// or sleeping channel, a muted or solo-silenced track, a source that no
+    /// longer exists -- records silence.
+    fn advance_takes(
+        &mut self,
+        spans: &[crate::transport::BlockSpan],
+        ticks_per_sample: f64,
+        heard: &[bool; MAX_CHANNELS],
+    ) {
+        let live = self.live_channels();
+        if !self.strips[..live]
+            .iter()
+            .any(|strip| strip.take.as_ref().is_some_and(|take| take.is_live()))
+        {
+            return;
+        }
+        let routing = self.audio_input_routing.load();
+        let playing = self.transport.playing;
+        let ticks_per_bar = f64::from(mooloop_core::TICKS_PER_BAR);
+        for index in 0..live {
+            let Some(mut take) = self.strips[index].take.take() else {
+                continue;
+            };
+            if take.is_live() {
+                let source = match routing.taps.get(index).copied().flatten() {
+                    Some(mooloop_core::AudioTap::Channel(channel)) => {
+                        let channel = channel as usize;
+                        (channel < live && heard[channel]).then(|| &self.strips[channel].bus)
+                    }
+                    Some(mooloop_core::AudioTap::Track(track)) => self
+                        .buses
+                        .get(track as usize)
+                        .filter(|track| !track.output.muted && !track.solo_silenced)
+                        .map(|track| &track.bus),
+                    Some(mooloop_core::AudioTap::Master) => {
+                        Some(&self.buses[MASTER_BUS as usize].bus)
+                    }
+                    None => None,
+                };
+                take.advance(spans, playing, ticks_per_sample, ticks_per_bar, source);
+            }
+            self.strips[index].take = Some(take);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_status(&self, channel: usize) -> Option<Arc<crate::take::TakeStatus>> {
+        self.strips[channel].take.as_ref().map(|take| take.status().clone())
     }
 
     pub fn master(&self) -> &StereoBus {
@@ -11558,7 +11640,12 @@ mod footprint {
         // held rather than dropped (8). The buffers themselves are not new
         // memory -- they were already alive until the voice let go -- they
         // just leave on the control thread now.
-        assert_eq!(size_of::<ChannelStrip>(), 42_368);
+        //
+        // `audio-recording/03` added 8: the channel's take, one pointer, on
+        // the strip so that an install carrying the strip carries the take.
+        // The ring and the status it points to are allocated only while a
+        // take is armed.
+        assert_eq!(size_of::<ChannelStrip>(), 42_376);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -11583,8 +11670,9 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        // The sampler's retired-sample ring is the latest 152 of this.
-        assert_eq!(per_live, 60_808);
+        // The sampler's retired-sample ring is 152 of this, and a take's
+        // pointer the latest 8.
+        assert_eq!(per_live, 60_816);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved

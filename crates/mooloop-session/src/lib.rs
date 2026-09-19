@@ -70,5 +70,6 @@ pub mod sample;
 pub mod sampler;
 pub mod session;
 pub mod steps;
+pub mod take;
 pub mod transport;
 pub mod values;

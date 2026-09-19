@@ -81,6 +81,11 @@ pub enum EngineCommand {
     /// rather than a gesture so that arming before pressing play works, which
     /// is how every recorder is operated.
     SetRecordArmed(bool),
+    /// End a channel's take now: its record button pressed again. A take
+    /// also ends by itself at its clip length or when the transport stops.
+    /// Starting one carries a ring, so it is a structural command
+    /// (`mooloop_engine::StructuralCommand::StartTake`) rather than this.
+    StopTake { channel: u8 },
     // There is no incremental channel removal. Removing a channel rebuilds
     // the whole render state (`EngineHandle::install_project`); the unsent
     // `RemoveChannel` that used to sit here cleared a chain on the audio

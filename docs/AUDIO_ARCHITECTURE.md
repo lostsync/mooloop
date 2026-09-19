@@ -257,6 +257,34 @@ such offsets per block. Block boundaries are an execution detail and must not
 change feedback delay, retained-buffer behavior, automation timing, or offline
 output.
 
+## Capture
+
+A channel records its audio input into a **take** (`audio-recording/03`,
+`crates/mooloop-engine/src/take.rs`). The take lives on the recording
+channel's strip -- so an install that carries the strip carries the take --
+and holds an `rtrb` ring allocated on the control thread, handed over by
+`StructuralCommand::StartTake`, and returned through the reclaim ring. Any
+number of channels may hold one.
+
+- **Read site.** Once per block, after every channel and track has rendered
+  and before the preview is mixed in (`RenderState::advance_takes`). Each
+  source is read where the block left it: a channel's output after its fader,
+  pan and compensation, a track's after its balance and compensation, the
+  master. So one read site serves every source, the render order does not
+  change, and a resample of the master is the render bit for bit.
+- **Silence, not stale audio.** A channel that did not reach its output this
+  block (muted, asleep), a muted or solo-silenced track, and a source that no
+  longer exists are recorded as silence.
+- **Sample-exact edges.** A take waits for the first bar line strictly after
+  it was armed -- the pre-roll -- and starts on the frame that line falls on;
+  a clip length ends it on the frame it runs out. A stopped transport ends it.
+- **Overflow is counted, never silent.** Frames the ring has no room for are
+  added to `TakeStatus::dropped`, and a take with any is reported damaged.
+- **The drain** (`mooloop-session`'s `take.rs`) is the only place a take
+  touches the disk. It ends when the engine has ended the take and every
+  frame is read, or when the ring is abandoned -- the strip rebuilt or the
+  channel gone -- and the rest is read. Either way the file is finalized.
+
 ## Latency Compensation
 
 Each node reports integer latency frames initially. The graph compiler sums

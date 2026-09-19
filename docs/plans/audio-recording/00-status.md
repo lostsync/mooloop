@@ -6,7 +6,7 @@ plan (same `SCOPE.md` item, filed before the migration) and is kept open as
 the earlier tracking issue for the input side; MOO-16 is where the plan's
 current shape lives.
 
-**Written 2026-09-17. Step 02 landed 2026-09-18.** This is `SCOPE.md` §2 item 3
+**Written 2026-09-17. Steps 02 and 03 landed 2026-09-18.** This is `SCOPE.md` §2 item 3
 (audio input) together with the audio half of item 5 (recording), in the shape
 Adam settled on 2026-09-17, and since 2026-09-18 item 6 (resampling) as well,
 which turned out to be the same feature with the source inside the app.
@@ -114,7 +114,7 @@ order.
 | Step | What | Rung | State |
 | --- | --- | --- | --- |
 | [02](02-one-input-menu.md) | `ChannelInput`: MIDI, an app source (channel, track, master) or a hardware input; one picker, saved | core, project, session, UI build | **landed 2026-09-18**, UI drawing deferred to 05 -- see below |
-| [03](03-capture.md) | Bounded capture of the chosen buffer at the end of each block, drained to a WAV file off the audio thread | engine, session | not started |
+| [03](03-capture.md) | Bounded capture of the chosen buffer at the end of each block, drained to a WAV file off the audio thread | engine, session | **landed 2026-09-18** -- see below |
 | [04](04-the-take.md) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | not started |
 | [05](05-interface.md) | Record button, source meter, the growing waveform, the non-sampler rule. **Acceptance: resample a loop into a sampler and play it back** | UI build | not started |
 | [01](01-input-in-the-engine.md) | Drivers deliver hardware input into an input bus, which becomes one more source; monitoring | engine; macOS unverified | not started |
@@ -193,6 +193,34 @@ What is on `main` after decisions 5, 6 and 10:
   channels -- waiting for step 05 to draw it. **The IN row is MIDI-only
   again**, exactly as before step 02.
 - Kit and channel documents still bring no audio input.
+
+## What step 03 actually did
+
+- **Engine** (`take.rs`, `take_tests.rs`): a `Take` per recording channel, on
+  its strip, with a `TakeStatus` the control side reads (phase, frames,
+  dropped, start tick). `StructuralCommand::StartTake` arms one;
+  `EngineCommand::StopTake` ends one. `advance_takes` runs every live take
+  once a block at the read site `AUDIO_ARCHITECTURE.md` "Capture" describes.
+  Tested against the rendered master bit for bit, with no allocation while
+  recording; a one-bar clip is 96,000 frames at 120 bpm; a muted source
+  records silence (checked against a tree without the gate -- the first
+  version of that test passed without it, because a source that never
+  sounded holds zeros anyway); two takes at once; a take rides its strip
+  across an install.
+- **Session** (`take.rs`): `TakeRecorder` arms a take -- opens the WAV, starts
+  its drain, returns the command -- keeps a peak summary per 1024 frames for
+  05's waveform, and `collect`s finished takes as `FinishedTake`s for 04.
+- **Not done here, and where it goes.** Sending `Play` before a take when the
+  transport is stopped is the caller's (05's button). No `EngineEvent`s were
+  added: the plan named `CaptureStarted`/`CaptureEnded`, but the shared
+  `TakeStatus` already carries all of it, and a second copy of the same facts
+  on the event ring is the duplication `AGENTS.md` opens on. Hardware latency
+  waits for step 01.
+- **Master latency.** A channel's take is read after its compensation, so it
+  lines up with the track it feeds; a take of the master is read after the
+  master's own chain, so a latency-reporting device *on the master* delays a
+  master take relative to a channel take by that device's latency. Nothing
+  corrects for it yet; it matters only when both are compared.
 
 ## Open questions for Adam
 

@@ -145,6 +145,7 @@ mod meters;
 mod offline;
 mod render;
 mod sequencer;
+mod take;
 mod transport;
 
 #[cfg(test)]
@@ -168,6 +169,8 @@ mod gain_structure_tests;
 mod idle_skip_tests;
 #[cfg(test)]
 mod strip_tests;
+#[cfg(test)]
+mod take_tests;
 
 use executor::{Executor, ExecutorIo};
 #[cfg(target_os = "macos")]
@@ -178,6 +181,7 @@ use render::{ReclaimedEffect, RenderState};
 pub use render::{AudioTapBank, ChannelStorage, ContainerScratch, EffectSlot, SendBank, SendSpec};
 
 pub use driver::{AudioConfig, DriverStatus, OutputTarget};
+pub use take::{Take, TakeFrame, TakePhase, TakeStatus};
 pub use meters::{
     BufferMarks, BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters,
 };
@@ -255,6 +259,12 @@ pub enum StructuralCommand {
         storage: Box<ChannelStorage>,
         source: DeviceKind,
     },
+    /// Arm a take on `channel`: it waits for the next bar line, then records
+    /// the channel's audio input into the take's ring (`audio-recording/03`).
+    /// Structural because the ring is allocated here; a take it displaces
+    /// comes back through the reclaim ring, so its producer is dropped off
+    /// the audio thread and its drain sees the ring abandoned.
+    StartTake { channel: u8, take: Box<Take> },
     /// Install (or clear) a producer's latency compensation delay.
     ///
     /// `target` is the channel or bus whose *output* waits; `None` means it
@@ -377,6 +387,9 @@ pub(crate) enum StructuralReclaim {
     AudioGraph(Box<AudioTapBank>),
     /// The previous generation's sends, with their compensation rings.
     TrackGraph(Box<SendBank>),
+    /// A take displaced by a new one on the same channel, or one with no
+    /// channel to record on.
+    Take(Box<Take>),
     /// A container's dry-path ring displaced by a resize, or the per-depth
     /// scratch handed to a chain that already had it. Same rule as every
     /// other box that reaches the audio thread: it comes back to be dropped.
@@ -1027,6 +1040,7 @@ impl EngineHandle {
                 StructuralReclaim::ConsoleSum(buffer) => drop(buffer),
                 StructuralReclaim::AudioGraph(bank) => drop(bank),
                 StructuralReclaim::TrackGraph(bank) => drop(bank),
+                StructuralReclaim::Take(take) => drop(take),
                 StructuralReclaim::Container { align, scratch } => {
                     drop(align);
                     drop(scratch);

@@ -533,6 +533,16 @@ figures in the `Sep 5 (last)` entry of `docs/JOURNAL.md` are what it said on
 the build box, and are the comparison to beat rather than to reproduce -- the
 laptop's numbers are its own.
 
+## Recordings
+
+A take is written, as it records, into a **recordings folder** as a 32-bit
+float stereo WAV named `<UTC date>-<time>-<channel>.wav`
+(`mooloop_session::take::TakeRecorder`). The folder is the recorder's to be
+told; the interface that arms takes (`audio-recording/05`) points it at
+`recordings/` beside the settings file. A take that recorded nothing leaves no
+file. Until step 04, nothing moves a take into a project or deletes an unused
+one (step 06).
+
 ## Diagnostic Log
 
 The app writes a levelled record of what it does to stderr: what it opened and
