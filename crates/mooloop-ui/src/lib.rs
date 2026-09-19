@@ -13877,7 +13877,9 @@ impl AppUi {
                         state.midi_ports = ports;
                         let ports = state.midi_ports.clone();
                         state.session.resolve_control_map(&ports);
-                        handle.set_midi_routing(state.session.midi_routing(&ports));
+                        if !handle.set_midi_routing(state.session.midi_routing(&ports)) {
+                            log_error!("ui", "the command queue refused the MIDI routing");
+                        }
                         drop(state);
                         st.borrow().refresh_editor(&w);
                         // The mapping page marks bindings whose controller is

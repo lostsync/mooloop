@@ -230,28 +230,32 @@ impl Executor {
             // a position captured earlier would step the song backwards by
             // however long the install took, and a key pressed during the
             // install would not be in a set captured before it.
-            let mut prepared = prepared;
-            if prepared.keep_transport {
-                prepared.render.adopt_performance_state(&self.render);
+            // Taken apart here so nothing that owns heap is left to drop when
+            // this arm ends: the carry plan leaves through the reclaim ring
+            // with the renderer it retires.
+            let crate::PreparedProject {
+                mut render,
+                generation,
+                keep_transport,
+                carry,
+            } = prepared;
+            if keep_transport {
+                render.adopt_performance_state(&self.render);
             }
             // Before the swap, because both generations have to be reachable:
             // the live strips are moved into the incoming state and the ones
             // built for it go back, to leave with the retired generation and
             // be freed off this thread.
-            prepared
-                .render
-                .carry_strips_from(&mut self.render, &prepared.carry);
-            let retired = std::mem::replace(&mut self.render, prepared.render);
+            render.carry_strips_from(&mut self.render, &carry);
+            let retired = std::mem::replace(&mut self.render, render);
             match self
                 .reclaim_tx
-                .push(StructuralReclaim::RenderState(retired))
+                .push(StructuralReclaim::RenderState { retired, carry })
             {
                 Ok(()) => {}
                 Err(_) => unreachable!("reclaim capacity checked before project swap"),
             }
-            let _ = self.evt_tx.push(EngineEvent::ProjectInstalled {
-                generation: prepared.generation,
-            });
+            let _ = self.evt_tx.push(EngineEvent::ProjectInstalled { generation });
         }
 
         // Decode before rendering so this block's input can act on this
@@ -501,12 +505,12 @@ mod tests {
             let mut out_r = [0.0f32; BLOCK];
             executor
                 .render
-                .attach_midi_routing(Arc::new(arc_swap::ArcSwap::from_pointee(MidiRouting {
+                .set_midi_routing(Box::new(MidiRouting {
                     routes: vec![MidiInputRoute {
                         source: MidiRouteSource::AllPorts,
                         channel: MidiChannelFilter::Omni,
                     }],
-                })));
+                }));
             executor.render.play();
             executor.render.apply_midi(&[MidiMessage {
                 offset: 0,
@@ -653,6 +657,88 @@ mod tests {
             after, before,
             "the swap allocated or freed on the thread that would be the callback"
         );
+    }
+
+    /// **The whole install allocates and frees nothing on the callback** --
+    /// the swap, the carry, the send-ring adoption and the end of the command,
+    /// measured around `Executor::process` with the install queued.
+    /// `carrying_strips_allocates_nothing` measures only `carry_strips_from`,
+    /// and `reports/fable-2026-09-19.md` finding 1 is what it could not see:
+    /// the carry plan's own vectors were dropped when the install arm ended,
+    /// on this thread, on every structural edit.
+    #[test]
+    fn an_install_frees_nothing_on_the_callback() {
+        let mut project = two_routed_notes();
+        project.buses[1].sends.push(mooloop_core::AuxSend::new(2));
+        let mut reordered = project.clone();
+        reordered.move_channel(0, 1).expect("a real move");
+        reordered.move_track(1, 2).expect("a real move");
+        let plan = crate::carry_plan(&project, &reordered);
+        assert!(!plan.channels.is_empty(), "nothing would be carried: {plan:?}");
+
+        let (mut cmd_tx, cmd_rx) = rtrb::RingBuffer::new(8);
+        let (evt_tx, _evt_rx) = rtrb::RingBuffer::new(8);
+        let (reclaim_tx, _reclaim_rx) = rtrb::RingBuffer::new(8);
+        let mut executor = Executor::new(
+            ExecutorIo { cmd_rx, evt_tx, reclaim_tx },
+            Box::new(RenderState::from_project(SAMPLE_RATE, &project, &[])),
+            Arc::new(AtomicU64::new(0)),
+            SAMPLE_RATE,
+            LoadMeters::new(),
+        );
+        let mut out_l = [0.0f32; BLOCK];
+        let mut out_r = [0.0f32; BLOCK];
+        executor.render.play();
+        executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        cmd_tx
+            .push(RealtimeCommand::InstallProject(PreparedProject {
+                generation: 1,
+                render: Box::new(RenderState::from_project(SAMPLE_RATE, &reordered, &[])),
+                keep_transport: true,
+                carry: plan,
+            }))
+            .expect("room in the ring");
+
+        let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        assert_eq!(
+            after, before,
+            "the install allocated or freed on the thread that would be the callback"
+        );
+    }
+
+    /// **A routing change frees nothing on the callback.** The table it
+    /// replaces leaves through the reclaim ring -- the reason the routings are
+    /// structural commands rather than `ArcSwap` cells, one of which could be
+    /// last-owned by a guard on this thread (`reports/fable-2026-09-19.md`,
+    /// finding 2).
+    #[test]
+    fn a_routing_change_frees_nothing_on_the_callback() {
+        let (mut executor, mut cmd_tx, _reclaim) = executor();
+        let mut out_l = [0.0f32; BLOCK];
+        let mut out_r = [0.0f32; BLOCK];
+        executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        cmd_tx
+            .push(RealtimeCommand::Structural(crate::StructuralCommand::SetMidiRouting(
+                Box::new(crate::render::MidiRouting {
+                    routes: vec![mooloop_core::MidiInputRoute::default(); 4],
+                }),
+            )))
+            .expect("room in the ring");
+        cmd_tx
+            .push(RealtimeCommand::Structural(
+                crate::StructuralCommand::SetAudioInputRouting(Box::new(
+                    crate::render::AudioInputRouting {
+                        taps: vec![Some(mooloop_core::AudioTap::Master); 4],
+                    },
+                )),
+            ))
+            .expect("room in the ring");
+        let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        assert_eq!(after, before, "a routing change freed on the callback");
     }
 
     /// The channel the edit was *about* is still rebuilt, and still cuts.

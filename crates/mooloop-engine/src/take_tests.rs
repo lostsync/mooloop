@@ -8,7 +8,6 @@
 
 use std::sync::Arc;
 
-use arc_swap::ArcSwap;
 use mooloop_core::{AudioTap, EngineCommand, NoteEvent, Project, ProjectChannel};
 
 use crate::render::{AudioInputRouting, RenderState};
@@ -39,7 +38,7 @@ fn sounding(channels: usize) -> Project {
 }
 
 fn route(render: &mut RenderState, taps: Vec<Option<AudioTap>>) {
-    render.attach_audio_input_routing(Arc::new(ArcSwap::from_pointee(AudioInputRouting { taps })));
+    drop(render.set_audio_input_routing(Box::new(AudioInputRouting { taps })));
 }
 
 fn arm(
