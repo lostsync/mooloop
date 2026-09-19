@@ -282,10 +282,11 @@ work instead of folding it into the current branch.
   decision about the edges before it is a refactor, which is why it is
   recorded rather than done.
 
-The Sampler v2 GitHub issues (#20 and its children) are real work and are not
-in this sequence. Weigh them against the loop story — chopped and stuttered
+The Sampler v2 tree (Linear project Sampler V2, umbrella MOO-42; formerly
+GitHub #20 and its children) is in for 0.2.0 as of 2026-09-18 (`SCOPE.md` §4),
+but it is not in this sequence. Weigh it against the loop story — chopped and stuttered
 breaks, loops mangled per repeat — rather than against generic sampler
-completeness, and do not treat them as the default pick when nothing else is
+completeness, and do not treat it as the default pick when nothing else is
 named.
 
 ## Deliberately not now

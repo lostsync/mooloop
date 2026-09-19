@@ -212,14 +212,16 @@ What a zone set crosses:
   becomes a set install, and the structural-reclaim path has to return N
   buffers rather than one.
 - `CAPACITY_POLICY.md` applies: no small cap on a user-facing collection.
-- Some editor is required even at the minimum. **#17** is the full mapping
-  workspace and stays out; zones need only a key-range editor.
+- Some editor is required even at the minimum. Zones need only a key-range
+  editor. **#17** (Linear MOO-40) is the full mapping workspace; it is in for
+  0.2 with the rest of Sampler v2 (§4), but it builds on zones and must not
+  hold them up.
 
 **Velocity layers are the "if not layers" half** — the same structure with a
 second axis, and they should be designed for now and built only if 0.2 has
 room. GitHub **#16** covers both; take its key-range half.
 
-Everything else in the Sampler v2 tree stays post-0.2 (§4).
+The rest of the Sampler v2 tree joined 0.2.0 on 2026-09-18 (§4).
 
 ---
 
@@ -259,7 +261,8 @@ thirteen sit downstream of, or that the definition in §1 forces.
 
 ### In for 0.2.0
 
-All thirteen, with three amendments that the sizing above forces:
+All thirteen, with the amendments that the sizing above forces and one later
+addition:
 
 - **Item 5 splits.** MIDI recording is in; audio recording follows audio input
   and is in only if item 3 lands early. **Its shape was settled 2026-09-17**
@@ -273,6 +276,17 @@ All thirteen, with three amendments that the sizing above forces:
   *plus* a separate master **safety limiter** and a lookahead decision.
 - **Item 11 is a listening session**, booked like one — not a plan directory.
 - **Item 14 joins**: sampler key zones (§2.2), Adam's addition on 2026-09-14.
+- **Sampler v2 joins, 2026-09-18.** Adam: *"i think i do want v2 in 0.2.0."*
+  Until then this section listed the tree as out. It is the Linear project
+  **Sampler V2**, with MOO-42 as the umbrella (formerly GitHub #20) and eight
+  open items: click-free loop seams, legato, the rest of tempo fit, transient
+  detection, pattern from slices, loop quantize, the mapping workspace and SFZ
+  import. Live loop gestures and per-repeat variation were cancelled the same
+  day because Buffer covers them. If variation comes back, it goes on the MIDI
+  notes, as a note modulator. This is the single largest block of recorded
+  work in the project. Its biggest items are the mapping
+  workspace (MOO-40) and SFZ import (MOO-41), and both wait on key zones
+  (item 14). The stretching-polyphony cap it left behind is MOO-7.
 
 Plus, from §3: the keyboard pass, the plan filing, and the Buffer tempo bug.
 
@@ -282,12 +296,6 @@ earlier, not by leaving scope.
 
 ### Out, explicitly
 
-- **The Sampler v2 tree** — 13 GitHub issues (#13–#18, #20, #31, #33–#38).
-  The single largest block of recorded work in the project, and Adam's
-  thirteen does not mention it. `FOCUS.md` already says not to treat it as the
-  default pick. **Post-0.2**, except for **#16's key-range half** (§2.2),
-  which Adam pulled in on 2026-09-14, and except where a defect blocks
-  something in §2.
 - **Everything in `archive/ROADMAP.md`'s "Later, Not Scheduled"** that item 2 does not
   pull in: MIDI output is now *in* (item 2), but controller mapping beyond it,
   multiple time signatures and tempo maps, stem and bus export, groove
