@@ -87,7 +87,8 @@ that split.
   (`ui/src/lib.rs:12364`). It owns the loaded library, the parameter info,
   state save and load, the GUI, and `on_main_thread`.
 - **`PluginProcessor: AudioNode + Send`** is what goes through
-  `StructuralCommand::InstallEffect` (`engine/src/lib.rs:175`), the way every
+  `StructuralCommand::InstallEffect` (`engine/src/lib.rs:201`; the citation
+  read `:175` until 2026-09-19, when it had drifted), the way every
   native node does.
 
 The control thread keeps the instances in a **`PluginRack`**, keyed by
@@ -224,6 +225,87 @@ this plan.
    plugin processor in the song and loading it again. Solved by
    `plans/archive/channel-identity/` step 05, which **must land before step 06
    here**.
+
+## Three things the tree already gives, and two it does not
+
+From `reports/fable-2026-09-17.md`, "Architecture: what will fight the next
+four features", item 5 — tracked as MOO-26 and folded in here 2026-09-19,
+when the Linear project was made, so the issue can close. **Every citation
+was re-read against the tree on that date.** Four of the five had drifted and
+two of the claims were wrong as written; the corrections are the point of
+keeping them.
+
+Easier than this plan assumes:
+
+- **Host time is free.** `ProcessContext` already carries `playing`, `bpm`,
+  `position_ticks` and `position_frames`
+  (`crates/mooloop-dsp/src/node.rs:49-55`; the report read `:49-52`, before
+  the comment on `position_frames` grew). The adapter fills CLAP's transport
+  from fields every native node already reads, so nothing new has to cross
+  into the audio thread to carry it.
+- **The boxed source slot is a copy of an existing path, not a new
+  mechanism.** `StructuralCommand::InstallEffect`
+  (`crates/mooloop-engine/src/lib.rs:201`) and `ReplaceEffect` (`:219`)
+  already move a `Box<dyn AudioNode + Send>` over the ring, and the displaced
+  occupant leaves through the reclaim ring rather than being dropped on the
+  audio thread — the rule is stated on `InstallEffect` itself and enforced in
+  `crates/mooloop-engine/src/executor.rs:181-189`, which checks the ring has
+  room *before* applying the edit. Blocker 4 and step 09 are a new field on
+  `ChannelStrip`, not a new path. (The report cited `:189,208` and the
+  Architecture section above said `:175`; both predate the one-executor
+  refactor, and `:175` is corrected there.)
+- **A CLAP main-thread callback can run inside a pump tick.** The 8 ms pump
+  (`PUMP_INTERVAL_MS`, `crates/mooloop-ui/src/lib.rs:138`; the timer at
+  `:12623`, its closure running to `:14043`) waits on nothing: all ten of its
+  channel drains are `try_recv`, and the body holds no lock, no blocking
+  `recv`, no `join` and no sleep. **One correction to the report:** the body
+  is not free of *I/O*. Four `settings.save()` calls write a small TOML
+  synchronously (`:12645`, `:13383`, `:13404`, `:13424`), on user-driven
+  events rather than every tick. That is bounded and waits on no other
+  thread, so the conclusion stands — but a callback drain added here shares a
+  tick with a file write and should not be written as if the tick were
+  I/O-free.
+
+Harder than this plan assumes — though the second claim is wrong as the
+report stated it:
+
+- **`format_version` is an exact-match gate, and the passes beside it are the
+  migration story.** Three sites refuse anything that is not `FORMAT_VERSION`
+  outright: the bundle loader (`crates/mooloop-project/src/lib.rs:995`), the
+  preset lister (`:1142`) and `validate_envelope` (`:1199`). The report read
+  the first two at `:982,1118`. Its "one bespoke fixup" is now **four**, all
+  run on the way in before the repair pass: `assign_device_ids` (`:1062`),
+  `assign_channel_ids` (`:1068`), `assign_track_ids` (`:1071`) and
+  `migrate_retired_buffer_offset` (`:1076`). That makes the plan's position
+  *stronger*, not weaker — see below.
+- **"Roughly 25-30 exhaustive matches across six crates" is two-thirds
+  right.** The arms are counted in `docs/plans/device-registry/README.md`, not
+  in its `00-status.md` as the report said — that file states of itself that
+  "`README.md` is the whole of it". The README's table sums to about 25 arms
+  and its own headline is fourteen files, so the figure holds. The crate count
+  does not: the table spans **four** crates — `mooloop-core` (`effect.rs` ~14
+  arms, `effect_factory.rs` 2), `mooloop-dsp` (2), `mooloop-engine` (1) and
+  `mooloop-ui` (2 in `lib.rs`, 1 in `settings.rs`, 3 in its `.slint` markup).
+  Six is the number of crates that *name* `EffectKind` at all, which is not
+  the same cost. The real warning is one the report missed: that table counts
+  **one `EffectKind`**, and the Saving section above adds five variants across
+  four enums. `DeviceKind` carries its own exhaustive matches that the effect
+  table never counted — ten of them in `mooloop-engine`, `mooloop-ui` and
+  `mooloop-session`, including `session.rs:457`, in a crate the table does not
+  list at all. Treat 25 as the floor.
+
+### The format-migration question is closed
+
+**Resolved 2026-09-17, no action needed**, in the same report's "Outcome".
+A plugin's state is opaque bytes that the plugin versions itself, so mooloop
+never reads inside one; `plugin-hosting/` keeps the format at version 1 and
+adds `Project.plugins` with `serde(default)`, as the Saving section says.
+That is what the tree already does four times over: every one of the four
+passes above backfills defaulted fields on the way in without moving
+`FORMAT_VERSION`, and
+`a_song_with_no_channel_identities_loads_with_its_positions`
+(`crates/mooloop-project/src/lib.rs:1464`) is the test that says so in as many
+words. **Do not reopen this as a version-bump question.**
 
 ## Steps
 
