@@ -273,6 +273,25 @@ export component SamplerDeviceFace inherits Rectangle {
     in-out property <float> waveform-view-offset: 0;
     in-out property <float> waveform-view-visible-fraction: 1;
 
+    // The RECORD page (`audio-recording/05`). Everything but the two clip
+    // settings is published from Rust at the pump's rate: the take belongs to
+    // the engine, and this page only shows it.
+    //
+    // 0 idle, 1 waiting for the bar line (the pre-roll), 2 recording.
+    in property <int> record-state;
+    // The take's length so far, formatted in Rust.
+    in property <string> record-elapsed;
+    // The take so far, one peak per bucket, 0..1, oldest first.
+    in property <[float]> record-peaks;
+    // How much of the width the drawn peaks fill: the take against its clip
+    // length when Clip is on, all of it when the take runs free.
+    in property <float> record-fill: 1;
+    // What the channel's AUDIO row names, or "" when it has none.
+    in property <string> record-source;
+    in-out property <bool> record-clip;
+    in-out property <int> record-bars: 1;
+    in property <int> record-max-bars: 64;
+
     callback attack-changed(float);
     callback decay-changed(float);
     callback sustain-changed(float);
@@ -340,6 +359,9 @@ export component SamplerDeviceFace inherits Rectangle {
     callback slice-drag-finished();
     callback commit-clicked();
     callback revert-clicked();
+    callback record-clicked();
+    callback record-clip-changed(bool);
+    callback record-bars-changed(int);
 
     // Maps a position normalized against the whole sample (0..1) to a
     // position normalized against the currently visible zoom window, for
@@ -356,6 +378,7 @@ export component SamplerDeviceFace inherits Rectangle {
             DevicePageButton { text: "SAMPLE"; active: root.page == 0; clicked => { root.page = 0; } }
             DevicePageButton { text: "VOICE"; active: root.page == 1; clicked => { root.page = 1; } }
             DevicePageButton { text: "TONE"; active: root.page == 2; clicked => { root.page = 2; } }
+            DevicePageButton { text: "RECORD"; active: root.page == 3; clicked => { root.page = 3; } }
             Rectangle { horizontal-stretch: 1; }
             // The trim belongs to the patch, not to a page, so it sits in the
             // page bar and stays reachable from all three. One control: the
@@ -1040,6 +1063,105 @@ export component SamplerDeviceFace inherits Rectangle {
                         Rectangle { horizontal-stretch: 1; }
                     }
                 }
+            }
+        }
+
+        // Clip recording into this sampler (`audio-recording/05`, decisions
+        // 7-9). One button: pressed idle it arms a take, which waits for the
+        // next bar line and then records the channel's AUDIO input; pressed
+        // again it stops. With Clip on the take also stops by itself after
+        // its length. What finishes becomes this sampler's sample.
+        if root.page == 3 : VerticalLayout {
+            spacing: 5px;
+            HorizontalLayout {
+                spacing: 6px;
+                Rectangle {
+                    width: 56px;
+                    height: 24px;
+                    border-radius: Theme.radius-md;
+                    background: root.record-state == 2 ? Theme.destructive
+                        : root.record-state == 1 ? Theme.warning
+                        : record-touch.has-hover ? Theme.surface-active : Theme.surface-raised;
+                    Text {
+                        text: root.record-state == 2 ? "STOP" : root.record-state == 1 ? "WAIT" : "REC";
+                        color: root.record-state == 0 ? Theme.text : Theme.background;
+                        font-size: Theme.text-md;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    record-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.record-clicked(); }
+                    }
+                }
+                Text {
+                    text: root.record-state == 2 ? root.record-elapsed
+                        : root.record-state == 1 ? "Waiting for the bar"
+                        : root.record-source == "" ? "No audio input" : "Ready";
+                    color: root.record-state == 0 ? Theme.text-muted : Theme.text;
+                    font-size: Theme.text-md;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                ToggleButton {
+                    width: 52px;
+                    text: "CLIP";
+                    tooltip: "Clip";
+                    hint: "On: a take stops by itself after its length. Off: it records until you stop it.";
+                    checked <=> root.record-clip;
+                    toggled(on) => { root.record-clip-changed(on); }
+                }
+                StepperField {
+                    label: "LENGTH";
+                    tooltip: "Length";
+                    hint: "How long a take records with Clip on.";
+                    enabled: root.record-clip;
+                    value <=> root.record-bars;
+                    minimum: 1;
+                    maximum: root.record-max-bars;
+                    value-width: 44px;
+                    display-text: root.record-bars + (root.record-bars == 1 ? " BAR" : " BARS");
+                    changed(bars) => { root.record-bars-changed(bars); }
+                }
+            }
+            Rectangle {
+                vertical-stretch: 1;
+                min-height: 60px;
+                background: Theme.background;
+                border-radius: Theme.radius-sm;
+                clip: true;
+                for amplitude[index] in root.record-peaks : Rectangle {
+                    x: index * parent.width * clamp(root.record-fill, 0, 1) / max(1, root.record-peaks.length);
+                    y: (parent.height - self.height) / 2;
+                    width: max(1px, parent.width * clamp(root.record-fill, 0, 1) / max(1, root.record-peaks.length));
+                    height: max(1px, amplitude * (parent.height - 6px));
+                    background: root.record-state == 2 ? Theme.destructive : Theme.text-muted;
+                }
+                if root.record-peaks.length == 0 : Text {
+                    text: root.record-source == ""
+                        ? "Pick an AUDIO input in the channel sidebar to record"
+                        : root.record-state == 1 ? "Recording starts on the next bar"
+                        : "Press REC: recording starts on the next bar";
+                    color: Theme.text-faint;
+                    font-size: Theme.text-md;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
+                }
+            }
+            HorizontalLayout {
+                spacing: 4px;
+                Text { text: "FROM"; color: Theme.text-faint; font-size: Theme.text-sm; vertical-alignment: center; }
+                Text {
+                    text: root.record-source == "" ? "—" : root.record-source;
+                    color: Theme.text-muted;
+                    font-size: Theme.text-md;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Rectangle { horizontal-stretch: 1; }
             }
         }
     }

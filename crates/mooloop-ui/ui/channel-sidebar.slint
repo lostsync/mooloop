@@ -93,8 +93,18 @@ export component ChannelSidebar inherits Rectangle {
     in property <[string]> midi-channel-options;
     in property <int> midi-channel-index;
 
+    // The AUDIO row (`audio-recording/05`): where this channel records audio
+    // from. Built in Rust by `AudioInputPicker`, like the MIDI rows, and
+    // independent of them. Offered on every channel whatever its device
+    // (decision 5); a device with no use for audio ignores it.
+    in property <[string]> audio-input-options;
+    in property <int> audio-input-index;
+    // Set when the stored source is a track or channel that has been deleted.
+    in property <bool> audio-input-missing;
+
     callback midi-input-picked(int);
     callback midi-channel-picked(int);
+    callback audio-input-picked(int);
     callback renamed(string);
     callback send-added(int);
     callback send-removed(int);
@@ -321,6 +331,31 @@ export component ChannelSidebar inherits Rectangle {
                     // Said out loud rather than left to a silent channel.
                     if root.midi-input-missing : Text {
                         text: root.midi-input-missing-name + " not connected";
+                        font-size: Theme.text-md;
+                        color: Theme.warning;
+                        wrap: word-wrap;
+                        width: parent.value-width + 38px;
+                    }
+                }
+            }
+
+            if !root.is-track : SidebarField {
+                label: "AUDIO";
+                VerticalLayout {
+                    spacing: 4px;
+                    // A constant, for the reason the MIDI rows give.
+                    property <length> value-width: 96px;
+                    MenuField {
+                        field-width: parent.value-width;
+                        label: "IN";
+                        options: root.audio-input-options;
+                        selected-index: root.audio-input-index;
+                        tooltip: root.audio-input-missing ? "Audio input — deleted" : "Audio input";
+                        hint: "What this channel records from when its sampler's REC is pressed.";
+                        selected(index) => { root.audio-input-picked(index); }
+                    }
+                    if root.audio-input-missing : Text {
+                        text: "Its source was deleted";
                         font-size: Theme.text-md;
                         color: Theme.warning;
                         wrap: word-wrap;

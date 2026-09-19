@@ -83,6 +83,8 @@ pub struct ChannelState {
     /// Slice boundaries into the *published* buffer, in frames, so they move
     /// with the waveform under any zoom.
     pub slices: SliceMap,
+    /// The Record page's clip settings, saved with the sampler.
+    pub record: mooloop_core::SamplerRecord,
     pub waveform: Vec<f32>,
     pub can_previous_sample: bool,
     pub can_next_sample: bool,
@@ -186,6 +188,7 @@ impl ChannelState {
             committed_sample: None,
             commit: None,
             slices: SliceMap::default(),
+            record: mooloop_core::SamplerRecord::default(),
             waveform: Vec::new(),
             can_previous_sample: false,
             can_next_sample: false,

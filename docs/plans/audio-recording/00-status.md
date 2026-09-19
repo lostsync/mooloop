@@ -6,7 +6,7 @@ plan (same `SCOPE.md` item, filed before the migration) and is kept open as
 the earlier tracking issue for the input side; MOO-16 is where the plan's
 current shape lives.
 
-**Written 2026-09-17. Steps 02, 03 and 04 landed 2026-09-18.** This is `SCOPE.md` §2 item 3
+**Written 2026-09-17. Steps 02-05 landed 2026-09-18; 01 and 06 are left.** This is `SCOPE.md` §2 item 3
 (audio input) together with the audio half of item 5 (recording), in the shape
 Adam settled on 2026-09-17, and since 2026-09-18 item 6 (resampling) as well,
 which turned out to be the same feature with the source inside the app.
@@ -116,7 +116,7 @@ order.
 | [02](02-one-input-menu.md) | `ChannelInput`: MIDI, an app source (channel, track, master) or a hardware input; one picker, saved | core, project, session, UI build | **landed 2026-09-18**, UI drawing deferred to 05 -- see below |
 | [03](03-capture.md) | Bounded capture of the chosen buffer at the end of each block, drained to a WAV file off the audio thread | engine, session | **landed 2026-09-18** -- see below |
 | [04](04-the-take.md) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | **landed 2026-09-18** -- see below |
-| [05](05-interface.md) | Record button, source meter, the growing waveform, the non-sampler rule. **Acceptance: resample a loop into a sampler and play it back** | UI build | not started |
+| [05](05-interface.md) | Record button, source meter, the growing waveform, the non-sampler rule. **Acceptance: resample a loop into a sampler and play it back** | UI build | **landed 2026-09-18** -- see below |
 | [01](01-input-in-the-engine.md) | Drivers deliver hardware input into an input bus, which becomes one more source; monitoring | engine; macOS unverified | not started |
 | [06](06-unused-takes.md) | Find and delete takes nothing refers to | session, project, UI build | not started |
 
@@ -246,6 +246,32 @@ What is on `main` after decisions 5, 6 and 10:
 - **Not yet exercised end to end.** Nothing arms a take until step 05's
   button, so the pump path is compiled and clippy-clean but first runs in
   05's acceptance.
+
+## What step 05 actually did
+
+- **The AUDIO row** in the channel sidebar (`channel-sidebar.slint`), built
+  by `AudioInputPicker` and offered on every channel.
+- **The RECORD page** on the sampler face: REC (idle / WAIT / STOP), the
+  elapsed length, the take's waveform from the drain's peaks, CLIP and LENGTH
+  (1-64 bars, saved as `SamplerState::record`), and FROM. The pump publishes
+  the live half each tick; `Session::record_press` decides what REC does and
+  is unit-tested; pressing it on a stopped transport sends Play first.
+- **The acceptance, run in the real application**, headless with the engine
+  and JACK, through `MOOLOOP_AUTODRIVE_RECORD=1` (`OPERATIONS.md`) --
+  because the AUDIO row's menu is a popup the MCP tools cannot click. It
+  passes: the page showed the pre-roll and the growing take, the take is one
+  bar (96,000 frames, sound in every tenth of it), it became the sampler's
+  sample, owned by the song, as a "Record Take" undo step. Screenshots taken
+  over MCP during the run show WAIT, then STOP at "0.6 / 1 BARS" with the
+  waveform filling toward the clip length. Running it found one bug: CLIP read
+  as off when the page was reopened, because only a click wrote the window's
+  copy; the callback writes it back now.
+- **Covered elsewhere, not re-run here:** save and reload of a take
+  (`a_take_is_copied_into_the_song_in_either_mode`), two samplers at once
+  (`two_channels_take_at_once`), an offline render of a sampler with a
+  sample (the ordinary path). Undo was checked as the history entry, not by
+  pressing it.
+- **Not heard.** Nobody has listened to a take yet.
 
 ## Open questions for Adam
 

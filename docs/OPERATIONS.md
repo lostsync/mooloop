@@ -292,7 +292,16 @@ cargo run -p mooloop-app --bin engine-selftest -j 2
 MOOLOOP_AUTODRIVE=1 cargo run -p mooloop-app --bin mooloop -j 2
 ```
 
-The last command exercises the app's automated smoke path. For UI work, the
+The last command exercises the app's automated smoke path.
+`MOOLOOP_AUTODRIVE_RECORD=1` is its twin for recording (`audio-recording/05`):
+a kick plays, a new sampler takes the master as its AUDIO input and records
+one clip bar from its RECORD page, and the report says whether the page showed
+the pre-roll and the take and whether the take became the sampler's sample as
+one "Record Take" undo step. Give it a throwaway `MOOLOOP_CONFIG_DIR` -- the
+take is written into that folder's `recordings/`. It drives the callbacks
+in-process because the AUDIO row is a popup the MCP tools cannot click.
+
+For UI work, the
 useful visual check is a software-rendered snapshot of the real window:
 
 ```sh

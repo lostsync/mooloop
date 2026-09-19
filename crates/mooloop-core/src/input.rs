@@ -175,6 +175,46 @@ impl<'a> AudioInputPicker<'a> {
     }
 }
 
+/// How a sampler's Record page records: until stopped, or for a clip length
+/// (decision 8). Part of the sampler's saved state, so a preset and a song
+/// keep it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SamplerRecord {
+    /// A take ends by itself after [`Self::bars`] when on, and runs until it
+    /// is stopped when off.
+    #[serde(default)]
+    pub clip: bool,
+    /// The clip length, in bars.
+    #[serde(default = "one_bar")]
+    pub bars: u8,
+}
+
+/// The longest clip the Record page offers, in bars.
+pub const MAX_RECORD_BARS: u8 = 64;
+
+fn one_bar() -> u8 {
+    1
+}
+
+impl Default for SamplerRecord {
+    /// Records until stopped, with a one-bar clip ready for when Clip is on.
+    fn default() -> Self {
+        Self { clip: false, bars: 1 }
+    }
+}
+
+impl SamplerRecord {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The clip length a take is armed with, in ticks, or `None` when the
+    /// take runs until it is stopped.
+    pub fn clip_ticks(&self) -> Option<u32> {
+        self.clip.then(|| u32::from(self.bars.clamp(1, MAX_RECORD_BARS)) * crate::TICKS_PER_BAR)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

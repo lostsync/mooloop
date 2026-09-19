@@ -4888,6 +4888,69 @@ impl UiState {
     /// index-to-value mapping with round-trip tests behind it. Building them
     /// here from a list spelled in the markup, or reading a row back into a
     /// value by a `match` written here, would be the second copy.
+    /// The selected channel's AUDIO row, and the static half of its sampler's
+    /// RECORD page: the clip settings and what it records from. The live
+    /// half -- the take's state, length and waveform -- is the pump's
+    /// (`publish_take`), because it moves while nothing is edited.
+    fn publish_audio_input(&self, window: &MainWindow, channel: &ChannelState) {
+        use mooloop_core::AudioInputPicker;
+        let rows = self.session.audio_source_rows();
+        let picker = AudioInputPicker::new(&rows);
+        let labels: Vec<SharedString> =
+            picker.labels().into_iter().map(SharedString::from).collect();
+        window.set_audio_input_options(ModelRc::from(Rc::new(VecModel::from(labels))));
+        window.set_audio_input_index(picker.row(channel.audio_input) as i32);
+        let missing = picker.is_missing(channel.audio_input);
+        window.set_audio_input_missing(missing);
+        let source = if channel.audio_input.is_off() || missing {
+            String::new()
+        } else {
+            picker.labels()[picker.row(channel.audio_input)].clone()
+        };
+        window.set_sampler_record_source(source.into());
+        window.set_sampler_record_clip(channel.record.clip);
+        window.set_sampler_record_bars(i32::from(channel.record.bars));
+        window.set_sampler_record_max_bars(i32::from(mooloop_core::MAX_RECORD_BARS));
+    }
+
+    /// The selected channel's take, for its sampler's RECORD page. Called by
+    /// the pump every tick; cheap when nothing is recording.
+    fn publish_take(&self, window: &MainWindow) {
+        let Some(channel) = self.session.channels.get(self.session.selected) else {
+            return;
+        };
+        let view = self.takes.view(channel.id).filter(|view| view.is_live());
+        let Some(view) = view else {
+            if window.get_sampler_record_state() != 0 {
+                window.set_sampler_record_state(0);
+                window.set_sampler_record_peaks(ModelRc::default());
+                window.set_sampler_record_elapsed(SharedString::new());
+            }
+            return;
+        };
+        let bpm = f64::from(window.get_bpm().max(1));
+        let frames_per_bar =
+            f64::from(self.audio_sample_rate) * 60.0 / bpm * f64::from(mooloop_core::time::BEATS_PER_BAR);
+        let elapsed = view.frames as f64 / frames_per_bar.max(1.0);
+        let (state, text, fill) = match view.phase {
+            mooloop_engine::TakePhase::Waiting => (1, String::new(), 1.0),
+            _ if channel.record.clip => {
+                let bars = f64::from(channel.record.bars);
+                (
+                    2,
+                    format!("{elapsed:.1} / {} BARS", channel.record.bars),
+                    (elapsed / bars).clamp(0.0, 1.0) as f32,
+                )
+            }
+            _ => (2, format!("{elapsed:.1} BARS"), 1.0),
+        };
+        window.set_sampler_record_state(state);
+        window.set_sampler_record_elapsed(text.into());
+        window.set_sampler_record_fill(fill);
+        let bars = view.bars(RECORD_PAGE_BARS);
+        window.set_sampler_record_peaks(ModelRc::from(Rc::new(VecModel::from(bars))));
+    }
+
     fn publish_midi_input(&self, window: &MainWindow, channel: &ChannelState) {
         use mooloop_core::{MidiChannelFilter, MidiInputSource, MIDI_CHANNEL_FILTER_ROWS};
 
@@ -4939,6 +5002,7 @@ impl UiState {
         );
         window.set_selected_channel_color(channel_colors::to_slint(ch.color));
         self.publish_midi_input(window, ch);
+        self.publish_audio_input(window, ch);
         window.set_selected_channel_volume_db(linear_to_db(ch.volume));
         window.set_source_kind(device_kind_to_int(ch.kind));
         // Derived rather than remembered per channel: the selection names one
@@ -8892,6 +8956,123 @@ impl AppUi {
                 if let Some(window) = weak.upgrade() {
                     guard.refresh_editor(&window);
                     guard.update_document_title(&window);
+                }
+            });
+        }
+        // The AUDIO row, and the sampler's RECORD page (`audio-recording/05`).
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            let tx = cmd_tx.clone();
+            window.on_audio_input_picked(move |row| {
+                let mut guard = st.borrow_mut();
+                let channel = guard.session.selected;
+                let rows = guard.session.audio_source_rows();
+                let source = mooloop_core::AudioInputPicker::new(&rows).pick(row.max(0) as usize);
+                if guard.session.set_channel_audio_input(channel, source) {
+                    guard.session.mark_dirty();
+                    tx.send_audio_input_routing(guard.session.audio_input_taps());
+                }
+                // Republished whatever happened: the menu moved its own
+                // highlight to the row that was clicked.
+                if let Some(window) = weak.upgrade() {
+                    guard.refresh_editor(&window);
+                    guard.update_document_title(&window);
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_sampler_record_clip_changed(move |on| {
+                let mut guard = st.borrow_mut();
+                let channel = guard.session.selected;
+                if guard.session.set_record_clip(channel, on) {
+                    guard.session.mark_dirty();
+                }
+                // Written back rather than left to the toggle's own state: the
+                // page is rebuilt whenever it is switched to, and it reads the
+                // window's copy, which a click sets but nothing else does.
+                if let Some(window) = weak.upgrade() {
+                    window.set_sampler_record_clip(
+                        guard.session.channels.get(channel).is_some_and(|c| c.record.clip),
+                    );
+                    guard.update_document_title(&window);
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            window.on_sampler_record_bars_changed(move |bars| {
+                let mut guard = st.borrow_mut();
+                let channel = guard.session.selected;
+                if guard.session.set_record_bars(channel, bars) {
+                    guard.session.mark_dirty();
+                }
+                if let Some(window) = weak.upgrade() {
+                    window.set_sampler_record_bars(i32::from(
+                        guard.session.channels.get(channel).map_or(1, |c| c.record.bars),
+                    ));
+                    guard.update_document_title(&window);
+                }
+            });
+        }
+        {
+            let st = state.clone();
+            let weak = window.as_weak();
+            let tx = cmd_tx.clone();
+            let structural = structural_tx.clone();
+            window.on_sampler_record_clicked(move || {
+                use mooloop_session::take::RecordPress;
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                let mut guard = st.borrow_mut();
+                let seat = guard.session.selected;
+                let live = guard
+                    .session
+                    .channels
+                    .get(seat)
+                    .and_then(|channel| guard.takes.view(channel.id))
+                    .is_some_and(|view| view.is_live());
+                match guard.session.record_press(seat, live) {
+                    Some(RecordPress::Stop { seat }) => {
+                        let _ = tx.send(EngineCommand::StopTake { channel: seat });
+                    }
+                    Some(RecordPress::NoInput) => {
+                        window.set_status_message(
+                            "Pick an AUDIO input in the channel sidebar to record".into(),
+                        );
+                    }
+                    Some(RecordPress::Arm { channel, seat, name, clip_ticks }) => {
+                        let sample_rate = guard.audio_sample_rate;
+                        match guard.takes.arm(channel, seat, &name, clip_ticks, sample_rate) {
+                            Ok(command) => {
+                                // The routing first, so the take reads the
+                                // source this channel names now; then the
+                                // transport, because a take waits for the next
+                                // bar of a running one (decision 9); then the
+                                // take. One ordered queue carries all three.
+                                tx.send_audio_input_routing(guard.session.audio_input_taps());
+                                if !window.get_playing() {
+                                    let _ = tx.send(EngineCommand::Play);
+                                }
+                                if !structural.send(command) {
+                                    window.set_status_message(
+                                        "The engine did not take the recording".into(),
+                                    );
+                                }
+                            }
+                            Err(error) => {
+                                log_error!("ui", "could not arm a take: {error}");
+                                window.set_status_message(
+                                    format!("Could not start recording: {error}").into(),
+                                );
+                            }
+                        }
+                    }
+                    None => {}
                 }
             });
         }
@@ -13256,6 +13437,9 @@ impl AppUi {
                 while let Ok(load) = take_rx.try_recv() {
                     apply_take(&handle, &st, &weak, &commands, load);
                 }
+                if let Some(window) = weak.upgrade() {
+                    st.borrow().publish_take(&window);
+                }
                 let mut forwarded = 0usize;
                 let mut document_title_needs_refresh = false;
                 while let Ok(message) = pending_rx.try_recv() {
@@ -14181,6 +14365,91 @@ impl AppUi {
             });
         }
 
+        // --- Optional recording self-test (MOOLOOP_AUTODRIVE_RECORD=1) ---
+        // `audio-recording/05`'s acceptance, driven through the real
+        // callbacks with the engine running, because the AUDIO row's menu is
+        // a popup the MCP tools cannot click (`OPERATIONS.md`). A kick plays,
+        // a new sampler takes the master as its AUDIO input and records one
+        // bar with Clip on; the report says whether the page showed the
+        // pre-roll and the take, and whether the take became the sampler's
+        // sample as one undo step. Run it with `MOOLOOP_CONFIG_DIR` pointed
+        // somewhere disposable: the take is written to its recordings folder.
+        if std::env::var("MOOLOOP_AUTODRIVE_RECORD").is_ok() {
+            let seen = Rc::new(Cell::new((false, false, 0usize)));
+            {
+                let weak = window.as_weak();
+                slint::Timer::single_shot(std::time::Duration::from_millis(300), move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    for step in [0, 4, 8, 12] {
+                        w.invoke_step_clicked(0, step);
+                    }
+                    w.invoke_add_channel_clicked(0);
+                    // Row 1 of the AUDIO menu is the master.
+                    w.invoke_audio_input_picked(1);
+                    w.invoke_sampler_record_clip_changed(true);
+                    w.invoke_sampler_record_bars_changed(1);
+                    w.invoke_sampler_record_clicked();
+                });
+            }
+            {
+                let weak = window.as_weak();
+                let seen = seen.clone();
+                let watch = Box::leak(Box::new(Timer::default()));
+                watch.start(
+                    TimerMode::Repeated,
+                    std::time::Duration::from_millis(40),
+                    move || {
+                        let Some(w) = weak.upgrade() else { return };
+                        let (mut waited, mut recorded, mut peaks) = seen.get();
+                        match w.get_sampler_record_state() {
+                            1 => waited = true,
+                            2 => {
+                                recorded = true;
+                                peaks = peaks.max(w.get_sampler_record_peaks().row_count());
+                            }
+                            _ => {}
+                        }
+                        seen.set((waited, recorded, peaks));
+                    },
+                );
+            }
+            {
+                let st = state.clone();
+                let commands = command_state.clone();
+                slint::Timer::single_shot(std::time::Duration::from_millis(9000), move || {
+                    let (waited, recorded, peaks) = seen.get();
+                    let st = st.borrow();
+                    let channel = st.session.channels.get(st.session.selected);
+                    let path = channel.and_then(|channel| channel.sample_path.clone());
+                    let in_recordings = path
+                        .as_ref()
+                        .is_some_and(|path| path.starts_with(settings::config_dir().join("recordings")));
+                    let embedded = channel.is_some_and(|channel| channel.sample_embedded);
+                    let label = commands
+                        .borrow()
+                        .history
+                        .undo_target()
+                        .map(|entry| entry.label)
+                        .unwrap_or("");
+                    println!("--- ui record autodrive report ---");
+                    println!("page showed the pre-roll   : {waited}");
+                    println!("page showed the take       : {recorded} ({peaks} bars drawn)");
+                    println!("sampler's sample           : {path:?}");
+                    println!("  from the recordings folder: {in_recordings}");
+                    println!("  owned by the song         : {embedded}");
+                    println!("last undo entry            : {label:?}");
+                    let ok = waited
+                        && recorded
+                        && peaks > 0
+                        && in_recordings
+                        && embedded
+                        && label == "Record Take";
+                    println!("RESULT: {}", if ok { "PASS" } else { "FAIL" });
+                    slint::quit_event_loop().ok();
+                });
+            }
+        }
+
         Ok(AppUi {
             window,
             _pump: pump,
@@ -14558,6 +14827,9 @@ fn apply_loaded_sample(
         }
     }
 }
+
+/// How many bars the RECORD page draws a take with, at most.
+const RECORD_PAGE_BARS: usize = 256;
 
 /// A finished take, decoded and on its way to its channel.
 struct TakeLoad {

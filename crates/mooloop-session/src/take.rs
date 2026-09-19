@@ -211,6 +211,87 @@ impl TakeRecorder {
     }
 }
 
+/// What pressing a sampler's REC does (`audio-recording/05`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum RecordPress {
+    /// A take is waiting or recording on this channel: end it.
+    Stop { seat: u8 },
+    /// Arm a new take. The caller starts the transport first if it is
+    /// stopped, then sends [`TakeRecorder::arm`]'s command.
+    Arm {
+        channel: ChannelId,
+        seat: u8,
+        name: String,
+        clip_ticks: Option<u32>,
+    },
+    /// The channel has no AUDIO input, so there is nothing to record.
+    NoInput,
+}
+
+impl crate::session::Session {
+    /// Decide what REC on the channel at `seat` does, given whether a take is
+    /// already live there. `None` for a seat with no channel.
+    pub fn record_press(&self, seat: usize, take_live: bool) -> Option<RecordPress> {
+        let channel = self.channels.get(seat)?;
+        let seat_u8 = u8::try_from(seat).ok()?;
+        Some(if take_live {
+            RecordPress::Stop { seat: seat_u8 }
+        } else if channel.audio_input.is_off() {
+            RecordPress::NoInput
+        } else {
+            RecordPress::Arm {
+                channel: channel.id,
+                seat: seat_u8,
+                name: channel.name.clone(),
+                clip_ticks: channel.record.clip_ticks(),
+            }
+        })
+    }
+
+    /// Turn the Record page's Clip on or off. Returns whether it changed.
+    pub fn set_record_clip(&mut self, seat: usize, clip: bool) -> bool {
+        let Some(channel) = self.channels.get_mut(seat) else {
+            return false;
+        };
+        let changed = channel.record.clip != clip;
+        channel.record.clip = clip;
+        changed
+    }
+
+    /// Set the Record page's clip length, clamped to what it offers.
+    pub fn set_record_bars(&mut self, seat: usize, bars: i32) -> bool {
+        let Some(channel) = self.channels.get_mut(seat) else {
+            return false;
+        };
+        let bars = bars.clamp(1, i32::from(mooloop_core::MAX_RECORD_BARS)) as u8;
+        let changed = channel.record.bars != bars;
+        channel.record.bars = bars;
+        changed
+    }
+}
+
+impl TakeView {
+    /// Whether this take is still waiting or recording.
+    pub fn is_live(&self) -> bool {
+        self.phase != TakePhase::Ended
+    }
+
+    /// The take's peaks folded to at most `bins` bars, each the louder
+    /// channel's peak, for the Record page to draw.
+    pub fn bars(&self, bins: usize) -> Vec<f32> {
+        let peaks = self.peaks.lock().map(|peaks| peaks.clone()).unwrap_or_default();
+        if peaks.is_empty() || bins == 0 {
+            return Vec::new();
+        }
+        let per = peaks.len().div_ceil(bins);
+        peaks
+            .chunks(per)
+            .map(|chunk| chunk.iter().fold(0.0f32, |peak, frame| peak.max(frame[0]).max(frame[1])))
+            .map(|peak| peak.min(1.0))
+            .collect()
+    }
+}
+
 /// Pull `consumer` into `writer` until the take is over, then finalize.
 fn drain(
     mut consumer: rtrb::Consumer<TakeFrame>,
@@ -397,6 +478,46 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    /// REC stops a live take, refuses a channel with no AUDIO input, and
+    /// otherwise arms one carrying the channel's identity and clip length.
+    #[test]
+    fn a_record_press_stops_arms_or_refuses() {
+        use mooloop_core::AudioInputSource;
+        let mut session = crate::session::Session::default();
+        assert_eq!(session.record_press(0, false), Some(RecordPress::NoInput));
+        assert_eq!(session.record_press(9, false), None);
+
+        assert!(session.set_channel_audio_input(0, AudioInputSource::Master));
+        assert!(session.set_record_clip(0, true));
+        assert!(session.set_record_bars(0, 2));
+        assert!(!session.set_record_bars(0, 2), "not an edit twice");
+        let id = session.channels[0].id;
+        assert_eq!(
+            session.record_press(0, false),
+            Some(RecordPress::Arm {
+                channel: id,
+                seat: 0,
+                name: session.channels[0].name.clone(),
+                clip_ticks: Some(2 * mooloop_core::TICKS_PER_BAR),
+            })
+        );
+        assert_eq!(session.record_press(0, true), Some(RecordPress::Stop { seat: 0 }));
+        assert!(session.set_record_bars(0, 1000));
+        assert_eq!(session.channels[0].record.bars, mooloop_core::MAX_RECORD_BARS);
+    }
+
+    /// The Record page's settings travel with the sampler through a document.
+    #[test]
+    fn the_record_settings_survive_a_round_trip() {
+        let mut session = crate::session::Session::default();
+        session.set_record_clip(0, true);
+        session.set_record_bars(0, 4);
+        let snapshot = session.project_snapshot(120, 0);
+        let mut reopened = crate::session::Session::default();
+        reopened.replace_project(&snapshot, &[]);
+        assert_eq!(reopened.channels[0].record, session.channels[0].record);
     }
 
     #[test]

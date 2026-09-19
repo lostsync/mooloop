@@ -685,6 +685,30 @@ boundary.
   the oldest matching pitch, layer mode overlaps notes, and overflow steals
   the oldest voice.
 
+### Recording Into The Sampler
+
+Clip recording, the way Ableton's or Bitwig's clip mode records and Maschine's
+sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
+
+- **Every channel has an AUDIO row** in the channel sidebar, beside MIDI IN
+  and independent of it: Off, the master, any track, any channel -- itself
+  included. It names its source by identity, so it follows moves, and says so
+  when the source has been deleted. Any number of channels may hold one, and
+  it stays set.
+- **The sampler face has a RECORD page**: REC, the take's length as it grows, a
+  live waveform, CLIP and LENGTH (1-64 bars), and what it records FROM.
+  Pressing REC waits for the next bar line -- starting the transport if it is
+  stopped, so a stopped song gets a bar of count-in -- then records the AUDIO
+  input sample-exact. It stops when REC is pressed again, the transport stops,
+  or, with CLIP on, after LENGTH. Several samplers can record at once.
+- **A finished take becomes the sampler's sample**, on the channel that
+  recorded it whichever is selected, as one "Record Take" undo step. Nothing
+  is written into a pattern; the take is heard through whatever triggers the
+  sampler. Takes are written to `recordings/` beside the settings file, and a
+  save copies a take into the song whichever asset mode it uses.
+- **Not yet:** hardware inputs (a microphone) as an AUDIO source, and
+  deleting takes nothing uses -- steps 01 and 06.
+
 ### Sampler Slicing And Stretch
 
 Known gaps left open by the 2026-09 slice/commit push, each small enough to

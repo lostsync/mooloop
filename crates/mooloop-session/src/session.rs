@@ -505,6 +505,7 @@ impl Session {
                             sample,
                             slices: channel.slices.clone(),
                             commit: channel.commit.clone(),
+                            record: channel.record,
                         })
                     }
                     DeviceKind::DrumSynth => ChannelSource::DrumSynth(DrumSynthState {
@@ -1430,6 +1431,7 @@ impl Session {
                     committed_sample: committed,
                     commit,
                     slices: sampler.map(|state| state.slices.clone()).unwrap_or_default(),
+                    record: sampler.map(|state| state.record).unwrap_or_default(),
                     waveform,
                     can_previous_sample: can_previous,
                     can_next_sample: can_next,

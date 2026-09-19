@@ -1048,6 +1048,10 @@ export component MainWindow inherits Window {
     // The row that was picked, never a value: Rust owns both lists.
     callback midi-input-picked(int);
     callback midi-channel-picked(int);
+    callback audio-input-picked(int);
+    callback sampler-record-clicked();
+    callback sampler-record-clip-changed(bool);
+    callback sampler-record-bars-changed(int);
     callback record-armed-toggled();
     // Channel structure is a project edit, so these callbacks carry the
     // clicked row rather than relying on whichever row was selected before a
@@ -1846,6 +1850,18 @@ export component MainWindow inherits Window {
     in-out property <string> midi-input-missing-name;
     in-out property <[string]> midi-channel-options;
     in-out property <int> midi-channel-index;
+    in-out property <[string]> audio-input-options;
+    in-out property <int> audio-input-index;
+    in-out property <bool> audio-input-missing;
+    // The selected sampler's RECORD page; see `sampler-device.slint`.
+    in-out property <int> sampler-record-state;
+    in-out property <string> sampler-record-elapsed;
+    in-out property <[float]> sampler-record-peaks;
+    in-out property <float> sampler-record-fill: 1;
+    in-out property <string> sampler-record-source;
+    in-out property <bool> sampler-record-clip;
+    in-out property <int> sampler-record-bars: 1;
+    in-out property <int> sampler-record-max-bars: 64;
     // Whether recording is armed. A transport state rather than a document
     // one: opening a song and pressing play must not record.
     in-out property <bool> record-armed;
@@ -2971,8 +2987,12 @@ export component MainWindow inherits Window {
                             midi-input-missing-name: root.midi-input-missing-name;
                             midi-channel-options: root.midi-channel-options;
                             midi-channel-index: root.midi-channel-index;
+                            audio-input-options: root.audio-input-options;
+                            audio-input-index: root.audio-input-index;
+                            audio-input-missing: root.audio-input-missing;
                             midi-input-picked(row) => { root.midi-input-picked(row); }
                             midi-channel-picked(row) => { root.midi-channel-picked(row); }
+                            audio-input-picked(row) => { root.audio-input-picked(row); }
                             // The renames the rest of the interface already
                             // does. A second callback for either would be a
                             // second way to rename the same thing, and they
@@ -4059,6 +4079,17 @@ export component MainWindow inherits Window {
                                                 loop-start <=> root.loop-start;
                                                 loop-end <=> root.loop-end;
                                                 snap-to-zero <=> root.snap-to-zero;
+                                                record-state: root.sampler-record-state;
+                                                record-elapsed: root.sampler-record-elapsed;
+                                                record-peaks: root.sampler-record-peaks;
+                                                record-fill: root.sampler-record-fill;
+                                                record-source: root.sampler-record-source;
+                                                record-clip <=> root.sampler-record-clip;
+                                                record-bars <=> root.sampler-record-bars;
+                                                record-max-bars: root.sampler-record-max-bars;
+                                                record-clicked() => { root.sampler-record-clicked(); }
+                                                record-clip-changed(on) => { root.sampler-record-clip-changed(on); }
+                                                record-bars-changed(bars) => { root.sampler-record-bars-changed(bars); }
                                                 reverse-playback <=> root.reverse-playback;
                                                 root-note <=> root.root-note;
                                                 tune-semitones <=> root.tune-semitones;

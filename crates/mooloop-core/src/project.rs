@@ -59,6 +59,10 @@ pub struct SamplerState {
     /// `large_enum_variant` two crates away.
     #[serde(default)]
     pub commit: Option<Box<SampleCommit>>,
+    /// How the Record page records (`audio-recording/05`). Omitted when it
+    /// holds the default, so a sampler saved before it is byte-identical.
+    #[serde(default, skip_serializing_if = "crate::SamplerRecord::is_default")]
+    pub record: crate::SamplerRecord,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
