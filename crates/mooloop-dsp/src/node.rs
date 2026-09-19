@@ -34,6 +34,8 @@
 
 use crate::bus::StereoBus;
 use crate::event::EventList;
+use crate::taps::AudioTaps;
+use mooloop_core::modulation::MAX_GENERATOR_OUTLETS;
 
 /// Per-block context handed to every `AudioNode::process` call. Valid only
 /// for the duration of the call; must not be retained.
@@ -302,6 +304,61 @@ pub trait AudioNode {
         events_in: &EventList,
         events_out: Option<&mut EventList>,
     );
+}
+
+/// A device that can be the source of a channel — the one call a channel
+/// strip makes into whatever generator it is running.
+///
+/// [`AudioNode::process`] is the node vocabulary and stays exactly what it
+/// is; this is the *host* vocabulary, and it exists because the strip needs
+/// one signature rather than three. Before it, delivering a block to a
+/// channel's generator was a closed `match` over the eight device kinds
+/// whose arms called three different methods with three different argument
+/// lists — which is fine while every source is native and in this repo, and
+/// is precisely what stops the strip from ever holding a boxed one.
+///
+/// A supertrait of `AudioNode` rather than a restatement of it: the rest
+/// contract (`tail_frames`, `is_at_rest`, `skip_block`) is inherited, so a
+/// `&mut dyn SourceNode` answers those too and nothing has two places to say
+/// when a device has finished.
+///
+/// The two extras are the union of what the eight need, and no more.
+/// `events_out` is deliberately absent: no generator emits events through a
+/// strip today, and a parameter for it would be inventing a capability
+/// rather than preserving one. It comes back the day something needs it.
+pub trait SourceNode: AudioNode {
+    /// Render one block as a channel's source.
+    ///
+    /// `source` is the auxiliary input an Aux In reads and the other seven
+    /// ignore; `ports` is the tap group the two publishing devices fill.
+    /// Both are supplied **for the duration of the call and not retained**,
+    /// which is `AUDIO_ARCHITECTURE.md`'s rule for auxiliary buffers, and it
+    /// is the reason they are parameters rather than fields.
+    fn process_source(
+        &mut self,
+        ctx: &ProcessContext,
+        bus: &mut StereoBus,
+        events_in: &EventList,
+        source: Option<&StereoBus>,
+        ports: &mut AudioTaps<'_>,
+    );
+
+    /// Copy this block's control outlets into `out`, which the caller has
+    /// already zeroed.
+    ///
+    /// Into a caller-owned band rather than returned, because the two
+    /// devices that implement it publish runs of different widths — seven
+    /// for ML-P8, six for DS-01 — so there is no one array type to return.
+    /// Writing into the full band also keeps the zeroing at the call site,
+    /// where the rule that the rest of the band is cleared belongs: replacing
+    /// a source must not leave a route reading a signal from an instrument
+    /// that is no longer there.
+    ///
+    /// The default publishes nothing, which is the same thing said for a
+    /// device that has not implemented outlets yet.
+    fn publish_outlets_into(&mut self, out: &mut [f32; MAX_GENERATOR_OUTLETS]) {
+        let _ = out;
+    }
 }
 
 #[cfg(test)]

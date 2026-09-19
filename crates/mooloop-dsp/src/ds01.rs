@@ -61,10 +61,11 @@ use crate::env::{shape, Ahd, AhdShape, DECAY_TAIL_CONSTANTS};
 use crate::event::{Event, EventList};
 use crate::filter::{apply_drive, soft_ceiling, OnePoleHp, Svf};
 use crate::modulator::CONTROL_RATE_FRAMES;
-use crate::node::{AudioNode, ProcessContext};
+use crate::node::{AudioNode, ProcessContext, SourceNode};
 use crate::osc::{Noise, Osc};
 use crate::shaper;
 use crate::smooth::Smoothed;
+use mooloop_core::modulation::MAX_GENERATOR_OUTLETS;
 use mooloop_core::ds01::{
     Ds01ControlOutlets, DS01_CONTROL_OUTLETS, DS01_OUTLET_AMP_ENV, DS01_OUTLET_GATE,
     DS01_OUTLET_MOD_ENV, DS01_OUTLET_NOTE, DS01_OUTLET_TRIGGER, DS01_OUTLET_VELOCITY,
@@ -1840,6 +1841,29 @@ impl AudioNode for Ds01 {
         _events_out: Option<&mut EventList>,
     ) {
         self.process_publishing(ctx, bus, events_in, &mut AudioTaps::none());
+    }
+}
+
+/// DS-01 takes the port group and ignores the auxiliary input, for the same
+/// reason ML-P8 does: it is a generator with taps, not a device that reads
+/// somebody else's audio.
+impl SourceNode for Ds01 {
+    fn process_source(
+        &mut self,
+        ctx: &ProcessContext,
+        bus: &mut StereoBus,
+        events_in: &EventList,
+        _source: Option<&StereoBus>,
+        ports: &mut AudioTaps<'_>,
+    ) {
+        self.process_publishing(ctx, bus, events_in, ports);
+    }
+
+    /// Six outlets into a band of [`MAX_GENERATOR_OUTLETS`]; the caller
+    /// zeroed the rest.
+    fn publish_outlets_into(&mut self, out: &mut [f32; MAX_GENERATOR_OUTLETS]) {
+        let published = self.publish_outlets();
+        out[..published.len()].copy_from_slice(&published);
     }
 }
 

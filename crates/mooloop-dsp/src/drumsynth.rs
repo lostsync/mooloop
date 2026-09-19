@@ -16,7 +16,8 @@ use crate::bus::StereoBus;
 use crate::env::{ExpDecay, DECAY_TAIL_CONSTANTS};
 use crate::event::{Event, EventList};
 use crate::filter::{apply_drive, OnePoleHp};
-use crate::node::{AudioNode, ProcessContext};
+use crate::node::{AudioNode, ProcessContext, SourceNode};
+use crate::taps::AudioTaps;
 use crate::osc::{Noise, Osc};
 use mooloop_core::{
     DrumMode, DrumSynthParams, GeneratorParams, HatCharacter, KickCharacter, OscWave,
@@ -450,6 +451,23 @@ impl AudioNode for DrumSynth {
             pos = off;
         }
         self.render_range(bus, pos, frames);
+    }
+}
+
+/// Neither extra reaches this device: it reads no auxiliary input and
+/// publishes no control outlets, so being a channel's source is exactly
+/// being an `AudioNode`. The forward is what lets the strip stop caring
+/// which of the eight it is holding.
+impl SourceNode for DrumSynth {
+    fn process_source(
+        &mut self,
+        ctx: &ProcessContext,
+        bus: &mut StereoBus,
+        events_in: &EventList,
+        _source: Option<&StereoBus>,
+        _ports: &mut AudioTaps<'_>,
+    ) {
+        self.process(ctx, bus, events_in, None);
     }
 }
 
