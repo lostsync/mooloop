@@ -9,3 +9,4 @@ Cargo.lock.bak
 /bin/
 /opencode.json
 /.slint-sketch/
+/.claude/worktrees/
