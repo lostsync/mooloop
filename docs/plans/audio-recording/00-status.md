@@ -6,7 +6,7 @@ plan (same `SCOPE.md` item, filed before the migration) and is kept open as
 the earlier tracking issue for the input side; MOO-16 is where the plan's
 current shape lives.
 
-**Written 2026-09-17. Steps 02 and 03 landed 2026-09-18.** This is `SCOPE.md` §2 item 3
+**Written 2026-09-17. Steps 02, 03 and 04 landed 2026-09-18.** This is `SCOPE.md` §2 item 3
 (audio input) together with the audio half of item 5 (recording), in the shape
 Adam settled on 2026-09-17, and since 2026-09-18 item 6 (resampling) as well,
 which turned out to be the same feature with the source inside the app.
@@ -115,7 +115,7 @@ order.
 | --- | --- | --- | --- |
 | [02](02-one-input-menu.md) | `ChannelInput`: MIDI, an app source (channel, track, master) or a hardware input; one picker, saved | core, project, session, UI build | **landed 2026-09-18**, UI drawing deferred to 05 -- see below |
 | [03](03-capture.md) | Bounded capture of the chosen buffer at the end of each block, drained to a WAV file off the audio thread | engine, session | **landed 2026-09-18** -- see below |
-| [04](04-the-take.md) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | not started |
+| [04](04-the-take.md) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | **landed 2026-09-18** -- see below |
 | [05](05-interface.md) | Record button, source meter, the growing waveform, the non-sampler rule. **Acceptance: resample a loop into a sampler and play it back** | UI build | not started |
 | [01](01-input-in-the-engine.md) | Drivers deliver hardware input into an input bus, which becomes one more source; monitoring | engine; macOS unverified | not started |
 | [06](06-unused-takes.md) | Find and delete takes nothing refers to | session, project, UI build | not started |
@@ -221,6 +221,31 @@ What is on `main` after decisions 5, 6 and 10:
   master's own chain, so a latency-reporting device *on the master* delays a
   master take relative to a channel take by that device's latency. Nothing
   corrects for it yet; it matters only when both are compared.
+
+## What step 04 actually did
+
+- **The pump collects finished takes** from `UiState::takes` (a
+  `TakeRecorder` over `recordings/` beside the settings file), decodes each on
+  a worker through the same `load_sample_at_path` a dragged-in file takes, and
+  `apply_take` puts it on the channel **found by `ChannelId`** -- selected or
+  not, wherever it moved while the take ran. A take whose channel is gone is
+  left in the recordings folder with a status-bar message.
+- **Undo.** The step asked for a check first, and the answer was no: an
+  ordinary sample load records no history. So `apply_take` records one entry,
+  "Record Take", around `apply_loaded_sample`; undo puts back the sample that
+  was there. Ordinary loads are unchanged.
+- **Save.** The step wanted takes *moved* into
+  `name.mooloop-assets/recordings/`. What landed is simpler and covers both
+  save modes: a take is marked `embedded` -- owned by the song -- and a save
+  now copies any owned sample that is not in the bundle yet into
+  `samples/`, even in Referenced mode, where it used to become a reference.
+  The original stays in the recordings folder for step 06 to find unused.
+  `a_take_is_copied_into_the_song_in_either_mode` deletes the recordings
+  folder after the save and reloads.
+- **A damaged take** says so in the status bar when it lands.
+- **Not yet exercised end to end.** Nothing arms a take until step 05's
+  button, so the pump path is compiled and clippy-clean but first runs in
+  05's acceptance.
 
 ## Open questions for Adam
 

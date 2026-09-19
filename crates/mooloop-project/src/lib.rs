@@ -635,14 +635,27 @@ fn prepare_song_asset(
     // the rest of the document does follow the mode. Un-embedding for real
     // means copying the bytes out to somewhere the user has chosen, which is
     // a gesture that does not exist; `docs/LOOSE_ENDS.md` carries it.
-    if mode == AssetMode::Referenced && keep_owned {
+    //
+    // **And a sample the song owns but has not stored yet is embedded too.**
+    // `embedded` means *owned by the song*, and until 2026-09-18 every owned
+    // sample was already inside the bundle. A recorded take is the first that
+    // is not: it is owned from the moment it lands (`audio-recording/04`),
+    // but it sits in the shared recordings folder until a save copies it in.
+    // Referencing it there instead would leave the song depending on a folder
+    // whose unused takes can be deleted (`audio-recording/06`). The same rule
+    // stops a Save As in Referenced mode pointing into another song's sidecar.
+    if mode == AssetMode::Referenced && *embedded {
         warnings.push(AssetWarning {
             channel,
             path: source.clone(),
-            message: "sample stays embedded: the bundle holds the only copy of it".into(),
+            message: if keep_owned {
+                "sample stays embedded: the bundle holds the only copy of it".into()
+            } else {
+                "sample stays embedded: the song owns it".into()
+            },
         });
     }
-    if mode == AssetMode::Referenced && !keep_owned {
+    if mode == AssetMode::Referenced && !*embedded {
         if !source.is_file() {
             warnings.push(AssetWarning {
                 channel,
@@ -1919,6 +1932,43 @@ mod tests {
     /// Un-embedding for real means copying the bytes out to somewhere the
     /// user has chosen, which is a gesture that does not exist. This is the
     /// honest refusal, which is what `LOOSE_ENDS.md` called the cheap half.
+    /// **A recorded take is the song's, whatever the save mode.** It sits in
+    /// the shared recordings folder, owned (`embedded`) but not yet stored,
+    /// and either kind of save copies it into the bundle -- so a song never
+    /// depends on a folder whose unused takes can be deleted
+    /// (`audio-recording/04` and `06`).
+    #[test]
+    fn a_take_is_copied_into_the_song_in_either_mode() {
+        for mode in [AssetMode::Embedded, AssetMode::Referenced] {
+            let temp = tempdir().unwrap();
+            let recordings = temp.path().join("recordings");
+            fs::create_dir_all(&recordings).unwrap();
+            let take = recordings.join("20260918-120000-Sampler_1.wav");
+            fs::write(&take, b"take bytes").unwrap();
+            let bundle = temp.path().join("song.mooloop");
+            let mut project = Project::default();
+            project.channels[0].setup.sampler_state_mut().unwrap().sample =
+                SampleReference::File {
+                    path: take.clone(),
+                    embedded: true,
+                };
+
+            save_song(&bundle, &project, mode).unwrap();
+            fs::remove_dir_all(&recordings).unwrap();
+
+            let LoadedDocument::Song(loaded) = load_bundle(&bundle).unwrap().document else {
+                panic!("expected song")
+            };
+            let SampleReference::File { path, embedded } =
+                &loaded.channels[0].setup.sampler_state().unwrap().sample
+            else {
+                panic!("a file reference");
+            };
+            assert!(embedded, "{mode:?}");
+            assert_eq!(fs::read(path).unwrap(), b"take bytes", "{mode:?}");
+        }
+    }
+
     #[test]
     fn unticking_embed_on_an_embedded_song_is_refused_out_loud() {
         let temp = tempdir().unwrap();

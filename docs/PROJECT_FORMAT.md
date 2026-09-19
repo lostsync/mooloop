@@ -73,8 +73,13 @@ Three of the eight tags were chosen rather than inherited from serde's
 | Aux In | `aux_in` — what `rename_all` would have spelled it anyway, written out on purpose so nobody has to derive an on-disk identifier from an attribute |
 
 `asset_mode` records the requested save policy. Each file sample also carries
-its own `embedded` flag because a referenced save may retain a bundle-owned
-sample when externalizing it would destroy the only copy.
+its own `embedded` flag, which means **the song owns this sample**: a
+referenced save keeps a bundle-owned sample when externalizing it would destroy
+the only copy, and since 2026-09-18 it also *copies in* an owned sample that is
+not in the bundle yet -- a recorded take, which sits in the shared recordings
+folder until the first save (`audio-recording/04`). Either way the report
+carries a "stays embedded" warning. So a saved song never refers to the
+recordings folder.
 
 ## Song Document
 

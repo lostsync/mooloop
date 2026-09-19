@@ -103,6 +103,7 @@ use mooloop_session::engine::{
 use mooloop_session::history::Entry as HistoryEntry;
 use mooloop_session::roll::NoteEdit;
 use mooloop_session::steps::StepEdit;
+use mooloop_session::take::{FinishedTake, TakeRecorder};
 use mooloop_session::project::{
     fresh_starter_seed, normalize_project_pattern_banks, HistoryMove, ProjectEdit, ProjectSnapshot,
 };
@@ -3172,6 +3173,9 @@ fn note_cell(note: NoteEvent, selected_ids: &HashSet<NoteId>) -> NoteCell {
 struct UiState {
     /// Everything the application would still be if the window went away.
     session: Session,
+    /// Every take that is running or waiting to be turned into a sample
+    /// (`audio-recording/03` and `04`). Runtime state, never saved.
+    takes: TakeRecorder,
     /// The MIDI inputs the driver is offering, as of the last scan. Cached
     /// rather than asked per use: under Core MIDI the answer is a lock and a
     /// list of `String` clones, and the input picker, the routing table and
@@ -5442,6 +5446,7 @@ impl AppUi {
             // routing. Starting empty rather than scanning here keeps one
             // path for "the ports changed", and the first pump is 16 ms away.
             midi_ports: Vec::new(),
+            takes: TakeRecorder::new(settings::config_dir().join("recordings")),
             midi_learn_armed: false,
             session: Session {
                 channels: vec![first],
@@ -12580,6 +12585,8 @@ impl AppUi {
         let commands = command_state.clone();
         let default_sample_for_pump = default_sample.clone();
         let ui_settings_for_pump = ui_settings.clone();
+        // Finished takes, decoded off the UI thread like any other file.
+        let (take_tx, take_rx) = std::sync::mpsc::channel::<TakeLoad>();
         let pump = Timer::default();
         // Diagnostics shared with the autodrive self-test (MOOLOOP_AUTODRIVE=1).
         let stats = Rc::new(Cell::new((0.0f32, false, 0usize)));
@@ -13230,6 +13237,24 @@ impl AppUi {
                         let channel = st.borrow().session.channels.len().saturating_sub(1);
                         apply_loaded_sample(&handle, &st, &weak, channel, loaded);
                     }
+                }
+                // Takes whose drain has finished go to a worker to be decoded,
+                // the way a dragged-in file is, and come back to be applied.
+                {
+                    let (finished, failures) = st.borrow_mut().takes.collect();
+                    for failure in failures {
+                        log_error!("ui", "a take could not be written: {failure}");
+                    }
+                    for take in finished {
+                        let tx = take_tx.clone();
+                        std::thread::spawn(move || {
+                            let result = load_sample_at_path(&take.path);
+                            let _ = tx.send(TakeLoad { take, result });
+                        });
+                    }
+                }
+                while let Ok(load) = take_rx.try_recv() {
+                    apply_take(&handle, &st, &weak, &commands, load);
                 }
                 let mut forwarded = 0usize;
                 let mut document_title_needs_refresh = false;
@@ -14531,6 +14556,71 @@ fn apply_loaded_sample(
             st.refresh_editor(&window);
             st.update_document_title(&window);
         }
+    }
+}
+
+/// A finished take, decoded and on its way to its channel.
+struct TakeLoad {
+    take: FinishedTake,
+    result: Result<LoadedSample, String>,
+}
+
+/// **A finished take becomes its channel's sample** (`audio-recording/04`).
+///
+/// Found by identity, so a take lands on the channel that recorded it however
+/// the bank was edited while it ran, and on that channel whether or not it is
+/// the one on screen. Nothing is written into any pattern: the take is heard
+/// through whatever already triggers the sampler (decision 2's answer).
+///
+/// **One undo step**, which an ordinary sample load is not -- a take
+/// overwrites what was there, so it is recorded around the same
+/// `apply_loaded_sample` a dragged-in file uses. And the sample is marked as
+/// the song's own, so a save copies it out of the shared recordings folder
+/// into the bundle whatever the save mode.
+fn apply_take(
+    handle: &EngineHandle,
+    st: &Rc<RefCell<UiState>>,
+    weak: &slint::Weak<MainWindow>,
+    commands: &Rc<RefCell<CommandState>>,
+    load: TakeLoad,
+) {
+    let Some(window) = weak.upgrade() else {
+        return;
+    };
+    let loaded = match load.result {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            log_error!("ui", "a take could not be loaded: {error}");
+            window.set_status_message(format!("The take could not be loaded: {error}").into());
+            return;
+        }
+    };
+    let Some(channel) = st
+        .borrow()
+        .session
+        .channels
+        .iter()
+        .position(|channel| channel.id == load.take.channel)
+    else {
+        window.set_status_message(
+            "The take's channel is gone; the recording is still in the recordings folder".into(),
+        );
+        return;
+    };
+    let before = project_snapshot(&st.borrow(), &window);
+    apply_loaded_sample(handle, st, weak, channel, loaded);
+    if let Some(state) = st.borrow_mut().session.channels.get_mut(channel) {
+        state.sample_embedded = true;
+    }
+    record_project_history(commands, before, st, &window, "Record Take");
+    if load.take.is_damaged() {
+        window.set_status_message(
+            format!(
+                "The take has a gap: {} frames did not reach the file",
+                load.take.dropped
+            )
+            .into(),
+        );
     }
 }
 
