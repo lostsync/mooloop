@@ -204,8 +204,8 @@ static DRUM_DESCRIPTORS: [ParamDescriptor; 20] = [
         id: DRUM_PARAM_TUNE_SEMITONES,
         name: "Tune",
         unit: "st",
-        min: -48.0,
-        max: 48.0,
+        min: DRUM_TUNE_RANGE.0,
+        max: DRUM_TUNE_RANGE.1,
         curve: ParamCurve::Linear,
         default: 0.0,
     },
@@ -404,6 +404,29 @@ pub const OSC_SEMITONE_RANGE: (f32, f32) = (-48.0, 48.0);
 /// An oscillator's fine tuning range, in cents: `(min, max)`. Shared for the
 /// reason [`OSC_SEMITONE_RANGE`] gives.
 pub const OSC_CENT_RANGE: (f32, f32) = (-100.0, 100.0);
+
+/// The drum synth's tune range, in semitones: `(min, max)`.
+///
+/// Read by `DRUM_DESCRIPTORS`' `Tune` entry and by the voice that honours it
+/// (`mooloop_dsp::drumsynth`). The two spelled `-48.0`/`48.0` separately
+/// until 2026-09-19; widen the descriptor alone and the knob travels where
+/// the voice will not follow, with nothing to report the disagreement.
+pub const DRUM_TUNE_RANGE: (f32, f32) = (-48.0, 48.0);
+
+/// How far the sampler honours its tune parameters: `(min, max)` semitones.
+///
+/// **Deliberately wider than the `Tune` descriptor's own `[-24, 24]`**, so a
+/// modulation route can push tuning past what the base knob reaches. That is
+/// why this is a constant of its own rather than a read of the descriptor:
+/// the two numbers are different on purpose and only stay so if the
+/// widening is written down once. `mooloop_dsp::sampler::tuning_ratio` and
+/// the UI's typed tune entry both clamp to it.
+pub const SAMPLER_TUNE_SEMITONE_CLAMP: (f32, f32) = (-48.0, 48.0);
+
+/// How far the sampler honours its fine-tune parameter: `(min, max)` cents.
+/// Equal to the `Fine` descriptor's range today; named for the reason
+/// [`SAMPLER_TUNE_SEMITONE_CLAMP`] gives, and moves with it.
+pub const SAMPLER_TUNE_CENT_CLAMP: (f32, f32) = (-100.0, 100.0);
 
 pub const SYNTH_PARAM_GLIDE: u32 = 0;
 pub const SYNTH_PARAM_ATTACK: u32 = 1;

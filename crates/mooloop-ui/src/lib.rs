@@ -56,6 +56,7 @@ use mooloop_core::{
     ParamCurve, ParamDescriptor, ParamOwner, PointId,
     Project, ProjectChannel, RetriggerMode, SampleReference,
     PlayMode, SamplerParams, SnareCharacter, StretchMode,
+    SAMPLER_TUNE_SEMITONE_CLAMP,
     VoiceMode, MAX_SLICES,
     DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MASTER_BUS, MAX_BUSES,
     MAX_CHANNELS, MAX_MODULATORS_PER_CHANNEL,
@@ -11176,7 +11177,8 @@ impl AppUi {
                 as u16;
         });
         wire_typed_stretch_field!(on_tune_typed, |p: &mut SamplerParams, v: f32| {
-            p.tune_semitones = v.clamp(-48.0, 48.0);
+            p.tune_semitones =
+                v.clamp(SAMPLER_TUNE_SEMITONE_CLAMP.0, SAMPLER_TUNE_SEMITONE_CLAMP.1);
         });
 
         {
