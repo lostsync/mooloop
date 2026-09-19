@@ -475,7 +475,14 @@ reached the history is discarded -- and redo cannot bring it back, because
 `entry.after` predates it too. Not recorded: every step-grid edit (click,
 right-click, velocity, paint), pattern length, add-pattern, playlist
 placement add and remove, **every effect and generator parameter**, both
-renames, and channel/generator preset loads from the browser.
+renames, channel/generator preset loads from the browser, and **swapping the
+selected channel's device kind** from the source picker
+(`on_channel_source_changed`). That last one is the worst of them: the swap
+destroys the outgoing device's state outright, so an undo of a *later* edit
+keeps the swap the user can see and silently discards it from the snapshot it
+installs. It is a replace rather than a structure change, so the fix that gave
+the toolbar's Add Channel its own history entry (MOO-29, 2026-09-19)
+deliberately left it alone.
 
 So: draw a note (recorded), click eight steps, turn a filter's cutoff, press
 Ctrl+Z -- and the eight steps and the cutoff are gone with no redo path. The

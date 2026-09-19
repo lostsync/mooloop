@@ -1421,6 +1421,76 @@ fn record_project_history(
     sync_command_availability(window, &commands.borrow());
 }
 
+/// Append a channel, show it, tell the engine about it, and record the undo
+/// entry for it.
+///
+/// Add is the one channel-structure verb that does not stop the song: it is
+/// incremental rather than a whole-project reinstall, so it goes through
+/// [`Session::add_channel`] and `StructuralCommandSender::add_channel` rather
+/// than [`queue_structural_edit`]. That is why it is also the one verb that
+/// used to reach the engine and the dirty flag without reaching the history --
+/// an undo then installed some *earlier* edit's `before`, taking the new
+/// channel and every unrecorded edit since it with no redo path.
+///
+/// The borrow order is the load-bearing part. `record_project_history` takes
+/// `state.borrow()` and `commands.borrow_mut()` itself, so it must be called
+/// with no `RefMut` on `UiState` alive -- which is a `RefCell` panic at
+/// runtime, not a compile error. The mutation is therefore scoped to a block
+/// and the recording happens after it.
+///
+/// A free function rather than the closure body so it can be tested without an
+/// `AppUi`, which needs an `EngineHandle` and so a live audio driver.
+fn add_channel_with_history(
+    state: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    window: &MainWindow,
+    tx: &StructuralCommandSender,
+    reset_tx: &std::sync::mpsc::Sender<usize>,
+    source: DeviceKind,
+) -> Option<usize> {
+    let before = project_snapshot(&state.borrow(), window);
+    let index = {
+        let mut st = state.borrow_mut();
+        // A full rack adds nothing, so it records nothing either.
+        let index = st.session.add_channel(source)?;
+        log_debug!("ui", "add channel");
+        let pattern = st.session.current_pattern;
+        let ch = &st.session.channels[index];
+        let cells: Vec<StepCell> = (0..st.session.pattern_lengths[pattern])
+            .map(|step| rack_cell(&ch.notes[pattern], step))
+            .collect();
+        let model = Rc::new(VecModel::from(cells));
+        let row = ChannelRow {
+            name: ch.name.as_str().into(),
+            color: channel_colors::to_slint(ch.color),
+            has_color: ch.color.is_some(),
+            track_color: channel_colors::to_slint(feeding_track_color(&st.session.buses, ch.bus)),
+            has_track_color: feeding_track_color(&st.session.buses, ch.bus).is_some(),
+            muted: false,
+            volume_db: linear_to_db(ch.volume),
+            pan: ch.pan,
+            selected: true,
+            bus: ch.bus as i32,
+            steps: ModelRc::from(model.clone()),
+        };
+        st.rows.push(row);
+        st.step_models.push(model);
+        st.sync_row_flags();
+        st.sync_mixer(window);
+        window.set_selected_channel(index as i32);
+        st.refresh_editor(window);
+        index
+    };
+    let _ = reset_tx.send(index);
+    let _ = tx.add_channel(index, source);
+    // `after` is taken from the live session, which the incremental add has
+    // already mutated -- there is no hand-built snapshot to get wrong. A click
+    // carries no gesture token, so this never coalesces into the entry below
+    // it and the add is its own undo step.
+    record_project_history(commands, before, state, window, "Add channel");
+    Some(index)
+}
+
 fn queue_channel_insert(
     tx: &ProjectEditSender,
     state: &Rc<RefCell<UiState>>,
@@ -3263,6 +3333,113 @@ enum BrowserTab {
 }
 
 impl UiState {
+    /// Build the rack state for a fresh, one-channel document and install
+    /// every model on the window.
+    ///
+    /// Extracted from `AppUi::new` so a `UiState` can be had without an
+    /// `EngineHandle`, which only `Engine::new` produces and only by opening
+    /// a real audio driver. That is what made every channel-rack callback
+    /// untestable; `add_channel_with_history` is tested through this.
+    fn new(
+        default_sample: Option<&SampleData>,
+        audio_sample_rate: u32,
+        window: &MainWindow,
+    ) -> Self {
+        let default_waveform = default_sample
+            .map(|sample| waveform_peaks(sample, WAVEFORM_BINS))
+            .unwrap_or_default();
+        let default_sample_description = default_sample
+            .map(sample_description)
+            .unwrap_or_default();
+        let default_sample_duration = default_sample
+            .map(sample_duration)
+            .unwrap_or_default();
+        let first = ChannelState::new(0);
+        let first_steps: Vec<StepCell> = (0..DEFAULT_STEPS as usize)
+            .map(|step| rack_cell(&first.notes[0], step))
+            .collect();
+        let step_model = Rc::new(VecModel::from(first_steps));
+        let note_model = Rc::new(VecModel::from(Vec::<NoteCell>::new()));
+        let automation_point_model = Rc::new(VecModel::from(Vec::<AutomationPointCell>::new()));
+        let automation_target_model = Rc::new(VecModel::from(Vec::<AutomationTargetRow>::new()));
+        let playlist_model = Rc::new(VecModel::from(Vec::<PlaylistClip>::new()));
+        let row = ChannelRow {
+            name: first.name.as_str().into(),
+            color: channel_colors::to_slint(first.color),
+            has_color: first.color.is_some(),
+            // A new song's one track is the master, which nobody has
+            // coloured yet; the first refresh fills this in if they do.
+            track_color: Default::default(),
+            has_track_color: false,
+            muted: false,
+            volume_db: linear_to_db(first.volume),
+            pan: first.pan,
+            selected: true,
+            bus: first.bus as i32,
+            steps: ModelRc::from(step_model.clone()),
+        };
+        let rows_model = Rc::new(VecModel::from(vec![row]));
+        let waveform_model = Rc::new(VecModel::from(first.waveform.clone()));
+        let slice_model = Rc::new(VecModel::from(Vec::<f32>::new()));
+        let playhead_model = Rc::new(VecModel::from(Vec::<f32>::new()));
+        let effect_slot_model = Rc::new(VecModel::from(Vec::<EffectSlotRow>::new()));
+        let modulation_source_model = Rc::new(VecModel::from(Vec::<ModulationSourceRow>::new()));
+        let modulation_outlet_model = Rc::new(VecModel::from(Vec::<ModulationOutletRow>::new()));
+        let modulation_route_model = Rc::new(VecModel::from(Vec::<ModulationRouteRow>::new()));
+        let mixer_strip_model = Rc::new(VecModel::from(Vec::<MixerStripRow>::new()));
+        let browser_row_model = Rc::new(VecModel::from(Vec::<BrowserRow>::new()));
+        window.set_channels(ModelRc::from(rows_model.clone()));
+        window.set_notes(ModelRc::from(note_model.clone()));
+        window.set_automation_points(ModelRc::from(automation_point_model.clone()));
+        window.set_automation_targets(ModelRc::from(automation_target_model.clone()));
+        window.set_playlist_clips(ModelRc::from(playlist_model.clone()));
+        window.set_waveform(ModelRc::from(waveform_model.clone()));
+        window.set_slice_markers(ModelRc::from(slice_model.clone()));
+        window.set_playhead_positions(ModelRc::from(playhead_model.clone()));
+        window.set_effect_slots(ModelRc::from(effect_slot_model.clone()));
+        window.set_modulation_sources(ModelRc::from(modulation_source_model.clone()));
+        window.set_modulation_outlets(ModelRc::from(modulation_outlet_model.clone()));
+        window.set_modulation_routes(ModelRc::from(modulation_route_model.clone()));
+        window.set_mixer_strips(ModelRc::from(mixer_strip_model.clone()));
+        window.set_browser_rows(ModelRc::from(browser_row_model.clone()));
+        window.set_pattern_count(1);
+
+        Self {
+            // Filled by the pump's first scan, which also installs the
+            // routing. Starting empty rather than scanning here keeps one
+            // path for "the ports changed", and the first pump is 16 ms away.
+            midi_ports: Vec::new(),
+            midi_learn_armed: false,
+            session: Session {
+                channels: vec![first],
+                default_waveform,
+                default_sample_description,
+                default_sample_duration,
+                ..Session::default()
+            },
+            rows: rows_model,
+            step_models: vec![step_model],
+            note_model,
+            playlist_model,
+            waveform_model,
+            slice_model,
+            playhead_model,
+            effect_slot_model,
+            modulation_source_model,
+            modulation_outlet_model,
+            modulation_route_model,
+            mixer_strip_model,
+            browser_rows: browser_row_model,
+            browser_tab: BrowserTab::default(),
+            preset_catalog: Vec::new(),
+            effect_spectra_stale: std::cell::Cell::new(false),
+            bus_meters_stale: false,
+            automation_point_model,
+            automation_target_model,
+            audio_sample_rate,
+        }
+    }
+
     fn replace_project(
         &mut self,
         project: &Project,
@@ -5375,102 +5552,11 @@ impl AppUi {
         let audio_sample_rate = handle.sample_rate();
         window.set_audio_sample_rate(audio_sample_rate as i32);
         let default_sample = Some(SampleData::default_kick(audio_sample_rate));
-        let default_waveform = default_sample
-            .as_ref()
-            .map(|sample| waveform_peaks(sample, WAVEFORM_BINS))
-            .unwrap_or_default();
-        let default_sample_description = default_sample
-            .as_ref()
-            .map(|sample| sample_description(sample))
-            .unwrap_or_default();
-        let default_sample_duration = default_sample
-            .as_ref()
-            .map(|sample| sample_duration(sample))
-            .unwrap_or_default();
-        let first = ChannelState::new(0);
-        let first_steps: Vec<StepCell> = (0..DEFAULT_STEPS as usize)
-            .map(|step| rack_cell(&first.notes[0], step))
-            .collect();
-        let step_model = Rc::new(VecModel::from(first_steps));
-        let note_model = Rc::new(VecModel::from(Vec::<NoteCell>::new()));
-        let automation_point_model = Rc::new(VecModel::from(Vec::<AutomationPointCell>::new()));
-        let automation_target_model = Rc::new(VecModel::from(Vec::<AutomationTargetRow>::new()));
-        let playlist_model = Rc::new(VecModel::from(Vec::<PlaylistClip>::new()));
-        let row = ChannelRow {
-            name: first.name.as_str().into(),
-            color: channel_colors::to_slint(first.color),
-            has_color: first.color.is_some(),
-            // A new song's one track is the master, which nobody has
-            // coloured yet; the first refresh fills this in if they do.
-            track_color: Default::default(),
-            has_track_color: false,
-            muted: false,
-            volume_db: linear_to_db(first.volume),
-            pan: first.pan,
-            selected: true,
-            bus: first.bus as i32,
-            steps: ModelRc::from(step_model.clone()),
-        };
-        let rows_model = Rc::new(VecModel::from(vec![row]));
-        let waveform_model = Rc::new(VecModel::from(first.waveform.clone()));
-        let slice_model = Rc::new(VecModel::from(Vec::<f32>::new()));
-        let playhead_model = Rc::new(VecModel::from(Vec::<f32>::new()));
-        let effect_slot_model = Rc::new(VecModel::from(Vec::<EffectSlotRow>::new()));
-        let modulation_source_model = Rc::new(VecModel::from(Vec::<ModulationSourceRow>::new()));
-        let modulation_outlet_model = Rc::new(VecModel::from(Vec::<ModulationOutletRow>::new()));
-        let modulation_route_model = Rc::new(VecModel::from(Vec::<ModulationRouteRow>::new()));
-        let mixer_strip_model = Rc::new(VecModel::from(Vec::<MixerStripRow>::new()));
-        let browser_row_model = Rc::new(VecModel::from(Vec::<BrowserRow>::new()));
-        window.set_channels(ModelRc::from(rows_model.clone()));
-        window.set_notes(ModelRc::from(note_model.clone()));
-        window.set_automation_points(ModelRc::from(automation_point_model.clone()));
-        window.set_automation_targets(ModelRc::from(automation_target_model.clone()));
-        window.set_playlist_clips(ModelRc::from(playlist_model.clone()));
-        window.set_waveform(ModelRc::from(waveform_model.clone()));
-        window.set_slice_markers(ModelRc::from(slice_model.clone()));
-        window.set_playhead_positions(ModelRc::from(playhead_model.clone()));
-        window.set_effect_slots(ModelRc::from(effect_slot_model.clone()));
-        window.set_modulation_sources(ModelRc::from(modulation_source_model.clone()));
-        window.set_modulation_outlets(ModelRc::from(modulation_outlet_model.clone()));
-        window.set_modulation_routes(ModelRc::from(modulation_route_model.clone()));
-        window.set_mixer_strips(ModelRc::from(mixer_strip_model.clone()));
-        window.set_browser_rows(ModelRc::from(browser_row_model.clone()));
-        window.set_pattern_count(1);
-
-        let state = Rc::new(RefCell::new(UiState {
-            // Filled by the pump's first scan, which also installs the
-            // routing. Starting empty rather than scanning here keeps one
-            // path for "the ports changed", and the first pump is 16 ms away.
-            midi_ports: Vec::new(),
-            midi_learn_armed: false,
-            session: Session {
-                channels: vec![first],
-                default_waveform,
-                default_sample_description,
-                default_sample_duration,
-                ..Session::default()
-            },
-            rows: rows_model,
-            step_models: vec![step_model],
-            note_model,
-            playlist_model,
-            waveform_model,
-            slice_model,
-            playhead_model,
-            effect_slot_model,
-            modulation_source_model,
-            modulation_outlet_model,
-            modulation_route_model,
-            mixer_strip_model,
-            browser_rows: browser_row_model,
-            browser_tab: BrowserTab::default(),
-            preset_catalog: Vec::new(),
-            effect_spectra_stale: std::cell::Cell::new(false),
-            bus_meters_stale: false,
-            automation_point_model,
-            automation_target_model,
+        let state = Rc::new(RefCell::new(UiState::new(
+            default_sample.as_deref(),
             audio_sample_rate,
-        }));
+            &window,
+        )));
         let starter = Project::starter_kit(fresh_starter_seed());
         let starter_samples = vec![None; starter.channels.len()];
         install_project_in_ui(
@@ -8053,47 +8139,21 @@ impl AppUi {
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_add_channel_clicked(move |value| {
+                // The window is upgraded first because the `before` snapshot
+                // needs it, which is the whole reason this used to record
+                // nothing.
+                let Some(window) = weak.upgrade() else { return };
                 if commands.borrow().project_edit_pending {
                     return;
                 }
-                let source = device_kind_from_int(value);
-                let mut st = st.borrow_mut();
-                let Some(index) = st.session.add_channel(source) else {
-                    return;
-                };
-                log_debug!("ui", "add channel");
-                let pattern = st.session.current_pattern;
-                let ch = &st.session.channels[index];
-                let cells: Vec<StepCell> = (0..st.session.pattern_lengths[pattern])
-                    .map(|step| rack_cell(&ch.notes[pattern], step))
-                    .collect();
-                let model = Rc::new(VecModel::from(cells));
-                let row = ChannelRow {
-                    name: ch.name.as_str().into(),
-                    color: channel_colors::to_slint(ch.color),
-                    has_color: ch.color.is_some(),
-                    track_color: channel_colors::to_slint(feeding_track_color(
-                        &st.session.buses,
-                        ch.bus,
-                    )),
-                    has_track_color: feeding_track_color(&st.session.buses, ch.bus).is_some(),
-                    muted: false,
-                    volume_db: linear_to_db(ch.volume),
-                    pan: ch.pan,
-                    selected: true,
-                    bus: ch.bus as i32,
-                    steps: ModelRc::from(model.clone()),
-                };
-                st.rows.push(row);
-                st.step_models.push(model);
-                st.sync_row_flags();
-                if let Some(window) = weak.upgrade() {
-                    st.sync_mixer(&window);
-                    window.set_selected_channel(index as i32);
-                    st.refresh_editor(&window);
-                }
-                let _ = reset_tx.send(index);
-                let _ = add_channel_tx.add_channel(index, source);
+                add_channel_with_history(
+                    &st,
+                    &commands,
+                    &window,
+                    &add_channel_tx,
+                    &reset_tx,
+                    device_kind_from_int(value),
+                );
             });
         }
         {
@@ -15783,5 +15843,69 @@ mod tests {
         reads(amp_decay, "2", 4.0, 2.0);
         reads(cutoff, "8 kHz", 7_500.0, 8_000.0);
         reads(amount, "-50%", 0.35, -0.5);
+    }
+
+    /// Adding a channel from the toolbar leaves an undo entry behind.
+    ///
+    /// It did not. Add is the only channel-structure verb that is incremental
+    /// rather than a whole-project reinstall, and it reached the engine and
+    /// the dirty flag without ever reaching the history. Undo then had two
+    /// ways to be wrong and no way to be right: with an empty history it did
+    /// nothing at all, and with a previous recorded edit it installed *that*
+    /// edit's `before` -- a snapshot taken before the channel existed -- so
+    /// the new channel and every unrecorded edit made since disappeared
+    /// together, with no redo to get them back because the entry's `after`
+    /// predated them too.
+    ///
+    /// The assertions are about the entry rather than about what undo does,
+    /// because undo is asynchronous here: it queues a `ProjectEdit` that only
+    /// lands when the pump runs, and the pump is an `AppUi` timer. What this
+    /// can see, and what was missing, is the recorded pair itself.
+    #[test]
+    fn adding_a_channel_records_its_own_undo_entry() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().expect("the testing backend builds a window");
+        let state = Rc::new(RefCell::new(UiState::new(None, 48_000, &window)));
+        let commands = Rc::new(RefCell::new(CommandState::default()));
+        // Both receivers are held for the duration: a dropped one makes the
+        // send fail, and this test is about what the send is accompanied by.
+        let (pending_tx, _pending_rx) = std::sync::mpsc::channel::<PendingEngineMessage>();
+        let structural_tx = StructuralCommandSender(pending_tx);
+        let (reset_tx, _reset_rx) = std::sync::mpsc::channel::<usize>();
+
+        assert!(
+            commands.borrow().history.undo_target().is_none(),
+            "a document nobody has edited has nothing to undo"
+        );
+
+        let index = add_channel_with_history(
+            &state,
+            &commands,
+            &window,
+            &structural_tx,
+            &reset_tx,
+            DeviceKind::Sampler,
+        )
+        .expect("a one-channel rack has room for a second");
+
+        let open = commands.borrow();
+        let entry = open
+            .history
+            .undo_target()
+            .expect("the add is now the edit an undo would reverse");
+        assert_eq!(entry.label, "Add channel");
+        assert_eq!(
+            entry.before.project.channels.len() + 1,
+            entry.after.project.channels.len(),
+            "the entry brackets exactly the one channel that was added"
+        );
+        // `selected_channel` is a `ChannelId` rather than a seat number, so
+        // the question "is the new channel the selected one" is asked through
+        // `selected_index` rather than by comparing a number to a position.
+        assert_eq!(
+            entry.after.project.selected_index(),
+            index,
+            "and the channel it added is the one left selected"
+        );
     }
 }
