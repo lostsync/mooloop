@@ -2996,6 +2996,17 @@ export component MainWindow inherits Window {
                             // same callbacks the face used to raise.
                             sends: root.editing-bus-sends;
                             bus-names: root.bus-names;
+                            // The channel's mixer destination, read out of
+                            // the rack's own row rather than published a
+                            // second time: `sync_row_flags` already keeps
+                            // `bus` current for the picker the rack row
+                            // draws, and two publishes of one routing
+                            // decision is how the copies in this codebase
+                            // start.
+                            channel-bus: root.channels[root.selected-channel].bus;
+                            bus-picked(b) => {
+                                root.channel-bus-changed(root.selected-channel, b);
+                            }
                             send-allowed: root.editing-bus-send-allowed;
                             track-index: root.editing-bus-index;
                             is-master: root.editing-bus-is-master;
