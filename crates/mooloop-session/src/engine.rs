@@ -166,6 +166,43 @@ impl PendingEngineMessage {
     }
 }
 
+/// Drain everything queued for the engine and put back only what a project
+/// install must not discard.
+///
+/// Installing a project is the point where a queue stops meaning anything:
+/// every message in it was addressed to the *outgoing* document, so anything
+/// still waiting is either already contained in the prepared project or
+/// deliberately superseded by it. Applied after the install it would write the
+/// outgoing song's intent over the incoming one -- a `MidiRouting` table
+/// indexed by the old channel order, a `sample_reset` naming a channel that is
+/// now somebody else. [`PendingEngineMessage::survives_project_load`] says
+/// which two kinds are addressed to the machine instead and have to live.
+///
+/// This exists as one function because there are two install paths -- Open and
+/// New Song -- and for a while only Open had the filter, which is how New Song
+/// came to install the starter kit and then take the previous song's queued
+/// routing on top of it.
+///
+/// `tx` must be a sender on the same channel as `rx`: the survivors go back on
+/// the queue for the caller's own drain to forward. That is also why the kept
+/// messages are **collected before any are sent** -- requeueing inside a live
+/// `try_iter()` would re-observe its own sends and spin forever.
+pub fn discard_document_messages(
+    rx: &std::sync::mpsc::Receiver<PendingEngineMessage>,
+    tx: &std::sync::mpsc::Sender<PendingEngineMessage>,
+) {
+    // Collected whole before anything goes back, not filtered in a streaming
+    // pass: `tx` is a sender on the channel `rx` reads, so a send inside a
+    // live `try_iter()` is a message the same iterator then yields again.
+    let kept: Vec<_> = rx
+        .try_iter()
+        .filter(PendingEngineMessage::survives_project_load)
+        .collect();
+    for message in kept {
+        let _ = tx.send(message);
+    }
+}
+
 /// Display subscriptions are handled by the pump, which exclusively owns the
 /// engine handle. They observe a device's signal; they are not audio-thread
 /// commands and never become modulation routes.
@@ -846,6 +883,51 @@ mod tests {
             enabled: true,
         })
         .survives_project_load());
+    }
+
+    /// The drain both install paths run: the two machine-addressed kinds come
+    /// back, in the order they were queued, and everything addressed to the
+    /// outgoing document is gone.
+    ///
+    /// The ordering assertion is not decoration. The survivors go back on the
+    /// same channel the caller is about to drain, so a helper that requeued as
+    /// it iterated would either spin or reorder a buffer-size pick behind a
+    /// preview-gain knob turn.
+    #[test]
+    fn discarding_document_messages_keeps_the_machine_ones_in_order() {
+        let (tx, rx) = std::sync::mpsc::channel::<PendingEngineMessage>();
+
+        // Interleaved deliberately: the two survivors are neither first nor
+        // adjacent, so a filter that kept a prefix would pass.
+        tx.send(PendingEngineMessage::MidiRouting(Vec::new())).unwrap();
+        tx.send(PendingEngineMessage::Audio(AudioAction::SelectBufferSize(256)))
+            .unwrap();
+        tx.send(PendingEngineMessage::Command(EngineCommand::SetRecordArmed(true)))
+            .unwrap();
+        tx.send(PendingEngineMessage::PreviewGain(0.5)).unwrap();
+        tx.send(PendingEngineMessage::AudioInputRouting(Vec::new()))
+            .unwrap();
+
+        discard_document_messages(&rx, &tx);
+
+        let survivors: Vec<_> = rx.try_iter().collect();
+        assert_eq!(
+            survivors.len(),
+            2,
+            "expected the two machine-addressed messages to survive, got {}",
+            survivors.len()
+        );
+        assert!(
+            matches!(
+                survivors[0],
+                PendingEngineMessage::Audio(AudioAction::SelectBufferSize(256))
+            ),
+            "the buffer-size pick was dropped or reordered"
+        );
+        assert!(
+            matches!(survivors[1], PendingEngineMessage::PreviewGain(gain) if gain == 0.5),
+            "the preview gain was dropped or reordered"
+        );
     }
 
     /// Pattern mode wraps inside the pattern on screen; song mode runs along
