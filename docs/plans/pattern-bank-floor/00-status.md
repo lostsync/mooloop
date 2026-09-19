@@ -49,7 +49,7 @@ An architecture pass asked whether mooloop should grow per-track clips, on the
 strength of one case: an instrument track -- one channel, a four-minute part,
 two thousand notes -- fits neither `MAX_PATTERN_STEPS` nor
 `MAX_NOTES_PER_CHANNEL_PATTERN`, and a `PatternPlacement` places every channel's
-whole pattern at once (`crates/mooloop-core/src/playlist.rs:29`), so there is no
+whole pattern at once (`crates/mooloop-core/src/playlist.rs:40`), so there is no
 per-channel clip for it to live in either. **Adam settled it the same day in
 favour of the groovebox: patterns stay, and there are no per-track clips.**
 `docs/CAPACITY_POLICY.md` carries the decision and the constants it rests on.

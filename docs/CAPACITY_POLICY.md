@@ -194,12 +194,12 @@ callback, which is the whole subject of the section above. The four-minute part
 is past the first and the two thousand notes are past the second.
 
 The second is the arrangement. `PatternPlacement` is a pattern index and a
-start tick and nothing else (`crates/mooloop-core/src/playlist.rs:29`);
+start tick and nothing else (`crates/mooloop-core/src/playlist.rs:40`);
 song-mode scheduling walks every active channel of the pattern a placement
-names (`crates/mooloop-engine/src/sequencer.rs:599`), and a pattern carries one
-`length_steps` shared by all of its channels (`pattern.rs:225`). A placement is
+names (`crates/mooloop-engine/src/sequencer.rs:604`), and a pattern carries one
+`length_steps` shared by all of its channels (`pattern.rs:226`). A placement is
 therefore every channel at once, on one 64-bar canvas (`MAX_PLAYLIST_BARS`,
-`playlist.rs:7`, with a placement *start* past it refused at
+`playlist.rs:8`, with a placement *start* past it refused at
 `sequencer.rs:117`). There is no per-channel clip for a long part to live in,
 and nothing short of inventing one would give it a place.
 
