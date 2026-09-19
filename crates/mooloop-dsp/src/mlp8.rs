@@ -56,11 +56,12 @@ use crate::effects::ModulationEffect;
 use crate::env::Adsr;
 use crate::event::{Event, EventList};
 use crate::filter::{soft_ceiling, PreDrive, Svf};
-use crate::node::{AudioNode, ProcessContext};
+use crate::node::{AudioNode, ProcessContext, SourceNode};
 use crate::osc::{sync_blep, Noise, Osc};
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
 use crate::synth_voice::{note_to_freq, MIN_GLIDE_S, PARAM_SMOOTH_S, STOP_RELEASE_S};
+use mooloop_core::modulation::MAX_GENERATOR_OUTLETS;
 use mooloop_core::mlp8::{
     MlP8ControlOutlets, MlP8Routes, MLP8_CONTROL_OUTLETS, MLP8_MAX_ROUTES, MLP8_MOD_DESTS,
     OUTLET_AMP_ENV, OUTLET_FILTER_ENV, OUTLET_GATE, OUTLET_LFO, OUTLET_NOTE, OUTLET_TRIGGER,
@@ -2576,6 +2577,28 @@ impl AudioNode for MlP8 {
         _events_out: Option<&mut EventList>,
     ) {
         self.process_publishing(ctx, bus, events_in, &mut AudioTaps::none());
+    }
+}
+
+/// ML-P8 takes the port group and ignores the auxiliary input: its sound is
+/// its own, and the three oscillator taps are what a route subscribes to.
+impl SourceNode for MlP8 {
+    fn process_source(
+        &mut self,
+        ctx: &ProcessContext,
+        bus: &mut StereoBus,
+        events_in: &EventList,
+        _source: Option<&StereoBus>,
+        ports: &mut AudioTaps<'_>,
+    ) {
+        self.process_publishing(ctx, bus, events_in, ports);
+    }
+
+    /// Seven outlets into a band of [`MAX_GENERATOR_OUTLETS`]; the caller
+    /// zeroed the rest.
+    fn publish_outlets_into(&mut self, out: &mut [f32; MAX_GENERATOR_OUTLETS]) {
+        let published = self.publish_outlets();
+        out[..published.len()].copy_from_slice(&published);
     }
 }
 

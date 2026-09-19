@@ -143,7 +143,11 @@ that every project reserves 1.00 GiB of pattern storage before it holds
 anything, and that an ordinary edit rebuilds it at 20 ms a time. Whether that
 is worth a step was a `FOCUS.md` question, and the answer as of 2026-09-12 is
 **not now** -- safely, because the measurements to judge it by are committed
-either way.
+either way. As of 2026-09-17 it is also a prerequisite rather than only a
+bug: per-track clips were ruled out that day, which leaves raising
+`MAX_PATTERN_STEPS` as the only answer to a part too long for a pattern, and
+the ceiling is not liftable while the bank is still dimensioned by it. Its
+`00-status.md` records that.
 
 Last swept 2026-09-15, and amended five times later the same day -- the fifth
 when `musical-time/` was worked start to finish and archived, leaving the

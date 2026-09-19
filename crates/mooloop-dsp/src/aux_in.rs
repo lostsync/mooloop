@@ -9,7 +9,7 @@
 
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
-use crate::node::{AudioNode, ProcessContext};
+use crate::node::{AudioNode, ProcessContext, SourceNode};
 use crate::smooth::Smoothed;
 use crate::taps::AudioTaps;
 use mooloop_core::aux_in::{self, AuxInParams};
@@ -154,6 +154,23 @@ impl AudioNode for AuxIn {
         _events_out: Option<&mut EventList>,
     ) {
         self.process_from(ctx, bus, None, events_in, &mut AudioTaps::none());
+    }
+}
+
+/// The one source that reads the auxiliary input, and the reason the unified
+/// signature has a `source` parameter at all. It also reorders: `process_from`
+/// puts `source` before `events_in`, which is the argument-order disagreement
+/// the strip used to carry in one of its eight arms.
+impl SourceNode for AuxIn {
+    fn process_source(
+        &mut self,
+        ctx: &ProcessContext,
+        bus: &mut StereoBus,
+        events_in: &EventList,
+        source: Option<&StereoBus>,
+        ports: &mut AudioTaps<'_>,
+    ) {
+        self.process_from(ctx, bus, source, events_in, ports);
     }
 }
 
