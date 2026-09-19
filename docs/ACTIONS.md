@@ -43,8 +43,8 @@ the command layer, and applies equally to any future console/MCP command.
 ## What's registered today
 
 `actions.rs`'s `ACTIONS` table is the source of truth; read it rather than
-this document for the current list. **It holds 65 actions in 11 categories**
-as of 2026-09-14, and a test in `actions.rs` reads that sentence and fails if
+this document for the current list. **It holds 67 actions in 12 categories**
+as of 2026-09-19, and a test in `actions.rs` reads that sentence and fails if
 either number stops being true.
 
 This sentence has been wrong twice. On 2026-09-08 it said 46 where the table
@@ -54,27 +54,31 @@ times — which is why the third fix is a test rather than a fourth count.
 
 The categories are:
 Transport (play/pause on Space, stop on Shift+Space, return-to-start on Home,
-and the song loop on L), File, Edit (undo/redo, the three contextual clipboard
-verbs, select-all and delete), Navigation (the four arrow keys — transpose
-lives there now, because the same key picks a channel or walks the browser
-tree when the roll is not where you are), Notes (the five pointer tools on
-keys 1-5 and the snap toggle on 6), View (revealing a view, splitting the top pane on Ctrl+\\,
-zooming a pane to the window on Ctrl+Shift+\\, and piano-roll zoom), Channel
-(add, remove, clone, mute), Track (solo on Ctrl+Shift+M and mute on
-Ctrl+Alt+M, plus moving the track one seat left or right, all aimed at the
-track the rack is editing), Device (the
-clipboard's four on Ctrl+Shift+C/X/V/D, plus bypass, remove, wrap in a
-container, save a preset, and stepping the selection along the chain),
-Browser (focus it on Ctrl+B, then Enter and Ctrl+Enter), and Pattern
+the song loop on L, and arming MIDI recording), File, Edit (undo/redo, the
+three contextual clipboard verbs, select-all and delete), Navigation (the
+four arrow keys — transpose lives there now, because the same key picks a
+channel or walks the browser tree when the roll is not where you are), Notes
+(the five pointer tools on keys 1-5 and the snap toggle on 6), View
+(revealing a view, splitting the top pane on Ctrl+\\, zooming a pane to the
+window on Ctrl+Shift+\\, and piano-roll zoom), Channel (add, remove, clone,
+mute), Track (solo on Ctrl+Shift+M and mute on Ctrl+Alt+M, plus moving the
+track one seat left or right, all aimed at the track the rack is editing),
+Device (the clipboard's four on Ctrl+Shift+C/X/V/D, plus bypass, remove,
+wrap in a container, save a preset, and stepping the selection along the
+chain), Browser (focus it on Ctrl+B, then Enter and Ctrl+Enter), Pattern
 (including lengthening and shortening the pattern by a beat, on
-Ctrl+Shift+= and Ctrl+Shift+-). Three entries are registered with no
-default chord and are listed so they can be bound. `pattern.clear` has none
-because every nearby Pattern action already claims a Ctrl+modifier
-combination. `track.move-left` and `track.move-right` have none because the
-Ctrl+Shift and Ctrl+Alt arrows sit beside the roll's nudges, and a
-rarely-used move is not worth a chord that close to transposing. They also
-have rows in the Track menu, which greys them from the same predicate
-(`Session::can_move_track`) that decides whether the chord fires.
+Ctrl+Shift+= and Ctrl+Shift+-), and MIDI (arming controller mapping). Five
+entries are registered with no default chord and are listed so they can be
+bound. `pattern.clear` has none because every nearby Pattern action already
+claims a Ctrl+modifier combination. `track.move-left` and `track.move-right`
+have none because the Ctrl+Shift and Ctrl+Alt arrows sit beside the roll's
+nudges, and a rarely-used move is not worth a chord that close to
+transposing. They also have rows in the Track menu, which greys them from
+the same predicate (`Session::can_move_track`) that decides whether the
+chord fires. `transport.record-arm-toggle` and `midi.learn-toggle` have none
+because both were toolbar-only until 2026-09-19 — added to the registry so
+they can be bound and appear on the Shortcuts page, not because either ships
+with a default binding.
 
 ## Scope: where a chord applies
 

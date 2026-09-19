@@ -201,6 +201,17 @@ pub(crate) static ACTIONS: &[ActionSpec] = &[
         "home"
     ),
     action!("transport.loop-toggle", "Toggle Loop", "Transport", "l"),
+    // Toolbar-only until now (`docs/LOOSE_ENDS.md`): arming MIDI recording
+    // had no action id, so it could not be bound to a key or shown on the
+    // Shortcuts page. No default chord, like `pattern.clear` below -- it is
+    // registered so it *can* be bound, not because it ships bound.
+    action!("transport.record-arm-toggle", "Toggle Record Arm", "Transport"),
+    // Same gap as record-arm, same fix: the LEARN toolbar button had no
+    // action id either. Its own category rather than Transport's, since it
+    // arms controller mapping rather than anything about playback -- it
+    // only sits in the transport row because that is the one place not
+    // covered by a modal dialog while the arm is waiting for a press.
+    action!("midi.learn-toggle", "Toggle MIDI Learn", "MIDI"),
     action!("file.new", "New Song", "File", ctrl + "n"),
     action!("file.open", "Open Song", "File", ctrl + "o"),
     action!("file.save", "Save Song", "File", ctrl + "s"),
