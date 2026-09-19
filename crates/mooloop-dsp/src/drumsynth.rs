@@ -20,7 +20,7 @@ use crate::node::{AudioNode, ProcessContext};
 use crate::osc::{Noise, Osc};
 use mooloop_core::{
     DrumMode, DrumSynthParams, GeneratorParams, HatCharacter, KickCharacter, OscWave,
-    SnareCharacter, MAX_CHOKE_GROUP, MAX_DRUM_VOICES,
+    SnareCharacter, DRUM_TUNE_RANGE, MAX_CHOKE_GROUP, MAX_DRUM_VOICES,
 };
 
 /// Fast fade used for chokes and transport stops (seconds). The coefficient
@@ -248,7 +248,7 @@ impl DrumSynth {
         self.next_age = self.next_age.wrapping_add(1).max(1);
 
         // Keyboard tracking relative to middle C, plus the tune knob.
-        let semitones = f32::from(note.min(127)) - 60.0 + params.tune_semitones.clamp(-48.0, 48.0);
+        let semitones = f32::from(note.min(127)) - 60.0 + params.tune_semitones.clamp(DRUM_TUNE_RANGE.0, DRUM_TUNE_RANGE.1);
         let voice = &mut self.voices[index];
         voice.active = true;
         voice.age = age;

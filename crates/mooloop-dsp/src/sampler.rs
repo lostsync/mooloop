@@ -27,7 +27,8 @@ use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
 use mooloop_core::{
     clamp01, EnvTimes, LoopMode, PlayMode, RetriggerMode, SamplerParams, SliceMap, VoiceMode,
-    MAX_CHOKE_GROUP, MAX_LINEAR_GAIN, MAX_SAMPLER_VOICES,
+    MAX_CHOKE_GROUP, MAX_LINEAR_GAIN, MAX_SAMPLER_VOICES, SAMPLER_TUNE_CENT_CLAMP,
+    SAMPLER_TUNE_SEMITONE_CLAMP,
 };
 
 use arc_swap::ArcSwapOption;
@@ -80,10 +81,18 @@ const OUTPUT_GAIN_SMOOTHING_S: f32 = 0.01;
 /// The tune knobs' combined contribution to playback rate, as a multiplier.
 /// Deliberately wider than the descriptor's `[-24, 24]` / `[-100, 100]`
 /// ranges, so a modulation route can still push tuning past what the base
-/// knob alone reaches.
+/// knob alone reaches -- which is why the bound is
+/// [`SAMPLER_TUNE_SEMITONE_CLAMP`] rather than the descriptor.
 fn tuning_ratio(params: SamplerParams) -> f64 {
-    let semitones = f64::from(params.tune_semitones.clamp(-48.0, 48.0))
-        + f64::from(params.tune_cents.clamp(-100.0, 100.0)) / 100.0;
+    let semitones = f64::from(
+        params
+            .tune_semitones
+            .clamp(SAMPLER_TUNE_SEMITONE_CLAMP.0, SAMPLER_TUNE_SEMITONE_CLAMP.1),
+    ) + f64::from(
+        params
+            .tune_cents
+            .clamp(SAMPLER_TUNE_CENT_CLAMP.0, SAMPLER_TUNE_CENT_CLAMP.1),
+    ) / 100.0;
     2.0_f64.powf(semitones / 12.0)
 }
 
