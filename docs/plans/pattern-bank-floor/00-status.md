@@ -45,14 +45,16 @@ and it gets worse with every channel added to a song.
 
 ## What else now waits on it, 2026-09-17
 
-An architecture pass asked whether mooloop should grow per-track clips, on the
-strength of one case: an instrument track -- one channel, a four-minute part,
-two thousand notes -- fits neither `MAX_PATTERN_STEPS` nor
-`MAX_NOTES_PER_CHANNEL_PATTERN`, and a `PatternPlacement` places every channel's
-whole pattern at once (`crates/mooloop-core/src/playlist.rs:40`), so there is no
-per-channel clip for it to live in either. **Adam settled it the same day in
-favour of the groovebox: patterns stay, and there are no per-track clips.**
-`docs/CAPACITY_POLICY.md` carries the decision and the constants it rests on.
+`reports/fable-2026-09-17.md` asked whether mooloop should grow per-track
+clips, on the strength of one case: an instrument track -- one channel, a
+four-minute part, two thousand notes -- fits neither `MAX_PATTERN_STEPS` nor
+`MAX_NOTES_PER_CHANNEL_PATTERN`, and a `PatternPlacement` places every
+channel's whole pattern at once (`crates/mooloop-core/src/playlist.rs:40`), so
+there is no per-channel clip for it to live in either. **Adam settled it the
+same day in favour of the groovebox: patterns stay, and there are no per-track
+clips**, the same ruling `docs/plans/audio-recording/00-status.md` records for
+audio that day. `docs/CAPACITY_POLICY.md` carries the decision and the
+constants it rests on.
 
 That turns this plan from a memory bug into a prerequisite. With clips ruled
 out, the only remaining answer to a part that is genuinely too long is to raise
@@ -66,5 +68,5 @@ before anyone raises it.
 
 This does not unpark the plan. Nothing has yet asked for a pattern longer than
 sixteen bars, and the parking argument above is unchanged. It is here so that
-the day something does ask -- a hosted CLAP instrument is the likeliest -- the
-order is already decided rather than argued then.
+the day something does ask -- step 10 of `plugin-hosting/`, CLAP instruments,
+is the likeliest -- the order is already decided rather than argued then.

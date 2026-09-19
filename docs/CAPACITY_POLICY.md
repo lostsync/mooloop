@@ -195,20 +195,24 @@ is past the first and the two thousand notes are past the second.
 
 The second is the arrangement. `PatternPlacement` is a pattern index and a
 start tick and nothing else (`crates/mooloop-core/src/playlist.rs:40`);
-song-mode scheduling walks every active channel of the pattern a placement
-names (`crates/mooloop-engine/src/sequencer.rs:604`), and a pattern carries one
-`length_steps` shared by all of its channels (`pattern.rs:226`). A placement is
-therefore every channel at once, on one 64-bar canvas (`MAX_PLAYLIST_BARS`,
-`playlist.rs:8`, with a placement *start* past it refused at
-`sequencer.rs:117`). There is no per-channel clip for a long part to live in,
-and nothing short of inventing one would give it a place.
+`Sequencer::schedule_song` walks every active channel of the pattern a
+placement names (`crates/mooloop-engine/src/sequencer.rs:850`), and a pattern
+carries one `length_steps` shared by all of its channels (`pattern.rs:225`). A
+placement is therefore every channel at once, on one 64-bar canvas
+(`MAX_PLAYLIST_BARS`, `playlist.rs:8`, with a placement *start* past it refused
+at `sequencer.rs:117`). There is no per-channel clip for a long part to live
+in, and nothing short of inventing one would give it a place.
 
 **Adam settled this the same day, in favour of the groovebox.** Patterns stay
-and there are no per-track clips. That is a product decision and not an
-implementation accident, which is why it is written here rather than left for
-each feature to rediscover: pattern-phase swing, `set_pattern_length` and clip
-automation are all built on the shared timeline, and every one of them makes
-the alternative more expensive without making it more likely.
+and there are no per-track clips. `docs/plans/audio-recording/00-status.md`
+records the same ruling from the audio side that day -- audio records into the
+sampler, "there are no per-track audio clips, and this plan must not add any"
+-- so this was one decision made once about notes and audio together, not two
+that happen to agree. It is a product decision rather than an implementation
+accident, which is why it is written here rather than left for each feature to
+rediscover: pattern-phase swing, `set_pattern_length` and clip automation are
+all built on the shared timeline, and every one of them makes the alternative
+more expensive without making it more likely.
 
 What the decision does not do is make the ceiling go away. If a part ever
 genuinely needs more than sixteen bars, **the answer is to raise
@@ -217,16 +221,17 @@ has to be read before making, because the two numbers multiply rather than
 stand alone. `MAX_NOTES_PER_CHANNEL_PATTERN` follows `MAX_PATTERN_STEPS`, and
 the preallocated bank is `MAX_PATTERNS x MAX_CHANNELS x
 MAX_NOTES_PER_CHANNEL_PATTERN x size_of::<NoteEvent>()`, so the floor is linear
-in the ceiling: sixteen bars is the 1.00 GiB measured above, sixty-four bars
-would be 4 GiB, and the hundred and twenty bars a four-minute part wants at 120
-BPM would be about 7.5 GiB. **So `docs/plans/pattern-bank-floor/` has to land
-first.** Raising the ceiling while the bank is still dimensioned by it
-multiplies the largest number in the engine, which is exactly the fault this
-document opens by naming.
+in the ceiling: sixteen bars is the 1051 MB measured above (`256 x 256 x 1024 x
+16 bytes`, exactly 1.00 GiB), sixty-four bars would be 4 GiB, and the hundred
+and twenty bars a four-minute part wants at 120 BPM would be about 7.5 GiB.
+**So `docs/plans/pattern-bank-floor/` has to land first.** Raising the ceiling
+while the bank is still dimensioned by it multiplies the largest number in the
+engine, which is exactly the fault this document opens by naming.
 
 A CLAP instrument is the likeliest thing to ask the question first, since a
-hosted instrument is where a long recorded part would arrive. The answer is
-settled before that work starts rather than during it.
+hosted instrument is where a long recorded part would arrive. That is step 10
+of `docs/plans/plugin-hosting/`, and the answer is settled before it starts
+rather than during it.
 
 ## Current boundaries
 
