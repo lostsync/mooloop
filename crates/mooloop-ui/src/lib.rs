@@ -6167,6 +6167,8 @@ impl AppUi {
                     "transport.loop-toggle" => window.invoke_playlist_loop_enabled_changed(
                         !window.get_playlist_loop_enabled(),
                     ),
+                    "transport.record-arm-toggle" => window.invoke_record_armed_toggled(),
+                    "midi.learn-toggle" => window.invoke_midi_learn_toggled(),
                     "file.new" => window.invoke_new_song(),
                     "file.open" => window.invoke_open_song(),
                     "file.save" => window.invoke_save_song(),

@@ -347,13 +347,6 @@ the machinery is there; nothing records an entry. Ctrl+Z after a learn reaches
 past it to the previous recorded edit, the way a channel or generator preset
 already does. The document is marked dirty, so the mapping is at least saved.
 
-**The record-arm and LEARN toolbar buttons have no action ids.** `ACTIONS.md`
-says every operation a shortcut or menu row can perform is a named action in
-`actions.rs`; these two are toolbar buttons only, so neither can be bound to a
-key and neither appears on the Shortcuts page. Adding them means moving the
-"63 actions in 11 categories" sentence and its test, which is why it was not
-done on the way past.
-
 **Nothing in the MIDI control layer has been run against a device, as of
 2026-09-15.** Every layer has tests and the application compiles and draws its
 mapping page, and no keyboard has been plugged into it. `scripts/mooloop-mcp`
