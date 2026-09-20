@@ -178,6 +178,61 @@ Not yet done, and not a thing to do casually — it is the core of the render
 state and the edit path either side of it. The measurements are committed so
 the decision has a before to point at.
 
+## The pattern ceilings are a model decision, not only an engine one
+
+Two of the constants the section above multiplies are also the shape of the
+product, and that came up as an architecture question on 2026-09-17: a real
+instrument track -- one channel, a four-minute part, two thousand notes -- fits
+nowhere in the current model, and there are two separate reasons why.
+
+The first is storage. `MAX_PATTERN_STEPS` is 256 sixteenth cells
+(`crates/mooloop-core/src/pattern.rs:13`), which at `STEPS_PER_BAR` of 16 is
+sixteen bars, and `MAX_NOTES_PER_CHANNEL_PATTERN` is not an independent number
+at all -- it is `MAX_PATTERN_STEPS * 4`, so 1024 (`pattern.rs:27`). Both are
+reserved in full up front so that `apply_command` never grows them in the
+callback, which is the whole subject of the section above. The four-minute part
+is past the first and the two thousand notes are past the second.
+
+The second is the arrangement. `PatternPlacement` is a pattern index and a
+start tick and nothing else (`crates/mooloop-core/src/playlist.rs:40`);
+`Sequencer::schedule_song` walks every active channel of the pattern a
+placement names (`crates/mooloop-engine/src/sequencer.rs:850`), and a pattern
+carries one `length_steps` shared by all of its channels (`pattern.rs:225`). A
+placement is therefore every channel at once, on one 64-bar canvas
+(`MAX_PLAYLIST_BARS`, `playlist.rs:8`, with a placement *start* past it refused
+at `sequencer.rs:117`). There is no per-channel clip for a long part to live
+in, and nothing short of inventing one would give it a place.
+
+**Adam settled this the same day, in favour of the groovebox.** Patterns stay
+and there are no per-track clips. `docs/plans/audio-recording/00-status.md`
+records the same ruling from the audio side that day -- audio records into the
+sampler, "there are no per-track audio clips, and this plan must not add any"
+-- so this was one decision made once about notes and audio together, not two
+that happen to agree. It is a product decision rather than an implementation
+accident, which is why it is written here rather than left for each feature to
+rediscover: pattern-phase swing, `set_pattern_length` and clip automation are
+all built on the shared timeline, and every one of them makes the alternative
+more expensive without making it more likely.
+
+What the decision does not do is make the ceiling go away. If a part ever
+genuinely needs more than sixteen bars, **the answer is to raise
+`MAX_PATTERN_STEPS`, not to add clips** -- and that is the move this document
+has to be read before making, because the two numbers multiply rather than
+stand alone. `MAX_NOTES_PER_CHANNEL_PATTERN` follows `MAX_PATTERN_STEPS`, and
+the preallocated bank is `MAX_PATTERNS x MAX_CHANNELS x
+MAX_NOTES_PER_CHANNEL_PATTERN x size_of::<NoteEvent>()`, so the floor is linear
+in the ceiling: sixteen bars is the 1051 MB measured above (`256 x 256 x 1024 x
+16 bytes`, exactly 1.00 GiB), sixty-four bars would be 4 GiB, and the hundred
+and twenty bars a four-minute part wants at 120 BPM would be about 7.5 GiB.
+**So `docs/plans/pattern-bank-floor/` has to land first.** Raising the ceiling
+while the bank is still dimensioned by it multiplies the largest number in the
+engine, which is exactly the fault this document opens by naming.
+
+A CLAP instrument is the likeliest thing to ask the question first, since a
+hosted instrument is where a long recorded part would arrive. That is step 10
+of `docs/plans/plugin-hosting/`, and the answer is settled before it starts
+rather than during it.
+
 ## Current boundaries
 
 - The current channel and effect bridges use complete `u8` address spaces:

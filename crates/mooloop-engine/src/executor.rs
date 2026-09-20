@@ -18,7 +18,7 @@ use rtrb::Consumer;
 
 use crate::load::LoadMeters;
 use crate::render::{RenderState, RetiredPreviews};
-use crate::{RealtimeCommand, StructuralReclaim};
+use crate::{PreparedProject, RealtimeCommand, StructuralReclaim};
 
 /// Per-block MIDI input ceiling. Bounded so the callback never allocates.
 const MAX_MIDI_PER_BLOCK: usize = 256;
@@ -248,28 +248,38 @@ impl Executor {
             // a position captured earlier would step the song backwards by
             // however long the install took, and a key pressed during the
             // install would not be in a set captured before it.
-            let mut prepared = prepared;
-            if prepared.keep_transport {
-                prepared.render.adopt_performance_state(&self.render);
+            // Destructured here and not before the capacity check, which
+            // needs the struct whole to put it back on `pending_command`.
+            // Taking the fields apart is what keeps the arm realtime-safe:
+            // `carry` owns four `Vec`s, and anything still owned by
+            // `prepared` when this block ends is freed by drop glue, on this
+            // thread. Every field leaves by hand, and the plan leaves through
+            // the reclaim ring with the generation it was made against.
+            let PreparedProject {
+                generation,
+                mut render,
+                keep_transport,
+                carry,
+            } = prepared;
+            if keep_transport {
+                render.adopt_performance_state(&self.render);
             }
             // Before the swap, because both generations have to be reachable:
             // the live strips are moved into the incoming state and the ones
             // built for it go back, to leave with the retired generation and
             // be freed off this thread.
-            prepared
-                .render
-                .carry_strips_from(&mut self.render, &prepared.carry);
-            let retired = std::mem::replace(&mut self.render, prepared.render);
+            render.carry_strips_from(&mut self.render, &carry);
+            let retired = std::mem::replace(&mut self.render, render);
             match self
                 .reclaim_tx
-                .push(StructuralReclaim::RenderState(retired))
+                .push(StructuralReclaim::RenderState { retired, carry })
             {
                 Ok(()) => {}
                 Err(_) => unreachable!("reclaim capacity checked before project swap"),
             }
-            let _ = self.evt_tx.push(EngineEvent::ProjectInstalled {
-                generation: prepared.generation,
-            });
+            let _ = self
+                .evt_tx
+                .push(EngineEvent::ProjectInstalled { generation });
         }
 
         // Decode before rendering so this block's input can act on this
@@ -410,7 +420,6 @@ fn enable_flush_to_zero() {}
 mod tests {
     use super::*;
     use crate::render::RenderState;
-    use crate::PreparedProject;
     use mooloop_core::Project;
 
     const SAMPLE_RATE: u32 = 48_000;
@@ -641,7 +650,14 @@ mod tests {
     /// this one does no work beyond moving boxes: no comparison, no
     /// reasoning, and above all no allocation. A carried strip is a pointer
     /// exchanged with the one built for it, and the strip it displaces leaves
-    /// through the reclaim ring to be dropped elsewhere.
+    /// through the reclaim ring to be dropped elsewhere. So does the plan
+    /// itself, which rides out with the retired generation and is freed on
+    /// the control thread.
+    ///
+    /// **This measures the swap and only the swap.** The install around it --
+    /// the `PreparedProject` that owns the plan, and what the callback does
+    /// with the fields it does not move -- is
+    /// [`installing_a_project_allocates_and_frees_nothing`].
     ///
     /// Measured rather than reasoned, in the manner of
     /// `no_buffer_operation_allocates_on_the_callback`. A floor rather than a
@@ -695,6 +711,95 @@ mod tests {
 
         executor.process(std::iter::empty(), &mut out_l, &mut out_r);
         assert!(executor.render.input_bus().l[..BLOCK].iter().all(|x| *x == 0.0));
+    }
+
+    /// **The whole install allocates and frees nothing on the audio thread.**
+    ///
+    /// [`carrying_strips_allocates_nothing`] measures a bare
+    /// `carry_strips_from` on two loose renderers. That is the swap, and the
+    /// swap was never the problem: the `PreparedProject` the callback takes
+    /// off the command ring owns the [`crate::CarryPlan`] as well as the
+    /// renderer, so whatever the arm leaves un-moved is freed by drop glue at
+    /// the end of the block -- four `Vec`s, on every structural edit. A test
+    /// that never builds a `PreparedProject` inside its measured window
+    /// cannot see that, which is AGENTS.md's one-sided guard.
+    ///
+    /// So this one measures `Executor::process` itself, with a real install
+    /// queued and a plan whose vectors are genuinely non-empty, and asserts
+    /// both counters. The plan must leave with the retired generation through
+    /// the reclaim ring and be freed on the control thread.
+    #[test]
+    fn installing_a_project_allocates_and_frees_nothing() {
+        let mut project = two_routed_notes();
+        // A send, so the send bank's edge matching is on the measured path.
+        project.buses[1].sends.push(mooloop_core::AuxSend::new(2));
+        let mut reordered = project.clone();
+        reordered.move_channel(0, 1).expect("a real move");
+        reordered.move_track(1, 2).expect("a real move");
+        let plan = crate::carry_plan(&project, &reordered);
+        let populated = [
+            &plan.channels,
+            &plan.tracks,
+            &plan.channel_seats,
+            &plan.track_seats,
+        ]
+        .into_iter()
+        .filter(|vectors| !vectors.is_empty())
+        .count();
+        assert!(
+            populated > 0,
+            "every vector in the plan is empty, so nothing would be freed and \
+             this test would pass whatever the executor does: {plan:?}"
+        );
+
+        // Not the `executor()` helper: its renderer is built from
+        // `Project::default()`, and the plan's indices are `project`'s.
+        let (mut cmd_tx, cmd_rx) = rtrb::RingBuffer::new(8);
+        let (evt_tx, _evt_rx) = rtrb::RingBuffer::new(8);
+        let (reclaim_tx, _reclaim_rx) = rtrb::RingBuffer::new(8);
+        let mut executor = Executor::new(
+            ExecutorIo {
+                cmd_rx,
+                evt_tx,
+                reclaim_tx,
+            },
+            Box::new(RenderState::from_project(SAMPLE_RATE, &project, &[])),
+            Arc::new(AtomicU64::new(0)),
+            SAMPLE_RATE,
+            LoadMeters::new(),
+        );
+        let mut out_l = [0.0f32; BLOCK];
+        let mut out_r = [0.0f32; BLOCK];
+        // Warm up, so block state initialised on first use is not counted.
+        executor.render.play();
+        for _ in 0..40 {
+            executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        }
+
+        // Not the `prepared()` helper: it hardcodes `CarryPlan::default()`,
+        // whose four empty vectors free nothing. Everything that allocates
+        // happens before the counter is read, the ring included.
+        cmd_tx
+            .push(RealtimeCommand::InstallProject(PreparedProject {
+                generation: 1,
+                render: Box::new(RenderState::from_project(SAMPLE_RATE, &reordered, &[])),
+                keep_transport: true,
+                carry: plan,
+            }))
+            .expect("room in the ring");
+
+        let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+
+        assert_eq!(
+            after, before,
+            "the install allocated or freed on the audio thread: \
+             {} allocations and {} frees, against a plan with {populated} \
+             non-empty vectors",
+            after.0 - before.0,
+            after.1 - before.1
+        );
     }
 
     /// The channel the edit was *about* is still rebuilt, and still cuts.

@@ -364,10 +364,21 @@ pub enum PreviewCommand {
 /// effect of `EngineHandle::poll` — there is nothing to inspect.
 pub(crate) enum StructuralReclaim {
     Effect(ReclaimedEffect),
-    /// A complete executor displaced by a project install. Keeping it boxed
-    /// lets the realtime thread swap ownership without allocating; the box is
+    /// A complete executor displaced by a project install, and the
+    /// [`CarryPlan`] that install was made under. Keeping the renderer boxed
+    /// lets the realtime thread swap ownership without allocating; both are
     /// destroyed when `EngineHandle::poll` drains this variant.
-    RenderState(Box<RenderState>),
+    ///
+    /// **The plan travels with the renderer rather than in a variant of its
+    /// own.** The executor reserves exactly one reclaim slot before it
+    /// commits to an install, so a second push would mean a second slot, a
+    /// `slots() < 2` check, and a new way for the swap to be turned away.
+    /// Freeing the plan's four `Vec`s where it was last used -- the callback
+    /// -- is the thing this variant exists to prevent.
+    RenderState {
+        retired: Box<RenderState>,
+        carry: CarryPlan,
+    },
     /// A sample whose browser preview finished or was replaced. Same
     /// ownership round trip as an effect node: the sample's last reference
     /// must not be dropped on the realtime thread.
@@ -439,6 +450,10 @@ pub(crate) struct PreparedProject {
 /// and does not compare anything; see [`RenderState::carry_strips_from`].
 ///
 /// Bounded by `MAX_CHANNELS` and `MAX_BUSES`, and allocated here off-thread.
+/// It is freed off-thread too: the executor hands the plan back through the
+/// reclaim ring with the generation it retired, so the four `Vec`s are
+/// destroyed by `EngineHandle::poll` on the control thread rather than by
+/// drop glue at the end of the callback.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CarryPlan {
     pub channels: Vec<(u8, u8)>,
@@ -1041,7 +1056,10 @@ impl EngineHandle {
         while let Ok(reclaim) = self.reclaim_rx.pop() {
             match reclaim {
                 StructuralReclaim::Effect(effect) => drop(effect),
-                StructuralReclaim::RenderState(render) => drop(render),
+                StructuralReclaim::RenderState { retired, carry } => {
+                    drop(retired);
+                    drop(carry);
+                }
                 StructuralReclaim::PreviewSample { sample } => drop(sample),
                 StructuralReclaim::SamplerAudio(audio) => drop(audio),
                 StructuralReclaim::SamplerStretch(pool) => drop(pool),

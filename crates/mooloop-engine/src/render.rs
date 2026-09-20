@@ -29,7 +29,8 @@ use mooloop_dsp::{
     AudioTaps, AuxIn, IntegerDelay, Event, EventList, ModulatorRack, MonoSynth, MlM1, MlP8,
     NoteGateEvents, PolySynth,
     ChannelAudioSnapshot,
-    ProcessContext, SampleData, Sampler, SpectrumAnalyzer, StereoBus, StretchPool, TimedEvent,
+    ProcessContext, SampleData, Sampler, SourceNode, SpectrumAnalyzer, StereoBus, StretchPool,
+    TimedEvent,
     CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE, SILENCE_PEAK,
 };
 use mooloop_dsp::smooth::Smoothed;
@@ -2479,7 +2480,12 @@ impl ChannelStrip {
     /// The rest contract is on `AudioNode`, so asking a channel whether its
     /// source has anything left to do should not mean a second `match` over
     /// the eight device kinds every time. This is that match, once.
-    fn source_node(&self) -> &dyn AudioNode {
+    ///
+    /// `SourceNode` rather than `AudioNode` because `SourceNode: AudioNode`:
+    /// the rest contract is inherited, so this answers `is_at_rest` and
+    /// `tail_frames` exactly as before, and also answers the one call the
+    /// strip makes into its generator.
+    fn source_node(&self) -> &dyn SourceNode {
         match self.active_source {
             DeviceKind::Sampler => &self.sampler,
             DeviceKind::DrumSynth => &self.drum_synth,
@@ -2492,8 +2498,19 @@ impl ChannelStrip {
         }
     }
 
-    fn source_node_mut(&mut self) -> &mut dyn AudioNode {
-        match self.active_source {
+    /// The generator and this channel's bus, borrowed apart.
+    ///
+    /// This is the mutable half of the match above, and it hands back the bus
+    /// with the node because it has to. A `source_node_mut(&mut self)`
+    /// borrows the *whole* strip, so `node.process_source(.., &mut self.bus,
+    /// ..)` at a call site is two mutable borrows of `self` and does not
+    /// compile — while the eight arms it replaced each borrowed one generator
+    /// field and `self.bus`, which are disjoint and always did. Doing the
+    /// match and the field split in the same function is what lets the
+    /// compiler see that disjointness, and it is why this returns a pair
+    /// rather than the node alone.
+    fn source_and_bus(&mut self) -> (&mut dyn SourceNode, &mut StereoBus) {
+        let source: &mut dyn SourceNode = match self.active_source {
             DeviceKind::Sampler => &mut self.sampler,
             DeviceKind::DrumSynth => &mut self.drum_synth,
             DeviceKind::MonoSynth => &mut self.mono_synth,
@@ -2502,7 +2519,13 @@ impl ChannelStrip {
             DeviceKind::MlP8 => &mut self.mlp8,
             DeviceKind::Ds01 => &mut self.ds01,
             DeviceKind::AuxIn => &mut self.aux_in,
-        }
+        };
+        (source, &mut self.bus)
+    }
+
+    /// The generator alone, for the callers that touch nothing else.
+    fn source_node_mut(&mut self) -> &mut dyn SourceNode {
+        self.source_and_bus().0
     }
 
     /// Record how loud the generator was this block, and return how many
@@ -2588,28 +2611,8 @@ impl ChannelStrip {
         source: Option<&StereoBus>,
         ports: &mut AudioTaps,
     ) {
-        match self.active_source {
-            DeviceKind::Sampler => self.sampler.process(context, &mut self.bus, events, None),
-            DeviceKind::DrumSynth => self
-                .drum_synth
-                .process(context, &mut self.bus, events, None),
-            DeviceKind::MonoSynth => self
-                .mono_synth
-                .process(context, &mut self.bus, events, None),
-            DeviceKind::PolySynth => self
-                .poly_synth
-                .process(context, &mut self.bus, events, None),
-            DeviceKind::MlM1 => self.mlm1.process(context, &mut self.bus, events, None),
-            DeviceKind::MlP8 => self
-                .mlp8
-                .process_publishing(context, &mut self.bus, events, ports),
-            DeviceKind::Ds01 => self
-                .ds01
-                .process_publishing(context, &mut self.bus, events, ports),
-            DeviceKind::AuxIn => self
-                .aux_in
-                .process_from(context, &mut self.bus, source, events, ports),
-        }
+        let (node, bus) = self.source_and_bus();
+        node.process_source(context, bus, events, source, ports);
         self.publish_outlets();
     }
 
@@ -2622,18 +2625,15 @@ impl ChannelStrip {
     /// band, which is the same thing said for a device that has not
     /// implemented outlets yet.
     fn publish_outlets(&mut self) {
-        self.published_outlets = [0.0; MAX_GENERATOR_OUTLETS];
-        match self.active_source {
-            DeviceKind::MlP8 => {
-                let published = self.mlp8.publish_outlets();
-                self.published_outlets[..published.len()].copy_from_slice(&published);
-            }
-            DeviceKind::Ds01 => {
-                let published = self.ds01.publish_outlets();
-                self.published_outlets[..published.len()].copy_from_slice(&published);
-            }
-            _ => {}
-        }
+        // Zeroed here, before the device is asked, which is the sequencing
+        // the paragraph above is about: the band the generator does not fill
+        // is cleared by the host and not by whoever happens to be installed.
+        // The band is eight floats on the stack, so building it and storing
+        // it is a move rather than anything the callback has to pay for, and
+        // it keeps the field from being readable half-written.
+        let mut published = [0.0; MAX_GENERATOR_OUTLETS];
+        self.source_node_mut().publish_outlets_into(&mut published);
+        self.published_outlets = published;
     }
 }
 
@@ -3438,6 +3438,10 @@ impl RenderState {
     /// freshly built one goes back in its place and leaves with the retired
     /// state to be freed off-thread. No allocation, no comparison, no
     /// reasoning on the audio thread.
+    ///
+    /// `carry` is borrowed here and freed nowhere near here: the executor
+    /// sends the plan out on the reclaim ring alongside the generation it
+    /// retired, so its four `Vec`s are destroyed on the control thread.
     ///
     /// **The compensation ring is decided by its length**, and that is not a
     /// detail. Every other setting on a strip comes from its own channel's
@@ -4979,7 +4983,7 @@ impl RenderState {
     /// block: its flag is on and its AUDIO input is the hardware input.
     fn monitors_input(&self, index: usize) -> bool {
         self.monitor.get(index).copied().unwrap_or(false)
-            && self.audio_input_routing.taps.get(index).copied().flatten()
+            && self.audio_input_routing.load().taps.get(index).copied().flatten()
                 == Some(mooloop_core::AudioTap::Input)
     }
 
