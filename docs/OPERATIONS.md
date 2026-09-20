@@ -558,6 +558,26 @@ machine it was written on had already granted it, and macOS is known to cache
 a TCC decision for the life of a process. If the row does not appear within a
 second or two of granting it, restart mooloop and say so here.
 
+**One shared build cache, in `~/.cache/cargo-target`.** `.cargo/config.toml`
+says a workstation wanting a cache shared across worktrees sets
+`CARGO_TARGET_DIR` machine-locally, and on this Mac that is done, in
+`~/.zshenv` beside the `PATH` line below. It was not optional: on 2026-09-20
+the main checkout and one task worktree held 26 GB and 29 GB of near-identical
+output, on a 228 GiB internal disk with **6.2 GiB free**. Consolidating them
+returned the disk to 33 GiB free, and a second worktree now costs nothing --
+measured at 0.10 s for a `cargo check` the main checkout had already done.
+
+**It is on the internal disk on purpose, and that is worth re-testing rather
+than inheriting.** Both external SSDs are fast drives -- a Samsung T5 and a
+SanDisk Extreme 2 TB -- but on 2026-09-20 both sat behind a VIA Labs **USB 2.0**
+hub, negotiating 480 Mb/s and measuring ~29 MB/s read and write against the
+internal's ~904 MB/s. Build output is the worst thing to put on a disk 31x
+slower, so the cache stayed internal. Plug a drive directly into the Mac,
+re-measure with `dd`, and if it reaches USB 3 speeds the external is the better
+home and `~/.zshenv` has one line to change. The guard there matters: an
+unmounted `/Volumes/<name>` resolves on the boot disk, so a cache pointed at a
+detached drive silently fills the disk it was meant to spare.
+
 **`cargo` reaches non-interactive shells through `~/.zshenv`, not `.zshrc`.**
 Homebrew's `rustup` is keg-only, so its shims are never linked into
 `/opt/homebrew/bin` -- and `rustup` itself resolves while `cargo` does not,
