@@ -126,7 +126,10 @@ limit. When several worktrees need a shared cache, use the machine-local
 
 Do not set `CARGO_INCREMENTAL=0` to save memory. It is the obvious guess and
 it is measurably wrong here: on the same `.slint` edit it cost 4.58 GB and
-2m01s, against 3.42 GB and 41s with incremental left on.
+2m01s, against 3.42 GB and 41s with incremental left on. (A web-runner
+container is the one place that advice inverts, for disk rather than memory
+and at a cost in memory; see the container section near the end. On this
+machine, leave it on.)
 
 For scale on where that single module comes from: `slint_build` expands
 `ui/main.slint` into roughly 39 MB and 395,000 lines of Rust, so `mooloop-ui`
@@ -523,6 +526,52 @@ stale package lists 404 on part of it. A 2026-09-20 session built and tested
 `mooloop-ui` with `libjack-jackd2-dev`, `libfontconfig-dev` and
 `libxkbcommon-dev` alone, and `autoconf` and `nasm` were installed on a guess
 and turned out to be unnecessary: `mp3lame-sys` builds LAME with plain gcc.
+
+**A verification pass in a container hits two separate walls, and neither
+error names itself.** Both were met on 2026-09-20 on four cores and 16 GB, and
+they are not the same failure -- treating them as one sends you after the
+wrong remedy.
+
+**Memory, during `mooloop-ui`'s own `rustc`.** `cargo test --workspace` at
+default parallelism ran four `rustc` at once and the `mooloop-ui` one died
+with `signal: 9, SIGKILL`. Cargo reports that as `error: could not compile
+mooloop-ui`, which reads like a broken build; a signal 9 with no diagnostic
+above it is the OOM killer, not the compiler. **`-j 1` for anything that
+compiles `mooloop-ui`** is the remedy: it is the crate that will not fit
+beside three others. Splitting the pass -- workspace `--exclude mooloop-ui` at
+full parallelism, then `mooloop-ui` alone at `-j 1` -- keeps most of the
+speed.
+
+**Disk, everywhere.** One `cargo test --workspace` took `target/` to 30 GB,
+**15 GB of it `target/debug/incremental` alone**, and filled the session's
+allowance. That one does not announce itself as a cargo error at all: what was
+seen first was the harness losing a command's output entirely, because its own
+temp files had nowhere to go. `df` is misleading here in the way this
+document's header warns -- the allowance is spent while the machine looks
+fine. So **export `CARGO_INCREMENTAL=0` for a verification pass** -- in a
+container, and only there. `rm -rf target/debug/incremental` recovers the
+space without touching the compiled artifacts, and works from inside an
+already-wedged session because deletes still succeed while writes fail.
+
+**That is the exact opposite of the laptop rule above, and both are right.**
+The Cargo-limits section says not to turn incremental off, measured: on a
+`.slint` edit it cost 4.58 GB against 3.42 GB and 2m01s against 41s. That is
+an *edit-rebuild cycle*, where incremental is doing the job it exists for. A
+container verification pass compiles each crate once from cold, so there is no
+second build for the 15 GB to pay off in -- and the container's scarce
+resource is disk, which the laptop has plenty of, while the laptop's scarce
+resource is memory. **Note what that means: turning incremental off spends
+memory to save disk**, and memory is the other wall on this list. It is
+survivable here only in company with the `-j 1` above -- one 4.6 GB `rustc`
+fits in 16 GB, four do not. Do not carry either setting to the other machine.
+
+Even with it off, a full rung 4 only just fits, and it is worth knowing the
+shape before starting one. The same worktree sat at **13 GB free** after a
+workspace test, a workspace clippy and a `mooloop-ui` check -- and at **1.8 GB
+free** once `cargo test -p mooloop-ui` and its clippy had built the test
+profile's own dependency tree on top. That last pair is 11 GB and half an hour
+(987 s and 1007 s at `-j 1`). Budget for it, or split rung 4 across two
+sessions.
 
 Everything else in this document still holds, `scripts/exit-code` included.
 What does not carry over is the timing. Measured on four container cores that

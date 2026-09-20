@@ -52,17 +52,20 @@ step 03 built first would have ended an open take silently on any structural
 edit. `reports/fable-2026-09-18.md` found this; `audio-recording/03-capture.md`
 states the decision and the alternative it rejected.
 
-`transport-discontinuity/` was added 2026-09-20 and is **not started, outside
-the `FOCUS.md` sequence**, because Adam reported it directly: switching the
-pattern he is looking at cuts off held notes, and it does so in Song mode
-where the selection changes nothing that plays. Four steps. Step 01 is the bug
-and stands alone; 02 to 04 are the mechanism whose absence caused it -- a
-command that lands at a musical boundary, an `AudioNode` that can be told time
-moved, and the rule that navigation must not reach the audio thread. Its
-`00-status.md` records what the investigation established, including that the
-symptom is a choke rather than the renderer rebuild Adam first suspected, and
-the one question left for him: whether a Pattern-mode switch should queue or
-stay immediate. Linear MOO-57.
+`transport-discontinuity/` was added 2026-09-20, **step 01 landed the same
+day**, and the rest is **in progress outside the `FOCUS.md` sequence**, because
+Adam reported it directly: switching the pattern he is looking at cuts off held
+notes, and it does so in Song mode where the selection changes nothing that
+plays. Step 01 is the bug: `SetCurrentPattern` pays a discontinuity only when
+the selection moved, the mode is Pattern and the transport is running, which
+takes four cases that cost every sounding voice down to nothing. Steps 02 to 04
+are the mechanism whose absence caused it -- a command that lands at a musical
+boundary, an `AudioNode` that can be told time moved, and the rule that
+navigation must not reach the audio thread. Read its `00-status.md` before any
+of them: it records that the symptom is a choke rather than the renderer
+rebuild Adam first suspected, and his two rulings, *"immediate and yes"* --
+which cost step 02 its original justification, since queueing was to be what
+retired the Pattern-mode release and immediate keeps it. Linear MOO-57.
 
 `plugin-hosting/` was added 2026-09-16 and is **not started, outside the
 `FOCUS.md` sequence**, because Adam asked for it directly: CLAP effects and

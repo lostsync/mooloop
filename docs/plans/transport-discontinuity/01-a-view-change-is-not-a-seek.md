@@ -1,6 +1,6 @@
 # 01 — A view change is not a seek
 
-Read `00-status.md` first. This step fixes the bug Adam reported and nothing
+**Landed 2026-09-20.** Read `00-status.md` first. This step fixes the bug Adam reported and nothing
 else. It is deliberately small: it does not change what a Pattern-mode switch
 sounds like, it removes the cost from the cases that were never owed one.
 
@@ -38,14 +38,24 @@ per-channel state:
    under Adam's rule those should survive somebody looking at another
    pattern.
 
-Condition 3 contradicts a comment that is currently in the tree, and the
-contradiction is worth stating rather than quietly resolving.
+Condition 3 contradicts a comment that is currently in the tree. It was put
+to Adam rather than resolved quietly, and he took it: *"immediate and yes."*
 `release_all_voices` is called outside the `playing` arm (`render.rs:5427`)
 with the reason *"a seek while stopped still owes the release, for auditioned
 notes if nothing else"*. That reasoning is sound **for a seek**: the user has
 moved the playhead, and an auditioned note heard at the old position is
 stale. It does not transfer to a pattern switch, where the playhead has not
-moved and the note is a key the user is still holding down. So the `seeked`
+moved and the note is a key the user is still holding down.
+
+**Condition 3 applies to the voice release only, and not to the lane
+restore.** The two debts this command owes look alike and are not: `process`
+resolves automation lanes whether or not the transport is running --
+deliberately, *"so that a knob does not jump the moment you press play"*
+(`render.rs:5509`), and `effect_is_driven`'s own doc says the same thing --
+so a stopped switch off an automated pattern strands the destination exactly
+as a running one does. Putting both behind one condition is the obvious
+shape and it is wrong; it was written that way in the first draft and caught
+on a re-read of the diff before it was committed. So the `seeked`
 flag keeps its stopped-transport behaviour and this command stops setting it
 while stopped.
 
@@ -79,22 +89,39 @@ green). **Each new one must fail red before the fix**, and the assertion is on
 the event lists rather than on audio, because `Event::Choke` is the thing
 being counted:
 
-- `switching_the_viewed_pattern_in_song_mode_chokes_nothing` — Song mode,
-  transport playing, a sounding voice, `SetCurrentPattern`; assert no channel's
-  `EventList` contains a `Choke`. This is the reported bug.
-- `reselecting_the_current_pattern_chokes_nothing` — Pattern mode, playing,
-  select the pattern already selected.
-- `an_out_of_range_pattern_selection_chokes_nothing` — a selection the
-  sequencer refuses must not cost anything either.
-- `switching_the_viewed_pattern_while_stopped_chokes_nothing` — Pattern mode,
-  transport stopped, an auditioned note sounding; it survives.
-- `switching_the_playing_pattern_still_releases_every_voice` — the behaviour
-  that stays. Written so that step 02 has to come and change it deliberately
-  rather than discovering it.
+- `switching_the_viewed_pattern_in_song_mode_releases_nothing` — the reported
+  bug.
+- `switching_the_viewed_pattern_while_stopped_leaves_an_audition_alone` — and
+  it carries the reason condition 3 overrules the comment it contradicts.
+- `reselecting_the_pattern_already_current_releases_nothing`.
+- `an_out_of_range_pattern_selection_releases_nothing`.
+- `switching_pattern_while_playing_releases_the_sounding_voices` — the
+  behaviour that stays. It already existed; its docstring gains *in pattern
+  mode*.
+- `switching_off_an_automated_pattern_hands_the_knob_back_while_stopped` —
+  the stopped sibling of the 2026-09-14 test above it, and the one that pins
+  the split between the two debts.
 
-A test that asserts silence would pass for the wrong reason — a `Choke` that
-is emitted and then not reached is still a bug — so assert on the emitted
-events, the way the existing seek and loop-fold tests do.
+The four voice tests were run against the unfixed tree first and failed there,
+each reporting a peak of `0` against `0.25` before the switch — so they failed
+because the voice was killed, not because nothing was sounding. The fifth
+passed in both states.
+
+The automation one was run against the *first draft* instead — the version
+with one shared condition — and failed there, which is the only tree in which
+it is a red test. Its first shape did not fail for the right reason and did
+not pass for one either: it asserted against a transport that had never run,
+where the strip is asleep, nothing had resolved and there was nothing to
+strand. The `"or this test proves nothing"` assertion it was written with is
+what caught that; it plays a block and pauses now.
+
+The voice tests measure the master's peak rather than the event lists, which is what the
+existing test does and is the stronger assertion: a `Choke` that is emitted
+and then not reached would still pass an event-list check. And they compare
+against the level *before* the switch rather than against audibility, because
+a `release_all` on an ML-P8 at `release: 0.0` is a fast fade rather than an
+instant one — "still making a sound one block later" would pass straight
+through the bug.
 
 ## Verification
 

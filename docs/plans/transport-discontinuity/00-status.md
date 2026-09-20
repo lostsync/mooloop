@@ -1,8 +1,9 @@
 # Transport discontinuity status
 
-Nothing has landed. This directory was written 2026-09-20, out of Adam
-reporting that moving around the app makes the audio glitch, and it covers
-both the bug he heard and the mechanism whose absence caused it.
+**Step 01 landed 2026-09-20**, the day the plan was written. Steps 02 to 04
+have not started. The directory came out of Adam reporting that moving around
+the app makes the audio glitch, and it covers both the bug he heard and the
+mechanism whose absence caused it.
 
 Linear: [MOO-57](https://linear.app/mooloop/issue/MOO-57/selecting-a-pattern-chokes-every-voice-on-every-channel-including-in).
 
@@ -65,19 +66,52 @@ changes nothing that is scheduled, so it costs nothing. This is why step 01 is
 an engine change and not a UI change: the command still has to be sent,
 because `recording_tick` needs it.
 
-## What is not settled
+## What Adam settled next, 2026-09-20
 
-**Whether a Pattern-mode switch should become queued or stay immediate.**
-Step 02 builds the mechanism either way; which one the pattern selector uses
-is Adam's call and is asked there rather than assumed. Queueing is the
-Elektron/Ableton convention and is what removes the last reason to choke;
-immediate is what mooloop does today and is the FL convention.
+Both questions this file left open were answered the same day, in one line:
+*"immediate and yes."*
+
+**A Pattern-mode switch stays immediate.** Step 02 still builds the deferred
+command class -- it is the missing granularity and other work wants it -- but
+the pattern selector does not adopt it, and the Pattern-mode release stays.
+That keeps the FL convention mooloop already has, and it means step 02 is no
+longer what retires the last choke; nothing does, because in Pattern mode
+under a running transport the release is genuinely owed.
+
+**A switch with the transport stopped stops releasing.** That is the "yes",
+and it settles the one thing step 01 proposed against a comment already in the
+tree. The reasoning is recorded at the test rather than only here:
+`switching_the_viewed_pattern_while_stopped_leaves_an_audition_alone`.
+
+## What step 01 changed
+
+`Sequencer::set_current_pattern` answers `bool` — whether the selection
+actually moved — and `RenderState::apply_command` pays the discontinuity only
+when that is true, the mode is `Pattern`, and the transport is running. Four
+cases that used to cost every sounding voice on every channel now cost
+nothing: a Song-mode switch, a switch with the transport stopped, a
+re-selection of the pattern already current, and a selection past the end of
+the bank.
+
+The Pattern-mode release under a running transport is unchanged, and its
+existing test still pins it.
+
+**The two debts the command owes do not share a condition**, and the first
+draft had them sharing one. The voice release is conditional on the transport
+running; the lane restore is not, because `process` resolves lanes while
+stopped on purpose -- *"so that a knob does not jump the moment you press
+play"* (`render.rs:5509`). Behind one condition, a paused switch off an
+automated pattern would have left the destination parked at whatever the
+curve last resolved, which is the exact hazard `restore_lanes_left_behind`
+was written for in the first place. Caught on a re-read of the diff, and
+`switching_off_an_automated_pattern_hands_the_knob_back_while_stopped` now
+pins it.
 
 ## Steps
 
 | Step | What it does | Cost |
 | --- | --- | --- |
-| 01 | `SetCurrentPattern` owes a discontinuity only when it changes what is scheduled | small, standalone, fixes the report |
+| 01 | **Landed 2026-09-20.** `SetCurrentPattern` owes a discontinuity only when it changes what is scheduled | small, standalone, fixed the report |
 | 02 | A command class that lands at a musical boundary | medium, needs a face change |
 | 03 | `AudioNode` can be told time moved, instead of being handed fake note events | touches every DSP node |
 | 04 | Navigation must not reach the audio thread — the rule, and a guard | small |

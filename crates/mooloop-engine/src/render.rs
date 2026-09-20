@@ -4506,18 +4506,49 @@ impl RenderState {
             EngineCommand::SetSwing(percent) => self.sequencer.set_swing(percent),
             EngineCommand::SetCurrentPattern(pattern) => {
                 let from = self.automation_position();
-                self.sequencer.set_current_pattern(pattern as usize);
-                // The same debt a seek owes, for the same reason: the
-                // note-off that would have ended a sounding voice lives in
-                // the pattern we just stopped scheduling, so without this it
-                // is never emitted and the voice holds until Stop. Pattern
-                // mode has no loop fold to catch it either -- `loop_range` is
-                // `None` outside Song mode.
-                self.seeked = true;
-                // A *lane* in that pattern owes the same debt, and it is the
-                // quieter one: a note that never ends is heard, and a knob
-                // parked where the last curve left it is not.
-                self.restore_lanes_left_behind(from);
+                let moved = self.sequencer.set_current_pattern(pattern as usize);
+                // **A view change is not a seek**, and this command is a view
+                // change unless the selection is what is being scheduled. It
+                // reaches playback only through `PlaybackMode::Pattern` arms
+                // -- `schedule_pattern`, `schedule_once`, `automation_lane_at`
+                // and `has_automation_at` -- so in Song mode nothing that is
+                // scheduled has changed and neither debt below is owed. (The
+                // restore would be a no-op there in any case: song mode
+                // answers both `covering_pattern_at` and `automation_lane_at`
+                // from the placements under a playhead this command does not
+                // move, so the coverage is identical either side of it.) A
+                // refused or unchanged selection is the same argument again,
+                // and `set_current_pattern` answers it.
+                //
+                // `docs/plans/transport-discontinuity/`.
+                if moved && self.sequencer.playback_mode() == PlaybackMode::Pattern {
+                    // The same debt a seek owes, for the same reason: the
+                    // note-off that would have ended a sounding voice lives in
+                    // the pattern we just stopped scheduling, so without this
+                    // it is never emitted and the voice holds until Stop.
+                    // Pattern mode has no loop fold to catch it either --
+                    // `loop_range` is `None` outside Song mode.
+                    //
+                    // **Only under a running transport.** Stopped, nothing
+                    // sequenced is sounding and so no note-off has been
+                    // stranded; what may be sounding is an audition or a held
+                    // key, which belongs to the player rather than to the
+                    // pattern being left.
+                    if self.transport.playing {
+                        self.seeked = true;
+                    }
+                    // A *lane* in that pattern owes the same debt, and it is
+                    // the quieter one: a note that never ends is heard, and a
+                    // knob parked where the last curve left it is not.
+                    //
+                    // This half is owed whether or not the transport is
+                    // running, and the two must not share a condition: lanes
+                    // resolve while stopped as well -- the playhead holds
+                    // still and the destination sits at the value drawn under
+                    // it -- so a stopped switch off an automated pattern
+                    // strands the knob exactly as a running one does.
+                    self.restore_lanes_left_behind(from);
+                }
             }
             EngineCommand::AddPattern => {
                 self.sequencer.add_pattern();
@@ -8569,6 +8600,68 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         );
     }
 
+    /// And it hands it back with the transport stopped, which is the half
+    /// that nearly went missing on 2026-09-20.
+    ///
+    /// Step 01 of `docs/plans/transport-discontinuity/` stopped charging a
+    /// view change for a discontinuity, and the first draft put both debts
+    /// this command owes behind one condition that included
+    /// `transport.playing`. The voice release is genuinely conditional on it
+    /// -- stopped, no sequenced note-off has been stranded -- but the lane
+    /// restore is not: `process` resolves lanes whether or not the transport
+    /// is running, deliberately, so that a knob does not jump the moment you
+    /// press play -- `effect_is_driven`'s own doc says it: *"playing or
+    /// stopped does not matter; lanes resolve either way"*. A paused switch
+    /// off an automated pattern therefore parks the destination exactly as a
+    /// running one does, and the two conditions have to stay apart.
+    #[test]
+    fn switching_off_an_automated_pattern_hands_the_knob_back_while_stopped() {
+        let mut project = synth_project(filter_channel(1_000.0));
+        project.pattern_lengths.push(DEFAULT_STEPS);
+        project.channels[0].notes.push(Vec::new());
+        project.channels[0].automation.push(Vec::new());
+
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        for (id, tick, value) in [(1u32, 0u32, 1.0f32), (2, 96, 0.0)] {
+            render.apply_command(EngineCommand::UpsertAutomationPoint {
+                pattern: 0,
+                channel: 0,
+                target: CUTOFF,
+                point: mooloop_core::AutomationPoint::new(id, tick, value),
+            });
+        }
+        // Play far enough for the curve to take the cutoff off its knob, then
+        // pause. An idle strip is skipped, so a transport that never ran
+        // would leave the device holding its knob value and there would be
+        // nothing stranded to hand back -- the hazard needs a lane that has
+        // actually resolved.
+        render.play();
+        render.process_block(128);
+        let driven = cutoff_events(&render);
+        assert!(
+            driven.iter().any(|(_, value)| (value - 1_000.0).abs() > 1.0),
+            "the cutoff never left its knob value: {driven:?}"
+        );
+
+        render.apply_command(EngineCommand::Pause);
+        render.process_block(128);
+        assert!(!render.transport.playing);
+
+        render.apply_command(EngineCommand::SetCurrentPattern(1));
+        render.process_block(128);
+
+        let restored = cutoff_events(&render);
+        assert_eq!(
+            restored.iter().map(|(offset, _)| *offset).collect::<Vec<_>>(),
+            vec![0],
+            "expected exactly one restoring event: {restored:?}"
+        );
+        assert!(
+            (restored[0].1 - 1_000.0).abs() < 1.0,
+            "the knob was not handed back: {restored:?}"
+        );
+    }
+
     /// The other half of the same rule: a destination that is **still**
     /// automated after the switch must not be written at all.
     ///
@@ -11477,22 +11570,25 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         );
     }
 
-    /// Switching the current pattern while the transport runs is a
-    /// discontinuity in the *note source* rather than in the position, and it
-    /// owes the same release a seek owes. `schedule_pattern` reads
-    /// `patterns[current]` fresh every block, so the moment `current` moves,
-    /// the note-off of anything still sounding is in a list nobody schedules
-    /// any more. Nothing else let it go: pattern mode takes no loop fold
-    /// (`loop_range` is `None` outside song mode, so no span is ever
-    /// `jumped`), and the generators only release on `!ctx.playing`, which is
-    /// false here -- the transport is still running. The voice held at full
-    /// sustain until Stop.
-    #[test]
-    fn switching_pattern_while_playing_releases_the_sounding_voices() {
-        use crate::render_test_support::{peak_of, SAMPLE_RATE};
+    /// Play `blocks` blocks and answer the master's peak over the last one.
+    fn peak_after(render: &mut RenderState, blocks: usize) -> f32 {
+        use crate::render_test_support::peak_of;
 
-        // A flat, fully sustaining envelope: the only thing that can end
-        // this note is the switch.
+        for _ in 0..blocks {
+            render.process_once_block(1_024);
+        }
+        peak_of(&render.master().l[..1_024])
+    }
+
+    /// A channel sounding one note for far longer than any of the tests
+    /// below run, on a flat, fully sustaining ML-P8. Nothing about the
+    /// material can end it, so anything that ends it is the engine's doing,
+    /// which is what every test here is measuring.
+    ///
+    /// Two patterns, and only pattern 0 carries the note: a switch to
+    /// pattern 1 therefore schedules nothing, and the note's own note-off
+    /// goes with it.
+    fn held_note_project() -> Project {
         let params = mooloop_core::MlP8Params {
             attack: 0.0,
             decay: 0.0,
@@ -11502,36 +11598,176 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         };
         let mut channel = ProjectChannel::mlp8_with_params(0, 2, params);
         channel.setup.channel.volume = 1.0;
-        // Long enough that its off edge is many blocks away, so the only
-        // thing that can end this note is the switch.
         channel.notes[0].push(NoteEvent::new(1, 0, 4608, 60, 127));
 
-        let project = Project {
+        Project {
             channels: vec![channel],
             pattern_lengths: vec![DEFAULT_STEPS, DEFAULT_STEPS],
             ..Project::default()
-        };
+        }
+    }
 
+    /// Switching the current pattern in pattern mode, with the transport
+    /// running, is a discontinuity in the *note source* rather than in the
+    /// position, and it owes the same release a seek owes. `schedule_pattern`
+    /// reads
+    /// `patterns[current]` fresh every block, so the moment `current` moves,
+    /// the note-off of anything still sounding is in a list nobody schedules
+    /// any more. Nothing else let it go: pattern mode takes no loop fold
+    /// (`loop_range` is `None` outside song mode, so no span is ever
+    /// `jumped`), and the generators only release on `!ctx.playing`, which is
+    /// false here -- the transport is still running. The voice held at full
+    /// sustain until Stop.
+    #[test]
+    fn switching_pattern_while_playing_releases_the_sounding_voices() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        let project = held_note_project();
         let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
         render.play();
-        for _ in 0..8 {
-            render.process_once_block(1_024);
-        }
-        let sounding = peak_of(&render.master().l[..1_024]);
+
+        let sounding = peak_after(&mut render, 8);
         assert!(
             sounding > 0.01,
             "the note has to be sounding before the switch, got {sounding}"
         );
 
         render.apply_command(EngineCommand::SetCurrentPattern(1));
-        for _ in 0..24 {
-            render.process_once_block(1_024);
-        }
-        let after = peak_of(&render.master().l[..1_024]);
+        let after = peak_after(&mut render, 24);
         assert!(
             after < sounding * 0.01,
             "the voice must be released by the switch; it was {after} against \
              {sounding} before, which is the note still held"
+        );
+    }
+
+    /// The bug Adam reported on 2026-09-20: *"when i change what pattern im
+    /// looking at, the audio glitches... its really only an issue in song
+    /// mode."*
+    ///
+    /// In song mode the selection is not what is playing. Every read of
+    /// `Sequencer::current` that reaches playback is inside a
+    /// `PlaybackMode::Pattern` arm -- `schedule_pattern`, `schedule_once`,
+    /// `automation_lane_at`, `has_automation_at` -- and song mode schedules
+    /// from playlist placements instead. What `current` still reaches is
+    /// `recording_tick`, so the command has to keep arriving; what it must not
+    /// do is cost a voice.
+    ///
+    /// Held to the *same* level rather than merely to audible: a choke on an
+    /// ML-P8 is `release_all`, and at `release: 0.0` that is a fast fade
+    /// rather than an instant one, so "still making a sound one block later"
+    /// would pass straight through the bug.
+    #[test]
+    fn switching_the_viewed_pattern_in_song_mode_releases_nothing() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        let project = held_note_project();
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        render.apply_command(EngineCommand::SetPlaylistPlacement {
+            pattern: 0,
+            start_tick: 0,
+            on: true,
+        });
+        render.apply_command(EngineCommand::SetPlaybackMode(PlaybackMode::Song));
+        render.play();
+
+        let sounding = peak_after(&mut render, 8);
+        assert!(
+            sounding > 0.01,
+            "the placement has to be sounding before the switch, got {sounding}"
+        );
+
+        render.apply_command(EngineCommand::SetCurrentPattern(1));
+        let after = peak_after(&mut render, 24);
+        assert!(
+            after > sounding * 0.9,
+            "looking at another pattern released a voice song mode is still \
+             playing: {after} against {sounding} before"
+        );
+    }
+
+    /// With the transport stopped there is no sequenced voice whose note-off
+    /// could have been stranded. What may be sounding is an audition or a held
+    /// key, and that belongs to the user rather than to the pattern being left.
+    ///
+    /// This contradicts the reasoning `release_all_voices` is called under for
+    /// a *seek* -- "a seek while stopped still owes the release, for auditioned
+    /// notes if nothing else" -- and deliberately so. After a seek the playhead
+    /// has moved and a note heard at the old position is stale; after this the
+    /// playhead has not moved and the note is a key still held down.
+    #[test]
+    fn switching_the_viewed_pattern_while_stopped_leaves_an_audition_alone() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        let project = held_note_project();
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        assert!(!render.transport.playing);
+
+        render.apply_command(EngineCommand::TriggerChannelNote {
+            channel: 0,
+            note: 60,
+            velocity: 127,
+        });
+        let sounding = peak_after(&mut render, 4);
+        assert!(
+            sounding > 0.01,
+            "the audition has to be sounding before the switch, got {sounding}"
+        );
+
+        render.apply_command(EngineCommand::SetCurrentPattern(1));
+        let after = peak_after(&mut render, 24);
+        assert!(
+            after > sounding * 0.9,
+            "looking at another pattern released an audition the transport \
+             was not playing: {after} against {sounding} before"
+        );
+    }
+
+    /// Re-selecting the pattern already current changes nothing that is
+    /// scheduled, so it owes nothing. It is not a rare gesture: the jump menu
+    /// carries the current pattern as an entry, and the stepper bounces off
+    /// its bounds onto the same index.
+    #[test]
+    fn reselecting_the_pattern_already_current_releases_nothing() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        let project = held_note_project();
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        render.play();
+
+        let sounding = peak_after(&mut render, 8);
+        assert!(sounding > 0.01, "nothing was sounding, got {sounding}");
+
+        render.apply_command(EngineCommand::SetCurrentPattern(0));
+        let after = peak_after(&mut render, 24);
+        assert!(
+            after > sounding * 0.9,
+            "re-selecting the current pattern released a voice: {after} \
+             against {sounding} before"
+        );
+    }
+
+    /// A selection the sequencer refuses must not cost anything either.
+    /// `set_current_pattern` ignores an index past the active prefix, so the
+    /// pattern being scheduled is the one that was already scheduled.
+    #[test]
+    fn an_out_of_range_pattern_selection_releases_nothing() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        let project = held_note_project();
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        render.play();
+
+        let sounding = peak_after(&mut render, 8);
+        assert!(sounding > 0.01, "nothing was sounding, got {sounding}");
+
+        // The project has two patterns.
+        render.apply_command(EngineCommand::SetCurrentPattern(9));
+        let after = peak_after(&mut render, 24);
+        assert!(
+            after > sounding * 0.9,
+            "a refused selection released a voice: {after} against \
+             {sounding} before"
         );
     }
 }

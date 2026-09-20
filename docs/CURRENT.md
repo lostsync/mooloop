@@ -772,8 +772,16 @@ land on its own when it starts to matter:
   reaching past the song's own end plays the part of it that exists, so
   shortening a song under a loop stops the loop rather than being refused.
   Every sounding voice is released at the loop point, at a seek, and when the
-  current pattern is switched under a running transport, because in each case
-  the note-off it was waiting for is no longer on the way.
+  current pattern is switched **in Pattern mode** under a running transport,
+  because in each case the note-off it was waiting for is no longer on the way.
+- **Selecting a pattern is a view change everywhere else, and costs nothing.**
+  In Song mode the selection is not what is playing -- it is what the editor
+  draws and where a recorded note goes -- so switching it while the song runs
+  releases nothing. Nor does switching with the transport stopped, where an
+  audition or a held key belongs to the player rather than to the pattern being
+  left, nor re-selecting the pattern already current, nor a selection past the
+  end of the bank. Before 2026-09-20 all four cut off every sounding voice on
+  every channel.
 - The playhead can be moved with the transport running or stopped, snapped to
   the playlist's own musical snap, and it reaches the end of the *song* --
   including the part of a long clip that overhangs the 64-bar start canvas --

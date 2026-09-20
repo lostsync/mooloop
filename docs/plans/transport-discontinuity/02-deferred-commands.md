@@ -64,20 +64,24 @@ the boundary in a pattern that is no longer being scheduled. That is a small,
 nameable set — the engine can release exactly those voices instead of every
 voice on every channel — and it is the first thing step 03's hook is good for.
 
-## The question for Adam
+## The ruling, 2026-09-20
 
-**Should the pattern selector queue by default, or keep switching
-immediately?**
+**The pattern selector stays immediate.** Adam was asked whether it should
+queue to the pattern end or keep switching now, and took immediate -- the FL
+convention mooloop already has.
 
-- *Queued* is Elektron and Ableton: press it, the change takes at the end of
-  the pattern, the button shows it is pending. It is the one that makes the
-  glitch impossible rather than rare.
-- *Immediate* is FL and is what mooloop does today. It stays possible under
-  this mechanism — `MusicalEdge::Now` is a legal edge — and could be a
-  modifier on the click.
+That changes what this step is for, and the change is worth being honest
+about. It was written expecting queueing to be the thing that retired the
+Pattern-mode choke; it does not, because an immediate switch in Pattern mode
+under a running transport genuinely does strand a note-off, and step 01 left
+that release exactly where it was. So this step is now about the missing
+granularity on its own terms -- a tempo change that lands on the bar, a
+pattern-length change that does not take effect mid-pass, a preset swap on the
+downbeat -- and `MusicalEdge::PatternEnd` gains a caller when something asks
+for one.
 
-This is a feel decision and it is his. Both are cheap once the mechanism
-exists; the mechanism is what this step is for.
+Queueing remains cheap to add on top if Adam ever wants it. Nothing below
+assumes either answer.
 
 ## The face
 

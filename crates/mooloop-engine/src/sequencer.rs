@@ -71,10 +71,20 @@ impl Sequencer {
         }
     }
 
-    pub fn set_current_pattern(&mut self, pattern: usize) {
-        if pattern < self.active_patterns {
-            self.current = pattern;
+    /// Select a pattern, answering whether the selection actually moved.
+    ///
+    /// The answer is what [`crate::render::RenderState::apply_command`]
+    /// charges against. A refused index and a re-selection of the pattern
+    /// already current both change nothing that is scheduled, and both used
+    /// to cost a full discontinuity -- so opening the jump menu on its own
+    /// current entry, or bouncing the stepper off a bound, cut off every
+    /// sounding voice. `docs/plans/transport-discontinuity/`.
+    pub fn set_current_pattern(&mut self, pattern: usize) -> bool {
+        if pattern >= self.active_patterns || pattern == self.current {
+            return false;
         }
+        self.current = pattern;
+        true
     }
 
     pub fn add_pattern(&mut self) -> bool {
