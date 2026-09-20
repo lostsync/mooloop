@@ -16,6 +16,21 @@ GitHub #10 and #26–#30 were written before this plan and describe the same
 order. This plan replaces their ordering and keeps their "done when" lists.
 Each step says which issue it closes.
 
+**Every `file:line` below was re-verified on 2026-09-19, after the
+audio-recording series merged with `origin/main`** — and the merge is the
+point. The 2026-09-19 pass that folded MOO-26 in was accurate the hour it
+ran: `crates/mooloop-ui/src/lib.rs:12623` really was `pump.start(` at
+`968a2f9`. Three commits later it was not. **A line number in this
+repository has a shelf life of about a day**, so the ones here are paired
+with the symbol they point at wherever a symbol exists; when they drift
+again, the name is what you search for.
+
+Crate-relative prefixes are shorthand: a bare `effect.rs`, `generator.rs`,
+`channel.rs`, `project.rs` or `modulation.rs` is `crates/mooloop-core/src/`,
+`session/` is `crates/mooloop-session/src/`, `engine/` is
+`crates/mooloop-engine/src/`, `ui/src/` is `crates/mooloop-ui/src/`, and a
+bare `.slint` file is `crates/mooloop-ui/ui/`.
+
 ## What this is
 
 A third-party plugin, effect or instrument, sits in a channel exactly where a
@@ -83,12 +98,21 @@ crate.
 `clack-host` already splits a plugin into two halves, and this plan follows
 that split.
 
-- **`PluginInstance`** stays on the control thread, which is the UI thread
-  (`ui/src/lib.rs:12364`). It owns the loaded library, the parameter info,
-  state save and load, the GUI, and `on_main_thread`.
+- **`PluginInstance`** stays on the control thread, which is the Slint
+  event-loop thread. **No single line says so** — it is a property of how
+  the control side is assembled, so the 2026-09-16 citation
+  (`ui/src/lib.rs:12364`) was never the right kind of reference. The
+  evidence is the pump: a repeating `slint::Timer` started at
+  `ui/src/lib.rs:12912` (`pump.start`), whose closure runs to `:14367` and
+  owns the session behind a non-`Send` `Rc<RefCell<_>>`. A Slint timer
+  callback runs on the thread with the event loop, and the non-`Send` state
+  means no other thread could take that work over. It owns the loaded
+  library, the parameter info, state save and load, the GUI, and
+  `on_main_thread`.
 - **`PluginProcessor: AudioNode + Send`** is what goes through
-  `StructuralCommand::InstallEffect` (`engine/src/lib.rs:201`; the citation
-  read `:175` until 2026-09-19, when it had drifted), the way every
+  `StructuralCommand::InstallEffect` (`engine/src/lib.rs:209`; the citation
+  read `:175`, then `:201` when it was corrected earlier on 2026-09-19 —
+  the merge moved it again the same day), the way every
   native node does.
 
 The control thread keeps the instances in a **`PluginRack`**, keyed by
@@ -128,9 +152,20 @@ events at the same sample offsets.
 - `EffectKind::Plugin`, `EffectParams::Plugin(PluginSlotId)`,
   `DeviceKind::Plugin`, `ChannelSource::Plugin(PluginSlotId)`,
   `GeneratorParams::Plugin(PluginSlotId)`. All of these are new tagged
-  variants with permanent `serde(rename)`s. All of them stay `Copy`
-  (`effect.rs:2663,3128` derive `Copy`, and so does `GeneratorParams`,
-  `generator.rs:877`).
+  variants with permanent `serde(rename)`s. **Four of the five are `Copy`,
+  not all five**: `EffectKind` (`effect.rs:12`), `EffectParams`
+  (`effect.rs:2889`), `DeviceKind` (`channel.rs:26`) and `GeneratorParams`
+  (`generator.rs:914`). `ChannelSource` is **not** — `project.rs:109`
+  derives `Debug, Clone, PartialEq, Serialize, Deserialize`, because it
+  holds `SamplerState` and the other per-source states by value. Checked
+  against the 2026-09-16 tree: it was not `Copy` then either, so this was
+  wrong the day it was written rather than drifted into. Nothing here
+  depends on it — a `Copy` variant inside a non-`Copy` enum is fine, and the
+  side table of blocker 2 turns on `EffectParams` and `GeneratorParams`,
+  which are `Copy` — but the sentence claimed a property of five types
+  having checked two. The old citations `effect.rs:2663,3128` and
+  `generator.rs:877` land on a Buffer id constant, a Gate match arm and an
+  oscillator-index helper; none is a derive.
 - `Project.plugins: BTreeMap<PluginSlotId, PluginSlotState>` with
   `serde(default)`, where
   `PluginSlotState { plugin: PluginRef, params: Vec<PluginParamInfo>,
@@ -187,29 +222,46 @@ plugin with no GUI it is the only face, so it has to be a good one (step 08).
 For a plugin with a GUI, it sits in the rack while the GUI opens in its own
 window (step 11).
 
-## Blockers (verified in source on 2026-09-16)
+## Blockers (verified 2026-09-16; re-verified 2026-09-19, post-merge)
 
 Items 1–4 are `SCOPE.md` §5's list. Items 5 and 6 were found while writing
 this plan.
 
-1. Parameter descriptors are static per kind (`effect.rs:128`). The id-sized
-   arrays assume small, dense ids, and `EffectSlotRow` has fixed `p0..p9`
-   (`main.slint:211`). **Step 03.**
+1. Parameter descriptors are static per kind (`effect.rs:128`,
+   `EffectKind::descriptors`). The id-sized arrays assume small, dense ids,
+   and `EffectSlotRow` has fixed, hand-written parameter fields
+   (`main.slint:243-266`; the citation read `:211`, the comment above the
+   struct). **They are `p0..p17`, not `p0..p9`** — `p0..p15` are the sixteen
+   slots a descriptor table fills, and `p16`/`p17` carry the tempo-sync flag
+   and beat division, which are not descriptors. There were eighteen on
+   2026-09-16 too, so the count was wrong when written rather than outgrown.
+   It does not soften the blocker: eighteen is still a ceiling spelled in
+   markup, and a plugin with forty parameters clears it as easily as one
+   with eleven. **Step 03.**
 2. `EffectParams` is a closed enum and it is `Copy`. **Step 02**, through
    the side table.
 3. Latency comes from the effect kind. **Step 04.**
    Added 2026-09-18 from `reports/fable-2026-09-18.md`: compensation is not
    the only per-install table this touches. `AudioTapBank` is **rebuilt whole
-   on every install** (`engine/src/render.rs:3379`, deliberately, so an
-   offline render that runs no pump still gets its tap plan). A plugin's
+   on every install** (`engine/src/render.rs:3691`, in
+   `RenderState::load_project`; the citation read `:3379`). It is
+   deliberate, and the line says why: an offline render builds its own
+   `RenderState` and never runs a pump, so without it an export would be the
+   one place the tap plan was missing. It is swapped whole a second way the
+   2026-09-18 note did not mention — `Session::sync_audio_graph`
+   (`session/engine.rs:661`) derives the plan once a pump tick and sends a
+   whole new bank through `StructuralCommand::SetAudioGraph` when it
+   differs. A plugin's
    latency is known only after activation and can change while it runs, so a
    latency change that today implies an install implies a tap-bank rebuild
    too. Both need the identity work of `plans/archive/channel-identity/` step 05
    before a plugin's latency can move without tearing the graph down —
    the same prerequisite blocker 7 records for step 06.
 4. `ChannelStrip` holds its eight generators as concrete fields
-   (`engine/src/render.rs:2189`; the citation read `:2154` until 2026-09-18,
-   when it had drifted) and has no slot for a boxed source. **Step 09.**
+   (`engine/src/render.rs:2273`, the eight named at `:2274-2281`; the
+   citation read `:2154`, then `:2189`, and `:2189` was `BusStrip::new`, a
+   different type) and has no slot for a boxed source. Three numbers in four
+   days: search for `pub struct ChannelStrip`. **Step 09.**
    Note delivery to those eight is a closed match calling three different
    method shapes rather than one trait method, and unifying it is worth
    doing while every source is still native --
@@ -227,8 +279,23 @@ this plan.
    three.
 5. Once a node is installed, the control thread has no handle to it, and
    nothing lets the audio thread ask for main-thread work. **Step 04.**
-6. The effect menu (`device-rack.slint:172-196`, 14 hard-coded rows) and the
-   source popup (`main.slint:3619`) are not driven by data. **Step 08.**
+6. The effect menu is not driven by data: 14 hard-coded `EffectTypeRow`s in
+   `EffectTypeMenu` (`device-rack.slint:172-194`; the citation read
+   `:172-196`). The count of 14 was right on 2026-09-16 and is right now —
+   the one number in this list that has never moved.
+
+   **The source popup claim is wrong, and has been since 2026-09-18.** It
+   *is* driven by a model: the popup is `main.slint:3716` and its rows are
+   `for label[i] in SourceKinds.labels` at `:3742`, since `3fff067` — which
+   landed for this exact fault, the menu having offered four of the eight
+   kinds for months. (`main.slint:3619` was wrong even on 2026-09-16: it was
+   piano-grid pointer handling that day too.) What survives is narrower and
+   is what step 08 must build: the model is a literal spelled in markup —
+   eight strings at `channel-rack.slint:61-66`, held against
+   `DeviceKind::label()` by `tests/source_kind_menu.rs` — so no row can be
+   added from Rust at runtime, which is the whole job of a scanned plugin
+   list. The popup's `for` is the shape step 08 wants; its source of rows is
+   not. The effect menu needs both. **Step 08.**
 7. **Found 2026-09-17, and not solved by this plan.** A channel paste, delete
    or move rebuilds the whole `RenderState` through `install_project`
    (`LOOSE_ENDS.md`, "Every structural edit stops the song"). `PluginSlotId`
@@ -256,22 +323,22 @@ Easier than this plan assumes:
   into the audio thread to carry it.
 - **The boxed source slot is a copy of an existing path, not a new
   mechanism.** `StructuralCommand::InstallEffect`
-  (`crates/mooloop-engine/src/lib.rs:201`) and `ReplaceEffect` (`:219`)
+  (`crates/mooloop-engine/src/lib.rs:209`) and `ReplaceEffect` (`:227`)
   already move a `Box<dyn AudioNode + Send>` over the ring, and the displaced
   occupant leaves through the reclaim ring rather than being dropped on the
   audio thread — the rule is stated on `InstallEffect` itself and enforced in
-  `crates/mooloop-engine/src/executor.rs:181-189`, which checks the ring has
+  `crates/mooloop-engine/src/executor.rs:199-202`, which checks the ring has
   room *before* applying the edit. Blocker 4 and step 09 are a new field on
   `ChannelStrip`, not a new path. (The report cited `:189,208` and the
   Architecture section above said `:175`; both predate the one-executor
   refactor, and `:175` is corrected there.)
 - **A CLAP main-thread callback can run inside a pump tick.** The 8 ms pump
-  (`PUMP_INTERVAL_MS`, `crates/mooloop-ui/src/lib.rs:138`; the timer at
-  `:12623`, its closure running to `:14043`) waits on nothing: all ten of its
+  (`PUMP_INTERVAL_MS`, `crates/mooloop-ui/src/lib.rs:139`; the timer at
+  `:12912`, its closure running to `:14367`) waits on nothing: all ten of its
   channel drains are `try_recv`, and the body holds no lock, no blocking
   `recv`, no `join` and no sleep. **One correction to the report:** the body
   is not free of *I/O*. Four `settings.save()` calls write a small TOML
-  synchronously (`:12645`, `:13383`, `:13404`, `:13424`), on user-driven
+  synchronously (`:12934`, `:13693`, `:13714`, `:13734`), on user-driven
   events rather than every tick. That is bounded and waits on no other
   thread, so the conclusion stands — but a callback drain added here shares a
   tick with a file write and should not be written as if the tick were
@@ -282,9 +349,11 @@ report stated it:
 
 - **`format_version` is an exact-match gate, and the passes beside it are the
   migration story.** Three sites refuse anything that is not `FORMAT_VERSION`
-  outright: the bundle loader (`crates/mooloop-project/src/lib.rs:995`), the
-  preset lister (`:1142`) and `validate_envelope` (`:1199`). The report read
-  the first two at `:982,1118`. Its "one bespoke fixup" is now **four**, all
+  outright: the bundle loader (`crates/mooloop-project/src/lib.rs:1008`), the
+  preset lister (`:1155`) and `validate_envelope` (`:1212`). The report read
+  the first two at `:982,1118`, and the 2026-09-19 pass corrected them to
+  `:995,1142,1199` — all three moved again in the `origin/main` merge that
+  same day. Search `header.format_version != FORMAT_VERSION`. Its "one bespoke fixup" is now **four**, all
   run on the way in before the repair pass: `assign_device_ids` (`:1062`),
   `assign_channel_ids` (`:1068`), `assign_track_ids` (`:1071`) and
   `migrate_retired_buffer_offset` (`:1076`). That makes the plan's position
@@ -302,8 +371,8 @@ report stated it:
   **one `EffectKind`**, and the Saving section above adds five variants across
   four enums. `DeviceKind` carries its own exhaustive matches that the effect
   table never counted — ten of them in `mooloop-engine`, `mooloop-ui` and
-  `mooloop-session`, including `session.rs:457`, in a crate the table does not
-  list at all. Treat 25 as the floor.
+  `mooloop-session`, including `session.rs:465`, in a crate the table does not
+  list at all (`:457` until the merge). Treat 25 as the floor.
 
 ### The format-migration question is closed
 
@@ -315,7 +384,8 @@ That is what the tree already does four times over: every one of the four
 passes above backfills defaulted fields on the way in without moving
 `FORMAT_VERSION`, and
 `a_song_with_no_channel_identities_loads_with_its_positions`
-(`crates/mooloop-project/src/lib.rs:1464`) is the test that says so in as many
+(`crates/mooloop-project/src/lib.rs:1477`; `:1464` until the merge) is the
+test that says so in as many
 words. **Do not reopen this as a version-bump question.**
 
 ## Steps
