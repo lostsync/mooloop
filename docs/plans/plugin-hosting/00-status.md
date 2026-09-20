@@ -252,11 +252,33 @@ this plan.
    (`session/engine.rs:661`) derives the plan once a pump tick and sends a
    whole new bank through `StructuralCommand::SetAudioGraph` when it
    differs. A plugin's
-   latency is known only after activation and can change while it runs, so a
-   latency change that today implies an install implies a tap-bank rebuild
-   too. Both need the identity work of `plans/archive/channel-identity/` step 05
-   before a plugin's latency can move without tearing the graph down —
-   the same prerequisite blocker 7 records for step 06.
+   latency is known only after activation and can change while it runs.
+
+   **Corrected 2026-09-20** from `reports/fable-2026-09-20.md`: a runtime
+   latency change does *not* imply an install, and the sentence that said so
+   survived the 2026-09-20 citation re-verification because the citations it
+   carried were sound and the claim between them was not.
+   `StructuralCommand::SetCompensation` (`engine/src/lib.rs:283`, applied at
+   `engine/src/render.rs:4390`) swaps one target's delay ring in place, and
+   `Session::sync_compensation` (`session/engine.rs:493`) sends it per target
+   from a diff against `compensation_sent` — which the install path resets
+   (`session/session.rs:1527`) so every length is re-derived against the
+   incoming project rather than trusted from the outgoing one. The tap-bank
+   rebuild therefore does not follow from the latency change either: it
+   follows from an install, or from `sync_audio_graph`'s own diff, and both
+   stand on their own.
+
+   So what step 04 still needs is narrower than "stop a latency change being
+   an install". The delivery already works one target at a time with no
+   install; what is missing is a *source*. `compile_latency` reads the effect
+   kind, so a number that only exists after activation and moves while the
+   plugin runs has nowhere to enter and nothing to trigger the re-derive.
+   Step 04 is that entry point and its trigger.
+
+   Blocker 3 also ordered the identity work of
+   `plans/archive/channel-identity/` step 05 before a plugin's latency could
+   move without tearing the graph down. That work landed on 2026-09-18 and
+   the plan is archived; the prerequisite is met.
 4. `ChannelStrip` holds its eight generators as concrete fields
    (`engine/src/render.rs:2273`, the eight named at `:2274-2281`; the
    citation read `:2154`, then `:2189`, and `:2189` was `BusStrip::new`, a
