@@ -52,6 +52,18 @@ step 03 built first would have ended an open take silently on any structural
 edit. `reports/fable-2026-09-18.md` found this; `audio-recording/03-capture.md`
 states the decision and the alternative it rejected.
 
+`transport-discontinuity/` was added 2026-09-20 and is **not started, outside
+the `FOCUS.md` sequence**, because Adam reported it directly: switching the
+pattern he is looking at cuts off held notes, and it does so in Song mode
+where the selection changes nothing that plays. Four steps. Step 01 is the bug
+and stands alone; 02 to 04 are the mechanism whose absence caused it -- a
+command that lands at a musical boundary, an `AudioNode` that can be told time
+moved, and the rule that navigation must not reach the audio thread. Its
+`00-status.md` records what the investigation established, including that the
+symptom is a choke rather than the renderer rebuild Adam first suspected, and
+the one question left for him: whether a Pattern-mode switch should queue or
+stay immediate. Linear MOO-57.
+
 `plugin-hosting/` was added 2026-09-16 and is **not started, outside the
 `FOCUS.md` sequence**, because Adam asked for it directly: CLAP effects and
 instruments now, then VST3, then AU if ever. Thirteen steps. The first four
