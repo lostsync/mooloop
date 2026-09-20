@@ -193,6 +193,36 @@ comments at both call sites before touching either. Adding a new
 Ctrl+letter *action* never requires touching that decode branch; only a
 genuinely new *key* (one not already decoded) would.
 
+### The Super key is read before the chord is matched
+
+`UiSettings.shortcuts.super_key` (Preferences > Shortcuts, *Modifier keys*)
+says what an event's Super/Meta flag means: **Separate keys**, the default
+and what shipped before 2026-09-20; **Super acts as Alt**, where either key
+presses an Alt chord; or **Swap Alt and Super**, where the two exchange
+places. It answers two opposite complaints with one control — a desktop
+whose window manager eats Alt leaves Super as the only modifier an
+application can reach, and a keyboard with the two transposed wants them
+back the other way round.
+
+`SuperKeyMode::read` is applied by `KeyChord::from_event`, which is the only
+way a key event should become a chord, at the two places one is made: the
+dispatcher in `lib.rs`'s `on_shortcut_key` and the prefpane recorder in
+`on_preferences_shortcut_rebind_key`. It is deliberately **not** inside
+`ShortcutTable`, so the table holds nothing but canonical chords: changing
+the mode leaves every stored binding and every row of the prefpane exactly
+as it was, and changes only which physical key arrives at them. A chord
+recorded while Super means Alt is written down as the Alt chord it will be
+pressed as, which is why the two sites share one reading rather than each
+having its own.
+
+The roll's drag modifiers (`gestures.rs`) are deliberately outside it. They
+are matched in the markup, against a table of booleans Rust publishes, so a
+reading applied on the Rust side would not reach them -- and they do not need
+one: Meta is already one of the eight combinations a gesture role can be
+assigned, on the same preferences page. A desktop that eats Alt moves the
+role onto Meta; the keyboard, whose chords are fixed by the registry rather
+than picked per action, is the half that needed a setting.
+
 **Two ladders written by hand and checked against nothing is how a shipped
 action stayed dead for a week.** `transport.loop-toggle` landed on a bare L
 on 2026-09-07. The registry held it, the prefpane drew it, `ShortcutTable`

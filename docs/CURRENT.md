@@ -217,6 +217,14 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   move and carried it off on its own. The snap override inverts the toggle
   rather than only defeating it, so it frees a drag when snap is on and
   quantises one when it is off.
+- How a Super (Meta/Win) press is read is a preference on that same page:
+  separate keys, which is the default and what every binding assumes; Super
+  acting as Alt, where either key presses an Alt chord; or Alt and Super
+  swapped. It changes no binding -- only which physical key reaches one -- so
+  every chord the page lists goes on saying what it said. It is for a desktop
+  whose window manager takes Alt before mooloop sees it, and for a keyboard
+  with the two keys transposed. Pointer gestures are unaffected: a gesture
+  role can already be assigned Meta outright.
 - Two lanes sit under the roll and toggle independently: a velocity lane
   drawn as stems with drag heads, and one variable automation lane. The
   automation lane's picker lists the selected channel's generator and every

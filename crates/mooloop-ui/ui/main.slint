@@ -821,6 +821,10 @@ export component MainWindow inherits Window {
     in property <[ShortcutRow]> preferences-shortcut-rows;
     in property <[GestureRow]> preferences-gesture-rows;
     in property <[string]> preferences-gesture-choices;
+    // Filled once at startup from `SuperKeyMode::ALL`, so the page never
+    // spells the option names a second time.
+    in property <[string]> preferences-shortcut-super-key-choices;
+    in-out property <int> preferences-shortcut-super-key;
     // Filled once at startup from `meter::falloff_options`, which builds each
     // label out of the rate it selects.
     in property <[string]> preferences-meter-falloff-options;
@@ -844,6 +848,7 @@ export component MainWindow inherits Window {
     callback preferences-shortcut-reset(string);
     callback preferences-shortcut-reset-all();
     callback preferences-gesture-rebound(string, int);
+    callback preferences-shortcut-super-key-changed(int);
     callback preferences-open-mockup-tool();
 
     // ---- document lifecycle ----
@@ -7291,6 +7296,8 @@ export component MainWindow inherits Window {
         shortcut-rows: root.preferences-shortcut-rows;
         gesture-rows: root.preferences-gesture-rows;
         gesture-choices: root.preferences-gesture-choices;
+        shortcut-super-key-choices: root.preferences-shortcut-super-key-choices;
+        shortcut-super-key <=> root.preferences-shortcut-super-key;
         meter-falloff-options: root.preferences-meter-falloff-options;
         shortcut-capturing-id <=> root.preferences-shortcut-capturing-id;
         midi-ports: root.preferences-midi-ports;
@@ -7319,6 +7326,7 @@ export component MainWindow inherits Window {
         shortcut-reset(id) => { root.preferences-shortcut-reset(id); }
         shortcut-reset-all => { root.preferences-shortcut-reset-all(); }
         gesture-rebound(id, index) => { root.preferences-gesture-rebound(id, index); }
+        shortcut-super-key-changed(index) => { root.preferences-shortcut-super-key-changed(index); }
         open-mockup-tool => { root.preferences-open-mockup-tool(); }
         log-to-file-toggled(v) => { root.preferences-log-to-file-toggled(v); }
     }
