@@ -8,7 +8,7 @@ use mooloop_core::{
     audio_tap_index, compile_bus_graph, AutomationLane, AuxInParams, ChannelSource,
     CompiledAudioGraph, CompiledBusGraph, DeviceKind, OutletDescriptor, PublishesOutlets,
     Ds01Params, DrumSynthParams, EffectTarget, EngineCommand, GeneratorParams,
-    LoopRange, ModDestinationDescriptor, PlaybackMode,
+    LoopRange, ModDestinationDescriptor, MusicalEdge, PlaybackMode,
     ModRack, MonoSynthParams, MlM1Params, MlP8Params, ParamAddr, ParamOwner, PolySynthParams,
     Project,
     SamplerParams, SendTap,
@@ -2920,6 +2920,18 @@ pub(crate) struct RenderReport {
     pub peak_r: f32,
 }
 
+/// Deferred command slots. One per kind that can be in flight, with room to
+/// spare: the count bounds the state without an overflow policy, and it is
+/// sized so that reaching the end is a defect rather than a busy engine.
+const MAX_DEFERRED: usize = 8;
+
+/// A command and the absolute tick it is waiting for.
+#[derive(Clone, Copy)]
+struct PendingCommand {
+    target_tick: f64,
+    command: EngineCommand,
+}
+
 pub(crate) struct RenderState {
     transport: Transport,
     sequencer: Sequencer,
@@ -3083,6 +3095,10 @@ pub(crate) struct RenderState {
     /// cleared, so the release this owes every sounding voice cannot be
     /// pushed at the moment the seek arrives.
     seeked: bool,
+    /// Commands waiting for a musical edge, one slot per kind.
+    ///
+    /// `docs/plans/transport-discontinuity/02-deferred-commands.md`.
+    deferred: [Option<PendingCommand>; MAX_DEFERRED],
     /// How many channel-blocks have been skipped since this state was built.
     ///
     /// One `u64` for the whole engine and one add per skipped strip. It is
@@ -3178,6 +3194,7 @@ impl RenderState {
             auditions: [None; MAX_AUDITIONS_PER_BLOCK],
             loop_range: LoopRange::default(),
             seeked: false,
+            deferred: [None; MAX_DEFERRED],
             preview: None,
             preview_retired: RetiredPreviews::new(),
             preview_gain: Arc::new(AtomicU32::new(mooloop_core::gain::db_to_linear(mooloop_core::gain::REFERENCE_PEAK_DBFS).to_bits())),
@@ -3586,6 +3603,11 @@ impl RenderState {
         self.transport.adopt_running_state(outgoing.transport());
         self.held_keys = outgoing.held_keys;
         self.recording = outgoing.recording;
+        // Carried, not re-sent -- the lesson `incremental-structure/` paid
+        // for. The control thread has no way to know an install happened
+        // between its send and the edge, so a pending command left behind
+        // here would simply never land.
+        self.deferred = outgoing.deferred;
     }
 
     /// Whether `note` is held on `channel`, for the tests that assert what a
@@ -4482,11 +4504,140 @@ impl RenderState {
         }
     }
 
+    /// Hold `command` until the transport reaches `when`.
+    ///
+    /// The edge is resolved to an absolute tick here, once, rather than every
+    /// block: a bar line is a position in the score, so a tempo change moves
+    /// when it arrives but not where it is. Resolving repeatedly would also
+    /// make the target chase the playhead, and it would never be reached.
+    ///
+    /// One slot per command kind. A second deferred command of the same kind
+    /// **replaces** the first, which is what re-queueing means to a player and
+    /// what keeps this bounded without an overflow policy. Different kinds do
+    /// not displace each other.
+    ///
+    /// A stopped transport is not waiting for anything, so the command is
+    /// applied immediately rather than parked where nothing would ever
+    /// release it.
+    pub fn defer_command(&mut self, when: MusicalEdge, command: EngineCommand) {
+        if !self.transport.playing {
+            self.apply_command(command);
+            return;
+        }
+        let Some(target_tick) = self.resolve_edge(when) else {
+            self.apply_command(command);
+            return;
+        };
+        let pending = PendingCommand {
+            target_tick,
+            command,
+        };
+        let kind = std::mem::discriminant(&command);
+        if let Some(slot) = self
+            .deferred
+            .iter_mut()
+            .find(|slot| slot.is_some_and(|held| std::mem::discriminant(&held.command) == kind))
+        {
+            *slot = Some(pending);
+            return;
+        }
+        if let Some(slot) = self.deferred.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(pending);
+            return;
+        }
+        // Sized above the number of kinds that can be in flight rather than
+        // against a load, so this is a defect and not a busy engine. Dropping
+        // is still the release behaviour: a refused deferred command is a
+        // gesture that does not happen, which is survivable, and applying it
+        // early here would be a discontinuity at the worst possible moment.
+        debug_assert!(false, "no free deferred slot for {command:?}");
+    }
+
+    /// The absolute tick a [`MusicalEdge`] names, or `None` when the edge
+    /// cannot be resolved and the caller should apply the command now.
+    fn resolve_edge(&self, when: MusicalEdge) -> Option<f64> {
+        let now = self.transport.position_ticks;
+        let period = match when {
+            MusicalEdge::Beat => f64::from(mooloop_core::TICKS_PER_BAR)
+                / f64::from(mooloop_core::BEATS_PER_BAR),
+            MusicalEdge::Bar => f64::from(mooloop_core::TICKS_PER_BAR),
+            MusicalEdge::PatternEnd => {
+                // Only Pattern mode schedules from the current pattern; in
+                // Song mode the playlist decides what plays and a pattern end
+                // is not a boundary the music crosses. The next bar is the
+                // nearest edge that still means something there.
+                let length = (self.sequencer.playback_mode() == PlaybackMode::Pattern)
+                    .then(|| {
+                        self.sequencer
+                            .pattern_length_ticks(self.sequencer.current_pattern())
+                    })
+                    .flatten()
+                    .filter(|length| *length > 0);
+                match length {
+                    Some(length) => f64::from(length),
+                    None => f64::from(mooloop_core::TICKS_PER_BAR),
+                }
+            }
+        };
+        if !period.is_finite() || period <= 0.0 || !now.is_finite() {
+            return None;
+        }
+        // Strictly after, the same rule a take's count-in uses: an edge
+        // exactly under the playhead has already happened, and landing on it
+        // would make a deferred command indistinguishable from an immediate
+        // one at exactly the moments a player is most likely to be aiming
+        // for it.
+        Some((now / period).floor() * period + period)
+    }
+
+    /// Drop any pending deferred command. The transport stopping, the
+    /// playback mode changing and a seek all invalidate the position an edge
+    /// was resolved against: after one, the target either never arrives or
+    /// arrives somewhere that no longer means what the caller meant.
+    fn cancel_deferred(&mut self) {
+        self.deferred = [None; MAX_DEFERRED];
+    }
+
+    /// Apply every deferred command whose edge `tick` has reached, in the
+    /// order the block walks. Called between spans, so what runs after it
+    /// schedules against the state the command left.
+    fn apply_deferred_reached(&mut self, tick: f64) {
+        for index in 0..MAX_DEFERRED {
+            let Some(pending) = self.deferred[index] else {
+                continue;
+            };
+            if tick + 1e-9 < pending.target_tick {
+                continue;
+            }
+            self.deferred[index] = None;
+            self.apply_command(pending.command);
+        }
+    }
+
+    /// The earliest edge anything is waiting for, which is where the block
+    /// has to be cut.
+    fn next_deferred_tick(&self) -> Option<f64> {
+        self.deferred
+            .iter()
+            .flatten()
+            .map(|pending| pending.target_tick)
+            .min_by(f64::total_cmp)
+    }
+
     pub fn apply_command(&mut self, cmd: EngineCommand) {
         match cmd {
             EngineCommand::Play => self.transport.play(),
-            EngineCommand::Pause => self.transport.pause(),
-            EngineCommand::Stop => self.transport.stop(),
+            // A transport that is not running reaches no edge, so anything
+            // held would wait forever. Cancelling is the honest end: the
+            // gesture was aimed at a moment in the music that is not coming.
+            EngineCommand::Pause => {
+                self.transport.pause();
+                self.cancel_deferred();
+            }
+            EngineCommand::Stop => {
+                self.transport.stop();
+                self.cancel_deferred();
+            }
             EngineCommand::SetRecordArmed(armed) => self.set_record_armed(armed),
             EngineCommand::SetInputMonitor { channel, on } => {
                 if let Some(flag) = self.monitor.get_mut(usize::from(channel)) {
@@ -4556,12 +4707,22 @@ impl RenderState {
             EngineCommand::SetPlaybackMode(mode) => {
                 let from = self.automation_position();
                 self.sequencer.set_playback_mode(mode);
+                // A pattern end resolved in Pattern mode is not an edge Song
+                // mode ever crosses, and the reverse changes what the target
+                // meant. Cancelling rather than re-resolving: the caller
+                // aimed at an edge in a mode that is gone.
+                self.cancel_deferred();
                 self.restore_lanes_left_behind(from);
             }
             EngineCommand::Seek { tick } => {
                 let from = self.automation_position();
                 self.transport.seek(tick);
                 self.seeked = true;
+                // The target was resolved against a position the transport is
+                // no longer travelling from. Left alone it would either fire
+                // instantly -- the seek having landed past it -- or wait a
+                // whole lap for an edge the player did not aim at.
+                self.cancel_deferred();
                 self.restore_lanes_left_behind(from);
             }
             EngineCommand::SetLoopRange(range) => self.loop_range = range,
@@ -5395,7 +5556,13 @@ impl RenderState {
             .then(|| self.loop_range.active(self.sequencer.song_length_ticks()))
             .flatten()
             .map(|(start, end)| (f64::from(start), f64::from(end)));
-        let (spans, span_count) = self.transport.advance_looped(frames, loop_range);
+        // The block is cut at the earliest edge anything is waiting for, so
+        // the command can be applied between the two halves and the second
+        // half scheduled against what it changed.
+        let deferred_tick = self.next_deferred_tick();
+        let (spans, span_count) =
+            self.transport
+                .advance_looped(frames, loop_range, deferred_tick);
         let start_tick = spans[0].start_tick;
         let end_tick = spans[span_count - 1].end_tick;
         let seeked = std::mem::take(&mut self.seeked);
@@ -5404,10 +5571,21 @@ impl RenderState {
             events.clear();
         }
         if self.transport.playing {
-            if looping {
+            // A deferred command lands between spans, so the stretch after it
+            // must be scheduled separately from the stretch before -- the
+            // same per-span pass a loop fold needs, for the same reason.
+            if looping || deferred_tick.is_some() {
                 // One pass per stretch of musical time in the block. Without
-                // a loop that is the single stretch this has always been.
+                // a loop or an edge that is the single stretch this has
+                // always been.
                 for span in &spans[..span_count] {
+                    // Before scheduling, not after: what this applies decides
+                    // what the span about to be scheduled contains. A target
+                    // at or behind the span's start produces no cut above, so
+                    // an edge that has already arrived lands here too.
+                    if deferred_tick.is_some() {
+                        self.apply_deferred_reached(span.start_tick);
+                    }
                     self.sequencer.schedule(
                         span.start_tick,
                         span.end_tick,
@@ -5454,6 +5632,14 @@ impl RenderState {
         // the release, for auditioned notes if nothing else.
         for span in spans[..span_count].iter().filter(|span| span.jumped) {
             release_all_voices(span.frame as u32, self.live_channels(), &mut self.events);
+            // A fold is a discontinuity like a seek, and invalidates a
+            // pending edge for the same reason -- with one failure mode a
+            // seek does not have. A target resolved past the loop end is
+            // never reached at all: the fold turns the playhead back before
+            // it, every lap, and the command waits for a tick the transport
+            // has stopped travelling towards. Cancelling is what keeps a
+            // deferred command from being silently immortal.
+            self.cancel_deferred();
         }
         if seeked {
             release_all_voices(0, self.live_channels(), &mut self.events);
@@ -11578,6 +11764,262 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             render.process_once_block(1_024);
         }
         peak_of(&render.master().l[..1_024])
+    }
+
+
+    /// The point of the whole class: a deferred command does **not** land at
+    /// the top of the block that drains it. It is held until the transport
+    /// reaches the edge, which is somewhere inside a later block, and the
+    /// block it lands in is cut so that what runs after it is scheduled
+    /// against what it changed.
+    ///
+    /// Asserted against the block *before* the bar as well as the one that
+    /// crosses it. Only checking that the tempo eventually changes would pass
+    /// just as well if the command had been applied immediately, which is the
+    /// behaviour this exists to rule out.
+    #[test]
+    fn a_deferred_command_waits_for_its_edge() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        let project = held_note_project();
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        render.play();
+        let bar = f64::from(mooloop_core::TICKS_PER_BAR);
+
+        render.defer_command(MusicalEdge::Bar, EngineCommand::SetTempo(140.0));
+        assert_eq!(
+            render.transport.bpm, 120.0,
+            "deferring must not apply the command"
+        );
+
+        let mut blocks = 0;
+        while render.transport.position_ticks + 1e-9 < bar {
+            assert_eq!(
+                render.transport.bpm, 120.0,
+                "the tempo changed at block {blocks}, before the bar line at \
+                 {bar}; the command was applied early"
+            );
+            render.process_once_block(256);
+            blocks += 1;
+            assert!(blocks < 10_000, "the bar line was never reached");
+        }
+        // One further block, because an edge that falls exactly on a block
+        // boundary produces no cut: there is nothing to divide, and the next
+        // block's first span *opens* on the edge. That is the same instant,
+        // reached by the other route through `apply_deferred_reached`.
+        if render.transport.bpm == 120.0 {
+            render.process_once_block(256);
+        }
+        assert_eq!(
+            render.transport.bpm, 140.0,
+            "the command did not land at the bar line it was waiting for"
+        );
+    }
+
+    /// A stopped transport reaches no edge, so a command deferred against one
+    /// would wait forever. It is applied immediately instead -- the gesture
+    /// still happens, it simply has nothing to wait for.
+    #[test]
+    fn a_deferred_command_sent_while_stopped_lands_immediately() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        let project = held_note_project();
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        assert!(!render.transport.playing);
+
+        render.defer_command(MusicalEdge::Bar, EngineCommand::SetTempo(140.0));
+        assert_eq!(
+            render.transport.bpm, 140.0,
+            "a stopped transport has no edge to wait for"
+        );
+        assert!(
+            render.deferred.iter().all(Option::is_none),
+            "nothing should have been parked"
+        );
+    }
+
+    /// One slot per kind: a second deferred command of the same kind replaces
+    /// the first rather than queueing behind it. That is what re-aiming a
+    /// gesture means to a player, and it bounds the state without an
+    /// overflow policy. Different kinds do not displace each other.
+    #[test]
+    fn a_second_deferred_command_of_one_kind_replaces_the_first() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        let project = held_note_project();
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        render.play();
+
+        render.defer_command(MusicalEdge::Bar, EngineCommand::SetTempo(140.0));
+        render.defer_command(MusicalEdge::Bar, EngineCommand::SetTempo(90.0));
+        assert_eq!(
+            render.deferred.iter().flatten().count(),
+            1,
+            "the second tempo should have replaced the first, not queued"
+        );
+
+        render.defer_command(MusicalEdge::Bar, EngineCommand::SetSwing(60));
+        assert_eq!(
+            render.deferred.iter().flatten().count(),
+            2,
+            "a different kind must take its own slot"
+        );
+
+        let bar = f64::from(mooloop_core::TICKS_PER_BAR);
+        while render.transport.position_ticks + 1e-9 < bar {
+            render.process_once_block(256);
+        }
+        if render.transport.bpm == 120.0 {
+            render.process_once_block(256);
+        }
+        assert_eq!(
+            render.transport.bpm, 90.0,
+            "the surviving tempo is the one sent last"
+        );
+    }
+
+    /// Stopping, seeking and changing playback mode each invalidate the
+    /// position an edge was resolved against. Left parked, the target either
+    /// never arrives or arrives somewhere the player never aimed at, so it is
+    /// cancelled rather than re-resolved.
+    #[test]
+    fn a_pending_command_is_cancelled_by_a_transport_discontinuity() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        let project = held_note_project();
+        for (label, interruption) in [
+            ("stop", EngineCommand::Stop),
+            ("pause", EngineCommand::Pause),
+            ("seek", EngineCommand::Seek { tick: 4_096.0 }),
+            (
+                "mode",
+                EngineCommand::SetPlaybackMode(mooloop_core::PlaybackMode::Song),
+            ),
+        ] {
+            let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+            render.play();
+            render.defer_command(MusicalEdge::Bar, EngineCommand::SetTempo(140.0));
+            assert_eq!(render.deferred.iter().flatten().count(), 1, "{label}: setup");
+
+            render.apply_command(interruption);
+            assert!(
+                render.deferred.iter().all(Option::is_none),
+                "{label} left a command waiting for an edge that no longer means \
+                 what it meant when it was resolved"
+            );
+        }
+    }
+
+    /// Carried across an install, not re-sent. The control thread cannot know
+    /// a project was installed between its send and the edge, so a pending
+    /// command left behind in the outgoing renderer would simply never land.
+    /// The lesson `incremental-structure/` paid for, applied to a new piece
+    /// of performance state.
+    #[test]
+    fn a_pending_command_survives_a_project_install() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        let project = held_note_project();
+        let mut outgoing = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        outgoing.play();
+        outgoing.defer_command(MusicalEdge::Bar, EngineCommand::SetTempo(140.0));
+
+        let mut incoming = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        incoming.adopt_performance_state(&outgoing);
+
+        assert_eq!(
+            incoming.deferred.iter().flatten().count(),
+            1,
+            "the install dropped a command that was waiting for an edge"
+        );
+        let bar = f64::from(mooloop_core::TICKS_PER_BAR);
+        while incoming.transport.position_ticks + 1e-9 < bar {
+            incoming.process_once_block(256);
+        }
+        if incoming.transport.bpm == 120.0 {
+            incoming.process_once_block(256);
+        }
+        assert_eq!(
+            incoming.transport.bpm, 140.0,
+            "the carried command still has to land at its edge"
+        );
+    }
+
+    /// `PatternEnd` in Song mode resolves to the next bar rather than to
+    /// nothing. Song mode schedules from placements and never crosses a
+    /// pattern end, so the edge as named does not exist there; falling back
+    /// to the nearest edge that does keeps a deferred command from being
+    /// stranded by the mode it was sent in.
+    #[test]
+    fn a_pattern_end_deferred_in_song_mode_falls_back_to_the_bar() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        let project = held_note_project();
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        render.apply_command(EngineCommand::SetPlaybackMode(
+            mooloop_core::PlaybackMode::Song,
+        ));
+        render.play();
+
+        render.defer_command(MusicalEdge::PatternEnd, EngineCommand::SetTempo(140.0));
+        let pending = render
+            .deferred
+            .iter()
+            .flatten()
+            .next()
+            .expect("the command should be waiting");
+        assert!(
+            (pending.target_tick - f64::from(mooloop_core::TICKS_PER_BAR)).abs() < 1e-9,
+            "expected the next bar, got {}",
+            pending.target_tick
+        );
+    }
+
+
+    /// A target past the loop end is never reached: the fold turns the
+    /// playhead back before it, every lap, and the command would wait for a
+    /// tick the transport has stopped travelling towards. A fold is a
+    /// discontinuity like a seek and cancels for the same reason -- this is
+    /// the case that makes it a hang rather than a surprise if it does not.
+    #[test]
+    fn a_fold_cancels_a_command_waiting_past_the_loop_end() {
+        use crate::render_test_support::SAMPLE_RATE;
+
+        let project = held_note_project();
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        render.apply_command(EngineCommand::SetPlaybackMode(
+            mooloop_core::PlaybackMode::Song,
+        ));
+        // A loop shorter than a bar, so the bar line the command waits for
+        // sits beyond the end of it.
+        let bar = mooloop_core::TICKS_PER_BAR;
+        render.apply_command(EngineCommand::SetLoopRange(mooloop_core::LoopRange {
+            start_tick: 0,
+            end_tick: bar / 2,
+            enabled: true,
+        }));
+        render.play();
+        render.defer_command(MusicalEdge::Bar, EngineCommand::SetTempo(140.0));
+        assert_eq!(
+            render.deferred.iter().flatten().count(),
+            1,
+            "the command should be waiting for the bar line"
+        );
+
+        let mut blocks = 0;
+        while render.deferred.iter().flatten().count() > 0 {
+            render.process_block(256);
+            blocks += 1;
+            assert!(
+                blocks < 10_000,
+                "the fold never cancelled it; the command is waiting for a tick \
+                 inside a loop that never reaches it"
+            );
+        }
+        assert_eq!(
+            render.transport.bpm, 120.0,
+            "cancelling must not apply the command on the way out"
+        );
     }
 
     /// A channel sounding one note for far longer than any of the tests

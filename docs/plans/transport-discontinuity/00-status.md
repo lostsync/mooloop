@@ -1,7 +1,7 @@
 # Transport discontinuity status
 
-**Step 01 landed 2026-09-20**, the day the plan was written. Steps 02 to 04
-have not started. The directory came out of Adam reporting that moving around
+**Steps 01 and 02 landed 2026-09-20**, the day the plan was written. Steps 03
+and 04 have not started. The directory came out of Adam reporting that moving around
 the app makes the audio glitch, and it covers both the bug he heard and the
 mechanism whose absence caused it.
 
@@ -35,7 +35,9 @@ Linear: [MOO-57](https://linear.app/mooloop/issue/MOO-57/selecting-a-pattern-cho
 - **In Pattern mode the discontinuity is genuinely owed.** Pattern position is
   `wrap_tick(global_tick, current_pattern.length_ticks())` (`sequencer.rs:969`),
   so switching to a pattern of a different length really does move the
-  playhead. Step 02 is what stops it being owed.
+  playhead. (Written expecting step 02 to stop it being owed. It does not --
+  the debt is the changed note source rather than the moved playhead, which
+  step 02 established by getting it wrong first. Step 03 is what retires it.)
 - **`on_pattern_selected` is the only navigation gesture that reaches the
   audio thread.** `on_channel_selected`, `on_bus_selected` and
   `on_device_selected` send nothing. `on_automation_lane_selected` does send,
@@ -107,12 +109,44 @@ was written for in the first place. Caught on a re-read of the diff, and
 `switching_off_an_automated_pattern_hands_the_knob_back_while_stopped` now
 pins it.
 
+## What step 02 changed
+
+`MusicalEdge` and a deferred command class: sent with
+`CommandSink::send_deferred`, held in renderer state, resolved to an absolute
+tick on arrival, and applied between spans at the edge. `Transport::advance_looped`
+cuts the block at that tick, and the cut is deliberately **not** a jump --
+only a loop fold owes the release.
+
+**Two things the plan had wrong, found by building it.**
+
+The block was not already split at musical edges. `advance_looped` cut at the
+loop end and nowhere else, and the per-span scheduling pass ran only under a
+loop; the cut had to be added rather than reused.
+
+And step 02 does not retire the Pattern-mode choke, which the draft claimed it
+would on the grounds that a switch at the pattern end does not move the
+playhead. It does move it -- `wrap_tick(768, 512)` is 256 -- but the real
+error is deeper: **the release is owed because the note source changed, not
+because the playhead moved.** Implemented the other way, with `seeked`
+conditional on the position moving,
+`switching_pattern_while_playing_releases_the_sounding_voices` failed at once
+with the voice still sounding at 0.2519. Two patterns of one length leave the
+playhead exactly where it was and still strand the note-off, because it lives
+in the pattern that stopped being scheduled. Reverted; step 01's rule stands.
+
+Releasing *only* the stranded voices needs per-voice knowledge, which is step
+03's hook. Nothing before then retires the last choke.
+
+**No caller yet.** The pattern selector stays immediate, so nothing in the
+app defers anything; the mechanism is exercised by tests alone until a
+gesture wants it.
+
 ## Steps
 
 | Step | What it does | Cost |
 | --- | --- | --- |
 | 01 | **Landed 2026-09-20.** `SetCurrentPattern` owes a discontinuity only when it changes what is scheduled | small, standalone, fixed the report |
-| 02 | A command class that lands at a musical boundary | medium, needs a face change |
+| 02 | **Landed 2026-09-20.** A command class that lands at a musical boundary | medium; no face change after all, and no caller yet |
 | 03 | `AudioNode` can be told time moved, instead of being handed fake note events | touches every DSP node |
 | 04 | Navigation must not reach the audio thread — the rule, and a guard | small |
 

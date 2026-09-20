@@ -47,7 +47,7 @@ pub use automation::{
     MAX_AUTOMATION_POINTS_PER_LANE,
 };
 pub use aux_in::AuxInParams;
-pub use bridge::{EngineCommand, EngineEvent};
+pub use bridge::{EngineCommand, EngineEvent, MusicalEdge};
 pub use ds01::{
     body_mode_ratio, matrix_param, Ds01Character, Ds01EnvParams, Ds01ModSource, Ds01NoiseColor,
     Ds01Params, Ds01PitchEnvParams, Ds01Retrigger, Ds01Route, DS01_BITS_TRANSPARENT,

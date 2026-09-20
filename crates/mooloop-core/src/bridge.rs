@@ -37,6 +37,30 @@ use crate::{
 // here: that ring may carry a `Box` because it has a reclaim path back off
 // the audio thread. See
 // `docs/plans/archive/modulator-capacity/03-per-slot-commands.md`.
+/// When a deferred command should land.
+///
+/// A command carries no offset and is applied at the top of the block that
+/// drains it, so anything that is not expressible as a note event lands at an
+/// arbitrary block edge -- up to a full quantum of jitter, never aligned to
+/// anything musical. An edge names a musical instant to wait for instead.
+///
+/// The engine resolves an edge to an absolute tick when the command arrives,
+/// not every block, so the target survives a tempo change: a bar line is a
+/// position in the score rather than a moment in time.
+///
+/// `docs/plans/transport-discontinuity/02-deferred-commands.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MusicalEdge {
+    /// The next beat line strictly after the current position.
+    Beat,
+    /// The next bar line strictly after the current position.
+    Bar,
+    /// The next wrap of the pattern being scheduled, in Pattern mode. In Song
+    /// mode there is no pattern being scheduled and this resolves to the next
+    /// bar instead, so a deferred command is never stranded by the mode.
+    PatternEnd,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EngineCommand {
     /// Begin or resume playback from the current position.

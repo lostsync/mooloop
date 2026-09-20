@@ -36,6 +36,15 @@ use mooloop_core::{ticks_per_sample, BbtPosition, Ppq, Ticks};
 /// the count is expected to climb.
 pub const MAX_BLOCK_SPANS: usize = 8;
 
+/// Why a block was cut in two. A fold is a discontinuity and owes the release
+/// every sounding voice is due; an edge is a boundary the music was walking
+/// towards anyway and owes nothing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cut {
+    Fold,
+    Edge,
+}
+
 /// One contiguous stretch of musical time inside one process block.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BlockSpan {
@@ -118,7 +127,7 @@ impl Transport {
     /// installed is a per-block question there.
     #[cfg(test)]
     pub fn advance(&mut self, frames: usize) -> (f64, f64) {
-        let (spans, _) = self.advance_looped(frames, None);
+        let (spans, _) = self.advance_looped(frames, None, None);
         (spans[0].start_tick, spans[0].end_tick)
     }
 
@@ -137,10 +146,26 @@ impl Transport {
     /// without folding. That leaves the position past the loop end, which the
     /// next block's opening fold catches, so an absurdly short loop under an
     /// absurdly long block degrades to a slower loop rather than to a fault.
+    ///
+    /// `split_at` additionally cuts the block at a tick.
+    ///
+    /// The extra cut is how a deferred command lands on a musical edge. It is
+    /// a boundary and **not** a discontinuity: the span it opens carries
+    /// `jumped: false`, because the position either side of it is continuous
+    /// and nothing is owed a release. Only a loop fold sets `jumped`.
+    ///
+    /// A cut lands on the first frame whose tick reaches the target, so the
+    /// span it closes owns every event up to the edge and none at it -- the
+    /// same rule the fold above uses. A target at or before the span's start
+    /// produces no cut: there is nothing to wait for, and the caller applies
+    /// the command before scheduling that span.
+    ///
+    /// `docs/plans/transport-discontinuity/02-deferred-commands.md`.
     pub fn advance_looped(
         &mut self,
         frames: usize,
         loop_range: Option<(f64, f64)>,
+        split_at: Option<f64>,
     ) -> ([BlockSpan; MAX_BLOCK_SPANS], usize) {
         let mut spans = [BlockSpan::SILENT; MAX_BLOCK_SPANS];
         // A stopped transport holds its position, loop or no loop. Folding it
@@ -169,33 +194,62 @@ impl Transport {
         let ticks_per_sample = self.ticks_per_sample();
         let mut count = 0;
         let mut frame = 0;
+        // Whether the span about to be written opens on a discontinuity. The
+        // fold at the top of the block seeds it, and a fold below sets it
+        // again; a cut at a musical edge deliberately does not, because
+        // landing on a bar line without being a seek is the entire point of
+        // one. Before deferred commands existed the only way to open a second
+        // span was a fold, which is why this used to read `count > 0`.
+        let mut opens_jumped = jumped;
         while count < MAX_BLOCK_SPANS {
             let start_tick = self.position_ticks;
             let remaining = frames - frame;
-            // The last span the cap allows never folds, so the loop end is
-            // not consulted for it and the block finishes where it would
-            // have without a loop at all.
-            let split = loop_range
-                .filter(|_| count + 1 < MAX_BLOCK_SPANS)
+            // The first frame whose tick would have reached `target`. Nudged
+            // before rounding up because the position is an accumulated
+            // float: a block landing exactly on the target computes a whole
+            // number of frames plus a few parts in 10^13, and a bare `ceil`
+            // would spend a whole extra frame on the strength of it. A frame
+            // is 20 us and the error never is, so erring early is free.
+            let frames_until = |target: f64| {
+                ((target - start_tick) / ticks_per_sample - 1e-6).ceil().max(0.0) as usize
+            };
+            // The last span the cap allows never cuts, so neither target is
+            // consulted for it and the block finishes where it would have
+            // without a loop or an edge at all.
+            let can_cut = count + 1 < MAX_BLOCK_SPANS;
+            let fold = loop_range
+                .filter(|_| can_cut)
                 .filter(|(_, end)| start_tick < *end)
-                .map(|(_, end)| {
-                    // The first frame whose tick would have reached the loop
-                    // end. Nudged before rounding up because the position is
-                    // an accumulated float: a block landing exactly on the
-                    // loop end computes a whole number of frames plus a few
-                    // parts in 10^13, and a bare `ceil` would spend a whole
-                    // extra frame on the strength of it. A frame is 20 us and
-                    // the error never is, so erring early is free.
-                    ((end - start_tick) / ticks_per_sample - 1e-6).ceil().max(0.0) as usize
-                })
+                .map(|(_, end)| frames_until(end))
                 .filter(|split| *split < remaining);
-            let span_frames = split.unwrap_or(remaining);
-            let end_tick = match split {
-                // Cut at the loop end exactly: the frame the fold happens on
-                // is the first whose tick would have passed it, so the span
-                // this closes owns every event up to the loop point and none
-                // at it.
-                Some(_) => loop_range.expect("split implies a loop").1,
+            // A target at or behind the span's start is not a cut: the edge
+            // has already arrived, and the caller applies the command before
+            // scheduling this span rather than opening an empty one.
+            let edge = split_at
+                .filter(|_| can_cut)
+                .filter(|target| *target > start_tick + 1e-9)
+                .map(frames_until)
+                .filter(|split| *split > 0 && *split < remaining);
+            let cut = match (fold, edge) {
+                // A fold at the same frame wins. It is a real discontinuity,
+                // and the edge would otherwise be resolved against a position
+                // the transport is in the act of leaving.
+                (Some(fold), Some(edge)) => Some(if fold <= edge {
+                    (fold, Cut::Fold)
+                } else {
+                    (edge, Cut::Edge)
+                }),
+                (Some(fold), None) => Some((fold, Cut::Fold)),
+                (None, Some(edge)) => Some((edge, Cut::Edge)),
+                (None, None) => None,
+            };
+            let span_frames = cut.map_or(remaining, |(frames, _)| frames);
+            let end_tick = match cut {
+                // Cut at the target exactly: the frame the cut happens on is
+                // the first whose tick would have passed it, so the span this
+                // closes owns every event up to the boundary and none at it.
+                Some((_, Cut::Fold)) => loop_range.expect("a fold implies a loop").1,
+                Some((_, Cut::Edge)) => split_at.expect("an edge implies a target"),
                 None => start_tick + span_frames as f64 * ticks_per_sample,
             };
             spans[count] = BlockSpan {
@@ -203,15 +257,16 @@ impl Transport {
                 frames: span_frames,
                 start_tick,
                 end_tick,
-                jumped: jumped || count > 0,
+                jumped: opens_jumped,
             };
             count += 1;
             frame += span_frames;
-            self.position_ticks = match split {
-                Some(_) => loop_range.expect("split implies a loop").0,
-                None => end_tick,
+            self.position_ticks = match cut {
+                Some((_, Cut::Fold)) => loop_range.expect("a fold implies a loop").0,
+                _ => end_tick,
             };
-            if split.is_none() {
+            opens_jumped = matches!(cut, Some((_, Cut::Fold)));
+            if cut.is_none() {
                 break;
             }
         }
@@ -301,7 +356,7 @@ mod tests {
         // Start two hundred frames short of the loop end.
         let end = 400.0;
         t.seek(end - 200.0 * tps);
-        let (spans, count) = t.advance_looped(512, Some((100.0, end)));
+        let (spans, count) = t.advance_looped(512, Some((100.0, end)), None);
 
         assert_eq!(count, 2, "one loop pass inside the block is two spans");
         assert_eq!(spans[0].frame, 0);
@@ -323,7 +378,7 @@ mod tests {
         let mut t = Transport::new(48_000);
         t.play();
         t.seek(9_000.0);
-        let (spans, count) = t.advance_looped(256, Some((100.0, 400.0)));
+        let (spans, count) = t.advance_looped(256, Some((100.0, 400.0)), None);
         assert_eq!(count, 1);
         assert_eq!(spans[0].start_tick, 100.0);
         assert!(spans[0].jumped);
@@ -335,7 +390,7 @@ mod tests {
     fn a_parked_playhead_is_left_where_it_is() {
         let mut t = Transport::new(48_000);
         t.seek(9_000.0);
-        let (spans, count) = t.advance_looped(256, Some((100.0, 400.0)));
+        let (spans, count) = t.advance_looped(256, Some((100.0, 400.0)), None);
         assert_eq!(count, 1);
         assert_eq!(spans[0].start_tick, 9_000.0);
         assert!(!spans[0].jumped);
@@ -343,7 +398,7 @@ mod tests {
 
         t.seek(0.0);
         t.play();
-        let (spans, count) = t.advance_looped(64, Some((100.0, 400.0)));
+        let (spans, count) = t.advance_looped(64, Some((100.0, 400.0)), None);
         assert_eq!(count, 1);
         assert_eq!(spans[0].start_tick, 0.0);
         assert!(!spans[0].jumped, "arriving is not jumping");
@@ -356,7 +411,7 @@ mod tests {
         let mut t = Transport::new(48_000);
         t.play();
         let range = Some((0.0, 1.0));
-        let (spans, count) = t.advance_looped(4_096, range);
+        let (spans, count) = t.advance_looped(4_096, range, None);
 
         assert_eq!(count, MAX_BLOCK_SPANS);
         assert_eq!(
@@ -368,7 +423,7 @@ mod tests {
             t.position_ticks > 1.0,
             "the capped tail runs past the loop end, for the next block to fold"
         );
-        let (spans, _) = t.advance_looped(64, range);
+        let (spans, _) = t.advance_looped(64, range, None);
         assert_eq!(spans[0].start_tick, 0.0, "and the next block folds it");
     }
 
@@ -426,4 +481,71 @@ mod tests {
         t.seek(-1.0);
         assert_eq!(t.position_ticks, 500.0);
     }
+
+    /// A cut at a musical edge is a **boundary, not a discontinuity**. It
+    /// opens a second span so a command can be applied between the two, and
+    /// that span must not carry `jumped` -- the flag the renderer turns into
+    /// a release of every sounding voice. Landing on a bar line without
+    /// costing the music a note is the whole reason the cut exists.
+    #[test]
+    fn an_edge_cuts_the_block_without_jumping() {
+        let mut t = Transport::new(48_000);
+        t.play();
+        let before = t.position_ticks;
+        let edge = before + t.ticks_per_sample() * 64.0;
+        let (spans, count) = t.advance_looped(512, None, Some(edge));
+
+        assert_eq!(count, 2, "the edge should have cut the block in two");
+        assert!(
+            !spans[0].jumped && !spans[1].jumped,
+            "an edge is continuous; neither span may claim a jump"
+        );
+        assert!(
+            (spans[0].end_tick - edge).abs() < 1e-9,
+            "the first span must close exactly on the edge, got {}",
+            spans[0].end_tick
+        );
+        assert!(
+            (spans[1].start_tick - edge).abs() < 1e-9,
+            "the second span must open exactly on the edge, got {}",
+            spans[1].start_tick
+        );
+        assert_eq!(
+            spans[0].frames + spans[1].frames,
+            512,
+            "the two spans still have to cover the whole block"
+        );
+    }
+
+    /// An edge already at or behind the playhead is not a cut. There is
+    /// nothing to wait for, and opening an empty span for it would be a
+    /// boundary the music never crosses; the renderer applies such a command
+    /// before scheduling the span instead.
+    #[test]
+    fn an_edge_already_reached_does_not_cut() {
+        let mut t = Transport::new(48_000);
+        t.play();
+        let (_, count) = t.advance_looped(512, None, Some(t.position_ticks));
+        assert_eq!(count, 1, "an edge under the playhead should not cut");
+    }
+
+    /// When a fold and an edge fall on the same frame the fold wins. It is a
+    /// real discontinuity, and an edge resolved against a position the
+    /// transport is in the act of leaving means nothing.
+    #[test]
+    fn a_fold_and_an_edge_on_the_same_frame_take_the_fold() {
+        let mut t = Transport::new(48_000);
+        t.play();
+        let start = t.position_ticks;
+        let ticks_per_sample = t.ticks_per_sample();
+        let boundary = start + ticks_per_sample * 64.0;
+        let (spans, count) = t.advance_looped(512, Some((start, boundary)), Some(boundary));
+
+        assert!(count >= 2, "the fold should still have cut the block");
+        assert!(
+            spans[1].jumped,
+            "the span after a fold owes the release, so it must claim the jump"
+        );
+    }
+
 }

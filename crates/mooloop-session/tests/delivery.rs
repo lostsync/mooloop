@@ -13,7 +13,7 @@
 //! under test is the reconciler's handling of a refusal, and a refusal is a
 //! `false`; `rtrb`'s own bound is `rtrb`'s to keep.
 
-use mooloop_core::{DeviceKind, EffectKind, EffectTarget, EngineCommand};
+use mooloop_core::{DeviceKind, EffectKind, EffectTarget, EngineCommand, MusicalEdge};
 use mooloop_engine::{CommandSink, StructuralCommand};
 use mooloop_session::session::Session;
 
@@ -88,6 +88,13 @@ impl CommandSink for Ring {
         }
         self.structural.push(cmd);
         true
+    }
+
+    /// Recorded on the same list as an immediate command: nothing in
+    /// `mooloop-session` defers anything yet, and these tests are about what
+    /// reaches the ring rather than when the engine applies it.
+    fn send_deferred(&mut self, cmd: EngineCommand, _when: MusicalEdge) -> bool {
+        self.send(cmd)
     }
 
     fn sample_rate(&self) -> u32 {

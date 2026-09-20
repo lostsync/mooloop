@@ -18,7 +18,7 @@ use std::sync::Arc;
 use mooloop_core::{
     BufferParams, EffectKind, EffectParams, EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS,
     modulation::CONTROL_SOURCE_SLOTS,
-    CompiledBusGraph, DeviceKind,
+    CompiledBusGraph, DeviceKind, MusicalEdge,
 };
 use mooloop_dsp::{
     buffer_allocation_key, build_effect_at_tempo, AudioNode, ChannelAudioSnapshot, IntegerDelay,
@@ -505,6 +505,11 @@ impl CarryPlan {
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum RealtimeCommand {
     Engine(EngineCommand),
+    /// A POD command to hold until the transport reaches a musical edge.
+    Deferred {
+        when: MusicalEdge,
+        command: EngineCommand,
+    },
     Structural(StructuralCommand),
     Preview(PreviewCommand),
     InstallProject(PreparedProject),
@@ -952,6 +957,16 @@ pub trait CommandSink {
     /// nothing left to reclaim.
     #[must_use]
     fn send_structural(&mut self, cmd: StructuralCommand) -> bool;
+
+    /// Queue a POD command to be applied when the transport next reaches
+    /// `when`, rather than at the top of the block that drains it.
+    ///
+    /// Non-blocking, and the same refusal as [`Self::send`]: `false` means the
+    /// ring was full and the command was dropped here. A command sent while
+    /// the transport is stopped is applied immediately, because a stopped
+    /// transport never reaches an edge.
+    #[must_use]
+    fn send_deferred(&mut self, cmd: EngineCommand, when: MusicalEdge) -> bool;
 
     /// The rate the prepared nodes a caller builds must be sized for.
     fn sample_rate(&self) -> u32;
@@ -1479,6 +1494,15 @@ impl CommandSink for EngineHandle {
 
     fn send_structural(&mut self, cmd: StructuralCommand) -> bool {
         self.cmd_tx.push(RealtimeCommand::Structural(cmd)).is_ok()
+    }
+
+    fn send_deferred(&mut self, cmd: EngineCommand, when: MusicalEdge) -> bool {
+        self.cmd_tx
+            .push(RealtimeCommand::Deferred {
+                when,
+                command: cmd,
+            })
+            .is_ok()
     }
 
     fn sample_rate(&self) -> u32 {

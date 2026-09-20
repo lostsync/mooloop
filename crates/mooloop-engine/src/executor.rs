@@ -195,6 +195,13 @@ impl Executor {
                     self.render.apply_command(command);
                     continue;
                 }
+                RealtimeCommand::Deferred { when, command } => {
+                    // Parked in renderer state rather than held here: it has
+                    // to survive a project install, and the renderer is what
+                    // carries performance state across one.
+                    self.render.defer_command(when, command);
+                    continue;
+                }
                 RealtimeCommand::Structural(command) => {
                     // Also held back while effects a previous edit displaced
                     // are still waiting: the renderer reserved room for one
