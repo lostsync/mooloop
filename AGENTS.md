@@ -184,6 +184,33 @@ sixteenth-note beat and must *not* move if mooloop's grid does. **One
 permanent false positive is worse than a narrow check**, because a check that
 is never clean stops being read.
 
+An eighth check, `popup-close-order`, was added 2026-09-20 with MOO-53, and it
+is not looking for a duplicate at all -- it looks for a **sequence**. Closing a
+`PopupWindow` tears down the repeater item whose handler is still running, so a
+callback written after the `close()` never lands: the menu opens, draws
+correctly, and does nothing. That has now been found four separate times --
+`BusPicker`, the rack's preset menu, `PickerChip`'s `MenuField`, and the
+channel rack's add-channel menu, which shipped High as MOO-53 -- and each was
+diagnosed from scratch, because nothing in the tree remembered the previous
+three.
+
+It is in this file because it is the same *lesson* as the rest, arriving as an
+order rather than as a copy: what fails is invisible to every test that does
+not click. `source_kind_menu.rs` held the add-channel menu's eight labels
+against `DeviceKind::label()` and was **entirely correct** the whole time the
+menu added no channel -- the rows were built from the right list, in the right
+order, and sent the right index to a call that was never reached. Ask of a
+control's test not only *does anything read the copy this checks*, but **does
+anything here press the button**.
+
+Two things about how it reports. It was written against the unfixed tree, where
+it finds MOO-53 along with the four other sites; and it deliberately reports
+close-first rows whose lists are written out rather than repeated, which are
+believed to work. Those are one refactor away from being the defect, and that
+refactor is exactly what happened here -- the add-channel menu was four
+hand-written rows, correct, until the day it became a `for` over eight. So its
+hits are leads that need the rows read, not a list of bugs.
+
 There is a third limit, and it is the one to keep in mind when a check comes
 back clean. **`repeated-line` matches bytes, so a rename hides a copy from it
 completely.** On 2026-09-12 it reported the effect event-splitting loop in ten

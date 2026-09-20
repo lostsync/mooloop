@@ -45,10 +45,10 @@ fn block(markup: &str, marker: &str) -> String {
     let mut hits = markup.match_indices(marker);
     let (start, _) = hits
         .next()
-        .unwrap_or_else(|| panic!("main.slint contains `{marker}`"));
+        .unwrap_or_else(|| panic!("the markup contains `{marker}`"));
     assert!(
         hits.next().is_none(),
-        "`{marker}` appears more than once in main.slint"
+        "`{marker}` appears more than once in the markup it was looked for in"
     );
     let mut depth = 0usize;
     let mut end = start;
@@ -103,15 +103,24 @@ fn the_channel_source_picker_reads_the_one_list() {
 
 /// The add-channel menu offers the same list, and each row sends its own
 /// position -- which is what `device_kind_from_int` reads on the other side.
+///
+/// The menu is `AddSourceButton` in `channel-rack.slint` rather than markup
+/// inline in `MainWindow`, so that `tests/add_source_menu.rs` can click it.
+/// That test is the one that can see whether a row *reports*; this one can
+/// only see what it is built from, and being right about that while the menu
+/// did nothing is exactly what happened on MOO-53.
 #[test]
 fn the_add_channel_menu_offers_every_source_and_sends_its_own_row() {
-    let menu = block(MAIN_SLINT, "add-source-menu := PopupWindow {");
+    let menu = block(
+        CHANNEL_RACK_SLINT,
+        "export component AddSourceButton inherits ToolButton {",
+    );
     assert!(
         menu.contains("for label[i] in SourceKinds.labels"),
         "the add-channel menu should repeat over SourceKinds.labels"
     );
     assert!(
-        menu.contains("root.add-channel-clicked(i)"),
+        menu.contains("root.picked(i)"),
         "each add-channel row should send its own index"
     );
     for kind in SOURCE_KINDS_IN_PICKER_ORDER {
@@ -123,12 +132,67 @@ fn the_add_channel_menu_offers_every_source_and_sends_its_own_row() {
     }
 }
 
+/// The rack's `+` is that component, and hands its choice straight on.
+///
+/// The component is only the menu the application opens if the application
+/// opens it. A second copy of the popup inline in `MainWindow` would leave
+/// `tests/add_source_menu.rs` clicking markup nothing reaches -- the
+/// "does anything read the copy the test checks?" failure, arriving from the
+/// other direction.
+#[test]
+fn the_rack_plus_button_is_the_add_source_component() {
+    let plus = block(MAIN_SLINT, "AddSourceButton {");
+    assert!(
+        plus.contains("picked(i) => { root.add-channel-clicked(i); }"),
+        "the rack's + should forward its choice to add-channel-clicked"
+    );
+    assert!(
+        !MAIN_SLINT.contains("SourceKinds.labels : "),
+        "main.slint repeats over SourceKinds.labels to build rows of its own; \
+         the rack's + is AddSourceButton in channel-rack.slint"
+    );
+}
+
+/// **A chosen row must not close the menu before it reports.**
+///
+/// MOO-53, and the regression this file can actually see. Closing a popup
+/// tears down the repeater item whose handler is still running, so the call
+/// after it never lands: the menu opens, draws every source, and adds no
+/// channel. `close-policy: close-on-click` dismisses it anyway, which is why
+/// the row needs no `close()` at all.
+///
+/// `tests/add_source_menu.rs` is the stronger statement of this -- it clicks
+/// a row and waits for the callback, so it fails on any cause rather than on
+/// this one spelling. This is here because it names the mistake, and because
+/// `scripts/dupe-audit popup-close-order` looks for the same shape in every
+/// other popup in the interface.
+#[test]
+fn an_add_channel_row_reports_before_the_menu_closes() {
+    let menu = block(
+        CHANNEL_RACK_SLINT,
+        "export component AddSourceButton inherits ToolButton {",
+    );
+    let row = menu
+        .lines()
+        .find(|line| line.contains("root.picked(i)"))
+        .expect("a row that reports its index");
+    assert!(
+        !row.contains("menu.close()"),
+        "the add-channel row closes the menu before reporting, which is the \
+         defect MOO-53 was: found `{}`",
+        row.trim()
+    );
+}
+
 /// The popup was 108px for four rows, and a fifth device would have been
 /// drawn outside it. Its height has to follow the list it is now built from,
 /// so this fails on any fixed height rather than on a particular expression.
 #[test]
 fn the_add_channel_menu_is_as_tall_as_its_rows() {
-    let menu = block(MAIN_SLINT, "add-source-menu := PopupWindow {");
+    let menu = block(
+        CHANNEL_RACK_SLINT,
+        "export component AddSourceButton inherits ToolButton {",
+    );
     let height = menu
         .lines()
         .map(str::trim)

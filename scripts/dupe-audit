@@ -558,6 +558,113 @@ def _brace_body(text: str, after: int) -> str | None:
 # matters and why.
 
 
+def popup_close_order():
+    """Popup rows that close the menu before they report the choice.
+
+    Not a duplicate: a *sequence*, and the one this interface keeps writing.
+    Closing a `PopupWindow` tears down the repeater item whose handler is
+    still running, so the callback after the `close()` never lands. The menu
+    opens, draws correctly, and does nothing -- which is indistinguishable
+    from a handler that was never wired, and costs the same half hour every
+    time.
+
+    Found four times now, each independently: `mixer.slint`'s `BusPicker`,
+    `device-rack.slint`'s preset menu, `controls.slint`'s `MenuField`, and
+    `channel-rack.slint`'s add-channel menu, which is MOO-53 and shipped
+    High. Three of the four have a pointer-event test behind them now
+    (`tests/picker_chip.rs`, `tests/effect_preset_menu.rs`,
+    `tests/add_source_menu.rs`); none of them had one before it broke, and
+    the add-channel menu had a *markup* test that was entirely correct about
+    a menu that added no channel.
+
+    Written before the fix, against `21524ff`, where it reports the
+    add-channel menu along with the four below. A check written after its fix
+    is shaped to report what its author already knows about.
+
+    **Read the hits, do not fix them blind.** Two orderings are reported and
+    only one is known to fail:
+
+    - The row is a **repeated** one -- a `for` inside the popup -- and it
+      closes first. That is the defect; report first and let `close-policy`
+      or a later `close()` dismiss the menu.
+    - The row is **written out**. `DeviceAddSlot`'s insert menu closes first
+      and works, because there is no repeater item to tear down. It is listed
+      anyway: it is one row-list refactor away from being the defect, and
+      that refactor is exactly what happened to the add-channel menu.
+
+    What it misses: a close and a callback that reach each other through a
+    component boundary, where the `for` is in one file and the `close()` in
+    another. `main.slint`'s `lane-menu` is that shape and is reported here
+    only because its close and its callback share a handler; a menu that
+    closed itself from inside a sub-component would not be seen at all.
+    """
+    popup = re.compile(r"([\w-]+)\s*:=\s*PopupWindow\s*\{")
+    call = re.compile(r"root\.[\w-]+\s*\(")
+    # Comments are blanked rather than dropped, so every offset below is
+    # still an offset into the real file and the line numbers stay right.
+    # `preset-menu.close()` is *written in a comment* explaining why it is not
+    # written in the code, and the first version of this check reported it --
+    # the fixed site, quoted back as the defect.
+    comment = re.compile(r"//[^\n]*")
+
+    hits = []
+    for path in slint_sources():
+        text = comment.sub(lambda m: " " * len(m.group(0)), path.read_text())
+        for match in popup.finditer(text):
+            name = match.group(1)
+            body = balanced(text, match.start())
+            repeated = re.search(r"\bfor\b[^\n]*\bin\b", body) is not None
+            closer = re.compile(re.escape(name) + r"\.close\s*\(\s*\)")
+            for found in closer.finditer(body):
+                # The rest of the handler the close sits in: everything up to
+                # the brace that ends it. A callback after that brace is a
+                # different click.
+                rest = balanced_tail(body, found.end())
+                after = call.search(rest)
+                if not after:
+                    continue
+                number = text.count("\n", 0, match.start() + found.start()) + 1
+                shape = (
+                    "a `for` in the popup"
+                    if repeated
+                    else "no `for` here -- read the rows' own component"
+                )
+                hits.append(
+                    (
+                        f"{rel(path)}:{number}",
+                        f"{name}.close() before {rest[after.start():].strip().splitlines()[0]}"
+                        f"  ({shape})",
+                    )
+                )
+    return hits
+
+
+def balanced(text, start):
+    """The brace-balanced block opening at or after `start`."""
+    depth = 0
+    for offset in range(start, len(text)):
+        if text[offset] == "{":
+            depth += 1
+        elif text[offset] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : offset + 1]
+    return text[start:]
+
+
+def balanced_tail(text, start):
+    """What is left of the innermost block `start` sits in."""
+    depth = 0
+    for offset in range(start, len(text)):
+        if text[offset] == "{":
+            depth += 1
+        elif text[offset] == "}":
+            if depth == 0:
+                return text[start:offset]
+            depth -= 1
+    return text[start:]
+
+
 CHECKS = {
     "shared-constant": shared_constant,
     "repeated-line": repeated_line,
@@ -566,6 +673,7 @@ CHECKS = {
     "unchecked-face": unchecked_face,
     "one-sided-test": one_sided_test,
     "bar-arithmetic": bar_arithmetic,
+    "popup-close-order": popup_close_order,
 }
 
 

@@ -814,6 +814,32 @@ Found 2026-09-13, made honest 2026-09-14.
 
 ## Cannot currently be tested
 
+**Three popups still close before they report, and nobody has clicked them.**
+`scripts/dupe-audit popup-close-order` lists them: the automation lane menu
+(`main.slint`, three handlers) and the two device insert menus
+(`device-rack.slint:387` and `:816`). Each does `<menu>.close()` and *then*
+calls the window, which is the exact sequence that made the add-channel menu
+add nothing (MOO-53, fixed 2026-09-20) and the preset menu load nothing before
+it.
+
+They are probably fine, and that is the whole difficulty. The rows of all
+three are written out rather than repeated, and the failure needs a repeater
+item to tear down -- `DeviceAddSlot`'s insert menu is the standing evidence,
+since it closes first and works. But the lane menu's rows *are* repeated, one
+component inwards: the `for` is in `AutomationLaneMenu` and the `close()` is in
+`MainWindow`'s handler for its callback, which is a third arrangement none of
+the four known cases had. Nobody has established which side of the line it
+falls on.
+
+The obstacle is reach. `scripts/mooloop-mcp` cannot click inside a
+`PopupWindow` at all (`OPERATIONS.md` says so, and it fails identically on a
+control known to work), and a pointer-event test needs the menu to be a
+component a harness can import -- which is why the add-channel menu was moved
+into `channel-rack.slint` before `tests/add_source_menu.rs` could click it.
+The lane menu is still nested inside `MainWindow`. Doing the same to it is an
+afternoon, and it would answer the question rather than guess at it. Until
+then: **report first, close second**, in any popup row you touch.
+
 **A muted track's frozen send rings could not be shown failing.** Fixed
 2026-09-13 -- `SendBank::reset` now drains them on every path that skips
 `emit` -- but the fix went in on symmetry (with `emit`'s own reset for a

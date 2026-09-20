@@ -5,6 +5,10 @@
 // from two places that do not contain each other, and a test harness has to
 // be able to import it without pulling in the whole of `main.slint`.
 
+import { Theme } from "theme.slint";
+import { ToolButton } from "controls.slint";
+import { MenuRow } from "menubar.slint";
+
 // Live state of a channel-rack reorder.
 //
 // The third global of this shape, and deliberately the same shape:
@@ -63,4 +67,65 @@ export global SourceKinds {
         "Sampler", "Drum Synth", "Mono Synth", "Poly Synth",
         "ML-M1", "ML-P8", "DS-01", "Aux In"
     ];
+}
+
+// The rack's `+`: the button that offers every source device, and reports
+// the one chosen as its position in `SourceKinds.labels`.
+//
+// It lives here rather than inline in `main.slint` for the second reason
+// this file exists. A menu row is only correct if clicking it *arrives*, and
+// the only way to know that is a real pointer event on the real markup;
+// `tests/add_source_menu.rs` imports this and clicks it, which it could not
+// do to a popup nested twelve levels inside `MainWindow`. The list it was
+// held to before was spelled right the whole time the menu did nothing.
+export component AddSourceButton inherits ToolButton {
+    // The chosen row's position in `SourceKinds.labels` -- the number
+    // `device_kind_from_int` decodes on the Rust side.
+    callback picked(int);
+
+    text: "+";
+    tooltip: "Add channel";
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 24px;
+    max-height: 24px;
+    clicked => { menu.show(); }
+
+    menu := PopupWindow {
+        x: 0px;
+        y: root.height + 2px;
+        width: 156px;
+        // As tall as the rows it has. The 108px it held was four of them, so
+        // a fifth source would have been drawn outside the menu it was in.
+        height: frame.preferred-height;
+        close-policy: close-on-click;
+        frame := Rectangle {
+            background: Theme.surface;
+            border-width: Theme.hairline;
+            border-color: Theme.border;
+            border-radius: Theme.radius-md;
+            VerticalLayout {
+                padding: 4px;
+                // `MenuRow`, not `ToolButton`: this is a menu, and the rest
+                // of the interface's menus read down a left edge. Eight
+                // centred captions of different widths had no edge to read
+                // down at all.
+                for label[i] in SourceKinds.labels : MenuRow {
+                    text: "Add " + label;
+                    // Report, and let `close-policy` dismiss the menu.
+                    //
+                    // Closing it here first is the whole of MOO-53: closing
+                    // a popup tears down the repeater item whose handler is
+                    // still running, so the call after it never lands. The
+                    // menu opened, drew all eight sources, and added no
+                    // channel. This is the fourth time that sequence has
+                    // been found -- `BusPicker`, `DeviceFrame`'s preset
+                    // menu, `PickerChip`'s `MenuField`, and here -- and
+                    // `scripts/dupe-audit popup-close-order` now looks for
+                    // the fifth.
+                    selected => { root.picked(i); }
+                }
+            }
+        }
+    }
 }

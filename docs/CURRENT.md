@@ -128,7 +128,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   another channel's published audio outlet — and every rack row exposes mute,
   output volume, and constant-power stereo pan. The rack's `+` offers all
   eight when adding a channel, which is the same list the source picker offers
-  when changing one.
+  when changing one; its rows are ordinary menu rows, reading down a left
+  edge like the rest of the interface's menus.
 - Channels can be reordered by dragging a rack row's name plate. The rows
   between the grab and the landing slide aside, and the gap that opens is the
   drop indicator. Every address in the song that named a channel follows it —

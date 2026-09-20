@@ -30,7 +30,7 @@ import {
     ContainerEnclosure, DeviceAddSlot, DeviceFrame, DeviceHeader, DeviceJoin, DeviceOutputRail,
     DevicePageButton, DeviceRackMetrics, RackDrag
 } from "device-rack.slint";
-import { ChannelDrag, SourceKinds } from "channel-rack.slint";
+import { AddSourceButton, ChannelDrag, SourceKinds } from "channel-rack.slint";
 import { ChannelSidebar } from "channel-sidebar.slint";
 import { ColorChipButton, ColorChoice } from "color-picker.slint";
 import { DrumDeviceFace } from "drum-device.slint";
@@ -3710,47 +3710,9 @@ export component MainWindow inherits Window {
                                         padding: 0px;
                                         spacing: 4px;
                                         alignment: start;
-                                        FlatButton {
-                                            text: "+";
-                                            tooltip: "Add channel";
+                                        AddSourceButton {
                                             enabled: !root.project-edit-pending && root.channels.length < root.max-channels;
-                                            min-width: 28px; max-width: 28px;
-                                            min-height: 24px; max-height: 24px;
-                                            clicked => { add-source-menu.show(); }
-
-                                            add-source-menu := PopupWindow {
-                                                x: 0px;
-                                                y: parent.height + 2px;
-                                                width: 156px;
-                                                // As tall as the rows it has.
-                                                // The 108px it held was four
-                                                // of them, so a fifth source
-                                                // would have been drawn
-                                                // outside the menu it was in.
-                                                height: add-source-rows.preferred-height;
-                                                close-policy: close-on-click;
-                                                Rectangle {
-                                                    background: Theme.surface;
-                                                    border-width: Theme.hairline;
-                                                    border-color: Theme.border;
-                                                    border-radius: Theme.radius-md;
-                                                    add-source-rows := VerticalLayout {
-                                                        padding: 4px;
-                                                        spacing: 1px;
-                                                        // The menu's rows are
-                                                        // the picker's options:
-                                                        // the row index is the
-                                                        // kind's number, which
-                                                        // is what
-                                                        // `device_kind_from_int`
-                                                        // decodes.
-                                                        for label[i] in SourceKinds.labels : ToolButton {
-                                                            text: "Add " + label;
-                                                            clicked => { add-source-menu.close(); root.add-channel-clicked(i); }
-                                                        }
-                                                    }
-                                                }
-                                            }
+                                            picked(i) => { root.add-channel-clicked(i); }
                                         }
                                         FlatButton {
                                             text: "−";
