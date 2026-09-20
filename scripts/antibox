@@ -160,12 +160,25 @@ ROOT="$(git rev-parse --show-toplevel)"
 SLUG="$(basename "$ROOT")-$(printf '%s' "$ROOT" | sha1sum | cut -c1-8)"
 
 # One multiplexed connection covers the preflight, sync, run, and pull.
-CONTROL="${TMPDIR:-/tmp}/antibox-$(id -u)-%C"
+#
+# `/tmp` rather than `$TMPDIR`, because a Unix domain socket's path is capped
+# at about 104 bytes and macOS hands every process a `$TMPDIR` of
+# `/var/folders/cd/zh6w4jjs369f8b4t6qx1_j3r0000gn/T/`. With `%C`'s 64-hex
+# digest and the temporary suffix ssh appends while connecting, that is over
+# the cap before the hostname is considered, and every run on the laptop died
+# with `unix_listener: path ... too long` -- which this script then reported
+# as `cannot reach ssh host`, sending the reader to the network for a fault
+# that was in the path. The remote box, whose `$TMPDIR` is `/tmp`, never saw
+# it.
+CONTROL="${MOOLOOP_SSH_CONTROL_DIR:-/tmp}/antibox-$(id -u)-%C"
 SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=$CONTROL" -o ControlPersist=120)
 ssh_run() { ssh "${SSH_OPTS[@]}" "$HOST" "$@"; }
 
-if ! ssh_run true 2>/dev/null; then
+# Ask once with the error showing, so the diagnosis is the reason ssh gives
+# rather than this script's guess at it.
+if ! probe="$(ssh_run true 2>&1)"; then
   echo "antibox: cannot reach ssh host '$HOST'." >&2
+  [[ -n "$probe" ]] && echo "  ssh said: $probe" >&2
   exit 1
 fi
 
