@@ -714,15 +714,23 @@ sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
   is written into a pattern; the take is heard through whatever triggers the
   sampler. Takes are written to `recordings/` beside the settings file, and a
   save copies a take into the song whichever asset mode it uses.
-- **The hardware input is an AUDIO source** under JACK, since 2026-09-19:
-  "Audio In", `mooloop:in_l`/`in_r` wired to the first physical capture pair.
-  A take from it starts the JACK round-trip latency after its bar, so it lines
-  up with what was played. With it picked, the AUDIO row shows a peak meter
-  and **MON**, which plays the input through the channel -- off by default,
-  not saved, and never switched on by anything else, because a microphone
-  through speakers feeds back.
-- **Not yet:** Core Audio input (the Mac), and deleting takes nothing uses
-  (step 06).
+- **The hardware input is an AUDIO source** under both drivers. Under JACK,
+  since 2026-09-19, it is "Audio In": `mooloop:in_l`/`in_r` wired to the first
+  physical capture pair. Under Core Audio, since 2026-09-20, it is the
+  system's default input device, listed by that device's own name -- Core
+  Audio opens a device rather than joining a graph, so there is a device to
+  name. A take from it starts the round-trip latency after its bar, so it
+  lines up with what was played. With it picked, the AUDIO row shows a peak
+  meter and **MON**, which plays the input through the channel -- off by
+  default, not saved, and never switched on by anything else, because a
+  microphone through speakers feeds back.
+- **On a Mac the input row appears only if there is an input.** No input
+  device, a device that will not run at the engine's sample rate, or a
+  microphone macOS has not granted mooloop, and the AUDIO row simply lists no
+  input; the reason is logged once at startup. macOS asks for the microphone
+  the first time mooloop opens it, and refusing it is not an error the
+  interface reports anywhere else.
+- **Not yet:** deleting takes nothing uses (step 06).
 
 ### Sampler Slicing And Stretch
 

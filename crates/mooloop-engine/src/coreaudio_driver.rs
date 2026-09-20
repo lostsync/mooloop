@@ -22,6 +22,15 @@
 //! is, and [`CoreAudioDriver::service`] picks up a keyboard plugged in later.
 //! Messages cross to the audio callback over a bounded ring and act at the
 //! top of the next block: a callback's worth of timing, a few milliseconds.
+//!
+//! Audio input is a second stream, because cpal has no duplex stream: it runs
+//! on its own thread and its own device clock, and hands stereo frames to the
+//! output callback over a ring the same way MIDI does. Two clocks that are not
+//! the same clock drift, and this driver **counts the drift rather than
+//! resampling it** -- a ring that starves reads silence, a ring that fills
+//! drops frames, and both are counted and reported. On the one machine that
+//! matters most, where the input and output are the same device, there is no
+//! drift to correct.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -56,6 +65,26 @@ const MIDI_QUEUE_CAPACITY: usize = 1024;
 /// The most MIDI messages one callback hands the executor. The rest wait in
 /// the ring for the next callback rather than being dropped.
 const MAX_MIDI_PER_CALLBACK: usize = 256;
+
+/// How many of the stream's buffers the input ring holds. Its job is to
+/// absorb the jitter and drift between two device clocks, and eight buffers is
+/// room for far more of both than a machine whose input and output are one
+/// device will ever show.
+const INPUT_RING_BUFFERS: usize = 8;
+
+/// How many buffers are gathered before the output side reads its first.
+///
+/// `audio-recording/01-input-in-the-engine.md` says to fill the ring halfway,
+/// which would be four. This is two, because a prefill is latency on the way
+/// in that the performer hears, and four buffers of it is 85 ms at 1024
+/// frames. Eight of capacity against two of prefill still leaves six buffers
+/// of headroom, which is what the plan was buying.
+const INPUT_PREFILL_BUFFERS: usize = 2;
+
+/// The buffer size the ring is sized from when the stream was opened at the
+/// device's own default, which cpal cannot report until it is running. The
+/// ring only has to be the right order of magnitude.
+const ASSUMED_INPUT_BUFFER: u32 = 1024;
 
 /// One channel message, copied out of Core MIDI's buffer so it can cross
 /// threads without allocating. System exclusive is filtered before it gets
@@ -164,10 +193,64 @@ fn parse_channel(address: &str) -> Result<(&str, u16), String> {
         .ok_or_else(|| format!("{address:?} does not name a device channel"))
 }
 
+/// The output callback's end of the input ring.
+///
+/// Stereo pairs rather than two rings of samples: a pair cannot come apart,
+/// and two rings can -- one overrun on one of them would swap the channels for
+/// the rest of the run.
+struct InputTap {
+    rx: Consumer<[f32; 2]>,
+    /// Frames to gather before the first read.
+    prefill: usize,
+    /// True until `prefill` frames have arrived, and true again once the ring
+    /// has starved. Without the second half, one starved block becomes every
+    /// block: the ring is read empty and is still empty when the next one
+    /// asks.
+    priming: bool,
+}
+
+impl InputTap {
+    /// Copy this block's input into `l` and `r`, returning the frames the ring
+    /// could not supply -- which are silence, not a gap: the executor renders
+    /// a whole block whatever the input did.
+    fn fill(&mut self, l: &mut [f32], r: &mut [f32]) -> u64 {
+        let frames = l.len().min(r.len());
+        if self.priming {
+            if self.rx.slots() < self.prefill {
+                l[..frames].fill(0.0);
+                r[..frames].fill(0.0);
+                // Not counted as an underrun. Priming is the ring filling up
+                // as designed, and counting it would report drift on every
+                // start.
+                return 0;
+            }
+            self.priming = false;
+        }
+        let mut taken = 0;
+        while taken < frames {
+            let Ok(frame) = self.rx.pop() else {
+                break;
+            };
+            l[taken] = frame[0];
+            r[taken] = frame[1];
+            taken += 1;
+        }
+        if taken == frames {
+            return 0;
+        }
+        l[taken..frames].fill(0.0);
+        r[taken..frames].fill(0.0);
+        self.priming = true;
+        (frames - taken) as u64
+    }
+}
+
 /// What the audio callback owns while it runs, under one lock.
 struct Realtime {
     executor: Executor,
     midi_rx: Consumer<MidiBytes>,
+    /// `None` until an input stream is open, and while one is being replaced.
+    input: Option<InputTap>,
 }
 
 /// What the realtime callbacks share with the control thread.
@@ -178,6 +261,16 @@ struct Shared {
     /// callback may run on the realtime thread, so it sets a flag and nothing
     /// else; the control thread does the reopening.
     lost: AtomicBool,
+    /// Set from the input stream's error callback, for the same reason and in
+    /// the same way as [`Shared::lost`].
+    input_lost: AtomicBool,
+    /// Frames the output callback asked the input ring for and did not get,
+    /// and frames the input callback could not fit into it, since the engine
+    /// started. Nothing corrects either: this driver does not resample, so
+    /// these two numbers are the whole account of how far the input and output
+    /// clocks have drifted apart.
+    input_underruns: AtomicU64,
+    input_overruns: AtomicU64,
 }
 
 struct State {
@@ -189,6 +282,17 @@ struct State {
     wanted: Route,
     buffer_size: Option<u32>,
     last_probe: Option<Instant>,
+    /// The input stream, the name of the device it reads, and the buffer size
+    /// its ring was sized from. All three are absent when there is no input:
+    /// this machine has none, macOS has refused mooloop the microphone, or the
+    /// device would not run at the engine's sample rate.
+    input_stream: Option<cpal::Stream>,
+    input_name: Option<String>,
+    input_buffer: u32,
+    last_input_probe: Option<Instant>,
+    /// The drift already reported, so a drifting pair of clocks is described
+    /// when the number moves rather than once a second forever.
+    reported_drift: u64,
 }
 
 /// One Core MIDI source mooloop is listening to.
@@ -371,9 +475,16 @@ impl Opening {
             host: self.host,
             sample_rate: self.sample_rate,
             shared: Arc::new(Shared {
-                realtime: Mutex::new(Realtime { executor, midi_rx }),
+                realtime: Mutex::new(Realtime {
+                    executor,
+                    midi_rx,
+                    input: None,
+                }),
                 xrun_count,
                 lost: AtomicBool::new(false),
+                input_lost: AtomicBool::new(false),
+                input_underruns: AtomicU64::new(0),
+                input_overruns: AtomicU64::new(0),
             }),
             midi: Mutex::new(MidiInputs::new(midi_tx)),
             state: Mutex::new(State {
@@ -382,6 +493,11 @@ impl Opening {
                 wanted: wanted.clone(),
                 buffer_size: config.buffer_size,
                 last_probe: None,
+                input_stream: None,
+                input_name: None,
+                input_buffer: 0,
+                last_input_probe: None,
+                reported_drift: 0,
             }),
             auto_reconnect: AtomicBool::new(config.auto_reconnect),
         };
@@ -422,6 +538,19 @@ impl Opening {
             ),
             (Some(_), None) => {}
         }
+        // Failure here is ordinary rather than fatal, and is the one place
+        // the reason is worth printing: a machine with no input device, or one
+        // where macOS has not granted the microphone, would otherwise be told
+        // about once a second for the length of the session.
+        match driver.open_input(&mut state) {
+            Ok(()) => mooloop_core::log_info!(
+                "audio",
+                "listening to the audio input {:?}",
+                state.input_name.as_deref().unwrap_or_default()
+            ),
+            Err(e) => mooloop_core::log_info!("audio", "no audio input: {e}"),
+        }
+        state.last_input_probe = Some(Instant::now());
         drop(state);
         lock(&driver.midi).scan();
         Ok(driver)
@@ -439,24 +568,49 @@ pub(crate) struct CoreAudioDriver {
 }
 
 impl CoreAudioDriver {
-    /// The system default first, then every device with at least two output
-    /// channels, addressed by its first two.
+    /// What the AUDIO menu calls the hardware input: the input device's own
+    /// name, because Core Audio opens a device rather than joining a graph, so
+    /// unlike JACK there is a device here to name. `None` when no input stream
+    /// is open, and then the menu offers no input row at all.
+    pub(crate) fn audio_input_label(&self) -> Option<String> {
+        lock(&self.state).input_name.clone()
+    }
+
+    /// An estimate, where JACK's is a measurement.
+    ///
+    /// JACK asks the server for the capture and playback latencies it actually
+    /// knows. cpal reports neither, and the two streams are not even on one
+    /// clock, so what can honestly be said is the path through this driver: a
+    /// buffer out, the ring's prefill, and a buffer in. A take from the input
+    /// is started that much after its bar line, so it is right to within the
+    /// device's own converter delay rather than to the sample.
+    pub(crate) fn input_latency_frames(&self) -> u32 {
+        let state = lock(&self.state);
+        if state.input_stream.is_none() {
+            return 0;
+        }
+        let output = state
+            .stream
+            .as_ref()
+            .and_then(|stream| stream.buffer_size().ok())
+            .unwrap_or(state.input_buffer);
+        output + state.input_buffer * (INPUT_PREFILL_BUFFERS as u32 + 1)
+    }
+
+    /// Frames of input read as silence, and frames of input dropped, since the
+    /// engine started. See [`Shared::input_underruns`].
+    fn input_drift(&self) -> (u64, u64) {
+        (
+            self.shared.input_underruns.load(Ordering::Relaxed),
+            self.shared.input_overruns.load(Ordering::Relaxed),
+        )
+    }
+
     /// Every Core MIDI source being listened to, for the input picker.
     ///
     /// Core MIDI connects to each source separately, so this really is a list
     /// of devices rather than JACK's single merged port -- and a project that
     /// names one of them is naming a keyboard.
-    /// No hardware input yet: Core Audio needs a second stream on its own
-    /// clock (`audio-recording/01-input-in-the-engine.md`), which is the Mac
-    /// side's to build. Until then the AUDIO menu offers no input row.
-    pub(crate) fn audio_input_label(&self) -> Option<String> {
-        None
-    }
-
-    pub(crate) fn input_latency_frames(&self) -> u32 {
-        0
-    }
-
     pub(crate) fn midi_ports(&self) -> Vec<MidiPortInfo> {
         lock(&self.midi)
             .connections
@@ -468,6 +622,8 @@ impl CoreAudioDriver {
             .collect()
     }
 
+    /// The system default first, then every device with at least two output
+    /// channels, addressed by its first two.
     pub(crate) fn available_output_targets(&self) -> Vec<OutputTarget> {
         let default = Route::system_default().target();
         let mut targets = vec![OutputTarget {
@@ -542,7 +698,8 @@ impl CoreAudioDriver {
 
     /// Control-thread upkeep, called from the handle's event poll: listen to
     /// MIDI sources that have appeared, reopen a stream whose device went
-    /// away, and return to the asked-for device when it is back.
+    /// away, return to the asked-for device when it is back, and the same for
+    /// the input stream ([`Self::service_input`]).
     pub(crate) fn service(&self) {
         {
             let mut midi = lock(&self.midi);
@@ -555,6 +712,7 @@ impl CoreAudioDriver {
         }
         let lost = self.shared.lost.swap(false, Ordering::Relaxed);
         let mut state = lock(&self.state);
+        self.service_input(&mut state);
         if lost {
             state.stream = None;
             mooloop_core::log_warn!(
@@ -595,6 +753,128 @@ impl CoreAudioDriver {
                 ),
                 Err(e) => mooloop_core::log_warn!("audio", "no audio output could be opened: {e}"),
             }
+        }
+    }
+
+    /// Open an input stream on the system default input device and hand its
+    /// ring to the audio callback.
+    ///
+    /// The input device is the system's, not a picked one: an input target
+    /// would be a second `<device>#<channel>` pair through the settings and
+    /// the preferences page, and nothing has asked for one. What this step
+    /// owes is an input bus that exists (`audio-recording/01`).
+    fn open_input(&self, state: &mut State) -> Result<(), String> {
+        let device = self
+            .host
+            .default_input_device()
+            .ok_or_else(|| "this machine has no audio input device".to_owned())?;
+        let name = device
+            .description()
+            .map(|description| description.name().to_owned())
+            .unwrap_or_else(|_| crate::AUDIO_IN_LABEL.to_owned());
+        let supported = device
+            .default_input_config()
+            .map_err(|e| format!("could not read {name:?}'s input format: {e}"))?;
+        let channels = supported.channels();
+        if channels == 0 {
+            return Err(format!("{name:?} offers no input channels"));
+        }
+        // The engine learns one sample rate from the system output and keeps
+        // it for its lifetime. An input device that will not run at that rate
+        // cannot be mixed into the same block without resampling, which this
+        // driver does not do, so the open fails and there is no input row.
+        let config = cpal::StreamConfig {
+            channels,
+            sample_rate: self.sample_rate,
+            buffer_size: match state.buffer_size {
+                Some(frames) => cpal::BufferSize::Fixed(frames),
+                None => cpal::BufferSize::Default,
+            },
+        };
+        let buffer = state.buffer_size.unwrap_or(ASSUMED_INPUT_BUFFER).max(1);
+        let (tx, rx) = RingBuffer::new(buffer as usize * INPUT_RING_BUFFERS);
+        // The old stream stops, and the callback lets go of the old ring,
+        // before the new one starts. Otherwise a failed open would leave the
+        // callback reading a ring whose producer has gone.
+        state.input_stream = None;
+        state.input_name = None;
+        lock(&self.shared.realtime).input = None;
+        let stream = device
+            .build_input_stream::<f32, _, _>(
+                config,
+                input_callback(tx, channels, self.shared.clone()),
+                input_error_callback(self.shared.clone()),
+                None,
+            )
+            .map_err(|e| match e.kind() {
+                // Worth its own sentence: macOS refuses the microphone
+                // silently the first time and the stream simply never
+                // delivers, which reads as a broken driver rather than as a
+                // permission nobody granted.
+                cpal::ErrorKind::PermissionDenied => format!(
+                    "macOS has not granted mooloop access to {name:?}. \
+                     System Settings -> Privacy & Security -> Microphone"
+                ),
+                _ => format!("could not open {name:?} for input: {e}"),
+            })?;
+        stream
+            .play()
+            .map_err(|e| format!("could not start {name:?}: {e}"))?;
+        lock(&self.shared.realtime).input = Some(InputTap {
+            rx,
+            prefill: buffer as usize * INPUT_PREFILL_BUFFERS,
+            priming: true,
+        });
+        state.input_stream = Some(stream);
+        state.input_name = Some(name);
+        state.input_buffer = buffer;
+        Ok(())
+    }
+
+    /// Reopen an input whose device went away or was never there, and report
+    /// drift between the two clocks when the number moves.
+    fn service_input(&self, state: &mut State) {
+        let lost = self.shared.input_lost.swap(false, Ordering::Relaxed);
+        if lost {
+            mooloop_core::log_warn!(
+                "audio",
+                "the audio input {:?} went away",
+                state.input_name.as_deref().unwrap_or(crate::AUDIO_IN_LABEL)
+            );
+            state.input_stream = None;
+            state.input_name = None;
+            lock(&self.shared.realtime).input = None;
+        }
+        if !lost
+            && state
+                .last_input_probe
+                .is_some_and(|probed| probed.elapsed() < PROBE_INTERVAL)
+        {
+            return;
+        }
+        state.last_input_probe = Some(Instant::now());
+        if state.input_stream.is_none() {
+            // Silent on failure, unlike the startup attempt: the reason does
+            // not change, and a machine with no microphone would otherwise
+            // say so once a second forever.
+            if self.open_input(state).is_ok() {
+                mooloop_core::log_info!(
+                    "audio",
+                    "listening to the audio input {:?}",
+                    state.input_name.as_deref().unwrap_or_default()
+                );
+            }
+            return;
+        }
+        let (under, over) = self.input_drift();
+        if under + over > state.reported_drift {
+            state.reported_drift = under + over;
+            mooloop_core::log_warn!(
+                "audio",
+                "the audio input and output clocks are drifting: {under} frames read as \
+                 silence and {over} frames dropped since the engine started. This driver \
+                 counts drift; it does not resample it"
+            );
         }
     }
 
@@ -679,6 +959,8 @@ fn render_callback(
     // renders at once.
     let mut scratch_l = vec![0.0f32; MAX_BLOCK_SIZE];
     let mut scratch_r = vec![0.0f32; MAX_BLOCK_SIZE];
+    let mut scratch_in_l = vec![0.0f32; MAX_BLOCK_SIZE];
+    let mut scratch_in_r = vec![0.0f32; MAX_BLOCK_SIZE];
     let mut midi = [MidiBytes::default(); MAX_MIDI_PER_CALLBACK];
     move |data, _info| {
         data.fill(0.0);
@@ -688,7 +970,11 @@ fn render_callback(
         let Ok(mut realtime) = shared.realtime.try_lock() else {
             return;
         };
-        let Realtime { executor, midi_rx } = &mut *realtime;
+        let Realtime {
+            executor,
+            midi_rx,
+            input,
+        } = &mut *realtime;
         let mut arrived = 0;
         while arrived < midi.len() {
             let Ok(message) = midi_rx.pop() else {
@@ -704,10 +990,28 @@ fn render_callback(
             // of its first block: Core MIDI's timestamps are on another clock,
             // and a key's lateness is already smaller than one callback.
             let block_midi = if index == 0 { &midi[..arrived] } else { &[] };
-            executor.process(
+            // The input is read a block at a time for the same reason the
+            // output is written one: a callback may hand over more frames
+            // than the executor renders at once.
+            let (in_l, in_r): (&[f32], &[f32]) = match input.as_mut() {
+                Some(tap) => {
+                    let silent =
+                        tap.fill(&mut scratch_in_l[..frames], &mut scratch_in_r[..frames]);
+                    if silent > 0 {
+                        shared.input_underruns.fetch_add(silent, Ordering::Relaxed);
+                    }
+                    (&scratch_in_l[..frames], &scratch_in_r[..frames])
+                }
+                // No input stream: empty slices, and the input bus stays
+                // silent, which is what every caller saw before this step.
+                None => (&[], &[]),
+            };
+            executor.process_with_input(
                 block_midi
-                .iter()
-                .map(|message| (message.port, 0, message.as_slice())),
+                    .iter()
+                    .map(|message| (message.port, 0, message.as_slice())),
+                in_l,
+                in_r,
                 out_l,
                 out_r,
             );
@@ -719,6 +1023,50 @@ fn render_callback(
                 frame[right] = *r;
             }
         }
+    }
+}
+
+/// Copy one input callback's interleaved frames into the ring as stereo
+/// pairs, returning the frames that did not fit.
+fn push_input(tx: &mut Producer<[f32; 2]>, data: &[f32], channels: usize) -> u64 {
+    let mut dropped = 0;
+    for frame in data.chunks_exact(channels) {
+        // A mono device is heard in both ears rather than only in the left
+        // one, which is how a microphone should arrive; channels past the
+        // second are dropped, because the input bus is a stereo pair.
+        let right = if channels > 1 { frame[1] } else { frame[0] };
+        if tx.push([frame[0], right]).is_err() {
+            dropped += 1;
+        }
+    }
+    dropped
+}
+
+/// The input stream's realtime callback. It does no more than copy: the
+/// output callback owns the executor, and this thread never waits for it.
+fn input_callback(
+    mut tx: Producer<[f32; 2]>,
+    channels: u16,
+    shared: Arc<Shared>,
+) -> impl FnMut(&[f32], &cpal::InputCallbackInfo) + Send + 'static {
+    let channels = usize::from(channels);
+    move |data, _info| {
+        let dropped = push_input(&mut tx, data, channels);
+        if dropped > 0 {
+            shared.input_overruns.fetch_add(dropped, Ordering::Relaxed);
+        }
+    }
+}
+
+fn input_error_callback(shared: Arc<Shared>) -> impl FnMut(cpal::Error) + Send + 'static {
+    move |error| match error.kind() {
+        cpal::ErrorKind::Xrun => {
+            shared.input_overruns.fetch_add(1, Ordering::Relaxed);
+        }
+        cpal::ErrorKind::DeviceNotAvailable | cpal::ErrorKind::StreamInvalidated => {
+            shared.input_lost.store(true, Ordering::Relaxed);
+        }
+        _ => {}
     }
 }
 
@@ -744,7 +1092,84 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{channel_address, parse_channel, MidiBytes, MidiPortId, Route};
+    use super::{
+        channel_address, parse_channel, push_input, InputTap, MidiBytes, MidiPortId, Route,
+    };
+    use rtrb::RingBuffer;
+
+    /// `prefill` frames with a known value in the ring, read back a block at a
+    /// time through a tap whose prefill is `prefill`.
+    fn tap_over(frames: &[[f32; 2]], capacity: usize, prefill: usize) -> InputTap {
+        let (mut tx, rx) = RingBuffer::new(capacity);
+        for frame in frames {
+            tx.push(*frame).expect("the ring was sized for these");
+        }
+        // `tx` is dropped here on purpose. rtrb lets a consumer drain a ring
+        // whose producer has gone, so the frames pushed above are still
+        // readable -- and a leaked producer would be a leaked ring.
+        InputTap {
+            rx,
+            prefill,
+            priming: true,
+        }
+    }
+
+    /// A ring that has not reached its prefill reads as silence rather than as
+    /// the few frames it does hold, and it is **not** counted as drift: the
+    /// ring filling up is what starting is.
+    #[test]
+    fn the_input_ring_is_silent_until_it_has_its_prefill() {
+        let mut tap = tap_over(&[[0.5, -0.5]; 3], 64, 8);
+        let (mut l, mut r) = ([9.0f32; 4], [9.0f32; 4]);
+        assert_eq!(tap.fill(&mut l, &mut r), 0);
+        assert_eq!(l, [0.0; 4]);
+        assert_eq!(r, [0.0; 4]);
+
+        // With the prefill reached, the same tap hands over what it holds, in
+        // order and with the channels still paired.
+        let mut tap = tap_over(&[[0.25, -0.25], [0.5, -0.5]], 64, 2);
+        let (mut l, mut r) = ([9.0f32; 2], [9.0f32; 2]);
+        assert_eq!(tap.fill(&mut l, &mut r), 0);
+        assert_eq!(l, [0.25, 0.5]);
+        assert_eq!(r, [-0.25, -0.5]);
+    }
+
+    /// A ring that runs dry mid-block pads the rest with silence, reports the
+    /// frames it could not supply, and primes again -- so the next block waits
+    /// for a refill instead of reading the same empty ring.
+    #[test]
+    fn a_starved_input_ring_pads_with_silence_and_primes_again() {
+        let mut tap = tap_over(&[[1.0, 1.0], [1.0, 1.0]], 64, 2);
+        let (mut l, mut r) = ([9.0f32; 4], [9.0f32; 4]);
+        assert_eq!(tap.fill(&mut l, &mut r), 2);
+        assert_eq!(l, [1.0, 1.0, 0.0, 0.0]);
+        assert_eq!(r, [1.0, 1.0, 0.0, 0.0]);
+        assert!(tap.priming, "a starved ring refills before it is read again");
+
+        // And the refill really is waited for: the ring is empty, so the next
+        // block is silence rather than a second underrun report.
+        let (mut l, mut r) = ([9.0f32; 4], [9.0f32; 4]);
+        assert_eq!(tap.fill(&mut l, &mut r), 0);
+        assert_eq!(l, [0.0; 4]);
+    }
+
+    /// A one-channel device is heard in both ears, and a device with more
+    /// channels than the input bus has is read from its first two.
+    #[test]
+    fn a_mono_input_device_is_heard_in_both_ears() {
+        let (mut tx, mut rx) = RingBuffer::new(8);
+        assert_eq!(push_input(&mut tx, &[0.5, -0.25], 1), 0);
+        assert_eq!(rx.pop(), Ok([0.5, 0.5]));
+        assert_eq!(rx.pop(), Ok([-0.25, -0.25]));
+
+        let (mut tx, mut rx) = RingBuffer::new(8);
+        assert_eq!(push_input(&mut tx, &[0.5, -0.5, 0.125], 3), 0);
+        assert_eq!(rx.pop(), Ok([0.5, -0.5]));
+
+        // A ring with no room drops rather than blocking, and says how much.
+        let (mut tx, _rx) = RingBuffer::new(1);
+        assert_eq!(push_input(&mut tx, &[0.1, 0.2, 0.3, 0.4], 2), 1);
+    }
 
     /// A channel message crosses whole; system exclusive, which Core MIDI
     /// hands over in one piece, and an empty packet do not cross at all.

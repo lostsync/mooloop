@@ -311,6 +311,19 @@ number of channels may hold one.
   (`process_with_input`), silent for a driver with no input and for every
   offline render. A take from it starts the driver's round-trip latency after
   its bar line.
+- **Two drivers fill that bus differently, and one of them has two clocks.**
+  JACK hands the process callback its own capture ports, so input and output
+  are the same callback on the same clock and the bus is a copy. cpal has no
+  duplex stream, so Core Audio runs a **second stream on a second thread and a
+  second device clock**, and the output callback reads its frames from an
+  `rtrb` ring the input callback writes (`coreaudio_driver.rs`). The ring is
+  primed before the first read so ordinary jitter does not starve it.
+  **Drift between two clocks is counted, not corrected**: a ring that starves
+  reads silence, a ring that fills drops frames, both are counted, and the
+  control thread reports the total when it moves. There is no resampler, so an
+  input device that is not the output device will slip over a long take. It is
+  not a problem on the machine that matters -- one device, one clock -- and
+  fixing it properly is a resampler, which is its own piece of work.
 - **Silence, not stale audio.** A channel that did not reach its output this
   block (muted, asleep), a muted or solo-silenced track, and a source that no
   longer exists are recorded as silence.

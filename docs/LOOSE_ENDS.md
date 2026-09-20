@@ -352,12 +352,13 @@ already does. The document is marked dirty, so the mapping is at least saved.
 mapping page, and no keyboard has been plugged into it. `scripts/mooloop-mcp`
 and a controller are the check.
 
-**The Core MIDI driver's port ids have never been compiled.**
-`coreaudio_driver.rs` is behind `#[cfg(target_os = "macos")]` and the
-2026-09-15 MIDI work was done on Linux, so the port threaded through
-`MidiBytes`, the `Listening` struct that replaced the connection tuple, and the
-narrowed `Ignore` flags are all unverified. Mechanical changes, but mechanical
-is not checked. Build `mooloop-engine` on macOS.
+~~**The Core MIDI driver's port ids have never been compiled.**~~ **Closed
+2026-09-20**: `cargo check -p mooloop-engine --all-targets` on the Mac is
+clean, and `cargo test -p mooloop-engine` is green, so the port threaded
+through `MidiBytes`, the `Listening` struct and the narrowed `Ignore` flags all
+compile and the driver's own tests run. Compiled is not played -- a keyboard
+through Core MIDI is still the MIDI-control entry above -- but the mechanical
+half is checked now.
 
 **There is no way to hear a track before its own fader.** Solo is in place
 as of 2026-09-11, which silences the others rather than opening a monitor

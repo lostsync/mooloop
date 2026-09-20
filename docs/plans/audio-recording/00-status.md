@@ -6,7 +6,7 @@ plan (same `SCOPE.md` item, filed before the migration) and is kept open as
 the earlier tracking issue for the input side; MOO-16 is where the plan's
 current shape lives.
 
-**Written 2026-09-17. Steps 02-05 landed 2026-09-18, and 01's JACK half 2026-09-19; the rest of 01 and all of 06 are left.** This is `SCOPE.md` §2 item 3
+**Written 2026-09-17. Steps 02-05 landed 2026-09-18, 01's JACK half 2026-09-19 and its Core Audio half 2026-09-20; step 06 is all that is left.** This is `SCOPE.md` §2 item 3
 (audio input) together with the audio half of item 5 (recording), in the shape
 Adam settled on 2026-09-17, and since 2026-09-18 item 6 (resampling) as well,
 which turned out to be the same feature with the source inside the app.
@@ -117,7 +117,7 @@ order.
 | [03](03-capture.md) | Bounded capture of the chosen buffer at the end of each block, drained to a WAV file off the audio thread | engine, session | **landed 2026-09-18** -- see below |
 | [04](04-the-take.md) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | **landed 2026-09-18** -- see below |
 | [05](05-interface.md) | Record button, source meter, the growing waveform, the non-sampler rule. **Acceptance: resample a loop into a sampler and play it back** | UI build | **landed 2026-09-18** -- see below |
-| [01](01-input-in-the-engine.md) | Drivers deliver hardware input into an input bus, which becomes one more source; monitoring | engine; macOS unverified | **Landed 2026-09-19 under JACK**, with monitoring and the input meter; Core Audio's input stream is left -- see below |
+| [01](01-input-in-the-engine.md) | Drivers deliver hardware input into an input bus, which becomes one more source; monitoring | engine | **Landed**: JACK 2026-09-19 with monitoring and the input meter, Core Audio 2026-09-20 -- see below |
 | [06](06-unused-takes.md) | Find and delete takes nothing refers to | session, project, UI build | not started |
 
 **Why internal sources can go first without new scheduling:** capture is a
@@ -310,8 +310,71 @@ What is on `main` after decisions 5, 6 and 10:
   passed without that guard, because a sounding input keeps its own strip
   awake; the version that starts the input after two seconds of silence fails
   without it.
-- **Left:** Core Audio's input stream, which is the Mac side's -- the Core
-  Audio driver reports no input, so the menu shows no input row there.
+- **Core Audio's input stream, 2026-09-20**, written and checked on the Mac.
+  cpal has no duplex stream, so it is a second stream on the system's default
+  input device, on its own thread and its own device clock, handing stereo
+  pairs to the output callback through an `rtrb` ring. `audio_input_label`
+  returns that device's own name -- Core Audio opens a device rather than
+  joining a graph, so unlike JACK there is a device to name -- and returns
+  `None`, which is no input row at all, when there is no input device, when
+  the device will not run at the engine's sample rate, or when macOS has not
+  granted the microphone. That last one is logged as a sentence naming
+  Privacy & Security, because macOS refuses silently and a stream that never
+  delivers reads as a broken driver.
+
+  Four things the doing decided, none of them a design question the step
+  asked:
+
+  - **The prefill is two buffers, not the half-ring the step specified.** A
+    prefill is input latency the performer hears, and half of an eight-buffer
+    ring is 85 ms at 1024 frames. Two buffers still leaves six of headroom,
+    which is what the step was buying.
+  - **Drift is counted, not corrected**, as the step asked. Frames read as
+    silence and frames dropped are counted, and `service` reports the total
+    when it moves -- once a second at worst, and never on a machine whose
+    input and output are one device, which has no drift to report. There is no
+    resampler and a long take from a second device will slip.
+  - **One input device, the system's**, not a picked one. An input target
+    would be a second `<device>#<channel>` pair through the settings file and
+    the preferences page, and nothing has asked for one.
+  - **`input_latency_frames` is an estimate here, where JACK's is a
+    measurement.** JACK asks the server for capture and playback latency;
+    cpal reports neither. What is returned is the path through this driver --
+    a buffer out, the prefill, a buffer in -- so a take is right to within the
+    device's converter delay rather than to the sample.
+
+  **Run live on the Mac, 2026-09-20**, which is step 01's own acceptance and
+  the JACK half's twin: `MOOLOOP_AUTODRIVE_RECORD=input` with a throwaway
+  `MOOLOOP_CONFIG_DIR`. It opened the machine's default input -- a webcam's
+  microphone, `IC800 1080P HD` -- at 48 kHz, showed the pre-roll and the
+  growing take, and the report was PASS: the take became the sampler's
+  sample, owned by the song, as one "Record Take" undo step.
+
+  **And the file was opened rather than trusted**, because the report says a
+  take arrived and not that it has anything in it -- the JACK run on
+  2026-09-19 recorded correct silence from a muted microphone and passed the
+  same checks. It is 96,000 frames, one bar at 120 bpm at 48 kHz, to the
+  sample; it peaks at -9.9 dBFS and averages -25.3 dBFS; 99.9% of its samples
+  are non-zero and every tenth of it has sound in it. So the ring really is
+  carrying the device's audio, not zeros.
+
+  Worth noting for the drift limitation: the input in that run was a webcam
+  and the output was not, so the two clocks really were different clocks, and
+  **nothing was reported over the whole run**. That is one short take, not
+  evidence about a long one.
+
+  The unit tests that landed with it cover the ring (`InputTap::fill` and the
+  interleaved copy), each validated by mutation against the tree before its
+  own fix.
+
+  It also retired a `LOOSE_ENDS.md` entry on the way past: the Core MIDI port
+  ids, written on Linux on 2026-09-15 and never compiled, compile and their
+  tests run.
+
+- **`Executor::process` is now test-only.** Core Audio was the last caller
+  that had no input; both drivers go through `process_with_input`, and its
+  `dead_code` exemption says so rather than naming a driver that has moved
+  on.
 
 ## Open questions for Adam
 

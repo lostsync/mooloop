@@ -128,9 +128,12 @@ impl Executor {
     /// driver with one input port passes [`MidiPortId::FIRST`] for every
     /// message. At most [`MAX_BLOCK_SIZE`] frames are rendered; anything past
     /// that in the buffers is silenced.
-    // The drivers without an input -- Core Audio, until its input stream
-    // exists -- and the tests; on Linux outside the tests nothing calls it.
-    #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+    // Tests only, as of `audio-recording/01`: Core Audio was the last caller
+    // without an input, and now that it has one, both drivers go through
+    // `process_with_input`. Kept because it is the contract a driver with no
+    // input renders against, and because the executor's own tests are written
+    // against a block with nothing coming in.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn process<'m>(
         &mut self,
         midi: impl IntoIterator<Item = (MidiPortId, u32, &'m [u8])>,

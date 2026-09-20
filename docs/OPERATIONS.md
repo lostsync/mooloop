@@ -545,6 +545,30 @@ every source and logs each one as `listening to the MIDI input "<name>"`. If a
 keyboard plays nothing, that log line is the first thing to look for, and Audio
 MIDI Setup's MIDI Studio window shows whether macOS sees the device at all.
 
+**Audio input needs the microphone permission, and macOS refuses it
+silently.** mooloop opens the system default input device at startup and logs
+either `listening to the audio input "<name>"` or `no audio input: <reason>`;
+a refused permission is one of the reasons and names Privacy & Security. With
+no input, the channel sidebar's AUDIO row simply lists no input source, which
+is the same thing it does on a machine that has no input device.
+
+The driver retries the open once a second, so granting the permission should
+be picked up without a relaunch -- **that has not been tested**, because the
+machine it was written on had already granted it, and macOS is known to cache
+a TCC decision for the life of a process. If the row does not appear within a
+second or two of granting it, restart mooloop and say so here.
+
+**`cargo` reaches non-interactive shells through `~/.zshenv`, not `.zshrc`.**
+Homebrew's `rustup` is keg-only, so its shims are never linked into
+`/opt/homebrew/bin` -- and `rustup` itself resolves while `cargo` does not,
+which reads as a broken toolchain rather than as a missing `PATH` entry. The
+prepend was put in `~/.zshenv` on 2026-09-20 because that is the only startup
+file zsh reads for every invocation: `.zshrc` opens with
+`[[ $- == *i* ]] || return`, and `.zprofile` is login shells only, so a
+`zsh -c "cargo ..."` -- which is how scripts, editors and coding agents run
+things -- sees neither. It is machine-local and not in the repository; a fresh
+clone on another Mac needs it made again.
+
 The JACK adapter does not compile on a Mac, so an edit to it, or to anything
 else behind `cfg(not(target_os = "macos"))`, goes unchecked there.
 `scripts/linux-check` checks the Linux build from the Mac instead:

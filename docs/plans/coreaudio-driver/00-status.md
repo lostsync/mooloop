@@ -47,6 +47,16 @@ does not provide.
 | 04 The preferences page names its driver | landed 2026-09-13 |
 | 05 Keep the Mac build honest | landed 2026-09-13; the macOS CI job has not run yet |
 
+Since then, `audio-recording/01` gave the driver an **input stream**
+(2026-09-20), which is the one thing this plan's step 02 deliberately left
+out. See that plan's status file; what belongs here is the shape it settled
+on, because it is the driver's and not the recording feature's: cpal has no
+duplex stream, so the input is a second stream on a second clock, joined to
+the output through a ring, and **the drift between the two clocks is counted
+rather than resampled**. `driver.rs`'s "no trait to dispatch" note still
+holds -- the input needed no boundary, only `Executor::process_with_input`,
+which the JACK side had already shaped.
+
 ## What the doing changed
 
 - **The Linux build can be checked from the Mac.** The build box does not
