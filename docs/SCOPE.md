@@ -396,9 +396,14 @@ is the audience.
 3. `EffectKind::latency_frames()` is static and asserted to match the node
    (`effects/mod.rs:446-472`); for a plugin it must be discovered at runtime.
 4. **Instruments are worse than effects.** `ChannelStrip` holds all eight
-   generators as concrete fields (`render.rs:2020-2029`) with `active_source`
-   selecting among them. There is no `Box<dyn AudioNode>` source slot, so a
-   hosted plugin *instrument* has nowhere to live at all.
+   generators as concrete fields (`pub struct ChannelStrip` in
+   `engine/src/render.rs`, the eight named right under it) with
+   `active_source` selecting among them. There is no `Box<dyn AudioNode>`
+   source slot, so a hosted plugin *instrument* has nowhere to live at all.
+   Searched for by name rather than cited by line on 2026-09-20: the line
+   had been `:2020-2029` here and `:2154`, then `:2189`, then `:2273` in
+   `plans/plugin-hosting/00-status.md`, four numbers for one struct, and the
+   name has not moved once.
 
 The good news is real: `AudioNode` (`node.rs:142-281`) takes a whole block plus
 a sorted event list, which is CLAP's own shape, and the install path already
