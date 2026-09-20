@@ -296,6 +296,12 @@ you are about to stop.**
   touching `mooloop-ui`, need memory the laptop does not have -- send them to
   the remote build box with `scripts/antibox`, which picks incremental
   compilation for dev builds and sccache for release builds on its own.
+- **A cloud container is neither machine.** An agent session on the web
+  runner starts with no `mold`, no JACK or font headers, and an empty
+  `target/`, so the build fails before it compiles anything and the error
+  names the wrong cause. `docs/OPERATIONS.md`'s *Working In A Cloud
+  Container* has the two environment settings that fix it, and what a run
+  there costs.
 - **`.slint` edits do not need a build at all.** `scripts/slint-sketch`
   type-checks against the real widgets in about 0.05 s, where a
   `mooloop-ui` build is minutes.
