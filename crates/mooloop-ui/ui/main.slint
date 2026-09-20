@@ -1766,7 +1766,12 @@ export component MainWindow inherits Window {
     // Natural-units readout of the point under the pointer, e.g. "1.2 kHz".
     in property <string> automation-value-text;
     // Index into `automation-targets`.
-    callback automation-lane-selected(int);
+    // `-opened` and not `-selected`: this is an edit. It mutates the
+    // document, marks it dirty and records undo history, and the session
+    // method it calls is already `open_automation_lane`. The name is what
+    // makes `scripts/dupe-audit navigation-sends` able to be clean --
+    // a selection handler that sends is the shape MOO-57 had.
+    callback automation-lane-opened(int);
     callback automation-lane-cleared();
     callback automation-lane-closed();
     // tick, normalised value -> stable point ID (-1 when the lane is full or
@@ -5845,7 +5850,7 @@ export component MainWindow inherits Window {
                                                             has-lane: root.automation-lane-name != "";
                                                             picked(index) => {
                                                                 lane-menu.close();
-                                                                root.automation-lane-selected(index);
+                                                                root.automation-lane-opened(index);
                                                             }
                                                             cleared => {
                                                                 lane-menu.close();

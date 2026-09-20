@@ -211,6 +211,28 @@ refactor is exactly what happened here -- the add-channel menu was four
 hand-written rows, correct, until the day it became a `for` over eight. So its
 hits are leads that need the rows read, not a list of bugs.
 
+A ninth, `navigation-sends`, was added 2026-09-20 with MOO-57, and it is a
+regression guard rather than a lead generator: **zero is its expected answer
+and a clean run is its result.** The rule it holds is that looking at
+something is not an edit -- selecting a pattern, a channel, a bus or a device
+changes what is drawn, not what is scheduled, so none of it may reach the
+audio thread. Broken once, it cost every sounding voice on every channel.
+
+It is also the clearest case yet for **writing a check before its fix**. The
+first draft matched `EngineCommand::` constructors and reported nothing
+against a tree that had two violations, because the automation handler sends a
+command a session method built rather than one it names. Run against the
+unfixed tree, that silence was the check failing; written afterwards, it would
+have looked exactly as clean as a correct one.
+
+And it carries the false-positive rule in a form worth copying: one send is
+sanctioned -- the active pattern is also the record target, so
+`SetCurrentPattern` has to cross -- so the check reports a selection handler
+sending anything *else*, with the allowance named and reasoned in the
+allowlist rather than left for a reader to rediscover. Without it the check
+would report a correct handler forever, and a check that is never clean stops
+being read.
+
 There is a third limit, and it is the one to keep in mind when a check comes
 back clean. **`repeated-line` matches bytes, so a rename hides a copy from it
 completely.** On 2026-09-12 it reported the effect event-splitting loop in ten

@@ -68,6 +68,25 @@ Queue overflow must be observable to the sender; silent divergence between
 the visible project and audible engine is not an acceptable steady-state
 contract.
 
+**Looking at something is not an edit, and must not reach the audio
+thread.** Selecting a pattern, a channel, a bus, a device, a track or a pane
+changes what is drawn and what the next edit will address. None of it changes
+what is scheduled, so none of it may cost a voice, a parameter jump or a block
+of work in the callback.
+
+Where a navigation gesture genuinely has to inform the engine, the engine
+charges for what *changed* rather than for the fact that a command arrived.
+There is one such gesture: the active pattern is also the record target, so
+`SetCurrentPattern` is still sent, and `set_current_pattern` answers whether
+the selection actually moved.
+
+This is written down because it was broken, and the bill was every sounding
+voice on every channel -- in Song mode, where the selected pattern is not what
+is playing. `scripts/dupe-audit navigation-sends` reports a selection handler
+that sends anything else; a gesture that is really an edit says so in its name
+(`on_automation_lane_opened`, not `…_selected`). MOO-57 and
+`docs/plans/transport-discontinuity/`.
+
 **Two mechanisms cross the boundary, and nothing else does**: the ordered
 command stream, whose displaced heap objects come back through the reclaim
 ring, and atomics. Nothing the audio thread reads from the control side is

@@ -782,6 +782,21 @@ land on its own when it starts to matter:
   left, nor re-selecting the pattern already current, nor a selection past the
   end of the bank. Before 2026-09-20 all four cut off every sounding voice on
   every channel.
+- **Moving around the app does not interrupt what is playing**, as of
+  2026-09-20, and that is now a rule rather than a set of fixes. Selecting a
+  pattern, a channel, a bus, a device or a track is a view change: it changes
+  what is drawn and what the next edit will address, and none of it reaches
+  the audio thread. The one gesture that must tell the engine anything is the
+  pattern selection, because the active pattern is also where a recorded note
+  goes -- and the engine charges for what changed rather than for the fact
+  that a command arrived. `scripts/dupe-audit navigation-sends` reports a
+  selection handler that breaks the rule, and its clean run is its answer.
+- **A seek no longer rings the old position over the new one.** Delay and
+  reverb tails are cleared when the transport jumps, because what they hold
+  is audio from a part of the song that is no longer playing; a pattern
+  switch deliberately does not clear them, because time is still continuous
+  there. Free-running modulation keeps its phase across a seek, so a bounce
+  still matches the take it was rendered against.
 - The playhead can be moved with the transport running or stopped, snapped to
   the playlist's own musical snap, and it reaches the end of the *song* --
   including the part of a long clip that overhangs the 64-bar start canvas --

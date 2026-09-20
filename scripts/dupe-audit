@@ -639,6 +639,88 @@ def popup_close_order():
     return hits
 
 
+def navigation_sends():
+    """Selection handlers that reach the audio thread.
+
+    **Looking at something is not an edit.** Selecting a pattern, a channel, a
+    bus, a device or a track changes what is drawn and what the next edit will
+    address; none of it changes what is scheduled, so none of it may cost a
+    voice, a parameter jump or a block of work in the callback.
+
+    That rule was broken once and it cost every sounding voice on every
+    channel: `on_pattern_selected` sent `SetCurrentPattern`, which set
+    `seeked`, which choked every live channel -- in Song mode, where the
+    selection is not what is playing. MOO-57, and
+    `docs/plans/transport-discontinuity/`.
+
+    Written before the rename below and run against that tree, where -- with
+    the allowance below removed -- it reports exactly the two handlers the
+    plan predicted: `on_pattern_selected` and `on_automation_lane_selected`.
+    A check written after its fix is shaped by what its author already knows
+    about. The first draft matched `EngineCommand::` constructors and reported
+    *nothing*, because the automation handler sends a command a session method
+    built; that is what the run-it-first rule is for.
+
+    **One send is sanctioned and is not a hit.** The active pattern is also
+    the record target -- `recording_tick` reads it -- so `SetCurrentPattern`
+    has to be sent, and step 01 made the engine charge for what changed rather
+    than for the fact that a command arrived. So this reports a selection
+    handler sending *anything else*, which is the shape the bug actually had:
+    a new selection callback wired to the engine by somebody who did not know
+    the rule.
+
+    The plan expected zero hits after step 01 and a rename, which was wrong in
+    a way worth recording: step 01 was an engine change and left the send in
+    place, so without the allowance above `on_pattern_selected` would be a
+    permanent false positive -- and a check that is never clean stops being
+    read.
+
+    What it misses: a gesture that violates the rule under a name that is not
+    `on_*_selected`, and a send that reaches the channel through a helper. The
+    `repeated-line` limit restated -- a rename hides a copy from a byte search
+    completely.
+    """
+    handler = re.compile(r"window\.(on_[\w]+_selected)\s*\(")
+    # Any send on the command channel, not only a literal `EngineCommand::`
+    # one. `on_automation_lane_selected` hands over a command a session method
+    # built -- `tx.send(command)` -- and matching constructors alone missed it
+    # entirely, which is the check reporting nothing against a tree the plan
+    # said had two.
+    send = re.compile(r"\.send\(\s*([^,\n]+?)\s*\)")
+    allowed = {
+        # The record target, not a view: `recording_tick` reads it. The
+        # engine charges for what changed -- see step 01.
+        "on_pattern_selected": {"SetCurrentPattern"},
+    }
+
+    def named(expression):
+        """The variant name where there is one, else the expression itself."""
+        variant = re.match(r"(?:Engine|Structural)Command::(\w+)", expression)
+        return variant.group(1) if variant else expression
+
+    hits = []
+    for path in rust_sources():
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for match in handler.finditer(text):
+            name = match.group(1)
+            body = balanced(text, text.index("{", match.end() - 1))
+            sent = {named(command) for command in send.findall(body)}
+            unsanctioned = sorted(sent - allowed.get(name, set()))
+            if not unsanctioned:
+                continue
+            line = text.count("\n", 0, match.start()) + 1
+            hits.append(
+                (
+                    f"{rel(path)}:{line}",
+                    f"{name} sends {', '.join(unsanctioned)}; looking at "
+                    f"something is not an edit. If it really is an edit, say "
+                    f"so in the name -- `_opened`, `_armed`, `_moved` -- and "
+                    f"this stops reporting it.",
+                )
+            )
+    return hits
+
+
 def balanced(text, start):
     """The brace-balanced block opening at or after `start`."""
     depth = 0
@@ -674,6 +756,7 @@ CHECKS = {
     "one-sided-test": one_sided_test,
     "bar-arithmetic": bar_arithmetic,
     "popup-close-order": popup_close_order,
+    "navigation-sends": navigation_sends,
 }
 
 

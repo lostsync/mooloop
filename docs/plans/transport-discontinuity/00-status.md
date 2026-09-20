@@ -1,7 +1,6 @@
 # Transport discontinuity status
 
-**Steps 01, 02 and 03 landed 2026-09-20**, the day the plan was written. Step
-04 has not started. The directory came out of Adam reporting that moving around
+**All four steps landed 2026-09-20**, the day the plan was written. The directory came out of Adam reporting that moving around
 the app makes the audio glitch, and it covers both the bug he heard and the
 mechanism whose absence caused it.
 
@@ -164,6 +163,24 @@ implemented.
 
 **Audible change:** reverb and delay tails no longer ring across a seek.
 
+## What step 04 changed
+
+The rule in `AUDIO_ARCHITECTURE.md` and `CURRENT.md`,
+`automation-lane-selected` renamed to `automation-lane-opened` because it is
+an edit, and `scripts/dupe-audit navigation-sends`, which reports zero.
+
+**The zero needed an allowance the plan did not account for.**
+`on_pattern_selected` still sends `SetCurrentPattern` -- step 01 was an engine
+change and left the send deliberately, since `recording_tick` reads the active
+pattern -- so a check for "a selection handler that sends" would report it
+forever. It reports a selection handler that sends anything *else*, which is
+the shape the bug had.
+
+Written before the rename and run against that tree, where its first draft
+found nothing because it matched `EngineCommand::` constructors and the
+automation handler sends a command a session method built. Matching the
+channel instead reported both handlers the plan predicted.
+
 ## Steps
 
 | Step | What it does | Cost |
@@ -171,7 +188,7 @@ implemented.
 | 01 | **Landed 2026-09-20.** `SetCurrentPattern` owes a discontinuity only when it changes what is scheduled | small, standalone, fixed the report |
 | 02 | **Landed 2026-09-20.** A command class that lands at a musical boundary | medium; no face change after all, and no caller yet |
 | 03 | **Landed 2026-09-20.** `AudioNode` can be told time moved, and which kind | four devices opted in; the voice path still uses `Choke` |
-| 04 | Navigation must not reach the audio thread — the rule, and a guard | small |
+| 04 | **Landed 2026-09-20.** Navigation must not reach the audio thread — the rule, and a guard | small |
 
 Step 01 stands alone and is worth landing on its own. Steps 02 through 04 are
 the general mechanism and are ordered by dependency: 03 is much easier to

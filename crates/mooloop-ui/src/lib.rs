@@ -7941,7 +7941,7 @@ impl AppUi {
             let history_state = state.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
-            window.on_automation_lane_selected(move |index| {
+            window.on_automation_lane_opened(move |index| {
                 let Some(window) = weak.upgrade() else { return };
                 let before = project_snapshot(&st.borrow(), &window);
                 let mut st = st.borrow_mut();
