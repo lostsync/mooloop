@@ -705,18 +705,14 @@ impl Session {
                 false
             }
             PendingEngineMessage::MidiRouting(routes) => {
-                if !handle.set_midi_routing(routes) {
-                    self.report_refused_command("MIDI routing");
-                }
+                handle.set_midi_routing(routes);
                 // The *document* was already dirtied by the edit that changed
                 // a channel's input; installing the resolved table is not a
                 // second edit, and a port appearing must not dirty anything.
                 false
             }
             PendingEngineMessage::AudioInputRouting(taps) => {
-                if !handle.set_audio_input_routing(taps) {
-                    self.report_refused_command("audio input routing");
-                }
+                handle.set_audio_input_routing(taps);
                 // Not an edit, for the reason the MIDI routing is not.
                 false
             }

@@ -68,23 +68,6 @@ Queue overflow must be observable to the sender; silent divergence between
 the visible project and audible engine is not an acceptable steady-state
 contract.
 
-**Two mechanisms cross the boundary, and nothing else does**: the ordered
-command stream, whose displaced heap objects come back through the reclaim
-ring, and atomics. Nothing the audio thread reads from the control side is
-reference-counted. The routing tables -- MIDI input, audio input, the buffer
-MIDI map -- were `ArcSwap` cells until 2026-09-19; a guard held on the audio
-thread could outlive the control thread's reference to a table it had just
-replaced, and the free then ran in the callback (`reports/fable-2026-09-19.md`,
-finding 2). They are `StructuralCommand::SetMidiRouting`,
-`SetAudioInputRouting` and `SetBufferMidi` now. The same review's finding 1
-was the same class by another door: a project install's carry plan was
-dropped at the end of the install arm; it leaves with the retired renderer.
-`an_install_frees_nothing_on_the_callback` and
-`a_routing_change_frees_nothing_on_the_callback` measure both, around
-`Executor::process` rather than around the one call inside it. (The per-channel
-sample slot is still an `ArcSwapOption`, retired through the reclaim ring by
-`load_full`, as `reports/fable-2026-09-17.md` finding 2 settled.)
-
 ## Control Graph Within A Channel
 
 The normal audio topology of a channel remains an ordered source-and-insert

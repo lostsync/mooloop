@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
 
-use arc_swap::ArcSwapOption;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use mooloop_core::{
     audio_tap_index, compile_bus_graph, AutomationLane, AuxInParams, ChannelSource,
     CompiledAudioGraph, CompiledBusGraph, DeviceKind, OutletDescriptor, PublishesOutlets,
@@ -2997,27 +2997,17 @@ pub(crate) struct RenderState {
     /// How MIDI input drives a buffer insert. `None` until the control layer
     /// configures one, so an unmapped project pays nothing for MIDI beyond
     /// decoding it.
-    ///
-    /// **This and the two routing tables below are plain boxes, replaced by
-    /// structural commands** (`StructuralCommand::SetBufferMidi`,
-    /// `SetMidiRouting`, `SetAudioInputRouting`), and the one they displace
-    /// leaves through the reclaim ring. They were `ArcSwap` cells until
-    /// 2026-09-19, and a guard held here could be the last owner of a table
-    /// the control thread had just replaced, freeing it on this thread
-    /// (`reports/fable-2026-09-19.md`, finding 2). Nothing the audio thread
-    /// reads from the control side is reference-counted now: it arrives on
-    /// the ordered stream or it is an atomic.
-    buffer_midi: Option<Box<mooloop_core::midi::BufferMidiMap>>,
+    buffer_midi: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>>,
     buffer_cc: BufferCcState,
     /// The channel a MIDI keyboard plays, or [`NO_KEYBOARD_CHANNEL`]. Shared
     /// with the control layer, which follows the editor's selection with it.
     keyboard_channel: Arc<AtomicU8>,
-    /// How each channel takes MIDI input. Rebuilt by the control layer when a
-    /// channel's setting changes or a port appears, and swapped in whole.
-    midi_routing: Box<MidiRouting>,
-    /// Which buffer each channel records from, read every block by
-    /// [`Self::advance_takes`]. Swapped in whole like `midi_routing`.
-    audio_input_routing: Box<AudioInputRouting>,
+    /// How each channel takes MIDI input. Shared with the control layer,
+    /// which rebuilds it when a channel's setting changes or a port appears.
+    midi_routing: Arc<ArcSwap<MidiRouting>>,
+    /// Which buffer each channel records from. Shared with the control layer
+    /// like `midi_routing`, and read by [`Self::advance_takes`].
+    audio_input_routing: Arc<ArcSwap<AudioInputRouting>>,
     /// The hardware input, filled from the driver at the top of each block by
     /// [`Self::load_input`] (`audio-recording/01`). Preallocated; a driver
     /// with no input, and every offline render, leaves it silent.
@@ -3161,11 +3151,11 @@ impl RenderState {
             meters: BusMeters::new(),
             device_meters: DeviceMeters::new(),
             device_telemetry: DeviceTelemetry::new(),
-            buffer_midi: None,
+            buffer_midi: Arc::new(ArcSwapOption::empty()),
             buffer_cc: BufferCcState::default(),
             keyboard_channel: Arc::new(AtomicU8::new(NO_KEYBOARD_CHANNEL)),
-            midi_routing: Box::new(MidiRouting::default()),
-            audio_input_routing: Box::new(AudioInputRouting::default()),
+            midi_routing: Arc::new(ArcSwap::from_pointee(MidiRouting::default())),
+            audio_input_routing: Arc::new(ArcSwap::from_pointee(AudioInputRouting::default())),
             input: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             input_dirty: false,
             monitor: [false; MAX_CHANNELS],
@@ -4433,15 +4423,6 @@ impl RenderState {
                 std::mem::replace(&mut strip.console_sum, buffer)
                     .map(StructuralReclaim::ConsoleSum)
             }
-            StructuralCommand::SetMidiRouting(routing) => {
-                Some(StructuralReclaim::MidiRouting(self.set_midi_routing(routing)))
-            }
-            StructuralCommand::SetAudioInputRouting(routing) => Some(
-                StructuralReclaim::AudioInputRouting(self.set_audio_input_routing(routing)),
-            ),
-            StructuralCommand::SetBufferMidi(map) => {
-                self.set_buffer_midi(map).map(StructuralReclaim::BufferMidi)
-            }
             StructuralCommand::StartTake { channel, take } => {
                 let Some(strip) = self.strips.get_mut(channel as usize) else {
                     // Nothing to record on. Handed straight back, so the
@@ -4933,14 +4914,14 @@ impl RenderState {
         }
     }
 
-    /// Install the buffer MIDI mapping, returning the one it displaces for the
-    /// caller to reclaim. `apply_structural` on the audio thread, directly on
-    /// the control thread while a renderer is being prepared.
-    pub(crate) fn set_buffer_midi(
+    /// Share the control layer's mapping cell. Same transport as the sample
+    /// slots: the non-realtime side swaps a whole map in, and the audio
+    /// thread only ever loads it, so no map is built or dropped here.
+    pub(crate) fn attach_buffer_midi_map(
         &mut self,
-        map: Option<Box<mooloop_core::midi::BufferMidiMap>>,
-    ) -> Option<Box<mooloop_core::midi::BufferMidiMap>> {
-        std::mem::replace(&mut self.buffer_midi, map)
+        map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>>,
+    ) {
+        self.buffer_midi = map;
     }
 
     /// Share the control layer's keyboard channel cell. An atomic rather than
@@ -4950,18 +4931,17 @@ impl RenderState {
         self.keyboard_channel = channel;
     }
 
-    /// Install the MIDI routing, returning the table it displaces. Same
-    /// transport as [`Self::set_buffer_midi`].
-    pub(crate) fn set_midi_routing(&mut self, routing: Box<MidiRouting>) -> Box<MidiRouting> {
-        std::mem::replace(&mut self.midi_routing, routing)
+    /// Share the control layer's MIDI routing cell. Same transport as the
+    /// buffer map: built and dropped off the audio thread, only ever loaded
+    /// here.
+    pub(crate) fn attach_midi_routing(&mut self, routing: Arc<ArcSwap<MidiRouting>>) {
+        self.midi_routing = routing;
     }
 
-    /// Install the audio input routing, returning the table it displaces.
-    pub(crate) fn set_audio_input_routing(
-        &mut self,
-        routing: Box<AudioInputRouting>,
-    ) -> Box<AudioInputRouting> {
-        std::mem::replace(&mut self.audio_input_routing, routing)
+    /// Share the control layer's audio input routing cell. Same transport as
+    /// the MIDI routing.
+    pub(crate) fn attach_audio_input_routing(&mut self, routing: Arc<ArcSwap<AudioInputRouting>>) {
+        self.audio_input_routing = routing;
     }
 
     /// Copy the driver's input for the next block into the input bus. Empty
@@ -5010,7 +4990,7 @@ impl RenderState {
 
     #[cfg(test)]
     pub(crate) fn audio_input_taps(&self) -> Vec<Option<mooloop_core::AudioTap>> {
-        self.audio_input_routing.taps.clone()
+        self.audio_input_routing.load().taps.clone()
     }
 
     /// Arm or disarm recording.
@@ -5067,7 +5047,8 @@ impl RenderState {
         if messages.is_empty() {
             return;
         }
-        let map = self.buffer_midi.as_deref().copied();
+        let map = self.buffer_midi.load();
+        let map = map.as_deref().copied();
         for message in messages {
             // A transport message is addressed to no channel and claimed by
             // no mapping; it goes straight up.
@@ -5175,10 +5156,11 @@ impl RenderState {
         // note-off, or two controllers on one pitch -- lets the first go
         // rather than stranding it under an id the second is about to reuse.
         self.stop_note(offset, note);
+        let routing = self.midi_routing.load();
         let id = keyboard_note_id(note);
         let mut claimed = false;
         for channel in 0..self.channel_count() {
-            if !self.midi_routing.route(channel).claims(message) {
+            if !routing.route(channel).claims(message) {
                 continue;
             }
             claimed = true;
@@ -5191,12 +5173,13 @@ impl RenderState {
             let channel = self.keyboard_channel.load(Ordering::Relaxed);
             if channel != NO_KEYBOARD_CHANNEL
                 && usize::from(channel) < self.channel_count()
-                && self.midi_routing.route(usize::from(channel)).follows_selection(message)
+                && routing.route(usize::from(channel)).follows_selection(message)
                 && self.queue_audition(channel, offset, Event::NoteOn { id, note, velocity })
             {
                 self.held_keys.hold(note, channel);
             }
         }
+        drop(routing);
         self.capture_note_on(message, note, velocity);
     }
 
@@ -6080,7 +6063,7 @@ impl RenderState {
         {
             return;
         }
-        let routing = &self.audio_input_routing;
+        let routing = self.audio_input_routing.load();
         let playing = self.transport.playing;
         let ticks_per_bar = f64::from(mooloop_core::TICKS_PER_BAR);
         for index in 0..live {
@@ -6373,7 +6356,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
 
         let mut render = two_channel_render();
         // Channel 0 takes MIDI channel 1, channel 1 takes MIDI channel 10.
-        let routing = Box::new(MidiRouting {
+        let routing = Arc::new(ArcSwap::from_pointee(MidiRouting {
             routes: vec![
                 MidiInputRoute {
                     source: MidiRouteSource::AllPorts,
@@ -6384,8 +6367,8 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                     channel: MidiChannelFilter::One(9),
                 },
             ],
-        });
-        drop(render.set_midi_routing(routing));
+        }));
+        render.attach_midi_routing(routing);
         let note = |channel, note| MidiMessage {
             offset: 0,
             port: MidiPortId::FIRST,
@@ -6423,12 +6406,12 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         };
 
         let mut render = two_channel_render();
-        render.set_midi_routing(Box::new(MidiRouting {
+        render.attach_midi_routing(Arc::new(ArcSwap::from_pointee(MidiRouting {
             routes: vec![MidiInputRoute {
                 source: MidiRouteSource::AllPorts,
                 channel: MidiChannelFilter::Omni,
             }],
-        }));
+        })));
         render.keyboard_channel.store(0, Ordering::Relaxed);
         render.apply_midi(&[MidiMessage {
             offset: 0,
@@ -6462,9 +6445,9 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             source: MidiRouteSource::AllPorts,
             channel: MidiChannelFilter::Omni,
         };
-        render.set_midi_routing(Box::new(MidiRouting {
+        render.attach_midi_routing(Arc::new(ArcSwap::from_pointee(MidiRouting {
             routes: vec![both, both],
-        }));
+        })));
         let message = |kind| MidiMessage {
             offset: 0,
             port: MidiPortId::FIRST,
@@ -6499,12 +6482,12 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         };
 
         let mut render = two_channel_render();
-        render.set_midi_routing(Box::new(MidiRouting {
+        render.attach_midi_routing(Arc::new(ArcSwap::from_pointee(MidiRouting {
             routes: vec![MidiInputRoute {
                 source: MidiRouteSource::AllPorts,
                 channel: MidiChannelFilter::Omni,
             }],
-        }));
+        })));
         let cc = MidiMessage {
             offset: 0,
             port: MidiPortId::FIRST,
@@ -6564,15 +6547,15 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         };
 
         let routing = || {
-            Box::new(MidiRouting {
+            Arc::new(ArcSwap::from_pointee(MidiRouting {
                 routes: vec![MidiInputRoute {
                     source: MidiRouteSource::AllPorts,
                     channel: MidiChannelFilter::Omni,
                 }],
-            })
+            }))
         };
         let mut outgoing = two_channel_render();
-        drop(outgoing.set_midi_routing(routing()));
+        outgoing.attach_midi_routing(routing());
         outgoing.set_record_armed(true);
         outgoing.play();
         outgoing.apply_midi(&[MidiMessage {
@@ -6594,7 +6577,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
 
         // What an install builds: a fresh renderer that has seen nothing.
         let mut incoming = two_channel_render();
-        drop(incoming.set_midi_routing(routing()));
+        incoming.attach_midi_routing(routing());
         assert!(!incoming.any_key_is_held());
         assert_eq!(incoming.capturing(60), None);
 
@@ -6636,12 +6619,12 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         };
 
         let mut render = two_channel_render();
-        render.set_midi_routing(Box::new(MidiRouting {
+        render.attach_midi_routing(Arc::new(ArcSwap::from_pointee(MidiRouting {
             routes: vec![MidiInputRoute {
                 source: MidiRouteSource::AllPorts,
                 channel: MidiChannelFilter::Omni,
             }],
-        }));
+        })));
         let message = |offset, kind| MidiMessage {
             offset,
             port: MidiPortId::FIRST,
@@ -6747,12 +6730,12 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         };
 
         let mut render = two_channel_render();
-        render.set_midi_routing(Box::new(MidiRouting {
+        render.attach_midi_routing(Arc::new(ArcSwap::from_pointee(MidiRouting {
             routes: vec![MidiInputRoute {
                 source: MidiRouteSource::AllPorts,
                 channel: MidiChannelFilter::Omni,
             }],
-        }));
+        })));
         // A one-quarter pattern placed on the second bar, and a second
         // pattern with no placement at all.
         render.apply_command(EngineCommand::AddPattern);
@@ -6828,12 +6811,12 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         };
 
         let mut render = two_channel_render();
-        render.set_midi_routing(Box::new(MidiRouting {
+        render.attach_midi_routing(Arc::new(ArcSwap::from_pointee(MidiRouting {
             routes: vec![MidiInputRoute {
                 source: MidiRouteSource::AllPorts,
                 channel: MidiChannelFilter::Omni,
             }],
-        }));
+        })));
         render.apply_command(EngineCommand::AddPattern);
         render.set_record_armed(true);
         render.play();
@@ -11346,7 +11329,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                     ..mooloop_core::BufferEvent::live()
                 },
             });
-            render.set_buffer_midi(Some(Box::new(map)));
+            render.attach_buffer_midi_map(Arc::new(ArcSwapOption::from_pointee(map)));
             render.play();
 
             let mut out = Vec::new();
@@ -11414,7 +11397,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         assert_eq!(hard.duration, mooloop_core::BufferDuration::Gate);
 
         let mut render = RenderState::from_project(48_000, &project, &[]);
-        render.set_buffer_midi(Some(Box::new(map)));
+        render.attach_buffer_midi_map(Arc::new(ArcSwapOption::from_pointee(map)));
         render.play();
         // Neither of these should panic or route anywhere unexpected; the
         // unmapped note is simply ignored.
@@ -11454,7 +11437,7 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             0,
             default_effect(mooloop_core::EffectKind::Buffer),
         ));
-        render.set_buffer_midi(Some(Box::new(map)));
+        render.attach_buffer_midi_map(Arc::new(ArcSwapOption::from_pointee(map)));
         render.play();
         for _ in 0..4 {
             render.process_block(1024);
