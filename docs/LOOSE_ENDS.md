@@ -1431,15 +1431,9 @@ monitoring a live microphone by itself, which the field's own doc comment
 says must never happen. Found 2026-09-20,
 `reports/fable-2026-09-20.md` finding 4.
 
-**Four unmerged spikes**, re-counted 2026-09-14. `spike/slint-split-build`
-(5 commits), `spike/egui-view-layer` (3), `spike/pattern-bank-cost` (1) and
-`spike/song-from-scratch` (1) are answers rather than candidates — none is
-waiting to land. Adam's call whether any goes anywhere. A fifth,
-`spike/measure-charts`, is fully merged and its branch can be deleted.
-
-There is also `claude/device-identity-rack-addressing-99yt4o` on the remote,
-one commit that is not in `origin/main` and has no local branch. Nobody has
-said whether it is wanted.
+There is `claude/device-identity-rack-addressing-99yt4o` on the remote, one
+commit that is not in `origin/main` and has no local branch. Nobody has said
+whether it is wanted.
 
 ---
 
