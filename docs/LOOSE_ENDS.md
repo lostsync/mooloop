@@ -475,14 +475,18 @@ reached the history is discarded -- and redo cannot bring it back, because
 `entry.after` predates it too. Not recorded: every step-grid edit (click,
 right-click, velocity, paint), pattern length, add-pattern, playlist
 placement add and remove, **every effect and generator parameter**, both
-renames, channel/generator preset loads from the browser, and **swapping the
-selected channel's device kind** from the source picker
-(`on_channel_source_changed`). That last one is the worst of them: the swap
-destroys the outgoing device's state outright, so an undo of a *later* edit
-keeps the swap the user can see and silently discards it from the snapshot it
-installs. It is a replace rather than a structure change, so the fix that gave
-the toolbar's Add Channel its own history entry (MOO-29, 2026-09-19)
-deliberately left it alone.
+renames, channel/generator preset loads from the browser, the MIDI IN and
+AUDIO input picks and the sampler RECORD page's CLIP and LENGTH
+(`on_midi_input_picked`, `on_audio_input_picked`,
+`on_sampler_record_clip_changed`, `on_sampler_record_bars_changed`;
+`mooloop-ui/src/lib.rs:9027`, `:9049`, `:9086`, `:9106`, each marking dirty
+and recording nothing), and **swapping the selected channel's device kind**
+from the source picker (`on_channel_source_changed`). That last one is the
+worst of them: the swap destroys the outgoing device's state outright, so an
+undo of a *later* edit keeps the swap the user can see and silently
+discards it from the snapshot it installs. It is a replace rather than a
+structure change, so the fix that gave the toolbar's Add Channel its own
+history entry (MOO-29, 2026-09-19) deliberately left it alone.
 
 So: draw a note (recorded), click eight steps, turn a filter's cutoff, press
 Ctrl+Z -- and the eight steps and the cutoff are gone with no redo path. The
@@ -975,6 +979,23 @@ routes whose device is gone (`modulation.rs:1875`) while keeping *illegal*
 routes inert (`modulation.rs:1932`). Both behaviours were chosen on purpose in
 their own passes; nobody has decided whether they should match.
 
+**A pasted channel keeps the original's audio input, so a copy of a channel
+that resamples itself resamples the original.** `channel_clipboard`
+(`session/session.rs:1737`) clones the whole `ProjectChannel`, `audio_input`
+included (`core/src/channel.rs:158`), and nothing on the way back in touches
+it: `queue_channel_insert` (`mooloop-ui/src/lib.rs:1495`) renames the copy
+and resizes its lanes, and `rescope_after` (`core/src/project.rs:1545`) walks
+subscriptions, modulation and lanes and not this field. A paste of a channel
+whose input is `Channel(n)` therefore points at channel *n* — the original —
+rather than at itself, which is the reading a duplicated feedback path would
+want and not the reading a duplicated resampler would.
+
+Both are defensible and the field is one line either way, so this is a
+question rather than a defect: **Adam's call.** Neither answer needs the
+rescope walk; the copy's own id is minted by `insert_channel` and is
+available at the same point the name is made unique. Found 2026-09-20,
+`reports/fable-2026-09-20.md` finding 4.
+
 ---
 
 ## One name, two policies
@@ -1397,6 +1418,18 @@ no crate mentions idle inhibition. The policy question is what counts as busy:
 transport running is the obvious answer, and an armed recording or a held note
 is the one that would actually annoy somebody if it were missed. Found
 2026-09-15.
+
+**`Session::input_monitor` is never pruned when a channel goes.**
+(`session/session.rs:76`.) It is a `BTreeSet<ChannelId>` and only
+`set_input_monitor` (`session/take.rs:267`) ever inserts or removes, so a
+monitored channel that is deleted leaves its id in the set for the life of
+the session. Harmless today, and for one reason worth stating rather than
+assuming: ids are never reused, so a stale entry can never be mistaken for a
+later channel — it is a few bytes that outlive their subject, not a wrong
+answer. The day an id *is* reused, this becomes a channel that opens
+monitoring a live microphone by itself, which the field's own doc comment
+says must never happen. Found 2026-09-20,
+`reports/fable-2026-09-20.md` finding 4.
 
 **Four unmerged spikes**, re-counted 2026-09-14. `spike/slint-split-build`
 (5 commits), `spike/egui-view-layer` (3), `spike/pattern-bank-cost` (1) and
