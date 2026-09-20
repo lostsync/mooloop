@@ -80,7 +80,7 @@ sections at the end.
 | # | Item | Where it stands |
 | --- | --- | --- |
 | 4 | **Audio routing** | **This is the most finished area in the codebase.** A topologically compiled bus graph with cycle refusal (`compile_bus_graph`, Kahn's, `mixer.rs:552`); sends that route a copy of a track to another track with per-edge latency compensation (`AuxSend` `mixer.rs:211`, `compile_latency` `:834`); and typed audio edges with device outlets, refusals-as-values and compiled ordering (`compile_audio_graph` `mixer.rs:1113`, `core/src/outlet.rs`, `AudioTapBank` `render.rs:53`). ML-P8 publishes 7 audio taps; DS-01 and Aux In publish too. **What is genuinely missing is sidechain** — a dependency edge that schedules a producer without summing it — plus mid-chain send taps (`SendTap` has two positions, both post-chain, `mixer.rs:177-201`) and `OutletTap::Output`, which is declared and then refused as `TapIsLate`. Read `plans/archive/typed-audio-edges/` before building any of it. |
-| 4b | **MIDI routing** | Separate item, and it is Tier B: there is **no MIDI graph at all**. One input port, decoded once, routed by a single `AtomicU8`. |
+| 4b | **MIDI routing** | Separate item, and it is Tier B: there is **no MIDI graph at all**. One input port, decoded once, and delivered by a per-channel route table (`MidiRouting`, `render.rs:2775`, a `Vec<MidiInputRoute>` built on the control thread and swapped in whole). *Corrected 2026-09-20*: this row said "routed by a single `AtomicU8`", which the route table outgrew; the one `AtomicU8` left is `keyboard_channel` (`render.rs:3004`), the computer-keyboard destination, not the routing. What is still missing is the graph — one port, no merge, no fan-out, no per-device filter. |
 | 6 | **Resampling** | **Folded into `plans/audio-recording/` on 2026-09-18** (Adam: *"its the same thing, only the source is different"*). It is recording with a channel, track or the master as the source, captured in real time into a sampler, and it is that plan's first working source. The offline route below is a faster-than-realtime *bounce*, a different gesture that nothing has asked for yet. The notes are kept for when something does. The offline render engine is done and reusable: `OfflineRenderer::render` (`offline.rs:104`), WAV via hound and MP3 via mp3lame. Critically, **`render_blocks` (`offline.rs:176`) already takes an arbitrary `FnMut(&[f32], &[f32])` sink** — so "render to a sample" is that closure filling a `Vec` and building `SampleData` (`dsp/src/sampler.rs:65-69`), installed through the existing `EngineHandle::load_sample` (`engine/lib.rs:580`). What is missing is only a **scope smaller than the master bus** (`offline.rs:186/195` reads `state.master()` and nothing else), and `RenderState` already has a full solo model to build one from (`install_solo`, `render.rs:3072`). Small. |
 | 13 | **Master bus comp** | Promoted out of this tier on 2026-09-14 — Adam wants it to be its own thing, with its own laws. **See §2.1.** |
 
@@ -396,9 +396,14 @@ is the audience.
 3. `EffectKind::latency_frames()` is static and asserted to match the node
    (`effects/mod.rs:446-472`); for a plugin it must be discovered at runtime.
 4. **Instruments are worse than effects.** `ChannelStrip` holds all eight
-   generators as concrete fields (`render.rs:2020-2029`) with `active_source`
-   selecting among them. There is no `Box<dyn AudioNode>` source slot, so a
-   hosted plugin *instrument* has nowhere to live at all.
+   generators as concrete fields (`pub struct ChannelStrip` in
+   `engine/src/render.rs`, the eight named right under it) with
+   `active_source` selecting among them. There is no `Box<dyn AudioNode>`
+   source slot, so a hosted plugin *instrument* has nowhere to live at all.
+   Searched for by name rather than cited by line on 2026-09-20: the line
+   had been `:2020-2029` here and `:2154`, then `:2189`, then `:2273` in
+   `plans/plugin-hosting/00-status.md`, four numbers for one struct, and the
+   name has not moved once.
 
 The good news is real: `AudioNode` (`node.rs:142-281`) takes a whole block plus
 a sorted event list, which is CLAP's own shape, and the install path already

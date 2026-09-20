@@ -65,13 +65,18 @@ type outgrows the MIDI module)
 - The tests pin the new numbering. Write them before changing the rows.
 
 **Engine routing**
-- A resolved `AudioInputRouting` table (`ArcSwap`, like `MidiRouting`) says
-  which channel, if any, records, and which buffer it records from: a
-  channel seat, a track seat, the master, or (from step 01) the input bus.
-- **Attach it in `install_project`.** Leaving the MIDI routing cell out of
-  that function is exactly the bug found on 2026-09-17, and it must not
-  happen twice. Add a test that installs a project and then checks the cell
-  is the handle's own.
+- A resolved `AudioInputRouting` table (a plain `Box` replaced by
+  `StructuralCommand::SetAudioInputRouting`, like `MidiRouting`) says which
+  channel, if any, records, and which buffer it records from: a channel
+  seat, a track seat, the master, or (from step 01) the input bus. It was an
+  `ArcSwap` cell until 2026-09-20; a guard held on the audio thread could be
+  the last owner of a table the control thread had just replaced
+  (`reports/fable-2026-09-19.md`, finding 2).
+- **Set it in `install_project`.** Leaving the MIDI routing out of that
+  function is exactly the bug found on 2026-09-17, and it must not happen
+  twice. `prepare_render_state` sets both tables from `InputState` before the
+  renderer reaches the audio thread; the test that installs a project and
+  checks the table is the handle's own still guards it.
 
 **Session**
 - `set_channel_input` replaces `set_channel_midi_input` as the entry point.

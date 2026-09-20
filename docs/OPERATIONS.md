@@ -496,6 +496,43 @@ in either direction -- 13m05s on the box for a cold release build with it on
 -- which is why the script builds there by default and keeps its binary at
 `bin/mooloop-mcp` rather than in `target/`.
 
+## Working In A Cloud Container
+
+An agent session on Claude Code's web runner gets a fresh Ubuntu container
+that is neither the laptop nor the box: no `mold`, no audio or font
+development headers, and an empty `target/`. Two things stop the build
+outright before any code is compiled, and both are the container's rather
+than the tree's.
+
+**`mold` is not installed, and `.cargo/config.toml` pins it.** Every link
+fails with `collect2: fatal error: cannot find 'ld'`, which names the wrong
+thing and reads like a broken toolchain; `ld`, `ld.lld` and `ld.gold` are all
+present and only mold is missing. Override the config's target rustflags from
+the environment rather than editing the file -- `.github/workflows/ci.yml`
+already does this with `RUSTFLAGS: ""`, and either form takes precedence over
+`target.*.rustflags`:
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-fuse-ld=lld"
+```
+
+**`jack-sys`'s build script panics when pkg-config cannot find JACK**, so
+nothing compiles at all until the headers are installed. The CI job's
+dependency list is the authoritative one; run `apt-get update` before it or
+stale package lists 404 on part of it. A 2026-09-20 session built and tested
+`mooloop-ui` with `libjack-jackd2-dev`, `libfontconfig-dev` and
+`libxkbcommon-dev` alone, and `autoconf` and `nasm` were installed on a guess
+and turned out to be unnecessary: `mp3lame-sys` builds LAME with plain gcc.
+
+Everything else in this document still holds, `scripts/exit-code` included.
+What does not carry over is the timing. Measured on four container cores that
+day: `cargo check -p mooloop-ui` 4m50s with its dependencies already built;
+`cargo test -p mooloop-ui --lib` 11m25s, which included compiling the test
+profile's dependency tree; and
+`cargo clippy -p mooloop-ui --all-targets -- -D warnings` 14m56s. That is a
+verification pass, not an iteration loop -- decide what to run once, background
+it, and do other work while it runs.
+
 ## Developing On macOS
 
 The workspace builds and runs on a Mac, where the engine plays through Core

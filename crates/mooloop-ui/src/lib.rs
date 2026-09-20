@@ -6318,12 +6318,18 @@ impl AppUi {
             let table = shortcut_table.clone();
             let commands = command_state.clone();
             let st = state.clone();
+            let settings = ui_settings.clone();
             let weak = window.as_weak();
             window.on_shortcut_key(move |key, ctrl, shift, alt, meta| {
                 let Some(window) = weak.upgrade() else {
                     return false;
                 };
-                let chord = actions::KeyChord::new(ctrl, shift, alt, meta, key.as_str());
+                // Read and dropped before anything is dispatched: an arm
+                // below can open Preferences, which borrows the settings in
+                // its turn.
+                let super_key = settings.borrow().shortcuts.super_key;
+                let chord =
+                    actions::KeyChord::from_event(super_key, ctrl, shift, alt, meta, key.as_str());
                 let Some(action_id) = table.borrow().resolve(&chord) else {
                     return false;
                 };
@@ -6618,6 +6624,13 @@ impl AppUi {
             });
         }
         sync_shortcut_rows(&window, &shortcut_table.borrow());
+        window.set_preferences_shortcut_super_key_choices(ModelRc::from(Rc::new(VecModel::from(
+            actions::super_key_labels()
+                .into_iter()
+                .map(slint::SharedString::from)
+                .collect::<Vec<_>>(),
+        ))));
+        window.set_preferences_shortcut_super_key(ui_settings.borrow().shortcuts.super_key.index());
         let gesture_table = Rc::new(RefCell::new(gestures::GestureTable::build(
             &ui_settings.borrow().gestures.overrides,
         )));
@@ -6672,7 +6685,19 @@ impl AppUi {
             window.on_preferences_shortcut_rebind_key(
                 move |action_id, key, ctrl, shift, alt, meta| {
                     let Some(window) = weak.upgrade() else { return };
-                    let chord = actions::KeyChord::new(ctrl, shift, alt, meta, key.as_str());
+                    // Recorded through the same reading the dispatcher uses,
+                    // so the chord stored is the chord that will arrive:
+                    // with Super acting as Alt, a recorded Super+K is
+                    // written down as Alt+K.
+                    let super_key = settings.borrow().shortcuts.super_key;
+                    let chord = actions::KeyChord::from_event(
+                        super_key,
+                        ctrl,
+                        shift,
+                        alt,
+                        meta,
+                        key.as_str(),
+                    );
                     // Assigning a chord already owned by another action clears
                     // that action rather than leaving two actions pointing at
                     // the same chord: `ShortcutTable::resolve` would only ever
@@ -6783,10 +6808,46 @@ impl AppUi {
                 apply_appearance(&window, &settings.appearance);
                 sync_preferences_properties(&window, &settings);
                 window.set_preferences_midi_learn_binds_port(settings.midi.learn_binds_port);
+                window.set_preferences_shortcut_super_key(settings.shortcuts.super_key.index());
                 // Built on open rather than kept current: the ports move, the
                 // map moves, and nothing outside this page reads either.
                 st.borrow().refresh_midi_mappings(&window);
                 tx.send(AudioAction::RefreshTargets);
+            });
+        }
+        {
+            let settings = ui_settings.clone();
+            let weak = window.as_weak();
+            window.on_preferences_shortcut_super_key_changed(move |index| {
+                let Some(window) = weak.upgrade() else { return };
+                let chosen = actions::SuperKeyMode::from_index(index);
+                let mut settings = settings.borrow_mut();
+                // This arrives whenever the property moves, including when
+                // this side pushed the stored value into it as the dialog
+                // opened. Re-saving the file it was just read from is the
+                // kind of write that turns into a lost setting when it
+                // fails, so an unchanged value does nothing -- and that is
+                // also what makes the write-back below safe to re-enter.
+                if chosen == settings.shortcuts.super_key {
+                    return;
+                }
+                let previous = std::mem::replace(&mut settings.shortcuts.super_key, chosen);
+                // The table is deliberately not rebuilt: the mode decides
+                // which key event makes which chord, not which chord an
+                // action holds, so every row on the page stays true.
+                let result = settings.save();
+                if result.is_err() {
+                    settings.shortcuts.super_key = previous;
+                }
+                let stored = settings.shortcuts.super_key.index();
+                // Before the window is touched, because putting a refused
+                // choice back moves the property, which calls this again.
+                drop(settings);
+                if let Err(error) = result {
+                    window
+                        .set_preferences_error(format!("Could not save settings: {error}").into());
+                }
+                window.set_preferences_shortcut_super_key(stored);
             });
         }
         {
@@ -13981,7 +14042,9 @@ impl AppUi {
                         state.midi_ports = ports;
                         let ports = state.midi_ports.clone();
                         state.session.resolve_control_map(&ports);
-                        handle.set_midi_routing(state.session.midi_routing(&ports));
+                        if !handle.set_midi_routing(state.session.midi_routing(&ports)) {
+                            log_error!("ui", "the command queue refused the MIDI routing");
+                        }
                         drop(state);
                         st.borrow().refresh_editor(&w);
                         // The mapping page marks bindings whose controller is

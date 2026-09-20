@@ -527,14 +527,12 @@ mod tests {
             let (mut executor, mut cmd_tx, _reclaim) = executor();
             let mut out_l = [0.0f32; BLOCK];
             let mut out_r = [0.0f32; BLOCK];
-            executor
-                .render
-                .attach_midi_routing(Arc::new(arc_swap::ArcSwap::from_pointee(MidiRouting {
-                    routes: vec![MidiInputRoute {
-                        source: MidiRouteSource::AllPorts,
-                        channel: MidiChannelFilter::Omni,
-                    }],
-                })));
+            drop(executor.render.set_midi_routing(Box::new(MidiRouting {
+                routes: vec![MidiInputRoute {
+                    source: MidiRouteSource::AllPorts,
+                    channel: MidiChannelFilter::Omni,
+                }],
+            })));
             executor.render.play();
             executor.render.apply_midi(&[MidiMessage {
                 offset: 0,
@@ -800,6 +798,39 @@ mod tests {
             after.0 - before.0,
             after.1 - before.1
         );
+    }
+
+    /// **A routing change frees nothing on the callback.** The table it
+    /// replaces leaves through the reclaim ring -- the reason the routings are
+    /// structural commands rather than `ArcSwap` cells, one of which could be
+    /// last-owned by a guard on this thread (`reports/fable-2026-09-19.md`,
+    /// finding 2).
+    #[test]
+    fn a_routing_change_frees_nothing_on_the_callback() {
+        let (mut executor, mut cmd_tx, _reclaim) = executor();
+        let mut out_l = [0.0f32; BLOCK];
+        let mut out_r = [0.0f32; BLOCK];
+        executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        cmd_tx
+            .push(RealtimeCommand::Structural(
+                crate::StructuralCommand::SetMidiRouting(Box::new(crate::render::MidiRouting {
+                    routes: vec![mooloop_core::MidiInputRoute::default(); 4],
+                })),
+            ))
+            .expect("room in the ring");
+        cmd_tx
+            .push(RealtimeCommand::Structural(
+                crate::StructuralCommand::SetAudioInputRouting(Box::new(
+                    crate::render::AudioInputRouting {
+                        taps: vec![Some(mooloop_core::AudioTap::Master); 4],
+                    },
+                )),
+            ))
+            .expect("room in the ring");
+        let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        assert_eq!(after, before, "a routing change freed on the callback");
     }
 
     /// The channel the edit was *about* is still rebuilt, and still cuts.

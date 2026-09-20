@@ -15,7 +15,6 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
-use arc_swap::{ArcSwap, ArcSwapOption};
 use mooloop_core::{
     BufferParams, EffectKind, EffectParams, EffectTarget, EngineCommand, EngineEvent, MAX_CHANNELS,
     modulation::CONTROL_SOURCE_SLOTS,
@@ -269,6 +268,15 @@ pub enum StructuralCommand {
     /// comes back through the reclaim ring, so its producer is dropped off
     /// the audio thread and its drain sees the ring abandoned.
     StartTake { channel: u8, take: Box<Take> },
+    /// Replace how each channel takes MIDI input. Structural, not a shared
+    /// cell, so the table the audio thread is reading can never be freed
+    /// under it: the displaced one comes back through the reclaim ring
+    /// (`reports/fable-2026-09-19.md`, finding 2).
+    SetMidiRouting(Box<render::MidiRouting>),
+    /// Replace which seat each channel records from. As `SetMidiRouting`.
+    SetAudioInputRouting(Box<render::AudioInputRouting>),
+    /// Replace, or clear, the MIDI mapping that drives a buffer insert.
+    SetBufferMidi(Option<Box<mooloop_core::midi::BufferMidiMap>>),
     /// Install (or clear) a producer's latency compensation delay.
     ///
     /// `target` is the channel or bus whose *output* waits; `None` means it
@@ -405,6 +413,10 @@ pub(crate) enum StructuralReclaim {
     /// A take displaced by a new one on the same channel, or one with no
     /// channel to record on.
     Take(Box<Take>),
+    /// Routing tables displaced by their `Set*` commands.
+    MidiRouting(Box<render::MidiRouting>),
+    AudioInputRouting(Box<render::AudioInputRouting>),
+    BufferMidi(Box<mooloop_core::midi::BufferMidiMap>),
     /// A container's dry-path ring displaced by a resize, or the per-depth
     /// scratch handed to a chain that already had it. Same rule as every
     /// other box that reaches the audio thread: it comes back to be dropped.
@@ -611,10 +623,11 @@ struct SharedCells {
     bus_meters: Arc<BusMeters>,
     device_meters: Arc<DeviceMeters>,
     device_telemetry: Arc<DeviceTelemetry>,
-    buffer_midi_map: Arc<ArcSwapOption<mooloop_core::midi::BufferMidiMap>>,
+    /// The buffer MIDI mapping last sent, kept on this side so a renderer
+    /// built for an install starts with it. Not a cell: the live renderer
+    /// holds its own copy, replaced by `StructuralCommand::SetBufferMidi`.
+    buffer_midi: Option<mooloop_core::midi::BufferMidiMap>,
     keyboard_channel: Arc<AtomicU8>,
-    midi_routing: Arc<ArcSwap<render::MidiRouting>>,
-    audio_input_routing: Arc<ArcSwap<render::AudioInputRouting>>,
     playhead_meters: Arc<PlayheadMeters>,
     modulator_meters: Arc<ModulatorMeters>,
     preview_gain: Arc<AtomicU32>,
@@ -626,12 +639,8 @@ impl SharedCells {
             bus_meters: BusMeters::new(),
             device_meters: DeviceMeters::new(),
             device_telemetry: DeviceTelemetry::new(),
-            buffer_midi_map: Arc::new(ArcSwapOption::empty()),
+            buffer_midi: None,
             keyboard_channel: Arc::new(AtomicU8::new(render::NO_KEYBOARD_CHANNEL)),
-            midi_routing: Arc::new(ArcSwap::from_pointee(render::MidiRouting::default())),
-            audio_input_routing: Arc::new(ArcSwap::from_pointee(
-                render::AudioInputRouting::default(),
-            )),
             playhead_meters: PlayheadMeters::new(),
             modulator_meters: ModulatorMeters::new(),
             preview_gain: Arc::new(AtomicU32::new(
@@ -641,27 +650,14 @@ impl SharedCells {
         }
     }
 
-    /// The store behind [`EngineHandle::set_midi_routing`].
-    fn set_midi_routing(&self, routes: Vec<mooloop_core::MidiInputRoute>) {
-        self.midi_routing
-            .store(Arc::new(render::MidiRouting { routes }));
-    }
-
-    /// The store behind [`EngineHandle::set_audio_input_routing`].
-    fn set_audio_input_routing(&self, taps: Vec<Option<mooloop_core::AudioTap>>) {
-        self.audio_input_routing
-            .store(Arc::new(render::AudioInputRouting { taps }));
-    }
-
-    /// Point `render` at these cells in place of its private ones.
+    /// Point `render` at these cells in place of its private ones, and seed it
+    /// with the buffer mapping. Control thread only: it allocates.
     fn attach(&self, render: &mut RenderState) {
         render.attach_meters(self.bus_meters.clone());
         render.attach_device_meters(self.device_meters.clone());
         render.attach_device_telemetry(self.device_telemetry.clone());
-        render.attach_buffer_midi_map(self.buffer_midi_map.clone());
+        drop(render.set_buffer_midi(self.buffer_midi.map(Box::new)));
         render.attach_keyboard_channel(self.keyboard_channel.clone());
-        render.attach_midi_routing(self.midi_routing.clone());
-        render.attach_audio_input_routing(self.audio_input_routing.clone());
         render.attach_playhead_meters(self.playhead_meters.clone());
         render.attach_modulator_meters(self.modulator_meters.clone());
         render.attach_preview_gain(self.preview_gain.clone());
@@ -905,23 +901,23 @@ fn prepare_render_state(
     input: &InputState,
 ) -> (RenderState, SharedCells) {
     let mut render = RenderState::new(sample_rate, bank);
-    // Every cell but the two routings is shared with the outgoing
-    // generation, because what they carry does not depend on which project's
-    // channel order is live.
-    let cells = SharedCells {
-        midi_routing: Arc::new(ArcSwap::from_pointee(render::MidiRouting {
-            routes: input.midi_routing.clone(),
-        })),
-        audio_input_routing: Arc::new(ArcSwap::from_pointee(render::AudioInputRouting {
-            taps: input.audio_input.clone(),
-        })),
-        ..shared.clone()
-    };
+    let cells = shared.clone();
     // A project swap replaces the complete renderer. Reconnect every shared
     // cell before it reaches the audio thread: otherwise the new renderer
     // publishes into its private, unread arrays while the UI continues to
     // read the startup arrays forever.
     cells.attach(&mut render);
+    // The two routing tables are the incoming project's own, because a
+    // channel edit renumbers the seats they are indexed by. Set here rather
+    // than sent after the install, so there is no block in which the new
+    // renderer reads the default; later changes follow the install down the
+    // same ordered stream, so they cannot reach the wrong generation.
+    drop(render.set_midi_routing(Box::new(render::MidiRouting {
+        routes: input.midi_routing.clone(),
+    })));
+    drop(render.set_audio_input_routing(Box::new(render::AudioInputRouting {
+        taps: input.audio_input.clone(),
+    })));
     render.load_project(project);
     render.set_record_armed(input.record_armed);
     render.set_input_monitors(&input.monitor);
@@ -1068,6 +1064,9 @@ impl EngineHandle {
                 StructuralReclaim::AudioGraph(bank) => drop(bank),
                 StructuralReclaim::TrackGraph(bank) => drop(bank),
                 StructuralReclaim::Take(take) => drop(take),
+                StructuralReclaim::MidiRouting(routing) => drop(routing),
+                StructuralReclaim::AudioInputRouting(routing) => drop(routing),
+                StructuralReclaim::BufferMidi(map) => drop(map),
                 StructuralReclaim::Container { align, scratch } => {
                     drop(align);
                     drop(scratch);
@@ -1315,9 +1314,12 @@ impl EngineHandle {
     }
 
     /// Install the MIDI mapping that drives a buffer insert, or clear it.
-    /// Built and dropped on this thread; the audio thread only loads it.
-    pub fn set_buffer_midi_map(&self, map: Option<mooloop_core::midi::BufferMidiMap>) {
-        self.shared.buffer_midi_map.store(map.map(Arc::new));
+    /// Built here and sent down the ordered stream; the one it displaces
+    /// comes back through the reclaim ring. Returns whether it was queued.
+    #[must_use]
+    pub fn set_buffer_midi_map(&mut self, map: Option<mooloop_core::midi::BufferMidiMap>) -> bool {
+        self.shared.buffer_midi = map;
+        self.send_structural(StructuralCommand::SetBufferMidi(map.map(Box::new)))
     }
 
     /// Install how each channel takes MIDI input, indexed by channel.
@@ -1327,15 +1329,21 @@ impl EngineHandle {
     /// than names. Call it when a channel's setting changes and when the port
     /// list does -- a keyboard plugged in mid-session is a channel whose
     /// stored port name resolves for the first time.
-    pub fn set_midi_routing(&self, routes: Vec<mooloop_core::MidiInputRoute>) {
-        self.shared.set_midi_routing(routes);
+    #[must_use]
+    pub fn set_midi_routing(&mut self, routes: Vec<mooloop_core::MidiInputRoute>) -> bool {
+        self.send_structural(StructuralCommand::SetMidiRouting(Box::new(
+            render::MidiRouting { routes },
+        )))
     }
 
     /// Install which seat each channel records from, resolved by
     /// `Session::audio_input_taps`. Call it when a channel's AUDIO row
     /// changes; an install carries its own in [`InputState::audio_input`].
-    pub fn set_audio_input_routing(&self, taps: Vec<Option<mooloop_core::AudioTap>>) {
-        self.shared.set_audio_input_routing(taps);
+    #[must_use]
+    pub fn set_audio_input_routing(&mut self, taps: Vec<Option<mooloop_core::AudioTap>>) -> bool {
+        self.send_structural(StructuralCommand::SetAudioInputRouting(Box::new(
+            render::AudioInputRouting { taps },
+        )))
     }
 
     /// The MIDI inputs available to pick from right now.
@@ -1501,7 +1509,7 @@ mod install_tests {
     /// path attached every shared cell but the routing one, and every channel
     /// behaved as Follow Selection however it was set. Driven through
     /// `prepare_render_state` because an `EngineHandle` needs an audio driver;
-    /// the routing is written through the same store `set_midi_routing` uses.
+    /// the routing arrives as the structural command `set_midi_routing` sends.
     #[test]
     fn an_installed_renderer_reads_the_routing_the_handle_writes() {
         let shared = SharedCells::new();
@@ -1512,7 +1520,9 @@ mod install_tests {
             prepare_render_state(&shared, 48_000, bank, &project, &InputState::default());
 
         // Channel 1 listens on MIDI channel 10; the selection is channel 0.
-        shared.set_midi_routing(vec![
+        let displaced = render.apply_structural(StructuralCommand::SetMidiRouting(Box::new(
+            render::MidiRouting {
+                routes: vec![
             MidiInputRoute {
                 source: MidiRouteSource::AllPorts,
                 channel: MidiChannelFilter::One(0),
@@ -1521,7 +1531,10 @@ mod install_tests {
                 source: MidiRouteSource::AllPorts,
                 channel: MidiChannelFilter::One(9),
             },
-        ]);
+                ],
+            },
+        )));
+        assert!(displaced.is_some(), "the default table leaves through the reclaim ring");
         shared.keyboard_channel.store(0, Ordering::Relaxed);
 
         render.apply_midi(&[MidiMessage {
@@ -1583,10 +1596,10 @@ mod install_tests {
         );
     }
 
-    /// An install carries the incoming project's routing into a cell of its
-    /// own: the incoming renderer reads it from its first block, the outgoing
-    /// one keeps the routing its own channel order was built for, and writes
-    /// after the install reach only the incoming one.
+    /// An install carries the incoming project's routing as its own: the
+    /// incoming renderer reads it from its first block, the outgoing one keeps
+    /// the routing its own channel order was built for, and a write after the
+    /// install reaches only the incoming one.
     ///
     /// Until 2026-09-17 nothing republished the routing after an install, so
     /// removing, moving or pasting a channel left later channels reading
@@ -1641,10 +1654,16 @@ mod install_tests {
         outgoing.apply_midi(&note_on_ten(60));
         assert_eq!(outgoing.audition_channels(), vec![0], "the outgoing order");
 
-        // A later write -- a picker change, a port appearing -- is about the
-        // live project, and reaches only its renderer. Another pitch, so the
-        // press does not also release the first one.
-        live.set_midi_routing(vec![listen(3), listen(3)]);
+        // A later write -- a picker change, a port appearing -- follows the
+        // install down the ordered stream, so it reaches only the renderer that
+        // is live by then. Another pitch, so the press does not also release
+        // the first one.
+        drop(live);
+        drop(incoming.apply_structural(StructuralCommand::SetMidiRouting(Box::new(
+            render::MidiRouting {
+                routes: vec![listen(3), listen(3)],
+            },
+        ))));
         incoming.process_block(64);
         outgoing.process_block(64);
         incoming.apply_midi(&note_on_ten(62));
@@ -1688,9 +1707,13 @@ mod install_tests {
         assert!(incoming.audio_input_taps().is_empty(), "the incoming project's own");
         assert_eq!(outgoing.audio_input_taps(), before, "the outgoing keeps its own");
 
-        // A later write -- a picker change -- is about the live project and
-        // reaches only its renderer.
-        live.set_audio_input_routing(after.clone());
+        // A later write -- a picker change -- follows the install down the
+        // ordered stream and reaches only the renderer live by then.
+        drop(live);
+        let mut incoming = incoming;
+        drop(incoming.apply_structural(StructuralCommand::SetAudioInputRouting(Box::new(
+            render::AudioInputRouting { taps: after.clone() },
+        ))));
         assert_eq!(incoming.audio_input_taps(), after);
         assert_eq!(outgoing.audio_input_taps(), before);
     }

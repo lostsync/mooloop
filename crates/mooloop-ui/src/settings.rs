@@ -1,5 +1,6 @@
 pub(crate) use crate::theme::color::Rgb;
 pub(crate) use crate::theme::ramp::ThemePalette;
+use crate::actions::SuperKeyMode;
 use crate::theme::ramp::Ramp;
 use crate::theme::{
     builtins, catalog, file, wal, Mode, ThemeColors, ThemeDefinition, ThemeStyle,
@@ -787,6 +788,13 @@ pub(crate) struct ShortcutSettings {
     /// without a settings migration.
     #[serde(default)]
     pub overrides: std::collections::HashMap<String, String>,
+    /// How a Super press is read before it is matched against the bindings
+    /// above. It is a fact about this machine's keyboard and window
+    /// manager rather than about any one binding, which is why it sits
+    /// beside the overrides instead of inside them: the stored chords do
+    /// not change when it does.
+    #[serde(default)]
+    pub super_key: SuperKeyMode,
 }
 
 /// Everything the sample browser owns: the folders it lists, in display
@@ -1729,6 +1737,10 @@ mod tests {
                 overrides: [("edit.undo".to_owned(), "Ctrl+Alt+Z".to_owned())]
                     .into_iter()
                     .collect(),
+                // Not the default, for the reason the `midi` section below
+                // gives: a round trip through a default value passes even
+                // when the field is never written at all.
+                super_key: SuperKeyMode::AsAlt,
             },
             gestures: GestureSettings {
                 overrides: [("gesture.copy-drag".to_owned(), "Alt".to_owned())]
@@ -1950,10 +1962,10 @@ mod tests {
             "schema-version = 1\n[appearance]\npreset = 'mooloop'\naccent = '#84CC16'\n",
         )
         .unwrap();
-        assert!(UiSettings::load_from(&path)
-            .unwrap()
-            .shortcuts
-            .overrides
-            .is_empty());
+        let shortcuts = UiSettings::load_from(&path).unwrap().shortcuts;
+        assert!(shortcuts.overrides.is_empty());
+        // Added 2026-09-20 to a section that already existed in the wild,
+        // so a file written before it has to keep loading.
+        assert_eq!(shortcuts.super_key, SuperKeyMode::Distinct);
     }
 }
