@@ -43,7 +43,7 @@ use mooloop_core::{
 use crate::bus::StereoBus;
 use crate::event::EventList;
 use crate::filter::OnePoleLp;
-use crate::node::{AudioNode, ProcessContext};
+use crate::node::{AudioNode, Discontinuity, ProcessContext};
 use crate::smooth::Smoothed;
 use super::{process_param_split, RangeProcessor};
 
@@ -142,6 +142,14 @@ struct Ring {
 }
 
 impl Ring {
+    /// Zero the stored audio and return the write head to the start.
+    /// Allocation-free, but it touches the whole ring: a discontinuity, not a
+    /// block.
+    fn clear(&mut self) {
+        self.buffer.fill(0.0);
+        self.write = 0;
+    }
+
     /// Allocates: construct off the audio thread.
     fn with_capacity(frames: usize) -> Self {
         Self {
@@ -188,6 +196,10 @@ struct Diffuser {
 }
 
 impl Diffuser {
+    fn clear(&mut self) {
+        self.ring.clear();
+    }
+
     fn new(base_len: usize, sample_rate: u32) -> Self {
         let capacity = scaled_len(base_len, sample_rate, SIZE_MAX_MULTIPLIER) + 4;
         let len = capacity as f32 - 4.0;
@@ -236,6 +248,16 @@ struct Line {
 }
 
 impl Line {
+    /// Forget the stored audio and the damping state -- **but not `phase`**.
+    /// The line's modulation is free-running: it advances whether or not this
+    /// node is called, so it has to arrive at the same place across a seek
+    /// exactly as it does across a sleep, or a bounce stops matching a take.
+    fn clear(&mut self) {
+        self.ring.clear();
+        self.damp.reset();
+        self.feedback = 0.0;
+    }
+
     fn new(base_len: usize, sample_rate: u32, index: usize) -> Self {
         // Room for the longest size plus the modulation excursion and the
         // interpolator's reach, so `size` never has to reallocate.
@@ -569,6 +591,29 @@ impl RangeProcessor for ReverbEffect {
 }
 
 impl AudioNode for ReverbEffect {
+    /// A seek invalidates every sample in the tail: it is the sound of a part
+    /// of the song the transport has left. Ringing it out over the new
+    /// position is the artefact this contract exists for.
+    ///
+    /// **Not on a program change.** Time is still continuous there -- the
+    /// player looked at another pattern -- and flushing a reverb for it would
+    /// be a worse artefact than the stranded note-off it came with.
+    ///
+    /// The lines' modulation phase is deliberately kept; see `Line::clear`.
+    fn on_discontinuity(&mut self, kind: Discontinuity) {
+        if kind == Discontinuity::ProgramChange {
+            return;
+        }
+        self.predelay.clear();
+        self.low_cut.reset();
+        for diffuser in &mut self.diffusers {
+            diffuser.clear();
+        }
+        for line in &mut self.lines {
+            line.clear();
+        }
+    }
+
     /// `decay_s` is an RT60, and it is an *upper* bound on the real one: the
     /// per-line gain is computed to hit it and then clamped down by
     /// `FEEDBACK_MAX`, and the damping filter inside the loop has gain at most

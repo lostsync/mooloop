@@ -141,6 +141,28 @@ pub fn feedback_tail_frames(gain: f32, trip_frames: f32) -> u32 {
 }
 
 /// A realtime audio node (instrument or effect).
+/// What kind of discontinuity the host is reporting.
+///
+/// The kind is the whole point of [`AudioNode::on_discontinuity`] carrying an
+/// argument: the three mean different things to a device, and before this
+/// they all arrived as one synthesised choke with no way to tell them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Discontinuity {
+    /// The playhead moved somewhere it was not travelling towards: a seek, or
+    /// a loop fold. Audio a node is holding belongs to the old position and
+    /// is now wrong -- this is the one that invalidates a delay line.
+    Seek,
+    /// The transport stopped. Everything a node holds is about to be
+    /// inaudible anyway; the reason to say so is that it must not come back
+    /// on the next play.
+    Stop,
+    /// What is being scheduled changed underneath a running transport -- the
+    /// current pattern switched in Pattern mode. **Time is still
+    /// continuous**, so audio in flight is still correct and a node that
+    /// flushes on this is wrong. What is lost is a note-off, not a position.
+    ProgramChange,
+}
+
 pub trait AudioNode {
     /// Frames of audible output this node can still produce after its input
     /// goes silent.
@@ -271,6 +293,49 @@ pub trait AudioNode {
     /// them.
     fn take_display_spectrum(&mut self) -> Option<[f32; crate::analysis::SPECTRUM_BINS]> {
         None
+    }
+
+    /// Tell this node that time stopped being continuous.
+    ///
+    /// Called once per discontinuity, before the node is handed the block's
+    /// events and before its `process` -- so a node may reset here and then
+    /// receive a note-on at offset 0 in the same block, deterministically, in
+    /// that order. Every node the host holds is told, **sleeping and
+    /// bypassed ones included**: a node that is not being called is exactly
+    /// the one whose rings still hold audio from where the transport was, and
+    /// it would emit it on waking.
+    ///
+    /// The default does nothing, which is right for most devices and is the
+    /// only correct default: a node that has not opted in behaves exactly as
+    /// it did before this existed.
+    ///
+    /// Before it, the host had one way of saying anything to a node --
+    /// synthesising `Event::Choke` into its event list -- so *let go of these
+    /// notes* and *time moved* arrived as the same sentence. Voices heard it
+    /// and guessed, differently (`release_all` in the synths, a hard fade in
+    /// the samplers), and **everything that is not a voice heard nothing at
+    /// all**: a delay line's contents, a reverb's tail and a splice position
+    /// carried across a seek as though the audio in them still belonged where
+    /// the transport now is.
+    ///
+    /// What a node may do here:
+    ///
+    /// - **No allocation and no lock.** This is the callback.
+    /// - **Free-running state keeps running.** The rest-and-tail rule applies
+    ///   unchanged: an LFO that holds its phase across silence holds it
+    ///   across a seek too, or a bounce stops matching a take. A node wanting
+    ///   that gets it by not implementing this.
+    /// - **Read the kind.** A seek invalidates the audio a node is holding; a
+    ///   program change does not, and flushing a reverb because the player
+    ///   looked at another pattern would be a worse artefact than the one
+    ///   this exists to fix.
+    /// - **A node that cannot honour it declines in writing**, the way Aux In
+    ///   and the retained-audio buffer decline rest-and-tail in their own
+    ///   comments rather than by omission.
+    ///
+    /// `docs/plans/transport-discontinuity/03-a-discontinuity-is-a-node-contract.md`.
+    fn on_discontinuity(&mut self, kind: Discontinuity) {
+        let _ = kind;
     }
 
     /// Move whatever runs whether or not this node is called, over a block

@@ -77,3 +77,47 @@ It does not remove `Event::Choke`. A choke is a real musical gesture — it is
 what a choke group does (`inject_choke_events`, `render.rs:2845`) and that
 usage is correct and stays. What changes is that the host stops borrowing it
 to mean something else.
+
+## What landed, 2026-09-20
+
+`Discontinuity` (`Seek`, `Stop`, `ProgramChange`) and a defaulted
+`AudioNode::on_discontinuity`, with the contract written into `node.rs` and
+`AUDIO_ARCHITECTURE.md`. The engine says it at three sites: a seek or a loop
+fold (`Seek`), `EngineCommand::Stop` (`Stop`), and a Pattern-mode switch under
+a running transport (`ProgramChange`). The fan-out reaches every channel's
+generator and effect chain and every bus's chain, **including sleeping and
+bypassed slots** -- those are precisely the ones holding audio they would emit
+on waking.
+
+Four devices opted in, and the split between them is the point:
+
+| Device | On a seek or stop | On a program change |
+| --- | --- | --- |
+| Delay | line cleared, read head re-seated, damping reset | nothing |
+| Modulation | line, feedback, tone and phaser cleared -- **LFO phase kept** | nothing |
+| Reverb (FDN) | pre-delay, diffusers and lines cleared, line modulation phase kept | nothing |
+| Plate | pre-delay, combs and allpasses cleared | nothing |
+
+Aux In and the retained-audio buffer decline in writing, as the plan asked.
+The buffer's refusal is the one with teeth: its ring is a performance somebody
+is playing, and clearing it on a seek would take a gesture away mid-flight --
+the same thing `holds_frozen_audio` refuses a ring resize to prevent.
+
+**The voice path was left alone.** `release_all_voices` still synthesises
+`Event::Choke` for a seek, and the synths still answer it as they did. The
+hook is what makes an alternative *expressible* -- which is how the plan
+framed the payoff -- but migrating the voices onto it changes what a seek
+sounds like, and that is a behaviour change to ask about rather than to slip
+in beside a contract addition.
+
+**One node is not reached.** The console channel strip is not an `AudioNode`,
+so its EQ and compressor state still crosses a seek. It has a `reset` of its
+own and closing the gap is small; it is recorded in `AUDIO_ARCHITECTURE.md`
+rather than done, because nothing has reported hearing it.
+
+**What a seek now sounds like, and it is a real change.** Reverb and delay
+tails stop ringing across a seek instead of continuing over the new position.
+That is what the plan asked for in as many words -- *"all of them carry on
+across a seek as though the audio in them still belongs to the position the
+transport is now at"* -- but it is audible, and if the ringing turns out to be
+wanted, the kind check is where to say so.

@@ -21,7 +21,7 @@
 
 use mooloop_core::{BufferDuration, BufferEvent, BufferParams};
 
-use crate::{AudioNode, Event, EventList, ProcessContext, StereoBus};
+use crate::{AudioNode, Discontinuity, Event, EventList, ProcessContext, StereoBus};
 
 /// A parameter change placed at a sample offset within a process block. The
 /// buffer takes these separately from [`TimedBufferEvent`] because the two are
@@ -1165,6 +1165,18 @@ fn ms_to_frames(ms: f32, sample_rate: u32) -> u32 {
 /// makes sound out of a silent input by design. It keeps the default — never
 /// skipped — and that is a decision rather than an omission.
 impl AudioNode for BufferDevice {
+    /// **Declined, deliberately.** The ring is not audio in flight from the
+    /// old position -- it is audio somebody is playing, and while frozen it
+    /// is a sample rather than a moving window. Clearing it on a seek would
+    /// take a performance away mid-gesture, which is the same thing
+    /// `holds_frozen_audio` refuses a ring resize to prevent.
+    ///
+    /// The heads are left alone for the same reason: they are where the
+    /// player put them, not where the transport was.
+    fn on_discontinuity(&mut self, kind: Discontinuity) {
+        let _ = kind;
+    }
+
     /// Seams rather than collisions. The old number counted a detached head
     /// being overtaken by its writer, which was a failure the turntable model
     /// could have; every head here wraps instead, so what is worth reporting

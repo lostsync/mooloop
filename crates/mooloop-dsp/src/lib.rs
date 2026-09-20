@@ -86,8 +86,8 @@ pub use mlp8::MlP8;
 pub use monosynth::MonoSynth;
 pub use mooloop_core::{BufferDuration, BufferEvent, BufferParams};
 pub use node::{
-    feedback_tail_frames, AudioNode, DynamicsFrame, ProcessContext, SourceNode, REST_EPSILON,
-    SILENCE_PEAK,
+    feedback_tail_frames, AudioNode, Discontinuity, DynamicsFrame, ProcessContext, SourceNode,
+    REST_EPSILON, SILENCE_PEAK,
 };
 pub use polysynth::PolySynth;
 pub use sampler::{ChannelAudioSnapshot, RetiredAudio, SampleData, Sampler};

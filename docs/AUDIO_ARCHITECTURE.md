@@ -197,7 +197,46 @@ eventual processing contract needs to describe:
 - stable parameter descriptors and instance identity.
 
 Latency and tail are implemented; "Rest And Tail" below states what they mean
-and what a host may do with them. Reset and transport discontinuities are not.
+and what a host may do with them. **Transport discontinuities are, as of
+2026-09-20**: `AudioNode::on_discontinuity(Discontinuity)` tells a node that
+time stopped being continuous, and names which kind -- `Seek`, `Stop` or
+`ProgramChange`. A general "reset to construction state" verb is still not
+part of the contract, and nothing has asked for one.
+
+Before it there was one channel for this, and it was the wrong one: the host
+synthesised `Event::Choke` into a node's event list, so *let go of these
+notes* and *time moved* arrived as the same sentence. The voices heard it and
+answered differently -- `release_all` in the synths, a hard fade in the
+samplers -- and **everything that is not a voice heard nothing at all**, so a
+delay line's contents and a reverb's tail carried across a seek as though they
+belonged where the transport now is.
+
+The rules, which are the rest-and-tail rules applied to a moment rather than
+to silence:
+
+- Called before the node is handed the block's events and before `process`.
+  Every node is told, including sleeping and bypassed ones -- those are
+  exactly the ones holding audio they would emit on waking.
+- No allocation and no lock. It is the callback.
+- **Free-running state keeps running.** An LFO that holds its phase across
+  silence holds it across a seek, or a bounce stops matching a take. A node
+  wanting that gets it by not implementing the method, which is the default.
+- **Read the kind.** A seek invalidates audio in flight; a program change does
+  not, and flushing a reverb because the player looked at another pattern is a
+  worse artefact than the one this fixes.
+- A node that cannot honour it declines in writing. Aux In and the
+  retained-audio buffer both do; the buffer's ring is a performance somebody
+  is playing, not audio from the old position.
+
+`Event::Choke` remains, and is still correct for what it names: a choke group
+cutting a hi-hat off. What changed is that the host stopped borrowing it to
+mean something else.
+
+**Not yet covered:** the console channel strip (`mooloop-dsp/src/strip.rs`) is
+not an `AudioNode` and is not reached by the fan-out, so its EQ and compressor
+state still crosses a seek. It has a `reset` of its own, so closing that is a
+small change; nothing has heard it yet, which is why it is written down here
+rather than guessed at.
 
 `COMPOSABLE_DEVICE_UNITS.md` defines the recursive design contract above and
 below this adapter: primitives and composites have intentional parameters,

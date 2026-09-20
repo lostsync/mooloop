@@ -15,7 +15,7 @@ use crate::bus::StereoBus;
 use crate::delayline::{DelayLine, ReadHead, MIN_READ_OFFSET};
 use crate::event::EventList;
 use crate::filter::OnePoleLp;
-use crate::node::{feedback_tail_frames, AudioNode, ProcessContext};
+use crate::node::{feedback_tail_frames, AudioNode, Discontinuity, ProcessContext};
 use crate::smooth::Smoothed;
 use super::{process_param_split, RangeProcessor};
 
@@ -211,6 +211,23 @@ impl RangeProcessor for DelayEffect {
 }
 
 impl AudioNode for DelayEffect {
+    /// The line holds audio from wherever the transport used to be, and the
+    /// repeats would arrive over the new position as though they belonged to
+    /// it. The read head goes back with it: its crossfade is mid-flight
+    /// between two points in audio that no longer exists.
+    ///
+    /// **Not on a program change**, where time is still continuous and the
+    /// repeats in flight are still the right ones.
+    fn on_discontinuity(&mut self, kind: Discontinuity) {
+        if kind == Discontinuity::ProgramChange {
+            return;
+        }
+        self.line.clear();
+        self.head = ReadHead::new(self.target_offset);
+        self.damp_l.reset();
+        self.damp_r.reset();
+    }
+
     /// The repeats decay by `feedback` once per trip round the line, so the
     /// bound is however many trips take the loop below audibility times the
     /// trip length. Damping only ever removes more, and `feedback` is clamped
@@ -348,6 +365,69 @@ mod tests {
         assert!(
             (peak_at as i64 - expected as i64).abs() <= 4,
             "echo landed at {peak_at}, expected about {expected}"
+        );
+    }
+
+    /// The echo in flight belongs to the position the transport has left.
+    /// Without this it arrives over the new one, sounding like a repeat of
+    /// audio that is no longer playing.
+    #[test]
+    fn a_seek_empties_the_line() {
+        let frames = 8_192;
+        let time_ms = 100.0;
+        let params = DelayParams {
+            time_ms,
+            feedback: 0.0,
+            mix: 1.0,
+            tone: 1.0,
+            ..DelayParams::default()
+        };
+        let mut effect = DelayEffect::new(params, SR);
+
+        // Write the impulse in, but stop short of the echo coming back out.
+        let short = (time_ms / 1_000.0 * SR as f32) as usize / 2;
+        let mut bus = impulse_bus(short);
+        effect.process(&context(short), &mut bus, &EventList::empty(), None);
+
+        effect.on_discontinuity(Discontinuity::Seek);
+
+        let mut after = StereoBus::with_capacity(frames);
+        effect.process(&context(frames), &mut after, &EventList::empty(), None);
+        let peak = after.l.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
+        assert!(
+            peak <= 1e-6,
+            "the echo survived the seek and arrived over the new position: {peak}"
+        );
+    }
+
+    /// A program change is not a position change. The repeats in flight are
+    /// still the right ones, and flushing them would be a worse artefact than
+    /// the one the discontinuity contract exists to fix.
+    #[test]
+    fn a_program_change_leaves_the_line_alone() {
+        let frames = 8_192;
+        let time_ms = 100.0;
+        let params = DelayParams {
+            time_ms,
+            feedback: 0.0,
+            mix: 1.0,
+            tone: 1.0,
+            ..DelayParams::default()
+        };
+        let mut effect = DelayEffect::new(params, SR);
+
+        let short = (time_ms / 1_000.0 * SR as f32) as usize / 2;
+        let mut bus = impulse_bus(short);
+        effect.process(&context(short), &mut bus, &EventList::empty(), None);
+
+        effect.on_discontinuity(Discontinuity::ProgramChange);
+
+        let mut after = StereoBus::with_capacity(frames);
+        effect.process(&context(frames), &mut after, &EventList::empty(), None);
+        let peak = after.l.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
+        assert!(
+            peak > 0.1,
+            "a program change swallowed an echo that was still correct: {peak}"
         );
     }
 

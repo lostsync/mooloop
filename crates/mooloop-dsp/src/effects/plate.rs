@@ -21,7 +21,7 @@ use mooloop_core::{
 use crate::bus::StereoBus;
 use crate::event::EventList;
 use crate::filter::OnePoleLp;
-use crate::node::{AudioNode, ProcessContext};
+use crate::node::{AudioNode, Discontinuity, ProcessContext};
 use crate::smooth::Smoothed;
 use super::{process_param_split, RangeProcessor};
 
@@ -104,6 +104,14 @@ struct Ring {
 }
 
 impl Ring {
+    /// Zero the stored audio and return the write head to the start.
+    /// Allocation-free, but it touches the whole ring: a discontinuity, not a
+    /// block.
+    fn clear(&mut self) {
+        self.buffer.fill(0.0);
+        self.write = 0;
+    }
+
     fn with_capacity(frames: usize) -> Self {
         Self {
             buffer: vec![0.0; frames.max(4)],
@@ -146,6 +154,12 @@ struct Comb {
 }
 
 impl Comb {
+    fn clear(&mut self) {
+        self.ring.clear();
+        self.damp.reset();
+        self.feedback = 0.0;
+    }
+
     fn new(base_len: usize, sample_rate: u32) -> Self {
         let capacity = scale_len(base_len, sample_rate, SIZE_MAX_MULTIPLIER) + 2;
         let len = scale_len(base_len, sample_rate, 1.0) as f32;
@@ -198,6 +212,10 @@ struct SchroederAllpass {
 }
 
 impl SchroederAllpass {
+    fn clear(&mut self) {
+        self.ring.clear();
+    }
+
     fn new(base_len: usize, sample_rate: u32) -> Self {
         let capacity = scale_len(base_len, sample_rate, SIZE_MAX_MULTIPLIER) + 2;
         let len = scale_len(base_len, sample_rate, 1.0) as f32;
@@ -371,6 +389,22 @@ impl RangeProcessor for PlateEffect {
 }
 
 impl AudioNode for PlateEffect {
+    /// The same argument as the FDN reverb's: the tail belongs to the
+    /// position the transport has left, and a program change is not a
+    /// position change.
+    fn on_discontinuity(&mut self, kind: Discontinuity) {
+        if kind == Discontinuity::ProgramChange {
+            return;
+        }
+        self.predelay.clear();
+        for comb in self.combs_l.iter_mut().chain(&mut self.combs_r) {
+            comb.clear();
+        }
+        for allpass in self.allpass_l.iter_mut().chain(&mut self.allpass_r) {
+            allpass.clear();
+        }
+    }
+
     /// The same derivation as the FDN's: `decay_s` is the RT60 the comb gains
     /// are solved for and `FEEDBACK_MAX` can only shorten it, 140 dB is 2.34
     /// RT60s, three is the margin, and the quarter second covers the

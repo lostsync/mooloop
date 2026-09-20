@@ -1,7 +1,7 @@
 # Transport discontinuity status
 
-**Steps 01 and 02 landed 2026-09-20**, the day the plan was written. Steps 03
-and 04 have not started. The directory came out of Adam reporting that moving around
+**Steps 01, 02 and 03 landed 2026-09-20**, the day the plan was written. Step
+04 has not started. The directory came out of Adam reporting that moving around
 the app makes the audio glitch, and it covers both the bug he heard and the
 mechanism whose absence caused it.
 
@@ -141,13 +141,36 @@ Releasing *only* the stranded voices needs per-voice knowledge, which is step
 app defers anything; the mechanism is exercised by tests alone until a
 gesture wants it.
 
+## What step 03 changed
+
+`AudioNode::on_discontinuity(Discontinuity)`, defaulted to nothing, said by
+the engine at a seek, a loop fold, a stop and a Pattern-mode switch. Delay,
+modulation, reverb and plate opted in and clear what they are holding on a
+seek; every one of them declines a program change, because time is still
+continuous there. Aux In and the retained-audio buffer decline outright, in
+writing.
+
+The distinction the hook exists for shows up inside modulation: its own
+`reset` restarts the LFO, and `on_discontinuity` deliberately does not. Free
+-running state has to arrive at the same phase whether or not the transport
+moved, exactly as it does across a sleep, or a bounce stops matching a take.
+
+**The voice path was not migrated.** `release_all_voices` still synthesises
+`Event::Choke` for a seek. The hook makes the alternative expressible, which
+is what the plan claimed for it, but changing what a seek does to held notes
+is a behaviour change worth asking about rather than bundling into a contract
+addition. Step 02's overhanging-note case is now expressible and still not
+implemented.
+
+**Audible change:** reverb and delay tails no longer ring across a seek.
+
 ## Steps
 
 | Step | What it does | Cost |
 | --- | --- | --- |
 | 01 | **Landed 2026-09-20.** `SetCurrentPattern` owes a discontinuity only when it changes what is scheduled | small, standalone, fixed the report |
 | 02 | **Landed 2026-09-20.** A command class that lands at a musical boundary | medium; no face change after all, and no caller yet |
-| 03 | `AudioNode` can be told time moved, instead of being handed fake note events | touches every DSP node |
+| 03 | **Landed 2026-09-20.** `AudioNode` can be told time moved, and which kind | four devices opted in; the voice path still uses `Choke` |
 | 04 | Navigation must not reach the audio thread — the rule, and a guard | small |
 
 Step 01 stands alone and is worth landing on its own. Steps 02 through 04 are

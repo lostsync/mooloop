@@ -17,7 +17,7 @@ use crate::delayline::{DelayLine, MIN_READ_OFFSET};
 use crate::event::EventList;
 use crate::filter::{AllPass, OnePoleLp};
 use crate::lfo::Lfo;
-use crate::node::{feedback_tail_frames, AudioNode, ProcessContext};
+use crate::node::{feedback_tail_frames, AudioNode, Discontinuity, ProcessContext};
 use crate::smooth::Smoothed;
 use super::{process_param_split, RangeProcessor};
 
@@ -290,6 +290,25 @@ impl RangeProcessor for ModulationEffect {
 }
 
 impl AudioNode for ModulationEffect {
+    /// Clears the line and the filters, and **keeps the LFO phase**. This is
+    /// the narrower reset `Self::reset` is not: that one restarts the LFO,
+    /// which is right when the device's own mode changes and wrong here. A
+    /// free-running modulator has to arrive at the same phase whether or not
+    /// the transport was seeked, for the same reason `skip_block` exists.
+    fn on_discontinuity(&mut self, kind: Discontinuity) {
+        if kind == Discontinuity::ProgramChange {
+            return;
+        }
+        self.line.clear();
+        self.feedback_l = 0.0;
+        self.feedback_r = 0.0;
+        self.tone_l.reset();
+        self.tone_r.reset();
+        for stage in self.phaser_l.iter_mut().chain(&mut self.phaser_r) {
+            stage.reset();
+        }
+    }
+
     /// Measured against the longest tap the device can be asked for rather
     /// than the one the mode is currently using: `MAX_DELAY_MS` is both the
     /// ring's capacity and the furthest back `depth`, `spread` and the LFO can
@@ -368,6 +387,61 @@ mod tests {
             position_ticks: 0.0,
             position_frames: 0,
         }
+    }
+
+    /// **Free-running state keeps running**, the rest-and-tail rule applied
+    /// to a discontinuity. The LFO advances whether or not this node is
+    /// called, so it has to arrive at the same phase across a seek exactly as
+    /// it does across a sleep -- otherwise a bounce stops matching the take
+    /// it was rendered against, and *how* it differs depends on where the
+    /// player happened to seek.
+    ///
+    /// This is what separates `on_discontinuity` from the device's own
+    /// `reset`, which restarts the LFO deliberately: that is right when the
+    /// device's mode changes and wrong when the transport moves.
+    #[test]
+    fn a_seek_empties_the_line_and_keeps_the_lfo_phase() {
+        let frames = 4_096;
+        let mut bus = StereoBus::with_capacity(frames);
+        bus.l[0] = 1.0;
+        bus.r[0] = 1.0;
+        let mut effect = ModulationEffect::new(
+            ModulationParams {
+                tone: 1.0,
+                ..ModulationParams::default()
+            },
+            SR,
+        );
+        effect.process(&context(frames), &mut bus, &EventList::empty(), None);
+
+        // Read through `peek_offset`, which is a pure function of the phase:
+        // the field itself belongs to `lfo.rs`.
+        let phase_before = effect.lfo.peek_offset(0.0, LfoWave::Sine);
+        effect.on_discontinuity(Discontinuity::Seek);
+        assert_eq!(
+            effect.lfo.peek_offset(0.0, LfoWave::Sine),
+            phase_before,
+            "the seek restarted a free-running LFO"
+        );
+
+        let mut after = StereoBus::with_capacity(frames);
+        effect.process(&context(frames), &mut after, &EventList::empty(), None);
+        let peak = after.l.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
+        assert!(
+            peak <= 1e-6,
+            "the line kept audio from before the seek: {peak}"
+        );
+
+        // The control: `reset` is the wider one and *does* restart it, which
+        // is what makes the assertion above a distinction rather than a
+        // coincidence.
+        effect.reset();
+        assert_ne!(
+            effect.lfo.peek_offset(0.0, LfoWave::Sine),
+            phase_before,
+            "reset was expected to restart the LFO; if it no longer does, the \
+             test above has stopped proving anything"
+        );
     }
 
     #[test]

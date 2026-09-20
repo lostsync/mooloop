@@ -9,7 +9,7 @@
 
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
-use crate::node::{AudioNode, ProcessContext, SourceNode};
+use crate::node::{AudioNode, Discontinuity, ProcessContext, SourceNode};
 use crate::smooth::Smoothed;
 use crate::taps::AudioTaps;
 use mooloop_core::aux_in::{self, AuxInParams};
@@ -142,6 +142,15 @@ impl AuxIn {
 /// would drop the first block of whatever it is subscribed to. The default —
 /// never at rest — is the right answer here rather than an unconverted one.
 impl AudioNode for AuxIn {
+    /// **Declined, deliberately**, the way this device declines rest and
+    /// tail. Its sound is another channel's, arriving on a bus that the host
+    /// has already cleared for the new position; it holds no audio of its
+    /// own to invalidate. Its one piece of state is a level ramp, which is a
+    /// parameter rather than a position.
+    fn on_discontinuity(&mut self, kind: Discontinuity) {
+        let _ = kind;
+    }
+
     /// An Aux In outside a channel strip has no edge to read, so it renders
     /// silence. The engine calls [`Self::process_from`] instead; this exists
     /// so the device fits the trait every other generator implements rather

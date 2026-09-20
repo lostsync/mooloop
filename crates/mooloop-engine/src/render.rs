@@ -25,7 +25,7 @@ use mooloop_dsp::console;
 use mooloop_dsp::build_effect;
 use mooloop_dsp::{
     balance_gains, buffer_allocation_key, build_effect_at_tempo, pan_gains, AudioNode, Ds01,
-    DrumSynth,
+    Discontinuity, DrumSynth,
     AudioTaps, AuxIn, IntegerDelay, Event, EventList, ModulatorRack, MonoSynth, MlM1, MlP8,
     NoteGateEvents, PolySynth,
     ChannelAudioSnapshot,
@@ -1560,6 +1560,22 @@ impl EffectChain {
     /// every device gets the chance to move whatever it runs on the clock. A
     /// chain is only ever slept while `is_at_rest` holds, so this cannot be
     /// reached with anything still decaying in it.
+    /// Tell every device in the chain that time stopped being continuous.
+    ///
+    /// **Bypassed and sleeping slots included**, which is the opposite of
+    /// what `sleep` does and is deliberate: a slot that is not being called
+    /// is exactly the one whose ring is still holding audio from where the
+    /// transport used to be, and it would emit it on waking. There is no
+    /// running-versus-sleeping disagreement to create here, because this
+    /// moves nothing on the clock -- it only invalidates what is stored.
+    fn on_discontinuity(&mut self, kind: Discontinuity) {
+        for slot in 0..self.bound {
+            if let Some(node) = self.nodes[slot].as_mut() {
+                node.on_discontinuity(kind);
+            }
+        }
+    }
+
     fn sleep(&mut self, context: &ProcessContext) {
         for slot in 0..self.bound {
             // A bypassed slot's device is not called at all while the strip
@@ -2560,6 +2576,12 @@ impl ChannelStrip {
 
     /// Spend a block asleep: move whatever runs on the clock, and the first
     /// time round, empty what would otherwise be emitted on waking.
+    /// Tell this channel's generator and its whole chain that time moved.
+    fn on_discontinuity(&mut self, kind: Discontinuity) {
+        self.source_node_mut().on_discontinuity(kind);
+        self.effects.on_discontinuity(kind);
+    }
+
     fn sleep(&mut self, context: &ProcessContext) {
         self.source_node_mut().skip_block(context);
         self.effects.sleep(context);
@@ -4504,6 +4526,22 @@ impl RenderState {
         }
     }
 
+    /// Tell every node in the project that time stopped being continuous.
+    ///
+    /// Channels first, then buses, which is signal order -- it does not
+    /// matter today, because a node may not produce audio from here, but a
+    /// contract that is silent about order invites one that does.
+    ///
+    /// `docs/plans/transport-discontinuity/03-a-discontinuity-is-a-node-contract.md`.
+    fn on_discontinuity(&mut self, kind: Discontinuity) {
+        for index in 0..self.live_channels() {
+            self.strips[index].on_discontinuity(kind);
+        }
+        for bus in &mut self.buses {
+            bus.effects.on_discontinuity(kind);
+        }
+    }
+
     /// Hold `command` until the transport reaches `when`.
     ///
     /// The edge is resolved to an absolute tick here, once, rather than every
@@ -4637,6 +4675,10 @@ impl RenderState {
             EngineCommand::Stop => {
                 self.transport.stop();
                 self.cancel_deferred();
+                // Stop returns the playhead to the start, so it is a seek as
+                // well as a stop -- and what a node is holding must not come
+                // back on the next play.
+                self.on_discontinuity(Discontinuity::Stop);
             }
             EngineCommand::SetRecordArmed(armed) => self.set_record_armed(armed),
             EngineCommand::SetInputMonitor { channel, on } => {
@@ -4687,6 +4729,14 @@ impl RenderState {
                     // pattern being left.
                     if self.transport.playing {
                         self.seeked = true;
+                        // Named for what it is, and distinct from the seek
+                        // above. Time is still continuous -- what changed is
+                        // which notes are being scheduled -- so a node that
+                        // flushes a tail on this is wrong, and every one that
+                        // opted in checks the kind and declines it. It is
+                        // here so the engine stops having one word for two
+                        // different facts.
+                        self.on_discontinuity(Discontinuity::ProgramChange);
                     }
                     // A *lane* in that pattern owes the same debt, and it is
                     // the quieter one: a note that never ends is heard, and a
@@ -5630,7 +5680,9 @@ impl RenderState {
         //
         // Outside the `playing` arm because a seek while stopped still owes
         // the release, for auditioned notes if nothing else.
+        let mut jumped = false;
         for span in spans[..span_count].iter().filter(|span| span.jumped) {
+            jumped = true;
             release_all_voices(span.frame as u32, self.live_channels(), &mut self.events);
             // A fold is a discontinuity like a seek, and invalidates a
             // pending edge for the same reason -- with one failure mode a
@@ -5643,6 +5695,18 @@ impl RenderState {
         }
         if seeked {
             release_all_voices(0, self.live_channels(), &mut self.events);
+        }
+        // Before the block's events, as the contract promises, and once for
+        // however many spans jumped: a node is being told that time is no
+        // longer continuous, which is a fact about the block rather than a
+        // count of folds.
+        //
+        // This is the half of a discontinuity that had no words before. The
+        // release above is the *voices* being let go of; this is the delay
+        // lines, the reverb tails and the splice positions being told that
+        // what they are holding came from somewhere the transport has left.
+        if seeked || jumped {
+            self.on_discontinuity(Discontinuity::Seek);
         }
         self.dispatch_auditions(frames);
 
@@ -12019,6 +12083,109 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         assert_eq!(
             render.transport.bpm, 120.0,
             "cancelling must not apply the command on the way out"
+        );
+    }
+
+
+    /// The wiring and the vocabulary, which is what this layer owns: that a
+    /// discontinuity reaches an installed node at all, and that it arrives
+    /// **named**. The `mooloop-dsp` tests prove what each device does when
+    /// told; this proves it is told, and told which.
+    ///
+    /// A spy rather than a measurement of the audio. A seek chokes the voices
+    /// as well as reaching the nodes, so an output-level assertion would be
+    /// measuring two mechanisms at once and could not say which one moved.
+    #[test]
+    fn a_discontinuity_reaches_installed_nodes_and_says_which_it_is() {
+        use crate::render_test_support::SAMPLE_RATE;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Default)]
+        struct Spy {
+            heard: Arc<Mutex<Vec<Discontinuity>>>,
+        }
+
+        impl AudioNode for Spy {
+            fn on_discontinuity(&mut self, kind: Discontinuity) {
+                self.heard.lock().expect("spy lock").push(kind);
+            }
+
+            fn process(
+                &mut self,
+                _context: &ProcessContext,
+                _bus: &mut StereoBus,
+                _events_in: &EventList,
+                _events_out: Option<&mut EventList>,
+            ) {
+            }
+        }
+
+        fn spied(render: &mut RenderState) -> Arc<Mutex<Vec<Discontinuity>>> {
+            let heard = Arc::<Mutex<Vec<Discontinuity>>>::default();
+            render.strips[0].effects.nodes[0] = Some(Box::new(Spy {
+                heard: Arc::clone(&heard),
+            }));
+            heard
+        }
+
+        fn render_with_a_slot() -> RenderState {
+            let mut project = held_note_project();
+            project.channels[0]
+                .setup
+                .push_effect(mooloop_core::EffectSlotState::of_kind(
+                    mooloop_core::EffectKind::Eq,
+                ))
+                .expect("pushed");
+            let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+            assert!(
+                render.strips[0].effects.nodes[0].is_some(),
+                "the slot has to exist for the spy to take it"
+            );
+            render.play();
+            render
+        }
+
+        let mut render = render_with_a_slot();
+        let heard = spied(&mut render);
+        render.apply_command(EngineCommand::Seek { tick: 4_096.0 });
+        render.process_once_block(1_024);
+        assert_eq!(
+            heard.lock().expect("spy lock").as_slice(),
+            [Discontinuity::Seek],
+            "a seek has to reach the node, exactly once, named as a seek"
+        );
+
+        let mut render = render_with_a_slot();
+        let heard = spied(&mut render);
+        render.apply_command(EngineCommand::SetCurrentPattern(1));
+        render.process_once_block(1_024);
+        // A program change sets `seeked` too -- step 01's rule, since the
+        // note-off is stranded either way -- so the node hears both. What
+        // matters is that the program change is *said*, in its own word, so a
+        // device can tell the two apart; before this it could not.
+        assert!(
+            heard
+                .lock()
+                .expect("spy lock")
+                .contains(&Discontinuity::ProgramChange),
+            "a pattern switch has to reach the node named as a program change"
+        );
+
+        let mut render = render_with_a_slot();
+        let heard = spied(&mut render);
+        render.apply_command(EngineCommand::Stop);
+        assert_eq!(
+            heard.lock().expect("spy lock").as_slice(),
+            [Discontinuity::Stop],
+            "stopping has to reach the node, named as a stop"
+        );
+
+        let mut render = render_with_a_slot();
+        let heard = spied(&mut render);
+        render.process_once_block(1_024);
+        assert!(
+            heard.lock().expect("spy lock").is_empty(),
+            "an ordinary block is not a discontinuity and must say nothing"
         );
     }
 
