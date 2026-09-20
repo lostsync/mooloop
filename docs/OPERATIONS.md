@@ -558,25 +558,41 @@ machine it was written on had already granted it, and macOS is known to cache
 a TCC decision for the life of a process. If the row does not appear within a
 second or two of granting it, restart mooloop and say so here.
 
-**One shared build cache, in `~/.cache/cargo-target`.** `.cargo/config.toml`
-says a workstation wanting a cache shared across worktrees sets
-`CARGO_TARGET_DIR` machine-locally, and on this Mac that is done, in
-`~/.zshenv` beside the `PATH` line below. It was not optional: on 2026-09-20
-the main checkout and one task worktree held 26 GB and 29 GB of near-identical
-output, on a 228 GiB internal disk with **6.2 GiB free**. Consolidating them
-returned the disk to 33 GiB free, and a second worktree now costs nothing --
-measured at 0.10 s for a `cargo check` the main checkout had already done.
+**One shared build cache, at `~/.cache/cargo-target`, on the external SSD.**
+`.cargo/config.toml` says a workstation wanting a cache shared across
+worktrees sets `CARGO_TARGET_DIR` machine-locally, and on this Mac that is
+done, in `~/.zshenv`. It was not optional: on 2026-09-20 the main checkout and
+one task worktree held 26 GB and 29 GB of near-identical output, on a 228 GiB
+internal disk with **6.2 GiB free**. Consolidating and moving it to the
+external took the internal disk to **59 GiB free**, and a second worktree now
+costs nothing -- measured at 0.38 s for a `cargo check` another checkout had
+already done.
 
-**It is on the internal disk on purpose, and that is worth re-testing rather
-than inheriting.** Both external SSDs are fast drives -- a Samsung T5 and a
-SanDisk Extreme 2 TB -- but on 2026-09-20 both sat behind a VIA Labs **USB 2.0**
-hub, negotiating 480 Mb/s and measuring ~29 MB/s read and write against the
-internal's ~904 MB/s. Build output is the worst thing to put on a disk 31x
-slower, so the cache stayed internal. Plug a drive directly into the Mac,
-re-measure with `dd`, and if it reaches USB 3 speeds the external is the better
-home and `~/.zshenv` has one line to change. The guard there matters: an
-unmounted `/Volumes/<name>` resolves on the boot disk, so a cache pointed at a
-detached drive silently fills the disk it was meant to spare.
+The configured path is a **symlink** into `/Volumes/Extended SSD`. That
+indirection is load-bearing: the volume name contains a space, and an autoconf
+build script handed a path with a space in it fails in ways that read as a
+broken toolchain. `mp3lame-sys` is such a script and it is in this workspace.
+Cargo does not canonicalise `CARGO_TARGET_DIR`, so `OUT_DIR` arrives
+space-free. The guard in `~/.zshenv` tests the *volume* rather than the
+symlink, so a detached drive leaves `CARGO_TARGET_DIR` unset and cargo falls
+back to a per-project `target/`; naming a path under an unmounted
+`/Volumes/<name>` would instead resolve on the boot disk and quietly fill the
+disk the move exists to spare.
+
+**It is on a USB 2.0 cable, and that costs more than it sounds.** Measured
+2026-09-20: the drive is a SanDisk Extreme 2 TB plugged *directly* into a
+USB 3.1 bus, and it still negotiates 480 Mb/s and writes at ~41 MB/s, against
+the internal's ~904 MB/s. Not the hub, not the port, not the drive -- the
+cable. An Apple iPad USB-C cable carries charge and USB 2 data only, with none
+of the SuperSpeed pairs.
+
+What that buys, measured on the same tree: touching `mooloop-engine/src/lib.rs`
+and rebuilding `mooloop-app` took **3 m 29 s of wall clock for 23.6 s of CPU**
+-- eleven per cent utilisation, so seven eighths of the build was waiting on
+the cable. Judge any build time on this machine against that before concluding
+something in the workspace got slower. A cable marked `SS` or `10Gbps` should
+return it to roughly internal speed with nothing to change in `~/.zshenv`;
+re-measure with `dd if=/dev/zero of="/Volumes/Extended SSD/.st" bs=4m count=200`.
 
 **`cargo` reaches non-interactive shells through `~/.zshenv`, not `.zshrc`.**
 Homebrew's `rustup` is keg-only, so its shims are never linked into
