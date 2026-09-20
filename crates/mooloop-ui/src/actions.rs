@@ -8,6 +8,7 @@
 //! `lib.rs`'s `on_shortcut_key` dispatcher; it never requires touching the
 //! key-decoding logic in `main.slint`.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -497,6 +498,78 @@ const NAMED_KEYS: &[(&str, &str)] = &[
     ("insert", "Ins"),
 ];
 
+/// How a Super press (Meta, Win, Cmd) is read before a chord is resolved.
+///
+/// A setting rather than a fixed rule because the two things that go wrong
+/// are opposites. A desktop whose window manager takes Alt for its own
+/// window dragging and menu keys leaves Super as the only spare modifier an
+/// application can reach, so Super has to mean Alt; a keyboard that puts
+/// Super where Alt belongs wants the two exchanged. Both are answers to
+/// "this key is not where the shortcut expects it", so both live on one
+/// control.
+///
+/// It applies where a chord is *made* from a key event -- dispatch and the
+/// prefpane's recorder -- and not inside `ShortcutTable`. So the table only
+/// ever holds canonical chords: changing the mode keeps every stored
+/// binding, and changes which physical key arrives at it. A chord recorded
+/// while Super means Alt is stored as the Alt chord it will be pressed as.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum SuperKeyMode {
+    /// Super is its own modifier and matches only a chord that asks for it.
+    #[default]
+    Distinct,
+    /// Super counts as Alt, and Alt still does: either key presses an Alt
+    /// chord. A binding that wanted Super by itself becomes unreachable,
+    /// which is the trade a user makes by choosing this.
+    AsAlt,
+    /// Alt and Super exchange places.
+    Swapped,
+}
+
+impl SuperKeyMode {
+    /// In prefpane order. The labels are here rather than in the markup for
+    /// the reason `AGENTS.md` gives: a list spelled on both sides of the
+    /// boundary is the copy that drifts, and the prefpane reads this one
+    /// through `preferences-shortcut-super-key-choices`.
+    pub(crate) const ALL: [SuperKeyMode; 3] = [Self::Distinct, Self::AsAlt, Self::Swapped];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Distinct => "Separate keys",
+            Self::AsAlt => "Super acts as Alt",
+            Self::Swapped => "Swap Alt and Super",
+        }
+    }
+
+    pub(crate) fn index(self) -> i32 {
+        Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0) as i32
+    }
+
+    /// The mode a prefpane index means. Out-of-range falls back to the
+    /// default rather than panicking: the index arrives from the markup.
+    pub(crate) fn from_index(index: i32) -> Self {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| Self::ALL.get(index).copied())
+            .unwrap_or_default()
+    }
+
+    /// What a raw event's `(alt, meta)` pair means under this mode.
+    pub(crate) fn read(self, alt: bool, meta: bool) -> (bool, bool) {
+        match self {
+            Self::Distinct => (alt, meta),
+            Self::AsAlt => (alt || meta, false),
+            Self::Swapped => (meta, alt),
+        }
+    }
+}
+
+/// The labels the Preferences > Shortcuts page offers, in `ALL` order.
+pub(crate) fn super_key_labels() -> Vec<&'static str> {
+    SuperKeyMode::ALL.iter().map(|mode| mode.label()).collect()
+}
+
 impl KeyChord {
     pub(crate) fn new(ctrl: bool, shift: bool, alt: bool, meta: bool, key: &str) -> Self {
         Self {
@@ -506,6 +579,21 @@ impl KeyChord {
             meta,
             key: key.to_lowercase(),
         }
+    }
+
+    /// The chord a raw key event means once `mode` has had its say. This is
+    /// the only way a key event should become a `KeyChord`; `new` takes the
+    /// modifiers as given, for a chord that is already canonical.
+    pub(crate) fn from_event(
+        mode: SuperKeyMode,
+        ctrl: bool,
+        shift: bool,
+        alt: bool,
+        meta: bool,
+        key: &str,
+    ) -> Self {
+        let (alt, meta) = mode.read(alt, meta);
+        Self::new(ctrl, shift, alt, meta, key)
     }
 
     /// Parses the canonical `display()` form (also accepted case-insensitively).
@@ -723,6 +811,75 @@ mod tests {
         assert_eq!(KeyChord::parse(&text).unwrap(), chord);
     }
 
+    /// The mapping itself, each mode against both keys. `AsAlt` keeps Alt
+    /// working -- a mode that moved the shortcut to Super instead of adding
+    /// Super to it would be a swap, which is the other option.
+    #[test]
+    fn each_super_key_mode_reads_the_modifier_pair_its_own_way() {
+        for (alt, meta) in [(false, false), (true, false), (false, true), (true, true)] {
+            assert_eq!(SuperKeyMode::Distinct.read(alt, meta), (alt, meta));
+        }
+        assert_eq!(SuperKeyMode::AsAlt.read(false, true), (true, false));
+        assert_eq!(SuperKeyMode::AsAlt.read(true, false), (true, false));
+        assert_eq!(SuperKeyMode::AsAlt.read(false, false), (false, false));
+        assert_eq!(SuperKeyMode::Swapped.read(true, false), (false, true));
+        assert_eq!(SuperKeyMode::Swapped.read(false, true), (true, false));
+        assert_eq!(SuperKeyMode::Swapped.read(true, true), (true, true));
+    }
+
+    /// What the setting is *for*: the stored binding never moves, and which
+    /// physical key reaches it does. `pattern.clone` is Ctrl+Alt+D in the
+    /// registry and stays Ctrl+Alt+D in all three modes.
+    #[test]
+    fn a_mode_changes_which_key_reaches_a_binding_not_the_binding() {
+        let table = ShortcutTable::build(&HashMap::new());
+        let press = |mode, alt, meta| {
+            table.resolve(&KeyChord::from_event(mode, true, false, alt, meta, "d"))
+        };
+
+        assert_eq!(press(SuperKeyMode::Distinct, true, false), Some("pattern.clone"));
+        assert_eq!(press(SuperKeyMode::Distinct, false, true), None);
+
+        // Either key, which is the point of it.
+        assert_eq!(press(SuperKeyMode::AsAlt, true, false), Some("pattern.clone"));
+        assert_eq!(press(SuperKeyMode::AsAlt, false, true), Some("pattern.clone"));
+
+        // And exchanged, which is the point of the other one.
+        assert_eq!(press(SuperKeyMode::Swapped, false, true), Some("pattern.clone"));
+        assert_eq!(press(SuperKeyMode::Swapped, true, false), None);
+
+        assert_eq!(
+            table.chord_for("pattern.clone").map(|chord| chord.to_string()),
+            Some("Ctrl+Alt+D".to_string())
+        );
+    }
+
+    /// A chord *recorded* under a mode is stored as the chord it will be
+    /// pressed as, so the prefpane shows what the table holds. Recording
+    /// Super+K while Super means Alt writes Alt+K, and Super+K goes on
+    /// pressing it.
+    #[test]
+    fn a_recorded_chord_is_stored_in_the_form_it_will_arrive_in() {
+        for mode in [SuperKeyMode::AsAlt, SuperKeyMode::Swapped] {
+            let recorded = KeyChord::from_event(mode, false, false, false, true, "k");
+            assert_eq!(recorded.to_string(), "Alt+K");
+            let pressed = KeyChord::from_event(mode, false, false, false, true, "k");
+            assert_eq!(pressed, recorded);
+        }
+    }
+
+    #[test]
+    fn a_super_key_mode_round_trips_through_its_prefpane_index() {
+        for mode in SuperKeyMode::ALL {
+            assert_eq!(SuperKeyMode::from_index(mode.index()), mode);
+        }
+        // The index arrives from the markup, so a bad one is the default
+        // rather than a panic.
+        assert_eq!(SuperKeyMode::from_index(-1), SuperKeyMode::default());
+        assert_eq!(SuperKeyMode::from_index(99), SuperKeyMode::default());
+        assert_eq!(super_key_labels().len(), SuperKeyMode::ALL.len());
+    }
+
     #[test]
     fn rebinding_reports_the_previous_owner() {
         let mut overrides = HashMap::new();
@@ -888,6 +1045,39 @@ mod decoding {
                 recorder.can_produce(&chord),
                 "{} defaults to {chord}, which the Shortcuts recorder cannot capture",
                 spec.id
+            );
+        }
+    }
+
+    /// The Super-key reading is Rust's, and the only part of it that can
+    /// fail quietly is the markup not reaching it -- which is the 2026-09-07
+    /// shape this module exists for: a control drawn on the page, a handler
+    /// waiting in `lib.rs`, and nothing between them.
+    ///
+    /// The index itself needs no test of this kind. The labels the segments
+    /// draw and the index `SuperKeyMode::from_index` reads are both
+    /// `SuperKeyMode::ALL`, so the markup has no copy of the order to
+    /// disagree with.
+    #[test]
+    fn the_super_key_control_is_wired_from_the_page_to_the_window() {
+        for fragment in [
+            "options: root.shortcut-super-key-choices;",
+            "selected-index <=> root.shortcut-super-key;",
+            "root.shortcut-super-key-changed(self.selected-index)",
+        ] {
+            assert!(
+                PREFS_SLINT.contains(fragment),
+                "the Shortcuts page no longer has `{fragment}`"
+            );
+        }
+        for fragment in [
+            "shortcut-super-key-choices: root.preferences-shortcut-super-key-choices;",
+            "shortcut-super-key <=> root.preferences-shortcut-super-key;",
+            "root.preferences-shortcut-super-key-changed(index);",
+        ] {
+            assert!(
+                MAIN_SLINT.contains(fragment),
+                "the window no longer forwards `{fragment}`"
             );
         }
     }

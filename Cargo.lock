@@ -3268,6 +3268,7 @@ dependencies = [
  "mooloop-dsp",
  "mooloop-engine",
  "mooloop-project",
+ "rtrb",
  "symphonia",
  "tempfile",
 ]

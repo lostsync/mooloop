@@ -1200,6 +1200,12 @@ export component PreferencesDialog inherits Rectangle {
     in-out property <string> shortcut-capturing-id;
     in property <[GestureRow]> gesture-rows;
     in property <[string]> gesture-choices;
+    /// The Super-key readings, in `SuperKeyMode::ALL` order, named in Rust
+    /// for the same reason `meter-falloff-options` is: the option list is
+    /// the enum, and a second copy here would be the one that drifts.
+    in property <[string]> shortcut-super-key-choices;
+    in-out property <int> shortcut-super-key;
+    callback shortcut-super-key-changed(int);
     /// The falloff rows, labelled with the rate each one is. Handed over by
     /// Rust from `meter::FALLOFF_DB_PER_SECOND` rather than typed out here:
     /// the label *is* the number, so a copy in the markup would be a number
@@ -1493,6 +1499,37 @@ export component PreferencesDialog inherits Rectangle {
                                         entry: row;
                                         choices: root.gesture-choices;
                                         picked(index) => { root.gesture-rebound(row.id, index); }
+                                    }
+                                    // A page-wide reading of one key rather
+                                    // than a binding, so it sits with the
+                                    // gestures at the foot of the page and
+                                    // not in the rows it changes the reach
+                                    // of.
+                                    SectionLabel { text: "MODIFIER KEYS"; }
+                                    Text {
+                                        text: "How a Super press is read. A desktop that keeps Alt for its "
+                                            + "own window commands can leave Super as the only spare "
+                                            + "modifier, and a keyboard with the two the wrong way round "
+                                            + "wants them exchanged. No chord above moves either way -- "
+                                            + "only which key presses it.";
+                                        color: Theme.text-muted;
+                                        font-size: Theme.text-lg;
+                                        wrap: word-wrap;
+                                    }
+                                    HorizontalLayout {
+                                        alignment: start;
+                                        height: 26px;
+                                        SegmentedControl {
+                                            // Stated, because the segments
+                                            // size from the panel otherwise
+                                            // and these three labels are
+                                            // sentences rather than words.
+                                            width: 320px;
+                                            options: root.shortcut-super-key-choices;
+                                            hint: "Which physical key means Alt in a shortcut.";
+                                            selected-index <=> root.shortcut-super-key;
+                                            changed selected-index => { root.shortcut-super-key-changed(self.selected-index); }
+                                        }
                                     }
                                 }
                             }
