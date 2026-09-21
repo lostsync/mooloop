@@ -3,6 +3,7 @@
 Adam's quick notes: things worth doing that have no plan yet and no obvious
 home. Delete a line when it is done or has moved somewhere better.
 
+<<<<<<< HEAD
 ✓ add option to swap alt/super or recognize super as alt (5311de4)
 ✓ should be able to assign mixer track from channel sidebar (49c7a6a)
 - in the sequencer, let's split the mute button (figuratively) and have a yellow half-height solo button above it. we can remove the M and S from these.
@@ -16,3 +17,12 @@ home. Delete a line when it is done or has moved somewhere better.
 - need a 'tool' or 'utility' device that has gain, pan, width, maybe polarity invert and sweepable phase offset?
 ✓ in prefs, there's this line on the section tabs - it looks weird; it's right in the center of the tab. just highlight the whole tab or something (f5c8b24)
 ✓ allow keyboard browsing in sample sidebar. up/down should play if it selects a playable file and preview is selected. l/r should expand/collapse. (a70d025)
+=======
+- add option to swap alt/super or recognize super as alt
+- more shaping options to the oscs
+- build sidechains into dynamics devices
+- add audio input modulator == level and/or env follower
+- math modulator should accept 2 inputs so one can modify another
+- note generators for mod rack
+- midi recording doesnt loop
+>>>>>>> aea7ac9 (added some notes)
