@@ -66,6 +66,17 @@ would reserve 4 GiB; a four-minute pattern at 120 BPM about 7.5 GiB. Sizing the
 bank from the project is what makes the ceiling liftable at all, so this lands
 before anyone raises it.
 
+**And it now bounds the bank's *contents*, 2026-09-21.** The fix for opening
+an automation lane on the audio thread (`reports/fable-2026-09-21.md`,
+finding 1) was specified as "allocate each lane's points with the bank",
+which is 96 KB per `ChannelPattern` and 6 GiB across it -- six times the
+floor this plan is about, for a feature nobody would have connected to it.
+What landed instead reuses a vacated slot's own storage and takes spares
+from a pool refilled off the thread, so the bank grew nothing; but the
+episode is the argument for sizing from the project stated a third way.
+While the bank is dimensioned by its ceilings, **anything per-slot is
+multiplied by 65,536 before a reader sees it.**
+
 This does not unpark the plan. Nothing has yet asked for a pattern longer than
 sixteen bars, and the parking argument above is unchanged. It is here so that
 the day something does ask -- step 10 of `plugin-hosting/`, CLAP instruments,

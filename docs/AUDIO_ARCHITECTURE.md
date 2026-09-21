@@ -104,6 +104,20 @@ dropped at the end of the install arm; it leaves with the retired renderer.
 sample slot is still an `ArcSwapOption`, retired through the reclaim ring by
 `load_full`, as `reports/fable-2026-09-17.md` finding 2 settled.)
 
+**Sequencer storage is not allocated on an edit either, and is not
+preallocated with the bank.** A pattern's automation lanes are a fixed array
+of eight slots per channel-pattern; closing one vacates its slot and keeps
+its point vector, so a lane edit on the callback never frees, and reopening
+one never allocates. What the bank cannot do is own that vector up front:
+256 patterns by 256 channels by eight lanes by 1024 points is 6 GiB, and
+`CAPACITY_POLICY.md`'s *"the same lesson, unlearned"* is about this very
+bank. A slot that has never held a lane takes its storage from
+`LanePool`, refilled at project install; an empty pool still opens the lane,
+by allocating, rather than refusing an edit the user asked for. Closing that
+last hole means the session supplying the storage with the command, the way
+`StructuralCommand` supplies a routing table -- `LOOSE_ENDS.md`
+(`reports/fable-2026-09-21.md`, finding 1).
+
 ## Control Graph Within A Channel
 
 The normal audio topology of a channel remains an ordered source-and-insert
@@ -186,22 +200,11 @@ returns through a bounded reclaim channel and is destroyed on the control
 thread. If reclaim capacity is unavailable, the executor applies backpressure
 by leaving the structural edit queued; it never drops the object itself.
 
-One thing on the audio thread does not honour the second bullet yet. The
-three routing tables — MIDI routing, audio-input routing and the buffer MIDI
-map — are `ArcSwap`s the callback `load()`s rather than boxes the command
-stream hands over, so a control-thread `store` landing while a guard is live
-leaves the audio thread the last owner of a `Vec` and frees it in the
-callback. The window is open every block now, not only under a held note:
-`advance_takes` holds a guard across its whole per-channel loop whenever any
-strip has a live take, and `monitors_input` takes a fresh one per live
-channel per block. The fix — the three tables become plain boxes behind
-structural commands, the displaced box leaving through the reclaim ring like
-every other — was written, verified and landed as `db02366`, then reverted
-unmerged by `eb4f605` to clear a merge, *"deferred, not abandoned"*. Until it
-is reapplied these are the one `Arc` the audio thread still loads, and the
-rule above is the standard they are measured against rather than a
-description of them. Recorded 2026-09-20 from `reports/fable-2026-09-20.md`
-finding 1.
+The three routing tables were the one exception to the second bullet, and
+are not any more: `a576f17` reapplied the fix, and the paragraph a hundred
+lines above -- *Two mechanisms cross the boundary* -- describes what they are
+now. Recorded 2026-09-20 from `reports/fable-2026-09-20.md` finding 1, closed
+2026-09-21.
 
 ## DSP Node Contract
 
@@ -250,6 +253,22 @@ to silence:
 `Event::Choke` remains, and is still correct for what it names: a choke group
 cutting a hi-hat off. What changed is that the host stopped borrowing it to
 mean something else.
+
+**A device that contains a device forwards every hook it is given.** The
+fan-out reaches the outer node and stops: `on_discontinuity`, `skip_block`,
+`is_at_rest` and latency all have to be passed on again inside it. ML-P8 is
+the case that found the rule -- its finishing chorus is a `ModulationEffect`,
+which empties its line on a seek when it stands alone, and nothing was
+telling the one inside, so a seek rang across it
+(`reports/fable-2026-09-21.md`, finding 4). The plugin slot is the same shape
+at a larger size, and `docs/plans/plugin-hosting/` should read it that way.
+
+**A fold and a seek are different kinds.** `Discontinuity::LoopFold` says the
+transport turned back at a loop end: time is discontinuous and the music
+usually is not. Every node that clears on a `Seek` clears on a `LoopFold`
+today, so the sound is what it always was; the variant exists so that a
+device *can* keep its tail across the fold without also keeping it across a
+seek, which under one name it could not.
 
 **Not yet covered:** the console channel strip (`mooloop-dsp/src/strip.rs`) is
 not an `AudioNode` and is not reached by the fan-out, so its EQ and compressor

@@ -711,8 +711,11 @@ sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
   input sample-exact. It stops when REC is pressed again, the transport stops,
   or, with CLIP on, after LENGTH. Several samplers can record at once.
 - **A finished take becomes the sampler's sample**, on the channel that
-  recorded it whichever is selected, as one "Record Take" undo step. Nothing
-  is written into a pattern; the take is heard through whatever triggers the
+  recorded it whichever is selected, as one "Record Take" undo step -- unless
+  that channel has stopped being a sampler, or has gone, while the take was
+  in flight, in which case the recording stays in `recordings/` and the
+  status bar says so. A take that fails to write leaves no partial file
+  behind. Nothing is written into a pattern; the take is heard through whatever triggers the
   sampler. Takes are written to `recordings/` beside the settings file, and a
   save copies a take into the song whichever asset mode it uses.
 - **The hardware input is an AUDIO source** under both drivers. Under JACK,
@@ -1684,6 +1687,9 @@ land on its own when it starts to matter:
   at a *row*, and only the second one can say which side of the boundary it
   meant. Duplicate is on every rack row's left rail; all four are on
   Ctrl+Shift+C/X/V/D, and all but copy are undoable.
+  **A pasted channel arrives with its MIDI and AUDIO inputs off**: the picks
+  name something in the document the channel was copied from, and the
+  clipboard outlives New Song and Open Song.
   **The clipboard does not carry modulation routes or automation lanes**: a
   route's source is a module in the channel's own rack, so it cannot follow a
   device to another channel. That is the question `docs/plans/containers/`
@@ -1691,7 +1697,9 @@ land on its own when it starts to matter:
 - A canonical action registry drives the menu bar and rebindable shortcuts.
   Note multi-selection supports Select All and bulk deletion. **Undo is not
   universal**: channel structure, pattern clone/remove/clear, note edits,
-  modulation, effect presets and the sampler's five slice verbs feed a
+  modulation, effect presets, the sampler's five slice verbs and the mixer's
+  own verbs -- mute, volume, pan, output, console sum, polarity and solo, on
+  channels and buses alike, a fader drag being one step -- feed a
   project-snapshot undo/redo stack, while device and generator *parameters*,
   step-grid edits, pattern length, add-pattern, playlist placements and the
   two renames do not -- and because an undo installs a whole snapshot, an

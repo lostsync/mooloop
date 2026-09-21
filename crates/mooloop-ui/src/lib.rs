@@ -1448,6 +1448,14 @@ fn with_project_history(
 /// is down; a second grab of the same fader is a person, and slower.
 const CONTINUOUS_GESTURE_GAP: std::time::Duration = std::time::Duration::from_millis(400);
 
+/// Whether a move frame arriving `now` belongs to the drag that last reported
+/// at `last`. Pulled out of [`with_continuous_history`] so the rule can be
+/// tested without a window: the handlers it runs in are closures built inside
+/// `run()`, which no test in `crates/mooloop-ui/tests` can reach.
+fn continues_gesture(last: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    last.is_some_and(|at| now.duration_since(at) < CONTINUOUS_GESTURE_GAP)
+}
+
 /// [`with_project_history`] for a control that reports an edit on every move
 /// frame: a fader or a pan knob.
 ///
@@ -1467,9 +1475,7 @@ fn with_continuous_history(
     edit: impl FnOnce() -> bool,
 ) {
     let now = std::time::Instant::now();
-    let continuing = last
-        .get()
-        .is_some_and(|at| now.duration_since(at) < CONTINUOUS_GESTURE_GAP);
+    let continuing = continues_gesture(last.get(), now);
     {
         let mut open = commands.borrow_mut();
         if !continuing {
@@ -9386,7 +9392,11 @@ impl AppUi {
 
         // Record arm. Not an edit: a song does not reopen armed, so arming it
         // must not make an untouched document look unsaved -- the same rule
-        // the transport commands already follow.
+        // the transport commands already follow. That rule is
+        // `EngineCommand::edits_document`, and it is the only copy of it:
+        // this comment used to state it beside a list, a crate away, that had
+        // never heard of `SetRecordArmed` (`reports/fable-2026-09-21.md`,
+        // finding 6).
         {
             let st = state.clone();
             let weak = window.as_weak();
@@ -15199,6 +15209,26 @@ fn apply_take(
         );
         return;
     };
+    // The channel is still there, and may not still be a sampler: a take is
+    // in flight for as long as it takes to record and decode, and the source
+    // can be swapped underneath it. Loading the sample anyway wrote it into
+    // a device that cannot play it, set `sample_embedded`, and recorded an
+    // undo entry for all of it (`reports/fable-2026-09-21.md`, finding 3).
+    // The file is kept, exactly as it is when the channel has gone.
+    let is_sampler = st
+        .borrow()
+        .session
+        .channels
+        .get(channel)
+        .is_some_and(|channel| channel.kind == DeviceKind::Sampler);
+    if !is_sampler {
+        window.set_status_message(
+            "The take's channel is no longer a sampler; the recording is still in the \
+             recordings folder"
+                .into(),
+        );
+        return;
+    }
     let before = project_snapshot(&st.borrow(), &window);
     apply_loaded_sample(handle, st, weak, channel, loaded);
     if let Some(state) = st.borrow_mut().session.channels.get_mut(channel) {
@@ -15701,6 +15731,30 @@ fn refresh_browser(st: &UiState) {
 /// Step 01 shipped the tree with "no keyboard navigation" written into its
 /// own status file; this is the half that can be checked without a rendered
 /// tree, which is most of the rules worth stating.
+#[cfg(test)]
+mod continuous_gesture_tests {
+    use super::{continues_gesture, CONTINUOUS_GESTURE_GAP};
+    use std::time::{Duration, Instant};
+
+    /// **One drag is one undo step.** The mixer faces have no
+    /// press/release pair, so the bracket is the gap between move frames;
+    /// a frame arriving while the pointer is still moving continues the
+    /// drag, and the first frame of anything else starts a new entry.
+    #[test]
+    fn move_frames_inside_the_gap_are_one_gesture() {
+        let now = Instant::now();
+        assert!(!continues_gesture(None, now), "the first frame opens one");
+        assert!(continues_gesture(
+            Some(now - Duration::from_millis(8)),
+            now
+        ));
+        assert!(!continues_gesture(
+            Some(now - CONTINUOUS_GESTURE_GAP - Duration::from_millis(1)),
+            now
+        ));
+    }
+}
+
 #[cfg(test)]
 mod browser_keyboard_tests {
     use super::*;

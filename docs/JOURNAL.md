@@ -1622,6 +1622,54 @@ All four tests were run against the unfixed tree first and reported a peak of `0
 
 `plans/transport-discontinuity/` carries the rest — a command that lands at a musical edge, an `AudioNode` that can be told time moved, and the rule the whole thing serves, which is Adam's sentence: *"i just want to be able to move around the app freely without having audio issues."* He ruled on the two open questions in four words — *"immediate and yes"* — so the pattern selector keeps switching now rather than queueing, and a stopped transport stops releasing. The first of those retired step 02's own justification before it was built: queueing was going to be what removed the Pattern-mode choke, and with immediate chosen, nothing does, because under a running transport in Pattern mode the release is genuinely owed. The step stays, for the granularity rather than for this bug, and says so.
 
+## Sep 21 (the review) — a fix that would have cost six gigabytes
+
+The 2026-09-21 report's first finding was that opening an automation lane
+mallocs 12 KB inside the audio callback and that three paths free one there,
+under two comments each claiming the opposite. Its Plan A was the obvious
+shape: give every lane slot its point storage up front, the way note storage
+already is, and the allocation stops existing.
+
+The obvious shape is 6 GiB. The lane bank is `MAX_PATTERNS` by
+`MAX_CHANNELS` by `MAX_AUTOMATION_LANES_PER_CHANNEL` -- 256 by 256 by 8 --
+and a lane's points are 1024 by 12 bytes. `CAPACITY_POLICY.md` has a section
+called *"the same lesson, unlearned: the pattern bank"* about this exact
+product at a sixth of the size, and the plan walked into it anyway, because
+every number in it is defensible where it is written and nothing multiplies
+them where a reader would look. That is the third time this codebase has
+found the fault by multiplying constants in a different room from the one
+they live in, and it is the only way it has ever been found.
+
+What landed keeps the callback's side of the rule without dimensioning
+anything by a ceiling. A channel's lanes are a fixed array of eight slots
+whose open ones are a prefix; closing one vacates its slot, **keeps** its
+point vector and rotates the rest down, so the free is gone outright and
+reopening a lane in a slot that has held one costs nothing. A slot that has
+never held a lane takes a spare from a pool refilled at project install, off
+the thread. An empty pool still opens the lane by allocating -- the policy
+forbids a user-facing cap as firmly as it forbids the preallocation, and
+between two things it forbids, the one that only costs a callback is the
+lesser. The honest end of it is for the session to send the storage with the
+command, the way a routing table already arrives, and that is written down
+rather than done.
+
+The four allocation-counting tests were run against the unfixed tree first
+and all four failed, which is where the day's other finding came from: Add
+Channel still frees once with every lane closed, because the arm replaces
+the seat's `ModRack` and drops the old one where it stands. So the test
+asserts a *difference* -- lanes cost nothing to clear -- rather than zero,
+says why in its own docstring, and will start failing usefully the day that
+rack goes through the reclaim ring.
+
+The report's second finding, that a loop fold zeroes every delay and reverb
+in the song, came with arithmetic and no measurement. Measured, it is not
+there: sixteen channels of delay, reverb and plate, with the loop on and
+off, differ by 120 us in the worst block and nothing in the median. The
+finding was right that the fold and the seek were one word and should not be
+-- `Discontinuity::LoopFold` exists now, changing no sound, so that a device
+*can* keep its tail across a lap -- and wrong that the memset was the cost.
+Both halves were worth having; only one of them was worth hurrying.
+
 ## Open threads
 
 Refreshed 2026-09-02, with the September documentation audit's threads merged in on 2026-09-04 and Adam's 2026-09-05 list merged in after that. Four of the six threads listed here in August are closed: modulation drives things now, the buffer device exists, undo and clipboard are real, and the convolution reverb that needed an IR loader was replaced outright by an FDN hall — so `StereoIr` is no longer the boundary anything is waiting on.

@@ -414,6 +414,24 @@ to, so none of them blocks a step; Adam can overrule any of them.
 8. **Monitoring an app source.** Default: **not offered.** You are already
    hearing it, so the toggle belongs to hardware inputs only. Step 05.
 
+## A take's ownership at its edges, 2026-09-21
+
+Reported twice before it was recorded anywhere -- `reports/fable-2026-09-20.md`
+finding 2, carried in `reports/fable-2026-09-21.md` finding 3 -- which is the
+part worth remembering: a plan that is not executed is also not remembered.
+Two of the three are closed and one is a decision:
+
+- A `Drained::Failed` from a write or a finalize left the partial file in
+  `recordings/`. Closed: both paths remove it, as the `written == 0` branch
+  beside them already did.
+- `apply_take` applied the sample with no kind check, so a channel that
+  stopped being a sampler mid-take still received it, with a `sample_embedded`
+  flag and an undo entry. Closed: checked, and the recording is kept and
+  named in the status bar.
+- **Open, and a decision rather than a patch:** nothing in `session/take.rs`
+  is a `finish_all`, a `Drop` or a join site, so quitting with a take still
+  draining does not wait for it. `docs/LOOSE_ENDS.md` carries it.
+
 ## Not in this plan
 
 - Per-track audio clips and anything else DAW-like (decision 1).

@@ -508,6 +508,68 @@ which `CURRENT.md` now at least describes honestly; or make undo refuse to
 run over unrecorded state, which needs a "changed since the last entry"
 marker `record` has no way to set today. Found 2026-09-13.
 
+**The eleven console and rack verbs came off that list on 2026-09-21.**
+Channel mute, volume, pan and bus pick; bus mute, volume, pan, output,
+console on/off, polarity and solo all snapshot and call
+`record_project_history` now (`reports/fable-2026-09-21.md`, finding 7).
+Mute a bus, draw a note, undo, and the note goes while the mute stays --
+that was the class, and this is the surface it was worst on.
+
+The four continuous ones are bracketed by **time**, not by a gesture pair:
+`with_continuous_history` opens a token, keeps it while move frames keep
+arriving inside 400 ms, and closes it after each record, so one drag is one
+undo step. That is the cheap half of the paragraph above. The honest version
+is still the general `gesture-begin`/`gesture-end` pair across every face,
+and until it exists two grabs of the same fader less than 400 ms apart
+collapse into one entry -- the one case the timer gets wrong, and the
+cheapest possible wrong answer.
+
+**Add Channel frees one allocation on the audio thread.** Not the automation
+lanes any more (`reports/fable-2026-09-21.md`, finding 1, fixed): what is
+left is the seat's `ModRack`, replaced by `set_channel_modulation(channel,
+ModRack::default())` in the `AddChannel` arm (`engine/src/render.rs:4369`),
+whose predecessor is dropped where it stands. One free rather than the 2048
+that used to be possible, and the same shape as every reclaim the ring
+already carries, so the fix is to send it there.
+`adding_a_channel_frees_no_lane_on_the_callback` measures the difference
+rather than zero for exactly this reason, and will start failing usefully
+the day the rack goes through the ring. Found 2026-09-21.
+
+**Opening a lane still allocates when the pool is empty.** A lane's point
+vector is 12 KB and the lane bank is 256 patterns by 256 channels by eight
+slots, so preallocating one per slot is 6 GiB and `CAPACITY_POLICY.md`
+forbids it. Closing a lane now keeps its vector in the slot -- no free, ever
+-- and a slot that has never held one takes a spare from `LanePool`, which
+`Sequencer::load_project` refills to 32 off the audio thread. Draw more than
+32 new lanes between two installs and the 33rd allocates on the callback, as
+every lane did before. Refusing instead would be a user-facing cap on a
+thing the user creates, which the policy forbids in the other direction; the
+answer that needs neither is for the session to send the storage with the
+command, the way `StructuralCommand` sends a routing table, and hand the
+vacated one back through the reclaim ring. Found 2026-09-21.
+
+**Three callback costs that grow with the song rather than the block**, from
+`reports/fable-2026-09-21.md` finding 5, none of them a hazard and none of
+them measured:
+
+- Song-mode automation lookup is playlist by channels by destinations per
+  block once any lane exists under the playhead (`automation_lane_at`,
+  `sequencer.rs:526`). A per-block cache of covering placements would make
+  it O(destinations).
+- `EventList::push_ordered` (`dsp/src/event.rs:122`) is an insertion sort
+  into `MAX_EVENTS = 256`, and automation emits one event per control tick
+  per destination -- at an 8192-frame block one automated destination fills
+  the list alone and every later push returns `false` into a `let _`. No
+  allocation, no noise, wrong values.
+- `Sequencer::set_playlist_placement` does `push` then `sort_unstable` on
+  the callback per placement toggle; an insert at `partition_point` is the
+  same number of lines.
+
+Also on the thread: `defer_command`'s `debug_assert!(false, "... {command:?}")`
+(`render.rs:4591`) formats an `EngineCommand` and panics from the callback in
+a dev build when all eight slots are held, and drops the command with no
+counter in release. No caller yet.
+
 **Two preset producers mutate the live session before queueing, so a refused
 install leaves the document and the engine disagreeing.**
 `on_effect_preset_selected` (`lib.rs:8076`) and `append_effect_preset`
@@ -1023,6 +1085,20 @@ rescope walk; the copy's own id is minted by `insert_channel` and is
 available at the same point the name is made unique. Found 2026-09-20,
 `reports/fable-2026-09-20.md` finding 4.
 
+**Answered 2026-09-21, in the direction that cannot be wrong silently.**
+`queue_channel_insert` clears `audio_input` and `midi_input` on every paste
+and says so in the status message. The forcing case was the *other*
+document: the clipboard outlives New Song and Open Song
+(`CommandState::channel_clipboard` is written in two places and cleared
+nowhere), so a channel copied in one song pasted into the next carried ids
+that named whatever that song happened to have at those numbers
+(`reports/fable-2026-09-21.md`, finding 7). Adam's call stands for the
+same-song reading: if a duplicate should keep its input pick, the place to
+do it is here, with the copy's own id, and only when the clipboard and the
+document agree -- which needs a document identity the clipboard does not
+carry yet. Whether a clipboard should survive a song at all is the same
+question one level up, and is still open.
+
 ---
 
 ## One name, two policies
@@ -1445,6 +1521,25 @@ no crate mentions idle inhibition. The policy question is what counts as busy:
 transport running is the obvious answer, and an armed recording or a held note
 is the one that would actually annoy somebody if it were missed. Found
 2026-09-15.
+
+**A take's three edges, two of them closed.** A take had no owner at three
+places (`reports/fable-2026-09-20.md` finding 2, carried in
+`reports/fable-2026-09-21.md` finding 3):
+
+- A `Drained::Failed` from a write or a finalize left the partial file in
+  `recordings/`. **Closed 2026-09-21**: both paths `remove_file` the way the
+  `written == 0` branch beside them already did.
+- `apply_take` found the channel by id and applied the sample with no kind
+  check, so a channel that stopped being a sampler while its take was in
+  flight still received the sample, the `sample_embedded` flag and a "Record
+  Take" history entry. **Closed 2026-09-21**: it is checked, and the file is
+  kept and named in the status bar, exactly as when the channel has gone.
+  (A Haiku pass on 2026-09-21 reported this landed at `lib.rs:14389`; that
+  line is the playhead's `is_sampler` test in the pump, and was not this.)
+- **Still open:** nothing in `session/take.rs` is a `finish_all`, a `Drop`
+  or a join site, so a take still in flight when the application quits is
+  not waited for. That is the edge that needs a decision rather than a
+  patch: whether quit blocks on a draining take, abandons it, or asks.
 
 **`Session::input_monitor` is never pruned when a channel goes.**
 (`session/session.rs:76`.) It is a `BTreeSet<ChannelId>` and only

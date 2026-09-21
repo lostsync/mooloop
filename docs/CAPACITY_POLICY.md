@@ -67,6 +67,20 @@ Not yet done. The sequencer is indexed by pattern and channel throughout, so
 this is a real change rather than a one-line one, and the measurements are
 committed so it has a before to point at.
 
+**And it now bounds what can be put in the bank.** On 2026-09-21 the fix for
+opening an automation lane on the audio thread
+(`reports/fable-2026-09-21.md`, finding 1) was written as "give every lane
+slot its point storage up front". Eight slots per `ChannelPattern`, 1024
+points of 12 bytes each, is 96 KB per channel-pattern and **6 GiB** across
+the bank -- six times the floor this section is about, arrived at by exactly
+the multiplication it warns about, and nobody would have noticed at any
+single definition. What landed instead keeps the storage a lane already has
+(closing one vacates its slot and keeps the vector, so the callback never
+frees) and hands a slot that has never held one a spare from a pool refilled
+off the thread. The pool is a reserve, not a cap: when it is empty the lane
+still opens. **A ceiling costs nothing; dimensioning by one costs
+everything, and it costs more the moment anything per-slot grows.**
+
 ### The track bank, measured 2026-09-09
 
 The same lesson again, found and half-fixed the same day. `MAX_BUSES` was

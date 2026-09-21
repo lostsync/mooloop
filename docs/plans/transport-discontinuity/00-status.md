@@ -190,6 +190,59 @@ channel instead reported both handlers the plan predicted.
 | 03 | **Landed 2026-09-20.** `AudioNode` can be told time moved, and which kind | four devices opted in; the voice path still uses `Choke` |
 | 04 | **Landed 2026-09-20.** Navigation must not reach the audio thread — the rule, and a guard | small |
 
+### Two things step 03 left, both closed 2026-09-21
+
+**A fold arrived as a seek.** `Discontinuity` had `Seek`, `Stop` and
+`ProgramChange`, and the renderer sent `Seek` for both a seek and a loop
+fold, so a device could not decline one without declining the other -- and
+what it costs is audible: every delay, reverb and plate ring in the project
+is cleared on every lap, so no repeat and no tail ever crosses the loop
+point (`reports/fable-2026-09-21.md`, finding 2). `Discontinuity::LoopFold`
+now says which it is; every device that cleared on a fold still clears on
+one, so **nothing sounds different yet**, and whether a given device should
+keep its tail across a fold is Adam's call, one `match` arm at a time.
+`a_fold_reaches_installed_nodes_as_a_fold` holds the kind. A fold is a Song
+mode loop range turning the playhead back; Pattern mode wraps inside the
+sequencer without the transport jumping, so it does not reach the hook at
+all.
+
+**The hook stopped at the outer device.** `RenderState::on_discontinuity`
+fans out to every strip's source and chain, and a device that *contains* a
+device has to forward it again: ML-P8's finishing chorus is a
+`ModulationEffect`, the same type that opted in at step 03, and nothing was
+calling it (finding 4). One override, one test. The rule is now written in
+`docs/AUDIO_ARCHITECTURE.md` under the node contract, because the plugin
+slot is the same shape at a larger size.
+
+**And the cost was measured, because the finding estimated it.**
+`block_cost::loop_fold_cost` times sixteen channels of delay + reverb +
+plate at a 512-frame block, ten seconds of blocks, with the one-bar loop
+range on and off -- so the difference is the fold and not the arrangement.
+Release, container, 2026-09-21:
+
+```
+  loop        median ns   max ns
+  off           2445709  4563766
+  on            2350587  4683882
+```
+
+**No spike.** A fold lands about every two seconds there and the worst block
+differs by 120 us, which is 2.6% and smaller than the spread between the two
+medians -- one of which is *lower* with the loop on. The finding's arithmetic
+(768 KB per delay line, times every tail-holding ring) is right about the
+bytes and wrong about what they cost: a `fill(0.0)` over a ring the CPU has
+been reading every block is a fast linear write, not a stall.
+
+Two caveats keep this a floor rather than the worst case. The arrangement is
+silent -- samplers with no notes -- so the reverb and plate rings hold little
+and some of their pages may never have been touched; and one run of one
+machine, at a block already costing 2.4 ms, has little resolution left for a
+100 us effect. What it does settle is that the fold is not the thing to fix
+first. (The report asked for this in `docs/REFERENCE_MEASUREMENTS.md`; that
+document is about measuring reference *hardware*, and every other
+`block_cost` figure lives in the plan that commissioned it, as this one now
+does.)
+
 Step 01 stands alone and is worth landing on its own. Steps 02 through 04 are
 the general mechanism and are ordered by dependency: 03 is much easier to
 specify once 02 has established what a discontinuity *is*, and 04's guard

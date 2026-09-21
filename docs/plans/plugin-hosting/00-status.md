@@ -307,11 +307,17 @@ this plan.
    the one number in this list that has never moved.
 
    **The source popup claim is wrong, and has been since 2026-09-18.** It
-   *is* driven by a model: the popup is `main.slint:3716` and its rows are
-   `for label[i] in SourceKinds.labels` at `:3742`, since `3fff067` — which
+   *is* driven by a model: the popup is `AddSourceButton` in
+   `crates/mooloop-ui/ui/channel-rack.slint:94` and its rows are
+   `for label[i] in SourceKinds.labels` at `:113`, since `3fff067` — which
    landed for this exact fault, the menu having offered four of the eight
-   kinds for months. (`main.slint:3619` was wrong even on 2026-09-16: it was
-   piano-grid pointer handling that day too.) What survives is narrower and
+   kinds for months. (This paragraph cited `main.slint:3716` and `:3742`
+   until 2026-09-21; `18f560b` moved the popup into `channel-rack.slint` on
+   2026-09-20, the same day the correction was written, and `main.slint` has
+   no loop over `SourceKinds.labels` at all. `main.slint:3619` was wrong even
+   on 2026-09-16: it was piano-grid pointer handling that day too. The
+   argument below is unchanged, at the new address —
+   `reports/fable-2026-09-21.md`, finding 9.) What survives is narrower and
    is what step 08 must build: the model is a literal spelled in markup —
    eight strings at `channel-rack.slint:61-66`, held against
    `DeviceKind::label()` by `tests/source_kind_menu.rs` — so no row can be

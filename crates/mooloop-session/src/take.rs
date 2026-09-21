@@ -354,6 +354,13 @@ fn drain(
                     .write_sample(frame[0])
                     .and_then(|()| writer.write_sample(frame[1]))
                 {
+                    // A failed take owns its file. Nothing else will ever
+                    // name it -- the session hands back a `Failed` and
+                    // forgets the path -- so leaving it behind fills
+                    // `recordings/` with fragments a user has no way to tell
+                    // from a take that worked
+                    // (`reports/fable-2026-09-21.md`, finding 3).
+                    let _ = std::fs::remove_file(path);
                     return Drained::Failed(format!("writing {}: {error}", path.display()));
                 }
                 bucket[0] = bucket[0].max(frame[0].abs());
@@ -383,6 +390,9 @@ fn drain(
         }
     }
     if let Err(error) = writer.finalize() {
+        // Same rule as the write above: a header that was never finished is
+        // not a playable file, and nothing else is going to clean it up.
+        let _ = std::fs::remove_file(path);
         return Drained::Failed(format!("finishing {}: {error}", path.display()));
     }
     if written == 0 {

@@ -233,6 +233,76 @@ fn resting_effect_cost() {
     }
 }
 
+/// **What a loop fold costs.** A fold clears every tail-holding ring in the
+/// project inside one callback: a delay's two-second stereo line is 768 KB
+/// at 48 kHz, and a reverb is eight lines, four diffusers and a predelay.
+/// The cost scales with the *song*, not the block, and a fold is every few
+/// seconds in a loop-based instrument
+/// (`reports/fable-2026-09-21.md`, finding 2).
+///
+/// Sixteen channels, each with a delay, a reverb and a plate; the same
+/// arrangement measured with the loop range on and off, so the difference is
+/// the fold rather than the arrangement. The loop is one bar, so at 120 bpm a
+/// fold lands about every two seconds and the median block is unaffected --
+/// **read the maximum, not the median**, which is why both are printed.
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn loop_fold_cost() {
+    fn tail_project(channels: usize, looping: bool) -> Project {
+        let mut project = Project::default();
+        project.channels.clear();
+        for index in 0..channels {
+            let mut channel = ProjectChannel::sampler(index, 1);
+            for kind in [EffectKind::Delay, EffectKind::Reverb, EffectKind::Plate] {
+                channel.setup.push_effect(EffectSlotState::of_kind(kind));
+            }
+            project.channels.push(channel);
+        }
+        project.playback_mode = mooloop_core::PlaybackMode::Song;
+        project.playlist = vec![mooloop_core::PatternPlacement {
+            pattern: 0,
+            start_tick: 0,
+        }];
+        project.loop_range = mooloop_core::LoopRange {
+            start_tick: 0,
+            end_tick: mooloop_core::TICKS_PER_BAR,
+            enabled: looping,
+        };
+        project
+    }
+
+    fn blocks(project: &Project, frames: usize, blocks: usize) -> (u128, u128) {
+        let mut render = RenderState::from_project(SAMPLE_RATE, project, &[]);
+        render.play();
+        for _ in 0..64 {
+            render.process_block(frames);
+        }
+        let mut samples = Vec::with_capacity(blocks);
+        for _ in 0..blocks {
+            let started = Instant::now();
+            render.process_block(frames);
+            samples.push(started.elapsed().as_nanos());
+        }
+        samples.sort_unstable();
+        (samples[samples.len() / 2], *samples.last().expect("blocks"))
+    }
+
+    let channels = 16;
+    let frames = 512;
+    // Ten seconds of blocks: five folds at 120 bpm with a one-bar loop.
+    let count = SAMPLE_RATE as usize * 10 / frames;
+    println!();
+    println!("  {channels} channels of delay+reverb+plate, {frames}-frame block");
+    println!("  loop        median ns   max ns");
+    for looping in [false, true] {
+        let (median, max) = blocks(&tail_project(channels, looping), frames, count);
+        println!(
+            "  {:<10}  {median:>9}  {max:>7}",
+            if looping { "on" } else { "off" }
+        );
+    }
+}
+
 /// Drive is the only effect in the program that declares latency, and the
 /// only one whose cost at rest has no per-sample loop to point at. This says
 /// which of the two shapes that cost has: work per frame scales with the
