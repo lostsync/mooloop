@@ -55,15 +55,32 @@ they make this a plan rather than a research problem:
    a heuristic in the place where the markup already knows the answer.
    Retiring it is step 02's acceptance test.
 
-**The pair that already exists cannot be reused, and this is the trap to know
-about before starting.** `MiniKnob` and `TrimKnob` — which is what the mixer's
-pan and volume actually are — carry `modulation-edit-started`/`-finished`, so
-it looks as though the bracket is there and merely unwired. Every emission is
-gated: `assign-active` on the press, `modulation-active` on the release, the
-double-click and the scroll (`controls.slint:847`, `:860`, `:868-872`,
-`:879-883`). An ordinary value drag emits neither. It stays as it is — it
-carries *which parameter was touched*, which is what MIDI learn needs — and the
-new pair is orthogonal, ungated, and parameter-agnostic.
+**One widget has already solved this, and it is the reference
+implementation.** `MiniKnob` (`controls.slint:1608`) declares an **ungated**
+`edit-started`/`edit-finished` pair at `:1653-1654` -- *"base-value gesture
+boundaries, so a caller can coalesce one drag into one undo step"* -- emitted
+in the `else` of the assign check (`:1747`, `:1763`) and again from the
+double-click, the scroll and the arrow keys (`:1775-1779`, `:1786-1795`,
+`:1810-1816`). It covers every path step 03 has to cover, and `TrimKnob`
+(`:1845`) inherits it. **Copy its emission sites into the other seven widgets
+rather than designing them again.**
+
+It is already wired end to end for one surface: the modulation shelf routes
+it (`modulation-shelf.slint:1218-1219`) to `param-edit-started`/`-finished`
+in `main.slint`, and Rust turns that into the gesture
+`Session::begin_modulation_edit` opens. So the mixer's pan knobs need
+*wiring* rather than a new callback. (`LOOSE_ENDS.md` calling the piano roll
+and the slice editor the only gesture pair is out of date by this third one,
+which is also the best of the three to copy.)
+
+**The trap is narrower than it looks, and it is still a trap.**
+`ParameterKnob`, `KnobField`, `TimeDivisionKnob` and `KnobStack` carry only
+`modulation-edit-started`/`-finished`, whose every emission is gated on
+`assign-active` or `modulation-active` (`controls.slint:847`, `:861`,
+`:869-872`, `:880-883`). On those four the bracket looks present and unwired,
+and an ordinary value drag emits neither. That pair means *this parameter was
+named*, which is what MIDI learn needs; it stays as it is, and what those four
+need is `MiniKnob`'s other pair.
 
 ## The design in one paragraph
 

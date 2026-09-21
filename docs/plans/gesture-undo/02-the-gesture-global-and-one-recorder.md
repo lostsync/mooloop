@@ -26,7 +26,12 @@ together and the reason is written once.
 
 ## The Rust half
 
-Generalise what modulation already does. Today: `modulation_edit_before:
+Generalise what modulation already does. Note that its route is already fed
+by the **ungated** pair and not the gated one: the shelf wires
+`MiniKnob.edit-started` to `param-edit-started`
+(`modulation-shelf.slint:1218-1219`), which reaches
+`Session::begin_modulation_edit`. The end-to-end path exists; what it lacks is
+every other face. Today: `modulation_edit_before:
 Option<ProjectSnapshot>` (`session.rs:202`) holds the snapshot taken at the
 first change of a gesture, `modulation_gesture_open` (`modulation.rs:83`)
 tells a handler a gesture is in flight, and the entry is recorded when it
@@ -74,9 +79,12 @@ are **deleted**. Their replacement is not a heuristic, and the diff that
 deletes them is the evidence.
 
 `MixerFader` (`controls.slint:2263`), `MiniKnob` (`:1608`) and `TrimKnob`
-(`:1845`) are the widgets involved, which is three of the nine step 03 covers
-— so this step also proves the widget edit is small before the rest are done
-in bulk.
+(`:1845`) are the widgets involved, and they are the easy end of step 03 on
+purpose: **`MiniKnob` and `TrimKnob` already emit an ungated
+`edit-started`/`edit-finished`** (`:1653-1654`), so pan needs wiring and not a
+new callback, and `MixerFader` needs one `.up` arm on a `pointer-event`
+handler that already switches on `down` and `move` (`:2388-2399`). If the
+mechanism is right, this step is mostly deletion.
 
 ## Done when
 

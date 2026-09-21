@@ -678,16 +678,20 @@ and until it exists two grabs of the same fader less than 400 ms apart
 collapse into one entry -- the one case the timer gets wrong, and the
 cheapest possible wrong answer.
 
-**The pair a reader will reach for first does not work for this, and the
-reason is worth writing down.** `MiniKnob` and `TrimKnob` -- which is what
-the mixer's pan and volume actually are (`main.slint:3543`, `:3549`) -- do
-carry `modulation-edit-started`/`-finished`, so it looks as though the
-bracket is already there and merely unwired. Every emission of it is gated:
-`assign-active` on the press, `modulation-active` on the release, the
-double-click and the scroll (`controls.slint:847`, `:860`, `:868-872`,
-`:879-883`). An ordinary value drag emits neither, so wiring these callbacks
-through would bracket nothing and the timer would still be doing the work.
-The face change really is a new, ungated pair.
+**Which pair to reach for, since there are two and they are not
+interchangeable.** `MiniKnob` (`controls.slint:1608`) carries an **ungated**
+`edit-started`/`edit-finished` (`:1653-1654`) that fires on the drag, the
+double-click, the scroll and the arrow keys, and `TrimKnob` (`:1845`)
+inherits it -- so the mixer's pan knobs need wiring rather than a new
+callback, and the modulation shelf already routes exactly this pair through
+to Rust (`modulation-shelf.slint:1218-1219`). Its neighbour
+`modulation-edit-started`/`-finished` is gated on `assign-active` or
+`modulation-active` (`:847`, `:861`, `:869-872`, `:880-883`) and is not a
+value bracket; `ParameterKnob`, `KnobField`, `TimeDivisionKnob` and
+`KnobStack` carry only that one, which is why they look ready and are not.
+**A 2026-09-21 pass recorded the opposite of this** -- that no usable pair
+existed anywhere -- by reading `modulation-edit-*` and stopping before the
+two callbacks declared underneath it. MOO-60's investigation had it right.
 
 **Add Channel frees one allocation on the audio thread.** Not the automation
 lanes any more (`reports/fable-2026-09-21.md`, finding 1, fixed): what is
