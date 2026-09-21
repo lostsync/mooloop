@@ -414,6 +414,32 @@ to, so none of them blocks a step; Adam can overrule any of them.
 8. **Monitoring an app source.** Default: **not offered.** You are already
    hearing it, so the toggle belongs to hardware inputs only. Step 05.
 
+## Open, and not tracked by an open issue: a take has no owner at four edges
+
+**Added 2026-09-21.** Two consecutive review runs
+(`reports/fable-2026-09-20.md` finding 2, `reports/fable-2026-09-21.md`
+finding 3) reported the same four edges, and neither this file nor
+`LOOSE_ENDS.md` had recorded them -- so the second run had to rediscover what
+the first had found. MOO-55 was filed for them and is marked **Done** without
+a fix commit existing: `git log -- crates/mooloop-session/src/take.rs` is the
+four original `feat(audio-recording)` commits, and every symbol MOO-55's fix
+plan names (`finish_all`, `has_live`, `take_target`, `TakeMiss`,
+`NotASampler`, `SourceMissing`) has zero occurrences repo-wide. It needs
+reopening.
+
+Quit never joins a live drain (`take.rs:197`'s `.join()` sits behind the
+`is_finished()` skip at `:186-192`, and both quit handlers read only
+`session.dirty`); a `Drained::Failed` from a write (`:357`) or a finalize
+(`:386`) leaves a partial file in `recordings/`, since the only `remove_file`
+is the `written == 0` branch (`:388-390`); `apply_take`
+(`mooloop-ui/src/lib.rs:15047-15092`) applies a take to a channel that stopped
+being a sampler, with no kind check before `apply_loaded_sample` (`:15077`);
+and `record_press` (`take.rs:240-256`) arms on `!audio_input.is_off()` without
+checking the input still exists. Full detail in `LOOSE_ENDS.md`.
+
+This is step 04's contract rather than step 06's, so it is written here and
+not in `06-unused-takes.md`.
+
 ## Not in this plan
 
 - Per-track audio clips and anything else DAW-like (decision 1).
