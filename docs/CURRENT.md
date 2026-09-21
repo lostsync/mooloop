@@ -711,11 +711,8 @@ sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
   input sample-exact. It stops when REC is pressed again, the transport stops,
   or, with CLIP on, after LENGTH. Several samplers can record at once.
 - **A finished take becomes the sampler's sample**, on the channel that
-  recorded it whichever is selected, as one "Record Take" undo step -- unless
-  that channel has stopped being a sampler, or has gone, while the take was
-  in flight, in which case the recording stays in `recordings/` and the
-  status bar says so. A take that fails to write leaves no partial file
-  behind. Nothing is written into a pattern; the take is heard through whatever triggers the
+  recorded it whichever is selected, as one "Record Take" undo step. Nothing
+  is written into a pattern; the take is heard through whatever triggers the
   sampler. Takes are written to `recordings/` beside the settings file, and a
   save copies a take into the song whichever asset mode it uses.
 - **A take that has nowhere to land says so and keeps the file.** A take
@@ -723,7 +720,8 @@ sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
   records, and -- a channel being a dumb slot -- its sampler can be swapped
   for another device. Either way the recording stays in `recordings/` and the
   status bar says which happened, rather than the take being written onto a
-  channel that cannot show or save it.
+  channel that cannot show or save it. A take whose file could not be written
+  is reported the same way and leaves no partial behind.
 - **REC refuses a source that is gone.** If the channel's AUDIO input names a
   channel or track that has since been deleted, or the hardware input under a
   driver offering none, REC says so instead of recording silence. It is the
