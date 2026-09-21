@@ -456,10 +456,34 @@ impl EngineCommand {
     /// What belongs on the `false` side is a command that changes what the
     /// engine is *doing* rather than what the project *is*: nothing here is
     /// saved in the document, so nothing here can make a saved one stale.
+    /// Each entry is a claim about persistence, so check it against
+    /// `mooloop-project` before adding one -- `record_armed`, the input
+    /// monitor set and the transport position are all absent from the
+    /// document, which is why these four can be here.
+    ///
+    /// `SetInputMonitor` and `Seek` were the other two copies of the rule:
+    /// the monitor toggle's handler says monitoring "is performance state,
+    /// and a song does not reopen monitoring", `SetInputMonitor`'s own doc
+    /// comment says "never saved and off by default", and `seek_playlist`
+    /// says "where the transport is playing from is not something a song
+    /// should have to be saved to keep" -- so dragging the playhead dirtied
+    /// the document, and so did Home, which is a `Seek { tick: 0.0 }`.
+    /// Four copies, one reader, and the program wrong wherever they
+    /// disagreed.
+    ///
+    /// `TriggerChannelNote`, `ReleaseChannelNote` and `StopTake` are
+    /// arguable members of the same set and are deliberately not here:
+    /// auditioning a note changes nothing saved either, but that is Adam's
+    /// call rather than a defect, and a wrong `false` here loses work.
     pub fn edits_document(self) -> bool {
         !matches!(
             self,
-            Self::Play | Self::Pause | Self::Stop | Self::SetRecordArmed(_)
+            Self::Play
+                | Self::Pause
+                | Self::Stop
+                | Self::Seek { .. }
+                | Self::SetRecordArmed(_)
+                | Self::SetInputMonitor { .. }
         )
     }
 }
@@ -546,6 +570,21 @@ mod edits_document_tests {
         assert!(!EngineCommand::Play.edits_document());
         assert!(!EngineCommand::Pause.edits_document());
         assert!(!EngineCommand::Stop.edits_document());
+    }
+
+    /// **Moving the playhead and monitoring an input are not edits either.**
+    /// The other two copies of the rule, each a comment beside a sender that
+    /// the predicate had never heard of: Home is a `Seek { tick: 0.0 }`, so
+    /// pressing it marked the song unsaved.
+    #[test]
+    fn moving_the_playhead_or_monitoring_does_not_edit_the_document() {
+        assert!(!EngineCommand::Seek { tick: 0.0 }.edits_document());
+        assert!(!EngineCommand::Seek { tick: 4096.0 }.edits_document());
+        assert!(!EngineCommand::SetInputMonitor {
+            channel: 0,
+            on: true
+        }
+        .edits_document());
     }
 
     /// And the other side of it: a command that changes what the project *is*

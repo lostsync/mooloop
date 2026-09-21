@@ -571,6 +571,13 @@ arguable members of the same set and are Adam's call. Found 2026-09-21,
 `reports/fable-2026-09-21.md` finding 6, widened from two copies to four while
 filing it.
 
+**Closed 2026-09-21.** `EngineCommand::edits_document` exists, carries the
+rule in its doc comment and exempts all four: `Play`, `Pause`, `Stop`,
+`Seek`, `SetRecordArmed` and `SetInputMonitor`. The three audition and take
+commands are deliberately still outside it, as Adam's call. Its doc comment
+says to check a candidate against `mooloop-project` before adding it, since
+every entry is a claim that the thing is not persisted.
+
 **A pattern switch flushes every delay, reverb and plate in the project, and
 the code says two lines above that it must not.** `RenderState::seeked` means
 two different facts. `EngineCommand::Seek` sets it (`render.rs:4770`), and so
@@ -657,6 +664,17 @@ is still the general `gesture-begin`/`gesture-end` pair across every face,
 and until it exists two grabs of the same fader less than 400 ms apart
 collapse into one entry -- the one case the timer gets wrong, and the
 cheapest possible wrong answer.
+
+**The pair a reader will reach for first does not work for this, and the
+reason is worth writing down.** `MiniKnob` and `TrimKnob` -- which is what
+the mixer's pan and volume actually are (`main.slint:3543`, `:3549`) -- do
+carry `modulation-edit-started`/`-finished`, so it looks as though the
+bracket is already there and merely unwired. Every emission of it is gated:
+`assign-active` on the press, `modulation-active` on the release, the
+double-click and the scroll (`controls.slint:847`, `:860`, `:868-872`,
+`:879-883`). An ordinary value drag emits neither, so wiring these callbacks
+through would bracket nothing and the timer would still be doing the work.
+The face change really is a new, ungated pair.
 
 **Add Channel frees one allocation on the audio thread.** Not the automation
 lanes any more (`reports/fable-2026-09-21.md`, finding 1, fixed): what is
