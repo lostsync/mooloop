@@ -233,6 +233,47 @@ allowlist rather than left for a reader to rediscover. Without it the check
 would report a correct handler forever, and a check that is never clean stops
 being read.
 
+A tenth, `unrecorded-edit`, was added 2026-09-21 with MOO-50 and
+`docs/plans/gesture-undo/`, and it is a progress bar before it is a guard:
+its count on the day it was written was eighty-nine and its finish line is
+zero. What it reports is a `MainWindow` callback whose handler changes the
+document without recording an undo entry -- which is worse than a missing
+feature, because undo installs a whole-project snapshot: an edit that never
+reached the history is *destroyed* by the next Ctrl+Z, with no redo path.
+Turn a filter cutoff, draw a note, undo the note, lose the cutoff.
+
+Its lesson is about **resolution**, and it was learned by watching two drafts
+report a clean tree. A callback is wired as `window.on_channel_muted(...)`
+and the recording happens inside the closure, often inside something the
+closure calls, so the check has to follow calls -- and both naive ways of
+following them are wrong in the same direction. Indexing every `fn` by name
+and merging the duplicates resolved `X::new(` to thirty constructors at once,
+one of which records, so every rename and every device parameter came back
+*recorded*. Following every `.name(` resolved `window.set_source_preset_name(...)`
+-- a Slint setter -- to the `Session` method of the same name, and `.remove()`
+on a `Vec` to a note removal, so pure selection handlers came back sending
+`RemoveNote`. A name defined twice is now dropped rather than merged, and a
+call is followed only where its receiver says which index it belongs to:
+`window` is markup, `st`, `state`, `guard` and `self` are ours. **A resolver
+that guesses fails safe in the direction that prints a zero**, which is the
+one direction a check must not fail in.
+
+Two things it deliberately does not do. It does not match commands by
+constructor: `UiState::apply_step_edit` sends what `Session::toggle_step`
+returned, which is the exact shape that made `navigation-sends`' first draft
+silent, so a send is matched by the name the command is held under. And it
+does not restate the "not an edit" rule -- it parses
+`EngineCommand::edits_document`, the only copy of it, and a tree with no such
+function is reported as having no such rule rather than falling back to a
+list.
+
+It was validated at `4bef6dc~1`, where it reports the eleven mixer and rack
+verbs that commit went on to record, along with the four transport ones --
+the predicate arrived in that same commit, which is what the no-fallback
+behaviour above looks like from the outside. At `HEAD` those eleven are
+clean. A version that could not see them would print a zero that meant
+nothing.
+
 There is a third limit, and it is the one to keep in mind when a check comes
 back clean. **`repeated-line` matches bytes, so a rename hides a copy from it
 completely.** On 2026-09-12 it reported the effect event-splitting loop in ten

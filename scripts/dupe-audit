@@ -721,6 +721,229 @@ def navigation_sends():
     return hits
 
 
+# --- 10 ----------------------------------------------------------------
+def unrecorded_edit():
+    """Callbacks whose handler edits the document without recording it.
+
+    **An unrecorded edit is not merely un-undoable, it is destroyed.** Undo
+    installs a whole-project snapshot taken when the edit it undoes happened,
+    so anything that changed the document since, without reaching the
+    history, is thrown away by the next Ctrl+Z with no redo path. Turn a
+    filter cutoff, draw a note, undo the note: the cutoff goes too, silently,
+    and nothing in the interface said it would.
+    `docs/plans/gesture-undo/` is the plan that closes that, this check is
+    its progress bar, and step 07 is where it reads zero.
+
+    Written against the unfixed tree, which `AGENTS.md` asks for twice over:
+    `bar-arithmetic` written first found ten sites where the survey that
+    commissioned it had found eight, and `navigation-sends`' first draft
+    reported *nothing* against a tree with two violations. Validated by
+    running it at `4bef6dc~1`, before the eleven mixer and rack verbs were
+    recorded, where it reports those eleven -- with the four transport ones
+    for company, because `edits_document` arrived in that same commit. A
+    version that cannot see the eleven would print a zero that meant
+    nothing.
+
+    **It resolves a callback to its handler rather than grepping a line.**
+    `window.on_channel_muted(...)` is the wiring and the recording happens
+    inside the closure -- often inside something the closure calls, since
+    `on_channel_added` records in `add_channel_with_history` and the six step
+    verbs send their commands from `UiState::apply_step_edit`. So the closure
+    body is brace-matched and followed three calls deep.
+
+    **A name defined twice is not followed at all.** The first draft indexed
+    every `fn` by name and concatenated the duplicates, so `X::new(`
+    resolved to thirty unrelated constructors at once -- one of which
+    records -- and *every* rename and device parameter came back reading as
+    recorded. The check reported a clean tree because it had followed itself
+    into the wiring. An ambiguous name is dropped instead, which is why
+    `new`, `len` and `get` cost nothing here.
+
+    **What counts as editing the document is a send or a `mark_dirty`, and
+    both are load-bearing.** A note edit reaches the audio thread; a rename
+    does not reach it at all, because the name is not in the render graph, so
+    a check that knew only about sends would call every rename clean. And a
+    send is matched as a *send*, not as an `EngineCommand::` constructor:
+    `apply_step_edit` hands over a command the session built, which is the
+    same shape that made `navigation-sends`' first draft silent.
+
+    **The four that are not edits are read from the code that declares
+    them.** `EngineCommand::edits_document` (`mooloop-core/src/bridge.rs`) is
+    the only copy of the transport, record-arm, monitor and seek rule, and
+    finding 6 of `reports/fable-2026-09-21.md` is what a second copy cost.
+    This parses that function rather than restating its list -- and the three
+    audition commands below are exempted here because that same function's
+    doc comment says in so many words that they belong to the set and are
+    left out of it deliberately.
+
+    Selection and view callbacks need no exemption at all, which is worth
+    saying: MOO-57's rule is that looking at something is not an edit, so
+    they send nothing and dirty nothing and fall out on their own. The named
+    exemptions are the handlers that really do reach the document and are
+    right not to record.
+
+    What it misses: a `MainWindow` callback wired nowhere in Rust -- about a
+    hundred are declared for a sub-component to invoke, and a callback with
+    no handler is not an unrecorded edit; a handler that reaches the document
+    through a name defined twice, per above; and the `repeated-line` limit
+    restated -- this matches names, so a recorder reached under an alias is
+    invisible to it.
+    """
+    ui = ROOT / "crates" / "mooloop-ui" / "src"
+
+    # Every recorder. `with_gesture_history` is the general one
+    # `docs/plans/gesture-undo/` step 02 adds; naming it before it exists is
+    # deliberate, so this does not have to be edited by the commit that makes
+    # it read zero.
+    recorders = (
+        "record_project_history",
+        "with_project_history",
+        "with_continuous_history",
+        "with_gesture_history",
+        "queue_project_edit",
+        "queue_structural_edit",
+        "queue_history_target",
+    )
+
+    # Handlers that reach the document and are right not to record.
+    exempt = {
+        "on_undo": "undo is how the history is read, not something in it",
+        "on_redo": "redo is how the history is read, not something in it",
+        "on_pattern_selected": (
+            "the active pattern is also the record target, so `SetCurrentPattern`"
+            " has to cross -- the one send `navigation-sends` sanctions, for the"
+            " same reason and in the same words"
+        ),
+        "on_slice_auditioned": "auditioning a slice changes nothing that is saved",
+        "on_slice_audition_released": "the release of an audition, likewise",
+        "on_sampler_record_clicked": (
+            "arms and starts a take; what a take changes is the recording it"
+            " lands, which is recorded where it lands"
+        ),
+    }
+
+    # The "not an edit" set, read from the function that declares it rather
+    # than copied, plus the three the same function's doc comment says are
+    # arguable members left out of it on purpose. Those three are the
+    # auditions: a note played to hear it changes no saved state, so a
+    # handler whose only commands are these is not an unrecorded edit.
+    bridge = (CRATES / "mooloop-core" / "src" / "bridge.rs").read_text()
+    at = bridge.find("pub fn edits_document")
+    # A tree that has no such function has no such rule, and the check says
+    # so by reporting the transport verbs rather than by carrying a list of
+    # them. That is what the validation run at `4bef6dc~1` looks like: the
+    # predicate arrived in `4bef6dc` itself, so the eleven mixer verbs it
+    # must report come back with the four transport ones for company.
+    declaring = (_brace_body(bridge, at) or "") if at >= 0 else ""
+    not_an_edit = set(re.findall(r"Self::(\w+)", declaring))
+    not_an_edit |= {"TriggerChannelNote", "ReleaseChannelNote", "StopTake"}
+
+    # Two indexes, and the difference between them is what keeps this
+    # honest. `helpers` is the module-level functions of `mooloop-ui`, which
+    # is where a handler's recording is done for it --
+    # `add_channel_with_history` records for `on_channel_added`. `owned` is
+    # every method of `Session` and `UiState`, which is where a handler's
+    # *editing* is done for it: the six step verbs send their commands from
+    # `UiState::apply_step_edit`, and `on_record_armed_toggled` sends
+    # whatever `Session::set_record_armed` returned -- only that method knows
+    # it is a `SetRecordArmed` and so not an edit.
+    #
+    # A name defined twice is dropped rather than merged, and a call is
+    # followed only where its *receiver* says which index it belongs to. The
+    # two drafts that got this wrong are worth knowing about, because both
+    # made the check read cleaner than the tree. Merging duplicates resolved
+    # `X::new(` to thirty constructors at once, one of which records, so
+    # every rename and every device parameter came back recorded. Following
+    # any `.name(` resolved `window.set_source_preset_name(...)` -- a Slint
+    # setter -- to `Session::set_source_preset_name`, and `.remove(` on a
+    # `Vec` to a note-removal method, so pure selection handlers came back
+    # sending `RemoveNote`. A receiver of `window` is markup; a receiver of
+    # `st`, `state`, `guard` or `self` is ours.
+    sources = {path: path.read_text() for path in sorted(ui.glob("*.rs"))}
+    helpers: dict[str, str | None] = {}
+    for text in sources.values():
+        for match in re.finditer(r"^(?:pub(?:\([\w:]+\))? )?fn ([a-z_][\w]*)\s*[(<]", text, re.M):
+            found = _brace_body(text, match.end())
+            if found is not None:
+                helpers[match.group(1)] = None if match.group(1) in helpers else found
+
+    owned: dict[str, str | None] = {}
+    session_src = sorted((CRATES / "mooloop-session" / "src").glob("*.rs"))
+    for path in list(sources) + session_src:
+        text = sources.get(path) or path.read_text()
+        for match in re.finditer(r"^    (?:pub(?:\([\w:]+\))? )?fn ([a-z_][\w]*)\s*[(<]", text, re.M):
+            found = _brace_body(text, match.end())
+            if found is not None:
+                owned[match.group(1)] = None if match.group(1) in owned else found
+
+    # A free call: not a method, not a path. A method call on something of
+    # ours: `st.`, `state.`, `guard.`, `self.`, any of them through
+    # `.session`. Anything else is markup, a collection, or a crate we do not
+    # index, and is not followed.
+    free = re.compile(r"(?<![.\w:])([a-z_][\w]*)\s*\(")
+    ours = re.compile(r"\b(?:st|state|guard|self|session)(?:\.session)?\.([a-z_][\w]*)\s*\(")
+    # A send of a command the session built carries no constructor to match,
+    # which is the shape that made `navigation-sends`' first draft silent
+    # against a tree it was written for: `UiState::apply_step_edit` hands
+    # over what `Session::toggle_step` returned. It is matched by the name
+    # the command is held under rather than by any `.send(`, because the UI
+    # sends plenty of things that are not commands -- a chosen folder, a save
+    # request, an export -- down channels of their own, and counting those
+    # made every file verb an unrecorded edit.
+    opaque = re.compile(r"\.send\(\s*&?(?:command|cmd)\b")
+
+    def survey(body: str, depth: int, seen: frozenset) -> tuple[bool, set[str]]:
+        """Whether `body` records, and what it puts into the document."""
+        records = any(name in body for name in recorders)
+        edits = set(re.findall(r"(?:Engine|Structural)Command::(\w+)", body))
+        if "mark_dirty(" in body or re.search(r"\.dirty\s*=\s*true", body):
+            edits.add("mark_dirty")
+        unresolved = opaque.search(body) is not None
+        if depth:
+            reachable = [(name, helpers) for name in set(free.findall(body))]
+            reachable += [(name, owned) for name in set(ours.findall(body))]
+            for name, index in reachable:
+                if name in recorders or name in seen or index.get(name) is None:
+                    continue
+                deeper, deeper_edits = survey(index[name], depth - 1, seen | {name})
+                records = records or deeper
+                if deeper_edits:
+                    unresolved = False
+                edits |= deeper_edits
+        if unresolved and not edits:
+            edits.add("a command built where this cannot follow")
+        return records, edits
+
+    slint = (ROOT / "crates" / "mooloop-ui" / "ui" / "main.slint").read_text()
+    window = balanced(slint, slint.index("export component MainWindow"))
+    declared = {
+        "on_" + match.group(1).replace("-", "_")
+        for match in re.finditer(r"^\s*(?:pure\s+)?callback ([a-z][\w-]*)", window, re.M)
+    }
+
+    hits = []
+    for path, text in sources.items():
+        for match in re.finditer(r"\bwindow\.(on_[\w]+)\s*\(", text):
+            name = match.group(1)
+            if name not in declared or name in exempt:
+                continue
+            handler = _brace_body(text, match.end())
+            if handler is None:
+                continue
+            records, edits = survey(handler, 3, frozenset({name}))
+            if records or not edits or edits <= not_an_edit:
+                continue
+            line = text.count("\n", 0, match.start()) + 1
+            hits.append(
+                (
+                    f"{rel(path)}:{line}",
+                    f"{name} edits the document ({', '.join(sorted(edits))}) and "
+                    f"records nothing, so the next undo destroys it",
+                )
+            )
+    return hits
+
+
 def balanced(text, start):
     """The brace-balanced block opening at or after `start`."""
     depth = 0
@@ -757,6 +980,7 @@ CHECKS = {
     "bar-arithmetic": bar_arithmetic,
     "popup-close-order": popup_close_order,
     "navigation-sends": navigation_sends,
+    "unrecorded-edit": unrecorded_edit,
 }
 
 
