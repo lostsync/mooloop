@@ -1446,18 +1446,6 @@ transport running is the obvious answer, and an armed recording or a held note
 is the one that would actually annoy somebody if it were missed. Found
 2026-09-15.
 
-**`Session::input_monitor` is never pruned when a channel goes.**
-(`session/session.rs:76`.) It is a `BTreeSet<ChannelId>` and only
-`set_input_monitor` (`session/take.rs:267`) ever inserts or removes, so a
-monitored channel that is deleted leaves its id in the set for the life of
-the session. Harmless today, and for one reason worth stating rather than
-assuming: ids are never reused, so a stale entry can never be mistaken for a
-later channel — it is a few bytes that outlive their subject, not a wrong
-answer. The day an id *is* reused, this becomes a channel that opens
-monitoring a live microphone by itself, which the field's own doc comment
-says must never happen. Found 2026-09-20,
-`reports/fable-2026-09-20.md` finding 4.
-
 There is `claude/device-identity-rack-addressing-99yt4o` on the remote, one
 commit that is not in `origin/main` and has no local branch. Nobody has said
 whether it is wanted.

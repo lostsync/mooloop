@@ -580,6 +580,29 @@ mod tests {
         assert_eq!(session.monitor_seats(&project), [true, false]);
     }
 
+    /// A channel that is genuinely gone must lose its monitor toggle rather
+    /// than leave it for some later channel's id to inherit --
+    /// `docs/LOOSE_ENDS.md`'s `Session::input_monitor` entry, "is never
+    /// pruned when a channel goes."
+    #[test]
+    fn input_monitor_forgets_a_channel_that_is_removed() {
+        let mut session = crate::session::Session::default();
+        session.channels.push(crate::channel::ChannelState::new(1));
+        session.channels[1].id = mooloop_core::ChannelId(7);
+        session.set_input_monitor(0, true);
+        session.set_input_monitor(1, true);
+
+        let mut project = session.project_snapshot(120, 0);
+        project.remove_channel(1);
+        session.replace_project(&project, &[]);
+
+        assert!(session.is_monitoring(0), "channel 0 was not touched");
+        assert!(
+            !session.input_monitor.contains(&mooloop_core::ChannelId(7)),
+            "the removed channel's id must not linger in the set"
+        );
+    }
+
     #[test]
     fn a_take_is_named_by_date_time_and_channel() {
         let when = SystemTime::UNIX_EPOCH + Duration::from_secs(1_789_000_000);

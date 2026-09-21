@@ -14772,6 +14772,17 @@ fn install_project_in_ui(
     // reading. The pump resets them on its next tick.
     state.borrow_mut().bus_meters_stale = true;
     state.borrow_mut().replace_project(&project, samples, window);
+    if !keep_transport {
+        // `input_monitor`'s own doc comment promises "off for every channel
+        // of a song that has just opened" -- `replace_project` only prunes
+        // ids the incoming document does not have, so a load whose channel
+        // ids happen to coincide with the outgoing document's (every fresh
+        // project starts back at `ChannelId(0)`) would otherwise inherit a
+        // stale monitor toggle instead of starting unarmed. `keep_transport`
+        // is false exactly for a load and true for every in-song edit, which
+        // is what must not lose a channel's toggle on a move.
+        state.borrow_mut().session.input_monitor.clear();
+    }
     // **Still needed, and now only where it says something the bank could
     // not.** `samples` carries a project's *sources*; `replace_project`
     // re-renders any committed stretch, and a channel with a commit plays
