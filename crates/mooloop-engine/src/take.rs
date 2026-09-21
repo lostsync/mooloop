@@ -55,9 +55,11 @@ impl From<TakePhase> for mooloop_core::RecordFace {
 /// What a running take publishes: its phase, how many frames it has put in
 /// the ring, how many it could not, and where it started.
 ///
-/// Shared between the engine, the drain and the interface, written only by
-/// the engine. The drain reads [`Self::frames`] once the phase is `Ended` to
-/// know when it has everything.
+/// Shared between the engine, the drain and the interface. The counts are
+/// written only by the engine; the phase has one control-side writer,
+/// [`Self::end`], for the quit path where the engine is going away and would
+/// never write it. The drain reads [`Self::frames`] once the phase is `Ended`
+/// to know when it has everything.
 #[derive(Debug, Default)]
 pub struct TakeStatus {
     phase: AtomicU8,
@@ -95,6 +97,21 @@ impl TakeStatus {
     /// phase has left `Waiting`.
     pub fn start_tick(&self) -> f64 {
         f64::from_bits(self.start_tick.load(Ordering::Acquire))
+    }
+
+    /// End the take from the control side. The one phase write that is not
+    /// the engine's, and it exists for quit: the drain leaves only when the
+    /// phase is `Ended` and it has every frame, so a take still running when
+    /// the engine goes away would keep a drain waiting for a stop that can no
+    /// longer be sent.
+    ///
+    /// Deliberately *not* a general stop -- it does not touch [`Take::state`],
+    /// so the engine would go on feeding a take whose status says `Ended`.
+    /// Use [`Take::stop`] anywhere the engine is still alive. It is the same
+    /// store `stop` makes and is idempotent, so the two racing settles on
+    /// `Ended` either way.
+    pub fn end(&self) {
+        self.set_phase(TakePhase::Ended);
     }
 
     fn set_phase(&self, phase: TakePhase) {

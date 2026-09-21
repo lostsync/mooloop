@@ -718,6 +718,22 @@ sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
   behind. Nothing is written into a pattern; the take is heard through whatever triggers the
   sampler. Takes are written to `recordings/` beside the settings file, and a
   save copies a take into the song whichever asset mode it uses.
+- **A take that has nowhere to land says so and keeps the file.** A take
+  outlives what it was armed against: its channel can be deleted while it
+  records, and -- a channel being a dumb slot -- its sampler can be swapped
+  for another device. Either way the recording stays in `recordings/` and the
+  status bar says which happened, rather than the take being written onto a
+  channel that cannot show or save it.
+- **REC refuses a source that is gone.** If the channel's AUDIO input names a
+  channel or track that has since been deleted, or the hardware input under a
+  driver offering none, REC says so instead of recording silence. It is the
+  same rule the AUDIO row draws the source as missing by.
+- **Quitting with a take still recording asks first**, and finishes the take
+  either way once the window closes: the recording is written out to
+  `recordings/` complete, not left as a file whose header says it is empty. A
+  take in flight is not an unsaved *edit* -- it is not part of the song until
+  it lands on a channel -- so this is a separate question from the unsaved
+  changes prompt, and it is asked first.
 - **The hardware input is an AUDIO source** under both drivers. Under JACK,
   since 2026-09-19, it is "Audio In": `mooloop:in_l`/`in_r` wired to the first
   physical capture pair. Under Core Audio, since 2026-09-20, it is the
