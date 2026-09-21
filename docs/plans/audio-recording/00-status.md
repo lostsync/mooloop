@@ -6,7 +6,7 @@ plan (same `SCOPE.md` item, filed before the migration) and is kept open as
 the earlier tracking issue for the input side; MOO-16 is where the plan's
 current shape lives.
 
-**Written 2026-09-17. Steps 02-05 landed 2026-09-18, 01's JACK half 2026-09-19 and its Core Audio half 2026-09-20; step 06 is all that is left.** This is `SCOPE.md` §2 item 3
+**Written 2026-09-17. Steps 02-05 landed 2026-09-18, 01's JACK half 2026-09-19 and its Core Audio half 2026-09-20; step 06 is half landed, 2026-09-20.** This is `SCOPE.md` §2 item 3
 (audio input) together with the audio half of item 5 (recording), in the shape
 Adam settled on 2026-09-17, and since 2026-09-18 item 6 (resampling) as well,
 which turned out to be the same feature with the source inside the app.
@@ -435,41 +435,73 @@ to, so none of them blocks a step; Adam can overrule any of them.
     silent and destructive: arming on a missing input records digital silence
     and the finished take then *replaces the channel's sample*. Step 04.
 
-## Open, and not tracked by an open issue: a take has no owner at four edges
+## Closed: a take is owned at all four edges
 
-**Added 2026-09-21.** Two consecutive review runs
+**Reported twice, fixed 2026-09-21.** Two consecutive review runs
 (`reports/fable-2026-09-20.md` finding 2, `reports/fable-2026-09-21.md`
 finding 3) reported the same four edges, and neither this file nor
 `LOOSE_ENDS.md` had recorded them -- so the second run had to rediscover what
-the first had found. MOO-55 was filed for them and is marked **Done** without
-a fix commit existing: `git log -- crates/mooloop-session/src/take.rs` is the
-four original `feat(audio-recording)` commits, and every symbol MOO-55's fix
-plan names (`finish_all`, `has_live`, `take_target`, `TakeMiss`,
-`NotASampler`, `SourceMissing`) has zero occurrences repo-wide. It needs
-reopening.
+the first had found. All four are now closed by MOO-55:
 
-Quit never joins a live drain (`take.rs:197`'s `.join()` sits behind the
-`is_finished()` skip at `:186-192`, and both quit handlers read only
-`session.dirty`); a `Drained::Failed` from a write (`:357`) or a finalize
-(`:386`) leaves a partial file in `recordings/`, since the only `remove_file`
-is the `written == 0` branch (`:388-390`); `apply_take`
-(`mooloop-ui/src/lib.rs:15047-15092`) applies a take to a channel that stopped
-being a sampler, with no kind check before `apply_loaded_sample` (`:15077`);
-and `record_press` (`take.rs:240-256`) arms on `!audio_input.is_off()` without
-checking the input still exists. Full detail in `LOOSE_ENDS.md`.
+- **Quit no longer ends the process with the WAV header unpatched.**
+  `TakeRecorder::finish_all` ends every live take and joins every drain
+  against a deadline, `has_live` makes a running take its own prompt asked
+  ahead of the unsaved-changes one, `AppUi::finish_takes` runs it after the
+  event loop, and `impl Drop for TakeRecorder` backs it up. `TakeStatus::end`
+  is the one control-side phase write, needed because at quit the engine may
+  already be going away and the drain's exit condition could never be met.
+- **A failed drain removes its partial file**, from both the write and the
+  finalize route, through one `failed()` helper that also says so in the
+  message.
+- **A take lands only on a channel that is still a sampler**, via
+  `Session::take_target` and `TakeMiss`.
+- **REC refuses a source that has gone**, using the picker's rule --
+  the one the AUDIO row already draws -- and answering `SourceMissing`.
 
-**Two of the four closed the same day**, by the run that read this entry,
-and the other two were answered as decisions 9 and 10 above on 2026-09-21
-rather than left open.
-A failed write or finalize removes its partial file, as the `written == 0`
-branch beside it already did; and `apply_take` checks the channel is still a
-sampler, keeping the recording and naming it in the status bar when it is
-not. What is left is the pair that needs a decision rather than a patch --
-what quit should do about a draining take, and what arming should say when
-the input has gone. MOO-55 still needs reopening for those two.
+**The lesson is about the gap between Linear and the tree.** This entry
+previously read "MOO-55 is marked Done without a fix commit existing", and it
+was right about what it could see: the fix was committed locally and had not
+been pushed, so a reviewer checking `git log` and grepping for `finish_all`
+found nothing and correctly concluded the issue had been closed on nothing.
+Two of the four were then fixed a second time, independently. **An issue is
+not done until its fix is on `origin`**; closing it earlier costs somebody
+else the same work twice.
 
 This is step 04's contract rather than step 06's, so it is written here and
 not in `06-unused-takes.md`.
+
+## What step 06 has, and what it is still missing
+
+**The quit prompt landed 2026-09-20; the clean-up dialog did not**, on Adam's
+call, taking the half the step file itself says "handles the common case
+without ever opening the dialog".
+
+What is in: `mooloop-session/src/recordings.rs` answers which takes nothing
+refers to -- the open session's channels *and* every undo and redo snapshot,
+so a take an undo could reach back to is never offered -- and hands them to a
+`Trash` trait, whose real implementation is the desktop's own trash via the
+`trash` crate. Both quit paths ask, after the decision to quit is settled and
+never before it, so a cancelled quit tidies nothing away.
+
+**Deliberately outside the prompt: anything older than this run.** Only a
+crash leaves a shared-folder take behind, and it may be the only copy of a
+song that was never saved. A yes/no prompt is the wrong instrument for that
+question, so `UnusedTake::from_earlier_session` marks them and the quit path
+filters them out. Listing them, unticked and with the reason stated, is the
+dialog's job.
+
+Still missing from step 06, all of it dialog-side: the `recording.clean-up`
+command and its `ACTIONS.md` row, the two-list dialog with name/length/size/date
+and a running total, and the project-assets half -- sweeping a song's own
+`recordings/` folder, which needs the saved file on disk read as a third
+reference source. The scanner takes any set of projects, so that is an
+argument rather than a rewrite.
+
+**A note for whoever builds the dialog.** This codebase has no in-app dialog
+framework: `dialogs.rs` shells out to `zenity` and `osascript`. A two-list
+tickable dialog is a new Slint surface and therefore a `main.slint` crossing,
+which is the expensive kind of change (`AGENTS.md`, "order device work so the
+face contract comes last"). That cost is why the prompt went first.
 
 ## Not in this plan
 

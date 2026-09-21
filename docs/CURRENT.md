@@ -734,6 +734,18 @@ sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
   take in flight is not an unsaved *edit* -- it is not part of the song until
   it lands on a channel -- so this is a separate question from the unsaved
   changes prompt, and it is asked first.
+- **Quitting also offers to clear up takes nothing used.** Once quitting is
+  settled, takes recorded this session that neither the song nor its undo
+  history still points at are offered, as a count and a total size, and
+  **moved to the desktop trash** rather than deleted. A take an undo could
+  still reach is never offered, which is why the offer is made at quit:
+  closing the project is when history-only takes stop being reachable.
+  Answering no leaves everything alone, and cancelling the quit clears up
+  nothing.
+- **Takes left by a crash are not touched by that prompt.** A recording in
+  the shared folder older than this run of the app may be the only copy of a
+  take from a song that was never saved, so it is deliberately left for the
+  clean-up dialog (`audio-recording/06`), which is not built yet.
 - **The hardware input is an AUDIO source** under both drivers. Under JACK,
   since 2026-09-19, it is "Audio In": `mooloop:in_l`/`in_r` wired to the first
   physical capture pair. Under Core Audio, since 2026-09-20, it is the

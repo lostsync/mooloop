@@ -101,6 +101,7 @@ use mooloop_session::engine::{
     ProjectEditSender, StructuralCommandSender, TelemetryAction, TelemetryActionSender,
 };
 use mooloop_session::history::Entry as HistoryEntry;
+use mooloop_session::recordings;
 use mooloop_session::roll::NoteEdit;
 use mooloop_session::steps::StepEdit;
 use mooloop_session::take::{FinishedTake, TakeRecorder};
@@ -135,6 +136,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 const PUMP_INTERVAL_MS: u64 = 8;
 const INITIAL_BPM: i32 = 120;
@@ -1931,6 +1933,54 @@ fn feeding_track_color(
     buses.get(bus as usize).and_then(|setup| setup.bus.color)
 }
 
+/// The takes made this run that nothing in the app still refers to
+/// (`audio-recording/06`).
+///
+/// Crash leftovers are filtered out here rather than in the scan: the quit
+/// prompt is a yes/no question and must not be the thing that sweeps away a
+/// file that may be the only copy of an unsaved song's take. Those belong to
+/// the clean-up dialog, which can list them unticked and say why.
+fn unused_session_takes(st: &UiState, commands: &CommandState) -> Vec<recordings::UnusedTake> {
+    let referenced = recordings::referenced_by(&st.session, &commands.history);
+    recordings::unused_takes(
+        &settings::config_dir().join("recordings"),
+        &referenced,
+        st.session_start,
+    )
+    .into_iter()
+    .filter(|take| !take.from_earlier_session)
+    .collect()
+}
+
+/// Ask whether to move `unused` to the trash, and do it if told to.
+///
+/// **Blocks on a dialog**, so it belongs on a thread that may block: the
+/// menu's Quit runs it on the dialog thread it already spawns, and the
+/// window's close runs it where that path already blocks for its own
+/// confirmation.
+fn offer_unused_takes(unused: &[recordings::UnusedTake]) {
+    if unused.is_empty() {
+        return;
+    }
+    let (verb, them) = if unused.len() == 1 {
+        ("is", "it")
+    } else {
+        ("are", "them")
+    };
+    let question = format!(
+        "{} recorded this session {verb} not used by this song. Move {them} to the trash?",
+        recordings::summary(unused),
+    );
+    if !confirm_dialog(&question) {
+        return;
+    }
+    let (moved, failures) = recordings::discard_all(&recordings::DesktopTrash, unused);
+    log_info!("ui", "moved {moved} unused take(s) to the trash");
+    for failure in &failures {
+        log_error!("ui", "a take could not be moved to the trash: {failure}");
+    }
+}
+
 pub struct AppUi {
     window: MainWindow,
     _pump: Timer,
@@ -3358,6 +3408,13 @@ struct UiState {
     /// Every take that is running or waiting to be turned into a sample
     /// (`audio-recording/03` and `04`). Runtime state, never saved.
     takes: TakeRecorder,
+    /// When this run of the application began.
+    ///
+    /// What tells a take made in this session apart from one left in the
+    /// shared recordings folder by a crash (`audio-recording/06`). Only the
+    /// first kind is offered at quit: the second may be the only copy of a
+    /// take from a song that was never saved.
+    session_start: SystemTime,
     /// The driver's name for its hardware input, or `None` when it has none:
     /// the AUDIO menu's input row.
     audio_input_label: Option<String>,
@@ -3560,6 +3617,7 @@ impl UiState {
             automation_target_model,
             audio_sample_rate,
             takes: TakeRecorder::new(settings::config_dir().join("recordings")),
+            session_start: SystemTime::now(),
             // Both come from the driver, which this constructor deliberately
             // cannot reach: it takes no `EngineHandle` so the channel-rack
             // callbacks stay testable without one. `AppUi::new` fills them in
@@ -5786,6 +5844,7 @@ impl AppUi {
 
         {
             let st = state.clone();
+            let quit_commands = command_state.clone();
             window.on_quit_requested(move || {
                 // Same guard as Open Song: unsaved work must be confirmed
                 // away, and the dialog round-trip must not block the UI.
@@ -5808,12 +5867,19 @@ impl AppUi {
                         None
                     }
                 };
+                // Scanned here for the same reason the prompt is decided
+                // here -- the dialog thread cannot hold `UiState` -- and the
+                // list is plain data, so it crosses.
+                let unused = unused_session_takes(&st.borrow(), &quit_commands.borrow());
                 std::thread::spawn(move || {
                     if let Some(prompt) = prompt {
                         if !confirm_dialog(prompt) {
                             return;
                         }
                     }
+                    // After the decision to quit, never before it: a
+                    // cancelled quit must not have tidied anything away.
+                    offer_unused_takes(&unused);
                     let _ = slint::invoke_from_event_loop(|| {
                         slint::quit_event_loop().ok();
                     });
@@ -6371,6 +6437,7 @@ impl AppUi {
 
         {
             let st = state.clone();
+            let close_commands = command_state.clone();
             window.window().on_close_requested(move || {
                 // Closing the window is the other way out, and it asks the
                 // same two questions as the Quit menu row in the same order.
@@ -6379,18 +6446,21 @@ impl AppUi {
                 let prompt = {
                     let guard = st.borrow();
                     if guard.takes.has_live() {
-                        "A take is still recording. Finish it and quit?"
+                        Some("A take is still recording. Finish it and quit?")
                     } else if guard.session.dirty {
-                        "Quit without saving this song?"
+                        Some("Quit without saving this song?")
                     } else {
-                        return CloseRequestResponse::HideWindow;
+                        None
                     }
                 };
-                if confirm_dialog(prompt) {
-                    CloseRequestResponse::HideWindow
-                } else {
-                    CloseRequestResponse::KeepWindowShown
+                if let Some(prompt) = prompt {
+                    if !confirm_dialog(prompt) {
+                        return CloseRequestResponse::KeepWindowShown;
+                    }
                 }
+                let unused = unused_session_takes(&st.borrow(), &close_commands.borrow());
+                offer_unused_takes(&unused);
+                CloseRequestResponse::HideWindow
             });
         }
 
@@ -15343,6 +15413,9 @@ fn apply_take(
     // `reset_channel_source` had already cleared -- a sample the face cannot
     // draw and `project_snapshot` will not save, behind a "Record Take" undo
     // entry that restores nothing visible.
+    // `reports/fable-2026-09-21.md` finding 3 reported the same edge and fixed
+    // it inline here; the check lives in the session instead, so the rule has
+    // one home and one wording.
     let channel = match st.borrow().session.take_target(load.take.channel) {
         Ok(seat) => seat,
         Err(miss) => {
@@ -15350,26 +15423,6 @@ fn apply_take(
             return;
         }
     };
-    // The channel is still there, and may not still be a sampler: a take is
-    // in flight for as long as it takes to record and decode, and the source
-    // can be swapped underneath it. Loading the sample anyway wrote it into
-    // a device that cannot play it, set `sample_embedded`, and recorded an
-    // undo entry for all of it (`reports/fable-2026-09-21.md`, finding 3).
-    // The file is kept, exactly as it is when the channel has gone.
-    let is_sampler = st
-        .borrow()
-        .session
-        .channels
-        .get(channel)
-        .is_some_and(|channel| channel.kind == DeviceKind::Sampler);
-    if !is_sampler {
-        window.set_status_message(
-            "The take's channel is no longer a sampler; the recording is still in the \
-             recordings folder"
-                .into(),
-        );
-        return;
-    }
     let before = project_snapshot(&st.borrow(), &window);
     apply_loaded_sample(handle, st, weak, channel, loaded);
     if let Some(state) = st.borrow_mut().session.channels.get_mut(channel) {

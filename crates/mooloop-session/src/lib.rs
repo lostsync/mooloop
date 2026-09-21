@@ -65,6 +65,7 @@ pub mod modulation;
 pub mod notes;
 pub mod project;
 pub mod rack;
+pub mod recordings;
 pub mod roll;
 pub mod sample;
 pub mod sampler;
