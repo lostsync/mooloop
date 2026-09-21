@@ -508,18 +508,40 @@ continuous pair the gesture-token paragraph above covers; the eight switches
 are not, and are one snapshot each. Found 2026-09-21,
 `reports/fable-2026-09-21.md` finding 7.
 
-**Arming record marks a clean document dirty, and the rule saying it must not
-is a comment nothing reads.** `on_record_armed_toggled`
-(`mooloop-ui/src/lib.rs:9262-9264`) states the rule -- arming "must not make
-an untouched document look unsaved" -- and the code that decides is
+**"Not an edit" is written down four times and only one copy is read, so
+three exempt commands dirty the document anyway.** The copy that decides is
 `apply_engine_message`'s `edits` predicate
-(`mooloop-session/src/engine.rs:691-694`), which is
-`!matches!(command, Play | Pause | Stop)`. `SetRecordArmed` is not in that
-list, so every arm and disarm takes the title's `*` and makes quit ask about a
-document nothing changed; a control surface's transport arm
-(`mooloop-session/src/midi.rs:1100`) goes the same way. One predicate on
-`EngineCommand` read by both is the fix. Found 2026-09-21,
-`reports/fable-2026-09-21.md` finding 6.
+(`mooloop-session/src/engine.rs:691-693`), and it is
+`!matches!(command, Play | Pause | Stop)` -- three variants out of sixty-two.
+The other three copies are comments beside the senders, each stating an
+exemption the predicate does not grant:
+
+- **Record arm.** `on_record_armed_toggled` (`mooloop-ui/src/lib.rs:9262-9264`):
+  arming "must not make an untouched document look unsaved". `SetRecordArmed`
+  is not in the list, so every arm and disarm takes the title's `*` (
+  `update_document_title`, `lib.rs:3522-3536`) and makes quit ask about a
+  document nothing changed. `record_armed` is persisted nowhere in
+  `mooloop-project` or `mooloop-core`, so the flag has nothing behind it. A
+  control surface's arm goes the same way:
+  `apply_transport_control`'s `ToggleRecord` arm,
+  `mooloop-session/src/midi.rs:526-528`.
+- **Input monitoring.** `on_audio_monitor_toggled` (`lib.rs:9128-9131`): it "is
+  performance state, and a song does not reopen monitoring". `SetInputMonitor`'s
+  own doc comment (`core/src/bridge.rs:113-116`) says "Performance state, never
+  saved and off by default". It dirties.
+- **Seek.** `seek_playlist` (`mooloop-session/src/transport.rs:162-164`): "where
+  the transport is playing from is not something a song should have to be saved
+  to keep". So dragging the playhead dirties, and so does Home --
+  `TransportControl::ReturnToStart` (`midi.rs:525`) is a `Seek { tick: 0.0 }`.
+
+One `EngineCommand::edits_document()` read by `apply_engine_message`, with the
+rule in its doc comment, is the fix -- this is the repository's characteristic
+fault (`AGENTS.md`, "Duplication") in its purest form: four copies, three of
+them read by nobody, and the program wrong wherever they disagree.
+`TriggerChannelNote`/`ReleaseChannelNote` (audition) and `StopTake` are
+arguable members of the same set and are Adam's call. Found 2026-09-21,
+`reports/fable-2026-09-21.md` finding 6, widened from two copies to four while
+filing it.
 
 **A refused one-shot command is reported once per process and then never.**
 `Session::report_refused_command` (`mooloop-session/src/engine.rs:788-800`)
@@ -1502,6 +1524,37 @@ answer. The day an id *is* reused, this becomes a channel that opens
 monitoring a live microphone by itself, which the field's own doc comment
 says must never happen. Found 2026-09-20,
 `reports/fable-2026-09-20.md` finding 4.
+
+**A take has no owner at four edges, and the issue tracking it is marked
+Done.** MOO-55 moved to Done on 2026-09-21 with `startedAt` still null; no fix
+commit exists (`git log -- crates/mooloop-session/src/take.rs` is the four
+original `feat(audio-recording)` commits), and every symbol its fix plan names
+-- `finish_all`, `has_live`, `take_target`, `TakeMiss`, `NotASampler`,
+`SourceMissing` -- has zero occurrences repo-wide. There is no `impl Drop`
+anywhere in `crates/mooloop-session/src/`. All four edges are open:
+
+- **Quit loses a live take.** `take.rs`'s only `.join()` is at `:197` inside
+  `collect`, behind an `is_finished()` skip at `:186-192`, so a live drain is
+  never joined; both quit handlers (`mooloop-ui/src/lib.rs:5675-5687`,
+  `:6240-6247`) consult only `session.dirty`.
+- **A failed write leaves a partial file.** The only `remove_file` is the
+  `written == 0` branch (`take.rs:388-390`), so a `Drained::Failed` from a
+  write (`:357`) or from `finalize()` (`:386`) leaves a header-unpatched file
+  in `recordings/`.
+- **A take lands on a channel that stopped being a sampler.** `apply_take`
+  (`lib.rs:15047-15092`) finds the channel by id (`:15064-15075`) and calls
+  `apply_loaded_sample` (`:15077`) with no kind check, then sets
+  `sample_embedded` and records a "Record Take" history entry.
+- **Arming does not check the input still exists.** `record_press`
+  (`take.rs:240-256`) arms on `!channel.audio_input.is_off()` with no
+  `is_missing` check.
+
+Recorded here because two consecutive review runs reported it and neither the
+plan status nor this file remembered it: a plan that is not executed is also
+not remembered. Found 2026-09-20 (`reports/fable-2026-09-20.md` finding 2),
+re-confirmed open 2026-09-21 (`reports/fable-2026-09-21.md` finding 3) and
+verified against the history the same day. **MOO-55 needs reopening by its
+owner**; nothing here reopened it.
 
 There is `claude/device-identity-rack-addressing-99yt4o` on the remote, one
 commit that is not in `origin/main` and has no local branch. Nobody has said
