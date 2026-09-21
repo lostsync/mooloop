@@ -46,7 +46,7 @@ use mooloop_core::{
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor,
     ModPolarity, ModRack, ModRandomTrigger, ModStepTrigger,
     ControlRate, ControlTarget, ModulatorKind, ModulatorParams, OutletDescriptor,
-    PublishesOutlets, SendTap, Takeover, TransportControl,
+    PublishesOutlets, RecordFace, SendTap, Takeover, TransportControl,
     SignalShape,
     modulation::outlet_slot,
     aux_in, AuxInParams, EdgeRefusal,
@@ -5144,8 +5144,8 @@ impl UiState {
         };
         let view = self.takes.view(channel.id).filter(|view| view.is_live());
         let Some(view) = view else {
-            if window.get_sampler_record_state() != 0 {
-                window.set_sampler_record_state(0);
+            if window.get_sampler_record_state() != RecordFace::Idle.as_i32() {
+                window.set_sampler_record_state(RecordFace::Idle.as_i32());
                 window.set_sampler_record_peaks(ModelRc::default());
                 window.set_sampler_record_elapsed(SharedString::new());
             }
@@ -5156,18 +5156,20 @@ impl UiState {
             f64::from(self.audio_sample_rate) * 60.0 / bpm * f64::from(mooloop_core::time::BEATS_PER_BAR);
         let elapsed = view.frames as f64 / frames_per_bar.max(1.0);
         let (state, text, fill) = match view.phase {
-            mooloop_engine::TakePhase::Waiting => (1, String::new(), 1.0),
-            _ if channel.record.clip => {
+            phase @ mooloop_engine::TakePhase::Waiting => {
+                (RecordFace::from(phase), String::new(), 1.0)
+            }
+            phase if channel.record.clip => {
                 let bars = f64::from(channel.record.bars);
                 (
-                    2,
+                    RecordFace::from(phase),
                     format!("{elapsed:.1} / {} BARS", channel.record.bars),
                     (elapsed / bars).clamp(0.0, 1.0) as f32,
                 )
             }
-            _ => (2, format!("{elapsed:.1} BARS"), 1.0),
+            phase => (RecordFace::from(phase), format!("{elapsed:.1} BARS"), 1.0),
         };
-        window.set_sampler_record_state(state);
+        window.set_sampler_record_state(state.as_i32());
         window.set_sampler_record_elapsed(text.into());
         window.set_sampler_record_fill(fill);
         let bars = view.bars(RECORD_PAGE_BARS);
@@ -14645,13 +14647,13 @@ impl AppUi {
                     move || {
                         let Some(w) = weak.upgrade() else { return };
                         let (mut waited, mut recorded, mut peaks) = seen.get();
-                        match w.get_sampler_record_state() {
-                            1 => waited = true,
-                            2 => {
+                        match RecordFace::from_i32(w.get_sampler_record_state()) {
+                            Some(RecordFace::Waiting) => waited = true,
+                            Some(RecordFace::Recording) => {
                                 recorded = true;
                                 peaks = peaks.max(w.get_sampler_record_peaks().row_count());
                             }
-                            _ => {}
+                            Some(RecordFace::Idle) | None => {}
                         }
                         seen.set((waited, recorded, peaks));
                     },

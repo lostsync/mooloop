@@ -1876,7 +1876,7 @@ export component MainWindow inherits Window {
     in-out property <string> sampler-record-source;
     in-out property <bool> sampler-record-clip;
     in-out property <int> sampler-record-bars: 1;
-    in-out property <int> sampler-record-max-bars: 64;
+    in-out property <int> sampler-record-max-bars;
     // Whether recording is armed. A transport state rather than a document
     // one: opening a song and pressing play must not record.
     in-out property <bool> record-armed;
