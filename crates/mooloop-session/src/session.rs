@@ -1562,6 +1562,13 @@ impl Session {
         self.effect_target = EffectTarget::Channel(self.selected as u8);
         self.selected_note_id = None;
         self.selected_note_ids.clear();
+        // A channel this document no longer has must lose its monitor
+        // toggle rather than leave it for some later id to inherit: this is
+        // the pruning `docs/LOOSE_ENDS.md`'s `input_monitor` entry named
+        // missing. Keyed by identity like the rest of `channels`, so a
+        // channel that merely moved keeps its toggle -- only one that is
+        // genuinely gone loses its entry.
+        self.input_monitor.retain(|id| channels.iter().any(|channel| channel.id == *id));
         self.channels = channels;
     }
 

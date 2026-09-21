@@ -496,10 +496,144 @@ channel clipboard verbs were given the `ProjectEdit` path on purpose, "reuse
 the same whole-project undo pipeline") and nobody wrote down what it costs in
 the other.
 
+**Eleven console verbs belong to the same class, and the list above did not
+name them.** None of `on_channel_muted`, channel volume, channel pan, channel
+bus, `on_bus_muted`, bus volume, bus pan, bus output, console on/off,
+polarity or solo calls `record_project_history` (`mooloop-ui/src/lib.rs`
+`:8213`, `:8228`, `:8250`, `:8799`, `:8525`, `:8573`, `:8590`, `:8609`,
+`:8821`, `:8844`, `:8867` -- all eleven exact at 2026-09-21). Every field they
+edit is serialized into the project, so all eleven are inside the snapshot an
+undo installs. Mute a bus, draw a note, undo: the note goes and the mute
+stays.
+
+**They do not share one dirty path, and a fix hung off the command stream
+would miss four of them.** Seven dirty through `apply_engine_message`
+(`mooloop-session/src/engine.rs:701`); `on_bus_output_changed` (`:8609`) and
+`on_bus_solo_toggled` (`:8867`) send no engine command at all and are dirtied
+inside the session (`toggle_track_solo` → `mark_dirty`, `mixer.rs:323`);
+console (`:8821`) and polarity (`:8844`) send a command *and* set
+`session.dirty` in the UI handler.
+
+Pan and volume are the continuous pair; the rest are one snapshot each. Pan is
+already cheap: `MiniKnob` declares `edit-started()`/`edit-finished()`
+(`ui/controls.slint:1653-1654`) and the strip's instance
+(`mixer.slint:634-646`) wires only `changed(v)`, so it is two lines of
+forwarding. `MixerFader` (`controls.slint:2263`) has no such pair, but its
+`TouchArea` already switches on `pointer-event` for `down`/`move`
+(`:2388-2399`), so adding `up` is local to that widget. The working precedent
+is the modulation shelf, not the piano roll: `MiniKnob.edit-started/finished`
+→ `modulation-shelf.slint:700-701` → `main.slint:1663-1664`, `:5355-5356` →
+`lib.rs:9630`, `:9662`, with `modulation_gesture_open`
+(`session/modulation.rs:83`) suppressing the per-frame records. So the general
+gesture-pair follow-up below is **not** a dependency for these eleven.
+
+Two things to decide rather than inherit. `MixerBus::solo` is persisted
+(`core/src/mixer.rs:164`), so it is already reverted by any undo -- whether a
+solo click deserves its own *step* is a taste question. And channel volume is
+drawn twice, as the strip fader and as the source device's output-trim knob
+(`lib.rs:8240-8246`, `TrimKnob`, `controls.slint:1845`); that second face
+belongs to MOO-50, the field belongs here, and whichever lands first should
+bracket the gesture on both. Found 2026-09-21,
+`reports/fable-2026-09-21.md` finding 7; MOO-60.
+
+**"Not an edit" is written down four times and only one copy is read, so
+three exempt commands dirty the document anyway.** The copy that decides is
+`apply_engine_message`'s `edits` predicate
+(`mooloop-session/src/engine.rs:691-693`), and it is
+`!matches!(command, Play | Pause | Stop)` -- three variants out of sixty-two.
+The other three copies are comments beside the senders, each stating an
+exemption the predicate does not grant:
+
+- **Record arm.** `on_record_armed_toggled` (`mooloop-ui/src/lib.rs:9262-9264`):
+  arming "must not make an untouched document look unsaved". `SetRecordArmed`
+  is not in the list, so every arm and disarm takes the title's `*` (
+  `update_document_title`, `lib.rs:3522-3536`) and makes quit ask about a
+  document nothing changed. `record_armed` is persisted nowhere in
+  `mooloop-project` or `mooloop-core`, so the flag has nothing behind it. A
+  control surface's arm goes the same way:
+  `apply_transport_control`'s `ToggleRecord` arm,
+  `mooloop-session/src/midi.rs:526-528`.
+- **Input monitoring.** `on_audio_monitor_toggled` (`lib.rs:9128-9131`): it "is
+  performance state, and a song does not reopen monitoring". `SetInputMonitor`'s
+  own doc comment (`core/src/bridge.rs:113-116`) says "Performance state, never
+  saved and off by default". It dirties.
+- **Seek.** `seek_playlist` (`mooloop-session/src/transport.rs:162-164`): "where
+  the transport is playing from is not something a song should have to be saved
+  to keep". So dragging the playhead dirties, and so does Home --
+  `TransportControl::ReturnToStart` (`midi.rs:525`) is a `Seek { tick: 0.0 }`.
+
+One `EngineCommand::edits_document()` read by `apply_engine_message`, with the
+rule in its doc comment, is the fix -- this is the repository's characteristic
+fault (`AGENTS.md`, "Duplication") in its purest form: four copies, three of
+them read by nobody, and the program wrong wherever they disagree.
+`TriggerChannelNote`/`ReleaseChannelNote` (audition) and `StopTake` are
+arguable members of the same set and are Adam's call. Found 2026-09-21,
+`reports/fable-2026-09-21.md` finding 6, widened from two copies to four while
+filing it.
+
+**A pattern switch flushes every delay, reverb and plate in the project, and
+the code says two lines above that it must not.** `RenderState::seeked` means
+two different facts. `EngineCommand::Seek` sets it (`render.rs:4770`), and so
+does a Pattern-mode `SetCurrentPattern` under a running transport
+(`:4731`) -- there for a real reason, a note-off stranded in the pattern being
+left, and immediately followed by `on_discontinuity(ProgramChange)` (`:4739`)
+under a comment saying *"a node that flushes a tail on this is wrong ... it is
+here so the engine stops having one word for two different facts"*. It is
+still one word: the same block reaches `if seeked || jumped` (`:5708`) and
+sends `Discontinuity::Seek` too, so every device that declines
+`ProgramChange` clears anyway. `AUDIO_ARCHITECTURE.md`'s discontinuity rules
+name this exact artefact as the one worse than the problem being solved.
+
+The devices are not at fault -- each checks the kind and declines -- and
+`render.rs:12158-12172` is honest about it (*"the node hears both"*), which is
+why this survived review: the test documents the behaviour instead of
+rejecting it, and what it asserts (the program change is *said*) is true. The
+fix is that `seeked` carries the reason rather than a bool; MOO-59's step 1
+does it. Found 2026-09-21 while filing that issue -- not in
+`reports/fable-2026-09-21.md`, whose finding 2 is the neighbouring cost of the
+*loop fold* doing the same thing on purpose.
+
+**A refused one-shot command is reported once per process and then never.**
+`Session::report_refused_command` (`mooloop-session/src/engine.rs:788-800`)
+latches `engine_queue_refused` (`session.rs:192`) and nothing clears it, so a
+second full ring -- on a later song -- diverges the document from the engine
+silently. The window and session copies are written before the send in every
+caller and nothing rolls them back. Cheapest honest fix: clear the latch when
+the queue drains, or per document in `replace_project`. Found 2026-09-21,
+`reports/fable-2026-09-21.md` finding 8.
+
+**The channel and device clipboards outlive the song, carrying ids that named
+channels in the old one.** `CommandState::channel_clipboard`
+(`mooloop-session/src/command.rs:17`) is written at `lib.rs:8396` and `:8412`,
+read at `:1112` and `:8417`, and never set to `None`; the device clipboard is
+the same (`:15489`, read `:6392` and `:15511`). Three fields up in the same
+`CommandState`, `history` **is** cleared at both document boundaries
+(`lib.rs:13088` New Song, `:13464` Open Song) under a comment explaining why a
+snapshot must not cross a document. The clipboard was left out of that.
+
+Only `audio_input` carries a project id -- `ChannelMidiInput`
+(`core/src/midi.rs:382`) names a MIDI *port*, not a channel, so the report's
+"`audio_input` and `midi_input` ids" is half right. And the reason the paste
+is wrong is not that the id resolves to nothing: `assign_channel_ids`
+(`core/src/project.rs:1040`) gives an identity-less song `ChannelId(index)`
+and `next_channel_id` counts per document, so **low ids collide between
+songs** and a pasted `Channel(ChannelId(0))` names the new song's first
+channel -- inaudible, plausible, and wrong. `AudioInputSource::resolve` has no
+"departed" marker to fall back on, unlike Aux In's reseat
+(`aux_in.rs:219-227`, `DEPARTED_SOURCE`), so it reads as Off when it misses
+and as somebody else's channel when it hits. The same-song half is recorded
+below (`rescope_after`, `core/src/project.rs:1545`, does not touch the field).
+Whether a clipboard should survive a song is Adam's call; the ids inside it
+should not. Found 2026-09-21, `reports/fable-2026-09-21.md` finding 7; MOO-60.
+
 Not one patch per callback. A knob reports on every move frame, so making
-parameters undoable needs a gesture token per control, and only the piano
-roll and the slice editor have a `drag-started`/`finished` pair today -- so it
-is a `main.slint` contract change across every face, the eight-minute build
+parameters undoable needs a gesture token per control, and the piano roll, the
+slice editor and `MiniKnob` are the only things with a gesture pair today
+(`MiniKnob.edit-started`/`edit-finished`, `ui/controls.slint:1653-1654`,
+routed end to end for modulator params and nowhere else -- corrected
+2026-09-21, this sentence said two). `ParameterKnob` (`controls.slint:647`),
+which is what a device face wears, has none -- so the general case is still a
+`main.slint` contract change across every face, the eight-minute build
 `AGENTS.md` says to batch. `NameField.edited` fires on every *keystroke*, so
 a naively recorded rename is one undo step per character. Options: give the
 UI a general `gesture-begin`/`gesture-end` pair and route these through
@@ -700,6 +834,28 @@ in a way it is not for most caps. `Pattern::with_steps` builds
 builds `MAX_PATTERNS` of those, so the cap is multiplied by 65,536 before it
 is paid. Measure that before changing it. Found 2026-09-13, half-closed
 2026-09-14.
+
+**And the *inner* vector is not preallocated at all -- it is minted on the
+audio thread.** `AutomationLane::new` (`automation.rs:69-75`) is
+`Vec::with_capacity(MAX_AUTOMATION_POINTS_PER_LANE)`, 1024 points of 12 bytes
+= 12 KB, and `open_lane` pushes one from the callback: `OpenAutomationLane`
+and the first `UpsertAutomationPoint` on a fresh destination both reach it.
+Three paths free one there. `automation.rs:9-10` and `pattern.rs:165-167` both
+say this never happens, and they are true of the outer vector only. MOO-61,
+found 2026-09-21.
+
+**The trap, for whoever fixes it:** filling all eight lanes with
+points-reserved lanes at construction is 65,536 x 8 x 12,288 bytes = 6 GiB in
+524,288 `malloc`s per `RenderState` -- the multiplier this entry is about,
+walked into from the other direction. A vacancy scheme has to keep capacity 0
+until a lane opens and hand the opened lane over as a structural command (the
+`a576f17` routing-table shape), or reserve only the
+`active_patterns x active_channels` window off-thread. `ParamAddr::NONE` does
+not exist for the vacant marker; `DeviceId::UNASSIGNED` (`effect.rs:3354-3358`)
+is the sentinel this codebase already has. And "the lane set is full" is
+already two predicates -- `lanes.len() >= MAX_...` in the session
+(`session/automation.rs:58`) and `lanes.len() == lanes.capacity()` in the
+engine (`pattern.rs:172`) -- which a vacancy scheme silently breaks.
 
 **`MAX_MOD_ROUTES_PER_CHANNEL` is 16** (`modulation.rs:1290`) — two routes per
 module across eight slots. It was left there deliberately, to be raised once
@@ -1070,7 +1226,7 @@ their own passes; nobody has decided whether they should match.
 
 **A pasted channel keeps the original's audio input, so a copy of a channel
 that resamples itself resamples the original.** `channel_clipboard`
-(`session/session.rs:1737`) clones the whole `ProjectChannel`, `audio_input`
+(`session/session.rs:1736`) clones the whole `ProjectChannel`, `audio_input`
 included (`core/src/channel.rs:158`), and nothing on the way back in touches
 it: `queue_channel_insert` (`mooloop-ui/src/lib.rs:1495`) renames the copy
 and resizes its lanes, and `rescope_after` (`core/src/project.rs:1545`) walks
@@ -1522,24 +1678,45 @@ transport running is the obvious answer, and an armed recording or a held note
 is the one that would actually annoy somebody if it were missed. Found
 2026-09-15.
 
-**A take's three edges, two of them closed.** A take had no owner at three
-places (`reports/fable-2026-09-20.md` finding 2, carried in
-`reports/fable-2026-09-21.md` finding 3):
+**A take has no owner at four edges, and the issue tracking it is marked
+Done.** MOO-55 moved to Done on 2026-09-21 with `startedAt` still null; no fix
+commit exists (`git log -- crates/mooloop-session/src/take.rs` is the four
+original `feat(audio-recording)` commits), and every symbol its fix plan names
+-- `finish_all`, `has_live`, `take_target`, `TakeMiss`, `NotASampler`,
+`SourceMissing` -- has zero occurrences repo-wide. There is no `impl Drop`
+anywhere in `crates/mooloop-session/src/`. Two of the four edges were closed
+later the same day, by the run that read this one; the marks below say which,
+and **MOO-55 still needs reopening by its owner** for the two that are left.
 
-- A `Drained::Failed` from a write or a finalize left the partial file in
-  `recordings/`. **Closed 2026-09-21**: both paths `remove_file` the way the
-  `written == 0` branch beside them already did.
-- `apply_take` found the channel by id and applied the sample with no kind
-  check, so a channel that stopped being a sampler while its take was in
-  flight still received the sample, the `sample_embedded` flag and a "Record
-  Take" history entry. **Closed 2026-09-21**: it is checked, and the file is
-  kept and named in the status bar, exactly as when the channel has gone.
-  (A Haiku pass on 2026-09-21 reported this landed at `lib.rs:14389`; that
-  line is the playhead's `is_sampler` test in the pump, and was not this.)
-- **Still open:** nothing in `session/take.rs` is a `finish_all`, a `Drop`
-  or a join site, so a take still in flight when the application quits is
-  not waited for. That is the edge that needs a decision rather than a
-  patch: whether quit blocks on a draining take, abandons it, or asks.
+- **Quit loses a live take.** `take.rs`'s only `.join()` is at `:197` inside
+  `collect`, behind an `is_finished()` skip at `:186-192`, so a live drain is
+  never joined; both quit handlers (`mooloop-ui/src/lib.rs:5675-5687`,
+  `:6240-6247`) consult only `session.dirty`.
+- ~~**A failed write leaves a partial file.**~~ **Closed 2026-09-21.** The
+  only `remove_file` used to be the `written == 0` branch, so a
+  `Drained::Failed` from a write or from `finalize()` left a
+  header-unpatched file in `recordings/`; both paths remove it now.
+- ~~**A take lands on a channel that stopped being a sampler.**~~ **Closed
+  2026-09-21.** `apply_take` used to find the channel by id and call
+  `apply_loaded_sample` with no kind check, then set `sample_embedded` and
+  record a "Record Take" history entry. It checks now, and keeps the
+  recording and names it in the status bar, exactly as when the channel has
+  gone. (A Haiku pass reported this landed at `lib.rs:14389`; that line is
+  the playhead's `is_sampler` test in the pump, and was not this.)
+- **Arming does not check the input still exists.** `record_press`
+  (`take.rs:240-256`) arms on `!channel.audio_input.is_off()` with no
+  `is_missing` check.
+
+The two that remain both need a decision rather than a patch -- what quit
+should do about a draining take, and what arming should say when the input
+has gone -- which is why they were left rather than guessed at.
+
+Recorded here because two consecutive review runs reported it and neither the
+plan status nor this file remembered it: a plan that is not executed is also
+not remembered. Found 2026-09-20 (`reports/fable-2026-09-20.md` finding 2),
+re-confirmed open 2026-09-21 (`reports/fable-2026-09-21.md` finding 3) and
+verified against the history the same day. **MOO-55 needs reopening by its
+owner**; nothing here reopened it.
 
 **`Session::input_monitor` is never pruned when a channel goes.**
 (`session/session.rs:76`.) It is a `BTreeSet<ChannelId>` and only

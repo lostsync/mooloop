@@ -1622,7 +1622,21 @@ All four tests were run against the unfixed tree first and reported a peak of `0
 
 `plans/transport-discontinuity/` carries the rest — a command that lands at a musical edge, an `AudioNode` that can be told time moved, and the rule the whole thing serves, which is Adam's sentence: *"i just want to be able to move around the app freely without having audio issues."* He ruled on the two open questions in four words — *"immediate and yes"* — so the pattern selector keeps switching now rather than queueing, and a stopped transport stops releasing. The first of those retired step 02's own justification before it was built: queueing was going to be what removed the Pattern-mode choke, and with immediate chosen, nothing does, because under a running transport in Pattern mode the release is genuinely owed. The step stays, for the granularity rather than for this bug, and says so.
 
-## Sep 21 (the review) — a fix that would have cost six gigabytes
+## Sep 21 — reading the review rather than believing it
+
+`reports/fable-2026-09-21.md` closed with five plans. Plan E was documentation and was done here; A, B, C and D went to one investigator each with the same brief — read every cited line, report the drift, and file the issue — and became MOO-61, MOO-58, MOO-59 and MOO-60. The report is good and its citations are nearly all exact. Everything below is what the verification pass added, which is the argument for doing one.
+
+**The word was fixed and the flag was not.** Yesterday's entry ends on the fault underneath the pattern-switch glitch: *`seeked` is the engine's only vocabulary for "the program changed"*. Step 01 gave it one — `Discontinuity::ProgramChange`, said at `render.rs:4739` under a comment stating that a node flushing a tail on this is wrong and that it exists *"so the engine stops having one word for two different facts"*. Two lines above it, `self.seeked = true` is still set, because the stranded note-off is still owed. So the same block reaches `if seeked || jumped` and says `Seek` as well, and every delay, reverb and plate in the project flushes on a pattern switch — the exact artefact `AUDIO_ARCHITECTURE.md` names as worse than the problem being solved. The devices are all correct; each declines `ProgramChange` and cannot see the `Seek` behind it. The test is honest about it — *"the node hears both"* — and asserts the true half, which is why it survived. A new word in an enum does not split a bool that two call sites still share.
+
+**Plan A would have allocated six gigabytes at startup.** Its finding is real: `open_lane` mints a 12 KB points vector on the callback, under two doc comments promising it does not. Its fix was to fill every lane at construction with capacity reserved — and `Sequencer::new` builds 256 patterns x 256 channels, so that is 6 GiB in 524,288 `malloc`s per `RenderState`. `LOOSE_ENDS.md` has recorded that 65,536x multiplier since Sep 13 and says to measure before paying it; the plan walked into it from the other side. The issue carries a corrected shape. A plan written from a finding is not the same artefact as the finding.
+
+**"Not an edit" is written down four times.** The report found two copies and one reader. There are four: record arm, input monitoring, and `seek_playlist`, against a predicate that is `!matches!(command, Play | Pause | Stop)` — three variants of sixty-two. So dragging the playhead marks the document dirty, and so does pressing Home, each against a comment saying it must not. The characteristic fault of this codebase, in its purest form: four copies, three read by nobody, and the program wrong wherever they disagree.
+
+**And MOO-55 is marked Done with no fix.** It moved to Done on Sep 21 with `startedAt` null; `git log -- session/take.rs` is the four original commits, and every symbol its own fix plan names has zero occurrences repo-wide. All four take-ownership edges are open — quit never joins a live drain, a failed write leaves a partial file in `recordings/`, `apply_take` still applies a take to a channel that stopped being a sampler, and arming never checks the input still exists. Two consecutive runs reported them and neither this tree nor the plan status remembered, so the second had to rediscover the first's work. They are written down now, in `LOOSE_ENDS.md` and under step 04 in `plans/audio-recording/00-status.md`. **A tracker is not a memory.** The lesson is the one this repository keeps relearning about its tests: a green suite and a closed ticket are both claims, and neither is evidence.
+
+Smaller: the source popup's address in `plugin-hosting`'s blocker 6 was corrected on Sep 20 and invalidated the same day by `18f560b` moving it to `channel-rack.slint`; `AUDIO_ARCHITECTURE.md` still said the routing-table fix was "reverted unmerged ... until it is reapplied", a hundred lines from the paragraph saying it had been; `midi_input` carries no channel id, so only half the clipboard claim stands, and the reason the other half is wrong is a collision rather than a miss — `assign_channel_ids` hands an identity-less song `ChannelId(index)`, so low ids mean different channels in different documents; four of the eleven console verbs do not dirty through the command path a fix would naturally hang off; pan already has the gesture pair the plan assumed it lacked; and a delay ring is 750 KiB, not the 768 `effect.rs` claimed.
+
+## Sep 21 (the review, second pass) — building what the first pass filed
 
 The 2026-09-21 report's first finding was that opening an automation lane
 mallocs 12 KB inside the audio callback and that three paths free one there,
@@ -1669,6 +1683,7 @@ finding was right that the fold and the seek were one word and should not be
 -- `Discontinuity::LoopFold` exists now, changing no sound, so that a device
 *can* keep its tail across a lap -- and wrong that the memset was the cost.
 Both halves were worth having; only one of them was worth hurrying.
+
 
 ## Open threads
 

@@ -1642,7 +1642,15 @@ land on its own when it starts to matter:
   reveals the sidebar and aims the keys at it; Up/Down move a highlighted
   row, Right opens a closed folder or steps into it, Left closes an open one
   or climbs to its parent, Enter does what clicking the row does, and
-  Ctrl+Enter loads a sample or preset into the selected channel. It has no
+  Ctrl+Enter loads a sample or preset into the selected channel. **A move
+  that lands on a sample auditions it** — the same inspection a click on it
+  runs, so the info pane fills and, with the preview armed, the file plays;
+  so the arrows walk a folder by ear. A row that is not a sample is only
+  highlighted: a preset's click *loads* it, and a walk down the PRESETS tab
+  must not install a device per keypress. An inspection decodes on a worker
+  thread and several are in flight whenever the keys outrun a decode, so a
+  reply about a sample the selection has already left is dropped rather than
+  landing on the pane and in the speakers over the row that replaced it. It has no
   `FocusScope` of its own and deliberately does not get one — a nested scope
   swallows the pointer press that focuses it, which is the
   two-clicks-per-control bug `tests/first_click.rs` exists for. The root

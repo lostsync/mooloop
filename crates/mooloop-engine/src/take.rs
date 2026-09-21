@@ -35,6 +35,23 @@ pub enum TakePhase {
     Ended,
 }
 
+impl From<TakePhase> for mooloop_core::RecordFace {
+    /// What the RECORD page shows for a take in this phase.
+    ///
+    /// `Ended` maps to `Idle` because a finished take is not on the page: the
+    /// interface filters it out before it asks (`TakeView::is_live`), so
+    /// `Ended` reaches this arm only if that filter changes. Written here
+    /// rather than in core because `TakePhase` is this crate's and core
+    /// depends on nothing (MOO-54).
+    fn from(phase: TakePhase) -> Self {
+        match phase {
+            TakePhase::Waiting => Self::Waiting,
+            TakePhase::Recording => Self::Recording,
+            TakePhase::Ended => Self::Idle,
+        }
+    }
+}
+
 /// What a running take publishes: its phase, how many frames it has put in
 /// the ring, how many it could not, and where it started.
 ///

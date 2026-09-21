@@ -61,7 +61,7 @@ pub use control::{
 };
 pub use input::{
     audio_input_is_off, audio_input_taps, audio_source_rows, AudioInputPicker, AudioInputSource,
-    AudioSourceRow, AudioTap, SamplerRecord, MAX_RECORD_BARS,
+    AudioSourceRow, AudioTap, RecordFace, SamplerRecord, MAX_RECORD_BARS,
 };
 pub use midi::{
     cc_bucket, ChannelMidiInput, MidiChannelFilter, MidiInputRoute, MidiInputSource, MidiKind,

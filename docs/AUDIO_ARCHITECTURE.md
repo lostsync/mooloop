@@ -200,11 +200,19 @@ returns through a bounded reclaim channel and is destroyed on the control
 thread. If reclaim capacity is unavailable, the executor applies backpressure
 by leaving the structural edit queued; it never drops the object itself.
 
-The three routing tables were the one exception to the second bullet, and
-are not any more: `a576f17` reapplied the fix, and the paragraph a hundred
-lines above -- *Two mechanisms cross the boundary* -- describes what they are
-now. Recorded 2026-09-20 from `reports/fable-2026-09-20.md` finding 1, closed
-2026-09-21.
+Every structural edit now honours the second bullet. The three routing
+tables -- MIDI routing, audio-input routing and the buffer MIDI map -- were
+the one exception: `ArcSwap`s the callback `load()`ed, so a control-thread
+`store` landing while a guard was live left the audio thread the last owner
+of a `Vec` and freed it in the callback. They are plain boxes behind
+`StructuralCommand::SetMidiRouting`, `SetAudioInputRouting` and `SetBufferMidi`
+since `a576f17` (2026-09-20, after `db02366` was reverted unmerged by
+`eb4f605` to clear a merge); see *Two mechanisms cross the boundary* above,
+which is the current statement of the rule, and `render.rs`'s `buffer_midi`
+doc comment. The per-channel sample slot remains an `ArcSwapOption`, retired
+through the reclaim ring by `load_full`. Recorded 2026-09-20 from
+`reports/fable-2026-09-20.md` finding 1; corrected 2026-09-21 from
+`reports/fable-2026-09-21.md` finding 9.
 
 ## DSP Node Contract
 
@@ -245,10 +253,28 @@ to silence:
   wanting that gets it by not implementing the method, which is the default.
 - **Read the kind.** A seek invalidates audio in flight; a program change does
   not, and flushing a reverb because the player looked at another pattern is a
-  worse artefact than the one this fixes.
+  worse artefact than the one this fixes. **Not honoured today** (found
+  2026-09-21): a Pattern-mode `SetCurrentPattern` under a running transport
+  sets `RenderState::seeked` (`render.rs:4731`) so its stranded note-off is
+  emitted, then says `ProgramChange` (`:4739`) -- and the same block reaches
+  `if seeked || jumped` (`:5708`) and says `Seek` as well. Every delay, reverb
+  and plate in the project flushes on a pattern switch, which is the artefact
+  this bullet forbids. The word is right and the *flag* still means two
+  things, two lines under a comment saying it does not. The devices are
+  correct: each declines `ProgramChange` and has no way to know the `Seek`
+  behind it is the same event. Recorded in `LOOSE_ENDS.md`.
 - A node that cannot honour it declines in writing. Aux In and the
   retained-audio buffer both do; the buffer's ring is a performance somebody
   is playing, not audio from the old position.
+- **A device that contains a device forwards every hook.** A node holding
+  another node's state -- an effect nested inside an instrument, and in time a
+  plugin inside a slot -- is the only thing that can reach it: the executor's
+  fan-out stops at the node it installed. Declining is a decision; not
+  forwarding is an oversight, and it looks identical from outside. ML-P8 holds
+  a `Chorus` whose own `on_discontinuity` empties its line, and nothing calls
+  it, so a chorused ML-P8 rings its stale line across a seek
+  (`reports/fable-2026-09-21.md` finding 4). Written down 2026-09-21, before
+  the plugin slot needs it.
 
 `Event::Choke` remains, and is still correct for what it names: a choke group
 cutting a hi-hat off. What changed is that the host stopped borrowing it to
