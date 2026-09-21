@@ -307,17 +307,32 @@ this plan.
    the one number in this list that has never moved.
 
    **The source popup claim is wrong, and has been since 2026-09-18.** It
-   *is* driven by a model: the popup is `main.slint:3716` and its rows are
-   `for label[i] in SourceKinds.labels` at `:3742`, since `3fff067` — which
-   landed for this exact fault, the menu having offered four of the eight
-   kinds for months. (`main.slint:3619` was wrong even on 2026-09-16: it was
-   piano-grid pointer handling that day too.) What survives is narrower and
-   is what step 08 must build: the model is a literal spelled in markup —
-   eight strings at `channel-rack.slint:61-66`, held against
-   `DeviceKind::label()` by `tests/source_kind_menu.rs` — so no row can be
-   added from Rust at runtime, which is the whole job of a scanned plugin
-   list. The popup's `for` is the shape step 08 wants; its source of rows is
-   not. The effect menu needs both. **Step 08.**
+   *is* driven by a model. **Re-addressed 2026-09-21** (`18f560b`, MOO-53,
+   moved it the same day the previous correction was written): the popup is
+   `AddSourceButton` in `crates/mooloop-ui/ui/channel-rack.slint:81`, its
+   `PopupWindow` at `:94`, and its rows are `for label[i] in
+   SourceKinds.labels` at `:113`. `main.slint:3716` is a `spacing` line and
+   `main.slint` has no loop over `SourceKinds.labels` at all -- it imports
+   `AddSourceButton` (`:33`) and uses the list as a combo-box `options`
+   (`:3837`) and a name lookup (`:4515`). (`main.slint:3619` was wrong even
+   on 2026-09-16: it was piano-grid pointer handling that day too.) What
+   survives is narrower and is what step 08 must build: the model is a
+   literal spelled in markup — eight strings in `global SourceKinds` at
+   `channel-rack.slint:65-70`, held against `DeviceKind::label()` by
+   `tests/source_kind_menu.rs` — so no row can be added from Rust at
+   runtime, which is the whole job of a scanned plugin list. The popup's
+   `for` is the shape step 08 wants; its source of rows is not. The effect
+   menu needs both. **Step 08.**
+
+   Two things this correction is the second instance of, and they are the
+   lesson rather than the addresses. **Search by name, not by line** -- this
+   file already says so, and every *count* in it has stayed right while its
+   line citations drifted 13 to 61 lines. And `tests/source_kind_menu.rs`
+   was entirely correct for the whole time the menu added no channel: it
+   held the right labels in the right order against the right table, and
+   nothing in it pressed the button (`AGENTS.md`, the `popup-close-order`
+   check). Step 08 replaces this markup literal with a Rust-supplied model;
+   whatever guards it must click it.
 7. **Found 2026-09-17, and not solved by this plan.** A channel paste, delete
    or move rebuilds the whole `RenderState` through `install_project`
    (`LOOSE_ENDS.md`, "Every structural edit stops the song"). `PluginSlotId`

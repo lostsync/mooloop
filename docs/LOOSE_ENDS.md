@@ -496,6 +496,51 @@ channel clipboard verbs were given the `ProjectEdit` path on purpose, "reuse
 the same whole-project undo pipeline") and nobody wrote down what it costs in
 the other.
 
+**Eleven console verbs belong to the same class, and the list above did not
+name them.** None of `on_channel_muted`, channel volume, channel pan, channel
+bus, `on_bus_muted`, bus volume, bus pan, bus output, console on/off,
+polarity or solo calls `record_project_history` (`mooloop-ui/src/lib.rs`
+around `:8213`, `:8228`, `:8250`, `:8799`, `:8525`, `:8573`, `:8590`, `:8609`,
+`:8821`, `:8844`, `:8867`; each sends its command and dirties through
+`apply_engine_message`, `mooloop-session/src/engine.rs:701`). Mute a bus, draw
+a note, undo: the note goes and the mute stays. Volume and pan are the
+continuous pair the gesture-token paragraph above covers; the eight switches
+are not, and are one snapshot each. Found 2026-09-21,
+`reports/fable-2026-09-21.md` finding 7.
+
+**Arming record marks a clean document dirty, and the rule saying it must not
+is a comment nothing reads.** `on_record_armed_toggled`
+(`mooloop-ui/src/lib.rs:9262-9264`) states the rule -- arming "must not make
+an untouched document look unsaved" -- and the code that decides is
+`apply_engine_message`'s `edits` predicate
+(`mooloop-session/src/engine.rs:691-694`), which is
+`!matches!(command, Play | Pause | Stop)`. `SetRecordArmed` is not in that
+list, so every arm and disarm takes the title's `*` and makes quit ask about a
+document nothing changed; a control surface's transport arm
+(`mooloop-session/src/midi.rs:1100`) goes the same way. One predicate on
+`EngineCommand` read by both is the fix. Found 2026-09-21,
+`reports/fable-2026-09-21.md` finding 6.
+
+**A refused one-shot command is reported once per process and then never.**
+`Session::report_refused_command` (`mooloop-session/src/engine.rs:788-800`)
+latches `engine_queue_refused` (`session.rs:192`) and nothing clears it, so a
+second full ring -- on a later song -- diverges the document from the engine
+silently. The window and session copies are written before the send in every
+caller and nothing rolls them back. Cheapest honest fix: clear the latch when
+the queue drains, or per document in `replace_project`. Found 2026-09-21,
+`reports/fable-2026-09-21.md` finding 8.
+
+**The channel and device clipboards outlive the song, carrying ids that named
+channels in the old one.** `CommandState::channel_clipboard`
+(`mooloop-session/src/command.rs:17`) is written at `lib.rs:8396` and `:8412`
+and assigned nowhere else, so New Song and Open Song keep it; a channel copied
+in one song pastes into the next with its `audio_input` and `midi_input` ids
+intact, naming whatever channel happens to hold them now. The same-song half
+is recorded separately (`rescope_after`, `core/src/project.rs:1545`, does not
+touch the field); the device clipboard has the same lifetime. Whether a
+clipboard should survive a song is Adam's call; the ids inside it should not.
+Found 2026-09-21, `reports/fable-2026-09-21.md` finding 7.
+
 Not one patch per callback. A knob reports on every move frame, so making
 parameters undoable needs a gesture token per control, and only the piano
 roll and the slice editor have a `drag-started`/`finished` pair today -- so it

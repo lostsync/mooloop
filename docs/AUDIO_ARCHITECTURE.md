@@ -186,22 +186,19 @@ returns through a bounded reclaim channel and is destroyed on the control
 thread. If reclaim capacity is unavailable, the executor applies backpressure
 by leaving the structural edit queued; it never drops the object itself.
 
-One thing on the audio thread does not honour the second bullet yet. The
-three routing tables — MIDI routing, audio-input routing and the buffer MIDI
-map — are `ArcSwap`s the callback `load()`s rather than boxes the command
-stream hands over, so a control-thread `store` landing while a guard is live
-leaves the audio thread the last owner of a `Vec` and frees it in the
-callback. The window is open every block now, not only under a held note:
-`advance_takes` holds a guard across its whole per-channel loop whenever any
-strip has a live take, and `monitors_input` takes a fresh one per live
-channel per block. The fix — the three tables become plain boxes behind
-structural commands, the displaced box leaving through the reclaim ring like
-every other — was written, verified and landed as `db02366`, then reverted
-unmerged by `eb4f605` to clear a merge, *"deferred, not abandoned"*. Until it
-is reapplied these are the one `Arc` the audio thread still loads, and the
-rule above is the standard they are measured against rather than a
-description of them. Recorded 2026-09-20 from `reports/fable-2026-09-20.md`
-finding 1.
+Every structural edit now honours the second bullet. The three routing
+tables -- MIDI routing, audio-input routing and the buffer MIDI map -- were
+the one exception: `ArcSwap`s the callback `load()`ed, so a control-thread
+`store` landing while a guard was live left the audio thread the last owner
+of a `Vec` and freed it in the callback. They are plain boxes behind
+`StructuralCommand::SetMidiRouting`, `SetAudioInputRouting` and `SetBufferMidi`
+since `a576f17` (2026-09-20, after `db02366` was reverted unmerged by
+`eb4f605` to clear a merge); see *Two mechanisms cross the boundary* above,
+which is the current statement of the rule, and `render.rs`'s `buffer_midi`
+doc comment. The per-channel sample slot remains an `ArcSwapOption`, retired
+through the reclaim ring by `load_full`. Recorded 2026-09-20 from
+`reports/fable-2026-09-20.md` finding 1; corrected 2026-09-21 from
+`reports/fable-2026-09-21.md` finding 9.
 
 ## DSP Node Contract
 
@@ -246,6 +243,15 @@ to silence:
 - A node that cannot honour it declines in writing. Aux In and the
   retained-audio buffer both do; the buffer's ring is a performance somebody
   is playing, not audio from the old position.
+- **A device that contains a device forwards every hook.** A node holding
+  another node's state -- an effect nested inside an instrument, and in time a
+  plugin inside a slot -- is the only thing that can reach it: the executor's
+  fan-out stops at the node it installed. Declining is a decision; not
+  forwarding is an oversight, and it looks identical from outside. ML-P8 holds
+  a `Chorus` whose own `on_discontinuity` empties its line, and nothing calls
+  it, so a chorused ML-P8 rings its stale line across a seek
+  (`reports/fable-2026-09-21.md` finding 4). Written down 2026-09-21, before
+  the plugin slot needs it.
 
 `Event::Choke` remains, and is still correct for what it names: a choke group
 cutting a hi-hat off. What changed is that the host stopped borrowing it to
