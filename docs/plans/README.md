@@ -38,8 +38,13 @@ renderer being rebuilt, which `incremental-structure/` then closed. His *"im
 not convinced we're going to make it perfect by chasing this thread"* meant
 not chasing it *past* that plan.
 
-`audio-recording/` was added the same day and is **not started, outside the
-`FOCUS.md` sequence**. It is `SCOPE.md` items 3 and the audio half of 5, in
+`audio-recording/` was added the same day and is **all but finished**: steps
+02-05 landed 2026-09-18, step 01's JACK half on the 19th and its Core Audio
+half on the 20th, and step 06's quit prompt on the 20th. What is left of the
+whole plan is 06's clean-up dialog (MOO-38), and then it archives. *(This
+paragraph said "not started" until 2026-09-21, three days after the first
+steps landed — a plan index is only worth reading if landing a step includes
+striking it here.)* It is `SCOPE.md` items 3 and the audio half of 5, in
 Adam's shape: a take goes into the channel's sampler, and one input menu
 chooses between audio and MIDI. Its five open questions were all answered by
 Adam on 2026-09-17, the day the plan was written; they are kept in its
@@ -298,7 +303,7 @@ is worth reading before either.
 | --- | --- |
 | `edit-loop/` | **Steps 01 and 02 landed, 03 closed unstarted, 04 waiting on one measurement.** Six of every ten working hours went on `cargo`. `scripts/antibox` now picks incremental compilation for dev builds and sccache for release builds (64% off `cargo test --workspace`), `AGENTS.md` carries a verification ladder, the mockup tool is behind a Cargo feature, and `scripts/mooloop-run` is one command from edit to running application. Splitting device faces was measured and rejected: 79% of face commits also edit `main.slint`. What is left is `main.slint` itself, which no Slint arrangement reaches -- read `04-decide.md` before `egui-view-layer/`. |
 | `egui-view-layer/` | **Written, not decided; argument 4 tested and upheld; `edit-loop/` now points at it.** `edit-loop/04-decide.md` fixed the Rust half of the loop and found the UI half unreachable from inside Slint, which is the argument this plan was waiting for; one post-change `scripts/loop-profile` run closes it. No longer blocked: `session-layer-extraction/` is done, so a view layer would inherit a session rather than reproduce one. Still gated on step 01's spike. `00-status.md` states the case both ways. Compile cost was assumed to be the argument against and measured as an argument for: `build.rs` expands `ui/main.slint` into a single 39 MB Rust module, which is where the four minutes and the 3.4 GB go. What is left to decide is frame time and interaction feel. |
-| `containers/` | **Steps 01-05 landed 2026-09-06/07. Step 06 decided 2026-09-18: Adam wants a layer device**, which needs a work order written against the current tree; selectors are not part of it. |
+| `containers/` | **Steps 01-05 landed 2026-09-06/07. Step 06 decided 2026-09-18: Adam wants a layer device, and the work order is steps 07-10, written 2026-09-21 — ordered next by Adam the same day.** 07 is one container predicate (the `EffectParams::Chain(_)` test is written 33 times), latency as a tree rather than a sum, and `EffectKind::Layer` landing silent; 08 is the engine's split and sum, which is the "parallel routing inside a chain" `FOCUS.md` has parked since it was written; 09 is the drawing and is **deliberately blocked on a mock-up from Adam**, because the container's enclosure was drawn three times without one; 10 is the gestures and a preset with branches, and closes the plan. Selectors stay unbuilt, priced. **06 was wrong about one thing and it is the thing that made a layer look unaffordable:** the span representation *can* express parallel branches — a branch is a direct child's run. |
 
 ## Queued, not started
 

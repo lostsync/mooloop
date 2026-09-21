@@ -1,8 +1,23 @@
 # Containers plan status
 
 **Step 06 decided 2026-09-18: build a layer device** (Adam: *"i do want a
-layer device"*). It needs a work order; see the note at the top of
-`06-layers-and-selectors.md`. Steps 01-05 are unchanged.
+layer device"*). **The work order was written 2026-09-21 as steps 07-10** and
+Adam ordered it next the same day. Steps 01-05 are unchanged.
+
+| Step | What | State |
+| --- | --- | --- |
+| [07](07-a-branch-is-a-run.md) | One container predicate, latency as a tree, `EffectKind::Layer` landing silent | not started |
+| [08](08-the-chain-splits-and-sums.md) | Branch buffers, alignment, the sum — the engine | not started |
+| [09](09-the-rack-draws-branches.md) | The drawing. **Blocked on a mock-up from Adam**, deliberately | not started |
+| [10](10-the-gestures-and-the-preset.md) | Wrap-as-layer, add/remove a branch, a preset with branches | not started |
+
+**The one thing 06 priced that turned out not to be true:** it said the span
+representation could not express parallel branches, and it can. A branch is a
+direct child's *run*, which `wrap_in_container` already walks to validate a
+selection. No second representation, no new field on `EffectSlotState`. What
+does change, and 02 recorded the opposite in good faith, is that
+**`chain_latency` stops being a sum** — the time a signal spends inside a
+layer is its longest branch, not the total of all of them.
 
 ## Step 01 — a device is an identity, not a position
 

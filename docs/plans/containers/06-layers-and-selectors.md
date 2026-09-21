@@ -5,6 +5,20 @@
 > the brief for a build, and needs a work order written against what exists
 > now. Nothing below has been re-checked against the tree since it was
 > written. Selectors are not part of the decision.
+>
+> **The work order is steps 07-10, written 2026-09-21**, and it re-checked
+> this page against the tree. One of the four prices below is wrong: **the
+> span representation can express a layer**, because a branch is a direct
+> child's *run* and the flat list already describes a tree. The other three
+> — branch buffers, branch alignment, and a drawing that is not adjacency —
+> stand, and are steps 08 and 09. See `07-a-branch-is-a-run.md`.
+>
+> Two smaller corrections. The alignment is **not** `compile_latency` applied
+> inside a chain: that function compiles a tree of strips and a branch has no
+> strip. And the adjacency that means "the chain continues" is **horizontal**,
+> not vertical — `rack-row` is one `HorizontalLayout` in a horizontally
+> scrolling viewport, which is the fact step 04 already had to correct itself
+> about. So the axis a layer needs is free.
 
 The three container kinds get conflated because they sound like one feature
 with three settings. They are not, and this page exists so that saying no to
