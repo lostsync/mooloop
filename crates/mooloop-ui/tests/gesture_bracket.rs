@@ -179,9 +179,9 @@ fn a_double_click_reset_brackets_itself() {
         log.begins, log.ends,
         "every gesture the double-click opened was closed"
     );
-    assert!(
-        log.begins >= 1,
-        "the double-click reported no gesture at all"
+    assert_eq!(
+        log.begins, 3,
+        "two presses and the reset should each open a gesture"
     );
     assert_eq!(log.values, 1, "the reset is one value change, not three");
 }

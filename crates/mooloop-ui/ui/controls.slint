@@ -62,6 +62,7 @@ export component DraggablePoint inherits TouchArea {
     mouse-cursor: MouseCursor.crosshair;
     pointer-event(e) => {
         if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+            keyboard.focus();
             Gesture.begin();
             root.grabbed();
         } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) {
@@ -79,6 +80,13 @@ export component DraggablePoint inherits TouchArea {
         root.scrolled(e.delta-y / 1px);
         Gesture.end();
         accept
+    }
+
+    // Takes focus on grab, the same as `ParameterKnob` and its siblings, so a
+    // still-open text-field gesture blurs and closes on its own before this
+    // widget's `Gesture.begin()` would otherwise force it shut.
+    keyboard := FocusScope {
+        focus-on-click: false;
     }
 
     @children
