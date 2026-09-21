@@ -23,6 +23,35 @@ export global ControlAssign {
     in-out property <bool> midi-learn;
 }
 
+// Where one value edit begins and ends, so a drag is one undo step.
+//
+// A knob emits a value on every pointer frame, so a history that recorded
+// per callback would hold hundreds of whole-project snapshots for one drag
+// and make that drag cost dozens of Ctrl+Z. Something has to say where the
+// gesture starts and stops, and the control is the only thing that knows.
+//
+// A global for `ControlAssign`'s reason, and the reason is worth restating
+// because it points the other way. `ControlAssign` is read *in* by every
+// parameter control in every face; this is called *out* by them. Both buy
+// the same thing: no face declares, forwards, or knows about it. The
+// alternative was a callback pair threaded through every device face into
+// `main.slint`, which is a hundred and ten call sites and an eight-minute
+// build for each one missed.
+//
+// The rule on the Rust side is in `with_gesture_history`: with a gesture
+// open the first change snapshots and the rest change only the eventual
+// `after`, and the entry is recorded when it closes. With none open an edit
+// is its own entry, which is what makes a wheel notch, an arrow key and a
+// menu pick correct without bracketing anything.
+//
+// This is not `modulation-edit-started`/`-finished`, which is gated on
+// assignment and means *this parameter was named* -- what MIDI learn needs.
+// The two are orthogonal and a press emits one or the other, never both.
+export global Gesture {
+    callback begin();
+    callback end();
+}
+
 // Interaction-only graph handle. Consumers bind its position to their plotted
 // transfer function and map the relative pixel deltas into their parameters.
 export component DraggablePoint inherits TouchArea {
@@ -1744,7 +1773,7 @@ export component MiniKnob inherits Rectangle {
                     root.modulation-edited = false;
                     root.fine-drag = e.modifiers.control || e.modifiers.shift;
                     if (root.assign-active) { root.modulation-edit-started(); }
-                    else { root.edit-started(); }
+                    else { Gesture.begin(); root.edit-started(); }
                 } else if (e.kind == PointerEventKind.move && self.pressed) {
                     if (root.modulation-active) {
                         root.set-modulation-depth(root.pressed-modulation-depth
@@ -1761,6 +1790,7 @@ export component MiniKnob inherits Rectangle {
                         if (root.modulation-edited) { root.modulation-edit-finished(); }
                     } else {
                         root.edit-finished();
+                        Gesture.end();
                     }
                 }
             }
@@ -1772,18 +1802,20 @@ export component MiniKnob inherits Rectangle {
                     root.set-modulation-depth(0);
                     if (root.modulation-edited) { root.modulation-edit-finished(); }
                 } else {
+                    Gesture.begin();
                     root.edit-started();
                     let reset = clamp(root.default-value, root.minimum, root.maximum);
                     if (!root.controlled) { root.value = reset; }
                     root.changed(reset);
                     root.edit-finished();
+                    Gesture.end();
                 }
             }
             scroll-event(e) => {
                 if (root.assign-active) {
                     if (root.modulation-active) { root.modulation-edit-started(); }
                     root.modulation-edited = false;
-                } else { root.edit-started(); }
+                } else { Gesture.begin(); root.edit-started(); }
                 // Four times the drag's travel, which keeps a wheel notch
                 // worth about the same fraction of the range on a knob that
                 // has shortened its throw as on one that has not.
@@ -1793,6 +1825,7 @@ export component MiniKnob inherits Rectangle {
                     if (root.modulation-edited) { root.modulation-edit-finished(); }
                 } else {
                     root.edit-finished();
+                    Gesture.end();
                 }
                 accept
             }
@@ -1807,26 +1840,28 @@ export component MiniKnob inherits Rectangle {
                 if (root.assign-active) {
                     if (root.modulation-active) { root.modulation-edit-started(); }
                     root.modulation-edited = false;
-                } else { root.edit-started(); }
+                } else { Gesture.begin(); root.edit-started(); }
                 root.set-normalized(root.normalized
                     + ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01));
                 if (root.assign-active) {
                     if (root.modulation-edited) { root.modulation-edit-finished(); }
                 } else {
                     root.edit-finished();
+                    Gesture.end();
                 }
                 accept
             } else if (e.text == Key.DownArrow || e.text == Key.LeftArrow) {
                 if (root.assign-active) {
                     if (root.modulation-active) { root.modulation-edit-started(); }
                     root.modulation-edited = false;
-                } else { root.edit-started(); }
+                } else { Gesture.begin(); root.edit-started(); }
                 root.set-normalized(root.normalized
                     - ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01));
                 if (root.assign-active) {
                     if (root.modulation-edited) { root.modulation-edit-finished(); }
                 } else {
                     root.edit-finished();
+                    Gesture.end();
                 }
                 accept
             } else { reject }
@@ -2391,11 +2426,18 @@ export component MixerFader inherits Rectangle {
                     mixer-keyboard.focus();
                     root.pressed-normalized = root.normalized;
                     root.fine-drag = e.modifiers.control || e.modifiers.shift;
+                    Gesture.begin();
                 } else if (e.kind == PointerEventKind.move && self.pressed) {
                     // Always relative: grabbing a cap should never jump the
                     // level, which is the one thing a mixer fader must not do.
                     root.set-normalized(root.pressed-normalized
                         + (self.pressed-y - self.mouse-y) / (root.fine-drag ? 4000px : (parent.height - root.cap-height)));
+                } else if (e.kind == PointerEventKind.up) {
+                    // The whole drag, as one undo entry. This arm is the
+                    // difference between the 400 ms timer that stood in for
+                    // it and knowing: a move frame arriving late is still
+                    // this drag, and a second grab is never it.
+                    Gesture.end();
                 }
             }
             double-clicked => {

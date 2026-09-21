@@ -1474,51 +1474,89 @@ fn with_project_history(
     record_project_history(commands, before, state, window, label);
 }
 
-/// How long after a fader's last move frame the next one still belongs to the
-/// same drag. A move frame arrives every few milliseconds while the pointer
-/// is down; a second grab of the same fader is a person, and slower.
-const CONTINUOUS_GESTURE_GAP: std::time::Duration = std::time::Duration::from_millis(400);
-
-/// Whether a move frame arriving `now` belongs to the drag that last reported
-/// at `last`. Pulled out of [`with_continuous_history`] so the rule can be
-/// tested without a window: the handlers it runs in are closures built inside
-/// `run()`, which no test in `crates/mooloop-ui/tests` can reach.
-fn continues_gesture(last: Option<std::time::Instant>, now: std::time::Instant) -> bool {
-    last.is_some_and(|at| now.duration_since(at) < CONTINUOUS_GESTURE_GAP)
-}
-
-/// [`with_project_history`] for a control that reports an edit on every move
-/// frame: a fader or a pan knob.
+/// [`with_project_history`] for an edit that may be part of a gesture.
 ///
-/// The undo history collapses consecutive entries stamped with one gesture
-/// token (`History::record`), and the mixer faces have no press/release
-/// callback to bracket a drag with -- adding one crosses the Slint face
-/// contract, which `docs/LOOSE_ENDS.md` records as the follow-up. Until then
-/// the bracket is time: `last` is that control's own cell, so two faders
-/// dragged in turn never collapse into each other.
-#[allow(clippy::too_many_arguments)]
-fn with_continuous_history(
+/// The general recorder. Its whole rule is four lines and the fourth is what
+/// makes the other three cheap:
+///
+/// - **Gesture open, first change:** the `before` was snapshotted when the
+///   gesture opened; apply the edit, name the entry, record nothing yet.
+/// - **Gesture open, later changes:** apply the edit. Nothing else.
+/// - **Gesture closes:** one entry, that `before` to the project as it now
+///   is. See [`gesture_closed`].
+/// - **No gesture open:** snapshot, apply, record — one entry, exactly as a
+///   discrete edit already does.
+///
+/// That last line is why a wheel notch, an arrow-key nudge, a menu pick and
+/// a colour swatch are each correct without bracketing anything, and it is
+/// why a control that has not yet learned to call [`Gesture`] is no worse
+/// off than it was.
+///
+/// **One snapshot pair per gesture, not per frame.** This is what it buys
+/// over `History::record`'s token coalescing (`history.rs`), which works —
+/// the piano roll uses it — but pays two whole-project clones on every move
+/// frame and then throws all but the first and last away.
+///
+/// It replaced a 400 ms timer that guessed where a drag ended, because the
+/// mixer faces had no press/release callback to ask. They have one now:
+/// `MixerFader`'s `pointer-event` grew an `.up` arm, and `MiniKnob` already
+/// carried the pair.
+fn with_gesture_history(
     state: &Rc<RefCell<UiState>>,
     commands: &Rc<RefCell<CommandState>>,
     window: &MainWindow,
     label: &'static str,
-    last: &std::cell::Cell<Option<std::time::Instant>>,
     edit: impl FnOnce() -> bool,
 ) {
-    let now = std::time::Instant::now();
-    let continuing = continues_gesture(last.get(), now);
-    {
-        let mut open = commands.borrow_mut();
-        if !continuing {
-            open.next_gesture = open.next_gesture.wrapping_add(1);
-        }
-        open.gesture = Some(open.next_gesture);
+    if !state.borrow().session.gesture_open() {
+        with_project_history(state, commands, window, label, edit);
+        return;
     }
-    last.set(Some(now));
-    with_project_history(state, commands, window, label, edit);
-    // Left in flight it would collapse the *next* unrelated edit into this
-    // drag, which is the failure the token exists to prevent.
-    commands.borrow_mut().gesture = None;
+    if !edit() {
+        return;
+    }
+    state.borrow_mut().session.mark_gesture_changed();
+    // The first edit inside a gesture names it. A drag that crosses two
+    // parameters — which nothing can do today, but a future control might —
+    // is one entry under the first one's name rather than two entries.
+    commands.borrow_mut().gesture_label.get_or_insert(label);
+}
+
+/// `Gesture.begin()`: a value edit is starting.
+///
+/// A begin while one is open closes it and hands the `before` back rather
+/// than dropping it — see `Session::begin_gesture`, which is where that rule
+/// lives so it can be tested without a window.
+fn gesture_opened(
+    state: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    window: &MainWindow,
+) {
+    let snapshot = project_snapshot(&state.borrow(), window);
+    let abandoned = state.borrow_mut().session.begin_gesture(snapshot);
+    let label = commands.borrow_mut().gesture_label.take();
+    if let Some(before) = abandoned {
+        record_project_history(commands, before, state, window, label.unwrap_or("Edit"));
+    }
+}
+
+/// `Gesture.end()`: record the whole gesture as one entry.
+///
+/// Nothing open, or nothing changed while it was, records nothing — a press
+/// and release on a knob is not an edit, and neither is a MIDI learn press.
+fn gesture_closed(
+    state: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    window: &MainWindow,
+) {
+    let Some(before) = state.borrow_mut().session.finish_gesture() else {
+        return;
+    };
+    // A gesture the modulation shelf closed first already recorded under its
+    // own name, and took the snapshot with it, so this never runs twice for
+    // one press.
+    let label = commands.borrow_mut().gesture_label.take().unwrap_or("Edit");
+    record_project_history(commands, before, state, window, label);
 }
 
 /// Append a channel, show it, tell the engine about it, and record the undo
@@ -4822,10 +4860,17 @@ impl UiState {
         self.refresh_modulation(window);
     }
 
-    fn begin_modulation_edit(&mut self, window: &MainWindow) {
-        if self.session.modulation_edit_before.is_none() {
+    /// Make sure a gesture is open, without disturbing one that already is.
+    ///
+    /// The modulation shelf's knob reports the same press twice — once
+    /// through `Gesture.begin()` and once through its own `edit-started`,
+    /// which is the route that proved the pair — so this has to be the
+    /// idempotent half of `Session::begin_gesture`, never the closing one.
+    fn begin_gesture(&mut self, window: &MainWindow) {
+        if !self.session.gesture_open() {
             let snapshot = project_snapshot(self, window);
-            self.session.begin_modulation_edit(snapshot);
+            let closed = self.session.begin_gesture(snapshot);
+            debug_assert!(closed.is_none(), "nothing was open to close");
         }
     }
 
@@ -8439,15 +8484,13 @@ impl AppUi {
             let st = state.clone();
             let weak = window.as_weak();
             let commands = command_state.clone();
-            let last = std::cell::Cell::new(None);
             window.on_channel_volume_changed(move |ch, volume| {
                 let Some(window) = weak.upgrade() else { return };
-                with_continuous_history(
+                with_gesture_history(
                     &st,
                     &commands,
                     &window,
                     "Channel Volume",
-                    &last,
                     || {
                         let mut st = st.borrow_mut();
                         let Some(command) = st.session.set_channel_volume(ch, volume) else {
@@ -8473,10 +8516,9 @@ impl AppUi {
             let st = state.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
-            let last = std::cell::Cell::new(None);
             window.on_channel_pan_changed(move |ch, pan| {
                 let Some(window) = weak.upgrade() else { return };
-                with_continuous_history(&st, &commands, &window, "Channel Pan", &last, || {
+                with_gesture_history(&st, &commands, &window, "Channel Pan", || {
                     let mut st = st.borrow_mut();
                     let Some(command) = st.session.set_channel_pan(ch, pan) else {
                         return false;
@@ -8805,10 +8847,9 @@ impl AppUi {
             let weak = window.as_weak();
             let st = state.clone();
             let commands = command_state.clone();
-            let last = std::cell::Cell::new(None);
             window.on_bus_volume_changed(move |bus, volume| {
                 let Some(window) = weak.upgrade() else { return };
-                with_continuous_history(&st, &commands, &window, "Bus Volume", &last, || {
+                with_gesture_history(&st, &commands, &window, "Bus Volume", || {
                     let mut guard = st.borrow_mut();
                     let Some(command) = guard.session.set_bus_volume(bus, volume) else {
                         return false;
@@ -8826,10 +8867,9 @@ impl AppUi {
             let weak = window.as_weak();
             let st = state.clone();
             let commands = command_state.clone();
-            let last = std::cell::Cell::new(None);
             window.on_bus_pan_changed(move |bus, pan| {
                 let Some(window) = weak.upgrade() else { return };
-                with_continuous_history(&st, &commands, &window, "Bus Pan", &last, || {
+                with_gesture_history(&st, &commands, &window, "Bus Pan", || {
                     let mut guard = st.borrow_mut();
                     let Some(command) = guard.session.set_bus_pan(bus, pan) else {
                         return false;
@@ -9561,6 +9601,35 @@ impl AppUi {
                 }
             });
         }
+        // The value gesture, wired once for every control in every face.
+        //
+        // Beside the MIDI learn arm below on purpose: `ControlAssign` and
+        // `Gesture` are the same idea pointing in opposite directions.
+        // `ControlAssign.midi-learn` is one fact every parameter control
+        // *reads*; `Gesture.begin`/`end` is one fact every parameter control
+        // *says*. Both are globals so that no face declares, forwards, or
+        // knows about them — which is the difference between this and a
+        // callback pair threaded through a hundred and ten `main.slint`
+        // wiring sites.
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.global::<Gesture>().on_begin(move || {
+                let Some(window) = weak.upgrade() else { return };
+                gesture_opened(&st, &commands, &window);
+            });
+        }
+        {
+            let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            window.global::<Gesture>().on_end(move || {
+                let Some(window) = weak.upgrade() else { return };
+                gesture_closed(&st, &commands, &window);
+            });
+        }
+
         // MIDI Learn: the arm, and the four things the mapping editor can do
         // to a row. Every one of them ends by republishing the page, because
         // removing a binding renumbers the ones after it and a stale index is
@@ -9913,7 +9982,7 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_modulation_param_edit_started(move || {
                 let Some(window) = weak.upgrade() else { return };
-                st.borrow_mut().begin_modulation_edit(&window);
+                st.borrow_mut().begin_gesture(&window);
             });
         }
         {
@@ -9923,20 +9992,17 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_modulation_param_changed(move |slot, id, value| {
                 let Some(window) = weak.upgrade() else { return };
-                // A knob gesture owns one undo entry, recorded on release; outside one,
-                // every change is its own.
-                let in_gesture = st.borrow().session.modulation_gesture_open();
-                let before = (!in_gesture).then(|| project_snapshot(&st.borrow(), &window));
-                {
+                // A knob gesture owns one undo entry, recorded on release;
+                // outside one, every change is its own. This handler used to
+                // spell that rule out; it is the general one now.
+                with_gesture_history(&st, &commands, &window, "Modulator edited", || {
                     let mut state = st.borrow_mut();
                     let Some(command) = state.session.set_modulator_param(slot, id, value) else {
-                        return;
+                        return false;
                     };
                     state.send_modulation(&window, &tx, command);
-                }
-                if let Some(before) = before {
-                    record_project_history(&commands, before, &st, &window, "Modulator edited");
-                }
+                    true
+                });
             });
         }
         {
@@ -9945,7 +10011,7 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_modulation_param_edit_finished(move || {
                 let Some(window) = weak.upgrade() else { return };
-                let before = st.borrow_mut().session.finish_modulation_edit();
+                let before = st.borrow_mut().session.finish_gesture();
                 if let Some(before) = before {
                     record_project_history(&commands, before, &st, &window, "Modulator edited");
                 }
@@ -10057,7 +10123,7 @@ impl AppUi {
                 if state.learn_param_if_armed(&window, binds_port, address) {
                     return;
                 }
-                state.begin_modulation_edit(&window);
+                state.begin_gesture(&window);
             });
         }
         {
@@ -10088,7 +10154,7 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_source_modulation_edit_finished(move |_| {
                 let Some(window) = weak.upgrade() else { return };
-                let before = st.borrow_mut().session.finish_modulation_edit();
+                let before = st.borrow_mut().session.finish_gesture();
                 if let Some(before) = before {
                     record_project_history(
                         &commands,
@@ -10115,7 +10181,7 @@ impl AppUi {
                 if state.learn_param_if_armed(&window, binds_port, address) {
                     return;
                 }
-                state.begin_modulation_edit(&window);
+                state.begin_gesture(&window);
             });
         }
         {
@@ -10140,7 +10206,7 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_strip_modulation_edit_finished(move |_| {
                 let Some(window) = weak.upgrade() else { return };
-                let before = st.borrow_mut().session.finish_modulation_edit();
+                let before = st.borrow_mut().session.finish_gesture();
                 if let Some(before) = before {
                     record_project_history(
                         &commands,
@@ -10192,7 +10258,7 @@ impl AppUi {
                 if state.learn_param_if_armed(&window, binds_port, address) {
                     return;
                 }
-                state.begin_modulation_edit(&window);
+                state.begin_gesture(&window);
             });
         }
         {
@@ -10234,7 +10300,7 @@ impl AppUi {
             let weak = window.as_weak();
             window.on_effect_modulation_edit_finished(move |_, _| {
                 let Some(window) = weak.upgrade() else { return };
-                let before = st.borrow_mut().session.finish_modulation_edit();
+                let before = st.borrow_mut().session.finish_gesture();
                 if let Some(before) = before {
                     record_project_history(
                         &commands,
@@ -15925,30 +15991,6 @@ fn refresh_browser(st: &UiState) {
 /// Step 01 shipped the tree with "no keyboard navigation" written into its
 /// own status file; this is the half that can be checked without a rendered
 /// tree, which is most of the rules worth stating.
-#[cfg(test)]
-mod continuous_gesture_tests {
-    use super::{continues_gesture, CONTINUOUS_GESTURE_GAP};
-    use std::time::{Duration, Instant};
-
-    /// **One drag is one undo step.** The mixer faces have no
-    /// press/release pair, so the bracket is the gap between move frames;
-    /// a frame arriving while the pointer is still moving continues the
-    /// drag, and the first frame of anything else starts a new entry.
-    #[test]
-    fn move_frames_inside_the_gap_are_one_gesture() {
-        let now = Instant::now();
-        assert!(!continues_gesture(None, now), "the first frame opens one");
-        assert!(continues_gesture(
-            Some(now - Duration::from_millis(8)),
-            now
-        ));
-        assert!(!continues_gesture(
-            Some(now - CONTINUOUS_GESTURE_GAP - Duration::from_millis(1)),
-            now
-        ));
-    }
-}
-
 #[cfg(test)]
 mod browser_keyboard_tests {
     use super::*;

@@ -196,11 +196,20 @@ pub struct Session {
     /// How many times a refusal has been reported, over the whole session.
     /// The log line is the product; this is how a test sees it.
     pub engine_refusals_reported: u32,
-    /// Snapshot captured at the start of a direct knob gesture. Intermediate
-    /// control updates still reach audio immediately, while one release
-    /// becomes one undoable route edit.
-    pub modulation_edit_before: Option<ProjectSnapshot>,
-    pub modulation_edit_changed: bool,
+    /// Snapshot captured when a value gesture opened. Intermediate updates
+    /// still reach audio immediately, while one release becomes one undo
+    /// entry.
+    ///
+    /// General since `docs/plans/gesture-undo/` step 02, and modulation's
+    /// before that: a knob emits a value on every pointer frame, so a
+    /// history recorded per callback would hold hundreds of whole-project
+    /// snapshots for one drag and cost dozens of Ctrl+Z to undo. One pair
+    /// per gesture, not one per frame. `Gesture` in `controls.slint` is what
+    /// opens and closes it, from the only place that knows -- the control.
+    pub gesture_before: Option<ProjectSnapshot>,
+    /// Whether anything inside the open gesture actually changed. A press
+    /// that moved nothing records nothing.
+    pub gesture_changed: bool,
     /// Sample-browser folders in display order, mirroring the persisted
     /// settings for this session.
     pub browser_locations: Vec<PathBuf>,
@@ -321,8 +330,8 @@ impl Default for Session {
             sample_request_counter: 0,
             engine_queue_refused: false,
             engine_refusals_reported: 0,
-            modulation_edit_before: None,
-            modulation_edit_changed: false,
+            gesture_before: None,
+            gesture_changed: false,
             browser_locations: Vec::new(),
             browser_expanded: HashSet::new(),
             default_waveform: Vec::new(),
@@ -1191,9 +1200,13 @@ impl Session {
         }
     }
 
-    pub fn finish_modulation_edit(&mut self) -> Option<ProjectSnapshot> {
-        let before = self.modulation_edit_before.take();
-        let changed = std::mem::replace(&mut self.modulation_edit_changed, false);
+    /// Closes the open gesture, yielding the snapshot to record against if
+    /// anything changed inside it. A gesture that changed nothing -- a press
+    /// and release on a knob, a learn press -- yields `None` and is
+    /// discarded.
+    pub fn finish_gesture(&mut self) -> Option<ProjectSnapshot> {
+        let before = self.gesture_before.take();
+        let changed = std::mem::replace(&mut self.gesture_changed, false);
         if changed {
             before
         } else {
@@ -1258,6 +1271,10 @@ impl Session {
     /// in hand.
     pub fn replace_project(&mut self, project: &Project, samples: &[Option<Arc<SampleData>>]) {
         self.source_revision = self.source_revision.wrapping_add(1);
+        // A gesture cannot span an install. Its `before` belongs to the
+        // document going out, and recording it against the one coming in
+        // would install that song over this one on the next Ctrl+Z.
+        self.discard_gesture();
         // A new document gets its own first refusal. The latch exists to stop
         // a burst repeating itself, not to make the second song's divergence
         // unreportable.
@@ -1655,7 +1672,7 @@ impl Session {
         let Some(route) = channel.modulation.routes[index] else {
             return ArmedRoute::Unchanged;
         };
-        self.modulation_edit_changed = true;
+        self.gesture_changed = true;
         ArmedRoute::Added(route)
     }
 
@@ -1736,15 +1753,45 @@ impl Session {
             .collect()
     }
 
-    /// Opens a direct modulation-knob gesture against `snapshot`.
+    /// Opens a value gesture against `snapshot`, closing any already open.
     ///
     /// Intermediate control updates still reach audio immediately; one
-    /// release becomes one undoable route edit.
-    pub fn begin_modulation_edit(&mut self, snapshot: ProjectSnapshot) {
-        if self.modulation_edit_before.is_none() {
-            self.modulation_edit_before = Some(snapshot);
-            self.modulation_edit_changed = false;
-        }
+    /// release becomes one undo entry.
+    ///
+    /// **A gesture that never ends is the failure this closes over.**
+    /// Pointer capture is lost, a window is closed mid-drag, a face is torn
+    /// down under a popup — and a gesture left open swallows every later
+    /// edit into one entry, which is a worse fault than the one it exists to
+    /// fix. So a begin closes the previous one and hands its `before` back,
+    /// for the caller to record rather than lose.
+    ///
+    /// A caller that means *make sure one is open* — the modulation shelf,
+    /// whose knob reports the same press twice, once through the global and
+    /// once through its own callback — checks `gesture_open` first, and then
+    /// this never closes anything.
+    #[must_use = "the gesture this closed still has to be recorded"]
+    pub fn begin_gesture(&mut self, snapshot: ProjectSnapshot) -> Option<ProjectSnapshot> {
+        let previous = self.finish_gesture();
+        self.gesture_before = Some(snapshot);
+        self.gesture_changed = false;
+        previous
+    }
+
+    /// Says that the open gesture has changed the document, so its entry is
+    /// worth recording when it closes.
+    pub fn mark_gesture_changed(&mut self) {
+        self.gesture_changed = true;
+    }
+
+    /// Throws the open gesture away without recording it.
+    ///
+    /// A `before` taken from one document must never be recorded against
+    /// another, so every install calls this: undo, redo and every structural
+    /// edit replace the project, and a gesture left open across one would
+    /// put the old song's snapshot into the new song's history.
+    pub fn discard_gesture(&mut self) {
+        self.gesture_before = None;
+        self.gesture_changed = false;
     }
 
     /// A channel and its decoded audio, for the clipboard.
@@ -1883,5 +1930,115 @@ mod commit_reuse_tests {
                 "channel {index} re-rendered its commit after moving one seat along"
             );
         }
+    }
+}
+
+/// The value gesture: where one drag becomes one undo entry.
+///
+/// These are here rather than in `mooloop-ui` for the reason the 400 ms
+/// timer's own test recorded about itself: the handlers that drive this are
+/// closures built inside `run()`, which no test in `crates/mooloop-ui/tests`
+/// can reach. So the *rule* lives on `Session`, where it can be asserted
+/// without a window, and the UI side is the two lines that call it.
+#[cfg(test)]
+mod gesture_tests {
+    use std::collections::HashMap;
+
+    use mooloop_core::Project;
+
+    use super::{ProjectSnapshot, Session};
+
+    /// A snapshot that can be told apart from every other one.
+    fn marked(length: u16) -> ProjectSnapshot {
+        ProjectSnapshot {
+            project: Project {
+                pattern_lengths: vec![length],
+                ..Project::default()
+            },
+            samples: HashMap::new(),
+        }
+    }
+
+    fn mark(snapshot: &ProjectSnapshot) -> u16 {
+        snapshot.project.pattern_lengths[0]
+    }
+
+    /// **One snapshot pair per gesture, not one per frame.** A knob emits a
+    /// value on every pointer frame; what the history gets is the state the
+    /// drag *started* from, once, however many frames it took.
+    ///
+    /// The entry count was already right under the 400 ms timer, so counting
+    /// entries is not what proves this. What proves it is which snapshot
+    /// comes back: the one taken at the press, not one taken at the last
+    /// frame.
+    #[test]
+    fn a_whole_drag_records_the_snapshot_it_started_from() {
+        let mut session = Session::default();
+        assert!(session.begin_gesture(marked(1)).is_none());
+        for _ in 0..200 {
+            session.mark_gesture_changed();
+        }
+        let recorded = session.finish_gesture().expect("the drag changed things");
+        assert_eq!(mark(&recorded), 1, "recorded a later frame's snapshot");
+        assert!(!session.gesture_open(), "the gesture outlived its release");
+    }
+
+    /// A press and release that moved nothing is not an edit, and a MIDI
+    /// learn press is the same shape: the knob brackets a gesture and never
+    /// changes a value inside it.
+    #[test]
+    fn a_gesture_that_changed_nothing_records_nothing() {
+        let mut session = Session::default();
+        assert!(session.begin_gesture(marked(1)).is_none());
+        assert!(session.finish_gesture().is_none());
+        assert!(!session.gesture_open());
+    }
+
+    /// **A gesture that never ends.** Pointer capture lost, a window closed
+    /// mid-drag, a face torn down under a popup. Left open it would swallow
+    /// every later edit into one entry — so the next begin closes it and
+    /// hands the `before` back to be recorded rather than dropped, and the
+    /// gesture that follows starts from its own snapshot.
+    #[test]
+    fn a_gesture_left_open_is_closed_by_the_next_one_rather_than_swallowing_it() {
+        let mut session = Session::default();
+        assert!(session.begin_gesture(marked(1)).is_none());
+        session.mark_gesture_changed();
+
+        let abandoned = session
+            .begin_gesture(marked(2))
+            .expect("the open gesture had changed something");
+        assert_eq!(mark(&abandoned), 1, "the wrong gesture was handed back");
+
+        session.mark_gesture_changed();
+        let recorded = session.finish_gesture().expect("the second drag changed things");
+        assert_eq!(
+            mark(&recorded),
+            2,
+            "the second gesture recorded the first one's snapshot"
+        );
+    }
+
+    /// **A gesture that spans an install.** Undo, redo and every structural
+    /// edit replace the project, and a `before` from the document going out
+    /// must never be recorded against the one coming in — recording it would
+    /// put the old song into the new song's history, one Ctrl+Z away from
+    /// installing it.
+    #[test]
+    fn an_install_discards_the_gesture_it_interrupted() {
+        let mut session = Session::default();
+        assert!(session.begin_gesture(marked(1)).is_none());
+        session.mark_gesture_changed();
+
+        session.replace_project(&Project::default(), &[]);
+        assert!(!session.gesture_open(), "a gesture survived the install");
+        assert!(session.finish_gesture().is_none());
+
+        // And the edit after the install is its own entry rather than the
+        // tail of a gesture nobody closed.
+        assert!(session.begin_gesture(marked(3)).is_none());
+        session.mark_gesture_changed();
+        let recorded = session.finish_gesture().expect("the later drag changed things");
+        assert_eq!(mark(&recorded), 3, "the interrupted gesture was recorded anyway");
     }
 }

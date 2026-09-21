@@ -1,6 +1,27 @@
 # Gesture undo status
 
-**Not started.** Added 2026-09-21 from Adam's answer to the open question in
+**01 and 02 landed, 2026-09-21.** `scripts/dupe-audit unrecorded-edit` is the
+tenth check and read **89** the day it was written; that number is this plan's
+progress bar and zero is step 07. The `Gesture` global exists, the recorder is
+`with_gesture_history`, and the 400 ms timer is deleted.
+
+Three things the survey had wrong, found by doing it:
+
+* **`SyncMiniKnob` and `KnobStack` are built from the knobs, not beside
+  them.** The step-03 table lists nine widgets; `KnobField`, `TimeDivisionKnob`
+  and `KnobStack` each embed a real `ParameterKnob` and `SyncMiniKnob` embeds a
+  real `MiniKnob`, so bracketing the two dials covers all six. Step 03 is
+  `ParameterKnob`, `ParameterFader`, `DraggablePoint` and `EnvelopeEditor`.
+* **`main.slint` is touched after all, by one line.** A global is reachable
+  from Rust only if the root file exports it, so `export { ControlAssign }`
+  became `export { ControlAssign, Gesture }`. No *face* is touched, which is
+  the claim that mattered.
+* **The check had to be written three times.** Twice it reported a clean tree
+  for a resolution bug rather than for a clean tree. Both failures are written
+  up in `AGENTS.md`, because the direction they failed in is the one that
+  matters.
+
+Added 2026-09-21 from Adam's answer to the open question in
 `reports/fable-2026-09-21.md` finding 7: build the general gesture pair, fully,
 in one batched pass. MOO-50 is the parent issue and predates this plan by three
 weeks; the plan is what that issue's *"why it is awkward"* section asked for.

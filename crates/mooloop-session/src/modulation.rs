@@ -80,8 +80,8 @@ impl Session {
     }
 
     /// Whether a direct modulation-knob gesture is currently open.
-    pub fn modulation_gesture_open(&self) -> bool {
-        self.modulation_edit_before.is_some()
+    pub fn gesture_open(&self) -> bool {
+        self.gesture_before.is_some()
     }
 
     /// Opens or closes the modulation shelf.
@@ -198,7 +198,7 @@ impl Session {
     pub fn set_modulator_param(&mut self, slot: i32, id: i32, value: f32) -> Option<EngineCommand> {
         let (slot, id) = (usize::try_from(slot).ok()?, u32::try_from(id).ok()?);
         let channel = self.selected;
-        let in_gesture = self.modulation_gesture_open();
+        let in_gesture = self.gesture_open();
         let params = self.rack_mut()?.params_mut(slot)?;
         let previous = params.get(id);
         params.set(id, value);
@@ -206,7 +206,7 @@ impl Session {
             return None;
         }
         if in_gesture {
-            self.modulation_edit_changed = true;
+            self.gesture_changed = true;
         }
         Some(EngineCommand::SetModulatorParam {
             channel: channel as u8,

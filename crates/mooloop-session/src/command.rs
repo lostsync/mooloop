@@ -38,6 +38,15 @@ pub struct CommandState {
     /// Source of the next token. Monotonic rather than a bool so that two
     /// drags separated by a release never look like one continuous gesture.
     pub next_gesture: u64,
+    /// What the open value gesture will be called in the history, set by the
+    /// first edit inside it.
+    ///
+    /// Here rather than on `Session`, because it is what the entry is named
+    /// and not part of the document; `Session` holds the gesture's `before`
+    /// because `set_modulator_param` has to ask whether one is open. Cleared
+    /// when a gesture opens rather than when it closes, so a gesture thrown
+    /// away by an install cannot name the next one.
+    pub gesture_label: Option<&'static str>,
 }
 
 /// The work-surface/lower-dock combination a `view.pane-*` shortcut
