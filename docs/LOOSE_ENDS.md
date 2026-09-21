@@ -649,6 +649,18 @@ which `CURRENT.md` now at least describes honestly; or make undo refuse to
 run over unrecorded state, which needs a "changed since the last entry"
 marker `record` has no way to set today. Found 2026-09-13.
 
+**Decided 2026-09-21: the first one, built fully in one batched pass.**
+Adam's call. The pair goes on every face -- a `main.slint` contract change,
+which `AGENTS.md` says to batch into a single crossing because each build is
+minutes -- and knobs, faders, pan and the name fields then route through
+`record_project_history` like the piano roll already does. It retires the
+400 ms timer below. It is milestone-sized rather than a patch, and it wants
+a plan directory of its own before anyone starts: the interesting parts are
+`NameField.edited` firing per keystroke, the scroll and arrow-key paths that
+are not drags at all, and the fact that a *correct* pair on every face is
+exactly the kind of hand-maintained list `AGENTS.md`'s `unchecked-face`
+check exists because nobody extends.
+
 **The eleven console and rack verbs came off that list on 2026-09-21.**
 Channel mute, volume, pan and bus pick; bus mute, volume, pan, output,
 console on/off, polarity and solo all snapshot and call
@@ -699,6 +711,18 @@ thing the user creates, which the policy forbids in the other direction; the
 answer that needs neither is for the session to send the storage with the
 command, the way `StructuralCommand` sends a routing table, and hand the
 vacated one back through the reclaim ring. Found 2026-09-21.
+
+**Sequenced 2026-09-21, Adam's call: do it with automation recording, not
+before.** The remaining case is rare enough to wait -- 33 destinations drawn
+for the first time with no undo, redo or structural edit in between -- and
+the proper fix has real design in it, because `EngineCommand` is `Copy` in a
+POD ring and cannot carry a box, so lane opening moves to the structural
+channel and the two queues then have an ordering to agree on (a point can
+arrive before the lane it belongs to). Recording a knob movement into a lane
+is the feature that makes the audio thread a *writer* of lane points, which
+is what that design should be shaped by; the report's architecture section
+says the same thing the other way round -- the storage has to be settled
+before that writer exists, not after.
 
 **Three callback costs that grow with the song rather than the block**, from
 `reports/fable-2026-09-21.md` finding 5, none of them a hazard and none of
@@ -1725,9 +1749,15 @@ and **MOO-55 still needs reopening by its owner** for the two that are left.
   (`take.rs:240-256`) arms on `!channel.audio_input.is_off()` with no
   `is_missing` check.
 
-The two that remain both need a decision rather than a patch -- what quit
-should do about a draining take, and what arming should say when the input
-has gone -- which is why they were left rather than guessed at.
+The two that remain needed a decision rather than a patch, and **Adam gave
+both on 2026-09-21** (`plans/audio-recording/00-status.md`, decisions 9 and
+10). Quit **finishes the take**: it ends it as Stop does, flushes, finalizes
+and only then leaves, on a bounded wait, and a wait that times out removes
+the partial file instead of leaving an unfinalized one. Arming on a missing
+input **refuses and names the cause**, because a deleted source channel and
+an absent audio device need different fixes from the user and one generic
+message sends them to the wrong place. Neither is built yet; both are now
+specified rather than open.
 
 Recorded here because two consecutive review runs reported it and neither the
 plan status nor this file remembered it: a plan that is not executed is also

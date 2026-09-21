@@ -414,6 +414,27 @@ to, so none of them blocks a step; Adam can overrule any of them.
 8. **Monitoring an app source.** Default: **not offered.** You are already
    hearing it, so the toggle belongs to hardware inputs only. Step 05.
 
+9. **Quitting with a take still being written.** Adam's call, 2026-09-21:
+   **finish it, then quit.** Quit ends the take the way pressing Stop does,
+   flushes the ring and finalizes the WAV, and only then leaves -- no prompt,
+   because what is outstanding is a fraction of a second rather than
+   something worth a dialog. The wait is **bounded** so a stuck drain cannot
+   hang quit, and a wait that times out removes the partial file rather than
+   leaving an unfinalized one in `recordings/`. Note what this does *not*
+   promise: the finished take is a complete file on disk, not a sample in the
+   song, because the song is closing. Step 04.
+
+10. **Arming record on a channel whose input has gone.** Adam's call,
+    2026-09-21: **refuse, and name the cause.** The two causes need different
+    fixes from the user -- a resampled channel that was deleted, versus no
+    audio input device at all (unplugged, changed, or a refused microphone
+    permission on macOS) -- so one generic message sends them looking in the
+    wrong place. `record_press` asks `AudioInputPicker::is_missing`
+    (`core/src/input.rs:188`) alongside `is_off`, and `RecordPress` grows a
+    variant per cause rather than reusing `NoInput`. What this closes is
+    silent and destructive: arming on a missing input records digital silence
+    and the finished take then *replaces the channel's sample*. Step 04.
+
 ## Open, and not tracked by an open issue: a take has no owner at four edges
 
 **Added 2026-09-21.** Two consecutive review runs
@@ -437,7 +458,9 @@ being a sampler, with no kind check before `apply_loaded_sample` (`:15077`);
 and `record_press` (`take.rs:240-256`) arms on `!audio_input.is_off()` without
 checking the input still exists. Full detail in `LOOSE_ENDS.md`.
 
-**Two of the four closed the same day**, by the run that read this entry.
+**Two of the four closed the same day**, by the run that read this entry,
+and the other two were answered as decisions 9 and 10 above on 2026-09-21
+rather than left open.
 A failed write or finalize removes its partial file, as the `written == 0`
 branch beside it already did; and `apply_take` checks the channel is still a
 sampler, keeping the recording and naming it in the status bar when it is
