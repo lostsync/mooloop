@@ -28,5 +28,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // is dropped (stopping the audio driver) when `run` returns.
     let _ = &engine;
     app.run()?;
+    // After the loop and before `engine` drops: a take still recording is not
+    // an unsaved *edit*, so nothing on the quit path has dealt with it, and
+    // its WAV header is only written when its drain finishes.
+    app.finish_takes();
     Ok(())
 }

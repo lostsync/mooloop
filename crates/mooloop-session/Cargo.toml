@@ -20,6 +20,10 @@ symphonia = {
     default-features = false,
     features = ["aiff", "flac", "mp3", "ogg", "opt-simd", "pcm", "vorbis", "wav"]
 }
+# Moving an unused take to the desktop trash rather than deleting it
+# (`audio-recording/06`): the one case the scan cannot tell apart from an
+# unused take is a crash leftover, where being wrong costs a recording.
+trash = "5"
 
 [dev-dependencies]
 tempfile = "3"

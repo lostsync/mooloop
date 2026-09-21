@@ -87,6 +87,16 @@ impl<T> Default for History<T> {
 }
 
 impl<T: Retained> History<T> {
+    /// Every entry still retained, undo branch and redo branch alike.
+    ///
+    /// For asking what the history as a whole still refers to --
+    /// `recordings::referenced_paths` walks these so a take an undo could
+    /// reach is not offered for deletion. Deliberately not cursor-aware: a
+    /// redo reaches its snapshot just as an undo does.
+    pub fn entries(&self) -> &[Entry<T>] {
+        &self.entries
+    }
+
     pub fn can_undo(&self) -> bool {
         self.cursor > 0
     }

@@ -1721,51 +1721,51 @@ transport running is the obvious answer, and an armed recording or a held note
 is the one that would actually annoy somebody if it were missed. Found
 2026-09-15.
 
-**A take has no owner at four edges, and the issue tracking it is marked
-Done.** MOO-55 moved to Done on 2026-09-21 with `startedAt` still null; no fix
-commit exists (`git log -- crates/mooloop-session/src/take.rs` is the four
-original `feat(audio-recording)` commits), and every symbol its fix plan names
--- `finish_all`, `has_live`, `take_target`, `TakeMiss`, `NotASampler`,
-`SourceMissing` -- has zero occurrences repo-wide. There is no `impl Drop`
-anywhere in `crates/mooloop-session/src/`. Two of the four edges were closed
-later the same day, by the run that read this one; the marks below say which,
-and **MOO-55 still needs reopening by its owner** for the two that are left.
+~~**A take has no owner at four edges, and the issue tracking it is marked
+Done.**~~ **Closed 2026-09-21**, all four. This entry said MOO-55 was marked
+Done with no fix in the tree, and it was right about what it could see: the
+fix was committed locally and had not been pushed, so `git log` and a
+repo-wide grep for `finish_all` both found nothing. Two of the four were then
+fixed a second time, independently, before the branch landed.
 
-- **Quit loses a live take.** `take.rs`'s only `.join()` is at `:197` inside
-  `collect`, behind an `is_finished()` skip at `:186-192`, so a live drain is
-  never joined; both quit handlers (`mooloop-ui/src/lib.rs:5675-5687`,
-  `:6240-6247`) consult only `session.dirty`.
-- ~~**A failed write leaves a partial file.**~~ **Closed 2026-09-21.** The
-  only `remove_file` used to be the `written == 0` branch, so a
-  `Drained::Failed` from a write or from `finalize()` left a
-  header-unpatched file in `recordings/`; both paths remove it now.
-- ~~**A take lands on a channel that stopped being a sampler.**~~ **Closed
-  2026-09-21.** `apply_take` used to find the channel by id and call
-  `apply_loaded_sample` with no kind check, then set `sample_embedded` and
-  record a "Record Take" history entry. It checks now, and keeps the
-  recording and names it in the status bar, exactly as when the channel has
-  gone. (A Haiku pass reported this landed at `lib.rs:14389`; that line is
-  the playhead's `is_sampler` test in the pump, and was not this.)
-- **Arming does not check the input still exists.** `record_press`
-  (`take.rs:240-256`) arms on `!channel.audio_input.is_off()` with no
-  `is_missing` check.
+- ~~**Quit loses a live take.**~~ `TakeRecorder::finish_all` ends every live
+  take and joins every drain against a bounded deadline, silently:
+  `AppUi::finish_takes` runs it once the event loop returns and `impl Drop for
+  TakeRecorder` backs it up. A wait that times out removes the partial file.
+  `TakeStatus::end` is the one control-side phase write, needed because at
+  quit the engine may already be going away and the drain's exit condition
+  could otherwise never be met.
+- ~~**A failed write leaves a partial file.**~~ Both routes remove it, through
+  one `failed()` helper that also says so in the message.
+- ~~**A take lands on a channel that stopped being a sampler.**~~
+  `Session::take_target` answers `TakeMiss`, so the rule has one home and one
+  wording. The inline copy fixed the same day was removed as unreachable when
+  the two met.
+- ~~**Arming does not check the input still exists.**~~ `record_press` takes
+  the hardware input's label and asks the picker -- deliberately the picker's
+  rule and not `AudioInputSource::resolve`'s, which calls the hardware input
+  present whatever the driver offers -- and answers `SourceGone` or
+  `NoInputDevice`, whose advice is the opposite of `NoInput`'s and, between
+  them, points at two different places to go and fix it.
 
-The two that remain needed a decision rather than a patch, and **Adam gave
-both on 2026-09-21** (`plans/audio-recording/00-status.md`, decisions 9 and
-10). Quit **finishes the take**: it ends it as Stop does, flushes, finalizes
-and only then leaves, on a bounded wait, and a wait that times out removes
-the partial file instead of leaving an unfinalized one. Arming on a missing
-input **refuses and names the cause**, because a deleted source channel and
-an absent audio device need different fixes from the user and one generic
-message sends them to the wrong place. Neither is built yet; both are now
-specified rather than open.
+**Adam settled the last two on 2026-09-21** as open questions 9 and 10
+(`plans/audio-recording/00-status.md` -- *open questions*, not the decisions
+list, which separately has a 9 and a 10 meaning other things). Both are built.
+Quit **finishes the take with no prompt** -- what is outstanding is a fraction
+of a second rather than something worth a dialog -- on a bounded wait that
+removes the partial file if it times out. Arming on a missing input
+**refuses and names the cause**, `SourceGone` or `NoInputDevice`, because a
+deleted source channel and an absent input device need different fixes from
+the user.
 
-Recorded here because two consecutive review runs reported it and neither the
-plan status nor this file remembered it: a plan that is not executed is also
-not remembered. Found 2026-09-20 (`reports/fable-2026-09-20.md` finding 2),
-re-confirmed open 2026-09-21 (`reports/fable-2026-09-21.md` finding 3) and
-verified against the history the same day. **MOO-55 needs reopening by its
-owner**; nothing here reopened it.
+**The lesson worth keeping is the gap between the tracker and `origin`.** Two
+consecutive review runs reported these four because neither the plan status
+nor this file remembered them, which is the fault this file exists to prevent.
+Then a third run found the issue closed against a tree that did not contain
+its fix and redid two of them: **an issue is not done until its fix is
+pushed**, and closing it earlier costs somebody else the same work twice.
+Found 2026-09-20 (`reports/fable-2026-09-20.md` finding 2), re-confirmed
+2026-09-21 (`reports/fable-2026-09-21.md` finding 3), closed the same day.
 
 **`Session::input_monitor` is never pruned when a channel goes.**
 (`session/session.rs:76`.) It is a `BTreeSet<ChannelId>` and only

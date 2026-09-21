@@ -711,13 +711,41 @@ sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
   input sample-exact. It stops when REC is pressed again, the transport stops,
   or, with CLIP on, after LENGTH. Several samplers can record at once.
 - **A finished take becomes the sampler's sample**, on the channel that
-  recorded it whichever is selected, as one "Record Take" undo step -- unless
-  that channel has stopped being a sampler, or has gone, while the take was
-  in flight, in which case the recording stays in `recordings/` and the
-  status bar says so. A take that fails to write leaves no partial file
-  behind. Nothing is written into a pattern; the take is heard through whatever triggers the
+  recorded it whichever is selected, as one "Record Take" undo step. Nothing
+  is written into a pattern; the take is heard through whatever triggers the
   sampler. Takes are written to `recordings/` beside the settings file, and a
   save copies a take into the song whichever asset mode it uses.
+- **A take that has nowhere to land says so and keeps the file.** A take
+  outlives what it was armed against: its channel can be deleted while it
+  records, and -- a channel being a dumb slot -- its sampler can be swapped
+  for another device. Either way the recording stays in `recordings/` and the
+  status bar says which happened, rather than the take being written onto a
+  channel that cannot show or save it. A take whose file could not be written
+  is reported the same way and leaves no partial behind.
+- **REC refuses a source that is gone, and says which kind.** A channel or
+  track that has since been deleted sends you back to the AUDIO row; no audio
+  input device at all -- unplugged, changed, or a microphone permission macOS
+  refused -- sends you to the audio preferences. Either way REC says so
+  instead of recording digital silence and making it the sampler's sample. It
+  is the same rule the AUDIO row draws the source as missing by.
+- **Quitting finishes a take that is still recording, without asking.** The
+  recording is written out to `recordings/` complete, rather than left as a
+  file whose header says it is empty; what is outstanding is a fraction of a
+  second, so there is no dialog. The wait is bounded, and one that runs out
+  removes the partial rather than leaving an unreadable file behind. What you
+  get is a finished *file*, not a sample in the song -- the song is closing.
+- **Quitting also offers to clear up takes nothing used.** Once quitting is
+  settled, takes recorded this session that neither the song nor its undo
+  history still points at are offered, as a count and a total size, and
+  **moved to the desktop trash** rather than deleted. A take an undo could
+  still reach is never offered, which is why the offer is made at quit:
+  closing the project is when history-only takes stop being reachable.
+  Answering no leaves everything alone, and cancelling the quit clears up
+  nothing.
+- **Takes left by a crash are not touched by that prompt.** A recording in
+  the shared folder older than this run of the app may be the only copy of a
+  take from a song that was never saved, so it is deliberately left for the
+  clean-up dialog (`audio-recording/06`), which is not built yet.
 - **The hardware input is an AUDIO source** under both drivers. Under JACK,
   since 2026-09-19, it is "Audio In": `mooloop:in_l`/`in_r` wired to the first
   physical capture pair. Under Core Audio, since 2026-09-20, it is the
