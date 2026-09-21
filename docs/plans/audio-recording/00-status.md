@@ -118,7 +118,7 @@ order.
 | [04](04-the-take.md) | A finished take becomes the channel's sample, with an undo entry and no notes | session, UI | **landed 2026-09-18** -- see below |
 | [05](05-interface.md) | Record button, source meter, the growing waveform, the non-sampler rule. **Acceptance: resample a loop into a sampler and play it back** | UI build | **landed 2026-09-18** -- see below |
 | [01](01-input-in-the-engine.md) | Drivers deliver hardware input into an input bus, which becomes one more source; monitoring | engine | **Landed**: JACK 2026-09-19 with monitoring and the input meter, Core Audio 2026-09-20 -- see below |
-| [06](06-unused-takes.md) | Find and delete takes nothing refers to | session, project, UI build | not started |
+| [06](06-unused-takes.md) | Find and delete takes nothing refers to | session, project, UI build | **quit prompt landed 2026-09-20**; the clean-up dialog is not built |
 
 **Why internal sources can go first without new scheduling:** capture is a
 sink, not a consumer. It reads a buffer after the whole block has rendered,
@@ -382,6 +382,12 @@ Each of these changes what a step builds. They are listed here so the step
 that needs an answer can stop and ask rather than guess. All five were
 answered the day the plan was written, and are kept here as a record.
 
+**This list and "Adam's decisions" above are numbered separately, and they now
+collide.** Decision 9 is the pre-roll and decision 10 is the AUDIO row; open
+question 9 is quitting mid-take and open question 10 is arming on a missing
+input. A bare "decision 9" in a comment is therefore ambiguous, so code citing
+either says which list it means. Found 2026-09-21, when both lists reached ten.
+
 1. ~~**An audio input on a channel that is not a sampler.**~~ **Answered
    2026-09-17:** on a channel that is not a sampler, the audio inputs are
    listed but **greyed out**. If a channel with an audio input selected is
@@ -443,20 +449,33 @@ finding 3) reported the same four edges, and neither this file nor
 `LOOSE_ENDS.md` had recorded them -- so the second run had to rediscover what
 the first had found. All four are now closed by MOO-55:
 
-- **Quit no longer ends the process with the WAV header unpatched.**
-  `TakeRecorder::finish_all` ends every live take and joins every drain
-  against a deadline, `has_live` makes a running take its own prompt asked
-  ahead of the unsaved-changes one, `AppUi::finish_takes` runs it after the
-  event loop, and `impl Drop for TakeRecorder` backs it up. `TakeStatus::end`
-  is the one control-side phase write, needed because at quit the engine may
-  already be going away and the drain's exit condition could never be met.
+- **Quit no longer ends the process with the WAV header unpatched**, and
+  does it **without asking** (open question 9). `TakeRecorder::finish_all`
+  ends every live take and joins every drain against a bounded deadline;
+  `AppUi::finish_takes` runs it once the event loop returns, and `impl Drop
+  for TakeRecorder` backs it up for the routes that never reach there. A wait
+  that times out removes the partial file rather than leaving an unfinalized
+  one. `TakeStatus::end` is the one control-side phase write, needed because
+  at quit the engine may already be going away and the drain's exit condition
+  could otherwise never be met.
 - **A failed drain removes its partial file**, from both the write and the
   finalize route, through one `failed()` helper that also says so in the
   message.
 - **A take lands only on a channel that is still a sampler**, via
   `Session::take_target` and `TakeMiss`.
-- **REC refuses a source that has gone**, using the picker's rule --
-  the one the AUDIO row already draws -- and answering `SourceMissing`.
+- **REC refuses a source that has gone, and names which kind** (open question
+  10): `RecordPress::SourceGone` for a deleted channel or track,
+  `RecordPress::NoInputDevice` for no hardware input at all. One message would
+  send half of them looking in the wrong place. The rule is the picker's --
+  the one the AUDIO row already draws -- and deliberately not
+  `AudioInputSource::resolve`'s, which calls the hardware input present
+  whatever the driver offers.
+
+**Two of these were built before Adam answered, and then changed to match.**
+The first pass gave quit a prompt and used one generic `SourceMissing`; open
+questions 9 and 10 came back "no prompt" and "a variant per cause", so both
+were rebuilt. Worth recording because the first pass was not wrong to guess --
+it was wrong to ship the guess without marking it as one.
 
 **The lesson is about the gap between Linear and the tree.** This entry
 previously read "MOO-55 is marked Done without a fix commit existing", and it

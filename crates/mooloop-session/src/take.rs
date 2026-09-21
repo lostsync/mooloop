@@ -42,7 +42,7 @@ const DRAIN_POLL: Duration = Duration::from_millis(5);
 ///
 /// Generous against a ring that was nearly full at quit, and bounded because
 /// the alternative is a window that will not close. A drain that overruns it
-/// is reported as a failure and left detached rather than waited on.
+/// has its partial file removed and is reported, rather than being waited on.
 const FINISH_DEADLINE: Duration = Duration::from_secs(5);
 
 /// The per-bucket peak of a take so far, `[left, right]`, as absolute
@@ -207,10 +207,13 @@ impl TakeRecorder {
     /// Whether any take is still in flight -- armed, waiting for its bar, or
     /// recording.
     ///
-    /// Quit asks this as well as `Session::dirty`, because the two are
-    /// different questions: `dirty` is about the document, and a take does
-    /// not become an edit until it lands on a channel as a sample. A live
-    /// take is unsaved work that the document knows nothing about.
+    /// **Nothing in the application reads this**, and that is worth stating
+    /// rather than leaving to be assumed: it was written as a quit prompt, and
+    /// open question 9 came back "no prompt" -- what is outstanding at quit is
+    /// a fraction of a second, so quit finishes the take and says nothing.
+    /// What keeps it is [`Self::finish_all`]'s tests, which need to state the
+    /// precondition they are testing; the clean-up dialog
+    /// (`audio-recording/06`) is the plausible first real caller.
     pub fn has_live(&self) -> bool {
         self.running
             .iter()
@@ -220,15 +223,21 @@ impl TakeRecorder {
     /// End every take still running and collect all of them, waiting for
     /// each drain rather than skipping the ones still going.
     ///
-    /// This is the quit path. [`Self::collect`] is the pump's version and
-    /// skips a drain that has not finished, which is right when it will be
-    /// asked again in sixteen milliseconds and wrong when this is the last
-    /// time anything will ask: `hound` patches the frame count into the WAV
-    /// header in `finalize`, at the end of the drain, so a take whose drain
-    /// never runs out leaves a file that says it holds zero frames.
+    /// This is the quit path, and it is **silent by design**: Adam's answer to
+    /// open question 9, 2026-09-21 -- quit ends the take the way Stop does,
+    /// flushes, finalizes, and only then leaves, with no dialog, because what
+    /// is outstanding is a fraction of a second. What it promises is a
+    /// complete *file*, not a sample in the song; the song is closing.
     ///
-    /// Each drain is given [`FINISH_DEADLINE`]; one that overruns is reported
-    /// and left detached, so quit is delayed but never blocked.
+    /// [`Self::collect`] is the pump's version and skips a drain that has not
+    /// finished, which is right when it will be asked again in sixteen
+    /// milliseconds and wrong when this is the last time anything will ask:
+    /// `hound` patches the frame count into the WAV header in `finalize`, at
+    /// the end of the drain, so a take whose drain never runs out leaves a
+    /// file that says it holds zero frames.
+    ///
+    /// Each drain is given [`FINISH_DEADLINE`] so a stuck one cannot hang
+    /// quit; one that overruns has its partial file removed and is reported.
     pub fn finish_all(&mut self) -> (Vec<FinishedTake>, Vec<String>) {
         let mut finished = Vec::new();
         let mut failures = Vec::new();
@@ -251,10 +260,20 @@ impl TakeRecorder {
             if ready {
                 classify(take, &mut finished, &mut failures);
             } else {
+                // **A timed-out wait removes the partial file** (open question 9,
+                // answered 2026-09-21). Its header was never patched, so what is on
+                // disk is a WAV nothing can read; leaving it would put a file
+                // in `recordings/` that looks like a take and is not one.
+                let removed = std::fs::remove_file(&take.path).is_ok();
                 failures.push(format!(
-                    "{} did not finish writing within {} seconds and may be short",
+                    "{} did not finish writing within {} seconds{}",
                     take.path.display(),
                     FINISH_DEADLINE.as_secs(),
+                    if removed {
+                        "; the partial recording was removed"
+                    } else {
+                        " and may be short"
+                    },
                 ));
                 // Dropped without a join: waiting longer is the one thing
                 // this path has already decided not to do.
@@ -323,12 +342,18 @@ pub enum RecordPress {
     },
     /// The channel has no AUDIO input, so there is nothing to record.
     NoInput,
-    /// The channel's AUDIO input was picked and has since gone: a channel or
-    /// track that was deleted, or the hardware input on a driver offering
-    /// none. Distinct from [`Self::NoInput`] because the advice is the
-    /// opposite -- nothing needs picking, something needs picking *again* --
-    /// and because arming here records a silent file.
-    SourceMissing,
+    /// The channel or track this one resamples has been deleted.
+    ///
+    /// Split from [`Self::NoInputDevice`] on Adam's answer to open question
+    /// 10, 2026-09-21:
+    /// the two need different fixes from the user -- pick another source here,
+    /// go and look at your audio hardware there -- so one message would send
+    /// half of them looking in the wrong place. Both are distinct from
+    /// [`Self::NoInput`], whose advice is to pick an input at all.
+    SourceGone,
+    /// The channel records the hardware input and there is none: unplugged,
+    /// changed, or a microphone permission macOS refused.
+    NoInputDevice,
 }
 
 /// Why a finished take has nowhere to land.
@@ -420,8 +445,13 @@ impl crate::session::Session {
             RecordPress::NoInput
         } else if self.audio_input_missing(channel.audio_input, input_label) {
             // Arming here would record a ring of zeros into a file and make
-            // it the sampler's sample, silently.
-            RecordPress::SourceMissing
+            // it the sampler's sample, silently. Which cause it is decides
+            // what the user has to go and do about it (open question 10).
+            if channel.audio_input == mooloop_core::AudioInputSource::Input {
+                RecordPress::NoInputDevice
+            } else {
+                RecordPress::SourceGone
+            }
         } else {
             RecordPress::Arm {
                 channel: channel.id,
@@ -810,7 +840,7 @@ mod tests {
         let mut take = *take;
         let frames = ramp(5000);
         take.push_for_test(&frames);
-        assert!(recorder.has_live(), "a take is recording, so quit has to ask");
+        assert!(recorder.has_live(), "a take is recording when quit arrives");
 
         // `take` is deliberately still held, so the ring is *not* abandoned:
         // the drain has to leave on the status alone, which is the thing
@@ -940,15 +970,20 @@ mod tests {
         session.channels.remove(1);
         assert_eq!(
             session.record_press(0, false, None),
-            Some(RecordPress::SourceMissing),
+            Some(RecordPress::SourceGone),
             "the channel it records went away"
         );
 
         // The hardware input under a driver that offers none: `resolve` calls
         // this present and the picker calls it missing, and the picker is the
-        // one the face agrees with.
+        // one the face agrees with. **A different answer from the one above**,
+        // per open question 10: this user goes and looks at their audio
+        // device, not at the AUDIO row.
         assert!(session.set_channel_audio_input(0, AudioInputSource::Input));
-        assert_eq!(session.record_press(0, false, None), Some(RecordPress::SourceMissing));
+        assert_eq!(
+            session.record_press(0, false, None),
+            Some(RecordPress::NoInputDevice)
+        );
         assert_eq!(
             session.record_press(0, false, Some("Scarlett 2i2")),
             Some(RecordPress::Arm {

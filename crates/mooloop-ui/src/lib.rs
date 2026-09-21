@@ -5849,24 +5849,17 @@ impl AppUi {
                 // Same guard as Open Song: unsaved work must be confirmed
                 // away, and the dialog round-trip must not block the UI.
                 //
-                // A live take is asked about ahead of `dirty` and in its own
-                // words. It is not an edit until it lands on a channel, so
-                // the document is clean while a recording is running and this
-                // path used to quit without a word; and "discard unsaved song
-                // changes" is the wrong question to ask about a take, which is
-                // not discarded -- it is finished and left in the recordings
-                // folder. Decided on the UI thread, because the answer has to
-                // cross to the dialog thread and `UiState` cannot.
-                let prompt = {
-                    let guard = st.borrow();
-                    if guard.takes.has_live() {
-                        Some("A take is still recording. Finish it and quit?")
-                    } else if guard.session.dirty {
-                        Some("Discard unsaved song changes and quit?")
-                    } else {
-                        None
-                    }
-                };
+                // **A live take is not asked about** (open question 9,
+                // answered 2026-09-21): quit finishes it the way Stop would and leaves,
+                // because what is outstanding is a fraction of a second rather
+                // than something worth a dialog. `AppUi::finish_takes` does
+                // that work after the loop. It is not `dirty` either way -- a
+                // take is not an edit until it lands on a channel.
+                let prompt = st
+                    .borrow()
+                    .session
+                    .dirty
+                    .then_some("Discard unsaved song changes and quit?");
                 // Scanned here for the same reason the prompt is decided
                 // here -- the dialog thread cannot hold `UiState` -- and the
                 // list is plain data, so it crosses.
@@ -6443,16 +6436,12 @@ impl AppUi {
                 // same two questions as the Quit menu row in the same order.
                 // A take in flight first: it is not `dirty`, so this path used
                 // to close on it silently.
-                let prompt = {
-                    let guard = st.borrow();
-                    if guard.takes.has_live() {
-                        Some("A take is still recording. Finish it and quit?")
-                    } else if guard.session.dirty {
-                        Some("Quit without saving this song?")
-                    } else {
-                        None
-                    }
-                };
+                // No prompt for a live take here either; see the Quit row.
+                let prompt = st
+                    .borrow()
+                    .session
+                    .dirty
+                    .then_some("Quit without saving this song?");
                 if let Some(prompt) = prompt {
                     if !confirm_dialog(prompt) {
                         return CloseRequestResponse::KeepWindowShown;
@@ -9476,13 +9465,24 @@ impl AppUi {
                             "Pick an AUDIO input in the channel sidebar to record".into(),
                         );
                     }
-                    Some(RecordPress::SourceMissing) => {
-                        // Not `NoInput`'s wording: an input *was* picked, and
-                        // telling someone to pick one when the row already
-                        // shows the one they picked reads as the app not
-                        // knowing what it is showing.
+                    // Two causes, two messages (open question 10): one sends the
+                    // user back to the AUDIO row, the other to their audio
+                    // hardware, and a shared wording would send half of them
+                    // to the wrong one. Neither is `NoInput`'s "pick an
+                    // input", which reads as the app not knowing what it is
+                    // already showing.
+                    Some(RecordPress::SourceGone) => {
                         window.set_status_message(
-                            "This channel's AUDIO input is gone; pick another to record".into(),
+                            "This channel records a source that has been deleted; \
+                             pick another in the AUDIO row"
+                                .into(),
+                        );
+                    }
+                    Some(RecordPress::NoInputDevice) => {
+                        window.set_status_message(
+                            "There is no audio input to record; check the input device in \
+                             Preferences > Audio"
+                                .into(),
                         );
                     }
                     Some(RecordPress::Arm { channel, seat, name, clip_ticks, from_input }) => {

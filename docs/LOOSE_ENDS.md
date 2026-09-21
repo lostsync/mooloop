@@ -1728,10 +1728,9 @@ repo-wide grep for `finish_all` both found nothing. Two of the four were then
 fixed a second time, independently, before the branch landed.
 
 - ~~**Quit loses a live take.**~~ `TakeRecorder::finish_all` ends every live
-  take and joins every drain against a deadline; `has_live` makes a running
-  take its own quit prompt, asked ahead of the unsaved-changes one, because a
-  take is not an edit and so is not `dirty`. `AppUi::finish_takes` runs it
-  after the event loop and `impl Drop for TakeRecorder` backs it up.
+  take and joins every drain against a bounded deadline, silently:
+  `AppUi::finish_takes` runs it once the event loop returns and `impl Drop for
+  TakeRecorder` backs it up. A wait that times out removes the partial file.
   `TakeStatus::end` is the one control-side phase write, needed because at
   quit the engine may already be going away and the drain's exit condition
   could otherwise never be met.
@@ -1744,16 +1743,19 @@ fixed a second time, independently, before the branch landed.
 - ~~**Arming does not check the input still exists.**~~ `record_press` takes
   the hardware input's label and asks the picker -- deliberately the picker's
   rule and not `AudioInputSource::resolve`'s, which calls the hardware input
-  present whatever the driver offers -- and answers `SourceMissing`, whose
-  advice is the opposite of `NoInput`'s.
+  present whatever the driver offers -- and answers `SourceGone` or
+  `NoInputDevice`, whose advice is the opposite of `NoInput`'s and, between
+  them, points at two different places to go and fix it.
 
-**Adam settled the last two on 2026-09-21** as decisions 9 and 10
-(`plans/audio-recording/00-status.md`). Quit **finishes the take with no
-prompt** -- what is outstanding is a fraction of a second rather than
-something worth a dialog -- on a bounded wait that removes the partial file if
-it times out. Arming on a missing input **refuses and names the cause**, with
-a `RecordPress` variant per cause, because a deleted source channel and an
-absent input device need different fixes from the user.
+**Adam settled the last two on 2026-09-21** as open questions 9 and 10
+(`plans/audio-recording/00-status.md` -- *open questions*, not the decisions
+list, which separately has a 9 and a 10 meaning other things). Both are built.
+Quit **finishes the take with no prompt** -- what is outstanding is a fraction
+of a second rather than something worth a dialog -- on a bounded wait that
+removes the partial file if it times out. Arming on a missing input
+**refuses and names the cause**, `SourceGone` or `NoInputDevice`, because a
+deleted source channel and an absent input device need different fixes from
+the user.
 
 **The lesson worth keeping is the gap between the tracker and `origin`.** Two
 consecutive review runs reported these four because neither the plan status

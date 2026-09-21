@@ -722,16 +722,18 @@ sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
   status bar says which happened, rather than the take being written onto a
   channel that cannot show or save it. A take whose file could not be written
   is reported the same way and leaves no partial behind.
-- **REC refuses a source that is gone.** If the channel's AUDIO input names a
-  channel or track that has since been deleted, or the hardware input under a
-  driver offering none, REC says so instead of recording silence. It is the
-  same rule the AUDIO row draws the source as missing by.
-- **Quitting with a take still recording asks first**, and finishes the take
-  either way once the window closes: the recording is written out to
-  `recordings/` complete, not left as a file whose header says it is empty. A
-  take in flight is not an unsaved *edit* -- it is not part of the song until
-  it lands on a channel -- so this is a separate question from the unsaved
-  changes prompt, and it is asked first.
+- **REC refuses a source that is gone, and says which kind.** A channel or
+  track that has since been deleted sends you back to the AUDIO row; no audio
+  input device at all -- unplugged, changed, or a microphone permission macOS
+  refused -- sends you to the audio preferences. Either way REC says so
+  instead of recording digital silence and making it the sampler's sample. It
+  is the same rule the AUDIO row draws the source as missing by.
+- **Quitting finishes a take that is still recording, without asking.** The
+  recording is written out to `recordings/` complete, rather than left as a
+  file whose header says it is empty; what is outstanding is a fraction of a
+  second, so there is no dialog. The wait is bounded, and one that runs out
+  removes the partial rather than leaving an unreadable file behind. What you
+  get is a finished *file*, not a sample in the song -- the song is closing.
 - **Quitting also offers to clear up takes nothing used.** Once quitting is
   settled, takes recorded this session that neither the song nor its undo
   history still points at are offered, as a count and a total size, and
