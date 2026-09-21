@@ -97,15 +97,15 @@ that genuinely cannot bracket.
 
 ## Steps
 
-| Step | What it does | Size |
-| --- | --- | --- |
-| 01 | A check that reports every value callback nothing records — written against the unfixed tree, so its count is this plan's progress bar | small |
-| 02 | The `Gesture` global, and one recorder generalised from the modulation precedent; proved on the mixer's four continuous controls, retiring the 400 ms timer | medium |
-| 03 | Every shared widget brackets its own gesture, including the paths that are not drags: wheel, arrow keys, double-click reset | medium |
-| 04 | Device and generator parameters route through the recorder — the bulk of MOO-50, including the modulated-and-automated base value rule | large |
-| 05 | Typed fields and renames: one entry per editing session, not one per keystroke | medium |
-| 06 | The discrete surfaces that never needed a bracket and were simply never recorded — step grid, pattern length, playlist, presets, the input picks, the device-kind swap | medium |
-| 07 | The check reads zero; `CURRENT.md` and `LOOSE_ENDS.md` stop describing a gap that has closed | small |
+| Step | What it does | Size | Issue |
+| --- | --- | --- | --- |
+| 01 | A check that reports every value callback nothing records — written against the unfixed tree, so its count is this plan's progress bar | small | MOO-62 |
+| 02 | The `Gesture` global, and one recorder generalised from the modulation precedent; proved on the mixer's four continuous controls, retiring the 400 ms timer | medium | MOO-63 |
+| 03 | Every shared widget brackets its own gesture, including the paths that are not drags: wheel, arrow keys, double-click reset | medium | MOO-64 |
+| 04 | Device and generator parameters route through the recorder — the bulk of MOO-50, including the modulated-and-automated base value rule | large | MOO-65 |
+| 05 | Typed fields and renames: one entry per editing session, not one per keystroke | medium | MOO-66 |
+| 06 | The discrete surfaces that never needed a bracket and were simply never recorded — step grid, pattern length, playlist, presets, the input picks, the device-kind swap | medium | MOO-67 |
+| 07 | The check reads zero; `CURRENT.md` and `LOOSE_ENDS.md` stop describing a gap that has closed | small | MOO-68 |
 
 Order matters between 01 and 02 and nowhere else after that: 03 through 06 are
 independent of each other once the mechanism exists, and can go to different
