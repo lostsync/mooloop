@@ -731,7 +731,7 @@ def unrecorded_edit():
     history, is thrown away by the next Ctrl+Z with no redo path. Turn a
     filter cutoff, draw a note, undo the note: the cutoff goes too, silently,
     and nothing in the interface said it would.
-    `docs/plans/gesture-undo/` is the plan that closes that, this check is
+    `docs/plans/archive/gesture-undo/` is the plan that closes that, this check is
     its progress bar, and step 07 is where it reads zero.
 
     Written against the unfixed tree, which `AGENTS.md` asks for twice over:
@@ -802,10 +802,9 @@ def unrecorded_edit():
     """
     ui = ROOT / "crates" / "mooloop-ui" / "src"
 
-    # Every recorder. `with_gesture_history` is the general one
-    # `docs/plans/gesture-undo/` step 02 adds; naming it before it exists is
-    # deliberate, so this does not have to be edited by the commit that makes
-    # it read zero.
+    # Every recorder. `with_gesture_history` is the general one, and it was
+    # named here before it existed -- deliberately, so that the commit which
+    # made this read zero did not also have to edit the check that says so.
     recorders = (
         "record_project_history",
         "with_project_history",

@@ -234,7 +234,7 @@ would report a correct handler forever, and a check that is never clean stops
 being read.
 
 A tenth, `unrecorded-edit`, was added 2026-09-21 with MOO-50 and
-`docs/plans/gesture-undo/`, and it is a progress bar before it is a guard:
+`docs/plans/archive/gesture-undo/`, and it is a progress bar before it is a guard:
 its count on the day it was written was a hundred and seventy-six and its
 finish line is zero. What it reports is a `MainWindow` callback whose handler changes the
 document without recording an undo entry -- which is worse than a missing
