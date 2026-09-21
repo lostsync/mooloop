@@ -428,18 +428,21 @@ to, so none of them blocks a step; Adam can overrule any of them.
    hang quit, and a wait that times out removes the partial file rather than
    leaving an unfinalized one in `recordings/`. Note what this does *not*
    promise: the finished take is a complete file on disk, not a sample in the
-   song, because the song is closing. Step 04.
+   song, because the song is closing. **Built the same day** as
+   `TakeRecorder::finish_all` with a `Drop` behind it; see *a take is owned
+   at all four edges* below. Step 04.
 
 10. **Arming record on a channel whose input has gone.** Adam's call,
     2026-09-21: **refuse, and name the cause.** The two causes need different
     fixes from the user -- a resampled channel that was deleted, versus no
     audio input device at all (unplugged, changed, or a refused microphone
     permission on macOS) -- so one generic message sends them looking in the
-    wrong place. `record_press` asks `AudioInputPicker::is_missing`
-    (`core/src/input.rs:188`) alongside `is_off`, and `RecordPress` grows a
-    variant per cause rather than reusing `NoInput`. What this closes is
-    silent and destructive: arming on a missing input records digital silence
-    and the finished take then *replaces the channel's sample*. Step 04.
+    wrong place. What this closes is silent and destructive: arming on a
+    missing input records digital silence and the finished take then
+    *replaces the channel's sample*. **Built the same day** as
+    `RecordPress::SourceGone` and `RecordPress::NoInputDevice`, asking the
+    picker rather than `AudioInputSource::resolve`; see *a take is owned at
+    all four edges* below. Step 04.
 
 ## Closed: a take is owned at all four edges
 
