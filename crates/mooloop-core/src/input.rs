@@ -207,6 +207,54 @@ pub struct SamplerRecord {
 /// The longest clip the Record page offers, in bars.
 pub const MAX_RECORD_BARS: u8 = 64;
 
+/// What the RECORD page shows, as the window's `sampler-record-state`
+/// integer and the label on its button.
+///
+/// The phase a take is in is `mooloop_engine::TakePhase`; this is what the
+/// interface makes of it, and it lives in core because both the crate that
+/// encodes it (`mooloop-ui`) and the crate that converts into it
+/// (`mooloop-engine`) depend on core. The `.slint` ladder in
+/// `sampler-device.slint` decodes these numbers -- Slint cannot import a Rust
+/// enum, so the copy is unavoidable and
+/// `crates/mooloop-ui/tests/record_page.rs` holds the two together instead.
+///
+/// Adding a variant means adding an arm to that ladder; the test fails until
+/// both move. See MOO-54.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum RecordFace {
+    /// Nothing is recording on this channel: the button offers to start one.
+    Idle = 0,
+    /// Armed, waiting for the next bar line -- the pre-roll.
+    Waiting = 1,
+    /// Recording; the button offers to stop.
+    Recording = 2,
+}
+
+impl RecordFace {
+    /// Every variant, for a caller that needs to check it has them all.
+    pub const ALL: [Self; 3] = [Self::Idle, Self::Waiting, Self::Recording];
+
+    /// The label the RECORD button carries in this state.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "REC",
+            Self::Waiting => "WAIT",
+            Self::Recording => "STOP",
+        }
+    }
+
+    /// The number the window property carries in this state.
+    pub fn as_i32(self) -> i32 {
+        self as i32
+    }
+
+    /// The state that number names, or `None` if nothing does.
+    pub fn from_i32(value: i32) -> Option<Self> {
+        Self::ALL.into_iter().find(|face| face.as_i32() == value)
+    }
+}
+
 fn one_bar() -> u8 {
     1
 }

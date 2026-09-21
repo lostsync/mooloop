@@ -1547,7 +1547,8 @@ pub const DELAY_PARAM_TONE: u32 = 4;
 pub const DELAY_PARAM_MIX: u32 = 5;
 
 /// Longest delay time, and therefore the ring the effect allocates per slot:
-/// two seconds of stereo `f32` is about 768 KiB at 48 kHz.
+/// two seconds of stereo `f32` is about 768 kB at 48 kHz -- 750 KiB, not 768
+/// of them; 2 x 48_000 x 2 x 4 bytes.
 pub const DELAY_MAX_TIME_MS: f32 = 2_000.0;
 
 static DELAY_DESCRIPTORS: [ParamDescriptor; 6] = [

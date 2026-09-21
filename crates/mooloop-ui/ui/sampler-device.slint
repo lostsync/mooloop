@@ -290,7 +290,7 @@ export component SamplerDeviceFace inherits Rectangle {
     in property <string> record-source;
     in-out property <bool> record-clip;
     in-out property <int> record-bars: 1;
-    in property <int> record-max-bars: 64;
+    in property <int> record-max-bars;
 
     callback attack-changed(float);
     callback decay-changed(float);

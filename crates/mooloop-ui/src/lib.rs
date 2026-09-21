@@ -46,7 +46,7 @@ use mooloop_core::{
     KickCharacter, Kit, LfoWave, LoopMode, ModDestinationDescriptor,
     ModPolarity, ModRack, ModRandomTrigger, ModStepTrigger,
     ControlRate, ControlTarget, ModulatorKind, ModulatorParams, OutletDescriptor,
-    PublishesOutlets, SendTap, Takeover, TransportControl,
+    PublishesOutlets, RecordFace, SendTap, Takeover, TransportControl,
     SignalShape,
     modulation::outlet_slot,
     aux_in, AuxInParams, EdgeRefusal,
@@ -1256,6 +1256,20 @@ fn browser_row_expands(row: &BrowserRow) -> bool {
     row.kind == BROWSER_FOLDER || row.kind == BROWSER_GROUP
 }
 
+/// Whether landing on a row with the arrows should audition it -- inspect
+/// the file, fill the info pane, and, with the preview armed, sound it.
+///
+/// Only a sample row, and the exclusion is the point rather than an
+/// oversight: a *preset* row's click loads the preset into the selected
+/// channel, so a walk down the PRESETS tab that did what a click does would
+/// install a device per keypress. A folder or a group opens on Right or
+/// Enter and has nothing to hear. Every sample row is playable already --
+/// `build_browser_rows` filters the tree to the formats that decode -- so
+/// the kind is the whole question.
+fn browser_row_auditions(kind: i32) -> bool {
+    kind == BROWSER_SAMPLE
+}
+
 /// Where the keyboard's row lands when it moves by `delta`, or `None` if it
 /// does not move. Pure, and separate from the window for that reason: the
 /// enter-from-either-end rule and the clamp are the whole of the behaviour
@@ -1288,6 +1302,16 @@ fn browser_parent_of(depths: &[i32], index: usize) -> Option<usize> {
     (0..index).rev().find(|candidate| depths[*candidate] < depth)
 }
 
+/// Move the keyboard's row, auditioning whatever it lands on.
+///
+/// The audition is what makes the arrows a way of *listening* through a
+/// folder rather than a way of pointing at it: Adam asked for Up/Down to
+/// play what they select, and this is the only place a keyboard move
+/// happens, so Left and Right get it too where they fall through to a step.
+/// It goes through `browser-row-previewed`, the same callback the row's own
+/// click invokes, so the arrows and the pointer cannot drift into meaning
+/// two different things -- including the arm: that callback inspects, and
+/// only an armed preview turns the inspection into sound.
 fn browser_move_focus(st: &Rc<RefCell<UiState>>, window: &MainWindow, delta: i32) -> bool {
     let Some(next) = browser_focus_step(
         browser_row_count(st),
@@ -1297,6 +1321,11 @@ fn browser_move_focus(st: &Rc<RefCell<UiState>>, window: &MainWindow, delta: i32
         return false;
     };
     window.set_browser_focus_index(next);
+    if let Some(row) = browser_row_at(st, next) {
+        if browser_row_auditions(row.kind) {
+            window.invoke_browser_row_previewed(row.path.clone());
+        }
+    }
     true
 }
 
@@ -5115,8 +5144,8 @@ impl UiState {
         };
         let view = self.takes.view(channel.id).filter(|view| view.is_live());
         let Some(view) = view else {
-            if window.get_sampler_record_state() != 0 {
-                window.set_sampler_record_state(0);
+            if window.get_sampler_record_state() != RecordFace::Idle.as_i32() {
+                window.set_sampler_record_state(RecordFace::Idle.as_i32());
                 window.set_sampler_record_peaks(ModelRc::default());
                 window.set_sampler_record_elapsed(SharedString::new());
             }
@@ -5127,18 +5156,20 @@ impl UiState {
             f64::from(self.audio_sample_rate) * 60.0 / bpm * f64::from(mooloop_core::time::BEATS_PER_BAR);
         let elapsed = view.frames as f64 / frames_per_bar.max(1.0);
         let (state, text, fill) = match view.phase {
-            mooloop_engine::TakePhase::Waiting => (1, String::new(), 1.0),
-            _ if channel.record.clip => {
+            phase @ mooloop_engine::TakePhase::Waiting => {
+                (RecordFace::from(phase), String::new(), 1.0)
+            }
+            phase if channel.record.clip => {
                 let bars = f64::from(channel.record.bars);
                 (
-                    2,
+                    RecordFace::from(phase),
                     format!("{elapsed:.1} / {} BARS", channel.record.bars),
                     (elapsed / bars).clamp(0.0, 1.0) as f32,
                 )
             }
-            _ => (2, format!("{elapsed:.1} BARS"), 1.0),
+            phase => (RecordFace::from(phase), format!("{elapsed:.1} BARS"), 1.0),
         };
-        window.set_sampler_record_state(state);
+        window.set_sampler_record_state(state.as_i32());
         window.set_sampler_record_elapsed(text.into());
         window.set_sampler_record_fill(fill);
         let bars = view.bars(RECORD_PAGE_BARS);
@@ -12631,17 +12662,33 @@ impl AppUi {
         //     worker thread like every other dialog call, handing the picked
         //     path to the pump, which applies it on the UI thread. ---
         let (browser_pick_tx, browser_pick_rx) = std::sync::mpsc::channel::<PathBuf>();
-        let (browser_info_tx, browser_info_rx) =
-            std::sync::mpsc::channel::<Result<SampleInspection, (String, String)>>();
+        let (browser_info_tx, browser_info_rx) = std::sync::mpsc::channel::<(
+            PathBuf,
+            Result<SampleInspection, (String, String)>,
+        )>();
+        // The sample the browser is currently waiting to hear about, so a
+        // reply about any other one can be dropped.
+        //
+        // An inspection decodes the whole file on a worker thread, and since
+        // the arrow keys audition what they land on, a walk down a folder
+        // faster than a decode leaves several in flight at once -- which do
+        // not finish in the order they were asked for. Without this, arrowing
+        // past a long file lands its waveform, its stats and its *sound* on
+        // top of the short one below it that has already been selected and
+        // played. The pointer could always race this too; it just took a held
+        // key to make it ordinary.
+        let browser_inspecting: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
         {
             let browser_info_tx = browser_info_tx.clone();
+            let inspecting = browser_inspecting.clone();
             window.on_browser_row_previewed(move |path| {
                 let path = PathBuf::from(path.to_string());
+                *inspecting.borrow_mut() = Some(path.clone());
                 let tx = browser_info_tx.clone();
                 std::thread::spawn(move || {
-                    let _ = tx.send(
-                        inspect_sample(&path).map_err(|error| (path.display().to_string(), error)),
-                    );
+                    let result =
+                        inspect_sample(&path).map_err(|error| (path.display().to_string(), error));
+                    let _ = tx.send((path, result));
                 });
             });
         }
@@ -13009,11 +13056,16 @@ impl AppUi {
                     };
                 }
                 // Finished inspections fill the info pane and, when autoplay
-                // is armed, hand the decoded sample to the preview voice.
-                while let Ok(inspection) = browser_info_rx.try_recv() {
+                // is armed, hand the decoded sample to the preview voice --
+                // unless the selection has moved on since it was asked
+                // for, which is what `browser_inspecting` decides.
+                while let Ok((path, inspection)) = browser_info_rx.try_recv() {
                     let Some(window) = weak.upgrade() else {
                         continue;
                     };
+                    if browser_inspecting.borrow().as_deref() != Some(path.as_path()) {
+                        continue;
+                    }
                     match inspection {
                         Ok(inspection) => {
                             window.set_browser_info_name(inspection.name.into());
@@ -14595,13 +14647,13 @@ impl AppUi {
                     move || {
                         let Some(w) = weak.upgrade() else { return };
                         let (mut waited, mut recorded, mut peaks) = seen.get();
-                        match w.get_sampler_record_state() {
-                            1 => waited = true,
-                            2 => {
+                        match RecordFace::from_i32(w.get_sampler_record_state()) {
+                            Some(RecordFace::Waiting) => waited = true,
+                            Some(RecordFace::Recording) => {
                                 recorded = true;
                                 peaks = peaks.max(w.get_sampler_record_peaks().row_count());
                             }
-                            _ => {}
+                            Some(RecordFace::Idle) | None => {}
                         }
                         seen.set((waited, recorded, peaks));
                     },
@@ -15610,6 +15662,24 @@ mod browser_keyboard_tests {
     fn an_empty_tree_answers_nothing() {
         assert_eq!(browser_focus_step(0, -1, 1), None);
         assert_eq!(browser_focus_step(0, 0, -1), None);
+    }
+
+    /// Walking onto a sample plays it; walking onto anything else does not
+    /// do that row's click.
+    ///
+    /// The second half is the one worth pinning. A preset row's click
+    /// *loads* the preset into the selected channel, so an arrow walk that
+    /// did what a click does would install a device per keypress on the way
+    /// down the PRESETS tab -- and the tab shares this model and this
+    /// keyboard with the samples.
+    #[test]
+    fn the_arrows_audition_a_sample_and_nothing_else() {
+        assert!(browser_row_auditions(BROWSER_SAMPLE));
+        assert!(!browser_row_auditions(BROWSER_FOLDER));
+        assert!(!browser_row_auditions(BROWSER_GROUP));
+        // 3 is a preset, the kind that has no constant because it is what a
+        // row that is none of the others is.
+        assert!(!browser_row_auditions(3));
     }
 
     /// Left on a leaf climbs to the folder holding it, which in a flattened
