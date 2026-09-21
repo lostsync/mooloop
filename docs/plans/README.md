@@ -52,20 +52,23 @@ step 03 built first would have ended an open take silently on any structural
 edit. `reports/fable-2026-09-18.md` found this; `audio-recording/03-capture.md`
 states the decision and the alternative it rejected.
 
-`transport-discontinuity/` was added 2026-09-20, **step 01 landed the same
-day**, and the rest is **in progress outside the `FOCUS.md` sequence**, because
-Adam reported it directly: switching the pattern he is looking at cuts off held
-notes, and it does so in Song mode where the selection changes nothing that
-plays. Step 01 is the bug: `SetCurrentPattern` pays a discontinuity only when
-the selection moved, the mode is Pattern and the transport is running, which
-takes four cases that cost every sounding voice down to nothing. Steps 02 to 04
-are the mechanism whose absence caused it -- a command that lands at a musical
+`archive/transport-discontinuity/` was added 2026-09-20 and **all four steps
+landed the same day**, outside the `FOCUS.md` sequence, because Adam reported
+it directly: switching the pattern he is looking at cuts off held notes, and it
+does so in Song mode where the selection changes nothing that plays. Step 01 is
+the bug: `SetCurrentPattern` pays a discontinuity only when the selection
+moved, the mode is Pattern and the transport is running, which takes four cases
+that cost every sounding voice down to nothing. Steps 02 to 04 are the
+mechanism whose absence caused it -- a command that lands at a musical
 boundary, an `AudioNode` that can be told time moved, and the rule that
-navigation must not reach the audio thread. Read its `00-status.md` before any
-of them: it records that the symptom is a choke rather than the renderer
-rebuild Adam first suspected, and his two rulings, *"immediate and yes"* --
-which cost step 02 its original justification, since queueing was to be what
-retired the Pattern-mode release and immediate keeps it. Linear MOO-57.
+navigation must not reach the audio thread. Read its `00-status.md` before
+reopening any of it: it records that the symptom is a choke rather than the
+renderer rebuild Adam first suspected, and his two rulings, *"immediate and
+yes"* -- which cost step 02 its original justification, since queueing was to
+be what retired the Pattern-mode release and immediate keeps it. Two things it
+leaves open and says so: the voice path still synthesises `Event::Choke` for a
+seek rather than using the new hook, and nothing defers a command yet. Linear
+MOO-57.
 
 `plugin-hosting/` was added 2026-09-16 and is **not started, outside the
 `FOCUS.md` sequence**, because Adam asked for it directly: CLAP effects and
@@ -299,7 +302,11 @@ tempting change was rejected:
 worked, the app *"looks really good now"*, and the Acid cutoff is *"fine"* --
 though he heard that filter as *"really quiet"*, which is in `LOOSE_ENDS.md`.
 
-`buffer-implementation/` and `incremental-structure/` are the newest, both
+`transport-discontinuity/` is the newest, written and closed whole on
+2026-09-20; it is described at the top of this file, and its `00-status.md`
+names the two things it deliberately left open.
+
+`buffer-implementation/` and `incremental-structure/` came next, both
 closed 2026-09-18. Buffer ran three work orders -- the whole device, control
 and modulation, then freeze and the grid -- and a gesture rebuild after the
 first play-through showed the turntable model was the complaint; it closed

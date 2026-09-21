@@ -85,7 +85,7 @@ voice on every channel -- in Song mode, where the selected pattern is not what
 is playing. `scripts/dupe-audit navigation-sends` reports a selection handler
 that sends anything else; a gesture that is really an edit says so in its name
 (`on_automation_lane_opened`, not `…_selected`). MOO-57 and
-`docs/plans/transport-discontinuity/`.
+`docs/plans/archive/transport-discontinuity/`.
 
 **Two mechanisms cross the boundary, and nothing else does**: the ordered
 command stream, whose displaced heap objects come back through the reclaim
