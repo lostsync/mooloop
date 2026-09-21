@@ -4,12 +4,14 @@
 layer device"*). **The work order was written 2026-09-21 as steps 07-10** and
 Adam ordered it next the same day. Steps 01-05 are unchanged.
 
-| Step | What | State |
-| --- | --- | --- |
-| [07](07-a-branch-is-a-run.md) | One container predicate, latency as a tree, `EffectKind::Layer` landing silent | not started |
-| [08](08-the-chain-splits-and-sums.md) | Branch buffers, alignment, the sum — the engine | not started |
-| [09](09-the-rack-draws-branches.md) | The drawing. **Blocked on a mock-up from Adam**, deliberately | not started |
-| [10](10-the-gestures-and-the-preset.md) | Wrap-as-layer, add/remove a branch, a preset with branches | not started |
+Linear: project [Containers and the layer device](https://linear.app/mooloop/project/containers-and-the-layer-device-2a0a16bb6801), one issue per step.
+
+| Step | What | Issue | State |
+| --- | --- | --- | --- |
+| [07](07-a-branch-is-a-run.md) | One container predicate, latency as a tree, `EffectKind::Layer` landing silent | [MOO-69](https://linear.app/mooloop/issue/MOO-69) | not started |
+| [08](08-the-chain-splits-and-sums.md) | Branch buffers, alignment, the sum — the engine | [MOO-70](https://linear.app/mooloop/issue/MOO-70) | not started |
+| [09](09-the-rack-draws-branches.md) | The drawing. **Blocked on a mock-up from Adam**, deliberately | [MOO-71](https://linear.app/mooloop/issue/MOO-71) | not started |
+| [10](10-the-gestures-and-the-preset.md) | Wrap-as-layer, add/remove a branch, a preset with branches | [MOO-72](https://linear.app/mooloop/issue/MOO-72) | not started |
 
 **The one thing 06 priced that turned out not to be true:** it said the span
 representation could not express parallel branches, and it can. A branch is a
