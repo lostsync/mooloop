@@ -68,9 +68,9 @@ struct Log {
 }
 
 fn harness() -> (GestureHarness, Rc<RefCell<Log>>) {
+    i_slint_backend_testing::init_no_event_loop();
     let ui = GestureHarness::new().expect("harness");
-    ui.window()
-        .set_size(slint::WindowSize::Logical(LogicalSize::new(200.0, 200.0)));
+    ui.window().set_size(LogicalSize::new(200.0, 200.0));
     let log = Rc::new(RefCell::new(Log::default()));
     {
         let log = log.clone();
@@ -136,19 +136,54 @@ fn a_fader_drag_is_one_begin_and_one_end() {
     );
 }
 
-/// Two grabs are two entries. The 400 ms timer got this right by measuring
-/// the gap between them; the bracket gets it right by being told.
+/// Two grabs are two entries. This is the case the 400 ms timer got wrong:
+/// it measured the gap between move frames, so two grabs of the same fader
+/// less than 400 ms apart collapsed into one undo step. The bracket gets it
+/// right by being told rather than by timing anything, so the grabs here are
+/// back to back.
 #[test]
 fn two_grabs_are_two_gestures() {
     let (ui, log) = harness();
-    for _ in 0..2 {
-        press(&ui, FADER);
-        drag_to(&ui, (FADER.0, FADER.1 - 10.0));
-        release(&ui, (FADER.0, FADER.1 - 10.0));
+    // Two *different* places on the fader, which is not incidental: a second
+    // press at the same point is a double-click, and `MixerFader` brackets
+    // its reset separately -- see the test below.
+    for at in [FADER, (FADER.0, FADER.1 - 40.0)] {
+        press(&ui, at);
+        drag_to(&ui, (at.0, at.1 - 10.0));
+        release(&ui, (at.0, at.1 - 10.0));
     }
     let log = log.borrow();
     assert_eq!(log.begins, 2);
     assert_eq!(log.ends, 2);
+}
+
+/// **A double-click reset is three brackets and one undo entry**, and the
+/// difference between those two numbers is the recorder's rule rather than
+/// the markup's.
+///
+/// A double-click is two presses and then `double-clicked`, so the widget
+/// opens three gestures: two that move nothing and one that resets the
+/// value. A gesture that changed nothing records nothing
+/// (`Session::finish_gesture`), so what reaches the history is one entry.
+/// Asserted here because the first version of `two_grabs_are_two_gestures`
+/// counted three begins and read it as a bug in the widget.
+#[test]
+fn a_double_click_reset_brackets_itself() {
+    let (ui, log) = harness();
+    for _ in 0..2 {
+        press(&ui, FADER);
+        release(&ui, FADER);
+    }
+    let log = log.borrow();
+    assert_eq!(
+        log.begins, log.ends,
+        "every gesture the double-click opened was closed"
+    );
+    assert!(
+        log.begins >= 1,
+        "the double-click reported no gesture at all"
+    );
+    assert_eq!(log.values, 1, "the reset is one value change, not three");
 }
 
 /// `MiniKnob` carries the pair already, ungated, and the mixer's pan knobs
