@@ -15,4 +15,4 @@ home. Delete a line when it is done or has moved somewhere better.
 - need one for mid/side that lets you put devices on mid or side and set levels
 - need a 'tool' or 'utility' device that has gain, pan, width, maybe polarity invert and sweepable phase offset?
 ✓ in prefs, there's this line on the section tabs - it looks weird; it's right in the center of the tab. just highlight the whole tab or something (f5c8b24)
-- allow keyboard browsing in sample sidebar. up/down should play if it selects a playable file and preview is selected. l/r should expand/collapse.
+✓ allow keyboard browsing in sample sidebar. up/down should play if it selects a playable file and preview is selected. l/r should expand/collapse. (a70d025)
