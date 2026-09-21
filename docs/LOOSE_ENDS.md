@@ -654,12 +654,13 @@ Adam's call. The pair goes on every face -- a `main.slint` contract change,
 which `AGENTS.md` says to batch into a single crossing because each build is
 minutes -- and knobs, faders, pan and the name fields then route through
 `record_project_history` like the piano roll already does. It retires the
-400 ms timer below. It is milestone-sized rather than a patch, and it wants
-a plan directory of its own before anyone starts: the interesting parts are
-`NameField.edited` firing per keystroke, the scroll and arrow-key paths that
-are not drags at all, and the fact that a *correct* pair on every face is
-exactly the kind of hand-maintained list `AGENTS.md`'s `unchecked-face`
-check exists because nobody extends.
+400 ms timer below. It is milestone-sized rather than a patch, and it has a plan:
+`docs/plans/gesture-undo/`, seven steps, Linear MOO-50. Two things the plan
+establishes that are worth knowing from here: the pair goes on **nine shared
+widgets** rather than on every face, because a Slint global lets a widget
+report its own brackets without a face forwarding anything; and the
+gesture pair those widgets already carry is gated behind modulation and
+MIDI-learn mode, so it looks reusable and is not.
 
 **The eleven console and rack verbs came off that list on 2026-09-21.**
 Channel mute, volume, pan and bus pick; bus mute, volume, pan, output,

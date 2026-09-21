@@ -67,6 +67,27 @@ rebuild Adam first suspected, and his two rulings, *"immediate and yes"* --
 which cost step 02 its original justification, since queueing was to be what
 retired the Pattern-mode release and immediate keeps it. Linear MOO-57.
 
+`gesture-undo/` was added 2026-09-21 and is **not started, outside the
+`FOCUS.md` sequence**, because Adam named it directly: *"i think the undo thing
+should be the next big push."* Seven steps. It is not a feature -- it is the
+thing that makes the existing ones safe to use, because undo installs a
+whole-project snapshot and therefore **destroys** every edit that never reached
+the history, silently and with no redo path. Turning a knob, renaming anything
+and most of the step grid are all in that set.
+
+Read its `00-status.md` before starting, for three things the plan turns on.
+The session half already exists -- modulator parameters have coalesced a whole
+knob gesture into one entry since before this was written, and step 02
+generalises that rather than inventing it. A Slint **global** the widgets call
+into, on the `ControlAssign` precedent, means no face declares or forwards
+anything, so the "contract change across every device face" this was feared to
+be is a pass over nine shared widgets. And the gesture pair that already exists
+on those widgets cannot be reused, because every one of its emissions is gated
+behind modulation or MIDI-learn mode -- the trap that looks like a shortcut.
+Step 01 writes the check before the fix, and its count is the plan's progress
+bar. Linear MOO-50, which predates the plan by three weeks and asked for
+exactly it.
+
 `plugin-hosting/` was added 2026-09-16 and is **not started, outside the
 `FOCUS.md` sequence**, because Adam asked for it directly: CLAP effects and
 instruments now, then VST3, then AU if ever. Thirteen steps. The first four
