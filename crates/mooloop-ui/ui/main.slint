@@ -4,7 +4,7 @@ import { GainMath } from "gain.slint";
 import { ReorderMath } from "reorder.slint";
 export { DisplayPrefs, Motion } from "theme.slint";
 import {
-    AudioOrientation, IconButton, InstrumentModule, MiniKnob, NoteFormat, ParameterFader,
+    AudioOrientation, Gesture, IconButton, InstrumentModule, MiniKnob, NoteFormat, ParameterFader,
     ParameterKnob, PeakMeter,
     PickerChip, SegmentedControl, SelectorBank, ZoomScrollBar,
     ToggleButton, ToolButton, TransportButton, ValueScale, MuteButton as DesignMuteButton, TrimKnob
@@ -3639,6 +3639,7 @@ export component MainWindow inherits Window {
                                                 pointer-event(e) => {
                                                     let step = parent.step-at(self.mouse-x);
                                                     if (e.kind == PointerEventKind.down) {
+                                                        Gesture.begin();
                                                         self.drag-button =
                                                             e.button == PointerEventButton.right ? 1 : 0;
                                                         if (root.tool-mode == 1) {
@@ -3687,6 +3688,7 @@ export component MainWindow inherits Window {
                                                         self.velocity-drag = false;
                                                         self.last-step = -1;
                                                         self.stretch-origin = -1;
+                                                        Gesture.end();
                                                     }
                                                 }
                                                 // A pointer bubble cannot follow a drag across a

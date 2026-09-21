@@ -1,5 +1,5 @@
 import { StatusHint, Theme } from "theme.slint";
-import { BbtText } from "controls.slint";
+import { BbtText, Gesture } from "controls.slint";
 
 // Toolbar vocabulary.
 //
@@ -208,9 +208,12 @@ export component StepperField inherits Rectangle {
                 pointer-event(e) => {
                     if (e.kind == PointerEventKind.down) {
                         root.pressed-value = root.value;
+                        Gesture.begin();
                     } else if (e.kind == PointerEventKind.move && self.pressed) {
                         root.apply(root.pressed-value
                             + round((self.pressed-y - self.mouse-y) / 4px) * root.step);
+                    } else if (e.kind == PointerEventKind.up) {
+                        Gesture.end();
                     }
                 }
                 scroll-event(e) => {
@@ -408,6 +411,23 @@ export component NameField inherits Rectangle {
         x: 6px;
         width: parent.width - 12px;
         height: 100%;
+        // **A keystroke is not an edit.** `edited` fires on every one of
+        // them, so a rename recorded per callback is one undo step per
+        // character: "Kick" to "Kick Bus" would be eight entries and eight
+        // Ctrl+Z. The gesture for a typed field is the *editing session* --
+        // it opens when the caret arrives and closes when the caret leaves,
+        // by Enter, by Escape or by a click elsewhere -- and a session that
+        // typed nothing records nothing.
+        //
+        // Escape is a way out of the field rather than an undo: the app has
+        // already been written on every keystroke, so what is in the
+        // document when the caret leaves is what the person typed. A field
+        // that could really abandon an edit would close its gesture by
+        // discarding; this one has nothing to discard.
+        changed has-focus => {
+            if (self.has-focus) { Gesture.begin(); }
+            else { Gesture.end(); }
+        }
         // The initial value only; `changed text` above owns it from then on.
         text: root.text;
         color: Theme.text;

@@ -1501,6 +1501,19 @@ fn with_project_history(
 /// mixer faces had no press/release callback to ask. They have one now:
 /// `MixerFader`'s `pointer-event` grew an `.up` arm, and `MiniKnob` already
 /// carried the pair.
+/// A generator parameter's own name, for the undo entry it records.
+///
+/// The descriptor table is the one the face draws from, so a label taken
+/// from it cannot drift from what the user is looking at -- which is the
+/// whole reason not to write sixty literals instead. A kind whose table has
+/// no such id falls back to the kind's own name rather than to nothing.
+fn generator_param_label(kind: DeviceKind, id: u32) -> &'static str {
+    kind.descriptors()
+        .iter()
+        .find(|descriptor| descriptor.id == id)
+        .map_or(kind.label(), |descriptor| descriptor.name)
+}
+
 fn with_gesture_history(
     state: &Rc<RefCell<UiState>>,
     commands: &Rc<RefCell<CommandState>>,
@@ -1508,13 +1521,35 @@ fn with_gesture_history(
     label: &'static str,
     edit: impl FnOnce() -> bool,
 ) {
+    with_gesture_history_named(state, commands, window, || edit().then_some(label))
+}
+
+/// [`with_gesture_history`] where the *edit* knows what to call the entry.
+///
+/// One caller today and it is the reason this exists:
+/// `on_effect_param_changed` serves every parameter of every effect kind,
+/// and the descriptor's own name is resolved inside the session, where the
+/// id is. Naming it from the outside would mean the caller indexing
+/// `descriptors()` by the face index — right on every effect but the EQ,
+/// whose face indices are not descriptor positions, which is the
+/// lost-semantic-type fault `AGENTS.md` records at this boundary.
+fn with_gesture_history_named(
+    state: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    window: &MainWindow,
+    edit: impl FnOnce() -> Option<&'static str>,
+) {
     if !state.borrow().session.gesture_open() {
-        with_project_history(state, commands, window, label, edit);
+        let before = project_snapshot(&state.borrow(), window);
+        let Some(label) = edit() else {
+            return;
+        };
+        record_project_history(commands, before, state, window, label);
         return;
     }
-    if !edit() {
+    let Some(label) = edit() else {
         return;
-    }
+    };
     state.borrow_mut().session.mark_gesture_changed();
     // The first edit inside a gesture names it. A drag that crosses two
     // parameters — which nothing can do today, but a future control might —
@@ -7350,63 +7385,78 @@ impl AppUi {
         }
 
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_playback_mode_changed(move |song_mode| {
-                let command = st.borrow_mut().session.set_playback_mode(song_mode);
-                if let Some(window) = weak.upgrade() {
-                    window.set_song_mode(song_mode);
-                }
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Playback mode", || {
+                    let command = st.borrow_mut().session.set_playback_mode(song_mode);
+                    if let Some(window) = weak.upgrade() {
+                        window.set_song_mode(song_mode);
+                    }
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_bpm_changed(move |bpm| {
-                let bpm = bpm as f64;
-                // The session returns these already ordered: tempo first,
-                // then every synced delay's resolved ms value, before any
-                // beat-relative buffer replacement.
-                let commands = {
-                    let mut state = st.borrow_mut();
-                    let commands = state.session.set_tempo(bpm);
-                    state.sync_effects();
-                    commands
-                };
-                for command in commands {
-                    let _ = tx.send(command);
-                }
-                let _ = tx.resize_buffers(bpm);
-                if let Some(window) = weak.upgrade() {
-                    let st = st.borrow();
-                    st.update_document_title(&window);
-                    // A bar-synced bake was measured against the tempo, so
-                    // its stale badge follows the tempo rather than waiting
-                    // for the next full editor refresh.
-                    if let Some(channel) = st.session.channels.get(st.session.selected) {
-                        window.set_commit_stale(
-                            channel
-                                .commit
-                                .as_ref()
-                                .is_some_and(|commit| commit_is_stale(channel, commit, bpm)),
-                        );
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Tempo", || {
+                    let bpm = bpm as f64;
+                    // The session returns these already ordered: tempo first,
+                    // then every synced delay's resolved ms value, before any
+                    // beat-relative buffer replacement.
+                    let commands = {
+                        let mut state = st.borrow_mut();
+                        let commands = state.session.set_tempo(bpm);
+                        state.sync_effects();
+                        commands
+                    };
+                    for command in commands {
+                        let _ = tx.send(command);
                     }
-                }
+                    let _ = tx.resize_buffers(bpm);
+                    if let Some(window) = weak.upgrade() {
+                        let st = st.borrow();
+                        st.update_document_title(&window);
+                        // A bar-synced bake was measured against the tempo, so
+                        // its stale badge follows the tempo rather than waiting
+                        // for the next full editor refresh.
+                        if let Some(channel) = st.session.channels.get(st.session.selected) {
+                            window.set_commit_stale(
+                                channel
+                                    .commit
+                                    .as_ref()
+                                    .is_some_and(|commit| commit_is_stale(channel, commit, bpm)),
+                            );
+                        }
+                    }
+                    true
+                });
             });
         }
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_swing_changed(move |percent| {
-                let mut st = st.borrow_mut();
-                let _ = tx.send(st.session.set_swing(percent));
-                if let Some(window) = weak.upgrade() {
-                    st.update_document_title(&window);
-                }
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Swing", || {
+                    let mut st = st.borrow_mut();
+                    let _ = tx.send(st.session.set_swing(percent));
+                    if let Some(window) = weak.upgrade() {
+                        st.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
         {
@@ -7460,71 +7510,85 @@ impl AppUi {
             let commands = command_state.clone();
             let weak = window.as_weak();
             window.on_add_pattern_clicked(move || {
-                if commands.borrow().project_edit_pending {
-                    return;
-                }
-                let mut st = st.borrow_mut();
-                let Some(pattern) = st.session.add_pattern() else {
-                    return;
-                };
-                st.show_pattern(pattern);
-                if let Some(window) = weak.upgrade() {
-                    window.set_pattern_count(st.session.pattern_lengths.len() as i32);
-                    window.set_current_pattern(pattern as i32);
-                    window.set_pattern_length(DEFAULT_STEPS as i32);
-                    st.refresh_editor(&window);
-                    st.sync_playlist(&window);
-                    st.sync_pattern_menu(&window);
-                }
-                let _ = tx.send(EngineCommand::AddPattern);
-                let _ = tx.send(EngineCommand::SetCurrentPattern(pattern as u8));
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Add pattern", || {
+                    if commands.borrow().project_edit_pending {
+                        return false;
+                    }
+                    let mut st = st.borrow_mut();
+                    let Some(pattern) = st.session.add_pattern() else {
+                        return false;
+                    };
+                    st.show_pattern(pattern);
+                    if let Some(window) = weak.upgrade() {
+                        window.set_pattern_count(st.session.pattern_lengths.len() as i32);
+                        window.set_current_pattern(pattern as i32);
+                        window.set_pattern_length(DEFAULT_STEPS as i32);
+                        st.refresh_editor(&window);
+                        st.sync_playlist(&window);
+                        st.sync_pattern_menu(&window);
+                    }
+                    let _ = tx.send(EngineCommand::AddPattern);
+                    let _ = tx.send(EngineCommand::SetCurrentPattern(pattern as u8));
+                    true
+                });
             });
         }
 
         // Pattern renaming. An empty name is legal and falls back to
         // "Pattern N" in the menu.
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_pattern_renamed(move |index, name| {
-                let mut st = st.borrow_mut();
-                if !st.session.rename_pattern(index as usize, &name) {
-                    return;
-                }
-                // **This did not mark the document dirty until 2026-09-13**,
-                // and until the same day it did not need to: the name lived
-                // only in the session and was thrown away by the next save,
-                // so there was nothing for a dirty flag to protect. Persisting
-                // the name is what turned a harmless omission into a rename
-                // that could be lost at quit without being asked about.
-                st.session.mark_dirty();
-                if let Some(window) = weak.upgrade() {
-                    st.sync_pattern_menu(&window);
-                    st.update_document_title(&window);
-                }
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Rename pattern", || {
+                    let mut st = st.borrow_mut();
+                    if !st.session.rename_pattern(index as usize, &name) {
+                        return false;
+                    }
+                    // **This did not mark the document dirty until 2026-09-13**,
+                    // and until the same day it did not need to: the name lived
+                    // only in the session and was thrown away by the next save,
+                    // so there was nothing for a dirty flag to protect. Persisting
+                    // the name is what turned a harmless omission into a rename
+                    // that could be lost at quit without being asked about.
+                    st.session.mark_dirty();
+                    if let Some(window) = weak.upgrade() {
+                        st.sync_pattern_menu(&window);
+                        st.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
 
         // Per-pattern logical length. Channel storage stays at the maximum so
         // shortening and re-extending a pattern does not discard hidden steps.
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_pattern_length_changed(move |length| {
-                let mut st = st.borrow_mut();
-                let Some(applied) = st.session.set_pattern_length(length) else {
-                    return;
-                };
-                st.show_pattern(applied.pattern);
-                if let Some(w) = weak.upgrade() {
-                    w.set_pattern_length(applied.length as i32);
-                    st.refresh_note_editor(&w);
-                    st.sync_playlist(&w);
-                }
-                let _ = tx.send(EngineCommand::SetPatternLength {
-                    pattern: applied.pattern as u8,
-                    length_steps: applied.length as u16,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Pattern length", || {
+                    let mut st = st.borrow_mut();
+                    let Some(applied) = st.session.set_pattern_length(length) else {
+                        return false;
+                    };
+                    st.show_pattern(applied.pattern);
+                    if let Some(w) = weak.upgrade() {
+                        w.set_pattern_length(applied.length as i32);
+                        st.refresh_note_editor(&w);
+                        st.sync_playlist(&w);
+                    }
+                    let _ = tx.send(EngineCommand::SetPatternLength {
+                        pattern: applied.pattern as u8,
+                        length_steps: applied.length as u16,
+                    });
+                    true
                 });
             });
         }
@@ -7532,40 +7596,50 @@ impl AppUi {
         // Placement callbacks already carry musical-grid-snapped PPQ ticks.
         // Clip duration follows the referenced pattern's logical length.
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_playlist_placement_added(move |pattern, start_tick| {
-                let mut st = st.borrow_mut();
-                let Some(placement) = st.session.add_playlist_placement(pattern, start_tick) else {
-                    return;
-                };
-                if let Some(window) = weak.upgrade() {
-                    st.sync_playlist(&window);
-                }
-                let _ = tx.send(EngineCommand::SetPlaylistPlacement {
-                    pattern: placement.pattern,
-                    start_tick: placement.start_tick,
-                    on: true,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Add clip", || {
+                    let mut st = st.borrow_mut();
+                    let Some(placement) = st.session.add_playlist_placement(pattern, start_tick) else {
+                        return false;
+                    };
+                    if let Some(window) = weak.upgrade() {
+                        st.sync_playlist(&window);
+                    }
+                    let _ = tx.send(EngineCommand::SetPlaylistPlacement {
+                        pattern: placement.pattern,
+                        start_tick: placement.start_tick,
+                        on: true,
+                    });
+                    true
                 });
             });
         }
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_playlist_placement_removed(move |pattern, tick| {
-                let mut st = st.borrow_mut();
-                let Some(placement) = st.session.remove_playlist_placement(pattern, tick) else {
-                    return;
-                };
-                if let Some(window) = weak.upgrade() {
-                    st.sync_playlist(&window);
-                }
-                let _ = tx.send(EngineCommand::SetPlaylistPlacement {
-                    pattern: placement.pattern,
-                    start_tick: placement.start_tick,
-                    on: false,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Remove clip", || {
+                    let mut st = st.borrow_mut();
+                    let Some(placement) = st.session.remove_playlist_placement(pattern, tick) else {
+                        return false;
+                    };
+                    if let Some(window) = weak.upgrade() {
+                        st.sync_playlist(&window);
+                    }
+                    let _ = tx.send(EngineCommand::SetPlaylistPlacement {
+                        pattern: placement.pattern,
+                        start_tick: placement.start_tick,
+                        on: false,
+                    });
+                    true
                 });
             });
         }
@@ -7590,22 +7664,28 @@ impl AppUi {
             });
         }
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_playlist_loop_set(move |from_tick, to_tick| {
-                let mut st = st.borrow_mut();
-                let Some(command) = st.session.set_loop_range(from_tick, to_tick) else {
-                    return;
-                };
-                if let Some(window) = weak.upgrade() {
-                    st.sync_loop_range(&window);
-                    st.update_document_title(&window);
-                }
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Loop range", || {
+                    let mut st = st.borrow_mut();
+                    let Some(command) = st.session.set_loop_range(from_tick, to_tick) else {
+                        return false;
+                    };
+                    if let Some(window) = weak.upgrade() {
+                        st.sync_loop_range(&window);
+                        st.update_document_title(&window);
+                    }
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
@@ -7616,53 +7696,67 @@ impl AppUi {
             // and the ones that do not are what makes the edge follow the
             // pointer instead of jumping when it is let go.
             window.on_playlist_loop_adjusted(move |from_tick, to_tick| {
-                let mut st = st.borrow_mut();
-                let Some(command) = st.session.adjust_loop_range(from_tick, to_tick) else {
-                    return;
-                };
-                if let Some(window) = weak.upgrade() {
-                    st.sync_loop_range(&window);
-                    st.update_document_title(&window);
-                }
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Loop range", || {
+                    let mut st = st.borrow_mut();
+                    let Some(command) = st.session.adjust_loop_range(from_tick, to_tick) else {
+                        return false;
+                    };
+                    if let Some(window) = weak.upgrade() {
+                        st.sync_loop_range(&window);
+                        st.update_document_title(&window);
+                    }
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_playlist_loop_enabled_changed(move |enabled| {
-                let mut st = st.borrow_mut();
-                let Some(command) = st.session.set_loop_enabled(enabled) else {
-                    // Put the toggle back: it drives the callback rather than
-                    // being driven by it, so a refused change would otherwise
-                    // leave the button lit over a loop that is not running.
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Loop", || {
+                    let mut st = st.borrow_mut();
+                    let Some(command) = st.session.set_loop_enabled(enabled) else {
+                        // Put the toggle back: it drives the callback rather than
+                        // being driven by it, so a refused change would otherwise
+                        // leave the button lit over a loop that is not running.
+                        if let Some(window) = weak.upgrade() {
+                            st.sync_loop_range(&window);
+                        }
+                        return false;
+                    };
                     if let Some(window) = weak.upgrade() {
                         st.sync_loop_range(&window);
+                        st.update_document_title(&window);
                     }
-                    return;
-                };
-                if let Some(window) = weak.upgrade() {
-                    st.sync_loop_range(&window);
-                    st.update_document_title(&window);
-                }
-                let _ = tx.send(command);
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_playlist_loop_cleared(move || {
-                let mut st = st.borrow_mut();
-                let Some(command) = st.session.clear_loop_range() else {
-                    return;
-                };
-                if let Some(window) = weak.upgrade() {
-                    st.sync_loop_range(&window);
-                    st.update_document_title(&window);
-                }
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Clear loop", || {
+                    let mut st = st.borrow_mut();
+                    let Some(command) = st.session.clear_loop_range() else {
+                        return false;
+                    };
+                    if let Some(window) = weak.upgrade() {
+                        st.sync_loop_range(&window);
+                        st.update_document_title(&window);
+                    }
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
 
@@ -7670,68 +7764,93 @@ impl AppUi {
         // adds an anchor note to an empty cell or clears every substep in a
         // populated one; right-click always clears.
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_step_clicked(move |channel, step| {
-                let mut st = st.borrow_mut();
-                let Some(edit) = st.session.toggle_step(channel, step) else {
-                    return;
-                };
-                st.apply_step_edit(channel, edit, &weak, &tx);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Step", || {
+                    let mut st = st.borrow_mut();
+                    let Some(edit) = st.session.toggle_step(channel, step) else {
+                        return false;
+                    };
+                    st.apply_step_edit(channel, edit, &weak, &tx);
+                    true
+                });
             });
         }
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_step_removed(move |channel, step| {
-                let mut st = st.borrow_mut();
-                let Some(edit) = st.session.clear_step(channel, step) else {
-                    return;
-                };
-                st.apply_step_edit(channel, edit, &weak, &tx);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Clear step", || {
+                    let mut st = st.borrow_mut();
+                    let Some(edit) = st.session.clear_step(channel, step) else {
+                        return false;
+                    };
+                    st.apply_step_edit(channel, edit, &weak, &tx);
+                    true
+                });
             });
         }
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_step_velocity_edited(move |channel, step, value| {
-                let mut st = st.borrow_mut();
-                let Some(edit) = st.session.set_step_velocity(channel, step, value) else {
-                    return;
-                };
-                st.apply_step_edit(channel, edit, &weak, &tx);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Step velocity", || {
+                    let mut st = st.borrow_mut();
+                    let Some(edit) = st.session.set_step_velocity(channel, step, value) else {
+                        return false;
+                    };
+                    st.apply_step_edit(channel, edit, &weak, &tx);
+                    true
+                });
             });
         }
 
         // Paint-drag step editing: idempotent per call so a mouse drag can
         // call this repeatedly over the same cell without toggling it.
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_step_painted(move |channel, step, on| {
-                let mut st = st.borrow_mut();
-                let Some(edit) = st.session.paint_step(channel, step, on) else {
-                    return;
-                };
-                st.apply_step_edit(channel, edit, &weak, &tx);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Paint steps", || {
+                    let mut st = st.borrow_mut();
+                    let Some(edit) = st.session.paint_step(channel, step, on) else {
+                        return false;
+                    };
+                    st.apply_step_edit(channel, edit, &weak, &tx);
+                    true
+                });
             });
         }
 
         // Slice a sixteenth into `divisions` evenly spaced notes.
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_step_sliced(move |channel, step, divisions| {
-                let mut st = st.borrow_mut();
-                let Some(edit) = st.session.slice_step(channel, step, divisions) else {
-                    return;
-                };
-                st.apply_step_edit(channel, edit, &weak, &tx);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Slice step", || {
+                    let mut st = st.borrow_mut();
+                    let Some(edit) = st.session.slice_step(channel, step, divisions) else {
+                        return false;
+                    };
+                    st.apply_step_edit(channel, edit, &weak, &tx);
+                    true
+                });
             });
         }
 
@@ -7739,15 +7858,20 @@ impl AppUi {
         // during a drag, so no-op durations are skipped and only the cells
         // the note used to (or now does) span are refreshed.
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_step_length_dragged(move |channel, step, length_in_steps| {
-                let mut st = st.borrow_mut();
-                let Some(edit) = st.session.drag_step_length(channel, step, length_in_steps) else {
-                    return;
-                };
-                st.apply_step_edit(channel, edit, &weak, &tx);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Note length", || {
+                    let mut st = st.borrow_mut();
+                    let Some(edit) = st.session.drag_step_length(channel, step, length_in_steps) else {
+                        return false;
+                    };
+                    st.apply_step_edit(channel, edit, &weak, &tx);
+                    true
+                });
             });
         }
 
@@ -8353,31 +8477,35 @@ impl AppUi {
             ($callback:ident, $field:ident, $value:expr) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let commands = command_state.clone();
                 let weak = window.as_weak();
                 window.$callback(move |value| {
-                    let mut st = st.borrow_mut();
-                    let pattern = st.session.current_pattern;
-                    let channel = st.session.selected;
-                    let Some(id) = st.session.selected_note_id else {
-                        return;
-                    };
-                    let length_ticks = st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
-                    let Some(note) = st.session.channels[channel].notes[pattern]
-                        .iter_mut()
-                        .find(|note| note.id == id)
-                    else {
-                        return;
-                    };
-                    note.$field = $value(value, &mut *note, length_ticks);
-                    let edited = *note;
-                    st.refresh_rack_cell(channel, (edited.start_tick / TICKS_PER_STEP) as usize);
-                    if let Some(window) = weak.upgrade() {
+                    let Some(window) = weak.upgrade() else { return };
+                    with_gesture_history(&st, &commands, &window, "Note", || {
+                        let mut st = st.borrow_mut();
+                        let pattern = st.session.current_pattern;
+                        let channel = st.session.selected;
+                        let Some(id) = st.session.selected_note_id else {
+                            return false;
+                        };
+                        let length_ticks =
+                            st.session.pattern_lengths[pattern] as u32 * TICKS_PER_STEP;
+                        let Some(note) = st.session.channels[channel].notes[pattern]
+                            .iter_mut()
+                            .find(|note| note.id == id)
+                        else {
+                            return false;
+                        };
+                        note.$field = $value(value, &mut *note, length_ticks);
+                        let edited = *note;
+                        st.refresh_rack_cell(channel, (edited.start_tick / TICKS_PER_STEP) as usize);
                         st.refresh_note_editor(&window);
-                    }
-                    let _ = tx.send(EngineCommand::UpsertNote {
-                        pattern: pattern as u8,
-                        channel: channel as u8,
-                        note: edited,
+                        let _ = tx.send(EngineCommand::UpsertNote {
+                            pattern: pattern as u8,
+                            channel: channel as u8,
+                            note: edited,
+                        });
+                        true
                     });
                 });
             }};
@@ -8532,28 +8660,33 @@ impl AppUi {
 
         // Add, replace, or remove channel sources.
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let reset_tx = sample_reset_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_channel_source_changed(move |value| {
-                let source = device_kind_from_int(value);
-                let channel = {
-                    let mut guard = st.borrow_mut();
-                    let Some(channel) = guard.session.change_selected_source(source) else {
-                        return;
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Change device", || {
+                    let source = device_kind_from_int(value);
+                    let channel = {
+                        let mut guard = st.borrow_mut();
+                        let Some(channel) = guard.session.change_selected_source(source) else {
+                            return false;
+                        };
+                        guard.sync_row_flags();
+                        channel
                     };
-                    guard.sync_row_flags();
-                    channel
-                };
-                if let Some(window) = weak.upgrade() {
-                    st.borrow().refresh_editor(&window);
-                    refresh_preset_menus(&st, &window);
-                }
-                let _ = reset_tx.send(channel);
-                let _ = tx.send(EngineCommand::SetChannelSource {
-                    channel: channel as u8,
-                    source,
+                    if let Some(window) = weak.upgrade() {
+                        st.borrow().refresh_editor(&window);
+                        refresh_preset_menus(&st, &window);
+                    }
+                    let _ = reset_tx.send(channel);
+                    let _ = tx.send(EngineCommand::SetChannelSource {
+                        channel: channel as u8,
+                        source,
+                    });
+                    true
                 });
             });
         }
@@ -8934,128 +9067,151 @@ impl AppUi {
         // and enable are POD and reach audio directly, so a drag does not
         // rebuild a plan sixty times a second.
         {
+            let commands = command_state.clone();
             let weak = window.as_weak();
             let st = state.clone();
             window.on_send_added(move |bus, target| {
-                let mut guard = st.borrow_mut();
-                match guard.session.add_send(bus, target) {
-                    Some(Ok(_)) => {
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Add send", || {
+                    let mut guard = st.borrow_mut();
+                    match guard.session.add_send(bus, target) {
+                        Some(Ok(_)) => {
+                            if let Some(w) = weak.upgrade() {
+                                // `sync_mixer`, not `sync_bus_editor`: the mixer
+                                // strip draws `MixerStripRow.sends`, which only
+                                // `sync_mixer` writes, so the row the gesture was
+                                // made on never appeared and the empty-state text
+                                // stayed up. And a send is a graph edge, so every
+                                // strip's `allowed` mask moves with it -- the
+                                // reason `on_bus_output_changed` already calls
+                                // this. `sync_mixer` ends by calling
+                                // `sync_bus_editor`, so the rack face is still
+                                // covered.
+                                guard.sync_mixer(&w);
+                                guard.update_document_title(&w);
+                            }
+                        }
+                        Some(Err(refused)) => {
+                            if let Some(w) = weak.upgrade() {
+                                w.set_status_message(
+                                    format!(
+                                        "{} already leads back here - the send would loop",
+                                        refused.feeder
+                                    )
+                                    .into(),
+                                );
+                            }
+                        }
+                        None => {}
+                    }
+                    true
+                });
+            });
+        }
+        {
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            let st = state.clone();
+            window.on_send_removed(move |bus, send| {
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Remove send", || {
+                    let mut guard = st.borrow_mut();
+                    if guard.session.remove_send(bus, send) {
                         if let Some(w) = weak.upgrade() {
-                            // `sync_mixer`, not `sync_bus_editor`: the mixer
-                            // strip draws `MixerStripRow.sends`, which only
-                            // `sync_mixer` writes, so the row the gesture was
-                            // made on never appeared and the empty-state text
-                            // stayed up. And a send is a graph edge, so every
-                            // strip's `allowed` mask moves with it -- the
-                            // reason `on_bus_output_changed` already calls
-                            // this. `sync_mixer` ends by calling
-                            // `sync_bus_editor`, so the rack face is still
-                            // covered.
+                            // As above: the row has to leave the mixer strip too,
+                            // and removing an edge reopens destinations for every
+                            // other track.
                             guard.sync_mixer(&w);
                             guard.update_document_title(&w);
                         }
                     }
-                    Some(Err(refused)) => {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_status_message(
-                                format!(
-                                    "{} already leads back here - the send would loop",
-                                    refused.feeder
-                                )
-                                .into(),
-                            );
-                        }
-                    }
-                    None => {}
-                }
+                    true
+                });
             });
         }
         {
-            let weak = window.as_weak();
-            let st = state.clone();
-            window.on_send_removed(move |bus, send| {
-                let mut guard = st.borrow_mut();
-                if guard.session.remove_send(bus, send) {
-                    if let Some(w) = weak.upgrade() {
-                        // As above: the row has to leave the mixer strip too,
-                        // and removing an edge reopens destinations for every
-                        // other track.
-                        guard.sync_mixer(&w);
-                        guard.update_document_title(&w);
-                    }
-                }
-            });
-        }
-        {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             let st = state.clone();
             window.on_send_level_changed(move |bus, send, level| {
-                let mut guard = st.borrow_mut();
-                let Some(command) = guard.session.set_send_level(bus, send, level) else {
-                    return;
-                };
-                if let Some(w) = weak.upgrade() {
-                    // The mixer strip's own back face draws these rows too,
-                    // and only `sync_mixer_strip` writes them. One strip and
-                    // no edge changed, so this rather than a whole
-                    // `sync_mixer`.
-                    guard.sync_mixer_strip(bus.max(0) as usize);
-                    guard.sync_bus_editor(&w);
-                }
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Send level", || {
+                    let mut guard = st.borrow_mut();
+                    let Some(command) = guard.session.set_send_level(bus, send, level) else {
+                        return false;
+                    };
+                    if let Some(w) = weak.upgrade() {
+                        // The mixer strip's own back face draws these rows too,
+                        // and only `sync_mixer_strip` writes them. One strip and
+                        // no edge changed, so this rather than a whole
+                        // `sync_mixer`.
+                        guard.sync_mixer_strip(bus.max(0) as usize);
+                        guard.sync_bus_editor(&w);
+                    }
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             let st = state.clone();
             window.on_send_tap_picked(move |bus, send, tap| {
-                let mut guard = st.borrow_mut();
-                let tap = if tap == 1 {
-                    SendTap::PreFader
-                } else {
-                    SendTap::PostFader
-                };
-                let Some(command) = guard.session.set_send_tap(bus, send, tap) else {
-                    return;
-                };
-                if let Some(w) = weak.upgrade() {
-                    // The mixer strip's own back face draws these rows too,
-                    // and only `sync_mixer_strip` writes them. One strip and
-                    // no edge changed, so this rather than a whole
-                    // `sync_mixer`.
-                    guard.sync_mixer_strip(bus.max(0) as usize);
-                    guard.sync_bus_editor(&w);
-                }
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Send tap", || {
+                    let mut guard = st.borrow_mut();
+                    let tap = if tap == 1 {
+                        SendTap::PreFader
+                    } else {
+                        SendTap::PostFader
+                    };
+                    let Some(command) = guard.session.set_send_tap(bus, send, tap) else {
+                        return false;
+                    };
+                    if let Some(w) = weak.upgrade() {
+                        // The mixer strip's own back face draws these rows too,
+                        // and only `sync_mixer_strip` writes them. One strip and
+                        // no edge changed, so this rather than a whole
+                        // `sync_mixer`.
+                        guard.sync_mixer_strip(bus.max(0) as usize);
+                        guard.sync_bus_editor(&w);
+                    }
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
         {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             let st = state.clone();
+            let commands = command_state.clone();
             window.on_send_enable_toggled(move |bus, send| {
-                let mut guard = st.borrow_mut();
-                let wanted = guard
-                    .session
-                    .buses
-                    .get(bus.max(0) as usize)
-                    .and_then(|setup| setup.sends.get(send.max(0) as usize))
-                    .map(|entry| !entry.enabled);
-                let Some(wanted) = wanted else { return };
-                let Some(command) = guard.session.set_send_enabled(bus, send, wanted) else {
-                    return;
-                };
-                if let Some(w) = weak.upgrade() {
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Send", || {
+                    let mut guard = st.borrow_mut();
+                    let wanted = guard
+                        .session
+                        .buses
+                        .get(bus.max(0) as usize)
+                        .and_then(|setup| setup.sends.get(send.max(0) as usize))
+                        .map(|entry| !entry.enabled);
+                    let Some(wanted) = wanted else { return false };
+                    let Some(command) = guard.session.set_send_enabled(bus, send, wanted) else {
+                        return false;
+                    };
                     // The mixer strip's own back face draws these rows too,
                     // and only `sync_mixer_strip` writes them. One strip and
                     // no edge changed, so this rather than a whole
                     // `sync_mixer`.
                     guard.sync_mixer_strip(bus.max(0) as usize);
-                    guard.sync_bus_editor(&w);
-                }
-                let _ = tx.send(command);
+                    guard.sync_bus_editor(&window);
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
 
@@ -9181,38 +9337,43 @@ impl AppUi {
         // positions -- here rather than in the markup, because that search
         // is in log distance and a second copy of it is what would drift.
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             let st = state.clone();
             window.on_bus_strip_point_dragged(move |bus, band, hz, gain_db| {
-                let mut guard = st.borrow_mut();
-                let Some(params) = guard.session.strip_params(bus) else {
-                    return;
-                };
-                let band = band.max(0) as usize;
-                let table = mooloop_dsp::strip::strip_voicing(params.voicing).eq;
-                let position = table.nearest(band, hz);
-                let moves = [
-                    (strip_band_param(band, STRIP_BAND_FREQ), position as f32),
-                    (strip_band_param(band, STRIP_BAND_GAIN), gain_db),
-                ];
-                let mut moved = false;
-                for (param, value) in moves {
-                    if let Some(command) = guard.session.set_strip_param(bus, param as i32, value)
-                    {
-                        let _ = tx.send(command);
-                        moved = true;
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Channel strip", || {
+                    let mut guard = st.borrow_mut();
+                    let Some(params) = guard.session.strip_params(bus) else {
+                        return false;
+                    };
+                    let band = band.max(0) as usize;
+                    let table = mooloop_dsp::strip::strip_voicing(params.voicing).eq;
+                    let position = table.nearest(band, hz);
+                    let moves = [
+                        (strip_band_param(band, STRIP_BAND_FREQ), position as f32),
+                        (strip_band_param(band, STRIP_BAND_GAIN), gain_db),
+                    ];
+                    let mut moved = false;
+                    for (param, value) in moves {
+                        if let Some(command) = guard.session.set_strip_param(bus, param as i32, value)
+                        {
+                            let _ = tx.send(command);
+                            moved = true;
+                        }
                     }
-                }
-                if !moved {
-                    return;
-                }
-                guard.session.dirty = true;
-                if let Some(w) = weak.upgrade() {
-                    guard.sync_mixer_strip(bus.max(0) as usize);
-                    guard.sync_bus_editor(&w);
-                    guard.update_document_title(&w);
-                }
+                    if !moved {
+                        return false;
+                    }
+                    guard.session.dirty = true;
+                    if let Some(w) = weak.upgrade() {
+                        guard.sync_mixer_strip(bus.max(0) as usize);
+                        guard.sync_bus_editor(&w);
+                        guard.update_document_title(&w);
+                    }
+                    true
+                });
             });
         }
 
@@ -9226,43 +9387,53 @@ impl AppUi {
         // knob turned on the mixer's back face has to move the same knob on
         // the rack's pinned row.
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             let st = state.clone();
             window.on_bus_strip_param(move |bus, param, value| {
-                let mut guard = st.borrow_mut();
-                let Some(command) = guard.session.set_strip_param(bus, param, value) else {
-                    return;
-                };
-                guard.session.dirty = true;
-                if let Some(w) = weak.upgrade() {
-                    guard.sync_mixer_strip(bus.max(0) as usize);
-                    guard.sync_bus_editor(&w);
-                    guard.update_document_title(&w);
-                }
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Channel strip", || {
+                    let mut guard = st.borrow_mut();
+                    let Some(command) = guard.session.set_strip_param(bus, param, value) else {
+                        return false;
+                    };
+                    guard.session.dirty = true;
+                    if let Some(w) = weak.upgrade() {
+                        guard.sync_mixer_strip(bus.max(0) as usize);
+                        guard.sync_bus_editor(&w);
+                        guard.update_document_title(&w);
+                    }
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             let st = state.clone();
             window.on_bus_voicing_picked(move |bus, voicing| {
-                let mut guard = st.borrow_mut();
-                let Some(command) =
-                    guard
-                        .session
-                        .set_strip_param(bus, STRIP_VOICING as i32, voicing as f32)
-                else {
-                    return;
-                };
-                guard.session.dirty = true;
-                if let Some(w) = weak.upgrade() {
-                    guard.sync_mixer_strip(bus.max(0) as usize);
-                    guard.sync_bus_editor(&w);
-                    guard.update_document_title(&w);
-                }
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Strip voicing", || {
+                    let mut guard = st.borrow_mut();
+                    let Some(command) =
+                        guard
+                            .session
+                            .set_strip_param(bus, STRIP_VOICING as i32, voicing as f32)
+                    else {
+                        return false;
+                    };
+                    guard.session.dirty = true;
+                    if let Some(w) = weak.upgrade() {
+                        guard.sync_mixer_strip(bus.max(0) as usize);
+                        guard.sync_bus_editor(&w);
+                        guard.update_document_title(&w);
+                    }
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
 
@@ -9332,19 +9503,24 @@ impl AppUi {
             });
         }
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_track_renamed(move |track, name| {
-                let mut guard = st.borrow_mut();
-                if !guard.session.rename_track(track, &name) {
-                    return;
-                }
-                guard.session.mark_dirty();
-                if let Some(window) = weak.upgrade() {
-                    guard.sync_mixer(&window);
-                    guard.sync_bus_editor(&window);
-                    guard.update_document_title(&window);
-                }
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Rename track", || {
+                    let mut guard = st.borrow_mut();
+                    if !guard.session.rename_track(track, &name) {
+                        return false;
+                    }
+                    guard.session.mark_dirty();
+                    if let Some(window) = weak.upgrade() {
+                        guard.sync_mixer(&window);
+                        guard.sync_bus_editor(&window);
+                        guard.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
 
@@ -9352,22 +9528,27 @@ impl AppUi {
         // reason: the name is not in the render graph, so nothing has to reach
         // the engine and nothing has to reinstall the document.
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_channel_renamed(move |channel, name| {
-                let mut guard = st.borrow_mut();
-                if !guard.session.rename_channel(channel, &name) {
-                    return;
-                }
-                guard.session.mark_dirty();
-                if let Some(window) = weak.upgrade() {
-                    // The rack plate is the name's home, and the device-chain
-                    // header is where it was just typed; both are redrawn
-                    // because neither reads the other.
-                    guard.sync_row_flags();
-                    guard.refresh_editor(&window);
-                    guard.update_document_title(&window);
-                }
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Rename channel", || {
+                    let mut guard = st.borrow_mut();
+                    if !guard.session.rename_channel(channel, &name) {
+                        return false;
+                    }
+                    guard.session.mark_dirty();
+                    if let Some(window) = weak.upgrade() {
+                        // The rack plate is the name's home, and the device-chain
+                        // header is where it was just typed; both are redrawn
+                        // because neither reads the other.
+                        guard.sync_row_flags();
+                        guard.refresh_editor(&window);
+                        guard.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
 
@@ -9381,46 +9562,56 @@ impl AppUi {
         // path to the same state, which is what `Session::midi_routing`
         // exists to avoid.
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
             let tx = cmd_tx.clone();
             window.on_midi_input_picked(move |row| {
-                let mut guard = st.borrow_mut();
-                let channel = guard.session.selected;
-                let ports = guard.midi_ports.clone();
-                let mut input = guard.session.channel_midi_input(channel);
-                input.source = mooloop_core::MidiInputSource::from_row(row.max(0) as usize, &ports);
-                if !guard.session.set_channel_midi_input(channel, input) {
-                    return;
-                }
-                guard.session.mark_dirty();
-                tx.send_routing(guard.session.midi_routing(&ports));
-                if let Some(window) = weak.upgrade() {
-                    guard.refresh_editor(&window);
-                    guard.update_document_title(&window);
-                }
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "MIDI input", || {
+                    let mut guard = st.borrow_mut();
+                    let channel = guard.session.selected;
+                    let ports = guard.midi_ports.clone();
+                    let mut input = guard.session.channel_midi_input(channel);
+                    input.source = mooloop_core::MidiInputSource::from_row(row.max(0) as usize, &ports);
+                    if !guard.session.set_channel_midi_input(channel, input) {
+                        return false;
+                    }
+                    guard.session.mark_dirty();
+                    tx.send_routing(guard.session.midi_routing(&ports));
+                    if let Some(window) = weak.upgrade() {
+                        guard.refresh_editor(&window);
+                        guard.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
         // The AUDIO row, and the sampler's RECORD page (`audio-recording/05`).
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
             let tx = cmd_tx.clone();
             window.on_audio_input_picked(move |row| {
-                let mut guard = st.borrow_mut();
-                let channel = guard.session.selected;
-                let rows = guard.session.audio_source_rows(guard.audio_input_label.as_deref());
-                let source = mooloop_core::AudioInputPicker::new(&rows).pick(row.max(0) as usize);
-                if guard.session.set_channel_audio_input(channel, source) {
-                    guard.session.mark_dirty();
-                    tx.send_audio_input_routing(guard.session.audio_input_taps());
-                }
-                // Republished whatever happened: the menu moved its own
-                // highlight to the row that was clicked.
-                if let Some(window) = weak.upgrade() {
-                    guard.refresh_editor(&window);
-                    guard.update_document_title(&window);
-                }
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Audio input", || {
+                    let mut guard = st.borrow_mut();
+                    let channel = guard.session.selected;
+                    let rows = guard.session.audio_source_rows(guard.audio_input_label.as_deref());
+                    let source = mooloop_core::AudioInputPicker::new(&rows).pick(row.max(0) as usize);
+                    if guard.session.set_channel_audio_input(channel, source) {
+                        guard.session.mark_dirty();
+                        tx.send_audio_input_routing(guard.session.audio_input_taps());
+                    }
+                    // Republished whatever happened: the menu moved its own
+                    // highlight to the row that was clicked.
+                    if let Some(window) = weak.upgrade() {
+                        guard.refresh_editor(&window);
+                        guard.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
         // Monitoring the hardware input. Not an edit: it is performance
@@ -9441,40 +9632,50 @@ impl AppUi {
             });
         }
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_sampler_record_clip_changed(move |on| {
-                let mut guard = st.borrow_mut();
-                let channel = guard.session.selected;
-                if guard.session.set_record_clip(channel, on) {
-                    guard.session.mark_dirty();
-                }
-                // Written back rather than left to the toggle's own state: the
-                // page is rebuilt whenever it is switched to, and it reads the
-                // window's copy, which a click sets but nothing else does.
-                if let Some(window) = weak.upgrade() {
-                    window.set_sampler_record_clip(
-                        guard.session.channels.get(channel).is_some_and(|c| c.record.clip),
-                    );
-                    guard.update_document_title(&window);
-                }
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Record clip", || {
+                    let mut guard = st.borrow_mut();
+                    let channel = guard.session.selected;
+                    if guard.session.set_record_clip(channel, on) {
+                        guard.session.mark_dirty();
+                    }
+                    // Written back rather than left to the toggle's own state: the
+                    // page is rebuilt whenever it is switched to, and it reads the
+                    // window's copy, which a click sets but nothing else does.
+                    if let Some(window) = weak.upgrade() {
+                        window.set_sampler_record_clip(
+                            guard.session.channels.get(channel).is_some_and(|c| c.record.clip),
+                        );
+                        guard.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_sampler_record_bars_changed(move |bars| {
-                let mut guard = st.borrow_mut();
-                let channel = guard.session.selected;
-                if guard.session.set_record_bars(channel, bars) {
-                    guard.session.mark_dirty();
-                }
-                if let Some(window) = weak.upgrade() {
-                    window.set_sampler_record_bars(i32::from(
-                        guard.session.channels.get(channel).map_or(1, |c| c.record.bars),
-                    ));
-                    guard.update_document_title(&window);
-                }
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Record length", || {
+                    let mut guard = st.borrow_mut();
+                    let channel = guard.session.selected;
+                    if guard.session.set_record_bars(channel, bars) {
+                        guard.session.mark_dirty();
+                    }
+                    if let Some(window) = weak.upgrade() {
+                        window.set_sampler_record_bars(i32::from(
+                            guard.session.channels.get(channel).map_or(1, |c| c.record.bars),
+                        ));
+                        guard.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
         {
@@ -9558,24 +9759,29 @@ impl AppUi {
             });
         }
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
             let tx = cmd_tx.clone();
             window.on_midi_channel_picked(move |row| {
-                let mut guard = st.borrow_mut();
-                let channel = guard.session.selected;
-                let ports = guard.midi_ports.clone();
-                let mut input = guard.session.channel_midi_input(channel);
-                input.channel = mooloop_core::MidiChannelFilter::from_row(row.max(0) as usize);
-                if !guard.session.set_channel_midi_input(channel, input) {
-                    return;
-                }
-                guard.session.mark_dirty();
-                tx.send_routing(guard.session.midi_routing(&ports));
-                if let Some(window) = weak.upgrade() {
-                    guard.refresh_editor(&window);
-                    guard.update_document_title(&window);
-                }
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "MIDI channel", || {
+                    let mut guard = st.borrow_mut();
+                    let channel = guard.session.selected;
+                    let ports = guard.midi_ports.clone();
+                    let mut input = guard.session.channel_midi_input(channel);
+                    input.channel = mooloop_core::MidiChannelFilter::from_row(row.max(0) as usize);
+                    if !guard.session.set_channel_midi_input(channel, input) {
+                        return false;
+                    }
+                    guard.session.mark_dirty();
+                    tx.send_routing(guard.session.midi_routing(&ports));
+                    if let Some(window) = weak.upgrade() {
+                        guard.refresh_editor(&window);
+                        guard.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
 
@@ -9662,63 +9868,78 @@ impl AppUi {
             });
         }
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_midi_binding_removed(move |index| {
-                let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let ports = state.midi_ports.clone();
-                if state.session.remove_control_binding(index, &ports) {
-                    state.session.mark_dirty();
-                    state.refresh_midi_mappings(&window);
-                    state.update_document_title(&window);
-                }
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Remove MIDI binding", || {
+                    let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
+                        return false;
+                    };
+                    let mut state = st.borrow_mut();
+                    let ports = state.midi_ports.clone();
+                    if state.session.remove_control_binding(index, &ports) {
+                        state.session.mark_dirty();
+                        state.refresh_midi_mappings(&window);
+                        state.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_midi_binding_takeover_toggled(move |index| {
-                let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let jump = state
-                    .session
-                    .control_map
-                    .bindings
-                    .get(index)
-                    .and_then(|binding| binding.mode.takeover())
-                    == Some(Takeover::Jump);
-                let next = if jump { Takeover::Pickup } else { Takeover::Jump };
-                if state.session.set_control_binding_takeover(index, next) {
-                    state.session.mark_dirty();
-                    state.refresh_midi_mappings(&window);
-                    state.update_document_title(&window);
-                }
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "MIDI takeover", || {
+                    let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
+                        return false;
+                    };
+                    let mut state = st.borrow_mut();
+                    let jump = state
+                        .session
+                        .control_map
+                        .bindings
+                        .get(index)
+                        .and_then(|binding| binding.mode.takeover())
+                        == Some(Takeover::Jump);
+                    let next = if jump { Takeover::Pickup } else { Takeover::Jump };
+                    if state.session.set_control_binding_takeover(index, next) {
+                        state.session.mark_dirty();
+                        state.refresh_midi_mappings(&window);
+                        state.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_midi_binding_inverted_toggled(move |index| {
-                let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
-                    return;
-                };
-                let mut state = st.borrow_mut();
-                let inverted = state
-                    .session
-                    .control_map
-                    .bindings
-                    .get(index)
-                    .is_some_and(|binding| binding.inverted());
-                if state.session.set_control_binding_inverted(index, !inverted) {
-                    state.session.mark_dirty();
-                    state.refresh_midi_mappings(&window);
-                    state.update_document_title(&window);
-                }
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "MIDI invert", || {
+                    let (Some(window), Ok(index)) = (weak.upgrade(), usize::try_from(index)) else {
+                        return false;
+                    };
+                    let mut state = st.borrow_mut();
+                    let inverted = state
+                        .session
+                        .control_map
+                        .bindings
+                        .get(index)
+                        .is_some_and(|binding| binding.inverted());
+                    if state.session.set_control_binding_inverted(index, !inverted) {
+                        state.session.mark_dirty();
+                        state.refresh_midi_mappings(&window);
+                        state.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
         {
@@ -9777,31 +9998,36 @@ impl AppUi {
         // user typing, and treating it as "clear the colour" would lose the
         // colour they are in the middle of replacing.
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_channel_color_chosen(move |hex| {
-                let mut guard = st.borrow_mut();
-                let color = if hex.trim().is_empty() {
-                    None
-                } else {
-                    match mooloop_core::ProjectColor::from_hex(hex.trim()) {
-                        Some(color) => Some(color),
-                        None => return,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Channel colour", || {
+                    let mut guard = st.borrow_mut();
+                    let color = if hex.trim().is_empty() {
+                        None
+                    } else {
+                        match mooloop_core::ProjectColor::from_hex(hex.trim()) {
+                            Some(color) => Some(color),
+                            None => return false,
+                        }
+                    };
+                    let channel = guard.session.selected as i32;
+                    if !guard.session.set_channel_color(channel, color) {
+                        return false;
                     }
-                };
-                let channel = guard.session.selected as i32;
-                if !guard.session.set_channel_color(channel, color) {
-                    return;
-                }
-                guard.session.mark_dirty();
-                if let Some(window) = weak.upgrade() {
-                    // The same pair the rename handler refreshes, and for the
-                    // same reason: the sidebar and the rack row each read the
-                    // channel rather than each other.
-                    guard.sync_row_flags();
-                    guard.refresh_editor(&window);
-                    guard.update_document_title(&window);
-                }
+                    guard.session.mark_dirty();
+                    if let Some(window) = weak.upgrade() {
+                        // The same pair the rename handler refreshes, and for the
+                        // same reason: the sidebar and the rack row each read the
+                        // channel rather than each other.
+                        guard.sync_row_flags();
+                        guard.refresh_editor(&window);
+                        guard.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
 
@@ -9810,26 +10036,31 @@ impl AppUi {
         // its colour as a wash, so every rack plate has to be redrawn rather
         // than just the strip that was recoloured.
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_track_color_chosen(move |track, hex| {
-                let mut guard = st.borrow_mut();
-                let color = if hex.trim().is_empty() {
-                    None
-                } else {
-                    match mooloop_core::ProjectColor::from_hex(hex.trim()) {
-                        Some(color) => Some(color),
-                        None => return,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Track colour", || {
+                    let mut guard = st.borrow_mut();
+                    let color = if hex.trim().is_empty() {
+                        None
+                    } else {
+                        match mooloop_core::ProjectColor::from_hex(hex.trim()) {
+                            Some(color) => Some(color),
+                            None => return false,
+                        }
+                    };
+                    if !guard.session.set_track_color(track, color) {
+                        return false;
                     }
-                };
-                if !guard.session.set_track_color(track, color) {
-                    return;
-                }
-                if let Some(window) = weak.upgrade() {
-                    guard.sync_row_flags();
-                    guard.sync_mixer(&window);
-                    guard.update_document_title(&window);
-                }
+                    if let Some(window) = weak.upgrade() {
+                        guard.sync_row_flags();
+                        guard.sync_mixer(&window);
+                        guard.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
 
@@ -9838,29 +10069,34 @@ impl AppUi {
         // takes one, because the toolbar can outlive the selection it was
         // drawn for.
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_pattern_color_chosen(move |pattern, hex| {
-                let mut guard = st.borrow_mut();
-                let color = if hex.trim().is_empty() {
-                    None
-                } else {
-                    match mooloop_core::ProjectColor::from_hex(hex.trim()) {
-                        Some(color) => Some(color),
-                        None => return,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Pattern colour", || {
+                    let mut guard = st.borrow_mut();
+                    let color = if hex.trim().is_empty() {
+                        None
+                    } else {
+                        match mooloop_core::ProjectColor::from_hex(hex.trim()) {
+                            Some(color) => Some(color),
+                            None => return false,
+                        }
+                    };
+                    let Ok(pattern) = usize::try_from(pattern) else {
+                        return false;
+                    };
+                    if !guard.session.set_pattern_color(pattern, color) {
+                        return false;
                     }
-                };
-                let Ok(pattern) = usize::try_from(pattern) else {
-                    return;
-                };
-                if !guard.session.set_pattern_color(pattern, color) {
-                    return;
-                }
-                guard.session.mark_dirty();
-                if let Some(window) = weak.upgrade() {
-                    guard.sync_pattern_menu(&window);
-                    guard.update_document_title(&window);
-                }
+                    guard.session.mark_dirty();
+                    if let Some(window) = weak.upgrade() {
+                        guard.sync_pattern_menu(&window);
+                        guard.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
 
@@ -10039,18 +10275,21 @@ impl AppUi {
             });
         }
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             window.on_modulation_envelope_input_channel_changed(move |slot, channel| {
                 let Some(window) = weak.upgrade() else { return };
-                let mut state = st.borrow_mut();
-                // The gate is a jack rather than a descriptor id, so there is no
-                // parameter to name: the module travels entire.
-                let Some(command) = state.session.set_envelope_input_channel(slot, channel) else {
-                    return;
-                };
-                state.send_modulation(&window, &tx, command);
+                with_gesture_history(&st, &commands, &window, "Envelope input", || {                    let mut state = st.borrow_mut();
+                    // The gate is a jack rather than a descriptor id, so there is no
+                    // parameter to name: the module travels entire.
+                    let Some(command) = state.session.set_envelope_input_channel(slot, channel) else {
+                        return false;
+                    };
+                    state.send_modulation(&window, &tx, command);
+                    true
+                });
             });
         }
         {
@@ -10127,6 +10366,7 @@ impl AppUi {
             });
         }
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
@@ -10134,18 +10374,22 @@ impl AppUi {
                 let (Some(window), Ok(param)) = (weak.upgrade(), u32::try_from(param)) else {
                     return;
                 };
-                let mut state = st.borrow_mut();
-                let destination = ParamAddr {
-                    scope: EffectTarget::Channel(state.session.selected as u8),
-                    owner: ParamOwner::Source,
-                    param,
-                };
-                if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
-                    // A full matrix or invalid target must snap the transient
-                    // UI depth back to persisted truth rather than pretending
-                    // a parked route was written.
-                    state.refresh_modulation(&window);
-                }
+                with_gesture_history(&st, &commands, &window, "Modulation depth", || {
+                    let mut state = st.borrow_mut();
+                    let destination = ParamAddr {
+                        scope: EffectTarget::Channel(state.session.selected as u8),
+                        owner: ParamOwner::Source,
+                        param,
+                    };
+                    if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
+                        // A full matrix or invalid target must snap the
+                        // transient UI depth back to persisted truth rather
+                        // than pretending a parked route was written.
+                        state.refresh_modulation(&window);
+                        return false;
+                    }
+                    true
+                });
             });
         }
         {
@@ -10185,6 +10429,7 @@ impl AppUi {
             });
         }
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
@@ -10192,12 +10437,18 @@ impl AppUi {
                 let (Some(window), Ok(param)) = (weak.upgrade(), u32::try_from(param)) else {
                     return;
                 };
-                let mut state = st.borrow_mut();
-                let destination =
-                    ParamAddr::strip(EffectTarget::Channel(state.session.selected as u8), param);
-                if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
-                    state.refresh_modulation(&window);
-                }
+                with_gesture_history(&st, &commands, &window, "Modulation depth", || {
+                    let mut state = st.borrow_mut();
+                    let destination = ParamAddr::strip(
+                        EffectTarget::Channel(state.session.selected as u8),
+                        param,
+                    );
+                    if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
+                        state.refresh_modulation(&window);
+                        return false;
+                    }
+                    true
+                });
             });
         }
         {
@@ -10262,6 +10513,7 @@ impl AppUi {
             });
         }
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
@@ -10271,8 +10523,9 @@ impl AppUi {
                 else {
                     return;
                 };
-                let mut state = st.borrow_mut();
-                let destination = match state.session.effect_target {
+                with_gesture_history(&st, &commands, &window, "Modulation depth", || {
+                    let mut state = st.borrow_mut();
+                    let destination = match state.session.effect_target {
                     EffectTarget::Channel(channel) if channel as usize == state.session.selected => state
                         .session.channels
                         .get(state.session.selected)
@@ -10286,12 +10539,15 @@ impl AppUi {
                         }),
                     _ => None,
                 };
-                let Some(destination) = destination else {
-                    return;
-                };
-                if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
-                    state.refresh_modulation(&window);
-                }
+                    let Some(destination) = destination else {
+                        return false;
+                    };
+                    if !state.set_armed_modulation_depth(&window, &tx, destination, depth) {
+                        state.refresh_modulation(&window);
+                        return false;
+                    }
+                    true
+                });
             });
         }
         {
@@ -10721,52 +10977,76 @@ impl AppUi {
         }
 
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_effect_bypass_toggled(move |slot| {
-                let mut st = st.borrow_mut();
-                let Some(command) = st.session.toggle_effect_bypass(slot) else {
-                    return;
-                };
-                st.refresh_effect_row(slot as usize);
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Effect bypass", || {
+                    let mut st = st.borrow_mut();
+                    let Some(command) = st.session.toggle_effect_bypass(slot) else {
+                        return false;
+                    };
+                    st.refresh_effect_row(slot as usize);
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
 
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_effect_wet_dry_changed(move |slot, wet_dry| {
-                let mut st = st.borrow_mut();
-                let Some(command) = st.session.set_effect_wet_dry(slot, wet_dry) else {
-                    return;
-                };
-                st.refresh_effect_row(slot as usize);
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Wet/dry", || {
+                    let mut st = st.borrow_mut();
+                    let Some(command) = st.session.set_effect_wet_dry(slot, wet_dry) else {
+                        return false;
+                    };
+                    st.refresh_effect_row(slot as usize);
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_effect_input_trim_changed(move |slot, input_trim_db| {
-                let mut st = st.borrow_mut();
-                let Some(command) = st.session.set_effect_input_trim(slot, input_trim_db) else {
-                    return;
-                };
-                st.refresh_effect_row(slot as usize);
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Input trim", || {
+                    let mut st = st.borrow_mut();
+                    let Some(command) = st.session.set_effect_input_trim(slot, input_trim_db) else {
+                        return false;
+                    };
+                    st.refresh_effect_row(slot as usize);
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_effect_output_trim_changed(move |slot, output_trim_db| {
-                let mut st = st.borrow_mut();
-                let Some(command) = st.session.set_effect_output_trim(slot, output_trim_db) else {
-                    return;
-                };
-                st.refresh_effect_row(slot as usize);
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Output trim", || {
+                    let mut st = st.borrow_mut();
+                    let Some(command) = st.session.set_effect_output_trim(slot, output_trim_db) else {
+                        return false;
+                    };
+                    st.refresh_effect_row(slot as usize);
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
 
@@ -10785,17 +11065,25 @@ impl AppUi {
             let tx = cmd_tx.clone();
             // One place that writes a Buffer parameter, so the handlers below
             // cannot each invent their own way of doing it.
-            let write = move |slot: i32, param_index: i32, normalized: f32| {
+            //
+            // It does not record, and its two recording callers wrap it. The
+            // third caller is the gate, where a press and a release are the
+            // same write with different values: recording it would put two
+            // undo entries on one button press, and the release restores the
+            // resting value anyway, so there is nothing an undo could
+            // return. That is also its line on the check's exemption list.
+            let write = move |slot: i32, param_index: i32, normalized: f32| -> bool {
                 let mut st = st.borrow_mut();
-                let EffectParamWrite::Applied(command) =
+                let EffectParamWrite::Applied { command, .. } =
                     st.session.set_effect_param(slot, param_index, normalized)
                 else {
-                    return;
+                    return false;
                 };
                 st.refresh_effect_row(slot as usize);
                 if let Some(command) = command {
                     let _ = tx.send(command);
                 }
+                true
             };
 
             // These callbacks name controls by stable wire id, while the
@@ -10812,13 +11100,25 @@ impl AppUi {
 
             let w = write.clone();
             let quantize = buffer_param_index(mooloop_core::BUFFER_PARAM_QUANTIZE);
+            let st_q = state.clone();
+            let commands_q = command_state.clone();
+            let weak_q = window.as_weak();
             window.on_effect_buffer_quantize(move |slot, on| {
-                w(slot, quantize, if on { 1.0 } else { 0.0 });
+                let Some(window) = weak_q.upgrade() else { return };
+                with_gesture_history(&st_q, &commands_q, &window, "Buffer QUANT", || {
+                    w(slot, quantize, if on { 1.0 } else { 0.0 })
+                });
             });
             let w = write.clone();
             let freeze = buffer_param_index(mooloop_core::BUFFER_PARAM_FREEZE);
+            let st_f = state.clone();
+            let commands_f = command_state.clone();
+            let weak_f = window.as_weak();
             window.on_effect_buffer_freeze(move |slot, on| {
-                w(slot, freeze, if on { 1.0 } else { 0.0 });
+                let Some(window) = weak_f.upgrade() else { return };
+                with_gesture_history(&st_f, &commands_f, &window, "Buffer FREEZE", || {
+                    w(slot, freeze, if on { 1.0 } else { 0.0 })
+                });
             });
             let w = write.clone();
             window.on_effect_buffer_gate(move |slot, param_index, down| {
@@ -10832,115 +11132,147 @@ impl AppUi {
             let st = state.clone();
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
+            let commands = command_state.clone();
             window.on_effect_buffer_history_bars(move |slot, bars| {
                 // Not a parameter write: the ring is reallocated for it, off
                 // the audio thread, and swapped in at a block boundary. See
                 // `Session::set_buffer_bars`.
                 let Some(window) = weak.upgrade() else { return };
                 let bpm = f64::from(window.get_bpm());
-                let mut st = st.borrow_mut();
-                let Some(resize) = st.session.set_buffer_bars(slot, bars.clamp(1, 255) as u8) else {
-                    return;
-                };
-                st.refresh_effect_row(slot as usize);
-                let _ = tx.resize_buffer(resize, bpm);
-                st.update_document_title(&window);
+                with_gesture_history(&st, &commands, &window, "Buffer length", || {
+                    let mut st = st.borrow_mut();
+                    let Some(resize) = st.session.set_buffer_bars(slot, bars.clamp(1, 255) as u8)
+                    else {
+                        return false;
+                    };
+                    st.refresh_effect_row(slot as usize);
+                    let _ = tx.resize_buffer(resize, bpm);
+                    st.update_document_title(&window);
+                    true
+                });
             });
         }
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
             // One callback for every parameter of every effect kind: the
             // rack sends a descriptor index and a normalized position, and
             // the descriptor table converts to the natural units the wire
             // and the DSP use.
             window.on_effect_param_changed(move |slot, param_index, normalized| {
-                let mut st = st.borrow_mut();
-                // Republish on anything that moved, not only on anything the
-                // engine has to hear about. Choosing an EQ band is the case
-                // that separates the two: it emits no command, and skipping
-                // the republish leaves the selector highlight and all six
-                // knobs on the band you just left.
-                let EffectParamWrite::Applied(command) =
-                    st.session.set_effect_param(slot, param_index, normalized)
-                else {
-                    return;
-                };
-                st.refresh_effect_row(slot as usize);
-                if let Some(command) = command {
-                    let _ = tx.send(command);
-                }
+                let Some(window) = weak.upgrade() else { return };
+                // The label is the descriptor's own name, resolved where the
+                // id is. It arrives with the write rather than being looked
+                // up here, because the EQ's face indices are not descriptor
+                // positions and a second copy of that mapping in the caller
+                // would name the wrong parameter on exactly one effect.
+                with_gesture_history_named(&st, &commands, &window, || {
+                    let mut st = st.borrow_mut();
+                    // Republish on anything that moved, not only on anything
+                    // the engine has to hear about. Choosing an EQ band is
+                    // the case that separates the two: it emits no command,
+                    // and skipping the republish leaves the selector
+                    // highlight and all six knobs on the band you just left.
+                    let EffectParamWrite::Applied { command, name } =
+                        st.session.set_effect_param(slot, param_index, normalized)
+                    else {
+                        return None;
+                    };
+                    st.refresh_effect_row(slot as usize);
+                    if let Some(command) = command {
+                        let _ = tx.send(command);
+                    }
+                    Some(name)
+                });
             });
         }
 
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_delay_tempo_sync_changed(move |slot, enabled| {
-                let mut state = st.borrow_mut();
-                if !state.session.set_delay_tempo_sync(slot, enabled) {
-                    return;
-                }
-                state.refresh_effect_row(slot as usize);
-                if let Some(window) = weak.upgrade() {
-                    state.update_document_title(&window);
-                }
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Delay sync", || {
+                    let mut state = st.borrow_mut();
+                    if !state.session.set_delay_tempo_sync(slot, enabled) {
+                        return false;
+                    }
+                    state.refresh_effect_row(slot as usize);
+                    if let Some(window) = weak.upgrade() {
+                        state.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
 
         {
+            let commands = command_state.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_delay_time_division_changed(move |slot, division| {
-                let mut state = st.borrow_mut();
-                if !state.session.set_delay_time_division(slot, division) {
-                    return;
-                }
-                state.refresh_effect_row(slot as usize);
-                if let Some(window) = weak.upgrade() {
-                    state.update_document_title(&window);
-                }
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Delay division", || {
+                    let mut state = st.borrow_mut();
+                    if !state.session.set_delay_time_division(slot, division) {
+                        return false;
+                    }
+                    state.refresh_effect_row(slot as usize);
+                    if let Some(window) = weak.upgrade() {
+                        state.update_document_title(&window);
+                    }
+                    true
+                });
             });
         }
 
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_modulation_tempo_sync_changed(move |slot, enabled| {
                 let Some(window) = weak.upgrade() else { return };
-                let mut state = st.borrow_mut();
-                let bpm = f64::from(window.get_bpm());
-                let Some(command) = state.session.set_modulation_tempo_sync(slot, enabled, bpm)
-                else {
-                    return;
-                };
-                if let Some(command) = command {
-                    let _ = tx.send(command);
-                }
-                state.refresh_effect_row(slot as usize);
-                state.update_document_title(&window);
+                with_gesture_history(&st, &commands, &window, "Modulator sync", || {                    let mut state = st.borrow_mut();
+                    let bpm = f64::from(window.get_bpm());
+                    let Some(command) = state.session.set_modulation_tempo_sync(slot, enabled, bpm)
+                    else {
+                        return false;
+                    };
+                    if let Some(command) = command {
+                        let _ = tx.send(command);
+                    }
+                    state.refresh_effect_row(slot as usize);
+                    state.update_document_title(&window);
+                    true
+                });
             });
         }
 
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_modulation_rate_division_changed(move |slot, division| {
                 let Some(window) = weak.upgrade() else { return };
-                let mut state = st.borrow_mut();
-                let bpm = f64::from(window.get_bpm());
-                let Some(command) =
-                    state.session.set_modulation_rate_division(slot, division, bpm)
-                else {
-                    return;
-                };
-                if let Some(command) = command {
-                    let _ = tx.send(command);
-                }
-                state.refresh_effect_row(slot as usize);
-                state.update_document_title(&window);
+                with_gesture_history(&st, &commands, &window, "Modulator division", || {                    let mut state = st.borrow_mut();
+                    let bpm = f64::from(window.get_bpm());
+                    let Some(command) =
+                        state.session.set_modulation_rate_division(slot, division, bpm)
+                    else {
+                        return false;
+                    };
+                    if let Some(command) = command {
+                        let _ = tx.send(command);
+                    }
+                    state.refresh_effect_row(slot as usize);
+                    state.update_document_title(&window);
+                    true
+                });
             });
         }
 
@@ -10983,21 +11315,39 @@ impl AppUi {
         }
 
         // --- Sampler parameter callbacks (edit the selected channel) ---
+        // One label a family rather than one a callback. The plan's rule is
+        // that a label comes from somewhere that already exists rather than
+        // being invented sixty times, and for a *descriptor-addressed*
+        // parameter that place is the descriptor's own name -- which is what
+        // `on_effect_param_changed` uses. These write struct fields instead,
+        // so there is no descriptor to read and no id to read it by: the
+        // honest answer is the family, not a literal per invocation that
+        // nothing can keep in step with the face.
         macro_rules! wire_time_param {
             ($on:ident, $field:ident) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let commands = command_state.clone();
+                let weak = window.as_weak();
                 window.$on(move |v: f32| {
-                    let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
-                        return;
-                    };
-                    channel.params.$field = envelope_seconds(v);
-                    let p = channel.params;
-                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                        channel: ch as u8,
-                        params: p,
+                    let Some(window) = weak.upgrade() else { return };
+                    with_gesture_history(&st, &commands, &window, "Sampler envelope", || {
+                        let mut st = st.borrow_mut();
+                        let ch = st.session.selected;
+                        let Some(channel) = st.session.channels.get_mut(ch) else {
+                            return false;
+                        };
+                        let value = envelope_seconds(v);
+                        if channel.params.$field == value {
+                            return false;
+                        }
+                        channel.params.$field = value;
+                        let p = channel.params;
+                        let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                            channel: ch as u8,
+                            params: p,
+                        });
+                        true
                     });
                 });
             }};
@@ -11006,17 +11356,26 @@ impl AppUi {
             ($on:ident, $field:ident) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let commands = command_state.clone();
+                let weak = window.as_weak();
                 window.$on(move |v: f32| {
-                    let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
-                        return;
-                    };
-                    channel.params.$field = v;
-                    let p = channel.params;
-                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                        channel: ch as u8,
-                        params: p,
+                    let Some(window) = weak.upgrade() else { return };
+                    with_gesture_history(&st, &commands, &window, "Sampler parameter", || {
+                        let mut st = st.borrow_mut();
+                        let ch = st.session.selected;
+                        let Some(channel) = st.session.channels.get_mut(ch) else {
+                            return false;
+                        };
+                        if channel.params.$field == v {
+                            return false;
+                        }
+                        channel.params.$field = v;
+                        let p = channel.params;
+                        let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                            channel: ch as u8,
+                            params: p,
+                        });
+                        true
                     });
                 });
             }};
@@ -11034,38 +11393,44 @@ impl AppUi {
             ($on:ident, $marker:expr) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let commands = command_state.clone();
                 let window_weak = window.as_weak();
                 window.$on(move |v: f32| {
                     let Some(window) = window_weak.upgrade() else {
                         return;
                     };
                     let marker = $marker;
-                    let (value, status) = {
+                    // `RefCell` rather than `Cell`: the snap status is a
+                    // `String`, which is not `Copy`.
+                    let resolved = std::cell::RefCell::new((v, None));
+                    with_gesture_history(&st, &commands, &window, "Sample marker", || {
                         let mut st = st.borrow_mut();
                         let ch = st.session.selected;
                         let Some(channel) = st.session.channels.get_mut(ch) else {
-                            return;
+                            return false;
                         };
                         let mut value = v;
                         let mut status = None;
                         if window.get_snap_to_zero() {
                             if let Some(sample) = channel.published_sample().cloned() {
-                                if let Some((resolved, result)) =
+                                if let Some((snapped, result)) =
                                     snap_marker(&channel.params, &sample, marker, v)
                                 {
-                                    value = resolved;
+                                    value = snapped;
                                     status = Some(snap_status(marker, result));
                                 }
                             }
                         }
+                        *resolved.borrow_mut() = (value, status);
                         marker.set(&mut channel.params, value);
                         let p = channel.params;
                         let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                             channel: ch as u8,
                             params: p,
                         });
-                        (value, status)
-                    };
+                        true
+                    });
+                    let (value, status) = resolved.into_inner();
                     set_marker_property(&window, marker, value);
                     if let Some(status) = status {
                         window.set_status_message(status.into());
@@ -11156,6 +11521,7 @@ impl AppUi {
         }
 
         {
+            let commands = command_state.clone();
             // The explicit action, which works whether or not the toggle is
             // on. Markers resolve in region order so each one is bounded by
             // its neighbours' already-resolved positions.
@@ -11166,21 +11532,23 @@ impl AppUi {
                 let Some(window) = window_weak.upgrade() else {
                     return;
                 };
-                let Some(snapped) = st.borrow_mut().session.snap_all_markers() else {
-                    window.set_status_message("No sample to snap".into());
-                    return;
-                };
-                let _ = tx.send(snapped.command);
-                for (marker, value) in snapped.resolved {
-                    set_marker_property(&window, marker, value);
-                }
-                window.set_status_message(
-                    format!(
-                        "Snapped {} of {} markers to zero crossings",
-                        snapped.moved, snapped.searched
-                    )
-                    .into(),
-                );
+                with_gesture_history(&st, &commands, &window, "Snap markers", || {                    let Some(snapped) = st.borrow_mut().session.snap_all_markers() else {
+                        window.set_status_message("No sample to snap".into());
+                        return false;
+                    };
+                    let _ = tx.send(snapped.command);
+                    for (marker, value) in snapped.resolved {
+                        set_marker_property(&window, marker, value);
+                    }
+                    window.set_status_message(
+                        format!(
+                            "Snapped {} of {} markers to zero crossings",
+                            snapped.moved, snapped.searched
+                        )
+                        .into(),
+                    );
+                    true
+                });
             });
         }
         wire_unit_param!(on_filter_cutoff_changed, filter_cutoff);
@@ -11198,19 +11566,28 @@ impl AppUi {
             ($on:ident, $field:ident, $map:expr) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let commands = command_state.clone();
+                let weak = window.as_weak();
                 window.$on(move |v: f32| {
-                    let mut st = st.borrow_mut();
-                    let ch = st.session.selected;
-                    let Some(channel) = st.session.channels.get_mut(ch) else {
-                        return;
-                    };
-                    #[allow(clippy::redundant_closure_call)]
-                    let value = ($map)(v);
-                    channel.params.filter_env_mut().$field = value;
-                    let p = channel.params;
-                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                        channel: ch as u8,
-                        params: p,
+                    let Some(window) = weak.upgrade() else { return };
+                    with_gesture_history(&st, &commands, &window, "Filter envelope", || {
+                        let mut st = st.borrow_mut();
+                        let ch = st.session.selected;
+                        let Some(channel) = st.session.channels.get_mut(ch) else {
+                            return false;
+                        };
+                        #[allow(clippy::redundant_closure_call)]
+                        let value = ($map)(v);
+                        if channel.params.filter_env_mut().$field == value {
+                            return false;
+                        }
+                        channel.params.filter_env_mut().$field = value;
+                        let p = channel.params;
+                        let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                            channel: ch as u8,
+                            params: p,
+                        });
+                        true
                     });
                 });
             }};
@@ -11250,133 +11627,172 @@ impl AppUi {
         }
 
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_reverse_playback_changed(move |reverse| {
-                let mut st = st.borrow_mut();
-                let ch = st.session.selected;
-                let Some(channel) = st.session.channels.get_mut(ch) else {
-                    return;
-                };
-                channel.params.reverse = reverse;
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: ch as u8,
-                    params: channel.params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Reverse", || {
+                    let mut st = st.borrow_mut();
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
+                        return false;
+                    };
+                    channel.params.reverse = reverse;
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: ch as u8,
+                        params: channel.params,
+                    });
+                    true
                 });
             });
         }
 
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_root_note_changed(move |note| {
-                let mut st = st.borrow_mut();
-                let ch = st.session.selected;
-                let Some(channel) = st.session.channels.get_mut(ch) else {
-                    return;
-                };
-                channel.params.root_note = note.clamp(0, 127) as u8;
-                if let Some(window) = weak.upgrade() {
-                    window.set_tune_label(tune_label(channel.params).into());
-                }
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: ch as u8,
-                    params: channel.params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Root note", || {
+                    let mut st = st.borrow_mut();
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
+                        return false;
+                    };
+                    channel.params.root_note = note.clamp(0, 127) as u8;
+                    if let Some(window) = weak.upgrade() {
+                        window.set_tune_label(tune_label(channel.params).into());
+                    }
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: ch as u8,
+                        params: channel.params,
+                    });
+                    true
                 });
             });
         }
 
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_tune_semitones_changed(move |v: f32| {
-                let mut st = st.borrow_mut();
-                let ch = st.session.selected;
-                let Some(channel) = st.session.channels.get_mut(ch) else {
-                    return;
-                };
-                channel.params.tune_semitones = v;
-                if let Some(window) = weak.upgrade() {
-                    window.set_tune_label(tune_label(channel.params).into());
-                }
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: ch as u8,
-                    params: channel.params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Tune", || {
+                    let mut st = st.borrow_mut();
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
+                        return false;
+                    };
+                    channel.params.tune_semitones = v;
+                    if let Some(window) = weak.upgrade() {
+                        window.set_tune_label(tune_label(channel.params).into());
+                    }
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: ch as u8,
+                        params: channel.params,
+                    });
+                    true
                 });
             });
         }
 
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_tune_cents_changed(move |v: f32| {
-                let mut st = st.borrow_mut();
-                let ch = st.session.selected;
-                let Some(channel) = st.session.channels.get_mut(ch) else {
-                    return;
-                };
-                channel.params.tune_cents = v;
-                if let Some(window) = weak.upgrade() {
-                    window.set_tune_label(tune_label(channel.params).into());
-                }
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: ch as u8,
-                    params: channel.params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Tune", || {
+                    let mut st = st.borrow_mut();
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
+                        return false;
+                    };
+                    channel.params.tune_cents = v;
+                    if let Some(window) = weak.upgrade() {
+                        window.set_tune_label(tune_label(channel.params).into());
+                    }
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: ch as u8,
+                        params: channel.params,
+                    });
+                    true
                 });
             });
         }
 
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_retune_live_changed(move |on| {
-                let mut st = st.borrow_mut();
-                let ch = st.session.selected;
-                let Some(channel) = st.session.channels.get_mut(ch) else {
-                    return;
-                };
-                channel.params.retune_live = on;
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: ch as u8,
-                    params: channel.params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Retune", || {
+                    let mut st = st.borrow_mut();
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
+                        return false;
+                    };
+                    channel.params.retune_live = on;
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: ch as u8,
+                        params: channel.params,
+                    });
+                    true
                 });
             });
         }
 
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_filter_env_changed(move |v| {
-                let mut st = st.borrow_mut();
-                let ch = st.session.selected;
-                let Some(channel) = st.session.channels.get_mut(ch) else {
-                    return;
-                };
-                channel.params.filter_env_amount = v.clamp(0.0, 1.0) * 2.0 - 1.0;
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: ch as u8,
-                    params: channel.params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Filter envelope", || {
+                    let mut st = st.borrow_mut();
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
+                        return false;
+                    };
+                    channel.params.filter_env_amount = v.clamp(0.0, 1.0) * 2.0 - 1.0;
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: ch as u8,
+                        params: channel.params,
+                    });
+                    true
                 });
             });
         }
 
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_loop_mode_changed(move |i| {
-                let mut st = st.borrow_mut();
-                let ch = st.session.selected;
-                let Some(channel) = st.session.channels.get_mut(ch) else {
-                    return;
-                };
-                channel.params.loop_mode = loop_mode_from_int(i);
-                let p = channel.params;
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: ch as u8,
-                    params: p,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Loop mode", || {
+                    let mut st = st.borrow_mut();
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
+                        return false;
+                    };
+                    channel.params.loop_mode = loop_mode_from_int(i);
+                    let p = channel.params;
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: ch as u8,
+                        params: p,
+                    });
+                    true
                 });
             });
         }
@@ -11402,36 +11818,48 @@ impl AppUi {
             });
         }
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_play_mode_changed(move |value| {
-                let mut st = st.borrow_mut();
-                let ch = st.session.selected;
-                let Some(channel) = st.session.channels.get_mut(ch) else {
-                    return;
-                };
-                channel.params.play_mode = PlayMode::from_index(value);
-                let p = channel.params;
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: ch as u8,
-                    params: p,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Play mode", || {
+                    let mut st = st.borrow_mut();
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
+                        return false;
+                    };
+                    channel.params.play_mode = PlayMode::from_index(value);
+                    let p = channel.params;
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: ch as u8,
+                        params: p,
+                    });
+                    true
                 });
             });
         }
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_slice_base_note_changed(move |note| {
-                let mut st = st.borrow_mut();
-                let ch = st.session.selected;
-                let Some(channel) = st.session.channels.get_mut(ch) else {
-                    return;
-                };
-                channel.params.slice_base_note = note.clamp(0, 127) as u8;
-                let p = channel.params;
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: ch as u8,
-                    params: p,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Slice base note", || {
+                    let mut st = st.borrow_mut();
+                    let ch = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(ch) else {
+                        return false;
+                    };
+                    channel.params.slice_base_note = note.clamp(0, 127) as u8;
+                    let p = channel.params;
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: ch as u8,
+                        params: p,
+                    });
+                    true
                 });
             });
         }
@@ -11683,61 +12111,85 @@ impl AppUi {
         }
 
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_voice_mode_changed(move |value| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                channel.params.voice_mode = voice_mode_from_int(value);
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: channel_index as u8,
-                    params: channel.params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Voice mode", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    channel.params.voice_mode = voice_mode_from_int(value);
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: channel_index as u8,
+                        params: channel.params,
+                    });
+                    true
                 });
             });
         }
 
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_sampler_polyphony_changed(move |value| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                channel.params.polyphony = value.clamp(1, 16) as u8;
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: channel_index as u8,
-                    params: channel.params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Polyphony", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    channel.params.polyphony = value.clamp(1, 16) as u8;
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: channel_index as u8,
+                        params: channel.params,
+                    });
+                    true
                 });
             });
         }
 
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_retrigger_mode_changed(move |value| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                channel.params.retrigger_mode = retrigger_mode_from_int(value);
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: channel_index as u8,
-                    params: channel.params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Retrigger", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    channel.params.retrigger_mode = retrigger_mode_from_int(value);
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: channel_index as u8,
+                        params: channel.params,
+                    });
+                    true
                 });
             });
         }
 
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_choke_group_changed(move |value| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                channel.params.choke_group = value.clamp(0, 16) as u8;
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: channel_index as u8,
-                    params: channel.params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Choke group", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    channel.params.choke_group = value.clamp(0, 16) as u8;
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: channel_index as u8,
+                        params: channel.params,
+                    });
+                    true
                 });
             });
         }
@@ -11748,84 +12200,100 @@ impl AppUi {
         // parameter write. The two can arrive in either order -- a sampler
         // whose intent is on but whose pool has not landed plays unstretched.
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let stx = structural_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_stretch_enabled_changed(move |on| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                channel.params.stretch_enabled = on;
-                // Guess the loop length on the way in. A loop is nearly
-                // always some power of two of bars and nearly always
-                // recorded a little off it, so seeding this is the
-                // difference between one click and a knob turn every time.
-                if on {
-                    // Measured in the sample's own frames against its own
-                    // rate: the frame count is the file's, so a 44.1 kHz
-                    // break measured at the engine's 48 kHz read 8% short
-                    // and could snap a two-bar loop to one.
-                    let (frames, rate) = channel
-                        .published_sample()
-                        .map_or((0, sample_rate), |sample| {
-                            (sample.frames.len(), sample.sample_rate)
-                        });
-                    let bpm = weak.upgrade().map_or(120.0, |w| w.get_bpm() as f64);
-                    let measured = measured_loop_bars(channel.params, frames, rate, bpm);
-                    channel.params.stretch_bars = snap_bars_to_power_of_two(measured);
-                    channel.params.stretch_sync = true;
-                }
-                let params = channel.params;
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: channel_index as u8,
-                    params,
-                });
-                let _ = stx.send(StructuralCommand::SetSamplerStretch {
-                    channel: channel_index as u8,
-                    pool: on.then(|| {
-                        Box::new(StretchPool::new(
-                            params.stretch_mode,
-                            sample_rate,
-                            MAX_SAMPLER_VOICES as usize,
-                        ))
-                    }),
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Stretch", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    channel.params.stretch_enabled = on;
+                    // Guess the loop length on the way in. A loop is nearly
+                    // always some power of two of bars and nearly always
+                    // recorded a little off it, so seeding this is the
+                    // difference between one click and a knob turn every time.
+                    if on {
+                        // Measured in the sample's own frames against its own
+                        // rate: the frame count is the file's, so a 44.1 kHz
+                        // break measured at the engine's 48 kHz read 8% short
+                        // and could snap a two-bar loop to one.
+                        let (frames, rate) = channel
+                            .published_sample()
+                            .map_or((0, sample_rate), |sample| {
+                                (sample.frames.len(), sample.sample_rate)
+                            });
+                        let bpm = weak.upgrade().map_or(120.0, |w| w.get_bpm() as f64);
+                        let measured = measured_loop_bars(channel.params, frames, rate, bpm);
+                        channel.params.stretch_bars = snap_bars_to_power_of_two(measured);
+                        channel.params.stretch_sync = true;
+                    }
+                    let params = channel.params;
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: channel_index as u8,
+                        params,
+                    });
+                    let _ = stx.send(StructuralCommand::SetSamplerStretch {
+                        channel: channel_index as u8,
+                        pool: on.then(|| {
+                            Box::new(StretchPool::new(
+                                params.stretch_mode,
+                                sample_rate,
+                                MAX_SAMPLER_VOICES as usize,
+                            ))
+                        }),
+                    });
+                    true
                 });
             });
         }
 
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_stretch_sync_changed(move |on| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                channel.params.stretch_sync = on;
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: channel_index as u8,
-                    params: channel.params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Stretch sync", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    channel.params.stretch_sync = on;
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: channel_index as u8,
+                        params: channel.params,
+                    });
+                    true
                 });
             });
         }
 
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_stretch_bars_changed(move |norm| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                let bars = stretch_bars_from_norm(norm);
-                channel.params.stretch_bars = bars;
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: channel_index as u8,
-                    params: channel.params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Stretch bars", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    let bars = stretch_bars_from_norm(norm);
+                    channel.params.stretch_bars = bars;
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: channel_index as u8,
+                        params: channel.params,
+                    });
+                    if let Some(window) = weak.upgrade() {
+                        window.set_stretch_bars_label(format_bars(bars).into());
+                    }
+                    true
                 });
-                if let Some(window) = weak.upgrade() {
-                    window.set_stretch_bars_label(format_bars(bars).into());
-                }
             });
         }
 
@@ -11838,28 +12306,31 @@ impl AppUi {
             ($callback:ident, $apply:expr) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let commands = command_state.clone();
                 let weak = window.as_weak();
                 window.$callback(move |text| {
+                    let Some(window) = weak.upgrade() else { return };
                     let Some(typed) = parse_typed_value(text.as_str()) else {
-                        if let Some(window) = weak.upgrade() {
-                            st.borrow().refresh_editor(&window);
-                        }
+                        st.borrow().refresh_editor(&window);
                         return;
                     };
-                    {
+                    with_gesture_history(&st, &commands, &window, "Typed value", || {
                         let mut st = st.borrow_mut();
                         let channel_index = st.session.selected;
                         let channel = &mut st.session.channels[channel_index];
+                        let was = channel.params;
                         #[allow(clippy::redundant_closure_call)]
                         ($apply)(&mut channel.params, typed);
+                        if channel.params == was {
+                            return false;
+                        }
                         let _ = tx.send(EngineCommand::SetChannelSamplerParams {
                             channel: channel_index as u8,
                             params: channel.params,
                         });
-                    }
-                    if let Some(window) = weak.upgrade() {
-                        st.borrow().refresh_editor(&window);
-                    }
+                        true
+                    });
+                    st.borrow().refresh_editor(&window);
                 });
             }};
         }
@@ -11881,68 +12352,84 @@ impl AppUi {
         });
 
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_stretch_mode_changed(move |value| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                channel.params.stretch_mode = match value {
-                    1 => StretchMode::Drums,
-                    2 => StretchMode::Grain,
-                    _ => StretchMode::Music,
-                };
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: channel_index as u8,
-                    params: channel.params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Stretch mode", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    channel.params.stretch_mode = match value {
+                        1 => StretchMode::Drums,
+                        2 => StretchMode::Grain,
+                        _ => StretchMode::Music,
+                    };
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: channel_index as u8,
+                        params: channel.params,
+                    });
+                    true
                 });
             });
         }
 
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_stretch_ratio_changed(move |norm| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                let ratio = stretch_ratio_from_norm(norm);
-                channel.params.stretch_ratio = ratio;
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: channel_index as u8,
-                    params: channel.params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Stretch ratio", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    let ratio = stretch_ratio_from_norm(norm);
+                    channel.params.stretch_ratio = ratio;
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: channel_index as u8,
+                        params: channel.params,
+                    });
+                    if let Some(window) = weak.upgrade() {
+                        window.set_stretch_ratio_label(format!("{ratio:.2}x").into());
+                        window.set_stretch_ratio_clean((0.5..=1.5).contains(&ratio));
+                    }
+                    true
                 });
-                if let Some(window) = weak.upgrade() {
-                    window.set_stretch_ratio_label(format!("{ratio:.2}x").into());
-                    window.set_stretch_ratio_clean((0.5..=1.5).contains(&ratio));
-                }
             });
         }
 
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_stretch_grain_changed(move |norm| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                let frames = stretch_grain_from_norm(norm);
-                channel.params.stretch_grain = frames;
-                let _ = tx.send(EngineCommand::SetChannelSamplerParams {
-                    channel: channel_index as u8,
-                    params: channel.params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Stretch grain", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    let frames = stretch_grain_from_norm(norm);
+                    channel.params.stretch_grain = frames;
+                    let _ = tx.send(EngineCommand::SetChannelSamplerParams {
+                        channel: channel_index as u8,
+                        params: channel.params,
+                    });
+                    if let Some(window) = weak.upgrade() {
+                        window.set_stretch_grain_label(
+                            format!(
+                                "{frames} fr / {:.0} Hz",
+                                sample_rate as f32 / (frames.max(2) as f32 / 2.0)
+                            )
+                            .into(),
+                        );
+                    }
+                    true
                 });
-                if let Some(window) = weak.upgrade() {
-                    window.set_stretch_grain_label(
-                        format!(
-                            "{frames} fr / {:.0} Hz",
-                            sample_rate as f32 / (frames.max(2) as f32 / 2.0)
-                        )
-                        .into(),
-                    );
-                }
             });
         }
 
@@ -11950,19 +12437,28 @@ impl AppUi {
             ($callback:ident, $field:ident) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let commands = command_state.clone();
                 let window_weak = window.as_weak();
                 window.$callback(move |value: f32| {
-                    let mut st = st.borrow_mut();
-                    let channel_index = st.session.selected;
-                    let channel = &mut st.session.channels[channel_index];
-                    channel.drum_params.$field = value;
-                    let params = channel.drum_params;
-                    let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
-                        channel: channel_index as u8,
-                        params,
+                    let Some(window) = window_weak.upgrade() else { return };
+                    let params = std::cell::Cell::new(None);
+                    with_gesture_history(&st, &commands, &window, "Drum parameter", || {
+                        let mut st = st.borrow_mut();
+                        let channel_index = st.session.selected;
+                        let channel = &mut st.session.channels[channel_index];
+                        let next = value;
+                        if channel.drum_params.$field == next {
+                            return false;
+                        }
+                        channel.drum_params.$field = next;
+                        params.set(Some(channel.drum_params));
+                        let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
+                            channel: channel_index as u8,
+                            params: channel.drum_params,
+                        });
+                        true
                     });
-                    drop(st);
-                    if let Some(window) = window_weak.upgrade() {
+                    if let Some(params) = params.get() {
                         sync_drum_preview(&window, params);
                     }
                 });
@@ -11990,19 +12486,28 @@ impl AppUi {
             ($callback:ident, $field:ident, $map:path) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let commands = command_state.clone();
                 let window_weak = window.as_weak();
                 window.$callback(move |value| {
-                    let mut st = st.borrow_mut();
-                    let channel_index = st.session.selected;
-                    let channel = &mut st.session.channels[channel_index];
-                    channel.drum_params.$field = $map(value);
-                    let params = channel.drum_params;
-                    let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
-                        channel: channel_index as u8,
-                        params,
+                    let Some(window) = window_weak.upgrade() else { return };
+                    let params = std::cell::Cell::new(None);
+                    with_gesture_history(&st, &commands, &window, "Drum parameter", || {
+                        let mut st = st.borrow_mut();
+                        let channel_index = st.session.selected;
+                        let channel = &mut st.session.channels[channel_index];
+                        let next = $map(value);
+                        if channel.drum_params.$field == next {
+                            return false;
+                        }
+                        channel.drum_params.$field = next;
+                        params.set(Some(channel.drum_params));
+                        let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
+                            channel: channel_index as u8,
+                            params: channel.drum_params,
+                        });
+                        true
                     });
-                    drop(st);
-                    if let Some(window) = window_weak.upgrade() {
+                    if let Some(params) = params.get() {
                         sync_drum_preview(&window, params);
                     }
                 });
@@ -12026,36 +12531,47 @@ impl AppUi {
         );
 
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let window_weak = window.as_weak();
             window.on_drum_mode_changed(move |value| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                channel.drum_params.mode = DrumMode::from_index(value);
-                let params = channel.drum_params;
-                let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
-                    channel: channel_index as u8,
-                    params,
+                let Some(window) = window_weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Drum mode", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    channel.drum_params.mode = DrumMode::from_index(value);
+                    let params = channel.drum_params;
+                    let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
+                        channel: channel_index as u8,
+                        params,
+                    });
+                    drop(st);
+                    if let Some(window) = window_weak.upgrade() {
+                        sync_drum_preview(&window, params);
+                    }
+                    true
                 });
-                drop(st);
-                if let Some(window) = window_weak.upgrade() {
-                    sync_drum_preview(&window, params);
-                }
             });
         }
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_drum_choke_group_changed(move |value| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                channel.drum_params.choke_group = value.clamp(0, 16) as u8;
-                let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
-                    channel: channel_index as u8,
-                    params: channel.drum_params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Choke group", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    channel.drum_params.choke_group = value.clamp(0, 16) as u8;
+                    let _ = tx.send(EngineCommand::SetChannelDrumSynthParams {
+                        channel: channel_index as u8,
+                        params: channel.drum_params,
+                    });
+                    true
                 });
             });
         }
@@ -12064,14 +12580,23 @@ impl AppUi {
             ($params:ident, $command:ident, $callback:ident, $($field:ident).+) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let commands = command_state.clone();
+                let weak = window.as_weak();
                 window.$callback(move |value: f32| {
-                    let mut st = st.borrow_mut();
-                    let channel_index = st.session.selected;
-                    let channel = &mut st.session.channels[channel_index];
-                    channel.$params.$($field).+ = value;
-                    let _ = tx.send(EngineCommand::$command {
-                        channel: channel_index as u8,
-                        params: channel.$params,
+                    let Some(window) = weak.upgrade() else { return };
+                    with_gesture_history(&st, &commands, &window, "Synth parameter", || {
+                        let mut st = st.borrow_mut();
+                        let channel_index = st.session.selected;
+                        let channel = &mut st.session.channels[channel_index];
+                        if channel.$params.$($field).+ == value {
+                            return false;
+                        }
+                        channel.$params.$($field).+ = value;
+                        let _ = tx.send(EngineCommand::$command {
+                            channel: channel_index as u8,
+                            params: channel.$params,
+                        });
+                        true
                     });
                 });
             }};
@@ -12089,14 +12614,23 @@ impl AppUi {
             ($params:ident, $command:ident, $callback:ident, $index:expr, $field:ident) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let commands = command_state.clone();
+                let weak = window.as_weak();
                 window.$callback(move |value: f32| {
-                    let mut st = st.borrow_mut();
-                    let channel_index = st.session.selected;
-                    let channel = &mut st.session.channels[channel_index];
-                    channel.$params.osc[$index].$field = value;
-                    let _ = tx.send(EngineCommand::$command {
-                        channel: channel_index as u8,
-                        params: channel.$params,
+                    let Some(window) = weak.upgrade() else { return };
+                    with_gesture_history(&st, &commands, &window, "Oscillator", || {
+                        let mut st = st.borrow_mut();
+                        let channel_index = st.session.selected;
+                        let channel = &mut st.session.channels[channel_index];
+                        if channel.$params.osc[$index].$field == value {
+                            return false;
+                        }
+                        channel.$params.osc[$index].$field = value;
+                        let _ = tx.send(EngineCommand::$command {
+                            channel: channel_index as u8,
+                            params: channel.$params,
+                        });
+                        true
                     });
                 });
             }};
@@ -12114,14 +12648,24 @@ impl AppUi {
             ($params:ident, $command:ident, $callback:ident, $index:expr) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let commands = command_state.clone();
+                let weak = window.as_weak();
                 window.$callback(move |value| {
-                    let mut st = st.borrow_mut();
-                    let channel_index = st.session.selected;
-                    let channel = &mut st.session.channels[channel_index];
-                    channel.$params.osc[$index].wave = osc_wave_from_int(value);
-                    let _ = tx.send(EngineCommand::$command {
-                        channel: channel_index as u8,
-                        params: channel.$params,
+                    let Some(window) = weak.upgrade() else { return };
+                    with_gesture_history(&st, &commands, &window, "Oscillator wave", || {
+                        let mut st = st.borrow_mut();
+                        let channel_index = st.session.selected;
+                        let channel = &mut st.session.channels[channel_index];
+                        let wave = osc_wave_from_int(value);
+                        if channel.$params.osc[$index].wave == wave {
+                            return false;
+                        }
+                        channel.$params.osc[$index].wave = wave;
+                        let _ = tx.send(EngineCommand::$command {
+                            channel: channel_index as u8,
+                            params: channel.$params,
+                        });
+                        true
                     });
                 });
             }};
@@ -12153,16 +12697,22 @@ impl AppUi {
 
         // The LFO's two non-float controls take the same shape by hand.
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_mono_lfo_wave_changed(move |value| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                channel.mono_params.lfo.wave = lfo_wave_from_int(value);
-                let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
-                    channel: channel_index as u8,
-                    params: channel.mono_params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "LFO wave", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    channel.mono_params.lfo.wave = lfo_wave_from_int(value);
+                    let _ = tx.send(EngineCommand::SetChannelMonoSynthParams {
+                        channel: channel_index as u8,
+                        params: channel.mono_params,
+                    });
+                    true
                 });
             });
         }
@@ -12204,14 +12754,24 @@ impl AppUi {
             ($callback:ident, $field:ident, $from_index:path) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let commands = command_state.clone();
+                let weak = window.as_weak();
                 window.$callback(move |value: i32| {
-                    let mut st = st.borrow_mut();
-                    let channel_index = st.session.selected;
-                    let channel = &mut st.session.channels[channel_index];
-                    channel.mlm1_params.$field = $from_index(value);
-                    let _ = tx.send(EngineCommand::SetChannelMlM1Params {
-                        channel: channel_index as u8,
-                        params: channel.mlm1_params,
+                    let Some(window) = weak.upgrade() else { return };
+                    with_gesture_history(&st, &commands, &window, "Synth mode", || {
+                        let mut st = st.borrow_mut();
+                        let channel_index = st.session.selected;
+                        let channel = &mut st.session.channels[channel_index];
+                        let next = $from_index(value);
+                        if channel.mlm1_params.$field == next {
+                            return false;
+                        }
+                        channel.mlm1_params.$field = next;
+                        let _ = tx.send(EngineCommand::SetChannelMlM1Params {
+                            channel: channel_index as u8,
+                            params: channel.mlm1_params,
+                        });
+                        true
                     });
                 });
             }};
@@ -12261,23 +12821,29 @@ impl AppUi {
             ($callback:ident, $id:expr, $ty:ty) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let commands = command_state.clone();
+                let weak = window.as_weak();
                 window.$callback(move |value: $ty| {
+                    let Some(window) = weak.upgrade() else { return };
                     let id: u32 = $id;
                     let value = value as f32;
-                    let mut st = st.borrow_mut();
-                    let channel_index = st.session.selected;
-                    let channel = &mut st.session.channels[channel_index];
-                    let mut params = GeneratorParams::MlP8(channel.mlp8_params);
-                    let Some(value) = params.set(id, value) else {
-                        return;
-                    };
-                    if let GeneratorParams::MlP8(updated) = params {
-                        channel.mlp8_params = updated;
-                    }
-                    let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
-                        channel: channel_index as u8,
-                        id,
-                        value,
+                    with_gesture_history(&st, &commands, &window, generator_param_label(DeviceKind::MlP8, id), || {
+                        let mut st = st.borrow_mut();
+                        let channel_index = st.session.selected;
+                        let channel = &mut st.session.channels[channel_index];
+                        let mut params = GeneratorParams::MlP8(channel.mlp8_params);
+                        let Some(value) = params.set(id, value) else {
+                            return false;
+                        };
+                        if let GeneratorParams::MlP8(updated) = params {
+                            channel.mlp8_params = updated;
+                        }
+                        let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
+                            channel: channel_index as u8,
+                            id,
+                            value,
+                        });
+                        true
                     });
                 });
             }};
@@ -12323,29 +12889,32 @@ impl AppUi {
             let st = state.clone();
             let weak = window.as_weak();
             let redraw = schedule_ds01_preview.clone();
+            let commands = command_state.clone();
             window.on_ds01_value_changed(move |id, normalized| {
                 let id = id as u32;
-                let Some(descriptor) = ds01::descriptor(id) else {
+                let (Some(window), Some(descriptor)) = (weak.upgrade(), ds01::descriptor(id))
+                else {
                     return;
                 };
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                let mut params = GeneratorParams::Ds01(channel.ds01_params);
-                let Some(value) = params.set(id, descriptor.from_normalized(normalized)) else {
-                    return;
-                };
-                if let GeneratorParams::Ds01(updated) = params {
-                    channel.ds01_params = updated;
-                }
-                let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
-                    channel: channel_index as u8,
-                    id,
-                    value,
-                });
-                if let Some(window) = weak.upgrade() {
+                with_gesture_history(&st, &commands, &window, descriptor.name, || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    let mut params = GeneratorParams::Ds01(channel.ds01_params);
+                    let Some(value) = params.set(id, descriptor.from_normalized(normalized)) else {
+                        return false;
+                    };
+                    if let GeneratorParams::Ds01(updated) = params {
+                        channel.ds01_params = updated;
+                    }
+                    let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
+                        channel: channel_index as u8,
+                        id,
+                        value,
+                    });
                     touch_ds01_param(&window, &channel.ds01_params, id);
-                }
+                    true
+                });
                 redraw();
             });
         }
@@ -12357,113 +12926,128 @@ impl AppUi {
         // here, where the project is in hand. The value that goes on the wire
         // is still the descriptor's, so a lane and a knob agree.
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_aux_in_source_picked(move |row| {
-                let (consumer, params) = {
-                    let mut st = st.borrow_mut();
-                    let consumer = st.session.selected;
-                    let sources = aux_in_sources(&st.session, consumer);
-                    // Row zero is "None"; every other row indexes the
-                    // filtered list, whose entries carry their real index.
-                    let picked = (row > 0)
-                        .then(|| sources.get(row as usize - 1).map(|(index, _)| *index))
-                        .flatten();
-                    let outlets = picked
-                        .map(|source| {
-                            aux_in_outlets(&st.session, source)
-                                .iter()
-                                .map(|outlet| outlet.id)
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-                    // Both halves of the subscription, from the one place
-                    // that can see both: the row names a seat, and the
-                    // identity beside it is what survives the next reorder.
-                    let source_id = picked
-                        .and_then(|source| st.session.channel_id(usize::from(source)))
-                        .unwrap_or_default();
-                    let Some(channel) = st.session.channels.get_mut(consumer) else {
-                        return;
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Aux input", || {
+                    let (consumer, params) = {
+                        let mut st = st.borrow_mut();
+                        let consumer = st.session.selected;
+                        let sources = aux_in_sources(&st.session, consumer);
+                        // Row zero is "None"; every other row indexes the
+                        // filtered list, whose entries carry their real index.
+                        let picked = (row > 0)
+                            .then(|| sources.get(row as usize - 1).map(|(index, _)| *index))
+                            .flatten();
+                        let outlets = picked
+                            .map(|source| {
+                                aux_in_outlets(&st.session, source)
+                                    .iter()
+                                    .map(|outlet| outlet.id)
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        // Both halves of the subscription, from the one place
+                        // that can see both: the row names a seat, and the
+                        // identity beside it is what survives the next reorder.
+                        let source_id = picked
+                            .and_then(|source| st.session.channel_id(usize::from(source)))
+                            .unwrap_or_default();
+                        let Some(channel) = st.session.channels.get_mut(consumer) else {
+                            return false;
+                        };
+                        channel.aux_in_params.source_channel = picked.map_or(-1, i16::from);
+                        channel.aux_in_params.source_id = source_id;
+                        // A fresh pick lands on something rather than on a
+                        // refusal: if the outlet it was reading is not published
+                        // by the new source, take that source's first.
+                        if !outlets.is_empty()
+                            && !outlets.contains(&channel.aux_in_params.source_outlet)
+                        {
+                            channel.aux_in_params.source_outlet = outlets[0];
+                        }
+                        (consumer, channel.aux_in_params)
                     };
-                    channel.aux_in_params.source_channel = picked.map_or(-1, i16::from);
-                    channel.aux_in_params.source_id = source_id;
-                    // A fresh pick lands on something rather than on a
-                    // refusal: if the outlet it was reading is not published
-                    // by the new source, take that source's first.
-                    if !outlets.is_empty()
-                        && !outlets.contains(&channel.aux_in_params.source_outlet)
-                    {
-                        channel.aux_in_params.source_outlet = outlets[0];
+                    send_aux_in_subscription(&tx, consumer, params);
+                    if let Some(window) = weak.upgrade() {
+                        st.borrow().refresh_editor(&window);
                     }
-                    (consumer, channel.aux_in_params)
-                };
-                send_aux_in_subscription(&tx, consumer, params);
-                if let Some(window) = weak.upgrade() {
-                    st.borrow().refresh_editor(&window);
-                }
+                    true
+                });
             });
         }
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_aux_in_outlet_picked(move |row| {
-                let (consumer, params) = {
-                    let mut st = st.borrow_mut();
-                    let consumer = st.session.selected;
-                    let Some(source) = st
-                        .session
-                        .channels
-                        .get(consumer)
-                        .and_then(|channel| channel.aux_in_params.subscription())
-                        .map(|subscription| subscription.channel)
-                    else {
-                        return;
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Aux outlet", || {
+                    let (consumer, params) = {
+                        let mut st = st.borrow_mut();
+                        let consumer = st.session.selected;
+                        let Some(source) = st
+                            .session
+                            .channels
+                            .get(consumer)
+                            .and_then(|channel| channel.aux_in_params.subscription())
+                            .map(|subscription| subscription.channel)
+                        else {
+                            return false;
+                        };
+                        let outlets = aux_in_outlets(&st.session, source);
+                        let Some(outlet) = outlets.get(row.max(0) as usize).map(|o| o.id) else {
+                            return false;
+                        };
+                        let Some(channel) = st.session.channels.get_mut(consumer) else {
+                            return false;
+                        };
+                        channel.aux_in_params.source_outlet = outlet;
+                        (consumer, channel.aux_in_params)
                     };
-                    let outlets = aux_in_outlets(&st.session, source);
-                    let Some(outlet) = outlets.get(row.max(0) as usize).map(|o| o.id) else {
-                        return;
-                    };
-                    let Some(channel) = st.session.channels.get_mut(consumer) else {
-                        return;
-                    };
-                    channel.aux_in_params.source_outlet = outlet;
-                    (consumer, channel.aux_in_params)
-                };
-                send_aux_in_subscription(&tx, consumer, params);
-                if let Some(window) = weak.upgrade() {
-                    st.borrow().refresh_editor(&window);
-                }
+                    send_aux_in_subscription(&tx, consumer, params);
+                    if let Some(window) = weak.upgrade() {
+                        st.borrow().refresh_editor(&window);
+                    }
+                    true
+                });
             });
         }
         {
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
             window.on_aux_in_level_changed(move |level| {
-                let mut st = st.borrow_mut();
-                let consumer = st.session.selected;
-                let Some(channel) = st.session.channels.get_mut(consumer) else {
-                    return;
-                };
-                let mut params = GeneratorParams::AuxIn(channel.aux_in_params);
-                let Some(value) = params.set(aux_in::PARAM_LEVEL, level) else {
-                    return;
-                };
-                if let GeneratorParams::AuxIn(updated) = params {
-                    channel.aux_in_params = updated;
-                }
-                let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
-                    channel: consumer as u8,
-                    id: aux_in::PARAM_LEVEL,
-                    value,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Aux level", || {
+                    let mut st = st.borrow_mut();
+                    let consumer = st.session.selected;
+                    let Some(channel) = st.session.channels.get_mut(consumer) else {
+                        return false;
+                    };
+                    let mut params = GeneratorParams::AuxIn(channel.aux_in_params);
+                    let Some(value) = params.set(aux_in::PARAM_LEVEL, level) else {
+                        return false;
+                    };
+                    if let GeneratorParams::AuxIn(updated) = params {
+                        channel.aux_in_params = updated;
+                    }
+                    let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
+                        channel: consumer as u8,
+                        id: aux_in::PARAM_LEVEL,
+                        value,
+                    });
+                    drop(st);
+                    if let Some(window) = weak.upgrade() {
+                        window.set_aux_in_level_text(format!("{:.1} dB", linear_to_db(value)).into());
+                    }
+                    true
                 });
-                drop(st);
-                if let Some(window) = weak.upgrade() {
-                    window.set_aux_in_level_text(format!("{:.1} dB", linear_to_db(value)).into());
-                }
             });
         }
 
@@ -12480,6 +13064,7 @@ impl AppUi {
             let st = state.clone();
             let weak = window.as_weak();
             let redraw = schedule_ds01_preview.clone();
+            let commands = command_state.clone();
             window.on_ds01_text_committed(move |id, text| {
                 let id = id.max(0) as u32;
                 let Some(descriptor) = ds01::descriptor(id) else {
@@ -12508,14 +13093,15 @@ impl AppUi {
                     refresh();
                     return;
                 };
-                {
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, descriptor.name, || {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
                     let mut params = GeneratorParams::Ds01(channel.ds01_params);
                     let Some(value) = params.set(id, typed.clamp(descriptor.min, descriptor.max))
                     else {
-                        return;
+                        return false;
                     };
                     if let GeneratorParams::Ds01(updated) = params {
                         channel.ds01_params = updated;
@@ -12525,7 +13111,8 @@ impl AppUi {
                         id,
                         value,
                     });
-                }
+                    true
+                });
                 refresh();
                 redraw();
             });
@@ -12614,25 +13201,31 @@ impl AppUi {
         wire_mlp8!(on_mlp8_lfo_slew_changed, p8::PARAM_LFO_SLEW, f32);
         wire_mlp8!(on_mlp8_lfo_retrigger_changed, p8::PARAM_LFO_RETRIGGER, i32);
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             // Sync is a lamp rather than a selector, so it arrives as a bool
             // and reaches the same stepped descriptor as everything else.
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_mlp8_lfo_sync_changed(move |on| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                let mut params = GeneratorParams::MlP8(channel.mlp8_params);
-                let Some(value) = params.set(p8::PARAM_LFO_SYNC, f32::from(u8::from(on))) else {
-                    return;
-                };
-                if let GeneratorParams::MlP8(updated) = params {
-                    channel.mlp8_params = updated;
-                }
-                let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
-                    channel: channel_index as u8,
-                    id: p8::PARAM_LFO_SYNC,
-                    value,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "LFO sync", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    let mut params = GeneratorParams::MlP8(channel.mlp8_params);
+                    let Some(value) = params.set(p8::PARAM_LFO_SYNC, f32::from(u8::from(on))) else {
+                        return false;
+                    };
+                    if let GeneratorParams::MlP8(updated) = params {
+                        channel.mlp8_params = updated;
+                    }
+                    let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
+                        channel: channel_index as u8,
+                        id: p8::PARAM_LFO_SYNC,
+                        value,
+                    });
+                    true
                 });
             });
         }
@@ -12652,34 +13245,38 @@ impl AppUi {
             ($callback:ident, |$routes:ident, $channel:ident, $($arg:ident),*| $body:block) => {{
                 let tx = cmd_tx.clone();
                 let st = state.clone();
+                let commands = command_state.clone();
                 let weak = window.as_weak();
                 window.$callback(move |$($arg),*| {
                     let Some(window) = weak.upgrade() else {
                         return;
                     };
-                    let mut st = st.borrow_mut();
-                    let index = st.session.selected;
-                    if st.session.channels[index].kind != DeviceKind::MlP8 {
-                        return;
-                    }
-                    // A closure so an edit can bail with `?` on an id that
-                    // names no route -- which is what a stale click during a
-                    // list rebuild looks like.
-                    let edit = |$routes: &mut mooloop_core::MlP8Routes,
-                                $channel: u8|
-                     -> Option<EngineCommand> { $body };
-                    let Some(command) = edit(
-                        &mut st.session.channels[index].mlp8_params.routes,
-                        index as u8,
-                    ) else {
-                        return;
-                    };
-                    let _ = tx.send(command);
-                    let routes = st.session.channels[index].mlp8_params.routes;
-                    refresh_mlp8_routes(&window, &routes);
-                    st.session.dirty = true;
-                    st.session.revision = st.session.revision.wrapping_add(1);
-                    st.update_document_title(&window);
+                    with_gesture_history(&st, &commands, &window, "ML-P8 route", || {
+                        let mut st = st.borrow_mut();
+                        let index = st.session.selected;
+                        if st.session.channels[index].kind != DeviceKind::MlP8 {
+                            return false;
+                        }
+                        // A closure so an edit can bail with `?` on an id that
+                        // names no route -- which is what a stale click during a
+                        // list rebuild looks like.
+                        let edit = |$routes: &mut mooloop_core::MlP8Routes,
+                                    $channel: u8|
+                         -> Option<EngineCommand> { $body };
+                        let Some(command) = edit(
+                            &mut st.session.channels[index].mlp8_params.routes,
+                            index as u8,
+                        ) else {
+                            return false;
+                        };
+                        let _ = tx.send(command);
+                        let routes = st.session.channels[index].mlp8_params.routes;
+                        refresh_mlp8_routes(&window, &routes);
+                        st.session.dirty = true;
+                        st.session.revision = st.session.revision.wrapping_add(1);
+                        st.update_document_title(&window);
+                        true
+                    });
                 });
             }};
         }
@@ -12735,6 +13332,7 @@ impl AppUi {
         });
 
         {
+            let commands = command_state.clone();
             // The depth is a drag, so it neither redraws the list nor takes
             // the structural path: it is the one part of a route that is an
             // ordinary automatable value.
@@ -12742,35 +13340,39 @@ impl AppUi {
             let st = state.clone();
             let weak = window.as_weak();
             window.on_mlp8_route_amount_changed(move |id, amount| {
-                let (Some(window), Ok(id)) = (weak.upgrade(), u16::try_from(id)) else {
-                    return;
-                };
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                if st.session.channels[channel_index].kind != DeviceKind::MlP8 {
-                    return;
-                }
-                if !st.session.channels[channel_index]
-                    .mlp8_params
-                    .routes
-                    .set_amount(id, amount)
-                {
-                    return;
-                }
-                let _ = tx.send(EngineCommand::SetSourceRouteAmount {
-                    channel: channel_index as u8,
-                    route: id,
-                    amount,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "ML-P8 route", || {
+                    let (Some(window), Ok(id)) = (weak.upgrade(), u16::try_from(id)) else {
+                        return false;
+                    };
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    if st.session.channels[channel_index].kind != DeviceKind::MlP8 {
+                        return false;
+                    }
+                    if !st.session.channels[channel_index]
+                        .mlp8_params
+                        .routes
+                        .set_amount(id, amount)
+                    {
+                        return false;
+                    }
+                    let _ = tx.send(EngineCommand::SetSourceRouteAmount {
+                        channel: channel_index as u8,
+                        route: id,
+                        amount,
+                    });
+                    // The stored value, not the one that arrived: `set_amount`
+                    // clamps, and the row has to show what the patch holds.
+                    let stored = st.session.channels[channel_index]
+                        .mlp8_params
+                        .routes
+                        .get(id)
+                        .map_or(amount, |route| route.amount);
+                    touch_mlp8_route_amount(&window, id, stored);
+                    st.session.dirty = true;
+                    true
                 });
-                // The stored value, not the one that arrived: `set_amount`
-                // clamps, and the row has to show what the patch holds.
-                let stored = st.session.channels[channel_index]
-                    .mlp8_params
-                    .routes
-                    .get(id)
-                    .map_or(amount, |route| route.amount);
-                touch_mlp8_route_amount(&window, id, stored);
-                st.session.dirty = true;
             });
         }
 
@@ -12783,6 +13385,7 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
+            let commands = command_state.clone();
             window.on_mlp8_text_committed(move |id, text| {
                 let id = id.max(0) as u32;
                 let refresh_only = || {
@@ -12818,25 +13421,27 @@ impl AppUi {
                 } else {
                     typed
                 };
-                {
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, generator_param_label(DeviceKind::MlP8, id), || {
                     let mut st = st.borrow_mut();
                     let channel_index = st.session.selected;
                     let channel = &mut st.session.channels[channel_index];
                     let mut params = GeneratorParams::MlP8(channel.mlp8_params);
-                    if let Some(clamped) = params.set(id, value) {
-                        if let GeneratorParams::MlP8(updated) = params {
-                            channel.mlp8_params = updated;
-                            let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
-                                channel: channel_index as u8,
-                                id,
-                                value: clamped,
-                            });
-                        }
-                    }
-                }
-                if let Some(window) = weak.upgrade() {
-                    st.borrow().refresh_editor(&window);
-                }
+                    let Some(clamped) = params.set(id, value) else {
+                        return false;
+                    };
+                    let GeneratorParams::MlP8(updated) = params else {
+                        return false;
+                    };
+                    channel.mlp8_params = updated;
+                    let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
+                        channel: channel_index as u8,
+                        id,
+                        value: clamped,
+                    });
+                    true
+                });
+                st.borrow().refresh_editor(&window);
             });
         }
 
@@ -12875,16 +13480,22 @@ impl AppUi {
         wire_poly_param!(on_poly_spread_changed, spread);
 
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_poly_lfo_wave_changed(move |value| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                channel.poly_params.lfo.wave = lfo_wave_from_int(value);
-                let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
-                    channel: channel_index as u8,
-                    params: channel.poly_params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "LFO wave", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    channel.poly_params.lfo.wave = lfo_wave_from_int(value);
+                    let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
+                        channel: channel_index as u8,
+                        params: channel.poly_params,
+                    });
+                    true
                 });
             });
         }
@@ -12903,30 +13514,42 @@ impl AppUi {
             });
         }
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_poly_mono_mode_changed(move |value| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                channel.poly_params.mono_mode = value;
-                let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
-                    channel: channel_index as u8,
-                    params: channel.poly_params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Mono mode", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    channel.poly_params.mono_mode = value;
+                    let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
+                        channel: channel_index as u8,
+                        params: channel.poly_params,
+                    });
+                    true
                 });
             });
         }
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_poly_env_trigger_changed(move |value| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                channel.poly_params.env_trigger = EnvTrigger::from_index(value);
-                let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
-                    channel: channel_index as u8,
-                    params: channel.poly_params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Envelope trigger", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    channel.poly_params.env_trigger = EnvTrigger::from_index(value);
+                    let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
+                        channel: channel_index as u8,
+                        params: channel.poly_params,
+                    });
+                    true
                 });
             });
         }
@@ -12945,16 +13568,22 @@ impl AppUi {
             });
         }
         {
+            let weak = window.as_weak();
+            let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             window.on_poly_polyphony_changed(move |value| {
-                let mut st = st.borrow_mut();
-                let channel_index = st.session.selected;
-                let channel = &mut st.session.channels[channel_index];
-                channel.poly_params.polyphony = value.clamp(1, MAX_POLY_VOICES as i32) as u8;
-                let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
-                    channel: channel_index as u8,
-                    params: channel.poly_params,
+                let Some(window) = weak.upgrade() else { return };
+                with_gesture_history(&st, &commands, &window, "Polyphony", || {
+                    let mut st = st.borrow_mut();
+                    let channel_index = st.session.selected;
+                    let channel = &mut st.session.channels[channel_index];
+                    channel.poly_params.polyphony = value.clamp(1, MAX_POLY_VOICES as i32) as u8;
+                    let _ = tx.send(EngineCommand::SetChannelPolySynthParams {
+                        channel: channel_index as u8,
+                        params: channel.poly_params,
+                    });
+                    true
                 });
             });
         }

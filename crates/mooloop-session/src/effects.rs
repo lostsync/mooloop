@@ -32,19 +32,31 @@ pub enum EffectParamWrite {
     /// No such parameter, or the value it already had.
     Refused,
     /// The value moved. Republish the row; send the command if there is one.
-    Applied(Option<EngineCommand>),
+    ///
+    /// `name` is the parameter's own name from the descriptor table, for the
+    /// undo entry to be called. It is here rather than looked up by the
+    /// caller because **the EQ's face indices are not descriptor
+    /// positions** -- fifty descriptors, seven controls -- so a caller that
+    /// indexed `descriptors()` by `param_index` would name the wrong
+    /// parameter on one effect and the right one on every other, which is
+    /// precisely the lost-semantic-type fault `AGENTS.md` records at this
+    /// boundary. Resolved once, where the id is.
+    Applied {
+        command: Option<EngineCommand>,
+        name: &'static str,
+    },
 }
 
 impl EffectParamWrite {
     pub fn command(self) -> Option<EngineCommand> {
         match self {
-            EffectParamWrite::Applied(command) => command,
+            EffectParamWrite::Applied { command, .. } => command,
             EffectParamWrite::Refused => None,
         }
     }
 
     pub fn applied(&self) -> bool {
-        matches!(self, EffectParamWrite::Applied(_))
+        matches!(self, EffectParamWrite::Applied { .. })
     }
 }
 
@@ -597,7 +609,10 @@ impl Session {
                 }
                 eq.set_selected_target(target);
                 self.mark_dirty();
-                return Some(EffectParamWrite::Applied(None));
+                return Some(EffectParamWrite::Applied {
+                    command: None,
+                    name: "EQ band",
+                });
             }
             let control = EqFaceControl::from_face_index(param_index)?;
             EqParams::id_for_selected(eq.selected_target(), control)?
@@ -608,14 +623,15 @@ impl Session {
 
         let descriptor = effect.kind().descriptor(id)?;
         let value = effect.params.set(id, descriptor.from_normalized(normalized))?;
-        Some(EffectParamWrite::Applied(Some(
-            EngineCommand::SetEffectParam {
+        Some(EffectParamWrite::Applied {
+            command: Some(EngineCommand::SetEffectParam {
                 target,
                 slot: slot as u8,
                 id,
                 value,
-            },
-        )))
+            }),
+            name: descriptor.name,
+        })
     }
 
     /// Which target the EQ face's selector landed on.
@@ -1015,7 +1031,10 @@ mod tests {
         let selector = 3.0 / EqParams::LOW_PASS_TARGET as f32;
         assert_eq!(
             session.set_effect_param(0, EqFaceControl::SELECTOR as i32, selector),
-            EffectParamWrite::Applied(None),
+            EffectParamWrite::Applied {
+                command: None,
+                name: "EQ band"
+            },
             "choosing a band changes what the face shows and tells the engine nothing"
         );
         let command = session

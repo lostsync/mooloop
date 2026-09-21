@@ -103,6 +103,63 @@ fn snapshot_cost() {
     }
 }
 
+/// What a whole drag costs, before and after the gesture bracket.
+///
+/// The figure `docs/plans/gesture-undo/` step 04 asked for, and the one that
+/// says why the plan was worth doing. A knob emits a value on every pointer
+/// frame: under the old model the history took a `before` and an `after`
+/// snapshot for each of them, so a two-hundred-frame drag paid four hundred
+/// whole-project rebuilds and then threw all but two away. A bracketed
+/// gesture takes one pair for the drag, whatever its length.
+///
+/// The per-frame column is what `with_project_history` still costs for a
+/// discrete edit, which is correct -- one click, one entry, one pair. What
+/// changed is that a drag is no longer two hundred clicks.
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn gesture_cost() {
+    /// Frames in a drag of a second or so, at a typical pointer rate.
+    const FRAMES: usize = 200;
+
+    println!();
+    println!("  channels  notes/pattern   per frame (old)   per gesture (new)   saved");
+    for channels in [4usize, 16, 32] {
+        for notes in [16usize, 64, 256] {
+            let project = song(channels, notes, 1);
+            let mut session = Session::default();
+            session.replace_project(&project, &[]);
+
+            for _ in 0..8 {
+                let _ = session.project_snapshot(120, 50);
+            }
+
+            let started = Instant::now();
+            for _ in 0..FRAMES {
+                let pair = (
+                    session.project_snapshot(120, 50),
+                    session.project_snapshot(120, 50),
+                );
+                std::hint::black_box(&pair);
+            }
+            let per_frame = started.elapsed().as_secs_f64() * 1.0e3;
+
+            let started = Instant::now();
+            let pair = (
+                session.project_snapshot(120, 50),
+                session.project_snapshot(120, 50),
+            );
+            std::hint::black_box(&pair);
+            let per_gesture = started.elapsed().as_secs_f64() * 1.0e3;
+
+            println!(
+                "  {channels:>8}  {notes:>13}  {per_frame:>12.1} ms  {per_gesture:>15.3} ms  \
+                 {:>5.0}x",
+                per_frame / per_gesture.max(f64::MIN_POSITIVE)
+            );
+        }
+    }
+}
+
 /// Bytes currently held by the allocator, counted rather than sampled.
 ///
 /// Resident set size was tried first and is the wrong instrument: it moves a
