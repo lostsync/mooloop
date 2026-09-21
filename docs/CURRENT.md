@@ -904,9 +904,9 @@ land on its own when it starts to matter:
 - **The mixer is a list of tracks, and a track is made because somebody made
   it.** A new song opens with the master; the starter kit adds `Drums` and
   `Bass`, with its four drum channels grouped onto the first. `+` in the mixer
-  adds a track, and a track's device face renames it or removes it. Removing
-  is undoable; renaming is not, though an undo of some *other* edit reverts
-  the name with the rest of the snapshot. Removing one falls anything routed to it back to the master rather
+  adds a track, and a track's device face renames it or removes it. Both are
+  undoable, and a rename is one undo step however many characters it took.
+  Removing one falls anything routed to it back to the master rather
   than leaving it unheard.
 
   **There is no `+ Bus` and no `+ Send`.** What a track *is* — an ordinary
@@ -1731,16 +1731,25 @@ land on its own when it starts to matter:
   device to another channel. That is the question `docs/plans/containers/`
   reserved rather than answered, and this inherits its answer.
 - A canonical action registry drives the menu bar and rebindable shortcuts.
-  Note multi-selection supports Select All and bulk deletion. **Undo is not
-  universal**: channel structure, pattern clone/remove/clear, note edits,
-  modulation, effect presets, the sampler's five slice verbs and the mixer's
-  own verbs -- mute, volume, pan, output, console sum, polarity and solo, on
-  channels and buses alike, a fader drag being one step -- feed a
-  project-snapshot undo/redo stack, while device and generator *parameters*,
-  step-grid edits, pattern length, add-pattern, playlist placements and the
-  two renames do not -- and because an undo installs a whole snapshot, an
-  unrecorded edit made after the last recorded one is discarded by it. See
-  `docs/LOOSE_ENDS.md`. Project-level navigation remains limited.
+  Note multi-selection supports Select All and bulk deletion. **Undo covers
+  every edit that changes the document**, on one project-snapshot undo/redo
+  stack: channel structure, pattern verbs, note and step-grid edits, pattern
+  length, playlist placements, both renames, modulation, automation, presets,
+  the sampler's slice verbs, the mixer's own verbs, and every device and
+  generator parameter.
+
+  **One gesture is one undo step.** A knob emits a value on every pointer
+  frame, so the control says where a gesture starts and stops -- `Gesture` in
+  `controls.slint`, which every shared widget calls and no device face knows
+  about. A knob drag, a fader drag, a painted run of steps, a dragged
+  envelope handle and a typed rename are each a single Ctrl+Z, whatever their
+  length; a wheel notch, an arrow-key nudge, a double-click reset and a menu
+  pick are each one on their own. A press that moved nothing records nothing,
+  and naming a control for MIDI learn is not an edit.
+
+  `scripts/dupe-audit unrecorded-edit` is the guard: it reports every
+  callback whose handler changes the document without recording it, and its
+  expected answer is zero. Project-level navigation remains limited.
 
 ## Architecture Risks To Resolve Early
 

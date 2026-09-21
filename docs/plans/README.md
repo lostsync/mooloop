@@ -70,26 +70,27 @@ leaves open and says so: the voice path still synthesises `Event::Choke` for a
 seek rather than using the new hook, and nothing defers a command yet. Linear
 MOO-57.
 
-`gesture-undo/` was added 2026-09-21 and is **not started, outside the
-`FOCUS.md` sequence**, because Adam named it directly: *"i think the undo thing
-should be the next big push."* Seven steps. It is not a feature -- it is the
-thing that makes the existing ones safe to use, because undo installs a
-whole-project snapshot and therefore **destroys** every edit that never reached
-the history, silently and with no redo path. Turning a knob, renaming anything
-and most of the step grid are all in that set.
+`archive/gesture-undo/` was added 2026-09-21 and **all seven steps landed the
+same day**, outside the `FOCUS.md` sequence, because Adam named it directly:
+*"i think the undo thing should be the next big push."* It was not a feature
+-- it was the thing that made the existing ones safe to use, because undo
+installs a whole-project snapshot and therefore **destroyed** every edit that
+never reached the history, silently and with no redo path. Turning a knob,
+renaming anything and most of the step grid were all in that set.
 
-Read its `00-status.md` before starting, for three things the plan turns on.
-The session half already exists -- modulator parameters have coalesced a whole
-knob gesture into one entry since before this was written, and step 02
-generalises that rather than inventing it. A Slint **global** the widgets call
-into, on the `ControlAssign` precedent, means no face declares or forwards
-anything, so the "contract change across every device face" this was feared to
-be is a pass over nine shared widgets. And the gesture pair that already exists
-on those widgets cannot be reused, because every one of its emissions is gated
-behind modulation or MIDI-learn mode -- the trap that looks like a shortcut.
-Step 01 writes the check before the fix, and its count is the plan's progress
-bar. Linear MOO-50, which predates the plan by three weeks and asked for
-exactly it.
+Read its `00-status.md` before reopening any of it, for three things it
+records that a reader would otherwise re-derive. The feared cost -- a
+callback pair threaded into every device face -- was one line in
+`main.slint`, because a Slint **global** lets a widget report its own
+brackets and the export is all the root file needs; that generalises past
+undo and is the entry `JOURNAL.md` carries. Step 01's check
+(`scripts/dupe-audit unrecorded-edit`) reported a clean tree **twice** for
+resolution bugs before it worked, and then passed its own validation while
+reading a third of the program, because more callbacks here are wired by a
+`wire_*!` macro than by a `window.on_`. And the plan's own survey was wrong
+in three places, all of them making the work smaller: four shared widgets
+rather than nine, because the other five are built from those four. Linear
+MOO-50, which predates the plan by three weeks and asked for exactly it.
 
 `plugin-hosting/` was added 2026-09-16 and is **not started, outside the
 `FOCUS.md` sequence**, because Adam asked for it directly: CLAP effects and

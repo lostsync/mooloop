@@ -1,30 +1,45 @@
 # Gesture undo status
 
-**01 and 02 landed, 2026-09-21.** `scripts/dupe-audit unrecorded-edit` is the
-tenth check and read **89** the day it was written; that number is this plan's
-progress bar and zero is step 07. The `Gesture` global exists, the recorder is
-`with_gesture_history`, and the 400 ms timer is deleted.
+**Done, 2026-09-21. All seven steps.**
+`scripts/dupe-audit unrecorded-edit` reads **zero**, from **176** the day it
+was written. Undo covers every edit that changes the document, and one
+gesture is one step.
 
-Three things the survey had wrong, found by doing it:
+Four things the doing of it established that the planning of it had wrong,
+and every one of them made the work smaller or the checking harder:
 
-* **`SyncMiniKnob` and `KnobStack` are built from the knobs, not beside
-  them.** The step-03 table lists nine widgets; `KnobField`, `TimeDivisionKnob`
-  and `KnobStack` each embed a real `ParameterKnob` and `SyncMiniKnob` embeds a
-  real `MiniKnob`, so bracketing the two dials covers all six. Step 03 is
-  `ParameterKnob`, `ParameterFader`, `DraggablePoint` and `EnvelopeEditor`.
-* **`main.slint` is touched after all, by one line.** A global is reachable
-  from Rust only if the root file exports it, so `export { ControlAssign }`
-  became `export { ControlAssign, Gesture }`. No *face* is touched, which is
-  the claim that mattered.
-* **The check had to be written three times.** Twice it reported a clean tree
-  for a resolution bug rather than for a clean tree. Both failures are written
-  up in `AGENTS.md`, because the direction they failed in is the one that
-  matters.
+* **The feared cost was one line.** A global is reachable from Rust only if
+  the root file exports it, so `export { ControlAssign }` became
+  `export { ControlAssign, Gesture }` and no *face* was touched at all. That
+  is the reusable lesson and it is in `JOURNAL.md`: when a fact belongs to
+  every control rather than to any face, the markup boundary is a global, in
+  whichever direction it points.
+* **Step 03 was four widgets, not nine.** `KnobField`, `TimeDivisionKnob` and
+  `KnobStack` each embed a real `ParameterKnob`, and `SyncMiniKnob` embeds a
+  real `MiniKnob` -- so bracketing the two dials covered all six. What was
+  left was `ParameterKnob`, `ParameterFader`, `DraggablePoint` and
+  `EnvelopeEditor`. The step-03 table below is wrong about this and is kept
+  as written, because what it got wrong is the point: a survey that reads
+  declarations rather than compositions overcounts.
+* **The check reported a clean tree twice, and then passed its own validation
+  while reading a third of the program.** Two resolution bugs -- merging
+  same-named functions, and following any `.name(` into a Slint setter --
+  each made it silent against a tree with a hundred and seventy-six
+  violations. The third draft resolved handlers correctly, reported 89, and
+  was confirmed at `4bef6dc~1` against the eleven mixer verbs... which happen
+  to be wired the way it knew how to look. More callbacks here are wired by a
+  `wire_*!` macro than by a `window.on_`. `AGENTS.md` carries both lessons.
+* **Two callbacks the plan assumed were already undoable were not.**
+  `on_selected_note_changed` and `on_selected_velocity_changed` -- the piano
+  roll's selected-note fields -- recorded nothing. The check found them; no
+  reading of the tree had.
 
-Added 2026-09-21 from Adam's answer to the open question in
-`reports/fable-2026-09-21.md` finding 7: build the general gesture pair, fully,
-in one batched pass. MOO-50 is the parent issue and predates this plan by three
-weeks; the plan is what that issue's *"why it is awkward"* section asked for.
+What it deliberately leaves: `Gesture` is a single global with no owner, so a
+text field losing focus to a knob press can close the knob's gesture instead
+of its own if the two arrive in that order. The consequence is that one drag
+records per frame, which is the behaviour of the day before this landed
+rather than a corruption, and the sequence needs a caret parked in a name
+field. It is noted here rather than designed around.
 
 ## The problem, stated as what it costs
 

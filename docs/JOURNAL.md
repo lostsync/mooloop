@@ -1685,6 +1685,70 @@ finding was right that the fold and the seek were one word and should not be
 Both halves were worth having; only one of them was worth hurrying.
 
 
+## Sep 21 (the big push) — the faces never had to know
+
+Undo covered channel structure, notes, patterns and — since that morning —
+the mixer's eleven verbs. It did not cover a single device parameter, and the
+cost of that was not the missing feature. Undo installs a whole-project
+snapshot taken when the edit it undoes happened, so an edit that never
+reached the history was **destroyed** by the next Ctrl+Z, with no redo path.
+Turn a filter cutoff, draw a note, undo the note, lose the cutoff. Silently.
+
+The reason it had gone three weeks was one sentence: a knob emits a value on
+every pointer frame, so something has to say where a gesture starts and
+stops, and the only thing that knows is the control. The feared cost was a
+callback pair threaded through `main.slint` into every device face — a
+hundred and ten wiring sites and an eight-minute build for each one missed,
+which is why nobody started.
+
+**It cost one line in `main.slint` and nothing at all in any face.** A Slint
+global inverts the direction: `ControlAssign` is one fact every parameter
+control *reads in*, so `Gesture.begin()`/`end()` is one fact every parameter
+control *says out*, and a widget that calls out needs nothing forwarded to
+it. The one line is the export, because a global is only reachable from Rust
+if the root file exports it. That is the reusable lesson and it generalises
+past undo: **when a fact belongs to every control rather than to any face,
+the markup boundary is a global, in whichever direction it points.**
+
+Three other things the day taught, all of them about checking rather than
+about building.
+
+**A check that resolves names can fail in the direction that prints a zero.**
+`scripts/dupe-audit unrecorded-edit` was written first, against the unfixed
+tree, exactly as this file's duplication section keeps insisting. It reported
+a clean tree twice. Once because it indexed every `fn` by name and merged the
+duplicates, so `X::new(` resolved to thirty constructors at once and one of
+them recorded; once because it followed any `.name(`, so
+`window.set_source_preset_name(...)` — a Slint setter — resolved to the
+`Session` method of the same name and pure selection handlers came back
+sending `RemoveNote`. Both drafts looked right and both said the work was
+already done.
+
+**And it passed its own validation while reading a third of the program.**
+The third draft resolved handlers correctly, reported 89, and was confirmed
+against `4bef6dc~1` where it found all eleven mixer verbs it was supposed to
+find. It was still wrong: more of this program's callbacks are wired by a
+`wire_*!` macro than by a `window.on_`, and it could not see one of them. The
+real number was 176. The eleven it was validated against happened to be wired
+the way it knew how to look. **A check can be right about what it was tested
+on and still be reading the wrong half of the tree** — the validation says
+the resolver works, not that the list of places to look is complete.
+
+**`cargo fmt` is not this repository's formatter.** Run once, out of habit, on
+a tree that had never been rustfmt-clean: 1126 lines of unrelated churn in
+`lib.rs` alone, including a `lane_command` closure it made materially worse.
+Reverted and the work re-applied from the patch scripts, which is the second
+argument for keeping mechanical edits in a script rather than in a hand.
+
+What landed: a `Gesture` global and one recorder, `with_gesture_history`,
+generalised from the modulation gesture that already worked rather than
+invented; the 400 ms timer that stood in for a bracket, deleted; brackets on
+every shared widget, the step grid and the one text field that reports per
+keystroke; and 176 callbacks routed through the recorder, from the sampler's
+filter envelope to the ML-P8's route rows. Labels come from
+`EffectKind::descriptors()` where a parameter has a descriptor, and from its
+family where it does not — never from a literal per callback.
+
 ## Open threads
 
 Refreshed 2026-09-02, with the September documentation audit's threads merged in on 2026-09-04 and Adam's 2026-09-05 list merged in after that. Four of the six threads listed here in August are closed: modulation drives things now, the buffer device exists, undo and clipboard are real, and the convolution reverb that needed an IR loader was replaced outright by an FDN hall — so `StereoIr` is no longer the boundary anything is waiting on.

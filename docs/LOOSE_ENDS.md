@@ -341,12 +341,6 @@ modulation's reach, and the inline fader rows have never carried that
 callback. Nothing is inconsistent between the two features; both simply stop
 at the same place.
 
-**Learning or removing a mapping is not undoable.** The control map is part
-of the project and travels through `ProjectSnapshot` like everything else, so
-the machinery is there; nothing records an entry. Ctrl+Z after a learn reaches
-past it to the previous recorded edit, the way a channel or generator preset
-already does. The document is marked dirty, so the mapping is at least saved.
-
 **Nothing in the MIDI control layer has been run against a device, as of
 2026-09-15.** Every layer has tests and the application compiles and draws its
 mapping page, and no keyboard has been plugged into it. `scripts/mooloop-mcp`
@@ -469,72 +463,24 @@ them, which needs a way to show a point outside the roll's own width; or crop
 on shorten, which destroys authored work and needs the same drag-release
 gesture the `set_pattern_length` entry already needs. Found 2026-09-13.
 
-**An undo of one edit silently destroys every unrecorded edit made after
-it**, and whole surfaces are unrecorded. Undo installs `entry.before`, a full
-snapshot taken when *that* edit happened, so anything done since that never
-reached the history is discarded -- and redo cannot bring it back, because
-`entry.after` predates it too. Not recorded: every step-grid edit (click,
-right-click, velocity, paint), pattern length, add-pattern, playlist
-placement add and remove, **every effect and generator parameter**, both
-renames, channel/generator preset loads from the browser, the MIDI IN and
-AUDIO input picks and the sampler RECORD page's CLIP and LENGTH
-(`on_midi_input_picked`, `on_audio_input_picked`,
-`on_sampler_record_clip_changed`, `on_sampler_record_bars_changed`;
-`mooloop-ui/src/lib.rs:9027`, `:9049`, `:9086`, `:9106`, each marking dirty
-and recording nothing), and **swapping the selected channel's device kind**
-from the source picker (`on_channel_source_changed`). That last one is the
-worst of them: the swap destroys the outgoing device's state outright, so an
-undo of a *later* edit keeps the swap the user can see and silently
-discards it from the snapshot it installs. It is a replace rather than a
-structure change, so the fix that gave the toolbar's Add Channel its own
-history entry (MOO-29, 2026-09-19) deliberately left it alone.
+**The gesture global has no owner, so two controls can close each other's
+gesture.** `Gesture.begin()`/`end()` (`controls.slint`) is a single global
+with no identity on it: whoever calls `end()` closes whatever is open. A name
+field brackets its editing session on focus, and a knob press steals that
+focus, so if the field's focus-loss arrives *after* the knob's `begin()` the
+field closes the knob's gesture and the drag then records one entry per
+pointer frame. That is the behaviour of the day before `gesture-undo/`
+landed rather than a corruption -- nothing is lost, the history is just
+noisier -- and it needs a caret parked in a field when a knob is grabbed.
+The fix is an id on the pair so `end()` can be ignored when it names a
+gesture that has already been replaced, which is a small change and was not
+worth making on a hazard nobody has hit. Found 2026-09-21, building
+`docs/plans/archive/gesture-undo/`.
 
-So: draw a note (recorded), click eight steps, turn a filter's cutoff, press
-Ctrl+Z -- and the eight steps and the cutoff are gone with no redo path. The
-boundary was deliberate in one direction (pattern clone/remove/clear and the
-channel clipboard verbs were given the `ProjectEdit` path on purpose, "reuse
-the same whole-project undo pipeline") and nobody wrote down what it costs in
-the other.
-
-**Eleven console verbs belong to the same class, and the list above did not
-name them.** None of `on_channel_muted`, channel volume, channel pan, channel
-bus, `on_bus_muted`, bus volume, bus pan, bus output, console on/off,
-polarity or solo calls `record_project_history` (`mooloop-ui/src/lib.rs`
-`:8213`, `:8228`, `:8250`, `:8799`, `:8525`, `:8573`, `:8590`, `:8609`,
-`:8821`, `:8844`, `:8867` -- all eleven exact at 2026-09-21). Every field they
-edit is serialized into the project, so all eleven are inside the snapshot an
-undo installs. Mute a bus, draw a note, undo: the note goes and the mute
-stays.
-
-**They do not share one dirty path, and a fix hung off the command stream
-would miss four of them.** Seven dirty through `apply_engine_message`
-(`mooloop-session/src/engine.rs:701`); `on_bus_output_changed` (`:8609`) and
-`on_bus_solo_toggled` (`:8867`) send no engine command at all and are dirtied
-inside the session (`toggle_track_solo` → `mark_dirty`, `mixer.rs:323`);
-console (`:8821`) and polarity (`:8844`) send a command *and* set
-`session.dirty` in the UI handler.
-
-Pan and volume are the continuous pair; the rest are one snapshot each. Pan is
-already cheap: `MiniKnob` declares `edit-started()`/`edit-finished()`
-(`ui/controls.slint:1653-1654`) and the strip's instance
-(`mixer.slint:634-646`) wires only `changed(v)`, so it is two lines of
-forwarding. `MixerFader` (`controls.slint:2263`) has no such pair, but its
-`TouchArea` already switches on `pointer-event` for `down`/`move`
-(`:2388-2399`), so adding `up` is local to that widget. The working precedent
-is the modulation shelf, not the piano roll: `MiniKnob.edit-started/finished`
-→ `modulation-shelf.slint:700-701` → `main.slint:1663-1664`, `:5355-5356` →
-`lib.rs:9630`, `:9662`, with `modulation_gesture_open`
-(`session/modulation.rs:83`) suppressing the per-frame records. So the general
-gesture-pair follow-up below is **not** a dependency for these eleven.
-
-Two things to decide rather than inherit. `MixerBus::solo` is persisted
-(`core/src/mixer.rs:164`), so it is already reverted by any undo -- whether a
-solo click deserves its own *step* is a taste question. And channel volume is
-drawn twice, as the strip fader and as the source device's output-trim knob
-(`lib.rs:8240-8246`, `TrimKnob`, `controls.slint:1845`); that second face
-belongs to MOO-50, the field belongs here, and whichever lands first should
-bracket the gesture on both. Found 2026-09-21,
-`reports/fable-2026-09-21.md` finding 7; MOO-60.
+**Whether a solo click deserves its own undo step is a taste question.**
+`MixerBus::solo` is persisted (`core/src/mixer.rs:164`), so it is reverted
+by any undo either way; what is open is whether soloing should cost a
+Ctrl+Z of its own. It records one today. Found 2026-09-21.
 
 **"Not an edit" is written down four times and only one copy is read, so
 three exempt commands dirty the document anyway.** The copy that decides is
@@ -632,66 +578,6 @@ and as somebody else's channel when it hits. The same-song half is recorded
 below (`rescope_after`, `core/src/project.rs:1545`, does not touch the field).
 Whether a clipboard should survive a song is Adam's call; the ids inside it
 should not. Found 2026-09-21, `reports/fable-2026-09-21.md` finding 7; MOO-60.
-
-Not one patch per callback. A knob reports on every move frame, so making
-parameters undoable needs a gesture token per control, and the piano roll, the
-slice editor and `MiniKnob` are the only things with a gesture pair today
-(`MiniKnob.edit-started`/`edit-finished`, `ui/controls.slint:1653-1654`,
-routed end to end for modulator params and nowhere else -- corrected
-2026-09-21, this sentence said two). `ParameterKnob` (`controls.slint:647`),
-which is what a device face wears, has none -- so the general case is still a
-`main.slint` contract change across every face, the eight-minute build
-`AGENTS.md` says to batch. `NameField.edited` fires on every *keystroke*, so
-a naively recorded rename is one undo step per character. Options: give the
-UI a general `gesture-begin`/`gesture-end` pair and route these through
-`record_project_history`; or declare the boundary and leave the destruction,
-which `CURRENT.md` now at least describes honestly; or make undo refuse to
-run over unrecorded state, which needs a "changed since the last entry"
-marker `record` has no way to set today. Found 2026-09-13.
-
-**Decided 2026-09-21: the first one, built fully in one batched pass.**
-Adam's call. The pair goes on every face -- a `main.slint` contract change,
-which `AGENTS.md` says to batch into a single crossing because each build is
-minutes -- and knobs, faders, pan and the name fields then route through
-`record_project_history` like the piano roll already does. It retires the
-400 ms timer below. It is milestone-sized rather than a patch, and it has a plan:
-`docs/plans/gesture-undo/`, seven steps, Linear MOO-50. Two things the plan
-establishes that are worth knowing from here: the pair goes on **nine shared
-widgets** rather than on every face, because a Slint global lets a widget
-report its own brackets without a face forwarding anything; and the
-gesture pair those widgets already carry is gated behind modulation and
-MIDI-learn mode, so it looks reusable and is not.
-
-**The eleven console and rack verbs came off that list on 2026-09-21.**
-Channel mute, volume, pan and bus pick; bus mute, volume, pan, output,
-console on/off, polarity and solo all snapshot and call
-`record_project_history` now (`reports/fable-2026-09-21.md`, finding 7).
-Mute a bus, draw a note, undo, and the note goes while the mute stays --
-that was the class, and this is the surface it was worst on.
-
-The four continuous ones are bracketed by **time**, not by a gesture pair:
-`with_continuous_history` opens a token, keeps it while move frames keep
-arriving inside 400 ms, and closes it after each record, so one drag is one
-undo step. That is the cheap half of the paragraph above. The honest version
-is still the general `gesture-begin`/`gesture-end` pair across every face,
-and until it exists two grabs of the same fader less than 400 ms apart
-collapse into one entry -- the one case the timer gets wrong, and the
-cheapest possible wrong answer.
-
-**Which pair to reach for, since there are two and they are not
-interchangeable.** `MiniKnob` (`controls.slint:1608`) carries an **ungated**
-`edit-started`/`edit-finished` (`:1653-1654`) that fires on the drag, the
-double-click, the scroll and the arrow keys, and `TrimKnob` (`:1845`)
-inherits it -- so the mixer's pan knobs need wiring rather than a new
-callback, and the modulation shelf already routes exactly this pair through
-to Rust (`modulation-shelf.slint:1218-1219`). Its neighbour
-`modulation-edit-started`/`-finished` is gated on `assign-active` or
-`modulation-active` (`:847`, `:861`, `:869-872`, `:880-883`) and is not a
-value bracket; `ParameterKnob`, `KnobField`, `TimeDivisionKnob` and
-`KnobStack` carry only that one, which is why they look ready and are not.
-**A 2026-09-21 pass recorded the opposite of this** -- that no usable pair
-existed anywhere -- by reading `modulation-edit-*` and stopping before the
-two callbacks declared underneath it. MOO-60's investigation had it right.
 
 **Add Channel frees one allocation on the audio thread.** Not the automation
 lanes any more (`reports/fable-2026-09-21.md`, finding 1, fixed): what is
@@ -819,22 +705,14 @@ layer; or drop the covered placements and report them, which is the only one
 that also needs a repair path on load. Found 2026-09-12, made escapable
 2026-09-14.
 
-**Snap-all-markers and the four trim/loop markers are not undoable**, where
-the five slice verbs beside them now are. `add_slice`, `move_slice`,
-`remove_slice`, `divide_slices` and `clear_slices` record from the *caller*
-(`lib.rs:8840`-`8922`, with a gesture token for drags), which is why this
-entry used to say none of them did: it looked for history in `sampler.rs` and
-the snapshot is taken one level up. `snap_all_markers` (`lib.rs:8545`) and
-`wire_marker_param!` (`lib.rs:8410`-`8456`) are still on the cheap path.
-Corrected 2026-09-13.
-
-**Send edits are not undoable, because routing never was.** `add_send`,
-`remove_send`, `set_send_level`, `set_send_tap` and `set_send_enabled` in
-`mooloop-session/src/mixer.rs` mark the document dirty and return an
-`EngineCommand`, the same shape `set_bus_output` beside them has always had.
-A track *add* is undoable, because it goes through the project-edit path — so
-one mixer face now has both behaviours on it, which is the part worth fixing.
-Unifying them means routing joining `ProjectEdit`, not a per-callback patch.
+**Send edits and the bus output pick do not go through `ProjectEdit`.**
+`add_send`, `remove_send`, `set_send_level`, `set_send_tap` and
+`set_send_enabled` in `mooloop-session/src/mixer.rs` mark the document
+dirty and return an `EngineCommand`, the same shape `set_bus_output`
+beside them has always had. All of them record an undo entry from the
+caller now, so the behaviour a user sees is uniform; what is still split
+is the *path*, and a routing edit that joined `ProjectEdit` would be one
+mechanism instead of two. Not a per-callback patch.
 
 ---
 
