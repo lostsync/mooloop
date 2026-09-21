@@ -239,7 +239,16 @@ to silence:
   wanting that gets it by not implementing the method, which is the default.
 - **Read the kind.** A seek invalidates audio in flight; a program change does
   not, and flushing a reverb because the player looked at another pattern is a
-  worse artefact than the one this fixes.
+  worse artefact than the one this fixes. **Not honoured today** (found
+  2026-09-21): a Pattern-mode `SetCurrentPattern` under a running transport
+  sets `RenderState::seeked` (`render.rs:4731`) so its stranded note-off is
+  emitted, then says `ProgramChange` (`:4739`) -- and the same block reaches
+  `if seeked || jumped` (`:5708`) and says `Seek` as well. Every delay, reverb
+  and plate in the project flushes on a pattern switch, which is the artefact
+  this bullet forbids. The word is right and the *flag* still means two
+  things, two lines under a comment saying it does not. The devices are
+  correct: each declines `ProgramChange` and has no way to know the `Seek`
+  behind it is the same event. Recorded in `LOOSE_ENDS.md`.
 - A node that cannot honour it declines in writing. Aux In and the
   retained-audio buffer both do; the buffer's ring is a performance somebody
   is playing, not audio from the old position.
