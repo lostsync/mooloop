@@ -71,14 +71,22 @@ pub const MAX_CONTAINER_DEPTH: usize = 4;
 /// once.
 fn container_reach(effects: &[EffectSlotState], run: std::ops::Range<usize>) -> Option<usize> {
     let top = depth_at(effects, run.start);
-    run.filter(|slot| {
-        matches!(
-            effects.get(*slot).map(|effect| effect.params),
-            Some(EffectParams::Chain(_))
-        )
-    })
-    .map(|slot| depth_at(effects, slot).saturating_sub(top))
-    .max()
+    run.filter(|slot| slot_is_container(effects, *slot))
+        .map(|slot| depth_at(effects, slot).saturating_sub(top))
+        .max()
+}
+
+/// Whether the row in `slot` holds a run of the rows after it.
+///
+/// Every guard in this module went through `matches!(.., Chain(_))` before
+/// `EffectParams::is_container` existed, which meant the span primitives each
+/// named a container *kind* and would each have had to learn a second one.
+/// Out of range is not a container, which is what every caller's `.get()`
+/// already meant.
+fn slot_is_container(effects: &[EffectSlotState], slot: usize) -> bool {
+    effects
+        .get(slot)
+        .is_some_and(|effect| effect.params.is_container())
 }
 
 /// Whether a run whose containers reach `reach` below their own top may sit
@@ -118,13 +126,10 @@ pub fn can_insert_into_container(
     container: usize,
     params: EffectParams,
 ) -> bool {
-    if !matches!(
-        effects.get(container).map(|effect| effect.params),
-        Some(EffectParams::Chain(_))
-    ) {
+    if !slot_is_container(effects, container) {
         return false;
     }
-    let reach = matches!(params, EffectParams::Chain(_)).then_some(0);
+    let reach = params.is_container().then_some(0);
     depth_fits(depth_at(effects, container) + 1, reach)
 }
 
@@ -138,10 +143,7 @@ pub fn can_move_into_container(
     if from >= effects.len() || container >= effects.len() || from == container {
         return false;
     }
-    if !matches!(
-        effects.get(container).map(|effect| effect.params),
-        Some(EffectParams::Chain(_))
-    ) {
+    if !slot_is_container(effects, container) {
         return false;
     }
     let run = run_of(effects, from);
@@ -160,11 +162,14 @@ pub fn can_move_into_container(
 /// so a malformed span reports what is actually there rather than a range
 /// that would panic on indexing.
 pub fn span_of(effects: &[EffectSlotState], slot: usize) -> std::ops::Range<usize> {
-    let Some(EffectParams::Chain(chain)) = effects.get(slot).map(|effect| effect.params) else {
+    let Some(children) = effects
+        .get(slot)
+        .and_then(|effect| effect.params.container_children())
+    else {
         return slot + 1..slot + 1;
     };
     let start = slot + 1;
-    start..(start + chain.children as usize).min(effects.len())
+    start..(start + children as usize).min(effects.len())
 }
 
 /// How many containers enclose `slot`.
@@ -198,9 +203,11 @@ pub fn span_problem(effects: &[EffectSlotState]) -> Option<String> {
     let containers: Vec<(usize, usize)> = effects
         .iter()
         .enumerate()
-        .filter_map(|(slot, effect)| match effect.params {
-            EffectParams::Chain(chain) => Some((slot, chain.children as usize)),
-            _ => None,
+        .filter_map(|(slot, effect)| {
+            effect
+                .params
+                .container_children()
+                .map(|children| (slot, children as usize))
         })
         .collect();
     for (slot, children) in &containers {
@@ -257,10 +264,11 @@ fn resize_enclosing(effects: &mut [EffectSlotState], slot: usize, delta: isize) 
         .filter(|outer| span_of(effects, *outer).contains(&slot))
         .collect();
     for outer in enclosing {
-        if let EffectParams::Chain(chain) = &mut effects[outer].params {
-            let grown = (chain.children as isize + delta).clamp(0, u8::MAX as isize);
-            chain.children = grown as u8;
-        }
+        let Some(children) = effects[outer].params.container_children() else {
+            continue;
+        };
+        let grown = (children as isize + delta).clamp(0, u8::MAX as isize);
+        effects[outer].params.set_container_children(grown as u8);
     }
 }
 
@@ -390,10 +398,7 @@ pub fn move_effect_into_container(
     if from >= effects.len() || container >= effects.len() || from == container {
         return false;
     }
-    if !matches!(
-        effects.get(container).map(|effect| effect.params),
-        Some(EffectParams::Chain(_))
-    ) {
+    if !slot_is_container(effects, container) {
         return false;
     }
     let run = run_of(effects, from);
@@ -418,8 +423,9 @@ pub fn move_effect_into_container(
     // half is what `resize_enclosing` alone cannot do: for an empty box its
     // own span covers nothing, so it is not in its own enclosing set.
     resize_enclosing(effects, container, len as isize);
-    if let EffectParams::Chain(chain) = &mut effects[container].params {
-        chain.children = chain.children.saturating_add(len.min(u8::MAX as usize) as u8);
+    if let Some(children) = effects[container].params.container_children() {
+        let grown = children.saturating_add(len.min(u8::MAX as usize) as u8);
+        effects[container].params.set_container_children(grown);
     }
     let at = container + 1;
     let tail = effects.split_off(at);
@@ -504,10 +510,7 @@ pub fn insert_into_container(
     container: usize,
     effect: EffectSlotState,
 ) -> Option<usize> {
-    if !matches!(
-        effects.get(container).map(|effect| effect.params),
-        Some(EffectParams::Chain(_))
-    ) {
+    if !slot_is_container(effects, container) {
         return None;
     }
     if effects.len() >= MAX_EFFECTS_PER_CHANNEL {
@@ -520,8 +523,10 @@ pub fn insert_into_container(
     // The box itself and every box around it, rather than only the ones whose
     // span already covers `at` -- which for an empty box is none of them.
     resize_enclosing(effects, container, 1);
-    if let EffectParams::Chain(chain) = &mut effects[container].params {
-        chain.children = chain.children.saturating_add(1);
+    if let Some(children) = effects[container].params.container_children() {
+        effects[container]
+            .params
+            .set_container_children(children.saturating_add(1));
     }
     effects.insert(at, effect.with_id(mint_device_id(next_id)));
     Some(at)
@@ -664,10 +669,7 @@ pub fn replace_run(
 /// The escape hatch that makes [`remove_effect`]'s "a box goes with its
 /// contents" safe to have.
 pub fn unwrap_container(effects: &mut Vec<EffectSlotState>, at: usize) -> bool {
-    if !matches!(
-        effects.get(at).map(|effect| effect.params),
-        Some(EffectParams::Chain(_))
-    ) {
+    if !slot_is_container(effects, at) {
         return false;
     }
     // The children stay, so every enclosing container loses exactly the one
@@ -712,11 +714,12 @@ pub fn wrap_in_container(
         return None;
     }
     let mut container = container;
-    if let EffectParams::Chain(chain) = &mut container.params {
-        chain.children = u8::try_from(run.len()).ok()?;
-    } else {
+    if !container.params.is_container() {
         return None;
     }
+    container
+        .params
+        .set_container_children(u8::try_from(run.len()).ok()?);
     // The rows do not move, so nothing enclosing them changes reach except by
     // the one row the container itself adds.
     resize_enclosing(effects, run.start, 1);

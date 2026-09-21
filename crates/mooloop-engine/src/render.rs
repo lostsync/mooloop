@@ -1075,7 +1075,7 @@ impl EffectChain {
     fn is_container(&self, slot: usize) -> bool {
         self.slot(slot)
             .and_then(|state| state.kind)
-            .is_some_and(|kind| kind == mooloop_core::EffectKind::Chain)
+            .is_some_and(mooloop_core::EffectKind::is_container)
     }
 
     /// How many rows the container in `slot` encloses. Zero for a leaf, and
@@ -1457,10 +1457,7 @@ impl EffectChain {
             // A container's span and the ring that delays its dry copy.
             // Allocated here rather than sent, because `load` already runs on
             // the control thread inside `install_project`.
-            let children = match effect.params {
-                mooloop_core::EffectParams::Chain(chain) => chain.children,
-                _ => 0,
-            };
+            let children = effect.params.container_children().unwrap_or(0);
             let align = (children > 0)
                 .then(|| IntegerDelay::new(mooloop_core::run_latency(slots, slot)))
                 .flatten()
@@ -1480,7 +1477,7 @@ impl EffectChain {
         // One allocation for the whole chain, and only for a chain that
         // actually holds a box.
         if self.container_dry.is_none()
-            && slots.iter().any(|effect| effect.kind() == mooloop_core::EffectKind::Chain)
+            && slots.iter().any(|effect| effect.kind().is_container())
         {
             self.container_dry = Some(Box::new(ContainerScratch::new()));
         }

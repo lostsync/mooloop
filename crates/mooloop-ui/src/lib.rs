@@ -2219,10 +2219,9 @@ fn containers_closing_at(effects: &[EffectSlotState], slot: usize) -> Vec<i32> {
     (0..=slot)
         .rev()
         .filter(|container| {
-            matches!(
-                effects.get(*container).map(|effect| effect.params),
-                Some(mooloop_core::EffectParams::Chain(_))
-            )
+            effects
+                .get(*container)
+                .is_some_and(|effect| effect.params.is_container())
         })
         .filter(|container| {
             let span = mooloop_core::span_of(effects, *container);
@@ -2475,10 +2474,7 @@ fn effect_slot_row(
         buffer_position_tick: 0,
         detector_db: METER_FLOOR_DB,
         gain_reduction_db: 0.0,
-        children: match slot.params {
-            mooloop_core::EffectParams::Chain(chain) => chain.children as i32,
-            _ => 0,
-        },
+        children: slot.params.container_children().unwrap_or(0) as i32,
         depth,
         closing: ModelRc::from(Rc::new(VecModel::from(closing))),
         selected,
@@ -4205,10 +4201,10 @@ impl UiState {
         };
         let mut scratch = effects
             .iter()
-            .any(|effect| effect.kind() == EffectKind::Chain)
+            .any(|effect| effect.kind().is_container())
             .then(|| Box::new(ContainerScratch::new()));
         for (slot, effect) in effects.iter().enumerate() {
-            let mooloop_core::EffectParams::Chain(chain) = effect.params else {
+            let Some(children) = effect.params.container_children() else {
                 continue;
             };
             let Ok(slot_index) = u8::try_from(slot) else {
@@ -4216,14 +4212,14 @@ impl UiState {
             };
             // Allocated here, off the audio thread, for the same reason the
             // node beside it is.
-            let align = (chain.children > 0)
+            let align = (children > 0)
                 .then(|| IntegerDelay::new(mooloop_core::run_latency(effects, slot)))
                 .flatten()
                 .map(Box::new);
             stx.send(StructuralCommand::SetContainerSpan {
                 target,
                 slot: slot_index,
-                children: chain.children,
+                children,
                 align,
                 // Rides the first container's command; the chain keeps the
                 // first one it is given and hands every later one back.

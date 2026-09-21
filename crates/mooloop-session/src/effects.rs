@@ -287,7 +287,7 @@ impl Session {
         name: &str,
     ) -> Option<EffectRunLoaded> {
         let target = self.effect_target;
-        if run.effects.first().map(EffectSlotState::kind) != Some(EffectKind::Chain) {
+        if !run.effects.first().is_some_and(|effect| effect.kind().is_container()) {
             return None;
         }
         if mooloop_core::span_problem(&run.effects).is_some() {
@@ -295,7 +295,7 @@ impl Session {
         }
         let (removed, devices, removed_tail) = {
             let (effects, next_id) = self.effect_chain_parts_mut()?;
-            if effects.get(slot)?.kind() != EffectKind::Chain {
+            if !effects.get(slot)?.kind().is_container() {
                 return None;
             }
             let before = effects.len();
@@ -488,10 +488,10 @@ impl Session {
         // something, its own row keeps meaning "before this box" -- its
         // children are there to be aimed at, and taking that index away would
         // make "just before a container" the thing that had no gesture.
-        let into_empty_box = matches!(
-            effects.get(to).map(|effect| effect.params),
-            Some(EffectParams::Chain(chain)) if chain.children == 0
-        );
+        let into_empty_box = effects
+            .get(to)
+            .and_then(|effect| effect.params.container_children())
+            == Some(0);
         let moved = if into_empty_box {
             move_effect_into_container(effects, from, to)
         } else {
@@ -781,13 +781,10 @@ impl Session {
         // flattened every container on the channel. The two sibling paths,
         // `insert_run` and `load_effect_run`, both check `span_problem`
         // already; this one had no check to skip.
-        let children = match effect.params {
-            EffectParams::Chain(chain) => Some(chain.children),
-            _ => None,
-        };
+        let children = effect.params.container_children();
         *effect = preset.with_id(device);
-        if let (Some(children), EffectParams::Chain(chain)) = (children, &mut effect.params) {
-            chain.children = children;
+        if let Some(children) = children {
+            effect.params.set_container_children(children);
         }
         self.set_effect_preset_name(target, device, name);
         self.mark_dirty();

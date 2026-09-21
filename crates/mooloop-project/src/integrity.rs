@@ -260,7 +260,7 @@ pub fn repair_effect_run(run: &mut mooloop_core::EffectRun) -> Diagnosis {
             "it holds no devices at all".into(),
             "there is nothing to load".into(),
         );
-    } else if run.effects[0].kind() != EffectKind::Chain {
+    } else if !run.effects[0].kind().is_container() {
         doctor.refuse(
             "effect_run.headless",
             "This preset",
@@ -1367,7 +1367,7 @@ fn check_spans(doctor: &mut Doctor, who: &str, effects: &mut Vec<EffectSlotState
     };
     let containers = effects
         .iter()
-        .filter(|effect| effect.kind() == EffectKind::Chain)
+        .filter(|effect| effect.kind().is_container())
         .count();
     if doctor.correct(
         "effect.container.span",
@@ -1375,7 +1375,7 @@ fn check_spans(doctor: &mut Doctor, who: &str, effects: &mut Vec<EffectSlotState
         problem,
         format!("remove {containers} container(s), keeping every device inside them"),
     ) {
-        effects.retain(|effect| effect.kind() != EffectKind::Chain);
+        effects.retain(|effect| !effect.kind().is_container());
     }
 }
 

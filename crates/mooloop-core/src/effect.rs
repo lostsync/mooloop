@@ -85,6 +85,38 @@ impl EffectKind {
         }
     }
 
+    /// Whether this kind holds a run of the rows after it.
+    ///
+    /// **The one place a kind is asked whether it is a container.** It was
+    /// spelled `== EffectKind::Chain` at each of its call sites, which is the
+    /// same shape as the params-level test below and drifts for the same
+    /// reason: a second container kind is arriving
+    /// (`docs/plans/containers/07-a-branch-is-a-run.md`) and every site that
+    /// names `Chain` by hand is a site that will keep meaning "a serial
+    /// container" when it meant "a container".
+    ///
+    /// `EffectParams::is_container` is this question asked of a value rather
+    /// than of a kind, and `container_predicates_agree_about_every_kind`
+    /// holds the two together.
+    pub fn is_container(self) -> bool {
+        match self {
+            Self::Chain => true,
+            Self::Eq
+            | Self::Modulation
+            | Self::Filter
+            | Self::Drive
+            | Self::Preamp
+            | Self::Bitcrush
+            | Self::Delay
+            | Self::Reverb
+            | Self::Plate
+            | Self::Gate
+            | Self::Compressor
+            | Self::Limiter
+            | Self::Buffer => false,
+        }
+    }
+
     /// Every kind, in the order the UI offers them when adding an effect.
     pub const ALL: [EffectKind; 14] = [
         EffectKind::Eq,
@@ -2926,6 +2958,50 @@ impl EffectParams {
         }
     }
 
+    /// How many of the rows after this one are inside it, or `None` for a
+    /// device that holds nothing.
+    ///
+    /// **The one place the workspace asks "is this a container, and how big
+    /// is it".** It was spelled `EffectParams::Chain(chain)` at thirty-three
+    /// sites across seven crates — thirteen of them in `structure.rs`, which
+    /// is where the span primitives live — and a value written down that many
+    /// times is this codebase's characteristic fault waiting for a second
+    /// writer. The second writer is `EffectKind::Layer`
+    /// (`docs/plans/containers/07-a-branch-is-a-run.md`): every one of those
+    /// sites would have had to grow an arm, and the ones that did not would
+    /// have gone on quietly treating a layer as an ordinary device whose
+    /// children are loose rows of the chain.
+    ///
+    /// So the span primitives read this and **none of them names a container
+    /// kind at all**. What a container *does* with its rows — run them in
+    /// order, or split across them — is a separate question, asked in the two
+    /// places that render and draw, and it does not belong here.
+    pub fn container_children(&self) -> Option<u8> {
+        match self {
+            Self::Chain(chain) => Some(chain.children),
+            _ => None,
+        }
+    }
+
+    /// Whether this device holds a run of the rows after it.
+    pub fn is_container(&self) -> bool {
+        self.container_children().is_some()
+    }
+
+    /// Set how many of the rows after this one are inside it.
+    ///
+    /// Does nothing to a device that holds nothing, which is what every call
+    /// site already meant: each was an `if let` whose `else` branch was the
+    /// empty statement. Saturation and clamping stay with the caller, because
+    /// they differ — a resize clamps a signed delta into range, an insert
+    /// saturates, and a wrap refuses outright rather than truncating a run it
+    /// cannot describe.
+    pub fn set_container_children(&mut self, children: u8) {
+        if let Self::Chain(chain) = self {
+            chain.children = children;
+        }
+    }
+
     pub fn filter(&self) -> Option<&FilterParams> {
         match self {
             Self::Filter(p) => Some(p),
@@ -3571,6 +3647,52 @@ impl EffectSlotState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The guard on the sweep that replaced thirty-three hand-written
+    /// `EffectParams::Chain(_)` tests, and it is `AGENTS.md`'s question about
+    /// a mirrored value: **does anything read the copy the test checks?**
+    ///
+    /// It does — `EffectKind::is_container` and `EffectParams::is_container`
+    /// are one fact asked of a kind and of a value, and the span primitives
+    /// read the second while `integrity.rs` and the renderer's install read
+    /// the first. A fifteenth kind that answered them differently would put
+    /// a container's rows loose in the chain on one path and inside the box
+    /// on the other, with nothing failing.
+    ///
+    /// `EffectKind::ALL` is what makes this a sweep rather than a list
+    /// somebody has to remember to extend.
+    #[test]
+    fn container_predicates_agree_about_every_kind() {
+        for kind in EffectKind::ALL {
+            let params = kind.default_params();
+            assert_eq!(
+                kind.is_container(),
+                params.is_container(),
+                "{kind:?} answers is_container two different ways"
+            );
+            assert_eq!(
+                params.is_container(),
+                params.container_children().is_some(),
+                "{kind:?} is a container that cannot count its rows"
+            );
+        }
+    }
+
+    /// Each of the seven call sites this setter replaced was an `if let`
+    /// whose `else` was the empty statement, so a device that holds nothing
+    /// has to absorb the write rather than panic or store it somewhere.
+    #[test]
+    fn setting_children_does_nothing_to_a_device_that_holds_nothing() {
+        for kind in EffectKind::ALL {
+            let mut params = kind.default_params();
+            params.set_container_children(3);
+            assert_eq!(
+                params.container_children(),
+                kind.is_container().then_some(3),
+                "{kind:?} took a child count it should not have"
+            );
+        }
+    }
 
     #[test]
     fn normalization_round_trips_across_every_descriptor() {
