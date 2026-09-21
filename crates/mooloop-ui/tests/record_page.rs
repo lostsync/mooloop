@@ -79,15 +79,23 @@ fn record_state_comparisons(src: &str) -> Vec<(usize, i32)> {
     found
 }
 
+/// The RECORD button's label ladder, as the markup spells it.
+struct LabelLadder {
+    /// Where it is, for a failure that has to be found and edited.
+    line: usize,
+    /// The `(number, label)` arms, in the order the ternary tests them.
+    arms: Vec<(i32, String)>,
+    /// The label drawn when no arm matched.
+    otherwise: String,
+}
+
 /// The RECORD button's label ladder: the one single-line `text:` binding on a
-/// `record-state` ternary whose every branch is a string literal. Returns the
-/// line number, the `(number, label)` arms in the order they are tested, and
-/// the trailing else label.
+/// `record-state` ternary whose every branch is a string literal.
 ///
 /// The page holds three other `record-state` ternaries and none of them is
 /// this one: two are spread over several lines, and all three have at least
 /// one branch that is a property rather than a literal.
-fn button_label_ladder(src: &str) -> Option<(usize, Vec<(i32, String)>, String)> {
+fn button_label_ladder(src: &str) -> Option<LabelLadder> {
     for (index, line) in src.lines().enumerate() {
         let trimmed = line.trim();
         let Some(body) = trimmed.strip_prefix("text:") else {
@@ -131,7 +139,11 @@ fn button_label_ladder(src: &str) -> Option<(usize, Vec<(i32, String)>, String)>
         let Some(otherwise) = string_literal(rest) else {
             continue;
         };
-        return Some((index + 1, arms, otherwise));
+        return Some(LabelLadder {
+            line: index + 1,
+            arms,
+            otherwise,
+        });
     }
     None
 }
@@ -175,7 +187,11 @@ fn literal_defaults(src: &str, name: &str) -> Vec<(usize, String)> {
 /// this file unchanged.
 #[test]
 fn the_record_button_labels_match_the_rust_table() {
-    let (line, arms, otherwise) = button_label_ladder(SAMPLER_FACE)
+    let LabelLadder {
+        line,
+        arms,
+        otherwise,
+    } = button_label_ladder(SAMPLER_FACE)
         .expect("sampler-device.slint has a single-line RECORD button label ladder");
 
     assert!(
@@ -240,7 +256,7 @@ fn every_record_face_is_decoded_somewhere_in_the_markup() {
         .into_iter()
         .map(|(_, value)| value)
         .collect();
-    let ladder_else = button_label_ladder(SAMPLER_FACE).map(|(_, _, otherwise)| otherwise);
+    let ladder_else = button_label_ladder(SAMPLER_FACE).map(|ladder| ladder.otherwise);
 
     for face in RecordFace::ALL {
         let compared_directly = compared.contains(&face.as_i32());
