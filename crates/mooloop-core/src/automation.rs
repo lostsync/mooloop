@@ -6,8 +6,13 @@
 //! stores normalized `0..1` breakpoints and the engine maps them through
 //! [`crate::ParamDescriptor`] exactly like a knob position.
 //!
-//! Storage is preallocated for the same reason note storage is: lane edits are
-//! applied on the audio thread and must not allocate.
+//! Storage is reused rather than minted for the same reason note storage is
+//! preallocated: lane edits are applied on the audio thread and must not
+//! allocate or free. A lane's point vector is 12 KB, and the bank that holds
+//! lanes is 256 patterns by 256 channels by eight, so preallocating one per
+//! slot is 6 GiB and `docs/CAPACITY_POLICY.md` forbids it. Instead a vacated
+//! slot keeps the vector it was given, and a slot that has never held a lane
+//! takes one from [`LanePool`], which is refilled off the audio thread.
 
 use crate::ParamAddr;
 
@@ -65,7 +70,118 @@ fn default_next_point_id() -> PointId {
     1
 }
 
+/// The address a vacant slot in a lane bank carries.
+///
+/// A lane bank is a fixed array of lanes whose open ones are a prefix, so
+/// vacancy is really the prefix length; this exists so that a vacated slot
+/// cannot answer a lookup for the destination it used to drive, and so that
+/// two banks holding the same open lanes compare equal. `param` is `u32::MAX`,
+/// which no descriptor id is ever assigned.
+const VACANT_TARGET: ParamAddr = ParamAddr {
+    scope: crate::EffectTarget::Bus(u8::MAX),
+    owner: crate::ParamOwner::Strip,
+    param: u32::MAX,
+};
+
+/// Spare point vectors, allocated off the audio thread and handed to a lane
+/// slot that has never held one.
+///
+/// Opening a lane used to be `Vec::with_capacity(MAX_AUTOMATION_POINTS_PER_LANE)`
+/// on the audio thread -- a 12 KB malloc inside the callback, against the rule
+/// this module's header states. Closing one used to drop the same vector
+/// there. Closing now keeps it in the slot, so the free is gone outright; the
+/// malloc is gone for as long as this pool has anything in it.
+///
+/// Refilled by [`crate::Sequencer`]-style owners at project install, which
+/// runs off the thread. When it is empty a lane still opens, by allocating as
+/// it did before -- a lane the user asked for is never refused for want of a
+/// spare, and `docs/CAPACITY_POLICY.md` is why. The standing follow-up is to
+/// have the session supply storage with the command instead, the way
+/// `StructuralCommand` already supplies a routing table.
+#[derive(Debug, Default)]
+pub struct LanePool {
+    spare: Vec<Vec<AutomationPoint>>,
+}
+
+impl LanePool {
+    /// Spares kept for lanes drawn between two installs. Each is 12 KB, so
+    /// this is 384 KB held against an editing session's worth of new lanes.
+    pub const SPARE_LANES: usize = MAX_AUTOMATION_LANES_PER_CHANNEL * 4;
+
+    pub fn new() -> Self {
+        let mut pool = Self {
+            spare: Vec::with_capacity(Self::SPARE_LANES),
+        };
+        pool.refill();
+        pool
+    }
+
+    /// Top the pool back up to [`Self::SPARE_LANES`]. Allocates, so it is for
+    /// the install path and never for the callback.
+    pub fn refill(&mut self) {
+        while self.spare.len() < Self::SPARE_LANES {
+            self.spare
+                .push(Vec::with_capacity(MAX_AUTOMATION_POINTS_PER_LANE));
+        }
+    }
+
+    pub fn spare_lanes(&self) -> usize {
+        self.spare.len()
+    }
+
+    /// Storage for a lane that is opening. Allocation-free while the pool has
+    /// a spare; see the type's own note for why it allocates rather than
+    /// refusing when it does not.
+    fn take(&mut self) -> Vec<AutomationPoint> {
+        self.spare
+            .pop()
+            .unwrap_or_else(|| Vec::with_capacity(MAX_AUTOMATION_POINTS_PER_LANE))
+    }
+}
+
 impl AutomationLane {
+    /// A slot no destination has claimed. It owns no heap until it is opened,
+    /// which is what makes a bank of them affordable.
+    pub fn vacant() -> Self {
+        Self {
+            target: VACANT_TARGET,
+            points: Vec::new(),
+            next_point_id: 1,
+        }
+    }
+
+    /// Whether this slot drives a destination. The bank's prefix length is the
+    /// authority; this answers the same question for one lane in hand.
+    pub fn is_open(&self) -> bool {
+        self.target != VACANT_TARGET
+    }
+
+    /// Claim a vacant slot for `target`, taking point storage from `pool` only
+    /// when the slot has none of its own. Runs on the audio thread.
+    ///
+    /// A slot that has held a lane before still has that lane's vector, empty
+    /// and at full capacity, so reopening one costs nothing at all. A slot
+    /// holding a short vector -- one restored by a decode that had fewer
+    /// points than the ceiling -- keeps it rather than swapping it out, since
+    /// dropping it would be a free on the callback; `upsert` then refuses past
+    /// the shorter capacity, which is its documented behaviour already.
+    pub(crate) fn claim(&mut self, target: ParamAddr, pool: &mut LanePool) {
+        self.points.clear();
+        if self.points.capacity() == 0 {
+            self.points = pool.take();
+        }
+        self.target = target;
+        self.next_point_id = 1;
+    }
+
+    /// Close this slot, keeping its point storage for the next lane that lands
+    /// in it. No free, which is the whole point: this runs on the callback.
+    pub(crate) fn vacate(&mut self) {
+        self.points.clear();
+        self.target = VACANT_TARGET;
+        self.next_point_id = 1;
+    }
+
     pub fn new(target: ParamAddr) -> Self {
         Self {
             target,

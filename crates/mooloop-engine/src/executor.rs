@@ -430,7 +430,7 @@ fn enable_flush_to_zero() {}
 mod tests {
     use super::*;
     use crate::render::RenderState;
-    use mooloop_core::Project;
+    use mooloop_core::{EngineCommand, Project};
 
     const SAMPLE_RATE: u32 = 48_000;
     const BLOCK: usize = 256;
@@ -841,6 +841,202 @@ mod tests {
         executor.process(std::iter::empty(), &mut out_l, &mut out_r);
         let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
         assert_eq!(after, before, "a routing change freed on the callback");
+    }
+
+    /// A channel-0 strip destination, and the same for a device.
+    fn strip_lane(param: u32) -> mooloop_core::ParamAddr {
+        mooloop_core::ParamAddr::strip(mooloop_core::EffectTarget::Channel(0), param)
+    }
+
+    /// Render one block with `commands` in the ring and answer what the
+    /// callback allocated and freed doing it.
+    ///
+    /// The warm-up matters: a first block initialises block state, and the
+    /// ring itself is written before the counter is read.
+    fn allocation_of(
+        executor: &mut Executor,
+        cmd_tx: &mut rtrb::Producer<RealtimeCommand>,
+        commands: Vec<RealtimeCommand>,
+    ) -> (usize, usize) {
+        let mut out_l = [0.0f32; BLOCK];
+        let mut out_r = [0.0f32; BLOCK];
+        for _ in 0..4 {
+            executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        }
+        for command in commands {
+            cmd_tx.push(command).expect("room in the ring");
+        }
+        let before = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        executor.process(std::iter::empty(), &mut out_l, &mut out_r);
+        let after = (crate::COUNTING.allocations(), crate::COUNTING.frees());
+        (after.0 - before.0, after.1 - before.1)
+    }
+
+    /// **Opening an automation lane allocates nothing on the callback.**
+    ///
+    /// It used to allocate twice over: `AutomationLane::new` is a
+    /// `Vec::with_capacity(MAX_AUTOMATION_POINTS_PER_LANE)` -- 12 KB -- and
+    /// `UpsertAutomationPoint` opens the lane the same way, so the first
+    /// breakpoint drawn on a destination that had none paid for it again.
+    /// The lane bank now takes its point storage from a pool filled at
+    /// install (`reports/fable-2026-09-21.md`, finding 1).
+    #[test]
+    fn opening_a_lane_allocates_nothing_on_the_callback() {
+        let (mut executor, mut cmd_tx, _reclaim) = executor();
+        let (allocations, frees) = allocation_of(
+            &mut executor,
+            &mut cmd_tx,
+            vec![
+                RealtimeCommand::Engine(EngineCommand::OpenAutomationLane {
+                    pattern: 0,
+                    channel: 0,
+                    target: strip_lane(0),
+                }),
+                RealtimeCommand::Engine(EngineCommand::UpsertAutomationPoint {
+                    pattern: 0,
+                    channel: 0,
+                    target: strip_lane(1),
+                    point: mooloop_core::AutomationPoint::new(1, 0, 0.5),
+                }),
+            ],
+        );
+        assert_eq!(
+            (allocations, frees),
+            (0, 0),
+            "opening a lane allocated or freed on the callback"
+        );
+    }
+
+    /// **Closing an automation lane frees nothing on the callback.** The slot
+    /// keeps its point storage for the next lane that lands in it, rather
+    /// than the 12 KB vector being dropped inside the audio callback.
+    #[test]
+    fn removing_a_lane_frees_nothing_on_the_callback() {
+        let (mut executor, mut cmd_tx, _reclaim) = executor();
+        let _ = allocation_of(
+            &mut executor,
+            &mut cmd_tx,
+            vec![RealtimeCommand::Engine(EngineCommand::OpenAutomationLane {
+                pattern: 0,
+                channel: 0,
+                target: strip_lane(0),
+            })],
+        );
+        let (allocations, frees) = allocation_of(
+            &mut executor,
+            &mut cmd_tx,
+            vec![RealtimeCommand::Engine(
+                EngineCommand::RemoveAutomationLane {
+                    pattern: 0,
+                    channel: 0,
+                    target: strip_lane(0),
+                },
+            )],
+        );
+        assert_eq!(
+            (allocations, frees),
+            (0, 0),
+            "closing a lane allocated or freed on the callback"
+        );
+    }
+
+    /// **Removing an effect frees no lane on the callback.** Its lanes go
+    /// with it -- `ChannelPattern::forget_device`, which used to be a
+    /// `Vec::retain` under a comment claiming it did not allocate, and which
+    /// freed every point vector it dropped.
+    #[test]
+    fn removing_an_effect_with_lanes_frees_nothing_on_the_callback() {
+        let mut project = Project::default();
+        project.channels[0]
+            .setup
+            .push_effect(mooloop_core::EffectSlotState::of_kind(
+                mooloop_core::EffectKind::Filter,
+            ))
+            .expect("room in the chain");
+        let device = project.channels[0].setup.effects[0].id;
+        let (cmd_tx, cmd_rx) = rtrb::RingBuffer::new(8);
+        let (evt_tx, _evt_rx) = rtrb::RingBuffer::new(8);
+        let (reclaim_tx, _reclaim_rx) = rtrb::RingBuffer::new(8);
+        let mut cmd_tx = cmd_tx;
+        let mut executor = Executor::new(
+            ExecutorIo {
+                cmd_rx,
+                evt_tx,
+                reclaim_tx,
+            },
+            Box::new(RenderState::from_project(SAMPLE_RATE, &project, &[])),
+            Arc::new(AtomicU64::new(0)),
+            SAMPLE_RATE,
+            LoadMeters::new(),
+        );
+        let target = mooloop_core::EffectTarget::Channel(0);
+        let _ = allocation_of(
+            &mut executor,
+            &mut cmd_tx,
+            vec![RealtimeCommand::Engine(EngineCommand::OpenAutomationLane {
+                pattern: 0,
+                channel: 0,
+                target: mooloop_core::ParamAddr::effect(target, device, 0),
+            })],
+        );
+        let (_, frees) = allocation_of(
+            &mut executor,
+            &mut cmd_tx,
+            vec![RealtimeCommand::Structural(
+                crate::StructuralCommand::RemoveEffect { target, slot: 0 },
+            )],
+        );
+        assert_eq!(frees, 0, "removing an effect freed a lane on the callback");
+    }
+
+    /// **Adding a channel frees no lane on the callback.** The seat it takes
+    /// is cleared across the pattern bank first, and every lane in it used to
+    /// be dropped there -- up to 256 patterns by eight lanes, in one block
+    /// (`reports/fable-2026-09-21.md`, finding 1).
+    ///
+    /// Measured as a difference rather than against zero, because the command
+    /// frees one allocation of its own -- the modulation rack the seat had --
+    /// which is a separate matter recorded in `docs/LOOSE_ENDS.md`. What this
+    /// test holds is that the automation in the seat costs nothing to clear.
+    #[test]
+    fn adding_a_channel_frees_no_lane_on_the_callback() {
+        fn add_channel_frees(lanes: u32) -> usize {
+            let (mut executor, mut cmd_tx, _reclaim) = executor();
+            for param in 0..lanes {
+                let _ = allocation_of(
+                    &mut executor,
+                    &mut cmd_tx,
+                    vec![RealtimeCommand::Engine(EngineCommand::OpenAutomationLane {
+                        pattern: 0,
+                        channel: 1,
+                        target: mooloop_core::ParamAddr::strip(
+                            mooloop_core::EffectTarget::Channel(1),
+                            param,
+                        ),
+                    })],
+                );
+            }
+            let slot = crate::render::empty_channel_audio_bank()[1].clone();
+            let storage = crate::render::RenderState::build_channel(slot, SAMPLE_RATE);
+            allocation_of(
+                &mut executor,
+                &mut cmd_tx,
+                vec![RealtimeCommand::Structural(
+                    crate::StructuralCommand::AddChannel {
+                        storage,
+                        source: mooloop_core::DeviceKind::Sampler,
+                    },
+                )],
+            )
+            .1
+        }
+
+        let bare = add_channel_frees(0);
+        let with_lanes = add_channel_frees(mooloop_core::MAX_AUTOMATION_LANES_PER_CHANNEL as u32);
+        assert_eq!(
+            with_lanes, bare,
+            "adding a channel freed the seat's automation lanes on the callback"
+        );
     }
 
     /// The channel the edit was *about* is still rebuilt, and still cuts.

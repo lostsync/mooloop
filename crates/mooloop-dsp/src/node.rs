@@ -148,10 +148,22 @@ pub fn feedback_tail_frames(gain: f32, trip_frames: f32) -> u32 {
 /// they all arrived as one synthesised choke with no way to tell them apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Discontinuity {
-    /// The playhead moved somewhere it was not travelling towards: a seek, or
-    /// a loop fold. Audio a node is holding belongs to the old position and
-    /// is now wrong -- this is the one that invalidates a delay line.
+    /// The playhead moved somewhere it was not travelling towards. Audio a
+    /// node is holding belongs to the old position and is now wrong -- this
+    /// is the one that invalidates a delay line.
     Seek,
+    /// The transport turned back at a loop end. **Time is discontinuous and
+    /// the music usually is not**: the same bar is about to play again, so a
+    /// tail that crosses the fold is the sound a groove box is expected to
+    /// make, where a tail that crosses a seek is not.
+    ///
+    /// Every node that clears on [`Self::Seek`] clears on this too, which is
+    /// the behaviour a fold has always had -- the fold used to arrive *as* a
+    /// `Seek` and a node had no way to tell the two apart
+    /// (`reports/fable-2026-09-21.md`, finding 2). What this variant changes
+    /// is that declining it is now one `match` arm per device, and whether a
+    /// device should is Adam's call, per device.
+    LoopFold,
     /// The transport stopped. Everything a node holds is about to be
     /// inaudible anyway; the reason to say so is that it must not come back
     /// on the next play.
@@ -532,6 +544,68 @@ mod tests {
         bus.clear(BLOCK);
         node.process(&context(BLOCK), &mut bus, &silence, None);
         assert!(node.is_at_rest());
+    }
+
+    /// **A seek empties ML-P8's chorus line.** The hook reaches the outer
+    /// device and stopped there: the chorus is a `ModulationEffect`, which
+    /// clears its own line on a seek when it is a standalone effect, and
+    /// nothing forwarded the call to the one inside ML-P8. Because a chorused
+    /// ML-P8 deliberately keeps running between notes, whatever was in the
+    /// line before the seek rang out across it
+    /// (`reports/fable-2026-09-21.md`, finding 4).
+    ///
+    /// On the unfixed tree the post-seek block is the chorus playing the note
+    /// that is no longer being held, and this fails.
+    #[test]
+    fn a_seek_empties_a_chorused_mlp8s_line() {
+        let mut node = MlP8::new(
+            MlP8Params {
+                chorus: MlP8Chorus::Ensemble,
+                ..MlP8Params::default()
+            },
+            SAMPLE_RATE,
+        );
+        let mut bus = StereoBus::with_capacity(BLOCK);
+
+        let mut events = EventList::empty();
+        events.push_ordered(TimedEvent {
+            offset: 0,
+            event: Event::NoteOn {
+                id: 1,
+                note: 60,
+                velocity: 100,
+            },
+        });
+        bus.clear(BLOCK);
+        node.process(&context(BLOCK), &mut bus, &events, None);
+
+        let silence = EventList::empty();
+        for _ in 0..8 {
+            bus.clear(BLOCK);
+            node.process(&context(BLOCK), &mut bus, &silence, None);
+        }
+        let mut choke = EventList::empty();
+        choke.push_ordered(TimedEvent {
+            offset: 0,
+            event: Event::Choke,
+        });
+        bus.clear(BLOCK);
+        node.process(&context(BLOCK), &mut bus, &choke, None);
+        let sounding = bus.l.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
+        assert!(
+            sounding > 1e-3,
+            "the chorus line held nothing to clear, so this test proves \
+             nothing: {sounding}"
+        );
+
+        node.on_discontinuity(Discontinuity::Seek);
+        bus.clear(BLOCK);
+        node.process(&context(BLOCK), &mut bus, &silence, None);
+        let peak = bus.l.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
+        assert!(
+            peak <= 1e-6,
+            "the chorus line kept audio from before the seek: {peak}"
+        );
     }
 
     /// Play a note, let go of it, and keep rendering until the device says it

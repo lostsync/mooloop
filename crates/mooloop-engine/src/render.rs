@@ -5705,8 +5705,16 @@ impl RenderState {
         // release above is the *voices* being let go of; this is the delay
         // lines, the reverb tails and the splice positions being told that
         // what they are holding came from somewhere the transport has left.
-        if seeked || jumped {
+        //
+        // A fold says so. It clears exactly what a seek clears today, so the
+        // sound is unchanged; what the kind buys is that a node *can* decline
+        // a fold without also declining a seek, which it could not before
+        // (`reports/fable-2026-09-21.md`, finding 2). A block that both
+        // seeked and folded is a seek: the stronger claim is the true one.
+        if seeked {
             self.on_discontinuity(Discontinuity::Seek);
+        } else if jumped {
+            self.on_discontinuity(Discontinuity::LoopFold);
         }
         self.dispatch_auditions(frames);
 
@@ -12186,6 +12194,98 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         assert!(
             heard.lock().expect("spy lock").is_empty(),
             "an ordinary block is not a discontinuity and must say nothing"
+        );
+    }
+
+    /// **A loop fold reaches the nodes as a fold, not as a seek.** Both are
+    /// discontinuous in time; only one of them is discontinuous in the
+    /// music, and a device that wants to keep its tail across the fold could
+    /// not say so while the two arrived under one name
+    /// (`reports/fable-2026-09-21.md`, finding 2). Nothing about the sound
+    /// changes here: every node that cleared on a fold still clears on one.
+    #[test]
+    fn a_fold_reaches_installed_nodes_as_a_fold() {
+        use crate::render_test_support::SAMPLE_RATE;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Default)]
+        struct Spy {
+            heard: Arc<Mutex<Vec<Discontinuity>>>,
+        }
+
+        impl AudioNode for Spy {
+            fn on_discontinuity(&mut self, kind: Discontinuity) {
+                self.heard.lock().expect("spy lock").push(kind);
+            }
+
+            fn process(
+                &mut self,
+                _context: &ProcessContext,
+                _bus: &mut StereoBus,
+                _events_in: &EventList,
+                _events_out: Option<&mut EventList>,
+            ) {
+            }
+        }
+
+        let mut project = held_note_project();
+        project.channels[0]
+            .setup
+            .push_effect(mooloop_core::EffectSlotState::of_kind(
+                mooloop_core::EffectKind::Eq,
+            ))
+            .expect("pushed");
+        // A fold is a Song-mode loop range turning the playhead back.
+        // Pattern mode wraps inside the sequencer without the transport
+        // jumping, so it never reaches here at all.
+        project.playback_mode = PlaybackMode::Song;
+        project.playlist = vec![mooloop_core::PatternPlacement {
+            pattern: 0,
+            start_tick: 0,
+        }];
+        let end = mooloop_core::TICKS_PER_BAR;
+        project.loop_range = mooloop_core::LoopRange {
+            start_tick: 0,
+            end_tick: end,
+            enabled: true,
+        };
+        let mut render = RenderState::from_project(SAMPLE_RATE, &project, &[]);
+        let heard = Arc::<Mutex<Vec<Discontinuity>>>::default();
+        render.strips[0].effects.nodes[0] = Some(Box::new(Spy {
+            heard: Arc::clone(&heard),
+        }));
+        render.play();
+
+        let length = end;
+        render.apply_command(EngineCommand::Seek {
+            tick: length as f64 - 1.0,
+        });
+        // `process_block`, not `process_once_block`: the loop belongs to the
+        // realtime path, and the offline one walks the arrangement once.
+        render.process_block(1_024);
+        assert_eq!(
+            heard.lock().expect("spy lock").as_slice(),
+            [Discontinuity::Seek],
+            "the seek that positions this test has to be the seek"
+        );
+        heard.lock().expect("spy lock").clear();
+
+        // Blocks from a tick before the loop end: the transport turns back
+        // inside one of them, which is the only way a fold happens.
+        // The seek landed a tick from the loop end, so the block above
+        // already folded -- and said `Seek`, which is the right word for a
+        // block that did both. Play round the loop once more for a fold with
+        // nothing else in it: 384 ticks at 120 bpm is a hundred-odd blocks.
+        for _ in 0..200 {
+            render.process_block(1_024);
+            if !heard.lock().expect("spy lock").is_empty() {
+                break;
+            }
+        }
+        assert_eq!(
+            heard.lock().expect("spy lock").as_slice(),
+            [Discontinuity::LoopFold],
+            "the fold reached the node as something other than a fold"
         );
     }
 

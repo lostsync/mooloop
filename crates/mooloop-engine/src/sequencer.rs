@@ -5,7 +5,7 @@
 //! scheduling and edits never allocate on the audio thread.
 
 use mooloop_core::{
-    AutomationLane, AutomationPoint, EffectTarget, NoteEvent, NoteId, ParamAddr, Pattern,
+    AutomationLane, AutomationPoint, EffectTarget, LanePool, NoteEvent, NoteId, ParamAddr, Pattern,
     DeviceId, PatternPlacement, PlaybackMode, PointId, Ppq, Project,
     DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MAX_CHANNELS,
     MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_SWING_PERCENT,
@@ -43,6 +43,9 @@ pub struct Sequencer {
     playback_mode: PlaybackMode,
     swing_percent: u8,
     playlist: Vec<PatternPlacement>,
+    /// Point storage for lanes opened on the audio thread. Filled here and
+    /// topped up at every project install, both off the thread.
+    lane_pool: LanePool,
 }
 
 impl Sequencer {
@@ -68,6 +71,7 @@ impl Sequencer {
             playback_mode: PlaybackMode::Pattern,
             swing_percent: DEFAULT_SWING_PERCENT,
             playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
+            lane_pool: LanePool::new(),
         }
     }
 
@@ -167,18 +171,28 @@ impl Sequencer {
         self.active_channels = n.min(MAX_CHANNELS);
     }
 
-    /// Clear one preallocated channel lane across the full pattern bank.
+    /// Clear one preallocated channel lane across the patterns the song
+    /// actually holds.
+    ///
+    /// Bounded by `active_patterns` the way [`Self::forget_device`] is, and
+    /// for the same reason: this runs on the realtime command drain, and the
+    /// bank behind `active_patterns` is 256 patterns of nothing.
     pub fn clear_channel(&mut self, channel: usize) {
         if channel >= MAX_CHANNELS {
             return;
         }
-        for pattern in &mut self.patterns {
+        for pattern in self.patterns.iter_mut().take(self.active_patterns) {
             pattern.channels[channel].clear();
         }
     }
 
     /// Replace musical state without growing any realtime-owned allocation.
+    ///
+    /// Runs off the audio thread (the executor installs a `RenderState` that
+    /// is already built), so it is also where [`LanePool`] is refilled for
+    /// the lanes the user will draw before the next install.
     pub fn load_project(&mut self, project: &Project) {
+        self.lane_pool.refill();
         self.active_patterns = project.pattern_lengths.len().clamp(1, self.patterns.len());
         self.active_channels = project.channels.len().min(MAX_CHANNELS);
         self.current = (project.current_pattern as usize).min(self.active_patterns - 1);
@@ -267,14 +281,29 @@ impl Sequencer {
             .and_then(|pattern| pattern.channel_mut(channel))
     }
 
+    /// The channel's clip together with the lane storage opening one needs.
+    /// Two disjoint fields, handed out as a pair because `open_lane` takes
+    /// both and neither can be reached through the other.
+    fn channel_pattern_and_pool(
+        &mut self,
+        pattern: usize,
+        channel: usize,
+    ) -> Option<(&mut mooloop_core::pattern::ChannelPattern, &mut LanePool)> {
+        if pattern >= self.active_patterns {
+            return None;
+        }
+        let channel = self.patterns[pattern].channel_mut(channel)?;
+        Some((channel, &mut self.lane_pool))
+    }
+
     pub fn open_automation_lane(
         &mut self,
         pattern: usize,
         channel: usize,
         target: ParamAddr,
     ) -> bool {
-        self.channel_pattern_mut(pattern, channel)
-            .and_then(|channel| channel.open_lane(target))
+        self.channel_pattern_and_pool(pattern, channel)
+            .and_then(|(channel, pool)| channel.open_lane(target, pool))
             .is_some()
     }
 
@@ -285,8 +314,7 @@ impl Sequencer {
         target: ParamAddr,
     ) -> bool {
         self.channel_pattern_mut(pattern, channel)
-            .and_then(|channel| channel.remove_lane(target))
-            .is_some()
+            .is_some_and(|channel| channel.remove_lane(target))
     }
 
     pub fn clear_automation_lane(
@@ -314,8 +342,8 @@ impl Sequencer {
         target: ParamAddr,
         point: AutomationPoint,
     ) -> bool {
-        self.channel_pattern_mut(pattern, channel)
-            .and_then(|channel| channel.open_lane(target))
+        self.channel_pattern_and_pool(pattern, channel)
+            .and_then(|(channel, pool)| channel.open_lane(target, pool))
             .is_some_and(|lane| lane.upsert(point))
     }
 

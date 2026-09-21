@@ -185,11 +185,17 @@ pub struct Session {
     /// `Session` with a struct literal and `..Session::default()`, which a
     /// private field forbids outright.
     pub sample_request_counter: u64,
-    /// Whether a refused engine command has already been reported, for the
-    /// life of this session. See `Session::report_refused_command`: the
+    /// Whether a refused engine command has already been reported *for the
+    /// document now open*. See `Session::report_refused_command`: the
     /// condition is bursty, and one named line beats a hundred identical
-    /// ones.
+    /// ones -- but it used to be latched for the life of the process, so a
+    /// second full ring, on a later song, diverged in silence
+    /// (`reports/fable-2026-09-21.md`, finding 8). `replace_project` clears
+    /// it, which is what makes "once" mean once per document.
     pub engine_queue_refused: bool,
+    /// How many times a refusal has been reported, over the whole session.
+    /// The log line is the product; this is how a test sees it.
+    pub engine_refusals_reported: u32,
     /// Snapshot captured at the start of a direct knob gesture. Intermediate
     /// control updates still reach audio immediately, while one release
     /// becomes one undoable route edit.
@@ -314,6 +320,7 @@ impl Default for Session {
             sample_request: HashMap::new(),
             sample_request_counter: 0,
             engine_queue_refused: false,
+            engine_refusals_reported: 0,
             modulation_edit_before: None,
             modulation_edit_changed: false,
             browser_locations: Vec::new(),
@@ -1251,6 +1258,10 @@ impl Session {
     /// in hand.
     pub fn replace_project(&mut self, project: &Project, samples: &[Option<Arc<SampleData>>]) {
         self.source_revision = self.source_revision.wrapping_add(1);
+        // A new document gets its own first refusal. The latch exists to stop
+        // a burst repeating itself, not to make the second song's divergence
+        // unreportable.
+        self.engine_queue_refused = false;
         // Every baked commit currently in hand, found by what it was baked
         // from rather than by which channel is holding it.
         //

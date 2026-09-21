@@ -756,11 +756,18 @@ pub fn drop_lanes_for_device(
     device: DeviceId,
 ) -> bool {
     let before = lanes.len();
-    lanes.retain(|lane| {
-        !(lane.target.scope == scope
-            && matches!(lane.target.owner, ParamOwner::Effect { device: d } if d == device))
-    });
+    lanes.retain(|lane| !lane_drives_device(lane, scope, device));
     lanes.len() != before
+}
+
+/// Whether `lane` drives a parameter of `device` in `scope`.
+///
+/// Shared with [`crate::ChannelPattern::forget_device`], which cannot use the
+/// `retain` above: the engine's lane bank vacates a slot and keeps its point
+/// storage, because dropping it would be a free on the audio thread.
+pub fn lane_drives_device(lane: &AutomationLane, scope: EffectTarget, device: DeviceId) -> bool {
+    lane.target.scope == scope
+        && matches!(lane.target.owner, ParamOwner::Effect { device: d } if d == device)
 }
 
 /// Where the item that was at `old` sits after the one at `from` is lifted out

@@ -56,7 +56,7 @@ use crate::effects::ModulationEffect;
 use crate::env::Adsr;
 use crate::event::{Event, EventList};
 use crate::filter::{soft_ceiling, PreDrive, Svf};
-use crate::node::{AudioNode, ProcessContext, SourceNode};
+use crate::node::{AudioNode, Discontinuity, ProcessContext, SourceNode};
 use crate::osc::{sync_blep, Noise, Osc};
 use crate::scale::hz_from_normalized;
 use crate::smooth::Smoothed;
@@ -2555,6 +2555,17 @@ impl AudioNode for MlP8 {
 
     fn tail_frames(&self) -> u32 {
         0
+    }
+
+    /// **A device that contains a device forwards the hook.** ML-P8's voices
+    /// need nothing here -- a seek chokes them, like every other generator's
+    /// -- but its finishing chorus is a `ModulationEffect`, the same type
+    /// that opted in to emptying its line on a seek, and nothing was telling
+    /// it (`reports/fable-2026-09-21.md`, finding 4). A chorused ML-P8 keeps
+    /// its line running between notes on purpose, so what was in the line
+    /// before a seek rang across it.
+    fn on_discontinuity(&mut self, kind: Discontinuity) {
+        self.chorus.effect.on_discontinuity(kind);
     }
 
     /// The instrument's own LFO is advanced once per sample whether or not

@@ -43,7 +43,7 @@ mod stepped_round_trip_tests;
 mod param_id_freeze_tests;
 
 pub use automation::{
-    AutomationLane, AutomationPoint, PointId, MAX_AUTOMATION_LANES_PER_CHANNEL,
+    AutomationLane, AutomationPoint, LanePool, PointId, MAX_AUTOMATION_LANES_PER_CHANNEL,
     MAX_AUTOMATION_POINTS_PER_LANE,
 };
 pub use aux_in::AuxInParams;

@@ -4,7 +4,7 @@
 //! channel stores independent note events at PPQ tick precision. This keeps
 //! the compact rack useful without making it the authoritative note model.
 
-use crate::{AutomationLane, ParamAddr, MAX_AUTOMATION_LANES_PER_CHANNEL};
+use crate::{AutomationLane, LanePool, ParamAddr, MAX_AUTOMATION_LANES_PER_CHANNEL};
 
 /// Default number of sixteenth-note cells per pattern (one 4/4 bar).
 pub const DEFAULT_STEPS: u16 = 16;
@@ -87,9 +87,14 @@ impl NoteEvent {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChannelPattern {
     notes: Vec<NoteEvent>,
-    /// Open automation lanes, at most one per destination. Order is the order
-    /// they were opened, which is the order the lane picker lists them in.
+    /// A fixed bank of [`MAX_AUTOMATION_LANES_PER_CHANNEL`] lane slots whose
+    /// open ones are the prefix `..open_lanes`, at most one per destination.
+    /// Order inside the prefix is the order they were opened, which is the
+    /// order the lane picker lists them in, and closing one shifts the rest
+    /// down rather than leaving a hole -- a move of eight words, against the
+    /// 12 KB free that removing the lane outright used to cost the callback.
     lanes: Vec<AutomationLane>,
+    open_lanes: usize,
     capacity_ticks: u32,
 }
 
@@ -100,7 +105,12 @@ impl ChannelPattern {
             .min(MAX_NOTES_PER_CHANNEL_PATTERN);
         Self {
             notes: Vec::with_capacity(note_capacity),
-            lanes: Vec::with_capacity(MAX_AUTOMATION_LANES_PER_CHANNEL),
+            // Eight vacant slots own no point storage, so this is the same
+            // heap the empty `Vec::with_capacity(8)` here used to take.
+            lanes: (0..MAX_AUTOMATION_LANES_PER_CHANNEL)
+                .map(|_| AutomationLane::vacant())
+                .collect(),
+            open_lanes: 0,
             capacity_ticks: (num_steps as u32).saturating_mul(TICKS_PER_STEP),
         }
     }
@@ -145,40 +155,74 @@ impl ChannelPattern {
         Some(self.notes.remove(index))
     }
 
+    /// Empty the channel, keeping every slot's point storage: this runs on
+    /// the audio thread (Add Channel clears the seat across the bank).
     pub fn clear(&mut self) {
         self.notes.clear();
-        self.lanes.clear();
+        for lane in &mut self.lanes[..self.open_lanes] {
+            lane.vacate();
+        }
+        self.open_lanes = 0;
     }
 
     pub fn lanes(&self) -> &[AutomationLane] {
-        &self.lanes
+        &self.lanes[..self.open_lanes]
     }
 
     pub fn lane(&self, target: ParamAddr) -> Option<&AutomationLane> {
-        self.lanes.iter().find(|lane| lane.target == target)
+        self.lanes().iter().find(|lane| lane.target == target)
     }
 
     pub fn lane_mut(&mut self, target: ParamAddr) -> Option<&mut AutomationLane> {
-        self.lanes.iter_mut().find(|lane| lane.target == target)
+        self.lanes[..self.open_lanes]
+            .iter_mut()
+            .find(|lane| lane.target == target)
     }
 
-    /// Open the lane for `target`, or return the existing one. `None` when the
-    /// preallocated lane storage is full, which never reallocates on the audio
-    /// thread.
-    pub fn open_lane(&mut self, target: ParamAddr) -> Option<&mut AutomationLane> {
-        if let Some(index) = self.lanes.iter().position(|lane| lane.target == target) {
+    /// Open the lane for `target`, or return the existing one. `None` when all
+    /// [`MAX_AUTOMATION_LANES_PER_CHANNEL`] slots are open.
+    ///
+    /// Runs on the audio thread and does not free. It allocates only when the
+    /// slot it lands on has never held a lane *and* `pool` is empty; see
+    /// [`LanePool`].
+    pub fn open_lane(
+        &mut self,
+        target: ParamAddr,
+        pool: &mut LanePool,
+    ) -> Option<&mut AutomationLane> {
+        if let Some(index) = self.lanes()
+            .iter()
+            .position(|lane| lane.target == target)
+        {
             return self.lanes.get_mut(index);
         }
-        if self.lanes.len() == self.lanes.capacity() {
+        if self.open_lanes == self.lanes.len() {
             return None;
         }
-        self.lanes.push(AutomationLane::new(target));
-        self.lanes.last_mut()
+        let index = self.open_lanes;
+        self.lanes[index].claim(target, pool);
+        self.open_lanes += 1;
+        self.lanes.get_mut(index)
     }
 
-    pub fn remove_lane(&mut self, target: ParamAddr) -> Option<AutomationLane> {
-        let index = self.lanes.iter().position(|lane| lane.target == target)?;
-        Some(self.lanes.remove(index))
+    /// Close the lane driving `target`, answering whether there was one.
+    ///
+    /// The slot keeps its point storage and moves to the end of the bank, so
+    /// the open prefix stays in the order the picker lists it and nothing is
+    /// freed on the audio thread.
+    pub fn remove_lane(&mut self, target: ParamAddr) -> bool {
+        let Some(index) = self.lanes().iter().position(|lane| lane.target == target) else {
+            return false;
+        };
+        self.close_slot(index);
+        true
+    }
+
+    /// Vacate slot `index` of the open prefix and shift the rest down.
+    fn close_slot(&mut self, index: usize) {
+        self.lanes[index].vacate();
+        self.lanes[index..self.open_lanes].rotate_left(1);
+        self.open_lanes -= 1;
     }
 
     /// Drop the lanes driving `device` in `scope`, because that device has
@@ -192,18 +236,35 @@ impl ChannelPattern {
         scope: crate::EffectTarget,
         device: crate::DeviceId,
     ) -> bool {
-        crate::structure::drop_lanes_for_device(&mut self.lanes, scope, device)
+        let before = self.open_lanes;
+        let mut index = 0;
+        while index < self.open_lanes {
+            if crate::structure::lane_drives_device(&self.lanes[index], scope, device) {
+                self.close_slot(index);
+            } else {
+                index += 1;
+            }
+        }
+        self.open_lanes != before
     }
 
     /// Replace the whole lane set. Used by project load, which is the only
     /// caller allowed to allocate.
     pub fn set_lanes(&mut self, lanes: Vec<AutomationLane>) {
-        self.lanes.clear();
-        for mut lane in lanes.into_iter().take(MAX_AUTOMATION_LANES_PER_CHANNEL) {
+        self.open_lanes = 0;
+        for (index, mut lane) in lanes
+            .into_iter()
+            .take(MAX_AUTOMATION_LANES_PER_CHANNEL)
+            .enumerate()
+        {
             // This is the caller allowed to allocate, and a lane arriving
             // from a decode or a clone has none of its preallocation left.
             lane.reserve_points();
-            self.lanes.push(lane);
+            self.lanes[index] = lane;
+            self.open_lanes = index + 1;
+        }
+        for lane in &mut self.lanes[self.open_lanes..] {
+            lane.vacate();
         }
     }
 
@@ -216,7 +277,7 @@ impl ChannelPattern {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.notes.is_empty() && self.lanes.iter().all(AutomationLane::is_empty)
+        self.notes.is_empty() && self.lanes().iter().all(AutomationLane::is_empty)
     }
 }
 

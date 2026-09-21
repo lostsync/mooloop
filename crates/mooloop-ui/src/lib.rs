@@ -1422,6 +1422,68 @@ fn record_project_history(
     sync_command_availability(window, &commands.borrow());
 }
 
+/// Snapshot, run one console or rack verb, and record the undo entry for it.
+///
+/// Eleven mixer verbs -- mute, volume, pan, bus pick, console on, polarity,
+/// solo -- sent their command and dirtied the document without recording
+/// anything, so a later undo installed a snapshot taken before them and put
+/// every one of them back (`reports/fable-2026-09-21.md`, finding 7). `edit`
+/// answers whether anything actually changed; a refused verb records nothing.
+fn with_project_history(
+    state: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    window: &MainWindow,
+    label: &'static str,
+    edit: impl FnOnce() -> bool,
+) {
+    let before = project_snapshot(&state.borrow(), window);
+    if !edit() {
+        return;
+    }
+    record_project_history(commands, before, state, window, label);
+}
+
+/// How long after a fader's last move frame the next one still belongs to the
+/// same drag. A move frame arrives every few milliseconds while the pointer
+/// is down; a second grab of the same fader is a person, and slower.
+const CONTINUOUS_GESTURE_GAP: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// [`with_project_history`] for a control that reports an edit on every move
+/// frame: a fader or a pan knob.
+///
+/// The undo history collapses consecutive entries stamped with one gesture
+/// token (`History::record`), and the mixer faces have no press/release
+/// callback to bracket a drag with -- adding one crosses the Slint face
+/// contract, which `docs/LOOSE_ENDS.md` records as the follow-up. Until then
+/// the bracket is time: `last` is that control's own cell, so two faders
+/// dragged in turn never collapse into each other.
+#[allow(clippy::too_many_arguments)]
+fn with_continuous_history(
+    state: &Rc<RefCell<UiState>>,
+    commands: &Rc<RefCell<CommandState>>,
+    window: &MainWindow,
+    label: &'static str,
+    last: &std::cell::Cell<Option<std::time::Instant>>,
+    edit: impl FnOnce() -> bool,
+) {
+    let now = std::time::Instant::now();
+    let continuing = last
+        .get()
+        .is_some_and(|at| now.duration_since(at) < CONTINUOUS_GESTURE_GAP);
+    {
+        let mut open = commands.borrow_mut();
+        if !continuing {
+            open.next_gesture = open.next_gesture.wrapping_add(1);
+        }
+        open.gesture = Some(open.next_gesture);
+    }
+    last.set(Some(now));
+    with_project_history(state, commands, window, label, edit);
+    // Left in flight it would collapse the *next* unrelated edit into this
+    // drag, which is the failure the token exists to prevent.
+    commands.borrow_mut().gesture = None;
+}
+
 /// Append a channel, show it, tell the engine about it, and record the undo
 /// entry for it.
 ///
@@ -1510,6 +1572,17 @@ fn queue_channel_insert(
         return false;
     }
     let mut channel = clipboard.channel;
+    // **A paste carries no foreign input picks.** Both fields name something
+    // in the document the channel was copied *from*: paste into another song
+    // and the same numbers name whatever that song happens to have there, so
+    // a pasted channel arrived listening to a stranger
+    // (`reports/fable-2026-09-21.md`, finding 7). Cleared on every paste
+    // rather than only across documents, because the same-song case is not
+    // sound either -- `rescope_after` renumbers routes and lanes and does not
+    // touch these (`docs/LOOSE_ENDS.md`, "A pasted channel's inputs"). The
+    // status message says so, so the pick is re-made deliberately.
+    channel.setup.channel.audio_input = mooloop_core::AudioInputSource::Off;
+    channel.setup.channel.midi_input = mooloop_core::midi::ChannelMidiInput::default();
     channel
         .notes
         .resize_with(project.pattern_lengths.len(), Vec::new);
@@ -8210,13 +8283,19 @@ impl AppUi {
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
             window.on_channel_muted(move |ch| {
-                let mut st = st.borrow_mut();
-                let Some(command) = st.session.toggle_channel_mute(ch) else {
-                    return;
-                };
-                st.sync_row_flags();
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_project_history(&st, &commands, &window, "Mute Channel", || {
+                    let mut st = st.borrow_mut();
+                    let Some(command) = st.session.toggle_channel_mute(ch) else {
+                        return false;
+                    };
+                    st.sync_row_flags();
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
 
@@ -8225,35 +8304,53 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
+            let commands = command_state.clone();
+            let last = std::cell::Cell::new(None);
             window.on_channel_volume_changed(move |ch, volume| {
-                let mut st = st.borrow_mut();
-                let Some(command) = st.session.set_channel_volume(ch, volume) else {
-                    return;
-                };
-                st.sync_row_flags();
-                // The source device's output-trim knob is the same parameter;
-                // restate it or its readout freezes at whatever the channel
-                // had when it was selected.
-                if ch as usize == st.session.selected {
-                    if let Some(w) = weak.upgrade() {
-                        w.set_selected_channel_volume_db(linear_to_db(
-                            st.session.channels[st.session.selected].volume,
-                        ));
-                    }
-                }
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_continuous_history(
+                    &st,
+                    &commands,
+                    &window,
+                    "Channel Volume",
+                    &last,
+                    || {
+                        let mut st = st.borrow_mut();
+                        let Some(command) = st.session.set_channel_volume(ch, volume) else {
+                            return false;
+                        };
+                        st.sync_row_flags();
+                        // The source device's output-trim knob is the same
+                        // parameter; restate it or its readout freezes at
+                        // whatever the channel had when it was selected.
+                        if ch as usize == st.session.selected {
+                            window.set_selected_channel_volume_db(linear_to_db(
+                                st.session.channels[st.session.selected].volume,
+                            ));
+                        }
+                        let _ = tx.send(command);
+                        true
+                    },
+                );
             });
         }
         {
             let tx = cmd_tx.clone();
             let st = state.clone();
+            let commands = command_state.clone();
+            let weak = window.as_weak();
+            let last = std::cell::Cell::new(None);
             window.on_channel_pan_changed(move |ch, pan| {
-                let mut st = st.borrow_mut();
-                let Some(command) = st.session.set_channel_pan(ch, pan) else {
-                    return;
-                };
-                st.sync_row_flags();
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_continuous_history(&st, &commands, &window, "Channel Pan", &last, || {
+                    let mut st = st.borrow_mut();
+                    let Some(command) = st.session.set_channel_pan(ch, pan) else {
+                        return false;
+                    };
+                    st.sync_row_flags();
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
 
@@ -8522,16 +8619,19 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             let st = state.clone();
+            let commands = command_state.clone();
             window.on_bus_muted(move |bus| {
-                let mut guard = st.borrow_mut();
-                let Some(command) = guard.session.toggle_bus_mute(bus) else {
-                    return;
-                };
-                guard.sync_mixer_strip(bus as usize);
-                if let Some(w) = weak.upgrade() {
-                    guard.sync_bus_editor(&w);
-                }
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_project_history(&st, &commands, &window, "Mute Bus", || {
+                    let mut guard = st.borrow_mut();
+                    let Some(command) = guard.session.toggle_bus_mute(bus) else {
+                        return false;
+                    };
+                    guard.sync_mixer_strip(bus as usize);
+                    guard.sync_bus_editor(&window);
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
 
@@ -8570,16 +8670,20 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             let st = state.clone();
+            let commands = command_state.clone();
+            let last = std::cell::Cell::new(None);
             window.on_bus_volume_changed(move |bus, volume| {
-                let mut guard = st.borrow_mut();
-                let Some(command) = guard.session.set_bus_volume(bus, volume) else {
-                    return;
-                };
-                guard.sync_mixer_strip(bus as usize);
-                if let Some(w) = weak.upgrade() {
-                    guard.sync_bus_editor(&w);
-                }
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_continuous_history(&st, &commands, &window, "Bus Volume", &last, || {
+                    let mut guard = st.borrow_mut();
+                    let Some(command) = guard.session.set_bus_volume(bus, volume) else {
+                        return false;
+                    };
+                    guard.sync_mixer_strip(bus as usize);
+                    guard.sync_bus_editor(&window);
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
 
@@ -8587,16 +8691,20 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             let st = state.clone();
+            let commands = command_state.clone();
+            let last = std::cell::Cell::new(None);
             window.on_bus_pan_changed(move |bus, pan| {
-                let mut guard = st.borrow_mut();
-                let Some(command) = guard.session.set_bus_pan(bus, pan) else {
-                    return;
-                };
-                guard.sync_mixer_strip(bus as usize);
-                if let Some(w) = weak.upgrade() {
-                    guard.sync_bus_editor(&w);
-                }
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_continuous_history(&st, &commands, &window, "Bus Pan", &last, || {
+                    let mut guard = st.borrow_mut();
+                    let Some(command) = guard.session.set_bus_pan(bus, pan) else {
+                        return false;
+                    };
+                    guard.sync_mixer_strip(bus as usize);
+                    guard.sync_bus_editor(&window);
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
 
@@ -8606,18 +8714,22 @@ impl AppUi {
             // `sync_track_graph` derives and installs both.
             let weak = window.as_weak();
             let st = state.clone();
+            let commands = command_state.clone();
             window.on_bus_output_changed(move |bus, output| {
+                let Some(window) = weak.upgrade() else { return };
+                with_project_history(&st, &commands, &window, "Bus Output", || {
                 let mut guard = st.borrow_mut();
                 match guard.session.set_bus_output(bus, output) {
                     Some(Ok(())) => {
                         // Every strip's legal destinations move when an edge does.
-                        if let Some(w) = weak.upgrade() {
-                            guard.sync_mixer(&w);
+                        {
+                            let w = &window;
+                            guard.sync_mixer(w);
                             // The session marks the edit; the title is
                             // refreshed here because this no longer travels
                             // through the pump's command drain, which is what
                             // used to do it.
-                            guard.update_document_title(&w);
+                            guard.update_document_title(w);
                         }
                         // The schedule itself is not sent from here any more:
                         // it travels with the sends that ride on it, which
@@ -8625,18 +8737,19 @@ impl AppUi {
                         // `sync_track_graph` derives and installs both.
                     }
                     Some(Err(refused)) => {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_status_message(
-                                format!(
-                                    "{} already feeds this bus - routing would loop",
-                                    refused.feeder
-                                )
-                                .into(),
-                            );
-                        }
+                        window.set_status_message(
+                            format!(
+                                "{} already feeds this bus - routing would loop",
+                                refused.feeder
+                            )
+                            .into(),
+                        );
+                        return false;
                     }
-                    None => {}
+                    None => return false,
                 }
+                true
+                });
             });
         }
 
@@ -8796,17 +8909,20 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             let st = state.clone();
+            let commands = command_state.clone();
             window.on_channel_bus_changed(move |channel, bus| {
-                let mut guard = st.borrow_mut();
-                let Some(command) = guard.session.set_channel_bus(channel, bus) else {
-                    return;
-                };
-                guard.sync_row_flags();
-                // Feed counts moved, so both the old and new bus restate them.
-                if let Some(w) = weak.upgrade() {
-                    guard.sync_mixer(&w);
-                }
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_project_history(&st, &commands, &window, "Channel Output", || {
+                    let mut guard = st.borrow_mut();
+                    let Some(command) = guard.session.set_channel_bus(channel, bus) else {
+                        return false;
+                    };
+                    guard.sync_row_flags();
+                    // Feed counts moved, so the old and new bus both restate.
+                    guard.sync_mixer(&window);
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
 
@@ -8818,20 +8934,23 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             let st = state.clone();
+            let commands = command_state.clone();
             window.on_bus_console_toggled(move |bus| {
-                let mut guard = st.borrow_mut();
-                let Some(command) = guard.session.toggle_bus_console(bus) else {
-                    return;
-                };
-                guard.session.dirty = true;
-                if let Some(w) = weak.upgrade() {
-                    guard.sync_mixer(&w);
+                let Some(window) = weak.upgrade() else { return };
+                with_project_history(&st, &commands, &window, "Console Sum", || {
+                    let mut guard = st.borrow_mut();
+                    let Some(command) = guard.session.toggle_bus_console(bus) else {
+                        return false;
+                    };
+                    guard.session.dirty = true;
+                    guard.sync_mixer(&window);
                     // The bus device face carries the same switch, so it has
                     // to restate it -- the toggle can be thrown from either.
-                    guard.sync_bus_editor(&w);
-                    guard.update_document_title(&w);
-                }
-                let _ = tx.send(command);
+                    guard.sync_bus_editor(&window);
+                    guard.update_document_title(&window);
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
 
@@ -8841,18 +8960,21 @@ impl AppUi {
             let tx = cmd_tx.clone();
             let weak = window.as_weak();
             let st = state.clone();
+            let commands = command_state.clone();
             window.on_bus_polarity_toggled(move |bus| {
-                let mut guard = st.borrow_mut();
-                let Some(command) = guard.session.toggle_track_polarity(bus) else {
-                    return;
-                };
-                guard.session.dirty = true;
-                if let Some(w) = weak.upgrade() {
-                    guard.sync_mixer(&w);
-                    guard.sync_bus_editor(&w);
-                    guard.update_document_title(&w);
-                }
-                let _ = tx.send(command);
+                let Some(window) = weak.upgrade() else { return };
+                with_project_history(&st, &commands, &window, "Polarity", || {
+                    let mut guard = st.borrow_mut();
+                    let Some(command) = guard.session.toggle_track_polarity(bus) else {
+                        return false;
+                    };
+                    guard.session.dirty = true;
+                    guard.sync_mixer(&window);
+                    guard.sync_bus_editor(&window);
+                    guard.update_document_title(&window);
+                    let _ = tx.send(command);
+                    true
+                });
             });
         }
 
@@ -8864,16 +8986,19 @@ impl AppUi {
         {
             let weak = window.as_weak();
             let st = state.clone();
+            let commands = command_state.clone();
             window.on_bus_solo_toggled(move |bus| {
-                let mut guard = st.borrow_mut();
-                if !guard.session.toggle_track_solo(bus) {
-                    return;
-                }
-                if let Some(w) = weak.upgrade() {
-                    guard.sync_mixer(&w);
-                    guard.sync_bus_editor(&w);
-                    guard.update_document_title(&w);
-                }
+                let Some(window) = weak.upgrade() else { return };
+                with_project_history(&st, &commands, &window, "Solo", || {
+                    let mut guard = st.borrow_mut();
+                    if !guard.session.toggle_track_solo(bus) {
+                        return false;
+                    }
+                    guard.sync_mixer(&window);
+                    guard.sync_bus_editor(&window);
+                    guard.update_document_title(&window);
+                    true
+                });
             });
         }
 

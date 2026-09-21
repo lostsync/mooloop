@@ -686,12 +686,11 @@ impl Session {
     ) -> bool {
         match message {
             PendingEngineMessage::Command(command) => {
-                // Transport is not an edit: starting playback must not make
-                // an untouched document look unsaved.
-                let edits = !matches!(
-                    command,
-                    EngineCommand::Play | EngineCommand::Pause | EngineCommand::Stop
-                );
+                // Transport and record-arm are not edits: neither may make an
+                // untouched document look unsaved. The list lives on the
+                // command, so the UI's copy of the rule and this one cannot
+                // disagree again.
+                let edits = command.edits_document();
                 // A one-shot edit has no mirror to retry from, so a refusal
                 // here is divergence the next tick cannot repair -- which is
                 // precisely why it gets said out loud.
@@ -790,6 +789,7 @@ impl Session {
             return;
         }
         self.engine_queue_refused = true;
+        self.engine_refusals_reported = self.engine_refusals_reported.saturating_add(1);
         log_error!(
             "engine",
             "the command queue refused {what}. Reconciled state -- routing, \
@@ -868,6 +868,32 @@ impl Session {
 mod tests {
     use super::*;
     use mooloop_core::{PatternPlacement, BEATS_PER_BAR, TICKS_PER_BAR, TICKS_PER_STEP};
+
+    /// **A second song gets its own first refusal.** The latch that stops a
+    /// burst of identical lines used to be set for the life of the process
+    /// and cleared nowhere, so the first full ring was reported and every
+    /// later one -- on this document or any other opened after it -- diverged
+    /// in silence (`reports/fable-2026-09-21.md`, finding 8).
+    ///
+    /// On the unfixed tree the second call reports nothing and this counts 1.
+    #[test]
+    fn a_refusal_is_reported_again_for_the_next_document() {
+        let mut session = Session::default();
+
+        session.report_refused_command("a parameter change");
+        session.report_refused_command("a parameter change");
+        assert_eq!(
+            session.engine_refusals_reported, 1,
+            "a burst inside one document should be reported once"
+        );
+
+        session.replace_project(&mooloop_core::Project::default(), &[]);
+        session.report_refused_command("a parameter change");
+        assert_eq!(
+            session.engine_refusals_reported, 2,
+            "the new document's first refusal was swallowed by the old one's latch"
+        );
+    }
 
     /// A load keeps what is addressed to the machine and drops what is
     /// addressed to the outgoing project -- including a routing table, which

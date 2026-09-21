@@ -439,6 +439,31 @@ pub enum EngineCommand {
     ReleaseBuffer { target: EffectTarget, slot: u8 },
 }
 
+impl EngineCommand {
+    /// Whether sending this command means the document has been edited, and
+    /// so should take its `*` and ask about saving on quit.
+    ///
+    /// **This is the only copy of the rule.** It used to be an inline
+    /// `matches!` of three transport variants inside
+    /// `Session::apply_engine_message`, with the rule itself written a second
+    /// time as a comment beside the record-arm handler in the UI -- which
+    /// said that arming "must not make an untouched document look unsaved,
+    /// the same rule the transport commands already follow" while the list
+    /// that decides it had never heard of `SetRecordArmed`. Arming and
+    /// disarming dirtied every clean document
+    /// (`reports/fable-2026-09-21.md`, finding 6).
+    ///
+    /// What belongs on the `false` side is a command that changes what the
+    /// engine is *doing* rather than what the project *is*: nothing here is
+    /// saved in the document, so nothing here can make a saved one stale.
+    pub fn edits_document(self) -> bool {
+        !matches!(
+            self,
+            Self::Play | Self::Pause | Self::Stop | Self::SetRecordArmed(_)
+        )
+    }
+}
+
 /// audio -> GUI. Pushed sparingly (a few times per block at most) and drained
 /// by a timer on the UI thread.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -492,4 +517,42 @@ pub enum EngineEvent {
         start_tick: u32,
         length_ticks: u32,
     },
+}
+
+#[cfg(test)]
+mod edits_document_tests {
+    use super::*;
+
+    /// **Arming record is not an edit.** The UI's record-arm handler says so
+    /// in a comment -- "must not make an untouched document look unsaved" --
+    /// and the list that decided it named only `Play`, `Pause` and `Stop`, so
+    /// arming and disarming took the title's `*` and made quit ask about a
+    /// document nothing had changed (`reports/fable-2026-09-21.md`,
+    /// finding 6).
+    ///
+    /// On the unfixed tree the expression this replaces --
+    /// `!matches!(command, Play | Pause | Stop)` in
+    /// `Session::apply_engine_message` -- answers `true` for both of these.
+    #[test]
+    fn arming_record_does_not_edit_the_document() {
+        assert!(!EngineCommand::SetRecordArmed(true).edits_document());
+        assert!(!EngineCommand::SetRecordArmed(false).edits_document());
+    }
+
+    /// The three that were already right, kept honest: a list is only as good
+    /// as the entries nobody re-checks.
+    #[test]
+    fn starting_playback_does_not_edit_the_document() {
+        assert!(!EngineCommand::Play.edits_document());
+        assert!(!EngineCommand::Pause.edits_document());
+        assert!(!EngineCommand::Stop.edits_document());
+    }
+
+    /// And the other side of it: a command that changes what the project *is*
+    /// still dirties, or the predicate would be a way to lose work.
+    #[test]
+    fn changing_the_tempo_edits_the_document() {
+        assert!(EngineCommand::SetTempo(128.0).edits_document());
+        assert!(EngineCommand::SetSwing(60).edits_document());
+    }
 }
