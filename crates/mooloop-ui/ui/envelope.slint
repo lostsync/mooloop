@@ -113,6 +113,14 @@ export component EnvelopeEditor inherits Rectangle {
         width: parent.width - 16px;
         height: parent.height - 16px;
 
+        // Shared by all three handles below. Taking focus on grab, the same
+        // as `ParameterKnob` and its siblings, blurs and closes a still-open
+        // text-field gesture before a handle's `Gesture.begin()` would
+        // otherwise force it shut.
+        keyboard := FocusScope {
+            focus-on-click: false;
+        }
+
         // Level guides at 25/50/75%.
         for line[i] in [0.25, 0.5, 0.75] : Rectangle {
             y: parent.height * line;
@@ -189,6 +197,7 @@ export component EnvelopeEditor inherits Rectangle {
                 y: -5px;
                 pointer-event(e) => {
                     if (e.kind == PointerEventKind.down) {
+                        keyboard.focus();
                         root.active-handle = 0;
                         Gesture.begin();
                     } else if (e.kind == PointerEventKind.up) {
@@ -221,6 +230,7 @@ export component EnvelopeEditor inherits Rectangle {
                 y: -5px;
                 pointer-event(e) => {
                     if (e.kind == PointerEventKind.down) {
+                        keyboard.focus();
                         root.active-handle = 1;
                         Gesture.begin();
                     } else if (e.kind == PointerEventKind.up) {
@@ -256,6 +266,7 @@ export component EnvelopeEditor inherits Rectangle {
                 y: -5px;
                 pointer-event(e) => {
                     if (e.kind == PointerEventKind.down) {
+                        keyboard.focus();
                         root.active-handle = 2;
                         Gesture.begin();
                     } else if (e.kind == PointerEventKind.up) {

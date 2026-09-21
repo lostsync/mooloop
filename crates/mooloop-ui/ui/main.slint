@@ -466,6 +466,10 @@ component PlaylistLoopHandle inherits Rectangle {
 
     TouchArea {
         mouse-cursor: ew-resize;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) { Gesture.begin(); }
+            else if (e.kind == PointerEventKind.up) { Gesture.end(); }
+        }
         moved => {
             if (self.pressed) { root.moved(self.mouse-x + root.x); }
         }
