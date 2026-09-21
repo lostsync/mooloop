@@ -62,7 +62,10 @@ export component DraggablePoint inherits TouchArea {
     mouse-cursor: MouseCursor.crosshair;
     pointer-event(e) => {
         if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+            Gesture.begin();
             root.grabbed();
+        } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) {
+            Gesture.end();
         }
     }
     // The point moves with the bound parameter during a drag. Relative-to-
@@ -72,7 +75,9 @@ export component DraggablePoint inherits TouchArea {
         root.dragged((self.mouse-x - self.pressed-x) / 1px, (self.mouse-y - self.pressed-y) / 1px);
     }
     scroll-event(e) => {
+        Gesture.begin();
         root.scrolled(e.delta-y / 1px);
+        Gesture.end();
         accept
     }
 
@@ -874,6 +879,7 @@ export component ParameterKnob inherits Rectangle {
                 root.modulation-edited = false;
                 root.fine-drag = e.modifiers.control || e.modifiers.shift;
                 if (root.assign-active) { root.modulation-edit-started(); }
+                else { Gesture.begin(); }
             } else if (e.kind == PointerEventKind.move && self.pressed) {
                 // Measured from the press rather than from the last event, so
                 // a control whose own position follows its value cannot feed
@@ -886,8 +892,17 @@ export component ParameterKnob inherits Rectangle {
                 } else {
                     root.set-normalized(root.pressed-normalized + travel);
                 }
-            } else if (e.kind == PointerEventKind.up && root.modulation-active && root.modulation-edited) {
-                root.modulation-edit-finished();
+            } else if (e.kind == PointerEventKind.up) {
+                // Naming a control is not a value edit, so a learn press
+                // closes nothing -- the same rule `MiniKnob` states, and the
+                // reason the two pairs cannot be merged.
+                if (root.assign-active) {
+                    if (root.modulation-active && root.modulation-edited) {
+                        root.modulation-edit-finished();
+                    }
+                } else {
+                    Gesture.end();
+                }
             }
         }
         double-clicked => {
@@ -900,16 +915,23 @@ export component ParameterKnob inherits Rectangle {
                 root.set-modulation-depth(0);
                 if (root.modulation-edited) { root.modulation-edit-finished(); }
             } else {
+                Gesture.begin();
                 let reset = clamp(root.default-value, root.minimum, root.maximum);
                 if (!root.controlled) { root.value = reset; }
                 root.changed(reset);
+                Gesture.end();
             }
         }
         scroll-event(e) => {
             if (root.modulation-active) { root.modulation-edit-started(); root.modulation-edited = false; }
+            else { Gesture.begin(); }
             root.set-normalized(root.normalized
                 - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px));
-            if (root.modulation-active && root.modulation-edited) { root.modulation-edit-finished(); }
+            if (root.modulation-active) {
+                if (root.modulation-edited) { root.modulation-edit-finished(); }
+            } else {
+                Gesture.end();
+            }
             accept
         }
     }
@@ -919,15 +941,25 @@ export component ParameterKnob inherits Rectangle {
         key-pressed(e) => {
             if (e.text == Key.UpArrow || e.text == Key.RightArrow) {
                 if (root.modulation-active) { root.modulation-edit-started(); root.modulation-edited = false; }
+                else { Gesture.begin(); }
                 root.set-normalized(root.normalized
                     + ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01));
-                if (root.modulation-active && root.modulation-edited) { root.modulation-edit-finished(); }
+                if (root.modulation-active) {
+                    if (root.modulation-edited) { root.modulation-edit-finished(); }
+                } else {
+                    Gesture.end();
+                }
                 accept
             } else if (e.text == Key.DownArrow || e.text == Key.LeftArrow) {
                 if (root.modulation-active) { root.modulation-edit-started(); root.modulation-edited = false; }
+                else { Gesture.begin(); }
                 root.set-normalized(root.normalized
                     - ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01));
-                if (root.modulation-active && root.modulation-edited) { root.modulation-edit-finished(); }
+                if (root.modulation-active) {
+                    if (root.modulation-edited) { root.modulation-edit-finished(); }
+                } else {
+                    Gesture.end();
+                }
                 accept
             } else { reject }
         }
@@ -1386,17 +1418,23 @@ export component ParameterFader inherits Rectangle {
                         fader-keyboard.focus();
                         root.pressed-normalized = root.normalized;
                         root.fine-drag = e.modifiers.control || e.modifiers.shift;
+                        Gesture.begin();
                         if (!root.fine-drag) { root.set-normalized(self.mouse-x / self.width); }
                     } else if (e.kind == PointerEventKind.move && self.pressed) {
                         root.set-normalized(root.fine-drag
                             ? root.pressed-normalized + (self.mouse-x - self.pressed-x) / 5000px
                             : self.mouse-x / self.width);
+                    } else if (e.kind == PointerEventKind.up) {
+                        Gesture.end();
                     }
                 }
-                double-clicked => { root.value = clamp(root.default-value, root.minimum, root.maximum); root.changed(root.value); }
+                double-clicked => { Gesture.begin(); root.value = clamp(root.default-value, root.minimum, root.maximum); root.changed(root.value); Gesture.end(); }
                 scroll-event(e) => {
+                    Gesture.begin();
                     root.set-normalized(root.normalized
-                        - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px)); accept
+                        - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px));
+                    Gesture.end();
+                    accept
                 }
             }
         }
@@ -1445,17 +1483,23 @@ export component ParameterFader inherits Rectangle {
                         fader-keyboard.focus();
                         root.pressed-normalized = root.normalized;
                         root.fine-drag = e.modifiers.control || e.modifiers.shift;
+                        Gesture.begin();
                         if (!root.fine-drag) { root.set-normalized(1 - self.mouse-y / self.height); }
                     } else if (e.kind == PointerEventKind.move && self.pressed) {
                         root.set-normalized(root.fine-drag
                             ? root.pressed-normalized + (self.pressed-y - self.mouse-y) / 5000px
                             : 1 - self.mouse-y / self.height);
+                    } else if (e.kind == PointerEventKind.up) {
+                        Gesture.end();
                     }
                 }
-                double-clicked => { root.value = clamp(root.default-value, root.minimum, root.maximum); root.changed(root.value); }
+                double-clicked => { Gesture.begin(); root.value = clamp(root.default-value, root.minimum, root.maximum); root.changed(root.value); Gesture.end(); }
                 scroll-event(e) => {
+                    Gesture.begin();
                     root.set-normalized(root.normalized
-                        - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px)); accept
+                        - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px));
+                    Gesture.end();
+                    accept
                 }
             }
         }
@@ -1465,11 +1509,17 @@ export component ParameterFader inherits Rectangle {
         focus-on-click: false;
         key-pressed(e) => {
             if (e.text == Key.UpArrow || e.text == Key.RightArrow) {
+                Gesture.begin();
                 root.set-normalized(root.normalized
-                    + ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01)); accept
+                    + ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01));
+                Gesture.end();
+                accept
             } else if (e.text == Key.DownArrow || e.text == Key.LeftArrow) {
+                Gesture.begin();
                 root.set-normalized(root.normalized
-                    - ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01)); accept
+                    - ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01));
+                Gesture.end();
+                accept
             } else { reject }
         }
     }
@@ -2441,12 +2491,16 @@ export component MixerFader inherits Rectangle {
                 }
             }
             double-clicked => {
+                Gesture.begin();
                 root.value = clamp(root.default-value, root.minimum, root.maximum);
                 root.changed(root.value);
+                Gesture.end();
             }
             scroll-event(e) => {
+                Gesture.begin();
                 root.set-normalized(root.normalized
                     - e.delta-y / ((e.modifiers.control || e.modifiers.shift) ? 5000px : 600px));
+                Gesture.end();
                 accept
             }
         }
@@ -2457,11 +2511,17 @@ export component MixerFader inherits Rectangle {
         focus-on-click: false;
         key-pressed(e) => {
             if (e.text == Key.UpArrow || e.text == Key.RightArrow) {
+                Gesture.begin();
                 root.set-normalized(root.normalized
-                    + ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01)); accept
+                    + ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01));
+                Gesture.end();
+                accept
             } else if (e.text == Key.DownArrow || e.text == Key.LeftArrow) {
+                Gesture.begin();
                 root.set-normalized(root.normalized
-                    - ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01)); accept
+                    - ((e.modifiers.control || e.modifiers.shift) ? 0.0002 : 0.01));
+                Gesture.end();
+                accept
             } else { reject }
         }
     }

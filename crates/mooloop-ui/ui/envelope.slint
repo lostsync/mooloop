@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { Gesture } from "controls.slint";
 
 // Graphical ADSR editor.
 //
@@ -187,8 +188,13 @@ export component EnvelopeEditor inherits Rectangle {
                 x: -5px;
                 y: -5px;
                 pointer-event(e) => {
-                    if (e.kind == PointerEventKind.down) { root.active-handle = 0; }
-                    else if (e.kind == PointerEventKind.up) { root.active-handle = -1; }
+                    if (e.kind == PointerEventKind.down) {
+                        root.active-handle = 0;
+                        Gesture.begin();
+                    } else if (e.kind == PointerEventKind.up) {
+                        root.active-handle = -1;
+                        Gesture.end();
+                    }
                 }
                 moved => {
                     root.drag-attack((self.mouse-x - self.pressed-x)
@@ -214,8 +220,13 @@ export component EnvelopeEditor inherits Rectangle {
                 x: -5px;
                 y: -5px;
                 pointer-event(e) => {
-                    if (e.kind == PointerEventKind.down) { root.active-handle = 1; }
-                    else if (e.kind == PointerEventKind.up) { root.active-handle = -1; }
+                    if (e.kind == PointerEventKind.down) {
+                        root.active-handle = 1;
+                        Gesture.begin();
+                    } else if (e.kind == PointerEventKind.up) {
+                        root.active-handle = -1;
+                        Gesture.end();
+                    }
                 }
                 // This handle owns two parameters: decay time on x, sustain
                 // level on y, which is how the corner actually behaves.
@@ -244,8 +255,13 @@ export component EnvelopeEditor inherits Rectangle {
                 x: -5px;
                 y: -5px;
                 pointer-event(e) => {
-                    if (e.kind == PointerEventKind.down) { root.active-handle = 2; }
-                    else if (e.kind == PointerEventKind.up) { root.active-handle = -1; }
+                    if (e.kind == PointerEventKind.down) {
+                        root.active-handle = 2;
+                        Gesture.begin();
+                    } else if (e.kind == PointerEventKind.up) {
+                        root.active-handle = -1;
+                        Gesture.end();
+                    }
                 }
                 moved => {
                     root.drag-release((self.mouse-x - self.pressed-x)
