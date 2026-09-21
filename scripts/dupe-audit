@@ -751,6 +751,17 @@ def unrecorded_edit():
     verbs send their commands from `UiState::apply_step_edit`. So the closure
     body is brace-matched and followed three calls deep.
 
+    **And more callbacks are wired by a macro than by a `window.on_`.** A
+    hundred and fifty of them read
+    `wire_unit_param!(on_filter_cutoff_changed, filter_cutoff)`, whose
+    expansion is `window.$on(...)` and which no search for `window.on_` can
+    see. The first version that resolved handlers properly still reported 89
+    where the tree had 176: it called the sampler's filter, every oscillator
+    and every drum parameter clean, and would have gone on saying so after
+    this plan had missed them. Macro bodies are indexed like functions, macro
+    invocations are followed like calls, and a macro that wires through
+    another macro resolves the same way.
+
     **A name defined twice is not followed at all.** The first draft indexed
     every `fn` by name and concatenated the duplicates, so `X::new(`
     resolved to thirty unrelated constructors at once -- one of which
@@ -860,6 +871,12 @@ def unrecorded_edit():
     # sending `RemoveNote`. A receiver of `window` is markup; a receiver of
     # `st`, `state`, `guard` or `self` is ours.
     sources = {path: path.read_text() for path in sorted(ui.glob("*.rs"))}
+    macros: dict[str, str | None] = {}
+    for text in sources.values():
+        for match in re.finditer(r"macro_rules!\s+(\w+)", text):
+            found = _brace_body(text, match.end())
+            if found is not None:
+                macros[match.group(1)] = None if match.group(1) in macros else found
     helpers: dict[str, str | None] = {}
     for text in sources.values():
         for match in re.finditer(r"^(?:pub(?:\([\w:]+\))? )?fn ([a-z_][\w]*)\s*[(<]", text, re.M):
@@ -882,6 +899,9 @@ def unrecorded_edit():
     # index, and is not followed.
     free = re.compile(r"(?<![.\w:])([a-z_][\w]*)\s*\(")
     ours = re.compile(r"\b(?:st|state|guard|self|session)(?:\.session)?\.([a-z_][\w]*)\s*\(")
+    # A macro invocation, so a macro that wires through another macro is
+    # followed the same way a function that calls another function is.
+    invoked = re.compile(r"\b([a-z_][\w]*)!\s*\(")
     # A send of a command the session built carries no constructor to match,
     # which is the shape that made `navigation-sends`' first draft silent
     # against a tree it was written for: `UiState::apply_step_edit` hands
@@ -902,6 +922,7 @@ def unrecorded_edit():
         if depth:
             reachable = [(name, helpers) for name in set(free.findall(body))]
             reachable += [(name, owned) for name in set(ours.findall(body))]
+            reachable += [(name, macros) for name in set(invoked.findall(body))]
             for name, index in reachable:
                 if name in recorders or name in seen or index.get(name) is None:
                     continue
@@ -921,19 +942,39 @@ def unrecorded_edit():
         for match in re.finditer(r"^\s*(?:pure\s+)?callback ([a-z][\w-]*)", window, re.M)
     }
 
-    hits = []
-    for path, text in sources.items():
+    def wirings(text):
+        """Every (callback, handler body, offset) this file wires.
+
+        Two shapes, and **the second is the larger of the two.** A hundred
+        and fifty of these callbacks are wired by a `wire_*!` macro --
+        `wire_unit_param!(on_filter_cutoff_changed, filter_cutoff)` -- whose
+        expansion is `window.$on(...)`, which no search for `window.on_` can
+        see. A check that knew only the first shape called the sampler's
+        filter, every oscillator and every drum parameter clean, and would
+        have gone on saying so after this plan had missed them.
+        """
         for match in re.finditer(r"\bwindow\.(on_[\w]+)\s*\(", text):
-            name = match.group(1)
-            if name not in declared or name in exempt:
+            body = _brace_body(text, match.end())
+            if body is not None:
+                yield match.group(1), body, match.start()
+        for match in re.finditer(r"\b([a-z_][\w]*)!\s*\(", text):
+            body = macros.get(match.group(1))
+            if body is None:
                 continue
-            handler = _brace_body(text, match.end())
-            if handler is None:
+            for callback in re.findall(r"\b(on_[a-z0-9_]+)\b", _parens(text, match.end() - 1)):
+                yield callback, body, match.start()
+
+    hits = []
+    seen_wiring = set()
+    for path, text in sources.items():
+        for name, handler, at in wirings(text):
+            if name not in declared or name in exempt or name in seen_wiring:
                 continue
+            seen_wiring.add(name)
             records, edits = survey(handler, 3, frozenset({name}))
             if records or not edits or edits <= not_an_edit:
                 continue
-            line = text.count("\n", 0, match.start()) + 1
+            line = text.count("\n", 0, at) + 1
             hits.append(
                 (
                     f"{rel(path)}:{line}",
@@ -942,6 +983,19 @@ def unrecorded_edit():
                 )
             )
     return hits
+
+
+def _parens(text: str, start: int) -> str:
+    """The `( ... )` opening at `start`, paren-matched."""
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == "(":
+            depth += 1
+        elif text[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return text[start:]
 
 
 def balanced(text, start):

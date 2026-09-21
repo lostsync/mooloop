@@ -235,8 +235,8 @@ being read.
 
 A tenth, `unrecorded-edit`, was added 2026-09-21 with MOO-50 and
 `docs/plans/gesture-undo/`, and it is a progress bar before it is a guard:
-its count on the day it was written was eighty-nine and its finish line is
-zero. What it reports is a `MainWindow` callback whose handler changes the
+its count on the day it was written was a hundred and seventy-six and its
+finish line is zero. What it reports is a `MainWindow` callback whose handler changes the
 document without recording an undo entry -- which is worse than a missing
 feature, because undo installs a whole-project snapshot: an edit that never
 reached the history is *destroyed* by the next Ctrl+Z, with no redo path.
@@ -258,6 +258,17 @@ call is followed only where its receiver says which index it belongs to:
 that guesses fails safe in the direction that prints a zero**, which is the
 one direction a check must not fail in.
 
+**More of this program's callbacks are wired by a macro than by a
+`window.on_`, and the third draft did not know it.** A hundred and fifty read
+`wire_unit_param!(on_filter_cutoff_changed, filter_cutoff)`, expanding to
+`window.$on(...)`, which no search for `window.on_` can see. That draft
+resolved handlers correctly, was validated correctly, and reported 89 where
+the tree had 176 -- it called the sampler's filter, every oscillator and
+every drum parameter clean, and would have gone on saying so after the plan
+had missed them. **A check is only as honest as its list of places to look**,
+and this one's list was a third of the sites. Macro bodies are indexed like
+functions now and invocations followed like calls.
+
 Two things it deliberately does not do. It does not match commands by
 constructor: `UiState::apply_step_edit` sends what `Session::toggle_step`
 returned, which is the exact shape that made `navigation-sends`' first draft
@@ -268,7 +279,11 @@ function is reported as having no such rule rather than falling back to a
 list.
 
 It was validated at `4bef6dc~1`, where it reports the eleven mixer and rack
-verbs that commit went on to record, along with the four transport ones --
+verbs that commit went on to record -- and note that it passed that
+validation in the draft that could see only a third of the tree, which is
+worth knowing about validation: **a check can be right about the thing it was
+tested on and still be looking at the wrong half of the program.** Along with
+those eleven come the four transport ones --
 the predicate arrived in that same commit, which is what the no-fallback
 behaviour above looks like from the outside. At `HEAD` those eleven are
 clean. A version that could not see them would print a zero that meant
