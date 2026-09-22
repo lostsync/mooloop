@@ -161,7 +161,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   device's default name is renamed after the new one. **A pattern's name
   survived save and reload only from 2026-09-13**; before that the session
   held it and the project format had nowhere to put it, so reopening a song
-  numbered every pattern again.
+  numbered every pattern again. Cloning a pattern gives the copy its name and
+  colour, and cloning or deleting one leaves every other pattern's name on
+  that pattern; until 2026-09-22 both shifted the names after it by one.
 - Pattern and Song transport modes are independent of the visible editor.
   The playlist is a lower-pane tab, supports layered tick-addressed pattern
   instances, and remains editable while either mode plays. Clip width follows

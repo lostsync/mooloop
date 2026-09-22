@@ -1892,11 +1892,9 @@ fn queue_track_move(
     )
 }
 
-/// Duplicates pattern `index`'s length and every channel's notes for it,
-/// inserting the copy immediately after. Existing playlist placements (and
-/// `current_pattern`) keep pointing at the same pattern *content*, which
-/// means shifting any index greater than `index` up by one to follow the
-/// insertion; the new clone becomes the selected pattern, mirroring
+/// Duplicates pattern `index` immediately after itself -- see
+/// `Project::clone_pattern`, which moves every list parallel to the bank
+/// together. The new clone becomes the selected pattern, mirroring
 /// `queue_channel_insert` selecting the pasted/cloned channel.
 fn queue_pattern_clone(
     tx: &ProjectEditSender,
@@ -1911,27 +1909,13 @@ fn queue_pattern_clone(
     };
     let mut project = before.project.clone();
     let samples = before.samples.clone();
-    if project.pattern_lengths.len() >= MAX_PATTERNS || index >= project.pattern_lengths.len() {
+    if !project.clone_pattern(index) {
         return false;
     }
-    let length = project.pattern_lengths[index];
-    project.pattern_lengths.insert(index + 1, length);
-    for channel in &mut project.channels {
-        let notes = channel.notes[index].clone();
-        channel.notes.insert(index + 1, notes);
-        let automation = channel.automation[index].clone();
-        channel.automation.insert(index + 1, automation);
-    }
-    for placement in &mut project.playlist {
-        if placement.pattern as usize > index {
-            placement.pattern += 1;
-        }
-    }
-    project.current_pattern = (index + 1) as u16;
     queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
 }
 
-/// Removes pattern `index` and every channel's notes for it. Playlist
+/// Removes pattern `index` -- see `Project::remove_pattern`. Playlist
 /// placements on the removed pattern are dropped; placements on later
 /// patterns are reindexed down by one to keep pointing at the same
 /// content, mirroring the clone side of this pair.
@@ -1948,23 +1932,9 @@ fn queue_pattern_remove(
     };
     let mut project = before.project.clone();
     let samples = before.samples.clone();
-    if project.pattern_lengths.len() <= 1 || index >= project.pattern_lengths.len() {
+    if !project.remove_pattern(index) {
         return false;
     }
-    project.pattern_lengths.remove(index);
-    for channel in &mut project.channels {
-        channel.notes.remove(index);
-        channel.automation.remove(index);
-    }
-    project
-        .playlist
-        .retain(|placement| placement.pattern as usize != index);
-    for placement in &mut project.playlist {
-        if placement.pattern as usize > index {
-            placement.pattern -= 1;
-        }
-    }
-    project.current_pattern = index.min(project.pattern_lengths.len() - 1) as u16;
     queue_project_edit(tx, before, ProjectSnapshot { project, samples }, status)
 }
 

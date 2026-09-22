@@ -1007,6 +1007,82 @@ impl Default for Project {
 }
 
 impl Project {
+    /// Duplicate pattern `index` immediately after itself: its length, its
+    /// name and colour, and every channel's notes and automation for it.
+    /// Playlist placements keep pointing at the same *content*, so every
+    /// index past `index` shifts up one to follow the insertion, and the copy
+    /// becomes the current pattern. Returns `false`, changing nothing, when
+    /// the bank is full or `index` is not a pattern.
+    ///
+    /// One place for every list that runs parallel to the bank, because the
+    /// lists are only right while they move together. The interface did this
+    /// inline and left `pattern_meta` out, so cloning a pattern gave the copy
+    /// the *next* pattern's name, and every name after it slid one pattern
+    /// along.
+    pub fn clone_pattern(&mut self, index: usize) -> bool {
+        if self.pattern_lengths.len() >= crate::MAX_PATTERNS || index >= self.pattern_lengths.len()
+        {
+            return false;
+        }
+        let length = self.pattern_lengths[index];
+        self.pattern_lengths.insert(index + 1, length);
+        for channel in &mut self.channels {
+            if let Some(notes) = channel.notes.get(index).cloned() {
+                channel.notes.insert(index + 1, notes);
+            }
+            if let Some(automation) = channel.automation.get(index).cloned() {
+                channel.automation.insert(index + 1, automation);
+            }
+        }
+        // A list that stops short of `index` holds nothing for it or for
+        // anything after it: every entry past its end is the empty default
+        // (`trim_pattern_meta`), so there is nothing to copy or to shift.
+        if let Some(meta) = self.pattern_meta.get(index).cloned() {
+            self.pattern_meta.insert(index + 1, meta);
+        }
+        for placement in &mut self.playlist {
+            if usize::from(placement.pattern) > index {
+                placement.pattern += 1;
+            }
+        }
+        self.current_pattern = (index + 1) as u16;
+        true
+    }
+
+    /// Remove pattern `index`, with its name and colour and every channel's
+    /// notes and automation for it. Its playlist placements go; later ones
+    /// shift down one to keep pointing at the same content. Returns `false`,
+    /// changing nothing, when `index` is not a pattern or is the only one.
+    ///
+    /// The other half of [`Self::clone_pattern`], and it had the same hole:
+    /// the name of the pattern removed passed to the one after it.
+    pub fn remove_pattern(&mut self, index: usize) -> bool {
+        if self.pattern_lengths.len() <= 1 || index >= self.pattern_lengths.len() {
+            return false;
+        }
+        self.pattern_lengths.remove(index);
+        for channel in &mut self.channels {
+            if index < channel.notes.len() {
+                channel.notes.remove(index);
+            }
+            if index < channel.automation.len() {
+                channel.automation.remove(index);
+            }
+        }
+        if index < self.pattern_meta.len() {
+            self.pattern_meta.remove(index);
+        }
+        self.playlist
+            .retain(|placement| usize::from(placement.pattern) != index);
+        for placement in &mut self.playlist {
+            if usize::from(placement.pattern) > index {
+                placement.pattern -= 1;
+            }
+        }
+        self.current_pattern = index.min(self.pattern_lengths.len() - 1) as u16;
+        true
+    }
+
     /// Give every device in every chain -- channels and buses -- its
     /// identity, and put each chain's mint past it.
     ///
@@ -1731,6 +1807,84 @@ pub type ChannelPreset = ChannelSetup;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn named_patterns(names: &[&str]) -> Project {
+        let mut project = Project {
+            channels: vec![ProjectChannel::sampler(0, names.len()).with_id(ChannelId(0))],
+            pattern_lengths: vec![DEFAULT_STEPS; names.len()],
+            ..Project::default()
+        };
+        project.pattern_meta = names
+            .iter()
+            .map(|name| PatternMeta {
+                name: (*name).into(),
+                ..PatternMeta::default()
+            })
+            .collect();
+        for (index, _) in names.iter().enumerate() {
+            project.channels[0].notes[index].push(NoteEvent::new(index as u32 + 1, 0, 24, 60, 100));
+            project.playlist.push(crate::PatternPlacement::new(index as u8, index as u32 * 384));
+        }
+        project
+    }
+
+    fn names(project: &Project) -> Vec<&str> {
+        project.pattern_meta.iter().map(|meta| meta.name.as_str()).collect()
+    }
+
+    /// A pattern's name and colour travel with its notes. Shaped against the
+    /// interface's inline clone, which moved every other parallel list and
+    /// not this one: cloning A in `[A, B, C]` named the copy B, and C's name
+    /// landed on B.
+    #[test]
+    fn cloning_a_pattern_carries_its_name_and_shifts_the_rest() {
+        let mut project = named_patterns(&["A", "B", "C"]);
+        assert!(project.clone_pattern(0));
+        assert_eq!(names(&project), ["A", "A", "B", "C"]);
+        assert_eq!(project.pattern_lengths.len(), 4);
+        // Every list agrees about which pattern is which: the notes of the
+        // pattern called B are B's.
+        assert_eq!(project.channels[0].notes[2][0].id, 2);
+        assert_eq!(project.channels[0].notes[1][0].id, 1, "the copy holds A's notes");
+        let placed: Vec<u8> = project.playlist.iter().map(|placement| placement.pattern).collect();
+        assert_eq!(placed, [0, 2, 3], "placements follow their content");
+        assert_eq!(project.current_pattern, 1, "the copy is selected");
+    }
+
+    #[test]
+    fn removing_a_pattern_takes_its_name_with_it() {
+        let mut project = named_patterns(&["A", "B", "C"]);
+        assert!(project.remove_pattern(1));
+        assert_eq!(names(&project), ["A", "C"]);
+        assert_eq!(project.channels[0].notes[1][0].id, 3, "C's notes are under C's name");
+        let placed: Vec<u8> = project.playlist.iter().map(|placement| placement.pattern).collect();
+        assert_eq!(placed, [0, 1]);
+    }
+
+    /// The stored list stops at the last pattern anybody named, so an edit
+    /// past its end has nothing of its own to move -- and must not invent
+    /// entries or panic reaching for one.
+    #[test]
+    fn a_short_name_list_is_left_alone_past_its_end() {
+        let mut project = named_patterns(&["A", "B", "C"]);
+        project.pattern_meta.truncate(1);
+        assert!(project.clone_pattern(2));
+        assert_eq!(names(&project), ["A"]);
+        assert!(project.remove_pattern(3));
+        assert!(project.remove_pattern(1));
+        assert_eq!(names(&project), ["A"]);
+        assert!(project.clone_pattern(0));
+        assert_eq!(names(&project), ["A", "A"]);
+    }
+
+    #[test]
+    fn a_pattern_edit_that_cannot_happen_changes_nothing() {
+        let mut project = named_patterns(&["A"]);
+        let before = project.clone();
+        assert!(!project.remove_pattern(0), "the last pattern stays");
+        assert!(!project.clone_pattern(1), "there is no pattern 1");
+        assert_eq!(project, before);
+    }
 
     /// **The selection names a channel, so an edit to a different channel
     /// leaves it alone.** Both halves of this failed before the id existed,
