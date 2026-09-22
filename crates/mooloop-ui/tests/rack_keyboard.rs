@@ -70,6 +70,8 @@ fn channels() -> ModelRc<ChannelRow> {
         track_color: Default::default(),
         has_track_color: false,
         muted: false,
+        solo: false,
+        solo_silenced: false,
         volume_db: -1.9382,
         pan: 0.0,
         selected: true,

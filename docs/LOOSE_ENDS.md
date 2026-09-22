@@ -358,14 +358,10 @@ half is checked now.
 as of 2026-09-11, which silences the others rather than opening a monitor
 path, so a soloed track is still heard through its fader, its pan and its
 analog-sum switch. `archive/MIXER_PLAN.md` records the AFL tap as later work and
-names what it needs: the tap points that pre-fader sends also want.
-
-**A channel cannot be soloed, only its track.** `MixerBus.solo` is per track,
-which is the same scope the analog-sum switch has and for the same reason
-(`docs/TERMINOLOGY.md`: a mixer strip is a track). Soloing one channel of
-several on a track has not been asked for, and would need the per-channel
-strip the sends work also wants — so it is one control on one face away, not
-a design question.
+names what it needs: the tap points that pre-fader sends also want. The
+channel solo added 2026-09-22 is in place for the same reason and has the
+same gap, one level down: a soloed channel is heard through its own volume,
+its pan and the track it feeds.
 
 ---
 
@@ -914,6 +910,15 @@ change both documents, which then needs a separate ruling on the clip latch,
 since latching a clip on a track that produced no audible sample is the
 hardest part to defend either way; or publish it as a third state and draw it
 in the dimmed treatment the name already uses. Found 2026-09-13.
+
+A **channel** silenced by another channel's solo does not have this split, and
+that is deliberate rather than an inconsistency waiting to be levelled. The
+channel loop asks the question once -- `let muted = output.muted ||
+solo_silenced` at the top -- and everything below it, metering included, is
+inside that one branch, so there is no second reading of `output.muted` to
+disagree with the first. Added 2026-09-22 with channel solo. Whichever way
+the track's is settled, the channel's is already on the "meter it silent"
+side of it.
 
 **The project is 4/4 end to end.** Still true, and since 2026-09-15 it is
 true in one place: `time::BEATS_PER_BAR`, where it used to be nine anonymous

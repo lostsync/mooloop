@@ -2344,6 +2344,117 @@ export component SoloButton inherits ToolButton {
     max-height: 18px;
 }
 
+// Solo over mute, in the footprint one mute button used to have.
+//
+// Adam's `SHORT_NOTES.md`: *"in the sequencer, let's split the mute button
+// (figuratively) and have a yellow half-height solo button above it. we can
+// remove the M and S from these."* So this is literally that shape -- one
+// 18x18 chip with a hairline across its middle, yellow above and red below --
+// rather than two buttons standing next to each other, and the rack row
+// costs no more width or height than it did with mute alone.
+//
+// **Neither half wears a letter**, which is the second half of the note and
+// is the same ruling `ConsoleButton` above is drawn under: position and
+// colour say which is which, where an "M" in an 8px half would be exactly
+// the tiny low-contrast label that ruling is against. An unlit half is a
+// plain chip with a dim bar across it; what a user reads is the lit one.
+//
+// `MuteButton` and `SoloButton` are still the right controls on a mixer
+// strip, where a column of four has the room for their letters and where
+// solo's meaning is a track's. This is the rack row's version of the pair.
+export component ChannelMuteSolo inherits Rectangle {
+    in property <bool> muted;
+    in property <bool> soloed;
+    in property <string> mute-hint;
+    in property <string> solo-hint;
+    callback mute-toggled();
+    callback solo-toggled();
+
+    min-width: 18px;
+    max-width: 18px;
+    min-height: 18px;
+    max-height: 18px;
+    border-radius: Theme.radius-sm;
+    // The rounded corners belong to the pair, not to either half: clipping
+    // is what makes two square rectangles read as one button with a line
+    // through it, which is the "split" in the note.
+    clip: true;
+    background: Theme.surface;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            height: 8px;
+            background: root.soloed
+                ? #78500a
+                : solo-touch.has-hover ? Theme.surface-raised : Theme.surface;
+            accessible-role: button;
+            accessible-label: "Solo";
+            accessible-checkable: true;
+            accessible-checked: root.soloed;
+
+            // The lit state is a fill rather than a glyph, so the half needs
+            // something to read when it is *not* lit. A dim bar, the width of
+            // the chip's waist, is that: it says a control lives here and
+            // goes bright when the solo is on.
+            Rectangle {
+                width: 8px;
+                height: 2px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                border-radius: 1px;
+                background: root.soloed ? #fde68a : Theme.text-faint;
+            }
+
+            solo-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.solo-toggled(); }
+                changed has-hover => {
+                    if (self.has-hover) { StatusHint.show(root.solo-hint); }
+                    else { StatusHint.clear(root.solo-hint); }
+                }
+            }
+            Tooltip { text: @markdown("Solo"); }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
+
+        Rectangle {
+            height: 9px;
+            background: root.muted
+                ? Theme.destructive-active
+                : mute-touch.has-hover ? Theme.surface-raised : Theme.surface;
+            accessible-role: button;
+            accessible-label: "Mute";
+            accessible-checkable: true;
+            accessible-checked: root.muted;
+
+            Rectangle {
+                width: 8px;
+                height: 2px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                border-radius: 1px;
+                background: root.muted ? #fecaca : Theme.text-faint;
+            }
+
+            mute-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.mute-toggled(); }
+                changed has-hover => {
+                    if (self.has-hover) { StatusHint.show(root.mute-hint); }
+                    else { StatusHint.clear(root.mute-hint); }
+                }
+            }
+            Tooltip { text: @markdown("Mute"); }
+        }
+    }
+}
+
 // Mixer-style fader with a real cap and travel ticks, for channel strips.
 // ParameterFader stays the right choice for inline parameter rows; this is
 // the one that should look like a console.

@@ -2311,6 +2311,14 @@ pub struct ChannelStrip {
     effects: EffectChain,
     bus: StereoBus,
     output: OutputStage,
+    /// Whether some *other* channel is soloed and this one is not.
+    ///
+    /// Derived on the control thread by `mooloop_core::channel::solo_silenced`
+    /// and held apart from `output.muted` for the reason a track's is: dropping
+    /// the solo gives a channel back whatever its own mute said. From here down
+    /// it is the same question as mute -- a silenced channel's generator still
+    /// runs for anything reading its tap, and nothing it makes reaches its bus.
+    solo_silenced: bool,
     /// Mixer bus this channel feeds.
     destination: u8,
     /// How long this channel waits before summing into its bus, so that
@@ -2355,6 +2363,7 @@ impl ChannelStrip {
             effects: EffectChain::new(),
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             output: OutputStage::new(0.8),
+            solo_silenced: false,
             destination: MASTER_BUS,
             compensation: None,
             source_silent_frames: 0,
@@ -2388,6 +2397,7 @@ impl ChannelStrip {
         self.reset_sources_to_defaults(source);
         self.effects.clear(reclaim);
         self.output = OutputStage::new(0.8);
+        self.solo_silenced = false;
         self.destination = MASTER_BUS;
     }
 
@@ -3532,6 +3542,12 @@ impl RenderState {
             // a carried strip would otherwise go on summing into the seat its
             // track used to have.
             std::mem::swap(&mut fresh.destination, &mut live.destination);
+            // And the solo verdict, for the reason the compensation ring
+            // above is decided by length: it is derived from the *whole*
+            // bank, so a channel whose own setup did not change can still be
+            // owed a different answer because somebody else pressed solo.
+            // The fresh strip holds what `install_solo` just derived.
+            std::mem::swap(&mut fresh.solo_silenced, &mut live.solo_silenced);
             // The modulator rack is the other half of "still sounding": a
             // free-running LFO that restarted its phase would step every
             // destination it drives at the moment of an unrelated edit. Its
@@ -3595,6 +3611,19 @@ impl RenderState {
     #[cfg(test)]
     pub(crate) fn track_solo_silenced(&self, index: usize) -> bool {
         self.buses[index].solo_silenced
+    }
+
+    #[cfg(test)]
+    pub(crate) fn channel_solo_silenced(&self, index: usize) -> bool {
+        self.strips[index].solo_silenced
+    }
+
+    /// A channel's *own* mute, as opposed to the solo verdict above. Two
+    /// answers because they are two fields, which is the whole point of
+    /// holding them apart.
+    #[cfg(test)]
+    pub(crate) fn channel_muted(&self, index: usize) -> bool {
+        self.strips[index].output.muted
     }
 
     /// Take the outgoing renderer's position-in-time state: where the song is,
@@ -3753,6 +3782,12 @@ impl RenderState {
     fn install_solo(&mut self, project: &Project) {
         let silenced = mooloop_core::mixer::solo_silenced(&project.buses);
         for (index, strip) in self.buses.iter_mut().enumerate() {
+            strip.solo_silenced = silenced.get(index).copied().unwrap_or(false);
+        }
+        let silenced = mooloop_core::channel::solo_silenced(
+            project.channels.iter().map(|channel| channel.setup.channel.solo),
+        );
+        for (index, strip) in self.strips.iter_mut().enumerate() {
             strip.solo_silenced = silenced.get(index).copied().unwrap_or(false);
         }
     }
@@ -4792,6 +4827,11 @@ impl RenderState {
                     strip.output.muted = muted;
                 }
             }
+            EngineCommand::SetChannelSoloSilenced { channel, silenced } => {
+                if let Some(strip) = self.strips.get_mut(channel as usize) {
+                    strip.solo_silenced = silenced;
+                }
+            }
             EngineCommand::SetChannelVolume { channel, volume } => {
                 if let Some(strip) = self.strips.get_mut(channel as usize) {
                     strip.output.set_volume(volume);
@@ -5658,7 +5698,7 @@ impl RenderState {
                 .enumerate()
                 .take(self.live_channels())
             {
-                if !strip.output.muted {
+                if !strip.output.muted && !strip.solo_silenced {
                     choke_groups[index] = strip.choke_group();
                 }
             }
@@ -5854,7 +5894,12 @@ impl RenderState {
                 // block, unlike the per-tick table this is taken from.
                 self.modulator_meters.publish(index, &row);
             }
-            let muted = self.strips[index].output.muted;
+            // Mute and solo are one question here and two fields everywhere
+            // else, the way the track loop below puts it: a channel silenced
+            // by someone else's solo behaves exactly as a muted one, down to
+            // still filling a tap that something reads.
+            let muted =
+                self.strips[index].output.muted || self.strips[index].solo_silenced;
             // A muted producer that nobody reads still skips, which is what
             // keeps mute a way of not spending the work. One that somebody
             // reads renders its generator and stops there: mute is an

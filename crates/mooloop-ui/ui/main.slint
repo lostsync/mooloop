@@ -7,7 +7,7 @@ import {
     AudioOrientation, Gesture, IconButton, InstrumentModule, MiniKnob, NoteFormat, ParameterFader,
     ParameterKnob, PeakMeter,
     PickerChip, SegmentedControl, SelectorBank, ZoomScrollBar,
-    ToggleButton, ToolButton, TransportButton, ValueScale, MuteButton as DesignMuteButton, TrimKnob
+    ToggleButton, ToolButton, TransportButton, ValueScale, ChannelMuteSolo, TrimKnob
 } from "controls.slint";
 import {
     BeatLamps, MenuField, NameField, PositionReadout, StepperField, TempoField,
@@ -143,6 +143,12 @@ struct ChannelRow {
     track-color: color,
     has-track-color: bool,
     muted: bool,
+    solo: bool,
+    // Whether a solo on *another* channel is silencing this one. Derived from
+    // the whole bank on the Rust side and pushed like any other row fact, for
+    // the reason a track's `solo-silenced` is: the markup must not be the
+    // second place that rule is written down.
+    solo-silenced: bool,
     // Channel gain in dB from unity; the Rust side stores linear.
     volume-db: float,
     pan: float,
@@ -429,7 +435,6 @@ component AutomationLaneMenu inherits VerticalLayout {
 }
 
 component FlatButton inherits ToolButton { }
-component MuteButton inherits DesignMuteButton { }
 
 // One end of the playlist loop, as something a pointer can catch.
 //
@@ -1039,6 +1044,7 @@ export component MainWindow inherits Window {
     callback step-velocity-edited(int, int, float); // channel, step, normalised velocity
     callback channel-selected(int);
     callback channel-muted(int);
+    callback channel-soloed(int);
     callback channel-volume-changed(int, float);
     callback channel-pan-changed(int, float);
     callback channel-bus-changed(int, int); // channel, bus
@@ -3460,7 +3466,16 @@ export component MainWindow inherits Window {
                                             }
                                             Text {
                                                 text: row.name;
-                                                color: row.selected ? Theme.text : Theme.text-muted;
+                                                // Dimmed while somebody else's solo is
+                                                // silencing this channel, the way a mixer
+                                                // strip's name is: the channel is still
+                                                // there and still set up, it is just not
+                                                // being heard, which is a different thing
+                                                // from being muted and should not look the
+                                                // same.
+                                                color: row.solo-silenced
+                                                    ? Theme.text-faint
+                                                    : row.selected ? Theme.text : Theme.text-muted;
                                                 font-size: Theme.text-xl;
                                                 horizontal-alignment: left;
                                                 vertical-alignment: center;
@@ -3535,9 +3550,13 @@ export component MainWindow inherits Window {
                                             }
                                         }
 
-                                        MuteButton {
+                                        ChannelMuteSolo {
                                             muted: row.muted;
-                                            clicked => { root.channel-muted(ch); }
+                                            soloed: row.solo;
+                                            mute-hint: "Silence this channel. Its devices keep running, so tails decay rather than freeze.";
+                                            solo-hint: "Hear this channel alone. Solo is in place: the other channels go quiet and this one keeps its own level, pan and mute.";
+                                            mute-toggled => { root.channel-muted(ch); }
+                                            solo-toggled => { root.channel-soloed(ch); }
                                         }
 
                                         // Volume and pan are knobs here, not faders: the rack row

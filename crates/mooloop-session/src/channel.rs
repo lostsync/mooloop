@@ -38,6 +38,10 @@ pub struct ChannelState {
     pub color: Option<mooloop_core::ProjectColor>,
     pub kind: DeviceKind,
     pub muted: bool,
+    /// Whether this channel is soloed. What that *silences* is derived by the
+    /// pump's `sync_channel_solo` and never stored here, for the reason a
+    /// track's is: it is a property of the whole bank.
+    pub solo: bool,
     pub volume: f32,
     pub pan: f32,
     pub params: SamplerParams,
@@ -168,6 +172,7 @@ impl ChannelState {
             color: None,
             kind: DeviceKind::Sampler,
             muted: false,
+            solo: false,
             volume: 0.8,
             pan: 0.0,
             params: SamplerParams::default(),

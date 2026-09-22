@@ -123,6 +123,17 @@ pub enum EngineCommand {
     // carry (`reports/fable-2026-09-17.md`, finding 3).
     /// Mute/unmute a channel.
     SetChannelMuted { channel: u8, muted: bool },
+    /// Silence one channel because something else is soloed, or stop.
+    ///
+    /// **Derived, not a switch**, exactly as [`Self::SetTrackSoloSilenced`]
+    /// is: the control is `Channel::solo`, and what reaches the engine is
+    /// `channel::solo_silenced`'s answer for this channel, so the realtime
+    /// side receives a finished verdict rather than reasoning about the bank.
+    ///
+    /// Held apart from [`Self::SetChannelMuted`] so that a solo cannot eat a
+    /// mute: a channel silenced by someone else's solo goes back to whatever
+    /// its own mute said when the solo is dropped.
+    SetChannelSoloSilenced { channel: u8, silenced: bool },
     /// Set a channel's linear output volume in [0, 1].
     SetChannelVolume { channel: u8, volume: f32 },
     /// Set a channel's stereo pan in [-1, 1].
