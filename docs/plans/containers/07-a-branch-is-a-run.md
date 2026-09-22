@@ -85,6 +85,20 @@ change: a layer is a container, and containment is already correct.
 and the rack's drawing (09) — and nowhere else. If a third site wants it,
 that site is probably wrong.
 
+> **Corrected 2026-09-21, by doing it: there is a third, and it is not
+> wrong.** The latency walk below has to know how a container combines its
+> contents — series adds, parallel takes the longest — and that is the same
+> question, asked a third time. So `container_flow` has three readers: the
+> latency walk, the run loop, and the drawing.
+>
+> It is also why `ContainerFlow` is **not** introduced by the predicate
+> commit. With only `Chain` in the tree the enum would have one variant, and
+> `Option<ContainerFlow>` with one variant is `is_container()` spelled a
+> second way — the exact fault the commit exists to remove. Both variants
+> arrive with `Layer`, in the commit where both are real and both are
+> reachable by a test. Until then the walk is written so that
+> `latency_of_run` is the one place the combine happens.
+
 Do this as the first commit, on the tree as it is, with `Chain` still the
 only container: the sweep is then a refactor with an existing suite over it,
 and `scripts/dupe-audit` can be run either side of it. **A guard written

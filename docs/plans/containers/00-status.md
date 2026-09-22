@@ -8,7 +8,7 @@ Linear: project [Containers and the layer device](https://linear.app/mooloop/pro
 
 | Step | What | Issue | State |
 | --- | --- | --- | --- |
-| [07](07-a-branch-is-a-run.md) | One container predicate, latency as a tree, `EffectKind::Layer` landing silent | [MOO-69](https://linear.app/mooloop/issue/MOO-69) | not started |
+| [07](07-a-branch-is-a-run.md) | One container predicate, latency as a tree, `EffectKind::Layer` landing silent | [MOO-69](https://linear.app/mooloop/issue/MOO-69) | **two of three commits landed 2026-09-21** — see below |
 | [08](08-the-chain-splits-and-sums.md) | Branch buffers, alignment, the sum — the engine | [MOO-70](https://linear.app/mooloop/issue/MOO-70) | not started |
 | [09](09-the-rack-draws-branches.md) | The drawing. **Blocked on a mock-up from Adam**, deliberately | [MOO-71](https://linear.app/mooloop/issue/MOO-71) | not started |
 | [10](10-the-gestures-and-the-preset.md) | Wrap-as-layer, add/remove a branch, a preset with branches | [MOO-72](https://linear.app/mooloop/issue/MOO-72) | not started |
@@ -20,6 +20,40 @@ selection. No second representation, no new field on `EffectSlotState`. What
 does change, and 02 recorded the opposite in good faith, is that
 **`chain_latency` stops being a sum** — the time a signal spends inside a
 layer is its longest branch, not the total of all of them.
+
+## Step 07, as far as it has gone
+
+Two of its three commits are on `main`, both behaviour-neutral and both
+verified by mutation rather than by being green.
+
+- **`96848cb` — one container predicate.** `EffectKind::is_container`,
+  `EffectParams::{is_container, container_children, set_container_children}`,
+  and every span primitive in `structure.rs` reading them. The sweep found
+  four sites the survey had not counted, and the one that mattered is
+  `integrity.rs`: its three `EffectKind::Chain` comparisons are the repair
+  for a malformed span, so a layer would have opened unrepaired. Also the
+  renderer's `container_dry` allocation test, `load_effect_run`'s two guards,
+  and the `SetContainerSpan` publish loop in `mooloop-ui`.
+  `container_predicates_agree_about_every_kind` sweeps `EffectKind::ALL`;
+  flipping `Chain` to `false` fails it with *"Chain answers is_container two
+  different ways"*.
+- **`d7ec7e4` — latency is a tree walk.** `latency_of_runs` adds sibling
+  runs, `latency_of_run` asks what a container holds, and `run_latency` walks
+  too. No behaviour change on a serial tree, which is what
+  `the_latency_walk_agrees_with_the_flat_sum_on_every_serial_arrangement`
+  pins over five shapes. Changing the sibling combine to `max` fails it at
+  15 against 30.
+
+**What is left of 07 is the third commit**: `EffectKind::Layer`,
+`LayerParams`, `ContainerFlow` with both its variants, persistence and
+integrity repair — and the layer running **in series**, so that 08's "one
+branch is bit-identical to a chain" has something to be identical to.
+
+Two things the doing has already corrected in the step file. `container_flow`
+has **three** readers, not two — the latency walk is one — and it is
+deliberately not introduced until `Layer` exists, because a one-variant
+`Option<ContainerFlow>` is `is_container()` written a second way, which is
+what `96848cb` spent itself removing.
 
 ## Step 01 — a device is an identity, not a position
 
