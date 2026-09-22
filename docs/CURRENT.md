@@ -230,9 +230,11 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   role can already be assigned Meta outright.
 - Two lanes sit under the roll and toggle independently: a velocity lane
   drawn as stems with drag heads, and one variable automation lane. The
-  automation lane's picker lists the selected channel's generator and every
-  parameter of every effect on that channel and on every bus, grouped by
-  device, with already-open lanes marked and clear/remove actions. Points are drawn by clicking,
+  automation lane's picker lists the selected channel's generator, every
+  parameter of every effect on that channel, the channel's fader and pan
+  (as "Channel strip", after its chain), and every effect on every bus,
+  grouped by device, with already-open lanes marked and clear/remove
+  actions. Points are drawn by clicking,
   dragged to move, right-clicked to remove, and interpolate linearly. Lanes
   a clip is not currently showing are retained, not discarded.
 - Sixteenth-note rack cells summarize their four 64th-note substeps without
@@ -1058,8 +1060,9 @@ land on its own when it starts to matter:
   track's block, so everything after it -- the strip, the chain, both send
   taps and the fader -- sees the flipped signal.
 
-  Not yet: the strip's parameters are not automation or modulation
-  destinations, and there is no strip preset. `docs/plans/archive/console/00-status.md` says why
+  Not yet: the strip's own processing -- its drive, EQ and compressor -- is
+  not an automation or modulation destination (its fader and pan are), and
+  there is no strip preset. `docs/plans/archive/console/00-status.md` says why
   each is separable.
 - **Solo in place, per track.** A soloed track silences the *other* tracks,
   and the exceptions are what make it useful: anything that feeds a soloed

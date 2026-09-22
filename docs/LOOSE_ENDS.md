@@ -311,15 +311,19 @@ blend stops nulling at mix 0 and
 `a_container_at_zero_mix_is_its_input_delayed_by_its_run` is what breaks.
 Found 2026-09-13.
 
-**The channel strip's parameters are not automation or modulation
+**The channel strip's processing parameters are not automation or modulation
 destinations.** Every one has a stable id (`mooloop_core::strip`) and the
-engine applies them by id, so the values are addressable; what is missing is
-that a lane's target is an `EffectTarget` plus a *slot* and a strip is not a
-slot. The ids start at 16 for this: `modulation::STRIP_PARAM_VOLUME` and
-`STRIP_PARAM_PAN` are 0 and 1 of what is conceptually the same strip
-(`ParamOwner::Strip`, already addressable by a route), so the two tables can
-become one without renumbering anything automation has persisted. Recorded
-2026-09-11 with step 03.
+engine applies them by id, so the values are addressable. The reason given
+here until 2026-09-22 -- that a lane's target is an `EffectTarget` plus a
+*slot*, and a strip is not a slot -- has gone: a lane's target is a
+`ParamAddr`, and `ParamOwner::Strip` is one. What is missing now is that the
+engine resolves only `STRIP_DESCRIPTORS` (the fader and pan,
+`resolve_strip_segments`), and the picker lists only those; the fader and pan
+became pickable on 2026-09-22. The processing ids start at 16 for this:
+`modulation::STRIP_PARAM_VOLUME` and `STRIP_PARAM_PAN` are 0 and 1 of what is
+conceptually the same strip, so the two tables can become one without
+renumbering anything automation has persisted. Recorded 2026-09-11 with
+step 03.
 
 **Buffer MIDI mapping has no UI.** `EngineHandle::set_buffer_midi_map`
 (`mooloop-engine/src/lib.rs:622`) is the only way to install one, and neither
