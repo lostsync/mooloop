@@ -108,6 +108,7 @@ lines. Until then, this table is the boundary.
 | `ui/src/lib.rs` | Interface: `AppUi::new` as a shell, the pump, the `wire_*!` macros as a framework | **Each feature team:** the wiring for its own faces and views inside `AppUi::new`. **Document:** the document lifecycle, and tempo, swing and embed. **Control:** the pump's control drain. |
 | `ui/ui/main.slint` | Interface | **Sequencing:** the step grid and the playlist, both inline. **Each device team:** its entries in the DEVICES block. |
 | `ui/src/settings.rs` | Interface | **Platform:** the XDG paths and the settings-load policy. |
+| `ui/ui/device-rack.slint` | Interface: the shell every face is drawn in (`DeviceFrame`, `DeviceHeader`, `EffectDeviceShell`, the rails) | **Effects:** `ContainerEnclosure` and the container drawing, which the layer device's branches extend. |
 | `engine/src/sequencer.rs` | Sequencing | **Control:** the automation functions (`automation_lane_at`, `has_automation_at`, `open_automation_lane` and the rest). |
 | `core/src/modulation.rs` | Control | **Mixer:** `STRIP_DESCRIPTORS`. |
 | `session/src/engine.rs` | Engine | **Mixer:** `sync_compensation`, `sync_console_sums`, `sync_solo`, `sync_channel_solo`. |
@@ -226,9 +227,10 @@ Files marked *shared* are split in the table above.
 - `ui/ui/`: `main.slint` (*shared*), `controls.slint`, `toolbar.slint`,
   `menubar.slint`, `channel-sidebar.slint`, `appearance-dialog.slint`,
   `about-dialog.slint`, `color-picker.slint`, `theme.slint`, `reorder.slint`,
-  `device-rack.slint`, `device-displays.slint`, `device-concepts.slint`,
-  `device-drag-harness.slint`, `save-error-dialog.slint`, `mockup.slint`,
-  `mockup-catalog.slint`, `mockup-tool.slint`
+  `device-rack.slint` (*shared*), `device-displays.slint`,
+  `device-concepts.slint`, `device-drag-harness.slint`,
+  `save-error-dialog.slint`, `mockup.slint`, `mockup-catalog.slint`,
+  `mockup-tool.slint`
 - `ui/tests/`: `menubar.rs`, `panes.rs`, `pane_drag.rs`, `first_click.rs`,
   `name_field.rs`, `picker_chip.rs`, `color_picker.rs`, `sidebar.rs`,
   `browser.rs`, `gesture_bracket.rs`, `rack_keyboard.rs`,
@@ -237,7 +239,8 @@ Files marked *shared* are split in the table above.
 
 `device-rack.slint` and `device-displays.slint` are the shell and the display
 canvas every device face is drawn in. They are Interface's; the faces inside
-them belong to the device teams.
+them belong to the device teams, and the container drawing in
+`device-rack.slint` is Effects'.
 
 ### 10. Platform & Release
 
