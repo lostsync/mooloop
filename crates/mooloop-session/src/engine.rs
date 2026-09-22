@@ -805,14 +805,30 @@ impl Session {
         }
     }
 
-    /// Says, once for the life of this session, that the command ring refused
+    /// Says, once for the document now open, that the command ring refused
     /// something.
     ///
     /// Once and not per occurrence, because the condition that produces it --
     /// a burst of edits against a full ring -- produces it many times in a
-    /// row, and a line per refusal would bury the first one. Not reset by a
-    /// project load either: `replace_project` runs on every undo, and
-    /// re-arming there would make the quiet version of this the noisy one.
+    /// row, and a line per refusal would bury the first one.
+    ///
+    /// **Once per document, not once per process.** `replace_project` clears
+    /// the latch (`session.rs`, beside the other mirrors it resets), because
+    /// latched for the life of the process it reported the first full ring
+    /// and let every later one -- on this song or any opened after it --
+    /// diverge in silence (`reports/fable-2026-09-21.md`, finding 8).
+    ///
+    /// This comment used to argue the other way, that a load must *not* clear
+    /// it because "`replace_project` runs on every undo, and re-arming there
+    /// would make the quiet version of this the noisy one". The mechanism it
+    /// names is real -- undo and redo both install a snapshot through
+    /// `replace_project` (`edit_cost.rs`, `automation.rs`) -- so the latch
+    /// does re-arm on each one, and a ring that is still full re-reports.
+    /// That is the right trade and not an oversight: a refusal *during* an
+    /// undo is fresh divergence against a project the user just installed,
+    /// which is exactly the case worth hearing about, and the bound is still
+    /// one line per install rather than one per refused command. The louder
+    /// failure was the silent one.
     ///
     /// The sentence has to cover both kinds of caller, which is why it does
     /// not promise a retry. A **reconciler's** refusal is recoverable by
