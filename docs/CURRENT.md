@@ -352,6 +352,9 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - Every gain trim — device input/output, the rack-row volume knob, the source
   output trim — is the same dB knob class: −60 dB (−∞) to +12 dB from unity,
   double-click to 0 dB. Project files and the engine wire keep linear gain.
+  A new channel starts at 0 dB however it is made, and the strip's volume
+  descriptor defaults there too (`DEFAULT_CHANNEL_VOLUME`); one added from
+  the toolbar used to start at −1.9 dB.
 - The generator at the head of a chain is selectable, by clicking its header
   the way a device row is selected, and wears the same border. It is the one
   rack row a click could not name. What it does not do is take part in

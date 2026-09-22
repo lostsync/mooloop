@@ -2211,7 +2211,7 @@ impl BusStrip {
         Self {
             effects: EffectChain::new(),
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
-            // Unity, not a channel's 0.8: see `mooloop_core::MixerBus::new`.
+            // Unity, as a channel is: see `mooloop_core::MixerBus::new`.
             output: OutputStage::new(1.0),
             strip: Strip::new(StripParams::default(), sample_rate),
             polarity: false,
@@ -2374,7 +2374,7 @@ impl ChannelStrip {
             source_base: GeneratorParams::Sampler(SamplerParams::default()),
             effects: EffectChain::new(),
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
-            output: OutputStage::new(0.8),
+            output: OutputStage::new(mooloop_core::DEFAULT_CHANNEL_VOLUME),
             solo_silenced: false,
             destination: MASTER_BUS,
             compensation: None,
@@ -2408,7 +2408,7 @@ impl ChannelStrip {
     fn reset_slot(&mut self, source: DeviceKind, reclaim: &mut Reclaim) {
         self.reset_sources_to_defaults(source);
         self.effects.clear(reclaim);
-        self.output = OutputStage::new(0.8);
+        self.output = OutputStage::new(mooloop_core::DEFAULT_CHANNEL_VOLUME);
         self.solo_silenced = false;
         self.destination = MASTER_BUS;
     }
@@ -6657,6 +6657,17 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
 
     fn test_strip() -> ChannelStrip {
         ChannelStrip::new(Arc::new(ArcSwapOption::empty()), 48_000)
+    }
+
+    /// A strip starts, and resets, at the channel default the session and
+    /// core start a channel at, not a quieter one of its own.
+    #[test]
+    fn a_strip_starts_and_resets_at_the_channel_default_volume() {
+        let mut strip = test_strip();
+        assert_eq!(strip.output.gain, mooloop_core::DEFAULT_CHANNEL_VOLUME);
+        strip.output.set_volume(0.25);
+        strip.reset_slot(DeviceKind::Sampler, &mut Reclaim::default());
+        assert_eq!(strip.output.gain, mooloop_core::DEFAULT_CHANNEL_VOLUME);
     }
 
     #[test]
