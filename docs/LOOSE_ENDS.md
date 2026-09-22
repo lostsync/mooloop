@@ -482,47 +482,31 @@ worth making on a hazard nobody has hit. Found 2026-09-21, building
 by any undo either way; what is open is whether soloing should cost a
 Ctrl+Z of its own. It records one today. Found 2026-09-21.
 
-**"Not an edit" is written down four times and only one copy is read, so
-three exempt commands dirty the document anyway.** The copy that decides is
-`apply_engine_message`'s `edits` predicate
-(`mooloop-session/src/engine.rs:691-693`), and it is
-`!matches!(command, Play | Pause | Stop)` -- three variants out of sixty-two.
-The other three copies are comments beside the senders, each stating an
-exemption the predicate does not grant:
+**Nothing checks that `apply_engine_message` still reads
+`EngineCommand::edits_document`.** The "not an edit" rule is one predicate now
+(`mooloop-core/src/bridge.rs`), and four tests in `edits_document_tests` pin
+what it answers. All four call the predicate directly. Its only production
+reader is `Session::apply_engine_message`'s `Command` arm
+(`mooloop-session/src/engine.rs`), and **no test reaches it**: nothing in the
+tree pushes a `PendingEngineMessage::Command` through that function and
+asserts `session.dirty`. So the reader reverting to an inline
+`!matches!(command, Play | Pause | Stop)` -- which is the exact expression the
+fix replaced -- would restore the defect with the whole suite green. This is
+`AGENTS.md`'s own question in its narrowest form: *does anything read the copy
+the test checks?*
 
-- **Record arm.** `on_record_armed_toggled` (`mooloop-ui/src/lib.rs:9262-9264`):
-  arming "must not make an untouched document look unsaved". `SetRecordArmed`
-  is not in the list, so every arm and disarm takes the title's `*` (
-  `update_document_title`, `lib.rs:3522-3536`) and makes quit ask about a
-  document nothing changed. `record_armed` is persisted nowhere in
-  `mooloop-project` or `mooloop-core`, so the flag has nothing behind it. A
-  control surface's arm goes the same way:
-  `apply_transport_control`'s `ToggleRecord` arm,
-  `mooloop-session/src/midi.rs:526-528`.
-- **Input monitoring.** `on_audio_monitor_toggled` (`lib.rs:9128-9131`): it "is
-  performance state, and a song does not reopen monitoring". `SetInputMonitor`'s
-  own doc comment (`core/src/bridge.rs:113-116`) says "Performance state, never
-  saved and off by default". It dirties.
-- **Seek.** `seek_playlist` (`mooloop-session/src/transport.rs:162-164`): "where
-  the transport is playing from is not something a song should have to be saved
-  to keep". So dragging the playhead dirties, and so does Home --
-  `TransportControl::ReturnToStart` (`midi.rs:525`) is a `Seek { tick: 0.0 }`.
-
-One `EngineCommand::edits_document()` read by `apply_engine_message`, with the
-rule in its doc comment, is the fix -- this is the repository's characteristic
-fault (`AGENTS.md`, "Duplication") in its purest form: four copies, three of
-them read by nobody, and the program wrong wherever they disagree.
-`TriggerChannelNote`/`ReleaseChannelNote` (audition) and `StopTake` are
-arguable members of the same set and are Adam's call. Found 2026-09-21,
-`reports/fable-2026-09-21.md` finding 6, widened from two copies to four while
-filing it.
-
-**Closed 2026-09-21.** `EngineCommand::edits_document` exists, carries the
-rule in its doc comment and exempts all four: `Play`, `Pause`, `Stop`,
-`Seek`, `SetRecordArmed` and `SetInputMonitor`. The three audition and take
-commands are deliberately still outside it, as Adam's call. Its doc comment
-says to check a candidate against `mooloop-project` before adding it, since
-every entry is a claim that the thing is not persisted.
+The test was not written there because it cannot be, cheaply:
+`apply_engine_message` takes a concrete `&mut EngineHandle`, and an
+`EngineHandle` cannot be built without opening an audio driver. `CommandSink`
+(`mooloop-engine/src/lib.rs`) exists for precisely this reason and
+`mooloop-session/tests/delivery.rs` uses it. Three of the ten arms would
+already fit the trait -- `Command` (`send`), `Structural` (`send_structural`)
+and the `ProjectEdit`/`Audio` arm, which touches no handle at all -- but the
+other seven each call an `EngineHandle` method the trait does not carry
+(`set_preview_gain`, `set_midi_routing`, `set_audio_input_routing`,
+`replace_buffer`, `add_channel`, `set_effect_spectrum_enabled`), which is why
+the parameter is concrete. So the seam is real but it is a signature change,
+not a test. Found 2026-09-22, closing MOO-58.
 
 **A pattern switch flushes every delay, reverb and plate in the project, and
 the code says two lines above that it must not.** `RenderState::seeked` means
@@ -617,20 +601,41 @@ before that writer exists, not after.
 
 **Three callback costs that grow with the song rather than the block**, from
 `reports/fable-2026-09-21.md` finding 5, none of them a hazard and none of
-them measured:
+them measured. The third is closed; the first two are open as MOO-73, and the
+second is not really a cost at all -- it is a silent wrong answer, reachable
+at a 512-frame block:
 
 - Song-mode automation lookup is playlist by channels by destinations per
   block once any lane exists under the playhead (`automation_lane_at`,
   `sequencer.rs:526`). A per-block cache of covering placements would make
   it O(destinations).
 - `EventList::push_ordered` (`dsp/src/event.rs:122`) is an insertion sort
-  into `MAX_EVENTS = 256`, and automation emits one event per control tick
-  per destination -- at an 8192-frame block one automated destination fills
-  the list alone and every later push returns `false` into a `let _`. No
-  allocation, no noise, wrong values.
-- `Sequencer::set_playlist_placement` does `push` then `sort_unstable` on
-  the callback per placement toggle; an insert at `partition_point` is the
-  same number of lines.
+  into `MAX_EVENTS = 256`, and the control pass emits one event per control
+  tick per driven destination into a `let _` (`render.rs:5934`). **The
+  8192-frame block this used to be written against is the far end of it, and
+  the near end is 512 frames** -- the same loop serves modulation as well as
+  automation, so a channel has up to `MAX_MOD_ROUTES_PER_CHANNEL = 16` plus
+  `MAX_AUTOMATION_LANES_PER_CHANNEL = 8` driven destinations, and
+  24 x 512/`CONTROL_RATE_FRAMES` = 384 is already past 256. Sixteen of those
+  twenty-four need no lane drawn at all, so a modulation rack alone reaches
+  it at an ordinary buffer size. Notes are scheduled before the control pass,
+  so what is lost is automation and modulation rather than notes, and because
+  the refusal is on capacity rather than on order the failure is not a wrong
+  value everywhere but one destination freezing mid-block and every later one
+  in descriptor order getting nothing. No allocation and no noise either way.
+  MOO-73, which also names three more sites that drop a `push_ordered`
+  refusal, two of them without even a `let _`.
+- `Sequencer::set_playlist_placement` did `push` then `sort_unstable` on the
+  callback per placement toggle. **Closed 2026-09-22**: it inserts at
+  `partition_point`, which answers the duplicate check in the same binary
+  search, so painting a range costs one search and one memmove per cell
+  rather than a sort of up to 512 placements. What that changed beyond the
+  cost is that the playlist's sortedness used to be a *consequence* of the
+  function and is now something it *depends* on -- `load_project` is the
+  other place that establishes it -- so the invariant is named in the doc
+  comment and guarded by
+  `playlist_stays_sorted_and_deduplicated_however_it_is_painted`, which was
+  validated by moving the insert index and watching it fail.
 
 Also on the thread: `defer_command`'s `debug_assert!(false, "... {command:?}")`
 (`render.rs:4591`) formats an `EngineCommand` and panics from the callback in
@@ -1649,18 +1654,6 @@ pushed**, and closing it earlier costs somebody else the same work twice.
 Found 2026-09-20 (`reports/fable-2026-09-20.md` finding 2), re-confirmed
 2026-09-21 (`reports/fable-2026-09-21.md` finding 3), closed the same day.
 
-**`Session::input_monitor` is never pruned when a channel goes.**
-(`session/session.rs:76`.) It is a `BTreeSet<ChannelId>` and only
-`set_input_monitor` (`session/take.rs:267`) ever inserts or removes, so a
-monitored channel that is deleted leaves its id in the set for the life of
-the session. Harmless today, and for one reason worth stating rather than
-assuming: ids are never reused, so a stale entry can never be mistaken for a
-later channel — it is a few bytes that outlive their subject, not a wrong
-answer. The day an id *is* reused, this becomes a channel that opens
-monitoring a live microphone by itself, which the field's own doc comment
-says must never happen. Found 2026-09-20,
-`reports/fable-2026-09-20.md` finding 4.
-
 There is `claude/device-identity-rack-addressing-99yt4o` on the remote, one
 commit that is not in `origin/main` and has no local branch. Nobody has said
 whether it is wanted.
@@ -1693,3 +1686,8 @@ Kept briefly so the same thing is not re-reported. Delete freely once stale.
 - The device rack's and channel rack's rows in `main.slint` each spelled the
   reorder slide rule inline instead of calling `ReorderMath.shift` — both now
   call it, matching the mixer (`reorder.slint`, `main.slint`).
+- "Not an edit" was written down four times with one copy read, so record
+  arm, input monitoring and seek each dirtied the document against a comment
+  saying they must not — one `EngineCommand::edits_document` decides it now
+  (`bridge.rs`), and the refusal latch is cleared per document rather than
+  per process (`session.rs`).

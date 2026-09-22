@@ -124,6 +124,28 @@ impl Sequencer {
         self.swing_percent
     }
 
+    /// Toggle one placement, answering whether the playlist changed.
+    ///
+    /// **The playlist is sorted and deduplicated, and this is the only thing
+    /// that keeps it that way once a project is loaded** (`load_project`
+    /// sorts and dedups what it takes from the document). That invariant used
+    /// to be a consequence of the implementation -- push, then sort the whole
+    /// vector -- and is now the thing the implementation depends on: a
+    /// `partition_point` gives the insertion index and the duplicate check in
+    /// one binary search, and both answers are wrong if the vector is ever
+    /// unsorted. `playlist_stays_sorted_and_deduplicated_however_it_is_painted`
+    /// is the guard.
+    ///
+    /// This runs on the audio thread, once per cell of a painted range, so a
+    /// `sort_unstable` over up to `MAX_PLAYLIST_PLACEMENTS` per cell was
+    /// `O(n log n)` work in the callback for a vector that was already in
+    /// order except for the one element just pushed
+    /// (`reports/fable-2026-09-21.md`, finding 5). The insert is one memmove
+    /// and the capacity guard is unchanged, so it still never reallocates.
+    ///
+    /// Note that the order is `PatternPlacement`'s derived one -- pattern
+    /// first, then start tick -- and not time order. Nothing here reads it as
+    /// a timeline; every consumer walks the whole vector.
     pub fn set_playlist_placement(&mut self, pattern: usize, start_tick: u32, on: bool) -> bool {
         if pattern >= self.active_patterns {
             return false;
@@ -132,19 +154,24 @@ impl Sequencer {
             return false;
         }
         let placement = PatternPlacement::new(pattern as u8, start_tick);
-        let position = self.playlist.iter().position(|item| *item == placement);
-        match (on, position) {
-            (true, None) if self.playlist.len() < self.playlist.capacity() => {
-                self.playlist.push(placement);
-                self.playlist.sort_unstable();
+        let index = self.playlist.partition_point(|item| *item < placement);
+        let present = self.playlist.get(index) == Some(&placement);
+        match (on, present) {
+            (true, false) if self.playlist.len() < self.playlist.capacity() => {
+                self.playlist.insert(index, placement);
                 true
             }
-            (false, Some(index)) => {
+            (false, true) => {
                 self.playlist.remove(index);
                 true
             }
             _ => false,
         }
+    }
+
+    #[cfg(test)]
+    pub fn playlist(&self) -> &[PatternPlacement] {
+        &self.playlist
     }
 
     pub fn song_length_ticks(&self) -> u32 {
@@ -1258,6 +1285,69 @@ mod tests {
         assert!(!sequencer.set_playlist_placement(0, MAX_PLAYLIST_TICKS, true));
         assert!(sequencer.set_playlist_placement(1, TEST_PLACEMENT_TICKS, false));
         assert!(!sequencer.set_playlist_placement(1, TEST_PLACEMENT_TICKS, false));
+    }
+
+    /// A guard on the invariant `set_playlist_placement` now depends on
+    /// rather than establishes, not a check for a defect: it passes on the
+    /// tree before the `partition_point` insert as well as after, because
+    /// nothing about the playlist a caller can see was meant to change. What
+    /// it would catch is the insert landing at the wrong index, which a
+    /// `sort_unstable` over the whole vector could not do and a hand-written
+    /// insertion can.
+    ///
+    /// Painted deliberately out of order in both fields, since the order is
+    /// pattern first and then tick: a range painted along the timeline on one
+    /// pattern arrives in tick order, and a column painted across patterns at
+    /// one tick arrives in pattern order, and the insert has to be right for
+    /// both.
+    #[test]
+    fn playlist_stays_sorted_and_deduplicated_however_it_is_painted() {
+        let mut sequencer = Sequencer::new(1, 4, 16, Ppq::DEFAULT);
+        let painted = [
+            (2u8, TICKS_PER_BAR * 3),
+            (0, TICKS_PER_BAR),
+            (3, 0),
+            (0, 0),
+            (2, TICKS_PER_BAR),
+            (1, TICKS_PER_BAR * 2),
+            (0, TICKS_PER_BAR * 3),
+            (3, TICKS_PER_BAR * 2),
+        ];
+        for (pattern, tick) in painted {
+            assert!(
+                sequencer.set_playlist_placement(pattern as usize, tick, true),
+                "painting {pattern} at {tick} changed nothing"
+            );
+            assert!(
+                !sequencer.set_playlist_placement(pattern as usize, tick, true),
+                "painting {pattern} at {tick} twice made a second placement"
+            );
+        }
+
+        let expected = {
+            let mut placements: Vec<_> = painted
+                .iter()
+                .map(|(pattern, tick)| PatternPlacement::new(*pattern, *tick))
+                .collect();
+            placements.sort_unstable();
+            placements
+        };
+        assert_eq!(sequencer.playlist(), expected.as_slice());
+
+        // Erasing from the middle, where a wrong index is a placement that
+        // silently stops playing and another that silently keeps playing.
+        assert!(sequencer.set_playlist_placement(2, TICKS_PER_BAR, false));
+        assert!(!sequencer.set_playlist_placement(2, TICKS_PER_BAR, false));
+        let expected: Vec<_> = expected
+            .into_iter()
+            .filter(|item| *item != PatternPlacement::new(2, TICKS_PER_BAR))
+            .collect();
+        assert_eq!(sequencer.playlist(), expected.as_slice());
+        assert!(
+            sequencer.playlist().windows(2).all(|pair| pair[0] < pair[1]),
+            "the playlist is no longer strictly ordered: {:?}",
+            sequencer.playlist()
+        );
     }
 
     #[test]

@@ -1192,7 +1192,10 @@ land on its own when it starts to matter:
   bounded fractional stereo ring; Phaser uses a stereo all-pass cascade. The
   generic host supplies their dry/wet blend, so the DSP returns the processed
   signal only. The reverb runs eight modulated delay lines through a Hadamard
-  feedback matrix behind a diffused, pre-delayed input, at a fixed per-sample
+  feedback matrix behind a diffused, pre-delayed input, each line's return
+  smeared through its own allpass diffuser inside the feedback loop so the
+  tail blooms into a dense wash rather than ringing on eight sparse modes,
+  at a fixed per-sample
   cost independent of decay time and with no reported latency; Size, Decay,
   Damp, Pre, Diffuse, Width and Mod are all ordinary event-driven parameters,
   so every one of them is a working modulation destination. It replaced a
