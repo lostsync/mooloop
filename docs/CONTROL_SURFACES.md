@@ -120,6 +120,10 @@ one, for exactly that reason.
 - **MIDI's Stop is a pause.** It holds position and Continue resumes from it,
   so it maps to `TransportControl::Pause`. Mapping it to `Stop`, which returns
   to the start, would make an external sequencer's stop button rewind the song.
+  **Start is the other half**: it plays from the top, so it is
+  `ReturnToStart` then `Play`. Mapped to a bare `Play`, as it was until
+  2026-09-22, it resumed wherever mooloop had paused and the two machines ran
+  bars apart.
 - **Clock is dropped.** Twenty-four messages a beat, forever, and nothing
   syncs to it. It lands the day there is a clock to drive; the transport
   messages beside it are decoded now because they are gestures rather than a

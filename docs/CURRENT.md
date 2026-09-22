@@ -534,7 +534,8 @@ blunt about gaps so roadmap decisions are based on the system that exists.
   where no placement of that pattern is playing is heard but not recorded.
   The transport follows an external Start,
   Continue, Stop or Song Position without any mapping, because a device that
-  sends Start is asking for exactly one thing.
+  sends Start is asking for exactly one thing. Start plays from the
+  beginning, Continue from where it paused, and Stop pauses.
 
   **LEARN** beside the transport arms controller mapping: press any knob or
   fader and then move a control on the desk, and the two are bound. The button
