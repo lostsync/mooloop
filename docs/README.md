@@ -53,10 +53,10 @@ table of which document to read for which task. Start there, not here.
 
 ## Directories
 
-- [plans/](plans/) — numbered work orders, each with a Linear project and one
-  issue per step. Linear says which state every plan and step is in;
-  `00-status.md` in each records what the doing found. Work the files in
-  order. Completed directories move to [plans/archive/](plans/archive/).
+- [plans/](plans/) — numbered work orders, each with a Linear project and an
+  issue for every step still to do. Linear says which state every plan and
+  step is in; `00-status.md` in each records what the doing found. Work the
+  files in order. Completed directories move to [plans/archive/](plans/archive/).
   [plans/README.md](plans/README.md) is the narrative of how each plan got
   where it is.
 - [workflows/](workflows/) — procedures that are run *again*, where a plan is

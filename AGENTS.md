@@ -65,13 +65,14 @@ the backlog already holds near-duplicates. Every issue gets:
 - one type label -- `Bug`, `Feature` or `Improvement` -- and `Fable` as well if
   a Fable review found it;
 - a project: the plan it belongs to, or `Loose ends` for a defect that
-  belongs to no feature;
+  belongs to no feature (a question no plan has reached yet may go without);
 - a description a stranger could act on: what happens, where to start (file
   and symbol), and how to tell it is fixed.
 
 **A plan is a project.** Each directory in `docs/plans/` has a Linear project,
-and each numbered step an issue titled `NN · <step title>` that links its step
-file. A new plan gets both on the day it is written. When the last step lands,
+and each step that has not landed an issue titled `NN · <step title>` that
+links its step file; so does anything its `00-status.md` records as still
+owed. A new plan gets both on the day it is written. When the last step lands,
 the directory moves to `archive/` and the project to Completed in the same
 sitting.
 
@@ -94,8 +95,9 @@ no commit is a claim to verify, not a fact to rely on.
 ### Questions for Adam: the `Question` label
 
 When something needs a decision only Adam can make -- a taste call, a product
-call, a trade-off the tree cannot settle, a mock-up only he can draw -- **ask
-it on an issue and add the `Question` label.** That label is how he finds
+call, a trade-off the tree cannot settle, a mock-up only he can draw -- or a
+check only he can make -- a listening pass, hardware no agent can reach --
+**ask it on an issue and add the `Question` label.** That label is how he finds
 questions. One recorded anywhere else -- a plan's open-questions section,
 `LOOSE_ENDS.md`, a report, the journal, a handoff message -- is one he does
 not know exists. Do not rely on assigning the issue or @-mentioning him

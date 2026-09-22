@@ -83,26 +83,22 @@ mock-up.
 
 ## Waiting on Adam, not on work
 
-None of these should be worked around.
+None of these should be worked around. Each is a Linear issue carrying the
+`Question` label, which is the complete list; these are the ones that bear on
+this sequence.
 
-- **The layer device's drawing** (`containers/09`) — a mock-up. See above.
-- **`midi-control/`** — every step landed 2026-09-15 and every layer is
-  tested, but **none of it has been run against a keyboard**. Hardware, not a
-  judgement. `scripts/mooloop-mcp` and a controller are the check.
-- **The console's studio listening pass** — the one outstanding item that
-  could still change something that shipped. Headphones were 2026-09-11.
-- **`mono-synth-v2/`** — complete and played, held out of the archive by one
-  finding: Acid's Cutoff knob means 0.41x nominal where the other two models
-  mean 0.65–0.68x. The compensation constant is load-bearing rather than a
-  typo, so lining the corners up means re-deriving it. A taste question.
-- **Recording and undo have not been played.** Both landed in the last four
-  days, both are large, and neither has had a pass. `audio-recording/01`'s
-  acceptance was measured on the Mac from the file rather than trusted, which
-  is not the same thing as living with it.
+- **The layer device's drawing** (`containers/09`, MOO-71) — a mock-up. See
+  above.
+- **The console's studio listening pass** (MOO-166) — the one outstanding item
+  that could still change something that shipped. Headphones were 2026-09-11.
+- **Recording and undo have not been played** (MOO-165). Both landed in the
+  last four days, both are large, and neither has had a pass.
+  `audio-recording/01`'s acceptance was measured on the Mac from the file
+  rather than trusted, which is not the same thing as living with it.
 
-The EQ's two listening passes are owed and are in `LOOSE_ENDS.md` rather than
-here: closing that plan turned them from a decision into a check on shipped
-code.
+`midi-control/` and `mono-synth-v2/` were listed here until 2026-09-22; Adam
+had answered both on 2026-09-18 -- the keyboard worked, and the Acid cutoff is
+*"fine"* -- and both are archived.
 
 ## Fixes that may interrupt the sequence
 
@@ -111,7 +107,8 @@ rendering the active step; threatens realtime safety or project compatibility;
 or is a small regression in the surface being touched. Record larger adjacent
 work instead of folding it into the current branch.
 
-- **The sampler's stretching-polyphony cap is not enforced anywhere.**
+- **The sampler's stretching-polyphony cap is not enforced anywhere**
+  (MOO-7, where which way to fix it is a question for Adam).
   `StretchPool::new` builds a reader for all sixteen voices at 100 KB each —
   1.6 MB a stretching channel against 401 KB for four — although the contract
   names four. Sizing the pool to `polyphony` is not free: it arrives on the
@@ -142,20 +139,23 @@ work instead of folding it into the current branch.
   component** would take an arm from twenty-seven lines to eight with no Rust
   change. Take that piece if a device step already has `main.slint` open —
   which `containers/09` will. Do not open a step for it.
-- **`theming/02-relief.md`** — the only design problem left in that directory;
-  01, 03 and most of 04 landed 2026-09-15.
-- **`pattern-bank-floor/`** — every project reserves 1.00 GiB before it holds
-  anything. The measurements are committed, which is what makes parking safe.
+- **`theming/02-relief.md`** (MOO-153) — the only design problem left in that
+  directory; 01, 03 and most of 04 landed 2026-09-15.
+- **`pattern-bank-floor/`** (MOO-152) — every project reserves 1.00 GiB
+  before it holds anything. The measurements are committed, which is what
+  makes parking safe.
 - **`egui-view-layer/`** — `mooloop-ui` rebuilds in four minutes because
   `build.rs` expands `ui/main.slint` into one 39 MB Rust module, and
   `edit-loop/04-decide.md` found no Slint arrangement that reaches it. A real
-  cost and still not a musical decision. Gated on step 01's spike and one
-  post-change `scripts/loop-profile` run.
+  cost and still not a musical decision. The post-change `scripts/loop-profile`
+  run came in at 10% blocked, under `edit-loop/`'s own bar, so whether the plan
+  still has a case is Adam's call (MOO-146); if it does, step 01's spike
+  (MOO-147) is next.
 - **The modulation rack's move, and whether its modulator is a tracker.** The
   shelf is a relocation; the tracker is a genuine design question `IDEAS.md`
   has held longer than this document has existed. Settle whether they are one
-  design or two before planning either. `MODULATION.md` holds the contracts a
-  move must not break.
+  design or two before planning either (MOO-159). `MODULATION.md` holds the
+  contracts a move must not break.
 - **More effect kinds, or a broad effect-polish pass.** Thirteen effects, a
   common host, and a fourteenth kind that is not an effect. The layer device
   makes a fifteenth that is also not an effect, and that is the argument

@@ -351,11 +351,6 @@ modulation's reach, and the inline fader rows have never carried that
 callback. Nothing is inconsistent between the two features; both simply stop
 at the same place.
 
-**Nothing in the MIDI control layer has been run against a device, as of
-2026-09-15.** Every layer has tests and the application compiles and draws its
-mapping page, and no keyboard has been plugged into it. `scripts/mooloop-mcp`
-and a controller are the check.
-
 ~~**The Core MIDI driver's port ids have never been compiled.**~~ **Closed
 2026-09-20**: `cargo check -p mooloop-engine --all-targets` on the Mac is
 clean, and `cargo test -p mooloop-engine` is green, so the port threaded
@@ -483,11 +478,6 @@ gesture that has already been replaced, which is a small change and was not
 worth making on a hazard nobody has hit. Found 2026-09-21, building
 `docs/plans/archive/gesture-undo/`.
 
-**Whether a solo click deserves its own undo step is a taste question.**
-`MixerBus::solo` is persisted (`core/src/mixer.rs:164`), so it is reverted
-by any undo either way; what is open is whether soloing should cost a
-Ctrl+Z of its own. It records one today. Found 2026-09-21.
-
 **Nothing checks that `apply_engine_message` still reads
 `EngineCommand::edits_document`.** The "not an edit" rule is one predicate now
 (`mooloop-core/src/bridge.rs`), and four tests in `edits_document_tests` pin
@@ -544,30 +534,6 @@ silently. The window and session copies are written before the send in every
 caller and nothing rolls them back. Cheapest honest fix: clear the latch when
 the queue drains, or per document in `replace_project`. Found 2026-09-21,
 `reports/fable-2026-09-21.md` finding 8.
-
-**The channel and device clipboards outlive the song, carrying ids that named
-channels in the old one.** `CommandState::channel_clipboard`
-(`mooloop-session/src/command.rs:17`) is written at `lib.rs:8396` and `:8412`,
-read at `:1112` and `:8417`, and never set to `None`; the device clipboard is
-the same (`:15489`, read `:6392` and `:15511`). Three fields up in the same
-`CommandState`, `history` **is** cleared at both document boundaries
-(`lib.rs:13088` New Song, `:13464` Open Song) under a comment explaining why a
-snapshot must not cross a document. The clipboard was left out of that.
-
-Only `audio_input` carries a project id -- `ChannelMidiInput`
-(`core/src/midi.rs:382`) names a MIDI *port*, not a channel, so the report's
-"`audio_input` and `midi_input` ids" is half right. And the reason the paste
-is wrong is not that the id resolves to nothing: `assign_channel_ids`
-(`core/src/project.rs:1040`) gives an identity-less song `ChannelId(index)`
-and `next_channel_id` counts per document, so **low ids collide between
-songs** and a pasted `Channel(ChannelId(0))` names the new song's first
-channel -- inaudible, plausible, and wrong. `AudioInputSource::resolve` has no
-"departed" marker to fall back on, unlike Aux In's reseat
-(`aux_in.rs:219-227`, `DEPARTED_SOURCE`), so it reads as Off when it misses
-and as somebody else's channel when it hits. The same-song half is recorded
-below (`rescope_after`, `core/src/project.rs:1545`, does not touch the field).
-Whether a clipboard should survive a song is Adam's call; the ids inside it
-should not. Found 2026-09-21, `reports/fable-2026-09-21.md` finding 7; MOO-60.
 
 **Add Channel frees one allocation on the audio thread.** Not the automation
 lanes any more (`reports/fable-2026-09-21.md`, finding 1, fixed): what is
@@ -1175,37 +1141,6 @@ routes whose device is gone (`modulation.rs:1875`) while keeping *illegal*
 routes inert (`modulation.rs:1932`). Both behaviours were chosen on purpose in
 their own passes; nobody has decided whether they should match.
 
-**A pasted channel keeps the original's audio input, so a copy of a channel
-that resamples itself resamples the original.** `channel_clipboard`
-(`session/session.rs:1736`) clones the whole `ProjectChannel`, `audio_input`
-included (`core/src/channel.rs:158`), and nothing on the way back in touches
-it: `queue_channel_insert` (`mooloop-ui/src/lib.rs:1495`) renames the copy
-and resizes its lanes, and `rescope_after` (`core/src/project.rs:1545`) walks
-subscriptions, modulation and lanes and not this field. A paste of a channel
-whose input is `Channel(n)` therefore points at channel *n* — the original —
-rather than at itself, which is the reading a duplicated feedback path would
-want and not the reading a duplicated resampler would.
-
-Both are defensible and the field is one line either way, so this is a
-question rather than a defect: **Adam's call.** Neither answer needs the
-rescope walk; the copy's own id is minted by `insert_channel` and is
-available at the same point the name is made unique. Found 2026-09-20,
-`reports/fable-2026-09-20.md` finding 4.
-
-**Answered 2026-09-21, in the direction that cannot be wrong silently.**
-`queue_channel_insert` clears `audio_input` and `midi_input` on every paste
-and says so in the status message. The forcing case was the *other*
-document: the clipboard outlives New Song and Open Song
-(`CommandState::channel_clipboard` is written in two places and cleared
-nowhere), so a channel copied in one song pasted into the next carried ids
-that named whatever that song happened to have at those numbers
-(`reports/fable-2026-09-21.md`, finding 7). Adam's call stands for the
-same-song reading: if a duplicate should keep its input pick, the place to
-do it is here, with the copy's own id, and only when the clipboard and the
-document agree -- which needs a document identity the clipboard does not
-carry yet. Whether a clipboard should survive a song at all is the same
-question one level up, and is still open.
-
 ---
 
 ## One name, two policies
@@ -1516,27 +1451,6 @@ Moving tempo and swing onto `Session` is the one worth doing before any view
 rewrite. Pane layout and appearance preferences are read from the window too,
 which is fine: that is view state. The full list is in
 `docs/plans/egui-view-layer/00-status.md`.
-
-
-**Two EQ listening passes are owed, and the plan they belonged to has
-closed.** `eq-v2/` archived on 2026-09-15 when Adam declined step 04, so these
-are now owed against shipped code rather than against a pending decision, and
-they are recorded here so the archiving does not bury them. Neither is a
-defect; both are a change nobody has yet confirmed by ear.
-
-- **Step 03, the shelf slope.** Measured rather than guessed, so the listen is
-  narrow: at the Q both shelves rest at (0.707) the change peaks at **0.45 dB**
-  an octave from the corner, it pivots about the corner rather than moving the
-  shelf, and it is gone three octaves out. What actually changed is the Q knob,
-  which did nothing at all before -- **up to 1.9 dB at Q 0.15**. So the patches
-  affected are the ones where somebody tried to use that knob and gave up. Listen
-  to shelves with a Q away from 0.707, an octave either side of the corner.
-  `archive/eq-v2/00-status.md` has the table. See the shelf-Q entry above for
-  why the top 46% of that knob still does nothing.
-- **Step 02, the response plot.** Changed nothing audible and changed what the
-  picture *claims*: the curve is the bank's own coefficients evaluated rather
-  than a shape drawn to resemble them, and the pass filters appear in it at
-  last. That wants a look with a patch moving under it, not a listen.
 
 **`mooloop-ui` had never been linted, and two things had ridden in on that.**
 Fixed 2026-09-07, recorded because the *shape* of it will recur: `cargo

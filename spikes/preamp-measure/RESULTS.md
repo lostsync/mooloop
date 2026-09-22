@@ -596,7 +596,7 @@ picking a sound.
    is the **EMI TG12345**, as Waves NLS "Spike". `IRON` is authored from it
    as of the same day. The tilt question is untouched by this and is still
    open.
-5. **Should `Grip` equalise?** The SSL reference's fat low end is a
+5. **Should `Grip` equalise?** (open: MOO-163) The SSL reference's fat low end is a
    drive-dependent low shelf reaching +9 dB at 40 Hz, not frequency-dependent
    distortion. `Preamp`'s tilt pair is exactly reciprocal on purpose, so the
    stage colours without equalising and a test enforces it. Adding a
