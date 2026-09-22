@@ -16,6 +16,7 @@ table of which document to read for which task. Start there, not here.
 | [CURRENT.md](CURRENT.md) | What the application actually does, and where each behaviour stops. The one to update when behaviour changes. `SCOPE.md` is the list of what is missing. |
 | [TERMINOLOGY.md](TERMINOLOGY.md) | Channel, track, bus, send — which word means what, and why channel and track are not one word. Settled by Adam; read before naming anything in the mixer. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Crates, components, and the data crossing between them, in five small diagrams. |
+| [TEAMS.md](TEAMS.md) | The ten teams: which one owns each file, each symbol in a shared file, and each seam, and the `Team` label that carries it in Linear. |
 | [PROJECT_FORMAT.md](PROJECT_FORMAT.md) | The on-disk song, kit, and channel documents, and what each defaulted field is for. |
 | [GAIN_STRUCTURE.md](GAIN_STRUCTURE.md) | Operating level, summing, taper, wet/dry, metering. `gain.rs` is the authority. |
 | [REFERENCE_MEASUREMENTS.md](REFERENCE_MEASUREMENTS.md) | How to measure a reference plugin on the studio machine, and what to capture for which kind of device. Read before booking studio time for it. |
