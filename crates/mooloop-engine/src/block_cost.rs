@@ -235,7 +235,8 @@ fn resting_effect_cost() {
 
 /// **What a loop fold costs.** A fold clears every tail-holding ring in the
 /// project inside one callback: a delay's two-second stereo line is 768 KB
-/// at 48 kHz, and a reverb is eight lines, four diffusers and a predelay.
+/// at 48 kHz, and a reverb is eight lines, four input diffusers, eight in-loop
+/// diffusers and a predelay.
 /// The cost scales with the *song*, not the block, and a fold is every few
 /// seconds in a loop-based instrument
 /// (`reports/fable-2026-09-21.md`, finding 2).
