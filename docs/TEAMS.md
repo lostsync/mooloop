@@ -133,6 +133,9 @@ Files marked *shared* are split in the table above.
 - `session/src/engine.rs` (*shared*); `session/tests/ordering.rs`,
   `session/tests/delivery.rs`
 - `ui/ui/export-dialog.slint`
+- The plugin-host crate, once it exists (`docs/plans/plugin-hosting/`, MOO-11):
+  hosted code runs inside the callback. Scanning, plugin paths and packaging
+  are Platform & Release's.
 
 ### 2. Sequencing & Time
 
@@ -254,6 +257,8 @@ them belong to the device teams, and the container drawing in
   `Cargo.toml`
 - The tooling configuration: `.mcp.json`, `.codegraph/`, `.cursor/`,
   `.claude/`, `package.json`, `package-lock.json`, `.gitignore`
+- Plugin scanning, plugin paths, and packaging the plugin host
+  (`docs/plans/plugin-hosting/` step 05, MOO-80)
 
 ## In Linear
 
