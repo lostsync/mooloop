@@ -992,18 +992,15 @@ fn every_unrouted_face_knob_agrees_with_its_table() {
 /// `aux_in::descriptor`, so there is nothing for `EFFECT_FACES` to name it
 /// with.
 ///
-/// Its Level knob was the last face literal `scripts/dupe-audit
-/// unchecked-face` reported that anything could be done about, and it is the
-/// third spelling of one number. `aux_in.rs` says so itself, at length, above
-/// the literal it holds: that default is `gain::reference_level_gain()`
-/// written out because a const struct cannot call a function, and it is held
-/// to the real thing by a chain of two tests. The markup's copy was held to
-/// nothing at all.
-///
-/// The maximum is the same shape one level along. The face writes
-/// `GainMath.db-to-linear(12.0)` where the table says `MAX_LINEAR_GAIN`, so
-/// the two agree only as long as that `12.0` is `gain::MAX_DB` -- which is
-/// what this checks, rather than evaluating the conversion twice.
+/// Its Level knob is the pilot for the generator row struct finding 4 of
+/// `reports/fable-2026-09-22.md` asks for
+/// (`docs/plans/generator-face-rows/`): as of that pilot it works in
+/// normalized space, like every effect knob with no stated range, rather
+/// than the dB-derived natural range it used before. The check follows —
+/// `every_effect_face_knob_agrees_with_its_table`'s `(None, None)` branch is
+/// the model — because a bare `default-value:` is a normalized position,
+/// held to `descriptor.to_normalized(descriptor.default)` rather than to
+/// `descriptor.default` directly.
 #[test]
 fn the_aux_in_face_agrees_with_its_table() {
     let descriptor = mooloop_core::aux_in::descriptor(mooloop_core::aux_in::PARAM_LEVEL)
@@ -1014,39 +1011,83 @@ fn the_aux_in_face_agrees_with_its_table() {
         .expect("aux-in-device.slint no longer declares a knob bound to level");
 
     assert_eq!(
-        knob.minimum,
-        Some(descriptor.min),
-        "aux-in-device.slint:{}: face min against the table's {}",
-        knob.line,
-        descriptor.min
+        knob.minimum, None,
+        "aux-in-device.slint:{}: Level states a minimum again, so its default \
+         should be read against the table's natural units, not normalized",
+        knob.line
     );
-    assert!(
-        (knob.default - descriptor.default).abs() < 1e-6,
-        "aux-in-device.slint:{}: the face rests at {}, the table at {} -- and the \
-         table's is `gain::reference_level_gain()`, so this is that number a third \
-         time.",
-        knob.line,
-        knob.default,
-        descriptor.default
+    assert_eq!(
+        knob.maximum, None,
+        "aux-in-device.slint:{}: Level states a maximum again, so its default \
+         should be read against the table's natural units, not normalized",
+        knob.line
     );
 
-    // `maximum` is an expression, so `face_knobs` reads no number from it.
-    let top = AUX_IN_SLINT
-        .lines()
-        .find(|line| line.contains("maximum: GainMath.db-to-linear("))
-        .unwrap_or_else(|| {
-            panic!("aux-in-device.slint's Level knob stopped topping out at a dB value")
-        });
-    let stated: f32 = top
-        .split_once("db-to-linear(")
-        .and_then(|(_, rest)| rest.split(')').next())
-        .and_then(|number| number.trim().parse().ok())
-        .unwrap_or_else(|| panic!("not a plain dB literal: {top}"));
+    let want = descriptor.to_normalized(descriptor.default);
     assert!(
-        (stated - mooloop_core::gain::MAX_DB).abs() < 1e-4,
-        "aux-in-device.slint tops the Level knob at {stated} dB where gain::MAX_DB \
-         is {}, so the face and `MAX_LINEAR_GAIN` in the table no longer meet",
-        mooloop_core::gain::MAX_DB
+        (knob.default - want).abs() < 1e-3,
+        "aux-in-device.slint:{}: the face rests at {}, and the table's default \
+         of {} -- `gain::reference_level_gain()`, held to the real thing by a \
+         chain of two tests in `aux_in.rs` -- is {want} of the way along its \
+         range. A knob with no bounds works in 0..1, so these are the same \
+         number written twice.",
+        knob.line,
+        knob.default,
+        descriptor.default,
+    );
+}
+
+/// The read/write twin of `the_buffer_face_sends_descriptor_positions_for_edits`
+/// and `every_face_reads_its_parameters_by_id`, scoped to the one generator
+/// face migrated so far. `main.slint` feeds Aux In's knob from `source.pK`
+/// and forwards its edits through `source-param-changed(id, v)`; both `K`
+/// and `id` have to be `aux_in::PARAM_LEVEL`, not its position in a table
+/// that -- for Aux In specifically -- currently agrees with it, which is
+/// exactly the trap `AGENTS.md`'s "Parameter identity across the session
+/// boundary" section describes.
+#[test]
+fn the_aux_in_face_reads_and_writes_level_by_id() {
+    let level_id = mooloop_core::aux_in::PARAM_LEVEL;
+
+    // Not the bare component name: `main.slint` also names it in its own
+    // `import { AuxInDeviceFace } from "aux-in-device.slint";`, whose brace
+    // `blocks_after` would otherwise match instead of the instantiation's.
+    let (_, block) = blocks_after(MAIN_SLINT, ": AuxInDeviceFace {")
+        .into_iter()
+        .next()
+        .expect("main.slint no longer instantiates AuxInDeviceFace");
+
+    let read = block
+        .lines()
+        .find(|line| line.trim().starts_with("level:"))
+        .unwrap_or_else(|| panic!("AuxInDeviceFace's instantiation no longer binds level"));
+    let field: usize = read
+        .split("source.p")
+        .nth(1)
+        .and_then(|rest| {
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().ok()
+        })
+        .unwrap_or_else(|| panic!("{read} does not read Level from source.pK"));
+    assert_eq!(
+        field, level_id as usize,
+        "AuxInDeviceFace.level reads source.p{field}; the row carries Level in \
+         p{level_id}"
+    );
+
+    let write = block
+        .lines()
+        .find(|line| line.contains("level-changed(v)"))
+        .unwrap_or_else(|| panic!("AuxInDeviceFace's instantiation no longer forwards level-changed"));
+    let sent: u32 = write
+        .split_once("source-param-changed(")
+        .and_then(|(_, rest)| rest.split(',').next())
+        .and_then(|id| id.trim().parse().ok())
+        .unwrap_or_else(|| panic!("{write} has no literal id argument"));
+    assert_eq!(
+        sent, level_id,
+        "level-changed forwards id {sent} to source-param-changed; Aux In's \
+         Level descriptor is id {level_id}"
     );
 }
 

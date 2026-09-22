@@ -1,6 +1,5 @@
 import { Theme } from "theme.slint";
 import { ParameterKnob, PickerChip, SectionLabel } from "controls.slint";
-import { GainMath } from "gain.slint";
 
 // Aux In: a channel whose sound is another channel's published audio outlet.
 //
@@ -22,6 +21,9 @@ export component AuxInDeviceFace inherits Rectangle {
     // The chosen channel's audio outlets, likewise already filtered.
     in property <[string]> outlet-names;
     in property <int> outlet-index;
+    // Normalized 0..1, like an effect's `p0..p17`: `aux_in::PARAM_LEVEL`
+    // (id 2) is `main.slint`'s `source.p2`, and a drag reports back through
+    // `source-param-changed(2, v)` rather than a callback of its own.
     in property <float> level;
     in property <string> level-text;
     // Where the signal is tapped from, in the words `OutletTap::status`
@@ -110,9 +112,11 @@ export component AuxInDeviceFace inherits Rectangle {
                         label: "Level";
                         tooltip: "Aux In level";
                         value: root.level;
-                        minimum: 0;
-                        maximum: GainMath.db-to-linear(12.0);
-                        default-value: 0.3552344;
+                        // Normalized like every knob with no stated range:
+                        // `aux_in::PARAM_LEVEL`'s default (0 dB's reference
+                        // gain, `gain::reference_level_gain()`) is 0.0888086
+                        // of the way along its 0..MAX_LINEAR_GAIN table.
+                        default-value: 0.0888086;
                         value-text: root.level-text;
                         modulation-armed: root.modulation-armed;
                         modulation-allowed: root.modulation-allowed[2];

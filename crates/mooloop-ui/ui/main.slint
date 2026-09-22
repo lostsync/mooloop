@@ -358,6 +358,61 @@ struct EffectSlotRow {
     closing: [int],
 }
 
+// The selected channel's generator, addressed the way `EffectSlotRow`
+// addresses an effect: `kind` is `device_kind_to_int`'s number for it (the
+// same one `source-kind` below already carries), and `p0..p35` are its
+// normalized parameter values, **indexed by descriptor id** -- the same
+// number a saved automation lane and the modulation arrays below use.
+//
+// Sized to the widest declared generator table, the sampler's
+// (`SAMPLER_PARAM_SLICE_BASE_NOTE`, id 35 in `mooloop-core/src/generator.rs`);
+// a generator whose ids run past that needs this struct widened, the same
+// way `EFFECT_ROW_PARAMS` grew for the Reverb.
+//
+// This is the pilot from `docs/plans/generator-face-rows/`: only Aux In
+// reads it today (its Level, id 2, in `p2`) and writes back through
+// `source-param-changed`. Every other generator face still reads its own
+// flat properties below, so this row goes unfilled and unread for them.
+struct SourceRow {
+    kind: int,
+    p0: float,
+    p1: float,
+    p2: float,
+    p3: float,
+    p4: float,
+    p5: float,
+    p6: float,
+    p7: float,
+    p8: float,
+    p9: float,
+    p10: float,
+    p11: float,
+    p12: float,
+    p13: float,
+    p14: float,
+    p15: float,
+    p16: float,
+    p17: float,
+    p18: float,
+    p19: float,
+    p20: float,
+    p21: float,
+    p22: float,
+    p23: float,
+    p24: float,
+    p25: float,
+    p26: float,
+    p27: float,
+    p28: float,
+    p29: float,
+    p30: float,
+    p31: float,
+    p32: float,
+    p33: float,
+    p34: float,
+    p35: float,
+}
+
 // One selectable destination inside the automation lane picker.
 component AutomationMenuRow inherits Rectangle {
     in property <string> text;
@@ -1574,6 +1629,13 @@ export component MainWindow inherits Window {
     in-out property <string> browser-info-stats;
     in-out property <int> source-kind;      // 0=Sampler, 1=Drum, 2=Mono, 3=Poly, 4=ML-M1, 5=ML-P8, 6=DS-01, 7=Aux In
 
+    // The selected channel's generator as one row (`SourceRow`, above) --
+    // the pilot for the flat per-parameter properties every other generator
+    // still uses below. Only filled for Aux In today; see the struct's own
+    // comment.
+    in property <SourceRow> source;
+    callback source-param-changed(int, float);
+
     // ---- Aux In of the selected channel ----
     // "None" plus every channel that publishes audio. Already filtered, so a
     // row is not a channel index and the callbacks report the row.
@@ -1581,13 +1643,11 @@ export component MainWindow inherits Window {
     in-out property <int> aux-in-source-index;
     in property <[string]> aux-in-outlet-names;
     in-out property <int> aux-in-outlet-index;
-    in-out property <float> aux-in-level;
     in property <string> aux-in-level-text;
     in property <string> aux-in-tap-text;
     in property <string> aux-in-refusal-text;
     callback aux-in-source-picked(int);
     callback aux-in-outlet-picked(int);
-    callback aux-in-level-changed(float);
     in-out property <int> sampler-device-page;
     in-out property <int> mono-device-page;
     in-out property <int> poly-device-page;
@@ -4512,7 +4572,7 @@ export component MainWindow inherits Window {
                                                 source-index: root.aux-in-source-index;
                                                 outlet-names: root.aux-in-outlet-names;
                                                 outlet-index: root.aux-in-outlet-index;
-                                                level: root.aux-in-level;
+                                                level: root.source.p2;
                                                 level-text: root.aux-in-level-text;
                                                 tap-text: root.aux-in-tap-text;
                                                 refusal-text: root.aux-in-refusal-text;
@@ -4523,7 +4583,7 @@ export component MainWindow inherits Window {
                                                 modulation-route-counts: root.source-modulation-route-counts;
                                                 source-picked(i) => { root.aux-in-source-picked(i); }
                                                 outlet-picked(i) => { root.aux-in-outlet-picked(i); }
-                                                level-changed(v) => { root.aux-in-level-changed(v); }
+                                                level-changed(v) => { root.source-param-changed(2, v); }
                                                 modulation-depth-changed(p, v) => { root.source-modulation-depth-changed(p, v); }
                                                 modulation-edit-started(p) => { root.source-modulation-edit-started(p); }
                                                 modulation-edit-finished(p) => { root.source-modulation-edit-finished(p); }

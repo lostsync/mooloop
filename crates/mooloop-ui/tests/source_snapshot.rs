@@ -3,7 +3,7 @@ use mooloop_dsp::DrumSynth;
 use mooloop_ui::{
     device_kind_to_int, effect_kind_index, effect_kind_units, view, ChannelRow, EffectSlotRow,
     MainWindow, MlP8RouteRow, ModulationOutletRow, ModulationRouteRow, ModulationSourceRow,
-    StepCell,
+    SourceRow, StepCell,
 };
 use slint::platform::WindowEvent;
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, VecModel};
@@ -1430,7 +1430,11 @@ fn render_aux_in_source_editor() {
     // Nothing subscribed: the face says so rather than showing an outlet
     // picker for a source that does not exist.
     ui.set_aux_in_source_index(0);
-    ui.set_aux_in_level(0.355_234_4);
+    ui.set_source(SourceRow {
+        kind: device_kind_to_int(DeviceKind::AuxIn),
+        p2: 0.0888086, // aux_in::PARAM_LEVEL, normalized
+        ..Default::default()
+    });
     ui.set_aux_in_level_text(SharedString::from("-9.0 dB"));
     let unsubscribed = ui.window().take_snapshot().unwrap();
     assert_eq!((unsubscribed.width(), unsubscribed.height()), (960, 760));
