@@ -518,7 +518,7 @@ mod tests {
     #[test]
     fn offs_index_tracks_notes_through_inserts_replaces_and_removals() {
         fn assert_offs_matches(channel: &ChannelPattern) {
-            let mut expected: Vec<_> = channel.notes().iter().copied().collect();
+            let mut expected: Vec<_> = channel.notes().to_vec();
             expected.sort_by_key(|note| (note.end_tick(), note.id));
             let actual: Vec<_> = channel
                 .notes_ending_in(0..u32::MAX)
