@@ -56,6 +56,45 @@ fn loaded_project(count: usize) -> Project {
     project
 }
 
+/// `count` sampler channels, each holding a *full* pattern: one note every
+/// sixty-fourth across the whole `MAX_PATTERN_STEPS` capacity, 1,024 notes
+/// per channel, built with `NoteEvent::new` in a loop the way a note-dense
+/// pattern is actually authored. `loaded_project`'s one note per channel is
+/// the figure `pattern-bank-floor/00-status.md` reads as "the engine is not
+/// a problem"; this is the scheduling walk that number has never included
+/// (`reports/fable-2026-09-22.md`, finding 1, Plan A).
+fn scheduling_project(count: usize) -> Project {
+    use mooloop_core::{MAX_PATTERN_STEPS, TICKS_PER_64TH};
+    let mut project = Project::default();
+    project.channels.clear();
+    project.pattern_lengths = vec![MAX_PATTERN_STEPS];
+    for index in 0..count {
+        let mut channel = ProjectChannel::sampler(index, 1);
+        channel.notes[0] = (0..1024u32)
+            .map(|id| NoteEvent::new(id + 1, id * TICKS_PER_64TH, TICKS_PER_64TH, 60, 100))
+            .collect();
+        project.channels.push(channel);
+    }
+    project
+}
+
+/// [`scheduling_project`]'s full patterns, placed 64 times end to end on
+/// the playlist -- Song mode's shape of the same question, and the one
+/// `block_cost.rs` has never asked at all: nothing here built a Song-mode
+/// project before this.
+fn scheduling_song_project(count: usize) -> Project {
+    let mut project = scheduling_project(count);
+    let pattern_ticks = u32::from(project.pattern_lengths[0]) * mooloop_core::TICKS_PER_STEP;
+    project.playback_mode = mooloop_core::PlaybackMode::Song;
+    project.playlist = (0..64u32)
+        .map(|instance| mooloop_core::PatternPlacement {
+            pattern: 0,
+            start_tick: instance * pattern_ticks,
+        })
+        .collect();
+    project
+}
+
 /// `count` sampler channels with no sample loaded and nothing scheduled.
 ///
 /// The comparison that separates the two halves of an idle block: a sampler
@@ -154,6 +193,35 @@ fn block_cost_by_channels_and_buffer() {
                 nanos as f64 / budget_nanos * 100.0
             );
         }
+    }
+}
+
+/// What scheduling itself costs, as opposed to what `loaded_project`
+/// measures.
+///
+/// `loaded_project` holds one note per channel and no Song-mode case has
+/// ever existed here, so the 13-16% of a quantum
+/// `pattern-bank-floor/00-status.md` reads as "the engine is not a
+/// problem" has never included the per-block walk over a note-dense
+/// pattern or a placed-out song
+/// (`reports/fable-2026-09-22.md`, finding 1). Sixteen channels, each
+/// holding a full 1,024-note pattern, in Pattern mode and with the same
+/// patterns placed 64 times in Song mode, at 64 and 512 frames -- printed
+/// beside `loaded_project`'s one-note figure at the same channel count and
+/// frame size so the two read together.
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn scheduling_cost() {
+    println!();
+    println!("  mode       frames  ns/block   loaded_project (1 note/ch) ns/block");
+    for frames in [64usize, 512] {
+        let baseline = per_block_nanos(&loaded_project(16), frames, 400);
+
+        let pattern_ns = per_block_nanos(&scheduling_project(16), frames, 400);
+        println!("  {:<9}  {frames:>6}  {pattern_ns:>9}   {baseline:>9}", "Pattern");
+
+        let song_ns = per_block_nanos(&scheduling_song_project(16), frames, 400);
+        println!("  {:<9}  {frames:>6}  {song_ns:>9}   {baseline:>9}", "Song");
     }
 }
 

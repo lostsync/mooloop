@@ -4,12 +4,14 @@
 //! each process block. Pattern storage and event lists are bounded up front;
 //! scheduling and edits never allocate on the audio thread.
 
+use std::ops::Range;
+
 use mooloop_core::{
     AutomationLane, AutomationPoint, EffectTarget, LanePool, NoteEvent, NoteId, ParamAddr, Pattern,
     DeviceId, PatternPlacement, PlaybackMode, PointId, Ppq, Project,
     DEFAULT_NOTE_DURATION_TICKS, DEFAULT_STEPS, DEFAULT_SWING_PERCENT, MAX_CHANNELS,
-    MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS, MAX_SWING_PERCENT,
-    MIN_SWING_PERCENT, TICKS_PER_BAR, TICKS_PER_STEP,
+    MAX_NOTES_PER_CHANNEL_PATTERN, MAX_PATTERN_STEPS, MAX_PLAYLIST_PLACEMENTS, MAX_PLAYLIST_TICKS,
+    MAX_SWING_PERCENT, MIN_SWING_PERCENT, TICKS_PER_BAR, TICKS_PER_STEP,
 };
 use mooloop_dsp::{Event, EventList, TimedEvent};
 
@@ -35,6 +37,13 @@ impl FrameWindow {
     }
 }
 
+/// [`MAX_PATTERN_STEPS`] converted to ticks: the largest span a single
+/// pattern pass can occupy, and so how far before a reduced tick-range's
+/// start a placement search must reach to be sure it has not missed one
+/// that started earlier and still covers the range
+/// (`reports/fable-2026-09-22.md`, finding 1, Plan A).
+const MAX_PATTERN_TICKS: u32 = MAX_PATTERN_STEPS as u32 * TICKS_PER_STEP;
+
 pub struct Sequencer {
     patterns: Vec<Pattern>,
     active_patterns: usize,
@@ -43,6 +52,29 @@ pub struct Sequencer {
     playback_mode: PlaybackMode,
     swing_percent: u8,
     playlist: Vec<PatternPlacement>,
+    /// The same placements as `playlist`, sorted by `(start_tick, pattern)`
+    /// instead of `(pattern, start_tick)` -- a timeline view kept beside the
+    /// editing one rather than instead of it, since nothing about
+    /// `playlist`'s own order is allowed to change (`set_playlist_placement`'s
+    /// doc comment). Rebuilt incrementally at the same sites that touch
+    /// `playlist`, so a block never re-sorts it.
+    ///
+    /// Only [`Self::automation_lane_at`]'s Song arm reads this -- it answers
+    /// one destination and is asked once per automated destination per
+    /// block, so avoiding a walk of every placement pays for itself there.
+    /// `schedule_song` walks `playlist` itself instead, even though it is
+    /// exactly the query this view answers: it emits events, and two
+    /// placements can each contribute one at the very same offset, where
+    /// `push_ordered` keeps ties in insertion order -- so the walk has to
+    /// visit placements in `playlist`'s own order, not this one's. The
+    /// secondary key here matters for the query this view *does* answer:
+    /// two placements can share a start tick
+    /// (`song_mode_layers_patterns_at_the_same_position`), and the winner is
+    /// whichever comes last in `playlist`'s order, which is pattern
+    /// ascending within a shared start tick -- sorting by
+    /// `(start_tick, pattern)` reproduces that without having to remember
+    /// insertion history.
+    playlist_by_start: Vec<PatternPlacement>,
     /// Point storage for lanes opened on the audio thread. Filled here and
     /// topped up at every project install, both off the thread.
     lane_pool: LanePool,
@@ -71,6 +103,7 @@ impl Sequencer {
             playback_mode: PlaybackMode::Pattern,
             swing_percent: DEFAULT_SWING_PERCENT,
             playlist: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
+            playlist_by_start: Vec::with_capacity(MAX_PLAYLIST_PLACEMENTS),
             lane_pool: LanePool::new(),
         }
     }
@@ -156,7 +189,7 @@ impl Sequencer {
         let placement = PatternPlacement::new(pattern as u8, start_tick);
         let index = self.playlist.partition_point(|item| *item < placement);
         let present = self.playlist.get(index) == Some(&placement);
-        match (on, present) {
+        let changed = match (on, present) {
             (true, false) if self.playlist.len() < self.playlist.capacity() => {
                 self.playlist.insert(index, placement);
                 true
@@ -166,7 +199,41 @@ impl Sequencer {
                 true
             }
             _ => false,
+        };
+        if changed {
+            self.update_playlist_by_start(placement, on);
         }
+        changed
+    }
+
+    /// Keep [`Self::playlist_by_start`] in step with one change already made
+    /// to `playlist`. A sorted insert or removal by `(start_tick, pattern)`,
+    /// the same shape `playlist`'s own maintenance uses -- no re-sort, no
+    /// allocation, and the audio thread this runs on never sees either.
+    fn update_playlist_by_start(&mut self, placement: PatternPlacement, on: bool) {
+        let key = (placement.start_tick, placement.pattern);
+        let index = self
+            .playlist_by_start
+            .partition_point(|item| (item.start_tick, item.pattern) < key);
+        if on {
+            self.playlist_by_start.insert(index, placement);
+        } else {
+            debug_assert_eq!(self.playlist_by_start.get(index), Some(&placement));
+            self.playlist_by_start.remove(index);
+        }
+    }
+
+    /// Rebuild [`Self::playlist_by_start`] from `playlist` after a bulk
+    /// change (`load_project`) rather than one placement at a time. Off the
+    /// audio thread, so a full sort is fine; `sort_unstable_by_key` does not
+    /// need to be stable here because the key is already the whole ordering
+    /// (`(start_tick, pattern)`, and `playlist` holds no two placements with
+    /// the same `(pattern, start_tick)`, so no two share this key either).
+    fn rebuild_playlist_by_start(&mut self) {
+        self.playlist_by_start.clear();
+        self.playlist_by_start.extend_from_slice(&self.playlist);
+        self.playlist_by_start
+            .sort_unstable_by_key(|item| (item.start_tick, item.pattern));
     }
 
     #[cfg(test)]
@@ -240,6 +307,7 @@ impl Sequencer {
         // NoteOff half-releases them. `set_playlist_placement` refuses a
         // duplicate; the load path is the way one gets in.
         self.playlist.dedup();
+        self.rebuild_playlist_by_start();
 
         for pattern in &mut self.patterns {
             pattern.set_length_steps(DEFAULT_STEPS as usize);
@@ -595,9 +663,20 @@ impl Sequencer {
             }
             PlaybackMode::Song => {
                 let position = wrap_tick(song_tick, self.song_length_ticks());
+                // Every placement covering `position` starts at or before
+                // it and starts no more than one pattern pass earlier --
+                // the same widened, index-bounded search `schedule_song`
+                // runs for a span, here for a point.
+                let hi = self
+                    .playlist_by_start
+                    .partition_point(|item| f64::from(item.start_tick) <= position);
+                let lo_tick = (position - f64::from(MAX_PATTERN_TICKS)).max(0.0);
+                let lo = self
+                    .playlist_by_start
+                    .partition_point(|item| f64::from(item.start_tick) < lo_tick);
                 let mut best: Option<(&AutomationLane, f64, u32)> = None;
                 let mut best_start = 0u32;
-                for placement in &self.playlist {
+                for placement in &self.playlist_by_start[lo..hi] {
                     let pattern_index = placement.pattern as usize;
                     if pattern_index >= self.active_patterns {
                         continue;
@@ -716,6 +795,7 @@ impl Sequencer {
         if frames == 0 || end_tick <= start_tick || ticks_per_sample <= 0.0 {
             return;
         }
+        let swing_max = swing_offset_ticks(TICKS_PER_STEP, MAX_SWING_PERCENT);
         match self.playback_mode {
             PlaybackMode::Pattern => {
                 let Some(pattern) = self.patterns.get(self.current) else {
@@ -729,42 +809,45 @@ impl Sequencer {
                     let Some(channel) = pattern.channel(channel_index) else {
                         continue;
                     };
-                    for note in channel
-                        .notes()
-                        .iter()
-                        .copied()
-                        .filter(|note| note.start_tick < pattern_ticks)
-                    {
-                        let swing = swing_offset_ticks(note.start_tick, swing_percent);
-                        Self::schedule_edge_once(
-                            note,
-                            note.start_tick.saturating_add(swing),
-                            false,
-                            0,
-                            start_tick,
-                            end_tick,
-                            frames,
-                            ticks_per_sample,
-                            event_list,
-                        );
-                        Self::schedule_edge_once(
-                            note,
-                            note.end_tick().saturating_add(swing),
-                            true,
-                            0,
-                            start_tick,
-                            end_tick,
-                            frames,
-                            ticks_per_sample,
-                            event_list,
-                        );
-                    }
+                    Self::schedule_channel_once(
+                        channel,
+                        pattern_ticks,
+                        0,
+                        0,
+                        swing_percent,
+                        swing_max,
+                        start_tick,
+                        end_tick,
+                        frames,
+                        ticks_per_sample,
+                        event_list,
+                    );
                 }
             }
             PlaybackMode::Song => {
+                // No wraparound here (`schedule_once` is the no-loop, no-cut
+                // fast path -- see its callers in `render.rs`), so a
+                // placement is a candidate exactly when its own reach
+                // overlaps the (swing-widened) window once, not per repeat.
+                //
+                // Walked in `playlist`'s own order, not the start-sorted
+                // view: two placements can each contribute an event at the
+                // very same offset, and `push_ordered` keeps ties in
+                // insertion order, so this has to visit them in the order
+                // the original full walk did. The skip below is what keeps
+                // that walk cheap -- `playlist_by_start` stays for
+                // `automation_lane_at`, whose per-destination search has no
+                // insertion order to preserve.
+                let reach = MAX_PATTERN_TICKS.saturating_add(self.max_note_overshoot());
                 for placement in &self.playlist {
                     let pattern_index = placement.pattern as usize;
                     if pattern_index >= self.active_patterns {
+                        continue;
+                    }
+                    let anchor = f64::from(placement.start_tick);
+                    if anchor >= end_tick
+                        || anchor + f64::from(reach) <= start_tick - f64::from(swing_max)
+                    {
                         continue;
                     }
                     let pattern = &self.patterns[pattern_index];
@@ -778,42 +861,19 @@ impl Sequencer {
                         let Some(channel) = pattern.channel(channel_index) else {
                             continue;
                         };
-                        for note in channel
-                            .notes()
-                            .iter()
-                            .copied()
-                            .filter(|note| note.start_tick < pattern_ticks)
-                        {
-                            let swing = swing_offset_ticks(note.start_tick, swing_percent);
-                            Self::schedule_edge_once(
-                                note,
-                                placement
-                                    .start_tick
-                                    .saturating_add(note.start_tick)
-                                    .saturating_add(swing),
-                                false,
-                                instance,
-                                start_tick,
-                                end_tick,
-                                frames,
-                                ticks_per_sample,
-                                event_list,
-                            );
-                            Self::schedule_edge_once(
-                                note,
-                                placement
-                                    .start_tick
-                                    .saturating_add(note.end_tick())
-                                    .saturating_add(swing),
-                                true,
-                                instance,
-                                start_tick,
-                                end_tick,
-                                frames,
-                                ticks_per_sample,
-                                event_list,
-                            );
-                        }
+                        Self::schedule_channel_once(
+                            channel,
+                            pattern_ticks,
+                            placement.start_tick,
+                            instance,
+                            swing_percent,
+                            swing_max,
+                            start_tick,
+                            end_tick,
+                            frames,
+                            ticks_per_sample,
+                            event_list,
+                        );
                     }
                 }
             }
@@ -856,6 +916,75 @@ impl Sequencer {
         });
     }
 
+    /// [`Self::schedule_once`]'s per-channel body: candidates from the
+    /// note-on/note-off stores instead of a full walk, bounded to
+    /// `[start_tick, end_tick)` (widened for swing on the low side, since
+    /// swing only ever delays an edge -- `swing_offset_ticks` never
+    /// subtracts) with no wraparound to account for, because a finite pass
+    /// has none. `anchor` and `instance` carry a song placement's offset and
+    /// voice-id contribution; both are `0` for the pattern-mode playhead.
+    #[allow(clippy::too_many_arguments)]
+    fn schedule_channel_once(
+        channel: &mooloop_core::pattern::ChannelPattern,
+        pattern_ticks: u32,
+        anchor: u32,
+        instance: u64,
+        swing_percent: u8,
+        swing_max: u32,
+        start_tick: f64,
+        end_tick: f64,
+        frames: usize,
+        ticks_per_sample: f64,
+        event_list: &mut EventList,
+    ) {
+        let anchor_f = f64::from(anchor);
+        let lo = (start_tick - anchor_f - f64::from(swing_max))
+            .floor()
+            .max(0.0) as u32;
+        let hi = (end_tick - anchor_f).ceil().max(0.0) as u32;
+
+        for note in channel.notes_starting_in(lo..hi.min(pattern_ticks)) {
+            let swing = swing_offset_ticks(note.start_tick, swing_percent);
+            Self::schedule_edge_once(
+                *note,
+                anchor.saturating_add(note.start_tick).saturating_add(swing),
+                false,
+                instance,
+                start_tick,
+                end_tick,
+                frames,
+                ticks_per_sample,
+                event_list,
+            );
+        }
+
+        // `notes_ending_in` answers in end-tick order, not `notes()`'s own
+        // `(start_tick, id)` order -- so its candidates are marked here and
+        // then walked back through `notes()` below, in the order the walk
+        // this replaces visited every note in, since `push_ordered` keeps
+        // same-offset ties in the order they were pushed.
+        let mut off_candidate = [false; MAX_NOTES_PER_CHANNEL_PATTERN];
+        for index in channel.note_indices_ending_in(lo..hi) {
+            off_candidate[index] = true;
+        }
+        for (index, note) in channel.notes().iter().enumerate() {
+            if off_candidate[index] && note.start_tick < pattern_ticks {
+                let swing = swing_offset_ticks(note.start_tick, swing_percent);
+                Self::schedule_edge_once(
+                    *note,
+                    anchor.saturating_add(note.end_tick()).saturating_add(swing),
+                    true,
+                    instance,
+                    start_tick,
+                    end_tick,
+                    frames,
+                    ticks_per_sample,
+                    event_list,
+                );
+            }
+        }
+    }
+
     fn schedule_pattern(
         &self,
         start_tick: f64,
@@ -869,46 +998,28 @@ impl Sequencer {
         };
         let pattern_ticks = pattern.length_ticks();
         let swing_percent = self.swing_for_pattern(self.current);
+        let swing_max = swing_offset_ticks(TICKS_PER_STEP, MAX_SWING_PERCENT);
 
         for (channel_index, event_list) in events.iter_mut().enumerate().take(self.active_channels)
         {
             let Some(channel) = pattern.channel(channel_index) else {
                 continue;
             };
-            for note in channel
-                .notes()
-                .iter()
-                .copied()
-                .filter(|note| note.start_tick < pattern_ticks)
-            {
-                let swing = swing_offset_ticks(note.start_tick, swing_percent);
-                Self::schedule_note_edge(
-                    note,
-                    note.start_tick.saturating_add(swing),
-                    false,
-                    pattern_ticks,
-                    1,
-                    0,
-                    start_tick,
-                    end_tick,
-                    window,
-                    ticks_per_sample,
-                    event_list,
-                );
-                Self::schedule_note_edge(
-                    note,
-                    note.end_tick().saturating_add(swing),
-                    true,
-                    pattern_ticks,
-                    1,
-                    0,
-                    start_tick,
-                    end_tick,
-                    window,
-                    ticks_per_sample,
-                    event_list,
-                );
-            }
+            Self::schedule_channel_pass(
+                channel,
+                pattern_ticks,
+                pattern_ticks,
+                0,
+                1,
+                0,
+                swing_percent,
+                swing_max,
+                start_tick,
+                end_tick,
+                window,
+                ticks_per_sample,
+                event_list,
+            );
         }
     }
 
@@ -922,9 +1033,32 @@ impl Sequencer {
     ) {
         let song_ticks = self.song_length_ticks();
         let instance_stride = MAX_PLAYLIST_TICKS as u64 * self.patterns.len() as u64;
+        let swing_max = swing_offset_ticks(TICKS_PER_STEP, MAX_SWING_PERCENT);
+
+        // A placement is a candidate when its reach -- its pattern's
+        // length, plus however far any note in it sustains past that
+        // length, since nothing caps a note's duration to its pattern's --
+        // overlaps the (swing-widened) window on any repeat of the song.
+        //
+        // Walked in `playlist`'s own order, not the start-sorted view: two
+        // placements can each contribute an event at the very same offset,
+        // and `push_ordered` keeps ties in insertion order, so this has to
+        // visit them in the order the original full walk did (Plan A's
+        // first version used `playlist_by_start` here and the property test
+        // caught the reordering it caused). The `window_reaches` check
+        // below is what keeps that walk cheap -- `playlist_by_start` stays
+        // for `automation_lane_at`, whose per-destination search has no
+        // insertion order to preserve.
+        let reach = MAX_PATTERN_TICKS.saturating_add(self.max_note_overshoot());
         for placement in &self.playlist {
             let pattern_index = placement.pattern as usize;
             if pattern_index >= self.active_patterns {
+                continue;
+            }
+            let anchor = f64::from(placement.start_tick);
+            let q_lo = (start_tick - anchor - f64::from(swing_max)).floor() as i64;
+            let q_hi = (end_tick - anchor).ceil() as i64;
+            if !window_reaches(q_lo, q_hi, song_ticks, reach) {
                 continue;
             }
             let pattern = &self.patterns[pattern_index];
@@ -938,48 +1072,219 @@ impl Sequencer {
                 let Some(channel) = pattern.channel(channel_index) else {
                     continue;
                 };
-                for note in channel
-                    .notes()
-                    .iter()
-                    .copied()
-                    .filter(|note| note.start_tick < pattern_ticks)
-                {
-                    let swing = swing_offset_ticks(note.start_tick, swing_percent);
-                    Self::schedule_note_edge(
-                        note,
-                        placement
-                            .start_tick
-                            .saturating_add(note.start_tick)
-                            .saturating_add(swing),
-                        false,
-                        song_ticks,
-                        instance_stride,
-                        instance_offset,
-                        start_tick,
-                        end_tick,
-                        window,
-                        ticks_per_sample,
-                        event_list,
-                    );
-                    Self::schedule_note_edge(
-                        note,
-                        placement
-                            .start_tick
-                            .saturating_add(note.end_tick())
-                            .saturating_add(swing),
-                        true,
-                        song_ticks,
-                        instance_stride,
-                        instance_offset,
-                        start_tick,
-                        end_tick,
-                        window,
-                        ticks_per_sample,
+                Self::schedule_channel_pass(
+                    channel,
+                    pattern_ticks,
+                    song_ticks,
+                    placement.start_tick,
+                    instance_stride,
+                    instance_offset,
+                    swing_percent,
+                    swing_max,
+                    start_tick,
+                    end_tick,
+                    window,
+                    ticks_per_sample,
+                    event_list,
+                );
+            }
+        }
+    }
+
+    /// The most any note's raw end tick currently reaches past its own
+    /// pattern's declared length, across every pattern and channel the
+    /// song can place. Nothing caps a note's duration to its pattern's
+    /// length, so a placement's own reach past `start + pattern_ticks` is
+    /// exactly this -- `schedule_song` and `schedule_once`'s Song arm widen
+    /// their placement search by it, on top of [`MAX_PATTERN_TICKS`], so a
+    /// placement holding a long-sustaining note is never missed as a
+    /// candidate (`reports/fable-2026-09-22.md`, finding 1, Plan A: the bug
+    /// the property test caught before this existed).
+    ///
+    /// `O(active_patterns * active_channels)`, not the note count -- cheap
+    /// next to the per-block walk this whole scheme replaces, and
+    /// independent of it.
+    fn max_note_overshoot(&self) -> u32 {
+        (0..self.active_patterns)
+            .filter_map(|pattern_index| self.patterns.get(pattern_index))
+            .flat_map(|pattern| {
+                let pattern_ticks = pattern.length_ticks();
+                let channels = self.active_channels;
+                (0..channels)
+                    .filter_map(move |channel_index| pattern.channel(channel_index))
+                    .filter_map(move |channel| channel.max_end_tick())
+                    .map(move |max_end| max_end.saturating_sub(pattern_ticks))
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// One channel's notes for one pattern pass -- the pattern-mode
+    /// playhead itself, or one song placement -- scheduled from the
+    /// note-on/note-off stores instead of a full walk
+    /// (`reports/fable-2026-09-22.md`, finding 1, Plan A).
+    ///
+    /// `pattern_ticks` bounds which notes are in play this pass: a note
+    /// whose own start has drifted past a shortened pattern is stored but
+    /// silent, the filter the walk this replaces applied with
+    /// `.filter(|note| note.start_tick < pattern_ticks)`. `period_ticks` is
+    /// what the *edges* repeat on -- the pattern's own length in Pattern
+    /// mode, the whole song's in Song mode, where a placement plays once
+    /// per song pass rather than once per pattern pass. `anchor` is the
+    /// absolute tick this pass's local tick `0` sits at: `0` for the
+    /// pattern-mode playhead, a placement's `start_tick` in Song mode.
+    #[allow(clippy::too_many_arguments)]
+    fn schedule_channel_pass(
+        channel: &mooloop_core::pattern::ChannelPattern,
+        pattern_ticks: u32,
+        period_ticks: u32,
+        anchor: u32,
+        instance_stride: u64,
+        instance_offset: u64,
+        swing_percent: u8,
+        swing_max: u32,
+        start_tick: f64,
+        end_tick: f64,
+        window: FrameWindow,
+        ticks_per_sample: f64,
+        event_list: &mut EventList,
+    ) {
+        let anchor_f = f64::from(anchor);
+        let q_lo = (start_tick - anchor_f - f64::from(swing_max)).floor() as i64;
+        let q_hi = (end_tick - anchor_f).ceil() as i64;
+        let reduced = reduce_window(q_lo, q_hi, period_ticks);
+
+        let Some((r1, r2)) = reduced else {
+            // The span covers a whole pass; every note is a candidate,
+            // exactly the walk this replaces.
+            for note in channel
+                .notes()
+                .iter()
+                .copied()
+                .filter(|note| note.start_tick < pattern_ticks)
+            {
+                Self::schedule_local_edge(
+                    note, false, anchor, swing_percent, period_ticks, instance_stride,
+                    instance_offset, start_tick, end_tick, window, ticks_per_sample, event_list,
+                );
+                Self::schedule_local_edge(
+                    note, true, anchor, swing_percent, period_ticks, instance_stride,
+                    instance_offset, start_tick, end_tick, window, ticks_per_sample, event_list,
+                );
+            }
+            return;
+        };
+
+        // Ascending `(start_tick, id)` order -- the order the walk this
+        // replaces visited every note in, which `push_ordered` needs
+        // reproduced exactly for two notes that tie at the same offset.
+        // `r2`, when present, is always the *lower* tick range (`reduce_window`
+        // only ever splits as `lo..period` then `0..overflow`, and
+        // `overflow <= lo` is exactly what makes the split correct), so it
+        // has to be walked before `r1` to stay in that order.
+        for range in [r2.clone(), Some(r1.clone())].into_iter().flatten() {
+            for note in channel.notes_starting_in(range) {
+                if note.start_tick < pattern_ticks {
+                    Self::schedule_local_edge(
+                        *note, false, anchor, swing_percent, period_ticks, instance_stride,
+                        instance_offset, start_tick, end_tick, window, ticks_per_sample,
                         event_list,
                     );
                 }
             }
         }
+
+        // A note-off's raw end tick is unbounded (nothing caps duration to
+        // the pattern's length), so the end-tick index cannot be trusted to
+        // a single reduced range the way the start-tick one can: a note
+        // that sustains less than one whole pass has its end tick in
+        // `[0, 2 * period_ticks)`, covered by the reduced range and that
+        // same range shifted forward by one period. A note that sustains
+        // *more* than that falls back to the full walk, same as the
+        // whole-pass case above -- rare (nothing authored inside one
+        // pattern ordinarily lasts a whole extra pass), always correct, and
+        // cheap even when it triggers since it is still one channel's worth
+        // of notes, not the song's.
+        let needs_fallback = channel
+            .max_end_tick()
+            .is_some_and(|max_end| max_end >= period_ticks.saturating_mul(2));
+        if needs_fallback {
+            for note in channel
+                .notes()
+                .iter()
+                .copied()
+                .filter(|note| note.start_tick < pattern_ticks)
+            {
+                Self::schedule_local_edge(
+                    note, true, anchor, swing_percent, period_ticks, instance_stride,
+                    instance_offset, start_tick, end_tick, window, ticks_per_sample, event_list,
+                );
+            }
+        } else {
+            // `notes_ending_in` answers in end-tick order, which is *not*
+            // `notes()`'s own `(start_tick, id)` order (a note that starts
+            // earlier can easily end later), so candidates are marked here
+            // and the emission below walks `notes()` itself -- the same
+            // fix `schedule_channel_once` needs, for the same reason.
+            let mut off_candidate = [false; MAX_NOTES_PER_CHANNEL_PATTERN];
+            for range in [Some(r1), r2].into_iter().flatten() {
+                for shift in [0u32, period_ticks] {
+                    let shifted =
+                        range.start.saturating_add(shift)..range.end.saturating_add(shift);
+                    for index in channel.note_indices_ending_in(shifted) {
+                        off_candidate[index] = true;
+                    }
+                }
+            }
+            for (index, note) in channel.notes().iter().enumerate() {
+                if off_candidate[index] && note.start_tick < pattern_ticks {
+                    Self::schedule_local_edge(
+                        *note, true, anchor, swing_percent, period_ticks, instance_stride,
+                        instance_offset, start_tick, end_tick, window, ticks_per_sample,
+                        event_list,
+                    );
+                }
+            }
+        }
+    }
+
+    /// One note-on or note-off edge, anchored and swung, via
+    /// [`Self::schedule_note_edge`]'s unchanged cycle math. The shared tail
+    /// of every branch in [`Self::schedule_channel_pass`].
+    #[allow(clippy::too_many_arguments)]
+    fn schedule_local_edge(
+        note: NoteEvent,
+        is_note_off: bool,
+        anchor: u32,
+        swing_percent: u8,
+        period_ticks: u32,
+        instance_stride: u64,
+        instance_offset: u64,
+        start_tick: f64,
+        end_tick: f64,
+        window: FrameWindow,
+        ticks_per_sample: f64,
+        event_list: &mut EventList,
+    ) {
+        let swing = swing_offset_ticks(note.start_tick, swing_percent);
+        let local = if is_note_off {
+            note.end_tick()
+        } else {
+            note.start_tick
+        };
+        Self::schedule_note_edge(
+            note,
+            anchor.saturating_add(local).saturating_add(swing),
+            is_note_off,
+            period_ticks,
+            instance_stride,
+            instance_offset,
+            start_tick,
+            end_tick,
+            window,
+            ticks_per_sample,
+            event_list,
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1051,6 +1356,54 @@ fn swing_offset_ticks(note_start_tick: u32, percent: u8) -> u32 {
     let amount = u32::from(percent.clamp(MIN_SWING_PERCENT, MAX_SWING_PERCENT))
         - u32::from(MIN_SWING_PERCENT);
     (TICKS_PER_STEP * 2 * amount + 50) / 100
+}
+
+/// Reduce an absolute tick window to up to two ranges inside `[0, period)`
+/// -- the positions a value repeating on `period` could land on to
+/// intersect it. `None` means the window's own span already covers a whole
+/// period, so every position in `[0, period)` is a candidate: the fallback
+/// the full walk this whole scheme replaces still is, for the pattern
+/// lengths short enough (or blocks large enough) to reach it.
+///
+/// `q_lo`/`q_hi` are integers so that a window already widened for swing
+/// cannot have its edges rounded past an in-range integer tick; the caller
+/// floors the low edge and ceils the high one before calling this. Being
+/// generous here is always safe -- every note this returns as a candidate
+/// is still checked exactly by [`Sequencer::schedule_note_edge`], so an
+/// extra one costs a rejected comparison and a missing one is the bug this
+/// whole indexing scheme cannot afford
+/// (`reports/fable-2026-09-22.md`, finding 1, Plan A).
+fn reduce_window(q_lo: i64, q_hi: i64, period: u32) -> Option<(Range<u32>, Option<Range<u32>>)> {
+    let period_i = i64::from(period);
+    if period_i <= 0 || q_hi <= q_lo {
+        return Some((0..0, None));
+    }
+    if q_hi - q_lo >= period_i {
+        return None;
+    }
+    let lo = q_lo.rem_euclid(period_i);
+    let hi = lo + (q_hi - q_lo);
+    if hi <= period_i {
+        Some((lo as u32..hi as u32, None))
+    } else {
+        Some((lo as u32..period, Some(0..(hi - period_i) as u32)))
+    }
+}
+
+/// Whether a placement starting at local tick `0` and reaching `reach`
+/// ticks -- `[0, reach)` -- could contribute an event to the window
+/// `[q_lo, q_hi)` on any repeat of `period`. `schedule_song` and
+/// `schedule_once`'s Song arm use this as a cheap per-placement skip
+/// (walking `playlist` in its own order rather than pruning it with
+/// `playlist_by_start`, which would reorder the ties `push_ordered` needs
+/// kept in `playlist`'s order -- see `schedule_song`'s doc comment).
+fn window_reaches(q_lo: i64, q_hi: i64, period: u32, reach: u32) -> bool {
+    match reduce_window(q_lo, q_hi, period) {
+        None => true,
+        Some((r1, r2)) => {
+            (r1.start < reach && r1.end > 0) || r2.is_some_and(|r2| r2.start < reach && r2.end > 0)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1407,5 +1760,403 @@ mod tests {
         let events = schedule_range(&sequencer, wrap, wrap + 2.0);
         assert_eq!(events[0].offset, 0);
         assert!(matches!(events[0].event, Event::NoteOn { .. }));
+    }
+
+    // -- Plan A property test -------------------------------------------
+    //
+    // `schedule`/`schedule_once` now answer from `notes_starting_in`/
+    // `notes_ending_in` and the start-sorted playlist view instead of a
+    // full walk. Both reference functions below call the *same*
+    // `schedule_note_edge`/`schedule_edge_once` the fast path calls --
+    // they just call it for every note (`.filter(|note| note.start_tick <
+    // pattern_ticks)`, precisely the walk `reports/fable-2026-09-22.md`
+    // describes), so a mismatch here can only be the candidate-selection
+    // layer missing or duplicating a note, never a divergence in the edge
+    // math itself.
+
+    /// Tiny deterministic PRNG (xorshift64*) so the property test is
+    /// reproducible without a `rand` dependency.
+    struct Rng(u64);
+
+    impl Rng {
+        fn new(seed: u64) -> Self {
+            Self(seed | 1)
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+
+        fn range_u32(&mut self, lo: u32, hi: u32) -> u32 {
+            if hi <= lo {
+                return lo;
+            }
+            lo + (self.next_u64() as u32) % (hi - lo)
+        }
+
+        fn range_f64(&mut self, lo: f64, hi: f64) -> f64 {
+            lo + (self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64) * (hi - lo)
+        }
+
+        fn chance(&mut self, percent: u32) -> bool {
+            self.range_u32(0, 100) < percent
+        }
+    }
+
+    fn dump(sequencer: &Sequencer) -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
+        let _ = writeln!(out, "active_channels={} active_patterns={} current={} swing={}",
+            sequencer.active_channels, sequencer.active_patterns, sequencer.current, sequencer.swing_percent);
+        for p in 0..sequencer.active_patterns {
+            let pattern = &sequencer.patterns[p];
+            let _ = writeln!(out, "pattern {p}: length_ticks={}", pattern.length_ticks());
+            for c in 0..sequencer.active_channels {
+                if let Some(channel) = pattern.channel(c) {
+                    let _ = writeln!(out, "  channel {c}: {:?}", channel.notes());
+                }
+            }
+        }
+        let _ = writeln!(out, "playlist={:?}", sequencer.playlist);
+        out
+    }
+
+    fn empty_event_lists(channels: usize) -> Vec<Box<EventList>> {
+        (0..channels).map(|_| Box::new(EventList::empty())).collect()
+    }
+
+    fn collect_lists(events: &[Box<EventList>]) -> Vec<Vec<TimedEvent>> {
+        events
+            .iter()
+            .map(|list| list.iter().copied().collect())
+            .collect()
+    }
+
+    fn real_schedule(
+        sequencer: &Sequencer,
+        start_tick: f64,
+        end_tick: f64,
+        frames: usize,
+        ticks_per_sample: f64,
+    ) -> Vec<Vec<TimedEvent>> {
+        let mut events = empty_event_lists(sequencer.active_channels);
+        sequencer.schedule(start_tick, end_tick, 0, frames, ticks_per_sample, &mut events);
+        collect_lists(&events)
+    }
+
+    fn real_schedule_once(
+        sequencer: &Sequencer,
+        start_tick: f64,
+        end_tick: f64,
+        frames: usize,
+        ticks_per_sample: f64,
+    ) -> Vec<Vec<TimedEvent>> {
+        let mut events = empty_event_lists(sequencer.active_channels);
+        sequencer.schedule_once(start_tick, end_tick, frames, ticks_per_sample, &mut events);
+        collect_lists(&events)
+    }
+
+    /// The full walk Plan A replaces, calling the same edge math the fast
+    /// path does for every note rather than only the candidates the indexed
+    /// stores narrow it to.
+    fn brute_force_schedule(
+        sequencer: &Sequencer,
+        start_tick: f64,
+        end_tick: f64,
+        frames: usize,
+        ticks_per_sample: f64,
+    ) -> Vec<Vec<TimedEvent>> {
+        let mut events = empty_event_lists(sequencer.active_channels);
+        if frames == 0
+            || !start_tick.is_finite()
+            || !end_tick.is_finite()
+            || !ticks_per_sample.is_finite()
+            || ticks_per_sample <= 0.0
+            || end_tick <= start_tick
+        {
+            return collect_lists(&events);
+        }
+        let window = FrameWindow { offset: 0, frames };
+        match sequencer.playback_mode {
+            PlaybackMode::Pattern => {
+                if let Some(pattern) = sequencer.patterns.get(sequencer.current) {
+                    let pattern_ticks = pattern.length_ticks();
+                    let swing_percent = sequencer.swing_for_pattern(sequencer.current);
+                    for (channel_index, event_list) in events.iter_mut().enumerate() {
+                        let Some(channel) = pattern.channel(channel_index) else {
+                            continue;
+                        };
+                        for note in channel
+                            .notes()
+                            .iter()
+                            .copied()
+                            .filter(|note| note.start_tick < pattern_ticks)
+                        {
+                            let swing = swing_offset_ticks(note.start_tick, swing_percent);
+                            Sequencer::schedule_note_edge(
+                                note, note.start_tick.saturating_add(swing), false,
+                                pattern_ticks, 1, 0, start_tick, end_tick, window,
+                                ticks_per_sample, event_list,
+                            );
+                            Sequencer::schedule_note_edge(
+                                note, note.end_tick().saturating_add(swing), true,
+                                pattern_ticks, 1, 0, start_tick, end_tick, window,
+                                ticks_per_sample, event_list,
+                            );
+                        }
+                    }
+                }
+            }
+            PlaybackMode::Song => {
+                let song_ticks = sequencer.song_length_ticks();
+                let instance_stride = MAX_PLAYLIST_TICKS as u64 * sequencer.patterns.len() as u64;
+                for placement in &sequencer.playlist {
+                    let pattern_index = placement.pattern as usize;
+                    if pattern_index >= sequencer.active_patterns {
+                        continue;
+                    }
+                    let pattern = &sequencer.patterns[pattern_index];
+                    let swing_percent = sequencer.swing_for_pattern(pattern_index);
+                    let instance_offset = placement.pattern as u64 * MAX_PLAYLIST_TICKS as u64
+                        + u64::from(placement.start_tick);
+                    let pattern_ticks = pattern.length_ticks();
+                    for (channel_index, event_list) in events.iter_mut().enumerate() {
+                        let Some(channel) = pattern.channel(channel_index) else {
+                            continue;
+                        };
+                        for note in channel
+                            .notes()
+                            .iter()
+                            .copied()
+                            .filter(|note| note.start_tick < pattern_ticks)
+                        {
+                            let swing = swing_offset_ticks(note.start_tick, swing_percent);
+                            Sequencer::schedule_note_edge(
+                                note,
+                                placement
+                                    .start_tick
+                                    .saturating_add(note.start_tick)
+                                    .saturating_add(swing),
+                                false, song_ticks, instance_stride, instance_offset,
+                                start_tick, end_tick, window, ticks_per_sample, event_list,
+                            );
+                            Sequencer::schedule_note_edge(
+                                note,
+                                placement
+                                    .start_tick
+                                    .saturating_add(note.end_tick())
+                                    .saturating_add(swing),
+                                true, song_ticks, instance_stride, instance_offset,
+                                start_tick, end_tick, window, ticks_per_sample, event_list,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        collect_lists(&events)
+    }
+
+    /// The full walk `schedule_once` replaced, same shape as
+    /// [`brute_force_schedule`] but through `schedule_edge_once`'s
+    /// no-wraparound math.
+    fn brute_force_schedule_once(
+        sequencer: &Sequencer,
+        start_tick: f64,
+        end_tick: f64,
+        frames: usize,
+        ticks_per_sample: f64,
+    ) -> Vec<Vec<TimedEvent>> {
+        let mut events = empty_event_lists(sequencer.active_channels);
+        if frames == 0 || end_tick <= start_tick || ticks_per_sample <= 0.0 {
+            return collect_lists(&events);
+        }
+        match sequencer.playback_mode {
+            PlaybackMode::Pattern => {
+                if let Some(pattern) = sequencer.patterns.get(sequencer.current) {
+                    let pattern_ticks = pattern.length_ticks();
+                    let swing_percent = sequencer.swing_for_pattern(sequencer.current);
+                    for (channel_index, event_list) in events.iter_mut().enumerate() {
+                        let Some(channel) = pattern.channel(channel_index) else {
+                            continue;
+                        };
+                        for note in channel
+                            .notes()
+                            .iter()
+                            .copied()
+                            .filter(|note| note.start_tick < pattern_ticks)
+                        {
+                            let swing = swing_offset_ticks(note.start_tick, swing_percent);
+                            Sequencer::schedule_edge_once(
+                                note, note.start_tick.saturating_add(swing), false, 0,
+                                start_tick, end_tick, frames, ticks_per_sample, event_list,
+                            );
+                            Sequencer::schedule_edge_once(
+                                note, note.end_tick().saturating_add(swing), true, 0,
+                                start_tick, end_tick, frames, ticks_per_sample, event_list,
+                            );
+                        }
+                    }
+                }
+            }
+            PlaybackMode::Song => {
+                for placement in &sequencer.playlist {
+                    let pattern_index = placement.pattern as usize;
+                    if pattern_index >= sequencer.active_patterns {
+                        continue;
+                    }
+                    let pattern = &sequencer.patterns[pattern_index];
+                    let swing_percent = sequencer.swing_for_pattern(pattern_index);
+                    let pattern_ticks = pattern.length_ticks();
+                    let instance = u64::from(placement.pattern) * u64::from(MAX_PLAYLIST_TICKS)
+                        + u64::from(placement.start_tick);
+                    for (channel_index, event_list) in events.iter_mut().enumerate() {
+                        let Some(channel) = pattern.channel(channel_index) else {
+                            continue;
+                        };
+                        for note in channel
+                            .notes()
+                            .iter()
+                            .copied()
+                            .filter(|note| note.start_tick < pattern_ticks)
+                        {
+                            let swing = swing_offset_ticks(note.start_tick, swing_percent);
+                            Sequencer::schedule_edge_once(
+                                note,
+                                placement
+                                    .start_tick
+                                    .saturating_add(note.start_tick)
+                                    .saturating_add(swing),
+                                false, instance, start_tick, end_tick, frames,
+                                ticks_per_sample, event_list,
+                            );
+                            Sequencer::schedule_edge_once(
+                                note,
+                                placement
+                                    .start_tick
+                                    .saturating_add(note.end_tick())
+                                    .saturating_add(swing),
+                                true, instance, start_tick, end_tick, frames,
+                                ticks_per_sample, event_list,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        collect_lists(&events)
+    }
+
+    /// The indexed path (`notes_starting_in`/`notes_ending_in`, the
+    /// start-sorted playlist view) must emit exactly the events the old
+    /// full walk did, in the same order, for every note it touches -- over
+    /// random patterns, random swing, random playlists, and random query
+    /// windows, in both playback modes, through both `schedule` and
+    /// `schedule_once`. Deliberately biased toward the edge cases Plan A's
+    /// candidate selection has to get right rather than reject as a
+    /// false positive: patterns short enough that one block spans a whole
+    /// pass, notes whose duration sustains past one pass (the note-off
+    /// fallback), and playlist placements sharing a start tick (the
+    /// layering tie-break).
+    #[test]
+    fn indexed_scheduling_matches_brute_force_over_random_patterns() {
+        let mut rng = Rng::new(0xC0FFEE_D15EA5E);
+        for trial in 0..60u32 {
+            let channels = rng.range_u32(1, 5) as usize;
+            let active_patterns = rng.range_u32(1, 4) as usize;
+            let mut sequencer =
+                Sequencer::new(channels, active_patterns, DEFAULT_STEPS as usize, Ppq::DEFAULT);
+            for _ in 1..active_patterns {
+                sequencer.add_pattern();
+            }
+            sequencer.set_active_channels(channels);
+            sequencer.set_swing(rng.range_u32(50, 76) as u8);
+
+            for pattern in 0..active_patterns {
+                // Occasionally a very short pattern, to exercise the
+                // "span already covers a whole pass" fallback.
+                let steps = if rng.chance(15) {
+                    rng.range_u32(1, 3)
+                } else {
+                    rng.range_u32(1, 64)
+                };
+                sequencer.set_pattern_length(pattern, steps as usize);
+                let pattern_ticks = sequencer.pattern_length_ticks(pattern).unwrap_or(1);
+                for channel in 0..channels {
+                    let note_count = rng.range_u32(0, 14);
+                    for id in 0..note_count {
+                        // Sometimes past the pattern's current length, so
+                        // the `start_tick < pattern_ticks` filter has
+                        // something to actually exclude.
+                        let start = rng.range_u32(0, pattern_ticks + 60);
+                        // Occasionally a duration spanning a whole pass or
+                        // more, to exercise the note-off fallback.
+                        let duration = if rng.chance(12) {
+                            rng.range_u32(pattern_ticks, pattern_ticks.saturating_mul(3) + 5)
+                        } else {
+                            rng.range_u32(1, 60)
+                        };
+                        let note = NoteEvent::new(id + 1, start, duration.max(1), 60, 100);
+                        sequencer.upsert_note(pattern, channel, note);
+                    }
+                }
+            }
+
+            // A handful of placements, sometimes sharing a start tick
+            // (the layering tie-break) and spread widely enough to make a
+            // short song's own wraparound reachable.
+            let placement_count = rng.range_u32(0, 7);
+            let mut shared_start = None;
+            for _ in 0..placement_count {
+                let pattern = rng.range_u32(0, active_patterns as u32) as usize;
+                let start = if rng.chance(30) {
+                    *shared_start.get_or_insert_with(|| rng.range_u32(0, TICKS_PER_BAR * 3))
+                } else {
+                    rng.range_u32(0, TICKS_PER_BAR * 3)
+                };
+                sequencer.set_playlist_placement(pattern, start, true);
+            }
+
+            for mode in [PlaybackMode::Pattern, PlaybackMode::Song] {
+                sequencer.set_playback_mode(mode);
+                let bpm = rng.range_f64(20.0, 999.0);
+                let sample_rate = [22_050u32, 44_100, 48_000, 96_000]
+                    [rng.range_u32(0, 4) as usize];
+                let ticks_per_sample =
+                    mooloop_core::ticks_per_sample(bpm, sample_rate, Ppq::DEFAULT);
+
+                for query in 0..12u32 {
+                    let start_tick = rng.range_f64(0.0, f64::from(TICKS_PER_BAR) * 4.0);
+                    let frames = rng.range_u32(1, 700) as usize;
+                    let end_tick = start_tick + frames as f64 * ticks_per_sample;
+
+                    let expected =
+                        brute_force_schedule(&sequencer, start_tick, end_tick, frames, ticks_per_sample);
+                    let actual = real_schedule(&sequencer, start_tick, end_tick, frames, ticks_per_sample);
+                    assert_eq!(
+                        actual, expected,
+                        "schedule mismatch: trial {trial} query {query} mode {mode:?} \
+                         start {start_tick} frames {frames} ticks_per_sample {ticks_per_sample}\n{}",
+                        dump(&sequencer)
+                    );
+
+                    let expected_once =
+                        brute_force_schedule_once(&sequencer, start_tick, end_tick, frames, ticks_per_sample);
+                    let actual_once =
+                        real_schedule_once(&sequencer, start_tick, end_tick, frames, ticks_per_sample);
+                    assert_eq!(
+                        actual_once, expected_once,
+                        "schedule_once mismatch: trial {trial} query {query} mode {mode:?} \
+                         start {start_tick} frames {frames} ticks_per_sample {ticks_per_sample}\n{}",
+                        dump(&sequencer)
+                    );
+                }
+            }
+        }
     }
 }
