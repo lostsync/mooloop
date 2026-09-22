@@ -8392,26 +8392,31 @@ impl AppUi {
             let history_state = state.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
+            // Inside the lane's press-to-release gesture, so a point created
+            // and then dragged is one entry named for the creation.
             window.on_automation_point_created(move |tick, value| {
                 let Some(window) = weak.upgrade() else {
                     return -1;
                 };
-                let before = project_snapshot(&st.borrow(), &window);
-                let mut st = st.borrow_mut();
-                let Some((id, command)) = st.session.create_automation_point(tick, value) else {
-                    return -1;
-                };
-                let _ = tx.send(command);
-                st.refresh_automation_points(&window);
-                drop(st);
-                record_project_history(
-                    &commands,
-                    before,
+                let mut created = -1;
+                with_gesture_history(
                     &history_state,
+                    &commands,
                     &window,
                     "Automation point added",
+                    || {
+                        let mut st = st.borrow_mut();
+                        let Some((id, command)) = st.session.create_automation_point(tick, value)
+                        else {
+                            return false;
+                        };
+                        let _ = tx.send(command);
+                        st.refresh_automation_points(&window);
+                        created = id as i32;
+                        true
+                    },
                 );
-                id as i32
+                created
             });
         }
         {
@@ -8420,25 +8425,29 @@ impl AppUi {
             let history_state = state.clone();
             let commands = command_state.clone();
             let weak = window.as_weak();
+            // Every pointer frame of a drag lands here. The lane opens a
+            // gesture on the press, so the whole drag is one undo entry
+            // rather than one per frame -- which also kept a single drag from
+            // spending most of a heavy song's history.
             window.on_automation_point_moved(move |id, tick, value| {
                 let Some(window) = weak.upgrade() else { return };
-                let before = project_snapshot(&st.borrow(), &window);
-                let mut st = st.borrow_mut();
-                let Some(command) = st
-                    .session
-                    .move_automation_point(id.max(0) as PointId, tick, value)
-                else {
-                    return;
-                };
-                let _ = tx.send(command);
-                st.refresh_automation_points(&window);
-                drop(st);
-                record_project_history(
-                    &commands,
-                    before,
+                with_gesture_history(
                     &history_state,
+                    &commands,
                     &window,
                     "Automation point moved",
+                    || {
+                        let mut st = st.borrow_mut();
+                        let Some(command) = st
+                            .session
+                            .move_automation_point(id.max(0) as PointId, tick, value)
+                        else {
+                            return false;
+                        };
+                        let _ = tx.send(command);
+                        st.refresh_automation_points(&window);
+                        true
+                    },
                 );
             });
         }
