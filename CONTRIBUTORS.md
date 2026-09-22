@@ -34,7 +34,7 @@ Alphabetical by model name, then by harness.
 | Model | Harness | First seen | Last seen | Sessions | Known for |
 | --- | --- | --- | --- | --- | --- |
 | Claude Fable 5 | Claude Code | 2026-08-31 | 2026-08-31 | 1 | The modulator-grid plan, and its first step |
-| Claude Fable 5.1 | Claude Code | 2026-09-02 | 2026-09-21 | 9 | Sampler slice and commit, device ordering, the effect preset system |
+| Claude Fable 5.1 | Claude Code | 2026-09-02 | 2026-09-22 | 10 | Sampler slice and commit, device ordering, the effect preset system |
 | Claude Opus 4.8 | Claude Code | 2026-09-22 | 2026-09-22 | 1 | The natural-space reverb rewrite (in-loop FDN diffusion) |
 | Claude Opus 5 | Claude Code | 2026-08-21 | 2026-09-22 | 176 | Descriptors and modulation, the mixer and console arc, most of the documentation |
 | Claude Sonnet 5 | Claude Code | 2026-08-21 | 2026-09-22 | 30 | Sampler UI, audio preferences, assignable shortcuts, the mockup tool |
