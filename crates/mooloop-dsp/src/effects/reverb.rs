@@ -1,12 +1,30 @@
-//! Feedback-delay-network hall reverb.
+//! Feedback-delay-network hall reverb with in-loop diffusion.
 //!
 //! Eight delay lines feed back through a normalized Hadamard matrix. Input
-//! passes a pre-delay and a chain of Schroeder allpass diffusers before it
-//! reaches them; each line's return is damped and attenuated to hit a target
-//! RT60 before it is mixed back in. Cost is a fixed handful of taps and
+//! passes a pre-delay, a low cut, and a chain of Schroeder allpass diffusers
+//! before it reaches them; each line's return is damped, attenuated to hit a
+//! target RT60, and — the part that makes the tail read as a *room* rather than
+//! a *box* — passed through its own allpass diffuser **inside** the feedback
+//! loop before it is written back. Cost is a fixed handful of taps and
 //! multiplies per sample and does not vary with `decay_s` at all.
 //!
-//! ## Why this shape
+//! ## Why the diffusion is in the loop
+//!
+//! An FDN whose only diffusion is on the input smears the *first* arrival and
+//! then leaves the tail to the bare delay lines recirculating through the
+//! matrix. Eight lines is a sparse set of late echoes, and a sparse late echo
+//! train is exactly what a listener hears as metallic ringing and springy
+//! flutter: the tail never fills in, so it rings on a handful of modes instead
+//! of blooming into a wash. Putting a short allpass in series with each delay
+//! line means every lap around the network multiplies the echo density instead
+//! of merely relocating it — after a few laps the tail is dense enough to read
+//! as air rather than as a comb. This is the same trick a Griesinger/Dattorro
+//! tank uses, carried onto an FDN so the network keeps its hall-like spatial
+//! spread. The allpasses are unity-magnitude, so they reshape density without
+//! touching the per-line decay budget the feedback gains solve for; the trip
+//! length the gains *are* solved against just includes the allpass length.
+//!
+//! ## Why this shape at all
 //!
 //! This device used to be a partitioned FFT convolution against a generated
 //! room impulse response. That had three problems this structure does not:
@@ -47,9 +65,10 @@ use crate::node::{AudioNode, Discontinuity, ProcessContext};
 use crate::smooth::Smoothed;
 use super::{process_param_split, RangeProcessor};
 
-/// Delay lines in the network. Eight is the point where the echo density of
-/// the first 50 ms already reads as a room; sixteen doubles the per-sample
-/// cost for a difference the input diffusers largely supply anyway.
+/// Delay lines in the network. Eight lines carry the hall's spatial spread;
+/// the echo density the first design leaned on line count for is now supplied
+/// by the in-loop allpasses, which is what lets eight stay affordable and
+/// still read as dense.
 const LINES: usize = 8;
 const DIFFUSERS: usize = 4;
 
@@ -68,16 +87,24 @@ const LINE_TUNING: [usize; LINES] = [1013, 1201, 1409, 1601, 1811, 2003, 2213, 2
 /// longer window. Coprime with each other and with [`LINE_TUNING`].
 const DIFFUSER_TUNING: [usize; DIFFUSERS] = [229, 331, 557, 719];
 
+/// In-loop allpass lengths in samples at [`TUNING_SAMPLE_RATE`] and `size`
+/// 0.5, one per delay line. Short (2.6..11 ms) and prime, coprime with each
+/// other and with [`LINE_TUNING`], so each line's recirculating signal is
+/// smeared across a different, incommensurate window every lap. These are the
+/// stages that turn eight sparse echo trains into a continuous wash.
+const LOOP_DIFFUSER_TUNING: [usize; LINES] = [127, 179, 241, 293, 359, 421, 479, 541];
+
 /// `size` (0..1) maps onto this tap-length multiplier range, geometrically,
 /// so the default 0.5 lands exactly on the tuning above. The ends are a
 /// small ~8 ms-shortest chamber and a ~125 ms-longest cathedral.
 const SIZE_MIN_MULTIPLIER: f32 = 0.4;
 const SIZE_MAX_MULTIPLIER: f32 = 2.5;
 
-/// Feedback gain ceiling. The Hadamard matrix is orthonormal and the damping
-/// filters have gain at most one, so the loop is stable whenever every
-/// per-line gain is under one; this leaves margin so that a pathological
-/// `decay_s`/`size` pair cannot ring indefinitely.
+/// Feedback gain ceiling. The Hadamard matrix is orthonormal, the damping
+/// filters have gain at most one, and an allpass has magnitude exactly one, so
+/// the loop is a contraction whenever every per-line gain is under one; this
+/// leaves margin so that a pathological `decay_s`/`size` pair cannot ring
+/// indefinitely.
 const FEEDBACK_MAX: f32 = 0.9995;
 
 /// Damping is a one-pole lowpass *inside* the feedback loop, so its effect
@@ -90,9 +117,18 @@ const FEEDBACK_MAX: f32 = 0.9995;
 /// the same reason.
 const DAMP_MAX_LOSS: f32 = 0.45;
 
-/// Schroeder allpass gain at `diffusion = 1`. Past about 0.75 the stages
-/// start to ring audibly rather than smear.
+/// Schroeder allpass gain at `diffusion = 1` for the *input* diffusers. Past
+/// about 0.75 the stages start to ring audibly rather than smear.
 const DIFFUSION_MAX_GAIN: f32 = 0.72;
+
+/// Fixed gain of the in-loop allpasses. High enough that each lap adds real
+/// density, low enough that the stages smear rather than ring — the same
+/// ceiling the input diffusers respect, held constant here because in-loop
+/// diffusion is structural to the hall rather than a control. It is not driven
+/// by `diffusion`: that knob shapes the *onset* (discrete echoes to a wash)
+/// while these keep the *tail* from going sparse, and coupling them would make
+/// a low Diffuse setting metallic again.
+const LOOP_DIFFUSION_GAIN: f32 = 0.6;
 
 /// Peak delay-line modulation depth in milliseconds at `modulation = 1`.
 /// Enough to keep the tail's modes from standing still; below the point
@@ -126,7 +162,7 @@ const PREDELAY_SMOOTH_S: f32 = 0.12;
 /// network's modes. This pins typical sustained material within a couple of
 /// dB of the dry path it is blended against, and is enforced by
 /// `steady_state_wet_path_is_level_matched` in `gain_structure_tests.rs`.
-const OUTPUT_REFERENCE: f32 = 0.188;
+const OUTPUT_REFERENCE: f32 = 0.185;
 
 /// A mono ring buffer with a linearly interpolated read head.
 ///
@@ -176,8 +212,8 @@ impl Ring {
         let back = base as usize;
         // `back` is clamped inside the ring and the head is too, so the sum
         // is under two laps and one subtraction reduces it. The eight lines
-        // and four diffusers read at least once a sample each, so this is
-        // twelve integer divisions a frame that do not happen.
+        // and twelve diffusers read at least once a sample each, so this is
+        // twenty integer divisions a frame that do not happen.
         let raw = self.write + capacity - back;
         let index = if raw >= capacity { raw - capacity } else { raw };
         let previous = if index == 0 { capacity - 1 } else { index - 1 };
@@ -188,7 +224,8 @@ impl Ring {
 /// A Schroeder allpass diffuser: a delay tap whose feedforward and feedback
 /// gains cancel, so it reshapes echo density without colouring the response.
 /// Distinct from `crate::filter::AllPass`, which is a single-sample phase
-/// stage rather than a delay-line diffuser.
+/// stage rather than a delay-line diffuser. Used both for the input chain and,
+/// one per line, inside the feedback loop.
 struct Diffuser {
     ring: Ring,
     len: f32,
@@ -230,7 +267,7 @@ impl Diffuser {
 }
 
 /// One delay line of the network, with its damping filter, feedback gain,
-/// and modulation phase.
+/// modulation phase, and the in-loop allpass its return is diffused through.
 struct Line {
     ring: Ring,
     /// Nominal length in samples, before modulation. Glides toward
@@ -245,6 +282,9 @@ struct Line {
     phase: f32,
     damp: OnePoleLp,
     feedback: f32,
+    /// The allpass the recirculating signal passes through before it is
+    /// written back into the line. This is what makes the tail dense.
+    loop_ap: Diffuser,
 }
 
 impl Line {
@@ -256,9 +296,10 @@ impl Line {
         self.ring.clear();
         self.damp.reset();
         self.feedback = 0.0;
+        self.loop_ap.clear();
     }
 
-    fn new(base_len: usize, sample_rate: u32, index: usize) -> Self {
+    fn new(base_len: usize, loop_base_len: usize, sample_rate: u32, index: usize) -> Self {
         // Room for the longest size plus the modulation excursion and the
         // interpolator's reach, so `size` never has to reallocate.
         let capacity = scaled_len(base_len, sample_rate, SIZE_MAX_MULTIPLIER)
@@ -278,7 +319,21 @@ impl Line {
             phase: index as f32 / LINES as f32,
             damp,
             feedback: 0.0,
+            loop_ap: Diffuser::new(loop_base_len, sample_rate),
         }
+    }
+
+    /// Advance the modulation oscillator and the size glide without reading,
+    /// for a block the host skipped. The in-loop allpass glides here too, so a
+    /// size change that lands mid-sleep is tracked exactly. See
+    /// `AudioNode::skip_block`.
+    fn step_silent(&mut self, glide: f32) {
+        self.len += (self.target_len - self.len) * glide;
+        self.phase += self.mod_step;
+        if self.phase >= 1.0 {
+            self.phase -= 1.0;
+        }
+        self.loop_ap.step_silent(glide);
     }
 
     /// Advance the modulation oscillator and read the line.
@@ -286,17 +341,6 @@ impl Line {
     /// The modulator is a triangle rather than a sine: it costs an absolute
     /// value instead of a `sin`, and at these depths and rates the difference
     /// is a slightly different distribution of the same small pitch drift.
-    /// The part of `read` that runs on the clock rather than on the input.
-    /// Written as the same four lines rather than as a closed form, because
-    /// a phase that arrived by a different route is a different phase.
-    fn step_silent(&mut self, glide: f32) {
-        self.len += (self.target_len - self.len) * glide;
-        self.phase += self.mod_step;
-        if self.phase >= 1.0 {
-            self.phase -= 1.0;
-        }
-    }
-
     fn read(&mut self, glide: f32) -> f32 {
         self.len += (self.target_len - self.len) * glide;
         self.phase += self.mod_step;
@@ -401,7 +445,9 @@ impl ReverbEffect {
             ),
             low_cut,
             diffusers: std::array::from_fn(|i| Diffuser::new(DIFFUSER_TUNING[i], sample_rate)),
-            lines: std::array::from_fn(|i| Line::new(LINE_TUNING[i], sample_rate, i)),
+            lines: std::array::from_fn(|i| {
+                Line::new(LINE_TUNING[i], LOOP_DIFFUSER_TUNING[i], sample_rate, i)
+            }),
             diffusion: Smoothed::new(
                 params.diffusion.clamp(0.0, 1.0) * DIFFUSION_MAX_GAIN,
                 SMOOTH_S,
@@ -427,10 +473,12 @@ impl ReverbEffect {
     fn resize(&mut self) {
         let multiplier = size_multiplier(self.params.size);
         let sample_rate = self.sample_rate;
-        for (line, base) in self.lines.iter_mut().zip(LINE_TUNING) {
+        for (i, line) in self.lines.iter_mut().enumerate() {
             let ceiling = line.ring.buffer.len() as f32 - mod_depth_samples(sample_rate) - 4.0;
             line.target_len =
-                (scaled_len(base, sample_rate, multiplier) as f32).min(ceiling.max(1.0));
+                (scaled_len(LINE_TUNING[i], sample_rate, multiplier) as f32).min(ceiling.max(1.0));
+            line.loop_ap
+                .set_len(scaled_len(LOOP_DIFFUSER_TUNING[i], sample_rate, multiplier) as f32);
         }
         for (diffuser, base) in self.diffusers.iter_mut().zip(DIFFUSER_TUNING) {
             diffuser.set_len(scaled_len(base, sample_rate, multiplier) as f32);
@@ -440,11 +488,13 @@ impl ReverbEffect {
 
     /// Solve each line's feedback gain for the target RT60.
     ///
-    /// A signal circulating line `i` loses `gain` every `len` samples, so to
-    /// fall 60 dB in `decay_s` it needs `gain = 10^(-3 * len / (decay * fs))`.
-    /// Solving per line rather than sharing one gain is what makes the lines'
-    /// decays line up: the long lines are attenuated less per trip because
-    /// they make fewer trips.
+    /// A signal circulating line `i` loses `gain` every `trip` samples, so to
+    /// fall 60 dB in `decay_s` it needs `gain = 10^(-3 * trip / (decay * fs))`.
+    /// The trip is the delay length **plus** the in-loop allpass length: the
+    /// signal passes through both once per lap, and leaving the allpass out
+    /// would make the tail run a touch long. Solving per line rather than
+    /// sharing one gain is what makes the lines' decays line up: the long lines
+    /// are attenuated less per trip because they make fewer trips.
     fn rebuild_feedback(&mut self) {
         let decay_s = self.params.decay_s.max(0.05);
         let sample_rate = self.sample_rate as f32;
@@ -454,7 +504,7 @@ impl ReverbEffect {
             // one per line per sample. Mid-glide the decay is briefly off by
             // the fraction the length still has to travel — a few tens of
             // milliseconds, under a control that is itself moving.
-            let seconds = line.target_len / sample_rate;
+            let seconds = (line.target_len + line.loop_ap.target_len) / sample_rate;
             line.feedback = 10f32
                 .powf(-3.0 * seconds / decay_s)
                 .clamp(0.0, FEEDBACK_MAX);
@@ -513,8 +563,8 @@ impl RangeProcessor for ReverbEffect {
             }
 
             // Read the network, tap the output, then close the loop. Tapping
-            // before damping and attenuation means the output carries the
-            // tail as it currently stands rather than one bounce ahead.
+            // the delayed line contents means the output carries the tail as
+            // it currently stands rather than one bounce ahead.
             let mut taps = [0.0f32; LINES];
             for (tap, line) in taps.iter_mut().zip(self.lines.iter_mut()) {
                 *tap = line.read(self.size_glide);
@@ -527,14 +577,20 @@ impl RangeProcessor for ReverbEffect {
                 wet_r += taps[index] * TAP_R[index];
             }
 
+            // Damp and attenuate each return, mix through the matrix, then
+            // pass the injected result through the line's in-loop allpass
+            // before writing it back. The allpass is what makes the tail
+            // dense instead of a bare eight-mode ring.
             let mut feedback = taps;
             for (value, line) in feedback.iter_mut().zip(self.lines.iter_mut()) {
                 *value = line.damp.next_sample(*value) * line.feedback;
             }
             hadamard(&mut feedback);
+            let glide = self.size_glide;
             for (index, line) in self.lines.iter_mut().enumerate() {
-                line.ring
-                    .write(feedback[index] + diffused * INJECT[index]);
+                let injected = feedback[index] + diffused * INJECT[index];
+                let diffused_return = line.loop_ap.process(injected, LOOP_DIFFUSION_GAIN, glide);
+                line.ring.write(diffused_return);
             }
 
             // Mid/side width. The two taps are orthogonal, so at width 0 the
@@ -778,6 +834,41 @@ mod tests {
         assert!(
             long_energy > short_energy * 100.0,
             "decay_s=8 ({long_energy}) should far outlast decay_s=0.5 ({short_energy})"
+        );
+    }
+
+    /// The whole reason the loop diffusers were added: the late tail must be a
+    /// continuous wash, not a handful of echoes fluttering. A metallic/springy
+    /// FDN drops most of its energy between sparse arrivals, so its short-time
+    /// envelope swings wildly frame to frame; a diffuse one decays smoothly.
+    ///
+    /// Measured as the largest jump in short-time RMS between adjacent ~11 ms
+    /// frames across a mid-tail window, expressed against the window's mean.
+    /// A dense tail sits well under 1.0 (the decay trend across one frame is
+    /// tiny); a sparse one spikes far past it.
+    #[test]
+    fn the_late_tail_is_a_continuous_wash_not_a_flutter() {
+        let bus = impulse_response(ReverbParams::default(), 96_000);
+        const FRAME: usize = 512;
+        let window = 24_000..72_000;
+        let mut frame_rms = Vec::new();
+        let mut start = window.start;
+        while start + FRAME <= window.end {
+            let e = energy(&bus, start..start + FRAME);
+            frame_rms.push((e / (2 * FRAME) as f32).sqrt());
+            start += FRAME;
+        }
+        let mean = frame_rms.iter().sum::<f32>() / frame_rms.len() as f32;
+        assert!(mean > 1e-6, "the tail was silent, so this proves nothing");
+        let worst_jump = frame_rms
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst_jump < mean * 0.5,
+            "adjacent tail frames jumped by {worst_jump} against a mean of {mean} \
+             ({:.0}%); the tail is fluttering rather than washing",
+            100.0 * worst_jump / mean
         );
     }
 

@@ -3,12 +3,31 @@
 Status: feedback delay network implemented, August 2026. Supersedes the
 generated-room convolution player documented here through August 2026.
 
-The reverb is an eight-line feedback delay network. Mono-summed input passes a
-pre-delay, a one-pole low cut, and four Schroeder allpass diffusers
-before it is injected into the network; each line's return is lowpass-damped
-and attenuated to a per-line gain solved for the target RT60, then remixed
-through a normalized Hadamard matrix. Two orthogonal taps across the lines
-form the stereo output, which a mid/side `width` control then narrows.
+The reverb is an eight-line feedback delay network with in-loop diffusion.
+Mono-summed input passes a pre-delay, a one-pole low cut, and four Schroeder
+allpass diffusers before it is injected into the network; each line's return is
+lowpass-damped and attenuated to a per-line gain solved for the target RT60,
+remixed through a normalized Hadamard matrix, and then passed through that
+line's own short allpass diffuser before it is written back. Two orthogonal
+taps across the lines form the stereo output, which a mid/side `width` control
+then narrows.
+
+## Why the diffusion is in the loop
+
+Eight delay lines are a sparse set of late echoes. An FDN that diffuses only
+its input smears the first arrival and then leaves the tail to those eight
+lines recirculating through the matrix, and a sparse late echo train is what a
+listener hears as metallic ringing and springy flutter — the tail rings on a
+handful of modes instead of blooming into a wash. A short allpass in series
+with each delay line means every lap around the network multiplies the echo
+density instead of relocating it, so after a few laps the tail is dense enough
+to read as air. This is the trick a Griesinger/Dattorro tank uses, carried
+onto an FDN so the network keeps its hall-like spatial spread. The allpasses
+are unity-magnitude, so they reshape density without touching the per-line
+decay budget the feedback gains solve for; the trip length those gains are
+solved against simply includes the allpass length. `Diffuse` shapes the onset
+(discrete echoes to a wash); the in-loop allpasses run at a fixed gain and keep
+the tail dense regardless, so a low `Diffuse` setting is no longer metallic.
 
 ## Realtime contract
 
@@ -16,9 +35,11 @@ form the stereo output, which a mid/side `width` control then narrows.
   `dry_path_latency_frames`, so the host neither aligns nor delays around it.
   Pre-delay is a musical control, not reported latency.
 - Cost is a fixed number of taps, one-poles, and multiplies per sample. It
-  does not vary with `decay_s`, `size`, or anything else: measured at a
-  64-frame period and 48 kHz, a 0.5 s tail and a 20 s tail both run ~13.6 us
-  mean and under 60 us worst case, about 3-4% of the block budget.
+  does not vary with `decay_s`, `size`, or anything else: there is no window
+  and no spike, only a flat per-sample load. The in-loop diffusers add one
+  allpass tap per line (eight more interpolated reads a sample) on top of the
+  eight delay reads and four input diffusers, and the total is still a small
+  single-digit percentage of a 64-frame block budget at 48 kHz.
 - Nothing allocates, locks, or reallocates in `process`. The rings are sized
   at construction for the longest `size` plus the modulation excursion, so a
   size change moves read heads inside buffers that already exist.
