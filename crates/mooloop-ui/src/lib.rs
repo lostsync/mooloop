@@ -2557,6 +2557,17 @@ pub const SOURCE_KINDS_IN_PICKER_ORDER: [DeviceKind; 8] = [
     DeviceKind::AuxIn,
 ];
 
+/// The sources the interface no longer offers: a new channel cannot start as
+/// one, and a channel cannot be switched to one. Songs and presets that use
+/// them load and play unchanged, and a channel already on one still shows
+/// its name in the source picker.
+///
+/// Adam, 2026-09-22: the ML-M1 and ML-P8 do everything the Mono Synth and
+/// Poly Synth did. The Drum Synth stays: it is quicker to a standard kit
+/// than the DS-01. `SourceKinds.retired` in `channel-rack.slint` is the
+/// markup's copy, and `tests/source_kind_menu.rs` holds the two together.
+pub const RETIRED_SOURCE_KINDS: [DeviceKind; 2] = [DeviceKind::MonoSynth, DeviceKind::PolySynth];
+
 fn osc_wave_from_int(value: i32) -> OscWave {
     match value {
         0 => OscWave::Sine,

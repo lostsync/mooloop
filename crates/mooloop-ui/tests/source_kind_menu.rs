@@ -18,7 +18,7 @@
 //! which is the number `device_kind_from_int` decodes, and the popup still
 //! has to be tall enough for the rows it now has.
 
-use mooloop_ui::{device_kind_to_int, SOURCE_KINDS_IN_PICKER_ORDER};
+use mooloop_ui::{device_kind_to_int, RETIRED_SOURCE_KINDS, SOURCE_KINDS_IN_PICKER_ORDER};
 
 const MAIN_SLINT: &str = include_str!("../ui/main.slint");
 const CHANNEL_RACK_SLINT: &str = include_str!("../ui/channel-rack.slint");
@@ -91,13 +91,60 @@ fn the_markup_source_list_is_the_rust_labels_in_picker_order() {
     }
 }
 
-/// The toolbar picker offers the list rather than a copy of it.
+/// `SourceKinds.retired`, one flag per label, in the markup's order.
+fn markup_retired_flags() -> Vec<bool> {
+    let declaration = "out property <[bool]> retired:";
+    let start = CHANNEL_RACK_SLINT
+        .find(declaration)
+        .expect("channel-rack.slint declares SourceKinds.retired");
+    let rest = &CHANNEL_RACK_SLINT[start + declaration.len()..];
+    let end = rest
+        .find("];")
+        .expect("SourceKinds.retired is a closed array literal");
+    rest[..end]
+        .trim()
+        .trim_start_matches('[')
+        .split(',')
+        .map(|flag| match flag.trim() {
+            "true" => true,
+            "false" => false,
+            other => panic!("SourceKinds.retired holds `{other}`"),
+        })
+        .collect()
+}
+
+/// The markup retires exactly the kinds the Rust table does, one flag per
+/// source, at each kind's own position.
+#[test]
+fn the_markup_retires_the_rust_list() {
+    let flags = markup_retired_flags();
+    assert_eq!(
+        flags.len(),
+        SOURCE_KINDS_IN_PICKER_ORDER.len(),
+        "SourceKinds.retired needs one flag per source"
+    );
+    for kind in SOURCE_KINDS_IN_PICKER_ORDER {
+        let index = device_kind_to_int(kind) as usize;
+        assert_eq!(
+            flags[index],
+            RETIRED_SOURCE_KINDS.contains(&kind),
+            "SourceKinds.retired[{index}] disagrees about {kind:?}"
+        );
+    }
+}
+
+/// The toolbar picker offers the list rather than a copy of it, and hides
+/// the retired sources from it.
 #[test]
 fn the_channel_source_picker_reads_the_one_list() {
     let picker = block(MAIN_SLINT, "if !root.editing-bus : PickerChip {");
     assert!(
         picker.contains("options: SourceKinds.labels;"),
         "the source picker should take its options from SourceKinds.labels"
+    );
+    assert!(
+        picker.contains("hidden: SourceKinds.retired;"),
+        "the source picker should hide the retired sources"
     );
 }
 
@@ -110,7 +157,7 @@ fn the_channel_source_picker_reads_the_one_list() {
 /// only see what it is built from, and being right about that while the menu
 /// did nothing is exactly what happened on MOO-53.
 #[test]
-fn the_add_channel_menu_offers_every_source_and_sends_its_own_row() {
+fn the_add_channel_menu_offers_the_list_and_sends_its_own_row() {
     let menu = block(
         CHANNEL_RACK_SLINT,
         "export component AddSourceButton inherits ToolButton {",
@@ -118,6 +165,10 @@ fn the_add_channel_menu_offers_every_source_and_sends_its_own_row() {
     assert!(
         menu.contains("for label[i] in SourceKinds.labels"),
         "the add-channel menu should repeat over SourceKinds.labels"
+    );
+    assert!(
+        menu.contains("if !SourceKinds.retired[i] : MenuRow"),
+        "the add-channel menu should leave the retired sources out"
     );
     assert!(
         menu.contains("root.picked(i)"),

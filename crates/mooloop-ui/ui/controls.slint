@@ -323,6 +323,11 @@ export component SelectorBank inherits Rectangle {
 export component PickerChip inherits Rectangle {
     in property <[string]> options;
     in property <int> selected-index;
+    // Options listed only while they are the selection, by position: a value
+    // something can still hold but should not be chosen again, like a
+    // retired source device. Shorter than `options` is fine; a missing entry
+    // reads as `false`.
+    in property <[bool]> hidden;
     in property <string> tooltip;
     in property <color> text-color: Theme.text;
     callback picked(int);
@@ -376,39 +381,44 @@ export component PickerChip inherits Rectangle {
                 y: 4px;
                 width: parent.width - 8px;
                 height: parent.height - 8px;
+                // No spacing on the list: each row carries its own 1px gap,
+                // so a hidden row, which is zero tall, takes no room at all.
                 list := VerticalLayout {
-                    spacing: 1px;
-                    for option[index] in root.options : Rectangle {
-                        height: 18px;
-                        border-radius: Theme.radius-sm;
-                        background: index == root.selected-index
-                            ? Theme.surface-active
-                            : row-touch.has-hover ? Theme.surface-active : transparent;
-                        Text {
-                            x: 6px;
-                            width: parent.width - 12px;
-                            height: parent.height;
-                            text: option;
-                            color: index == root.selected-index ? Theme.accent : Theme.text;
-                            font-size: Theme.text-md;
-                            vertical-alignment: center;
-                            overflow: elide;
-                        }
-                        row-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            // Report first, close second. Closing tears down
-                            // the repeater item whose handler is still
-                            // running, so a `picked` after it never lands and
-                            // the chip looks stuck on its old entry. The same
-                            // bug has been found and fixed twice already --
-                            // `mixer.slint`'s `BusPicker` and
-                            // `device-rack.slint`'s preset menu, which has a
-                            // pointer-event test behind it in
-                            // `tests/effect_preset_menu.rs`. `tests/picker_chip.rs`
-                            // is this one's.
-                            clicked => {
-                                root.picked(index);
-                                menu.close();
+                    for option[index] in root.options : VerticalLayout {
+                        padding-bottom: row.visible ? 1px : 0px;
+                        row := Rectangle {
+                            visible: !root.hidden[index] || index == root.selected-index;
+                            height: self.visible ? 18px : 0px;
+                            border-radius: Theme.radius-sm;
+                            background: index == root.selected-index
+                                ? Theme.surface-active
+                                : row-touch.has-hover ? Theme.surface-active : transparent;
+                            Text {
+                                x: 6px;
+                                width: parent.width - 12px;
+                                height: parent.height;
+                                text: option;
+                                color: index == root.selected-index ? Theme.accent : Theme.text;
+                                font-size: Theme.text-md;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            row-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                // Report first, close second. Closing tears
+                                // down the repeater item whose handler is
+                                // still running, so a `picked` after it never
+                                // lands and the chip looks stuck on its old
+                                // entry. The same bug has been found and
+                                // fixed twice already -- `mixer.slint`'s
+                                // `BusPicker` and `device-rack.slint`'s
+                                // preset menu, which has a pointer-event test
+                                // behind it in `tests/effect_preset_menu.rs`.
+                                // `tests/picker_chip.rs` is this one's.
+                                clicked => {
+                                    root.picked(index);
+                                    menu.close();
+                                }
                             }
                         }
                     }

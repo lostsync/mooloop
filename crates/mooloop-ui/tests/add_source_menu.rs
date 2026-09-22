@@ -19,7 +19,7 @@
 //! `first_click.rs` records: the `ElementHandle` search API needs a build
 //! with debug info, and this control has fixed geometry anyway.
 
-use mooloop_ui::{device_kind_to_int, SOURCE_KINDS_IN_PICKER_ORDER};
+use mooloop_ui::{device_kind_to_int, RETIRED_SOURCE_KINDS, SOURCE_KINDS_IN_PICKER_ORDER};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize};
 use std::cell::RefCell;
@@ -113,18 +113,26 @@ fn choosing_a_row_reports_it() {
 /// Clicking every row rather than counting them, for `effect_preset_menu.rs`'s
 /// reason: a menu one row short still has a last row, and a click at a
 /// missing row's coordinates lands on nothing and reports nothing. What comes
-/// back has to be every kind's number exactly once, which is the
+/// back has to be every offered kind's number exactly once, which is the
 /// reachability question asked without assuming the menu's order --
 /// `device_kind_to_int` decides that, and `source_kind_menu.rs` holds the
 /// labels to it.
+///
+/// Offered, not every: the retired sources have no row, and the rows after
+/// them move up while still reporting their own kind. One click past the
+/// last row checks nothing is drawn there.
 #[test]
-fn every_source_is_reachable_and_carries_its_own_number() {
+fn every_offered_source_is_reachable_and_carries_its_own_number() {
     let ui = harness();
     let picked: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
     let seen = picked.clone();
     ui.on_picked(move |index| seen.borrow_mut().push(index));
 
-    let rows = SOURCE_KINDS_IN_PICKER_ORDER.len();
+    let offered: Vec<_> = SOURCE_KINDS_IN_PICKER_ORDER
+        .into_iter()
+        .filter(|kind| !RETIRED_SOURCE_KINDS.contains(kind))
+        .collect();
+    let rows = offered.len();
     // A row past the bottom of the harness window cannot be clicked, and an
     // unclicked row reads exactly like a missing one.
     let window_height = ui.window().size().height as f32;
@@ -135,22 +143,20 @@ fn every_source_is_reachable_and_carries_its_own_number() {
          to click"
     );
 
-    for row in 0..rows {
+    // One past the end too: a retired source that still had a row would
+    // push the last offered one there.
+    for row in 0..=rows {
         click(ui.window(), BUTTON);
         click(ui.window(), (ROW_X, row_y(row)));
     }
 
     let mut reported = picked.borrow().clone();
     reported.sort();
-    let mut expected: Vec<i32> = SOURCE_KINDS_IN_PICKER_ORDER
-        .iter()
-        .copied()
-        .map(device_kind_to_int)
-        .collect();
+    let mut expected: Vec<i32> = offered.into_iter().map(device_kind_to_int).collect();
     expected.sort();
     assert_eq!(
         reported, expected,
-        "the menu did not offer every source exactly once"
+        "the menu did not offer every source but the retired ones, each once"
     );
 }
 

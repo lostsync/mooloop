@@ -67,6 +67,16 @@ export global SourceKinds {
         "Sampler", "Drum Synth", "Mono Synth", "Poly Synth",
         "ML-M1", "ML-P8", "DS-01", "Aux In"
     ];
+    // The sources no longer offered, by the same positions. A new channel
+    // cannot start as one and a channel cannot be switched to one; a song
+    // that already uses one loads and plays as it did, and its channel's
+    // picker still names it. The Mono Synth and Poly Synth, retired
+    // 2026-09-22 -- Adam: the ML-M1 and ML-P8 do everything they did.
+    // `tests/source_kind_menu.rs` holds this to `RETIRED_SOURCE_KINDS`.
+    out property <[bool]> retired: [
+        false, false, true, true,
+        false, false, false, false
+    ];
 }
 
 // The rack's `+`: the button that offers every source device, and reports
@@ -110,20 +120,27 @@ export component AddSourceButton inherits ToolButton {
                 // of the interface's menus read down a left edge. Eight
                 // centred captions of different widths had no edge to read
                 // down at all.
-                for label[i] in SourceKinds.labels : MenuRow {
-                    text: "Add " + label;
-                    // Report, and let `close-policy` dismiss the menu.
-                    //
-                    // Closing it here first is the whole of MOO-53: closing
-                    // a popup tears down the repeater item whose handler is
-                    // still running, so the call after it never lands. The
-                    // menu opened, drew all eight sources, and added no
-                    // channel. This is the fourth time that sequence has
-                    // been found -- `BusPicker`, `DeviceFrame`'s preset
-                    // menu, `PickerChip`'s `MenuField`, and here -- and
-                    // `scripts/dupe-audit popup-close-order` now looks for
-                    // the fifth.
-                    selected => { root.picked(i); }
+                //
+                // A retired source is an empty layout rather than a row:
+                // this layout has no spacing, so it takes no room, and each
+                // row still reports its position in `SourceKinds.labels`.
+                for label[i] in SourceKinds.labels : VerticalLayout {
+                    if !SourceKinds.retired[i] : MenuRow {
+                        text: "Add " + label;
+                        // Report, and let `close-policy` dismiss the menu.
+                        //
+                        // Closing it here first is the whole of MOO-53:
+                        // closing a popup tears down the repeater item whose
+                        // handler is still running, so the call after it
+                        // never lands. The menu opened, drew all eight
+                        // sources, and added no channel. This is the fourth
+                        // time that sequence has been found -- `BusPicker`,
+                        // `DeviceFrame`'s preset menu, `PickerChip`'s
+                        // `MenuField`, and here -- and
+                        // `scripts/dupe-audit popup-close-order` now looks
+                        // for the fifth.
+                        selected => { root.picked(i); }
+                    }
                 }
             }
         }

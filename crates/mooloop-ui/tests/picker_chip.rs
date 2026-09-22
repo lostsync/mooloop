@@ -27,6 +27,7 @@ slint::slint! {
         height: 200px;
         background: #101010;
         in property <[string]> options;
+        in property <[bool]> hidden;
         in property <int> selected-index;
         callback picked(int);
 
@@ -35,6 +36,7 @@ slint::slint! {
             y: 0px;
             width: 120px;
             options: root.options;
+            hidden: root.hidden;
             selected-index: root.selected-index;
             tooltip: "Pick a source";
             picked(i) => { root.picked(i); }
@@ -95,5 +97,44 @@ fn picking_a_row_reports_its_index() {
         *picked.borrow(),
         vec![1, 2],
         "the third entry reported the wrong index"
+    );
+}
+
+/// A hidden option has no row: the one after it takes its place and still
+/// reports its own index.
+#[test]
+fn a_hidden_option_takes_no_row() {
+    let ui = harness();
+    ui.set_hidden(ModelRc::from(Rc::new(VecModel::from(vec![false, true]))));
+    let picked: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
+    let seen = picked.clone();
+    ui.on_picked(move |index| seen.borrow_mut().push(index));
+
+    click(ui.window(), (60.0, 9.0));
+    click(ui.window(), (ROW_X, row_y(1)));
+    assert_eq!(
+        *picked.borrow(),
+        vec![2],
+        "the second row should be the third option, the second being hidden"
+    );
+}
+
+/// A hidden option that is the selection is listed, so the menu shows what
+/// the chip says -- an old song's channel on a retired source.
+#[test]
+fn a_hidden_option_is_listed_while_it_is_the_selection() {
+    let ui = harness();
+    ui.set_hidden(ModelRc::from(Rc::new(VecModel::from(vec![false, true]))));
+    ui.set_selected_index(1);
+    let picked: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
+    let seen = picked.clone();
+    ui.on_picked(move |index| seen.borrow_mut().push(index));
+
+    click(ui.window(), (60.0, 9.0));
+    click(ui.window(), (ROW_X, row_y(2)));
+    assert_eq!(
+        *picked.borrow(),
+        vec![2],
+        "with the hidden option selected, all three rows should be there"
     );
 }

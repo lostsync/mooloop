@@ -123,13 +123,15 @@ blunt about gaps so roadmap decisions are based on the system that exists.
 - The complete 256-channel addressable bank. A new song starts with a lightly
   randomized four-channel drum kit (kick, snare, closed hat, and open hat);
   creating another new song generates a new variation. Channels can use any of
-  eight sources — the sampler, the v1 drum synth, the DS-01, the v1 mono
-  synth, the ML-M1, the v1 poly synth, the ML-P8, or Aux In, which plays
-  another channel's published audio outlet — and every rack row exposes solo
-  and mute, output volume, and constant-power stereo pan. The rack's `+`
-  offers all eight when adding a channel, which is the same list the source
-  picker offers when changing one; its rows are ordinary menu rows, reading
-  down a left edge like the rest of the interface's menus.
+  six sources — the sampler, the v1 drum synth, the DS-01, the ML-M1, the
+  ML-P8, or Aux In, which plays another channel's published audio outlet —
+  and every rack row exposes solo and mute, output volume, and constant-power
+  stereo pan. The rack's `+` offers those six when adding a channel, which is
+  the same list the source picker offers when changing one; its rows are
+  ordinary menu rows, reading down a left edge like the rest of the
+  interface's menus. The v1 mono and poly synths were retired from both on
+  2026-09-22 (the ML-M1 and ML-P8 cover them): a song that uses one loads and
+  plays unchanged, and its channel's picker still lists it while selected.
 - Channels can be reordered by dragging a rack row's name plate. The rows
   between the grab and the landing slide aside, and the gap that opens is the
   drop indicator. Every address in the song that named a channel follows it —
