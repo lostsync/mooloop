@@ -270,6 +270,7 @@ harmonics left the profile. `tilt_db`, `tilt_hz` and `slew` are still picked.
 and written down; nothing in `mooloop_dsp` has been re-authored from them
 yet, because two of the findings are choices for Adam rather than fits:
 whether `Iron` models a mic preamp or a console channel, which decides its
-harmonic order, and whether `Grip` gets a drive-dependent low shelf, which
+harmonic order, and whether `Grip` gets a drive-dependent low shelf (open:
+MOO-163), which
 the SSL reference plainly has and the current exactly-reciprocal tilt pair
 cannot produce. `spikes/preamp-measure/RESULTS.md` states both.

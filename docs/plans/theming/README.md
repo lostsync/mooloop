@@ -9,10 +9,11 @@ colors:
 > maybe accessibility...which i hadnt really thought about at all.
 
 This directory is the answer to both halves: what mooloop would need so that a
-theme is a file rather than a patch, and how somebody then writes one. It is
-**parked, by Adam on 2026-09-12**, under `FOCUS.md`'s "deliberately not now" --
+theme is a file rather than a patch, and how somebody then writes one. It was
+**parked by Adam on 2026-09-12**, under `FOCUS.md`'s "deliberately not now" --
 where the reason to build it is recorded as accessibility rather than the
-homage, because that reason does not expire. It is written now rather than
+homage, because that reason does not expire -- and **unparked by him on
+2026-09-15** (`00-status.md`). It was written now rather than
 later for the reason Adam gave -- the work is a token sweep across every face in the
 program, and every device added before it is another face to sweep.
 

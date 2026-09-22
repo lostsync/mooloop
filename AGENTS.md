@@ -44,6 +44,99 @@ The tracked pre-commit hook rejects ordinary commits on `main` other than
 Markdown-only ones; activate it
 once per clone with `git config core.hooksPath .githooks`.
 
+## Tracking work: Linear
+
+Linear is where work is tracked: every plan, every step, every defect, and
+every question for Adam. The workspace has one team, **Mooloop** (`MOO`), and
+the tree cites its issues as `MOO-n`. **The repository holds the content** --
+work orders, reasoning, measurements, what a change taught -- **and Linear
+holds the state**: what is open, what is next, what is blocked, and what is
+waiting on Adam. A state written in both drifts the way a constant written
+twice does, so a document links the issue rather than restating where it
+stands. GitHub issues are not used for tracking; do not file there.
+
+**File it rather than write it down.** A defect, gap or finding you are not
+fixing in this change becomes an issue -- not a row in `LOOSE_ENDS.md`, not a
+paragraph in a report, not a line in a handoff message. Search Linear first;
+the backlog already holds near-duplicates. Every issue gets:
+
+- exactly one `Team` label, the team that owns the code where the fix lands
+  (`docs/TEAMS.md`);
+- one type label -- `Bug`, `Feature` or `Improvement` -- and `Fable` as well if
+  a Fable review found it;
+- a project: the plan it belongs to, or `Loose ends` for a defect that
+  belongs to no feature (a question no plan has reached yet may go without);
+- a description a stranger could act on: what happens, where to start (file
+  and symbol), and how to tell it is fixed.
+
+**A plan is a project.** Each directory in `docs/plans/` has a Linear project,
+and each step that has not landed an issue titled `NN · <step title>` that
+links its step file; so does anything its `00-status.md` records as still
+owed. A new plan gets both on the day it is written. When the last step lands,
+the directory moves to `archive/` and the project to Completed in the same
+sitting.
+
+| Status | Means |
+| --- | --- |
+| Backlog | Filed, not scheduled. |
+| Todo | Scheduled: this is next. |
+| In Progress | Somebody has started. Set it when you start, so a session that dies leaves a trail. |
+| In Review | The change is on a branch or a PR and not yet on `main`. |
+| Done | The change is on `main`, and a comment names the commit. |
+| Canceled | Not doing it, or not a bug. A comment says why. |
+| Duplicate | Marked as a duplicate of the issue that carries the work. |
+
+**Done is a claim, so make it checkable.** MOO-55 was moved to Done with no
+fix in the tree, and two review runs in a row rediscovered its four open edges
+(`JOURNAL.md`, 2026-09-21). An issue closes with a comment naming the commit
+that fixed it, and that commit's message cites the issue. A closed issue with
+no commit is a claim to verify, not a fact to rely on.
+
+### Questions for Adam: the `Question` label
+
+When something needs a decision only Adam can make -- a taste call, a product
+call, a trade-off the tree cannot settle, a mock-up only he can draw -- or a
+check only he can make -- a listening pass, hardware no agent can reach --
+**ask it on an issue and add the `Question` label.** That label is how he finds
+questions. One recorded anywhere else -- a plan's open-questions section,
+`LOOSE_ENDS.md`, a report, the journal, a handoff message -- is one he does
+not know exists. Do not rely on assigning the issue or @-mentioning him
+instead: Claude Code reaches Linear through his own account, and Linear does
+not notify anyone of their own actions.
+
+- Put the question on the issue whose work waits on it. If there is none,
+  file one -- with a project and a `Team` label -- whose job is the question.
+- Ask in a comment that can be answered without reading anything else: the
+  question in one sentence, the options, what you recommend and why, and
+  what waits on the answer. Number several questions on one issue so he can
+  answer by number.
+- A document that mentions the question links the issue (`open: MOO-n`)
+  rather than restating it.
+- Do not stop for the answer. Carry on with whatever does not depend on it,
+  and name the issue in your handoff.
+- When he answers, write the ruling into the document it governs, dated and
+  in his words as the tree already does, act on it, and **remove the label**.
+  `Question` means *waiting on Adam* and nothing else, so it comes off the
+  moment that stops being true.
+
+### Unconfirmed bugs: the `Triage` label
+
+A bug report nobody has reproduced -- Adam's, a review's, or a suspicion from
+reading code -- is filed with `Bug` and `Triage`. MOO-89 is the shape: what is
+suspected, the sequence that would show it, and the test that would settle it.
+
+- **The first job on a `Triage` issue is to confirm or refute it, not to fix
+  it.** Write the test that should fail, or reproduce it in the running
+  application.
+- Confirmed: remove `Triage`, say in a comment how it was reproduced (the
+  test's name, or the steps), and set a priority. It is an ordinary bug now.
+- Refuted: say in a comment what was checked and against which commit, and
+  cancel it.
+- A bug you have already reproduced is filed without `Triage`.
+
+If Linear is unreachable, say so in your handoff and put the question or the
+finding there, so the next session can file it.
+
 ## CodeGraph
 
 This project has a CodeGraph MCP server (`codegraph_*` tools) indexing every
@@ -59,13 +152,14 @@ that affect the decision at hand.
 
 | Task | Required context |
 | --- | --- |
-| What is being built next, and in what order | `docs/FOCUS.md`, then the matching `docs/plans/<name>/00-status.md` |
+| What is being built next, and in what order | `docs/FOCUS.md`, then the plan's Linear project and its `docs/plans/<name>/` |
 | Product or architecture decision | `docs/PRODUCT.md`, then the relevant architecture/design document |
 | Open-ended priority or scope choice | `docs/FOCUS.md` and `docs/SCOPE.md` |
 | What is left before the feature freeze, and how big it is | `docs/SCOPE.md` |
-| Which plans are live, and what state each is in | `docs/plans/README.md` |
+| Which plans are live, and what state each is in | The projects in Linear; `docs/plans/README.md` for how each got there |
+| Whether a defect is already known, or what is waiting on Adam | Linear: search the `MOO` team, and the `Question` label |
 | Broad existing user surface or known gap | `docs/CURRENT.md` |
-| A small known gap you are about to rediscover | `docs/LOOSE_ENDS.md` |
+| A small known gap you are about to rediscover | Linear first, then `docs/LOOSE_ENDS.md` for the gaps recorded before it |
 | Which team owns a file, a finding, or a Linear issue | `docs/TEAMS.md` |
 | A value stated in both Rust and `.slint`, or a run at the duplication fault | `docs/workflows/rust-slint-boundary/` |
 | UI layout, controls, or interaction | `docs/UI_DESIGN.md` |
@@ -83,8 +177,10 @@ Current explicit user feedback and purpose-built UI designs outrank these
 documents.
 
 Active work orders live in `docs/plans/<name>/`, numbered and worked in
-order; `00-status.md` says what has landed. Update that status when a step
-lands. Completed plan directories move to `docs/plans/archive/`.
+order, and each has a Linear project with one issue per step. When a step
+lands, close its issue and write in `00-status.md` what the doing found and
+changed about the plan. Completed plan directories move to
+`docs/plans/archive/`.
 
 `docs/README.md` indexes every document and states its one job, for anything
 this table does not cover.

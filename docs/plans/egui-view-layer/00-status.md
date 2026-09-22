@@ -1,5 +1,9 @@
 # egui view layer — plan status
 
+Linear: project [egui view layer](https://linear.app/mooloop/project/egui-view-layer-3c7c01875514).
+Whether the plan still has a case is MOO-146 (`edit-loop/04`); step 01 is
+MOO-147, and the sketched 02-04 are MOO-148.
+
 Not started, and **not yet decided**. Written 2026-09-02, out of
 `docs/archive/ARCHITECTURE_REVIEW.md`.
 

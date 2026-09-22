@@ -1,5 +1,8 @@
 # Core Audio driver status
 
+Linear: project [Core Audio driver](https://linear.app/mooloop/project/core-audio-driver-15b373205661).
+What is left -- three checks on real hardware, then the archive -- is MOO-158.
+
 Written 2026-09-13. Adam wants to develop mooloop on a Mac as well as on
 Fedora, and asked for it to build and run there. It does, as of the same day,
 and every step has landed. Step 03 grew on the way in: Adam asked for a MIDI
@@ -43,9 +46,9 @@ does not provide.
 | --- | --- |
 | 01 One executor, two adapters | landed 2026-09-13 |
 | 02 Core Audio output | landed 2026-09-13 |
-| 03 Core MIDI input, and a keyboard that plays | landed 2026-09-13; not yet played from a real keyboard on either platform |
+| 03 Core MIDI input, and a keyboard that plays | landed 2026-09-13; a keyboard has since been played, but which platform is not recorded (MOO-158) |
 | 04 The preferences page names its driver | landed 2026-09-13 |
-| 05 Keep the Mac build honest | landed 2026-09-13; the macOS CI job has not run yet |
+| 05 Keep the Mac build honest | landed 2026-09-13; the macOS CI job first passed on `main` 2026-09-22 (run 208, `fe1e9ce`) |
 
 Since then, `audio-recording/01` gave the driver an **input stream**
 (2026-09-20), which is the one thing this plan's step 02 deliberately left

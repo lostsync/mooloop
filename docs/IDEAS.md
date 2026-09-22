@@ -120,7 +120,7 @@ half the ramp in each, as in Impulse Tracker. He also expects song automation
 to be how long-form audio is eventually handled, at least from the user's
 side, now that audio recording goes into the sampler
 (`plans/audio-recording/`). So when this question is answered, that is a
-second use case for it.
+second use case for it. The question is open as MOO-159, 2026-09-22.
 
 Recorded while writing `docs/plans/archive/console/`, which is the mixer half of the
 same morning list and which deliberately does not touch the playlist.

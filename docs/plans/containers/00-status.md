@@ -550,7 +550,7 @@ deliberately does not decide": *"Adam has not settled this and it does not
 block the container work. Design containers so that becomes possible; do not
 build it."*
 
-So the run travels and the modulation does not. `EffectRun` is a struct with
+So the run travels and the modulation does not (open: MOO-160). `EffectRun` is a struct with
 one field for exactly this reason, and `contains` is a list for exactly this
 reason: when the modulator question is answered, both grow rather than change.
 The ML-M1 bank's complaint — that a device preset cannot carry the modulation
