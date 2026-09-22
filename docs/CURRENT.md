@@ -721,8 +721,12 @@ sampler does (`docs/plans/audio-recording/`, steps 02-05, 2026-09-18):
   records, and -- a channel being a dumb slot -- its sampler can be swapped
   for another device. Either way the recording stays in `recordings/` and the
   status bar says which happened, rather than the take being written onto a
-  channel that cannot show or save it. A take whose file could not be written
-  is reported the same way and leaves no partial behind.
+  channel that cannot show or save it. A take is checkpointed every second,
+  so its file on disk is readable up to the last second even while it
+  records. A take whose file could not be finished -- a full disk, say -- is
+  reported the same way, and what it had checkpointed is kept and lands on
+  the channel; one that failed inside its first second leaves no partial
+  behind.
 - **REC refuses a source that is gone, and says which kind.** A channel or
   track that has since been deleted sends you back to the AUDIO row; no audio
   input device at all -- unplugged, changed, or a microphone permission macOS
