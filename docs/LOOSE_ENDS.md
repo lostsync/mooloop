@@ -617,7 +617,8 @@ before that writer exists, not after.
 
 **Three callback costs that grow with the song rather than the block**, from
 `reports/fable-2026-09-21.md` finding 5, none of them a hazard and none of
-them measured:
+them measured. The third is closed; the first two are open and the second is
+the one that gets values wrong:
 
 - Song-mode automation lookup is playlist by channels by destinations per
   block once any lane exists under the playhead (`automation_lane_at`,
@@ -628,9 +629,17 @@ them measured:
   per destination -- at an 8192-frame block one automated destination fills
   the list alone and every later push returns `false` into a `let _`. No
   allocation, no noise, wrong values.
-- `Sequencer::set_playlist_placement` does `push` then `sort_unstable` on
-  the callback per placement toggle; an insert at `partition_point` is the
-  same number of lines.
+- `Sequencer::set_playlist_placement` did `push` then `sort_unstable` on the
+  callback per placement toggle. **Closed 2026-09-22**: it inserts at
+  `partition_point`, which answers the duplicate check in the same binary
+  search, so painting a range costs one search and one memmove per cell
+  rather than a sort of up to 512 placements. What that changed beyond the
+  cost is that the playlist's sortedness used to be a *consequence* of the
+  function and is now something it *depends* on -- `load_project` is the
+  other place that establishes it -- so the invariant is named in the doc
+  comment and guarded by
+  `playlist_stays_sorted_and_deduplicated_however_it_is_painted`, which was
+  validated by moving the insert index and watching it fail.
 
 Also on the thread: `defer_command`'s `debug_assert!(false, "... {command:?}")`
 (`render.rs:4591`) formats an `EngineCommand` and panics from the callback in
