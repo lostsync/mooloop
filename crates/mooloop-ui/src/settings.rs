@@ -331,6 +331,10 @@ pub(crate) struct DriverSettings {
     pub output_port_l: Option<String>,
     #[serde(default)]
     pub output_port_r: Option<String>,
+    /// The outputs picked before the one above, most recent first, for the
+    /// engine to fall back through when the output playing goes away.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub earlier_outputs: Vec<(String, String)>,
     /// `None` leaves the driver's current buffer size alone.
     #[serde(default)]
     pub buffer_size: Option<u32>,
@@ -343,6 +347,7 @@ impl Default for DriverSettings {
         Self {
             output_port_l: None,
             output_port_r: None,
+            earlier_outputs: Vec::new(),
             // The server's, until somebody picks one. Under JACK the buffer
             // is server-wide, so a default of 256 re-sized it for every
             // client on the machine each time mooloop started, whatever the
@@ -364,6 +369,21 @@ impl DriverSettings {
             (Some(l), Some(r)) => Some((l.clone(), r.clone())),
             _ => None,
         }
+    }
+
+    /// Record `chosen` as the output picked, and the one it replaces as the
+    /// most recent earlier pick -- by the engine's rule, which keeps the same
+    /// list for the running session.
+    pub(crate) fn pick_output(&mut self, chosen: (String, String)) {
+        let mut picks: Vec<(String, String)> = self
+            .output_target()
+            .into_iter()
+            .chain(self.earlier_outputs.drain(..))
+            .collect();
+        mooloop_engine::remember_output(&mut picks, chosen.clone());
+        self.output_port_l = Some(chosen.0);
+        self.output_port_r = Some(chosen.1);
+        self.earlier_outputs = picks.into_iter().skip(1).collect();
     }
 }
 
@@ -412,6 +432,7 @@ impl AudioSettings {
         mooloop_engine::AudioConfig {
             buffer_size: active.buffer_size,
             output_target: active.output_target(),
+            earlier_outputs: active.earlier_outputs.clone(),
             auto_reconnect: active.auto_reconnect,
         }
     }
@@ -1728,12 +1749,17 @@ mod tests {
                 jack: DriverSettings {
                     output_port_l: Some("Carla:audio-in1".to_owned()),
                     output_port_r: Some("Carla:audio-in2".to_owned()),
+                    earlier_outputs: vec![(
+                        "Built-in Audio Analog Stereo:playback_FL".to_owned(),
+                        "Built-in Audio Analog Stereo:playback_FR".to_owned(),
+                    )],
                     buffer_size: Some(256),
                     auto_reconnect: false,
                 },
                 core_audio: DriverSettings {
                     output_port_l: Some("coreaudio:BuiltInSpeakerDevice#1".to_owned()),
                     output_port_r: Some("coreaudio:BuiltInSpeakerDevice#2".to_owned()),
+                    earlier_outputs: Vec::new(),
                     buffer_size: Some(512),
                     auto_reconnect: true,
                 },
@@ -1846,6 +1872,7 @@ mod tests {
         *audio.active_mut() = DriverSettings {
             output_port_l: Some("Carla:audio-in1".to_owned()),
             output_port_r: Some("Carla:audio-in2".to_owned()),
+            earlier_outputs: vec![("usb:FL".to_owned(), "usb:FR".to_owned())],
             buffer_size: Some(512),
             auto_reconnect: true,
         };
@@ -1855,7 +1882,29 @@ mod tests {
             config.output_target,
             Some(("Carla:audio-in1".to_owned(), "Carla:audio-in2".to_owned()))
         );
+        assert_eq!(config.earlier_outputs, [("usb:FL".to_owned(), "usb:FR".to_owned())]);
         assert!(config.auto_reconnect);
+    }
+
+    /// A pick pushes the output it replaces onto the earlier ones, and picking
+    /// an earlier one again takes it back off -- the list the engine walks
+    /// when the output playing goes away.
+    #[test]
+    fn picking_an_output_remembers_the_one_before() {
+        let pair = |name: &str| (format!("{name}:FL"), format!("{name}:FR"));
+        let mut driver = DriverSettings::default();
+        driver.pick_output(pair("speakers"));
+        assert_eq!(driver.output_target(), Some(pair("speakers")));
+        assert!(driver.earlier_outputs.is_empty());
+
+        driver.pick_output(pair("usb"));
+        driver.pick_output(pair("headphones"));
+        assert_eq!(driver.output_target(), Some(pair("headphones")));
+        assert_eq!(driver.earlier_outputs, [pair("usb"), pair("speakers")]);
+
+        driver.pick_output(pair("speakers"));
+        assert_eq!(driver.output_target(), Some(pair("speakers")));
+        assert_eq!(driver.earlier_outputs, [pair("headphones"), pair("usb")]);
     }
 
     /// The section the build does not use never reaches the engine, and is not

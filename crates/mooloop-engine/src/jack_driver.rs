@@ -4,7 +4,8 @@
 //! Works against pipewire-jack transparently.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
 use jack::{
@@ -15,7 +16,7 @@ use jack::{
 
 use mooloop_core::{MidiPortId, MidiPortInfo};
 
-use crate::driver::{AudioConfig, OutputTarget};
+use crate::driver::{remember_output, AudioConfig, OutputTarget};
 use crate::executor::Executor;
 use crate::Error;
 
@@ -77,13 +78,26 @@ impl ProcessHandler for Graph {
     }
 }
 
+/// How long the port graph has to stay still before the output is checked.
+///
+/// A device arrives and leaves one port at a time. Checked mid-change, a
+/// pair can have its left port and not yet its right, and the output would
+/// go to whatever else is complete -- and then stay there, because a
+/// connected output is not moved.
+const GRAPH_SETTLE: Duration = Duration::from_millis(500);
+
+/// How often the output is checked with no graph change to prompt it. A
+/// notification can be missed, and a connection can fail without one; this
+/// is what turns "connect it by hand in the patchbay" into a second's wait.
+const OUTPUT_RECHECK: Duration = Duration::from_secs(1);
+
 struct Notifications {
     xrun_count: Arc<AtomicU64>,
-    /// Whether to retry connecting `target` when the port graph changes and
-    /// it is currently unconnected. Shared with `JackDriver::set_auto_reconnect`.
-    auto_reconnect: Arc<AtomicBool>,
-    /// The configured output target, shared with `JackDriver`.
-    target: Arc<ArcSwap<(String, String)>>,
+    /// Bumped on every port registered or unregistered, for
+    /// [`JackDriver::service`] to notice. The output is not reconnected from
+    /// here: this is JACK's notification thread, and under pipewire-jack a
+    /// graph request made from it cannot wait for its own answer.
+    graph_generation: Arc<AtomicU64>,
 }
 
 impl jack::NotificationHandler for Notifications {
@@ -98,6 +112,7 @@ impl jack::NotificationHandler for Notifications {
     // ports registering, not as a "default device changed" event, so port
     // registration is what auto-reconnect actually watches.
     fn port_registration(&mut self, client: &Client, port_id: PortId, is_registered: bool) {
+        self.graph_generation.fetch_add(1, Ordering::Relaxed);
         if !is_registered {
             return;
         }
@@ -109,27 +124,6 @@ impl jack::NotificationHandler for Notifications {
                 if let Ok(name) = port.name() {
                     connect_midi_source(client, &name);
                 }
-            }
-        }
-        if !self.auto_reconnect.load(Ordering::Relaxed) {
-            return;
-        }
-        let target = self.target.load_full();
-        if client.port_by_name(&target.0).is_none() || client.port_by_name(&target.1).is_none() {
-            return;
-        }
-        for (src, dst) in [
-            (OUT_L_NAME, target.0.as_str()),
-            (OUT_R_NAME, target.1.as_str()),
-        ] {
-            match client.connect_ports_by_name(src, dst) {
-                Ok(()) | Err(jack::Error::PortAlreadyConnected(_, _)) => {}
-                // JACK's graph-change notification, not the process callback:
-                // formatting and locking are both fine here.
-                Err(e) => mooloop_core::log_warn!(
-                    "audio",
-                    "auto-reconnect could not connect {src} -> {dst} ({e})"
-                ),
             }
         }
     }
@@ -266,94 +260,78 @@ impl Opening {
             .unwrap_or_else(|| (DEFAULT_OUTPUT_L.to_owned(), DEFAULT_OUTPUT_R.to_owned()));
         let output_target = Arc::new(ArcSwap::from_pointee(target.clone()));
         let auto_reconnect = Arc::new(AtomicBool::new(config.auto_reconnect));
+        // Oldest first into `remember_output`, so the saved target ends up at
+        // the front and a malformed list is put back in order.
+        let mut picks = Vec::new();
+        for pick in config.earlier_outputs.iter().rev() {
+            remember_output(&mut picks, pick.clone());
+        }
+        remember_output(&mut picks, target.clone());
+        let graph_generation = Arc::new(AtomicU64::new(0));
 
         let async_client = client
             .activate_async(
                 Notifications {
                     xrun_count,
-                    auto_reconnect: auto_reconnect.clone(),
-                    target: output_target.clone(),
+                    graph_generation: graph_generation.clone(),
                 },
                 graph,
             )
             .map_err(|e| Error::Activate(e.to_string()))?;
 
-        // Best-effort: wire our outputs to the configured target so the app is
-        // audible out of the box. Auto-reconnect (if enabled) picks this back
-        // up whenever the JACK graph changes and this connection is missing.
-        let c = async_client.as_client();
-        connect_midi_sources(c);
-        let sources = [OUT_L_NAME, OUT_R_NAME];
-        let destinations = [target.0.as_str(), target.1.as_str()];
-        let mut connected = true;
-        for (src, dst) in sources.iter().zip(destinations.iter()) {
-            match c.connect_ports_by_name(src, dst) {
-                Ok(()) | Err(jack::Error::PortAlreadyConnected(_, _)) => {}
-                Err(_) => connected = false,
-            }
-        }
+        // Best-effort: wire the outputs to the most recent pick that is there,
+        // so the app is audible out of the box.
+        //
         // A saved destination outlives the thing it names. A device is
         // unplugged, a profile changes, the audio server is restarted and
         // renames its nodes -- and the target recorded in settings then
         // matches nothing. Connecting to nothing is the one outcome with no
         // symptom: the engine runs, the meters move, the transport rolls, and
-        // there is silence with nothing on screen to say why.
-        //
-        // So take any working stereo destination rather than none, and say so.
-        // A wrong output is audible and one click from right in Preferences;
-        // no output is a bug report.
-        if !connected {
-            for (src, dst) in sources.iter().zip(destinations.iter()) {
-                let _ = c.disconnect_ports_by_name(src, dst);
-            }
-            // In order, not just the first: a candidate can be present in the
-            // graph and still refuse the connection, and stopping at one would
-            // leave the silence this exists to prevent.
-            let available = stereo_destinations(c);
-            let landed = fallback_destinations(&available, &target).find(|candidate| {
-                let pair = [candidate.port_l.as_str(), candidate.port_r.as_str()];
-                let mut ok = true;
-                for (src, dst) in sources.iter().zip(pair.iter()) {
-                    match c.connect_ports_by_name(src, dst) {
-                        Ok(()) | Err(jack::Error::PortAlreadyConnected(_, _)) => {}
-                        Err(_) => ok = false,
-                    }
-                }
-                if !ok {
-                    for (src, dst) in sources.iter().zip(pair.iter()) {
-                        let _ = c.disconnect_ports_by_name(src, dst);
-                    }
-                }
-                ok
-            });
-            match landed {
-                Some(fallback) => {
-                    output_target
-                        .store(Arc::new((fallback.port_l.clone(), fallback.port_r.clone())));
+        // there is silence with nothing on screen to say why. So an earlier
+        // pick is taken over none, and any working stereo destination over
+        // that, and the log says so. A wrong output is audible and one click
+        // from right in Preferences; no output is a bug report.
+        let c = async_client.as_client();
+        connect_midi_sources(c);
+        let candidates = output_candidates(&picks, &audio_destination_ports(c));
+        match connect_first(c, &target, &candidates) {
+            Some(landed) => {
+                if landed != target {
                     mooloop_core::log_warn!(
                         "audio",
                         "the saved audio output {:?} is not available; connected to {:?} \
                          instead. Preferences -> Audio picks a different one",
                         target.0,
-                        fallback.client
+                        landed.0
                     );
                 }
-                None => mooloop_core::log_warn!(
-                    "audio",
-                    "the saved audio output {:?} is not available and nothing else accepted \
-                     a connection; connect mooloop manually in a patchbay \
-                     (e.g. qpwgraph, qjackctl, Helvum)",
-                    target.0
-                ),
+                output_target.store(Arc::new(landed));
             }
+            None => mooloop_core::log_warn!(
+                "audio",
+                "the saved audio output {:?} is not available and nothing else accepted \
+                 a connection; connect mooloop manually in a patchbay \
+                 (e.g. qpwgraph, qjackctl, Helvum)",
+                target.0
+            ),
         }
 
         connect_audio_input(async_client.as_client());
 
+        let now = Instant::now();
         Ok(JackDriver {
             client: async_client,
             output_target,
             auto_reconnect,
+            picks: Mutex::new(picks),
+            graph_generation,
+            watch: Mutex::new(GraphWatch {
+                seen: 0,
+                changed_at: now,
+                pending: false,
+                last_check: now,
+                reported_stranded: false,
+            }),
         })
     }
 }
@@ -361,8 +339,33 @@ impl Opening {
 /// The running JACK client. Dropping it deactivates audio.
 pub(crate) struct JackDriver {
     client: AsyncClient,
+    /// The pair the outputs are connected to, or were last.
     output_target: Arc<ArcSwap<(String, String)>>,
     auto_reconnect: Arc<AtomicBool>,
+    /// The outputs picked in Preferences, most recent first. Kept apart from
+    /// `output_target`, which a fallback overwrites, so that the output
+    /// asked for is not forgotten because it was missing once.
+    picks: Mutex<Vec<(String, String)>>,
+    graph_generation: Arc<AtomicU64>,
+    watch: Mutex<GraphWatch>,
+}
+
+/// What [`JackDriver::service`] has seen of the port graph.
+struct GraphWatch {
+    /// The `graph_generation` last seen, and when it was seen to change.
+    seen: u64,
+    changed_at: Instant,
+    /// A change that has not been checked, waiting for [`GRAPH_SETTLE`].
+    pending: bool,
+    last_check: Instant,
+    /// Whether "no output" has been logged since the output last connected,
+    /// so a machine with nothing to play through logs it once, not every
+    /// second.
+    reported_stranded: bool,
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl JackDriver {
@@ -397,16 +400,18 @@ impl JackDriver {
     }
 
     pub(crate) fn available_output_targets(&self) -> Vec<OutputTarget> {
-        stereo_destinations(self.client.as_client())
+        stereo_destinations(&audio_destination_ports(self.client.as_client()))
     }
 
     /// Connect the outputs to `target`, or to the system default if it is
     /// `None`, and only then let go of the previous target. See [`retarget`].
+    /// A pair that connects becomes the most recent pick.
     pub(crate) fn set_output_target(&self, target: Option<(String, String)>) -> Result<(), String> {
         let previous = self.output_target.load_full();
         let next =
             target.unwrap_or_else(|| (DEFAULT_OUTPUT_L.to_owned(), DEFAULT_OUTPUT_R.to_owned()));
         retarget(self.client.as_client(), &previous, &next)?;
+        remember_output(&mut lock(&self.picks), next.clone());
         self.output_target.store(Arc::new(next));
         Ok(())
     }
@@ -420,8 +425,8 @@ impl JackDriver {
             .map_err(|e| format!("could not change the JACK buffer size: {e}"))
     }
 
-    /// Retry the configured output target when the JACK port graph changes
-    /// and the target is currently unconnected.
+    /// Find another output when the one playing goes away. See
+    /// [`Self::service`].
     pub(crate) fn set_auto_reconnect(&self, enabled: bool) {
         self.auto_reconnect.store(enabled, Ordering::Relaxed);
     }
@@ -434,37 +439,96 @@ impl JackDriver {
         (*self.output_target.load_full()).clone()
     }
 
-    /// Nothing to do: JACK's notification thread reconnects on the graph
-    /// change that makes it possible, where Core Audio needs the control
-    /// thread to look.
-    pub(crate) fn service(&self) {}
+    /// Control-thread upkeep, called from the handle's event poll: when the
+    /// outputs are connected to nothing, connect them to the most recent pick
+    /// that is there, or to anything that is ([`restore_output`]).
+    ///
+    /// Checked once the port graph has been still for [`GRAPH_SETTLE`], and
+    /// every [`OUTPUT_RECHECK`] without a change. **A connected output is
+    /// never moved**, even when a more recent pick appears: a USB interface
+    /// plugged in while the speakers play leaves them playing. When plugging
+    /// something in takes the playing device away -- headphones replacing
+    /// the speakers on the same card -- the output has gone, and it moves.
+    pub(crate) fn service(&self) {
+        let generation = self.graph_generation.load(Ordering::Relaxed);
+        let now = Instant::now();
+        let mut watch = lock(&self.watch);
+        if generation != watch.seen {
+            watch.seen = generation;
+            watch.changed_at = now;
+            watch.pending = true;
+            return;
+        }
+        let due = if watch.pending {
+            now.duration_since(watch.changed_at) >= GRAPH_SETTLE
+        } else {
+            now.duration_since(watch.last_check) >= OUTPUT_RECHECK
+        };
+        if !due {
+            return;
+        }
+        watch.pending = false;
+        watch.last_check = now;
+        if !self.auto_reconnect.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let client = self.client.as_client();
+        let current = self.output_target.load_full();
+        let picks = lock(&self.picks).clone();
+        match restore_output(client, &current, &picks, &audio_destination_ports(client)) {
+            Restored::Connected => watch.reported_stranded = false,
+            Restored::Moved(landed) => {
+                mooloop_core::log_info!(
+                    "audio",
+                    "the audio output {:?} is not connected; playing through {:?}",
+                    current.0,
+                    landed.0
+                );
+                self.output_target.store(Arc::new(landed));
+                watch.reported_stranded = false;
+            }
+            Restored::Nowhere => {
+                if !watch.reported_stranded {
+                    mooloop_core::log_warn!(
+                        "audio",
+                        "the audio output {:?} is not connected and nothing else accepted \
+                         a connection; waiting for an output to appear",
+                        current.0
+                    );
+                    watch.reported_stranded = true;
+                }
+            }
+        }
+    }
 }
 
-/// JACK input ports grouped by owning client, as candidate output
-/// destinations. A non-realtime JACK graph query.
+/// Every audio input port in the graph: everything the outputs could be
+/// connected to. A non-realtime JACK graph query.
 ///
-/// Shared by the preferences page and by startup's fallback, so that what the
-/// engine reaches for when a saved target has gone is exactly what the
+/// Audio inputs only. Unfiltered, this returns MIDI destinations too -- a
+/// machine with `Midi-Bridge` on the graph offers it as an output pair, and
+/// connecting an audio port to it simply fails. That was survivable while the
+/// list only populated a menu a human read; it is not, now that the fallback
+/// picks from it without asking.
+fn audio_destination_ports(jack_client: &Client) -> Vec<String> {
+    jack_client.ports(None, Some(AUDIO_PORT_TYPE), jack::PortFlags::IS_INPUT)
+}
+
+/// Destination ports grouped by owning client, by the first two of each.
+///
+/// Shared by the preferences page and by the fallback, so that what the
+/// engine reaches for when no pick is available is exactly what the
 /// interface would have offered.
-fn stereo_destinations(jack_client: &Client) -> Vec<OutputTarget> {
-    // Audio inputs only. Unfiltered, this returns MIDI destinations too --
-    // a machine with `Midi-Bridge` on the graph offers it as an output pair,
-    // and connecting an audio port to it simply fails. That was survivable
-    // while the list only populated a menu a human read; it is not, now that
-    // the fallback below picks from it without asking.
-    let ports = jack_client.ports(
-        None,
-        Some(AUDIO_PORT_TYPE),
-        jack::PortFlags::IS_INPUT,
-    );
+fn stereo_destinations(ports: &[String]) -> Vec<OutputTarget> {
     let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
     for port in ports {
         let Some((client_name, _)) = port.split_once(':') else {
             continue;
         };
         match grouped.iter_mut().find(|(name, _)| name == client_name) {
-            Some((_, ports)) => ports.push(port),
-            None => grouped.push((client_name.to_owned(), vec![port])),
+            Some((_, ports)) => ports.push(port.clone()),
+            None => grouped.push((client_name.to_owned(), vec![port.clone()])),
         }
     }
     grouped
@@ -495,6 +559,8 @@ enum Connection {
 trait Patchbay {
     fn connect(&self, source: &str, destination: &str) -> Connection;
     fn disconnect(&self, source: &str, destination: &str);
+    /// Whether `source` is connected to anything at all.
+    fn is_connected(&self, source: &str) -> bool;
 }
 
 impl Patchbay for jack::Client {
@@ -508,6 +574,11 @@ impl Patchbay for jack::Client {
 
     fn disconnect(&self, source: &str, destination: &str) {
         let _ = self.disconnect_ports_by_name(source, destination);
+    }
+
+    fn is_connected(&self, source: &str) -> bool {
+        self.port_by_name(source)
+            .is_some_and(|port| port.connected_count().is_ok_and(|count| count > 0))
     }
 }
 
@@ -554,78 +625,136 @@ fn retarget(
     Ok(())
 }
 
-/// Which destinations to try when the saved one does not exist, in order.
+/// Where the outputs may go, in the order to try: the picks whose ports are
+/// all in the graph, most recent first, then every other stereo destination.
 ///
 /// Split from the JACK calls around it because this is the only part with a
 /// decision in it, and a decision that cannot be tested without an audio
 /// server is a decision nobody will revisit.
 ///
-/// The rule is deliberately dull: the first destination that is not the one
-/// already tried, and not mooloop itself. Ranking outputs by desirability --
-/// preferring speakers over HDMI, say -- is a guess about a machine this code
-/// cannot see, and being audible somewhere is the whole of what is wanted
-/// here. Preferences owns the actual choice.
-fn fallback_destinations<'a>(
-    available: &'a [OutputTarget],
-    tried: &'a (String, String),
-) -> impl Iterator<Item = &'a OutputTarget> + 'a {
-    available.iter().filter(move |candidate| {
-        candidate.client != CLIENT_NAME
-            && candidate.port_l != tried.0
-            && candidate.port_r != tried.1
-    })
+/// Past the picks the rule is deliberately dull: whatever is there, in the
+/// graph's order. Ranking outputs by desirability -- preferring speakers over
+/// HDMI, say -- is a guess about a machine this code cannot see, and being
+/// audible somewhere is the whole of what is wanted then. Preferences owns
+/// the actual choice. Mooloop's own inputs are never offered: routing the
+/// master output back into the program is a feedback loop.
+fn output_candidates(picks: &[(String, String)], ports: &[String]) -> Vec<(String, String)> {
+    let present = |port: &String| ports.contains(port);
+    let mut candidates: Vec<(String, String)> = picks
+        .iter()
+        .filter(|(l, r)| present(l) && present(r))
+        .cloned()
+        .collect();
+    for destination in stereo_destinations(ports) {
+        let pair = (destination.port_l, destination.port_r);
+        if destination.client != CLIENT_NAME && !candidates.contains(&pair) {
+            candidates.push(pair);
+        }
+    }
+    candidates
+}
+
+/// Move the outputs from `current` to the first of `candidates` that
+/// connects, and name it. A candidate can be in the graph and still refuse
+/// the connection, so this walks them rather than trying one.
+fn connect_first(
+    bay: &impl Patchbay,
+    current: &(String, String),
+    candidates: &[(String, String)],
+) -> Option<(String, String)> {
+    candidates
+        .iter()
+        .find(|candidate| retarget(bay, current, candidate).is_ok())
+        .cloned()
+}
+
+/// What a check of the outputs came to.
+#[derive(Debug, PartialEq, Eq)]
+enum Restored {
+    /// Either output was connected somewhere, so nothing was touched.
+    Connected,
+    Moved((String, String)),
+    /// Nothing was connected and nothing would take a connection.
+    Nowhere,
+}
+
+/// Adam's rule for the output, 2026-09-22: stay on the most recently picked
+/// output that is available, **but never move one that is connected** --
+/// only one that is connected to nothing.
+///
+/// "Connected" is either output connected to anything, whoever made the
+/// connection: a pair patched by hand in qpwgraph is a choice too.
+fn restore_output(
+    bay: &impl Patchbay,
+    current: &(String, String),
+    picks: &[(String, String)],
+    ports: &[String],
+) -> Restored {
+    if bay.is_connected(OUT_L_NAME) || bay.is_connected(OUT_R_NAME) {
+        return Restored::Connected;
+    }
+    connect_first(bay, current, &output_candidates(picks, ports))
+        .map_or(Restored::Nowhere, Restored::Moved)
 }
 
 #[cfg(test)]
-mod output_fallback_tests {
-    use super::{fallback_destinations, OutputTarget, CLIENT_NAME};
+mod output_candidate_tests {
+    use super::{output_candidates, CLIENT_NAME};
 
-    fn target(client: &str) -> OutputTarget {
-        OutputTarget {
-            client: client.to_owned(),
-            port_l: format!("{client}:playback_FL"),
-            port_r: format!("{client}:playback_FR"),
-        }
-    }
-
-    fn clients(available: &[OutputTarget], tried: &(String, String)) -> Vec<String> {
-        fallback_destinations(available, tried)
-            .map(|t| t.client.clone())
+    fn ports(clients: &[&str]) -> Vec<String> {
+        clients
+            .iter()
+            .flat_map(|client| [format!("{client}:playback_FL"), format!("{client}:playback_FR")])
             .collect()
     }
 
-    fn gone() -> (String, String) {
-        ("gone:playback_FL".into(), "gone:playback_FR".into())
+    fn pair(client: &str) -> (String, String) {
+        (format!("{client}:playback_FL"), format!("{client}:playback_FR"))
     }
 
-    /// The ordinary case: a saved output that no longer exists, and a machine
-    /// that has something else to offer.
-    #[test]
-    fn a_missing_output_falls_back_to_whatever_is_there() {
-        let available = vec![target("hdmi"), target("speaker")];
-        assert_eq!(clients(&available, &gone()), ["hdmi", "speaker"]);
+    fn clients(picks: &[(String, String)], graph: &[String]) -> Vec<String> {
+        output_candidates(picks, graph)
+            .into_iter()
+            .map(|(l, _)| l.split_once(':').unwrap().0.to_owned())
+            .collect()
     }
 
-    /// Every candidate is offered, not just the first. A destination can be
-    /// in the graph and still refuse the connection, and the caller walks this
-    /// until one accepts.
+    /// The picks come first, most recent first, whatever order the graph
+    /// lists them in -- then everything else, once.
     #[test]
-    fn every_candidate_is_offered_in_order() {
-        let available = vec![target("a"), target("b"), target("c")];
-        assert_eq!(clients(&available, &gone()), ["a", "b", "c"]);
+    fn picks_come_before_the_rest_in_the_order_they_were_picked() {
+        let picks = [pair("usb"), pair("speakers")];
+        let graph = ports(&["hdmi", "speakers", "usb"]);
+        assert_eq!(clients(&picks, &graph), ["usb", "speakers", "hdmi"]);
     }
 
-    /// The destination that was already tried is not a fallback for itself.
-    /// Reaching here means connecting to it failed, and the identical pair
-    /// would fail the same way.
+    /// A pick that is not in the graph is not offered: the most recent pick
+    /// that *is* there is the one to go to.
     #[test]
-    fn the_destination_that_just_failed_is_not_offered_again() {
-        let available = vec![target("headphones"), target("speaker")];
-        let tried = (
-            "headphones:playback_FL".into(),
-            "headphones:playback_FR".into(),
-        );
-        assert_eq!(clients(&available, &tried), ["speaker"]);
+    fn a_missing_pick_gives_way_to_the_next_one() {
+        let picks = [pair("headphones"), pair("speakers")];
+        let graph = ports(&["hdmi", "speakers"]);
+        assert_eq!(clients(&picks, &graph), ["speakers", "hdmi"]);
+    }
+
+    /// A device part-way through arriving has its left port and not its
+    /// right. It is not there yet.
+    #[test]
+    fn a_pick_with_one_port_is_not_there() {
+        let picks = [pair("usb")];
+        let graph = vec![
+            "usb:playback_FL".to_owned(),
+            "speakers:playback_FL".to_owned(),
+            "speakers:playback_FR".to_owned(),
+        ];
+        assert_eq!(clients(&picks, &graph), ["speakers"]);
+    }
+
+    /// With no pick in the graph, anything there is better than silence.
+    #[test]
+    fn with_no_pick_there_anything_will_do() {
+        let graph = ports(&["hdmi", "speaker"]);
+        assert_eq!(clients(&[pair("gone")], &graph), ["hdmi", "speaker"]);
     }
 
     /// Mooloop's own input ports are in the graph like anyone else's. Routing
@@ -633,21 +762,23 @@ mod output_fallback_tests {
     /// arrived at by accident.
     #[test]
     fn mooloop_is_never_its_own_output() {
-        let available = vec![target(CLIENT_NAME), target("speaker")];
-        assert_eq!(clients(&available, &gone()), ["speaker"]);
+        let graph = ports(&[CLIENT_NAME, "speaker"]);
+        assert_eq!(clients(&[], &graph), ["speaker"]);
     }
 
     /// A machine with nothing to play through gets the warning, not a panic
     /// and not a wrong guess.
     #[test]
-    fn nothing_available_means_no_fallback() {
-        assert!(clients(&[], &gone()).is_empty());
+    fn nothing_available_means_nothing_offered() {
+        assert!(clients(&[pair("gone")], &[]).is_empty());
     }
 }
 
 #[cfg(test)]
 mod retarget_tests {
-    use super::{retarget, Connection, Patchbay, OUT_L_NAME, OUT_R_NAME};
+    use super::{
+        restore_output, retarget, Connection, Patchbay, Restored, OUT_L_NAME, OUT_R_NAME,
+    };
     use std::cell::RefCell;
     use std::collections::BTreeSet;
 
@@ -666,6 +797,15 @@ mod retarget_tests {
             ];
             Self {
                 connected: RefCell::new(connected.into_iter().collect()),
+                gone,
+            }
+        }
+
+        /// Nothing connected: the device that was playing has gone, and
+        /// its connections with it.
+        fn silent(gone: Vec<&'static str>) -> Self {
+            Self {
+                connected: RefCell::new(BTreeSet::new()),
                 gone,
             }
         }
@@ -692,6 +832,10 @@ mod retarget_tests {
             self.connected
                 .borrow_mut()
                 .remove(&(source.to_owned(), destination.to_owned()));
+        }
+
+        fn is_connected(&self, source: &str) -> bool {
+            self.connected.borrow().iter().any(|(from, _)| from == source)
         }
     }
 
@@ -734,5 +878,88 @@ mod retarget_tests {
         let graph = FakeGraph::playing(&speakers, vec![]);
         assert!(retarget(&graph, &speakers, &speakers).is_ok());
         assert_eq!(graph.outputs(), [speakers.0, speakers.1]);
+    }
+
+    fn graph(pairs: &[&(String, String)]) -> Vec<String> {
+        pairs.iter().flat_map(|(l, r)| [l.clone(), r.clone()]).collect()
+    }
+
+    /// Adam's case, 2026-09-22: mooloop is playing through the speakers and
+    /// a USB interface he picked more recently is plugged in. The speakers
+    /// are still there and still connected, so nothing moves.
+    #[test]
+    fn a_more_recent_pick_appearing_does_not_move_a_connected_output() {
+        let (speakers, usb) = (pair("speakers"), pair("usb"));
+        let graph_now = FakeGraph::playing(&speakers, vec![]);
+        let picks = [usb.clone(), speakers.clone()];
+        assert_eq!(
+            restore_output(&graph_now, &speakers, &picks, &graph(&[&speakers, &usb])),
+            Restored::Connected
+        );
+        assert_eq!(graph_now.outputs(), [speakers.0, speakers.1]);
+    }
+
+    /// The other half of the same rule: when plugging the headphones in takes
+    /// the speakers away, the output is connected to nothing, and it goes to
+    /// the most recent pick that is there -- not to whatever the graph lists
+    /// first.
+    #[test]
+    fn an_output_left_with_nothing_goes_to_the_most_recent_pick_there() {
+        let (speakers, headphones, hdmi) = (pair("speakers"), pair("headphones"), pair("hdmi"));
+        let graph_now = FakeGraph::silent(vec![]);
+        let picks = [headphones.clone(), speakers.clone()];
+        assert_eq!(
+            restore_output(&graph_now, &speakers, &picks, &graph(&[&hdmi, &headphones])),
+            Restored::Moved(headphones.clone())
+        );
+        assert_eq!(graph_now.outputs(), [headphones.0, headphones.1]);
+    }
+
+    /// No pick is there, so anything that is: silence is the one wrong
+    /// answer.
+    #[test]
+    fn with_no_pick_there_the_output_goes_anywhere_that_takes_it() {
+        let (gone, hdmi) = (pair("gone"), pair("hdmi"));
+        let graph_now = FakeGraph::silent(vec![]);
+        assert_eq!(
+            restore_output(&graph_now, &gone, std::slice::from_ref(&gone), &graph(&[&hdmi])),
+            Restored::Moved(hdmi)
+        );
+    }
+
+    /// A destination that refuses is passed over for the next one.
+    #[test]
+    fn a_pick_that_refuses_gives_way_to_the_next() {
+        let (usb, speakers) = (pair("usb"), pair("speakers"));
+        let graph_now = FakeGraph::silent(vec!["usb:playback_FL"]);
+        let picks = [usb.clone(), speakers.clone()];
+        assert_eq!(
+            restore_output(&graph_now, &usb, &picks, &graph(&[&usb, &speakers])),
+            Restored::Moved(speakers.clone())
+        );
+        assert_eq!(graph_now.outputs(), [speakers.0, speakers.1]);
+    }
+
+    /// A connection made by hand in a patchbay is a choice too, even half of
+    /// one.
+    #[test]
+    fn one_output_patched_by_hand_counts_as_connected() {
+        let (speakers, elsewhere) = (pair("speakers"), pair("elsewhere"));
+        let graph_now = FakeGraph::silent(vec![]);
+        assert_eq!(graph_now.connect(OUT_L_NAME, &elsewhere.0), Connection::Made);
+        assert_eq!(
+            restore_output(&graph_now, &speakers, std::slice::from_ref(&speakers), &graph(&[&speakers])),
+            Restored::Connected
+        );
+        assert_eq!(graph_now.outputs(), [elsewhere.0]);
+    }
+
+    #[test]
+    fn nothing_there_is_nowhere() {
+        let gone = pair("gone");
+        assert_eq!(
+            restore_output(&FakeGraph::silent(vec![]), &gone, std::slice::from_ref(&gone), &[]),
+            Restored::Nowhere
+        );
     }
 }

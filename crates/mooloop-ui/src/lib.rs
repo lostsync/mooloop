@@ -162,7 +162,7 @@ const DRIVER_COPY: DriverCopy = DriverCopy {
     note: "ALSA support is planned.",
     targets_empty: "No connectable JACK inputs found.",
     buffer_note: "Changes the buffer for every JACK client on this machine.",
-    auto_reconnect_hint: "Reconnects to the output above when it reappears on the JACK graph — for example after unplugging and replugging a device.",
+    auto_reconnect_hint: "When the output playing goes away, moves to the most recent output picked here that is still there. An output that is playing is never moved.",
     sample_rate_source: "set by the JACK server",
 };
 
@@ -14768,8 +14768,7 @@ impl AppUi {
                                     {
                                         Ok(()) => {
                                             let mut settings = ui_settings_for_pump.borrow_mut();
-                                            settings.audio.active_mut().output_port_l = Some(port_l);
-                                            settings.audio.active_mut().output_port_r = Some(port_r);
+                                            settings.audio.active_mut().pick_output((port_l, port_r));
                                             if let Err(error) = settings.save() {
                                                 window.set_preferences_audio_error(
                                                     format!("Could not save settings: {error}")

@@ -822,33 +822,47 @@ change an ALSA profile, or restart the audio server and have it rename its
 nodes, and the pair recorded in `settings.toml` matches nothing in the graph.
 
 Connecting to nothing is the one failure with no symptom — the engine runs,
-the meters move, the transport rolls, and there is silence. So mooloop takes
-any working stereo destination instead and says which:
+the meters move, the transport rolls, and there is silence. So under JACK the
+output follows Adam's rule (2026-09-22):
+
+- **Stay on the most recently picked output that is there.** Preferences
+  remembers the last eight outputs picked (`earlier-outputs` in the driver's
+  section of `settings.toml`, beside `output-port-l`/`-r`). At launch, and
+  whenever the outputs are connected to nothing, mooloop connects to the most
+  recent of them whose ports are all in the graph.
+- **Never move an output that is connected.** A device appearing while
+  mooloop plays somewhere is left alone, even one picked more recently: plug
+  in a USB interface while the speakers play, and the speakers keep playing.
+  "Connected" means connected to anything, including a link made by hand in
+  a patchbay.
+- **Something over nothing.** With no remembered output there, any working
+  stereo destination is taken, unranked -- the graph's first that is not
+  mooloop itself. Preferring speakers over HDMI would be a guess about a
+  machine the engine cannot see.
+
+So if headphones on the same card replace the speakers' ports when plugged
+in, the speakers' ports go, the output is connected to nothing, and it moves
+to the headphones if they are the more recent pick. A second device that
+simply appears changes nothing.
 
 ```text
-warn  audio  the saved audio output "..." does not exist; connected to
-             "alsa_output...HiFi__Speaker__sink" instead.
+warn  audio  the saved audio output "..." is not available; connected to
+             "alsa_output...HiFi__Speaker__sink:playback_FL" instead.
              Preferences -> Audio picks a different one
+info  audio  the audio output "..." is not connected; playing through "..."
 ```
 
-The choice is deliberately unranked — the first destination that is neither
-mooloop itself nor the pair that just failed. Preferring speakers over HDMI
-would be a guess about a machine the engine cannot see; being audible
-*somewhere* is the whole intent, and Preferences owns the real choice.
+The check runs on the control thread, from the engine's event poll, half a
+second after the port graph last changed and once a second otherwise. It
+used to run inside JACK's port-registration callback, which pipewire-jack
+does not let wait on its own graph requests, and it only ever reconnected
+the one remembered pair -- after a fallback, the fallback. Turning
+auto-reconnect off in Preferences stops everything but the choice at launch.
 
-This happens when the engine opens, and it works only because the engine
-opens *on the saved output*. Until 2026-09-22 it opened on the default, fell
-back from that, and applied the saved pair once the window was up -- which
-disconnected the working fallback before finding the saved pair missing, so
-unplugged headphones at launch meant total silence. Moving the output now
-connects the new pair before letting go of the old one, so choosing one in
-Preferences that will not connect leaves the current one playing.
-
-One part is still open: after a fallback, the fallback is what the engine
-remembers as its target, so auto-reconnect watches it rather than the saved
-pair, and plugging the headphones back in does not bring the output back to
-them. Keeping "wanted" and "connected" apart is P3's remainder in
-`reports/teams-2026-09-22.md`.
+Moving the output connects the new pair before letting go of the old one, so
+choosing one in Preferences that will not connect leaves the current one
+playing. Core Audio still returns to the picked device when it comes back,
+even while the system default is playing; it has not been moved to this rule.
 
 To see the state directly: `pw-link -l | grep mooloop` lists the links, and no
 output at all means the outputs are connected to nothing.

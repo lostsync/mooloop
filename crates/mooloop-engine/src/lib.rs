@@ -183,7 +183,7 @@ use jack_driver::{JackDriver as Driver, Opening};
 use render::{ReclaimedEffect, RenderState};
 pub use render::{AudioTapBank, ChannelStorage, ContainerScratch, EffectSlot, SendBank, SendSpec};
 
-pub use driver::{AudioConfig, DriverStatus, OutputTarget};
+pub use driver::{remember_output, AudioConfig, DriverStatus, OutputTarget, REMEMBERED_OUTPUTS};
 pub use take::{Take, TakeFrame, TakePhase, TakeStatus};
 pub use meters::{
     BufferMarks, BusMeters, DeviceMeters, DeviceTelemetry, ModulatorMeters, PlayheadMeters,
