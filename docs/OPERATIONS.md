@@ -899,9 +899,9 @@ Nothing here may be called from the audio thread; see
 
 ## Commit, Merge, And Tidy Up
 
-Commit small, buildable changes from the task worktree. Update your row in
-`CONTRIBUTORS.md` before each commit — `Last seen` and `Sessions`, and nothing
-else unless `Known for` has stopped being true.
+Commit small, buildable changes from the task worktree. If your model+harness
+pair has no row in `CONTRIBUTORS.md`, add one; an existing row needs nothing
+per commit.
 
 ```sh
 git status --short --branch
