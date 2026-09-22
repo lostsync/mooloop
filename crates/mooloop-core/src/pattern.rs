@@ -87,6 +87,22 @@ impl NoteEvent {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChannelPattern {
     notes: Vec<NoteEvent>,
+    /// `(end_tick, index into notes)`, sorted by end tick. `notes` is sorted
+    /// by `(start_tick, id)` for the note-on walk; this is the same storage
+    /// read the other way, for the note-off walk, so the scheduler can
+    /// binary-search either edge instead of scanning every note for both
+    /// (`reports/fable-2026-09-22.md`, finding 1). Kept in lockstep by every
+    /// site that touches `notes`, and by the same rule: a sorted insert, no
+    /// heap allocation on the hot path (the `binary_search_by_key` below is
+    /// the same one `upsert_note` already used).
+    ///
+    /// A note's raw `end_tick` is `start_tick + duration_ticks`, which
+    /// nothing here caps, so it is stored as the real value rather than one
+    /// folded into the pattern's current length -- the same reason `notes`
+    /// still holds a note whose `start_tick` has drifted past the pattern
+    /// after a shorten. `index` is a `u16` because
+    /// [`MAX_NOTES_PER_CHANNEL_PATTERN`] fits comfortably under 2^16.
+    offs: Vec<(u32, u16)>,
     /// A fixed bank of [`MAX_AUTOMATION_LANES_PER_CHANNEL`] lane slots whose
     /// open ones are the prefix `..open_lanes`, at most one per destination.
     /// Order inside the prefix is the order they were opened, which is the
@@ -105,6 +121,7 @@ impl ChannelPattern {
             .min(MAX_NOTES_PER_CHANNEL_PATTERN);
         Self {
             notes: Vec::with_capacity(note_capacity),
+            offs: Vec::with_capacity(note_capacity),
             // Eight vacant slots own no point storage, so this is the same
             // heap the empty `Vec::with_capacity(8)` here used to take.
             lanes: (0..MAX_AUTOMATION_LANES_PER_CHANNEL)
@@ -123,6 +140,66 @@ impl ChannelPattern {
         self.notes.iter().find(|note| note.id == id)
     }
 
+    /// Notes whose `start_tick` falls in `[range.start, range.end)`, in
+    /// storage (start-tick) order. A direct slice of `notes`, since that is
+    /// exactly what it is already sorted by.
+    pub fn notes_starting_in(&self, range: std::ops::Range<u32>) -> &[NoteEvent] {
+        if range.start >= range.end {
+            return &[];
+        }
+        let lo = self.notes.partition_point(|note| note.start_tick < range.start);
+        let hi = self.notes.partition_point(|note| note.start_tick < range.end);
+        &self.notes[lo..hi]
+    }
+
+    /// Notes whose `end_tick()` falls in `[range.start, range.end)`, in
+    /// end-tick order (not `notes`' own timeline order -- a caller after a
+    /// specific note-on/note-off ordering sorts what this returns itself).
+    pub fn notes_ending_in(
+        &self,
+        range: std::ops::Range<u32>,
+    ) -> impl Iterator<Item = &NoteEvent> + '_ {
+        let (lo, hi) = if range.start >= range.end {
+            (0, 0)
+        } else {
+            let lo = self.offs.partition_point(|&(end, _)| end < range.start);
+            let hi = self.offs.partition_point(|&(end, _)| end < range.end);
+            (lo, hi)
+        };
+        self.offs[lo..hi]
+            .iter()
+            .map(move |&(_, index)| &self.notes[index as usize])
+    }
+
+    /// Indices into `notes()` whose `end_tick()` falls in
+    /// `[range.start, range.end)`. The same query as
+    /// [`Self::notes_ending_in`], but the position rather than the note
+    /// itself -- a caller that needs the notes back in `notes()`'s own
+    /// `(start_tick, id)` order (not end-tick order) marks these positions
+    /// and re-walks `notes()` instead of sorting what this returns.
+    pub fn note_indices_ending_in(
+        &self,
+        range: std::ops::Range<u32>,
+    ) -> impl Iterator<Item = usize> + '_ {
+        let (lo, hi) = if range.start >= range.end {
+            (0, 0)
+        } else {
+            let lo = self.offs.partition_point(|&(end, _)| end < range.start);
+            let hi = self.offs.partition_point(|&(end, _)| end < range.end);
+            (lo, hi)
+        };
+        self.offs[lo..hi].iter().map(|&(_, index)| index as usize)
+    }
+
+    /// The largest `end_tick()` currently stored, or `None` when empty.
+    /// Cheap (the last element of a sorted store) and the scheduler's only
+    /// way to notice a note that sustains across more than one pattern or
+    /// song pass, which the `offs` shift-by-one-period search does not
+    /// cover -- see `sequencer.rs`'s note-off fallback.
+    pub fn max_end_tick(&self) -> Option<u32> {
+        self.offs.last().map(|&(end, _)| end)
+    }
+
     /// Insert or replace a note while preserving timeline order. Returns false
     /// when the start is outside storage or the preallocated capacity is full.
     pub fn upsert_note(&mut self, note: NoteEvent) -> bool {
@@ -135,7 +212,9 @@ impl ChannelPattern {
             .iter()
             .position(|existing| existing.id == note.id)
         {
+            self.remove_off_entry(index);
             self.notes.remove(index);
+            self.shift_offs_after_removal(index);
         } else if self.notes.len() == self.notes.capacity() {
             return false;
         }
@@ -147,18 +226,67 @@ impl ChannelPattern {
             })
             .unwrap_or_else(|index| index);
         self.notes.insert(index, note);
+        self.shift_offs_after_insertion(index);
+        self.insert_off_entry(note.end_tick(), index);
         true
     }
 
     pub fn remove_note(&mut self, id: NoteId) -> Option<NoteEvent> {
         let index = self.notes.iter().position(|note| note.id == id)?;
-        Some(self.notes.remove(index))
+        self.remove_off_entry(index);
+        let removed = self.notes.remove(index);
+        self.shift_offs_after_removal(index);
+        Some(removed)
+    }
+
+    /// Remove the `offs` entry for the note currently at `notes[index]`,
+    /// before that note itself is removed. A linear scan among the ties at
+    /// its end tick, matching `upsert_note`/`remove_note`'s own `position`
+    /// lookup on `notes` -- O(n), no allocation, and not the per-block path.
+    fn remove_off_entry(&mut self, index: usize) {
+        let end = self.notes[index].end_tick();
+        let start = self.offs.partition_point(|&(candidate, _)| candidate < end);
+        let offset = self.offs[start..]
+            .iter()
+            .position(|&(candidate, at)| candidate == end && at as usize == index)
+            .expect("every stored note has a matching offs entry");
+        self.offs.remove(start + offset);
+    }
+
+    /// Every `offs` entry pointing past a just-removed `notes[index]` now
+    /// points one too far; bring it back in line.
+    fn shift_offs_after_removal(&mut self, index: usize) {
+        for (_, at) in &mut self.offs {
+            if *at as usize > index {
+                *at -= 1;
+            }
+        }
+    }
+
+    /// Every `offs` entry pointing at or past a just-inserted `notes[index]`
+    /// now points one short; move it up.
+    fn shift_offs_after_insertion(&mut self, index: usize) {
+        for (_, at) in &mut self.offs {
+            if *at as usize >= index {
+                *at += 1;
+            }
+        }
+    }
+
+    /// Insert the `(end_tick, index)` pair for a just-inserted note.
+    fn insert_off_entry(&mut self, end_tick: u32, index: usize) {
+        let at = self
+            .offs
+            .binary_search_by_key(&end_tick, |&(end, _)| end)
+            .unwrap_or_else(|at| at);
+        self.offs.insert(at, (end_tick, index as u16));
     }
 
     /// Empty the channel, keeping every slot's point storage: this runs on
     /// the audio thread (Add Channel clears the seat across the bank).
     pub fn clear(&mut self) {
         self.notes.clear();
+        self.offs.clear();
         for lane in &mut self.lanes[..self.open_lanes] {
             lane.vacate();
         }
@@ -379,6 +507,86 @@ mod tests {
             [8, 3]
         );
         assert_eq!(channel.note(8).unwrap().duration_ticks, 48);
+    }
+
+    /// `offs` (the end-tick index) has to track `notes` exactly through
+    /// every kind of edit `upsert_note`/`remove_note` do: a fresh insert, a
+    /// same-id replace (which moves other notes' positions in `notes` when
+    /// its start tick changes), and a removal from the middle -- each a way
+    /// the positional indices `offs` stores can go stale if the shift is
+    /// wrong. Checked by brute force: sort `notes` by end tick and compare.
+    #[test]
+    fn offs_index_tracks_notes_through_inserts_replaces_and_removals() {
+        fn assert_offs_matches(channel: &ChannelPattern) {
+            let mut expected: Vec<_> = channel.notes().to_vec();
+            expected.sort_by_key(|note| (note.end_tick(), note.id));
+            let actual: Vec<_> = channel
+                .notes_ending_in(0..u32::MAX)
+                .copied()
+                .collect();
+            let mut actual_sorted = actual.clone();
+            actual_sorted.sort_by_key(|note| (note.end_tick(), note.id));
+            assert_eq!(actual_sorted, expected, "offs disagrees with notes");
+            // notes_ending_in must itself already be in end-tick order.
+            assert!(actual
+                .windows(2)
+                .all(|pair| pair[0].end_tick() <= pair[1].end_tick()));
+        }
+
+        let mut channel = ChannelPattern::new(64);
+        for (id, (start, dur)) in [(1, (10, 5)), (2, (0, 100)), (3, (50, 1)), (4, (20, 20))] {
+            assert!(channel.upsert_note(NoteEvent::new(id, start, dur, 60, 100)));
+        }
+        assert_offs_matches(&channel);
+
+        // Replace id 2 with a start tick that moves it later in `notes`,
+        // shifting every note between its old and new position.
+        assert!(channel.upsert_note(NoteEvent::new(2, 45, 3, 61, 90)));
+        assert_offs_matches(&channel);
+
+        // Remove from the middle.
+        assert!(channel.remove_note(4).is_some());
+        assert_offs_matches(&channel);
+
+        // Remove everything, then rebuild.
+        for id in [1, 2, 3] {
+            channel.remove_note(id);
+        }
+        assert!(channel.notes().is_empty());
+        assert_offs_matches(&channel);
+        assert!(channel.upsert_note(NoteEvent::new(9, 5, 5, 60, 100)));
+        assert_offs_matches(&channel);
+
+        channel.clear();
+        assert_offs_matches(&channel);
+    }
+
+    #[test]
+    fn notes_starting_and_ending_in_bound_correctly() {
+        let mut channel = ChannelPattern::new(64);
+        // start=10 end=15, start=20 end=100, start=30 end=35
+        assert!(channel.upsert_note(NoteEvent::new(1, 10, 5, 60, 100)));
+        assert!(channel.upsert_note(NoteEvent::new(2, 20, 80, 60, 100)));
+        assert!(channel.upsert_note(NoteEvent::new(3, 30, 5, 60, 100)));
+
+        assert_eq!(
+            channel
+                .notes_starting_in(0..25)
+                .iter()
+                .map(|n| n.id)
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
+        assert_eq!(
+            channel
+                .notes_ending_in(0..40)
+                .map(|n| n.id)
+                .collect::<Vec<_>>(),
+            [1, 3]
+        );
+        assert!(channel.notes_starting_in(25..25).is_empty());
+        assert_eq!(channel.notes_ending_in(1000..2000).count(), 0);
+        assert_eq!(channel.max_end_tick(), Some(100));
     }
 
     #[test]

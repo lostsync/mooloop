@@ -403,8 +403,9 @@ impl Executor {
 /// asymptotically toward zero and spends time in subnormal range on the way;
 /// without this, the CPU can take an order of magnitude longer per
 /// arithmetic op on those values, which reads as constant background load
-/// with no single attributable cause. MXCSR is per-thread, so this must run
-/// on the realtime callback's own thread rather than at engine construction.
+/// with no single attributable cause. Both the x86_64 (MXCSR) and aarch64
+/// (FPCR) control registers below are per-thread, so this must run on the
+/// realtime callback's own thread rather than at engine construction.
 #[cfg(target_arch = "x86_64")]
 #[inline]
 fn enable_flush_to_zero() {
@@ -422,7 +423,33 @@ fn enable_flush_to_zero() {
     }
 }
 
-#[cfg(not(target_arch = "x86_64"))]
+/// aarch64's equivalent of the x86_64 arm above: bit 24 (FZ) of FPCR, the
+/// 64-bit floating-point control register the ARM ARM documents. Apple
+/// silicon (the Core Audio driver's own architecture, see
+/// `reports/fable-2026-09-22.md` finding 6) handles subnormals in hardware
+/// at little cost, so this closes a gap in the stated contract more than a
+/// measured one -- but a plugin host or a Linux aarch64 build is not
+/// guaranteed the same, and nothing here should assume it.
+///
+/// There is no separate DAZ bit to set at this width: FZ alone flushes both
+/// subnormal inputs and subnormal outputs for the single- and
+/// double-precision instructions this engine uses. `FZ16` (bit 19), which
+/// would do the same for half-precision arithmetic, does not apply -- the
+/// DSP graph never runs in `f16`.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+fn enable_flush_to_zero() {
+    use std::arch::asm;
+    const FLUSH_TO_ZERO: u64 = 1 << 24;
+    unsafe {
+        let mut fpcr: u64;
+        asm!("mrs {0}, fpcr", out(reg) fpcr, options(nostack, preserves_flags));
+        fpcr |= FLUSH_TO_ZERO;
+        asm!("msr fpcr, {0}", in(reg) fpcr, options(nostack, preserves_flags));
+    }
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 #[inline]
 fn enable_flush_to_zero() {}
 

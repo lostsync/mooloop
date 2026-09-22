@@ -225,6 +225,15 @@ impl MonoSynth {
         let to_amp = lfo_params.to_amp.clamp(0.0, 1.0);
         let max_hz = sr as f32 * 0.45;
 
+        // `hz_from_normalized`'s `powf` depends only on the smoothed knob
+        // position, which has settled to a constant for most of a note's
+        // life; resolve it once per range instead of every sample.
+        // `advance_by` leaves `voice.cutoff` exactly where `frames` calls to
+        // `advance()` would have, so this is the same value the old
+        // per-sample read would have used by the end of this range.
+        let cutoff = voice.cutoff.advance_by(end.saturating_sub(start));
+        let base_hz = hz_from_normalized(cutoff, max_hz);
+
         for i in start..end {
             voice.current_freq += (voice.target_freq - voice.current_freq) * (1.0 - glide_coeff);
 
@@ -261,7 +270,6 @@ impl MonoSynth {
 
             // Envelope- and LFO-modulated low-pass, same perceptual mapping
             // the sampler uses. Bypassed entirely when fully open.
-            let cutoff = voice.cutoff.advance();
             let drive = voice.drive.advance();
             let filtered = if cutoff >= 0.999
                 && env_amount.abs() <= f32::EPSILON
@@ -270,7 +278,6 @@ impl MonoSynth {
             {
                 mix
             } else {
-                let base_hz = hz_from_normalized(cutoff, max_hz);
                 let octaves = voice.env.level() * env_amount * 6.0 + lfo_value * to_filter;
                 let cutoff_hz = (base_hz * octaves.exp2()).clamp(20.0, max_hz);
                 voice.filter.next_sample(mix, cutoff_hz, resonance, sr)

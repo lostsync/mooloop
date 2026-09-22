@@ -589,7 +589,13 @@ at a 512-frame block:
   blocks (`offline.rs`, `OFFLINE_BLOCK_FRAMES`), and the control pass's
   refusals -- source and effect parameters, route amounts, auditions -- are
   counted in `RenderState::refused_events`, which an export returns and
-  logs. The near end is still open: the same loop serves modulation as well as
+  logs. Plan D (`docs/plans/automation-curves/`) then moved a driven
+  parameter out of the list into a per-destination curve row, which takes a
+  device with a native curve path off the cap -- only the EQ so far. Every
+  other device still gets its curves back as events through
+  `AudioNode::apply_curves`'s default fallback, whose refusals are counted in
+  the same total, and route amounts are still one event per tick. So for
+  those, the near end is still open: the same loop serves modulation as well as
   automation, so a channel has up to `MAX_MOD_ROUTES_PER_CHANNEL = 16` plus
   `MAX_AUTOMATION_LANES_PER_CHANNEL = 8` driven destinations, and
   24 x 512/`CONTROL_RATE_FRAMES` = 384 is already past 256. Sixteen of those

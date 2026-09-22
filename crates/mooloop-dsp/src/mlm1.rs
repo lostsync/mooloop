@@ -464,6 +464,15 @@ impl MlM1 {
         let model = params.filter_model;
         let max_hz = sr as f32 * 0.45;
 
+        // `hz_from_normalized`'s `powf` depends only on the smoothed knob
+        // position, which has settled to a constant for most of a note's
+        // life; resolve it once per range instead of every sample.
+        // `advance_by` leaves `voice.cutoff` exactly where `frames` calls to
+        // `advance()` would have, so this is the same value the old
+        // per-sample read would have used by the end of this range.
+        let cutoff = voice.cutoff.advance_by(end.saturating_sub(start));
+        let base_hz = hz_from_normalized(cutoff, max_hz);
+
         for i in start..end {
             voice.current_freq += (voice.target_freq - voice.current_freq) * (1.0 - glide_coeff);
 
@@ -499,7 +508,6 @@ impl MlM1 {
                     );
             }
 
-            let cutoff = voice.cutoff.advance();
             // Added to the *smoothed* drive rather than applied as a stage of
             // its own, so it inherits click-safety instead of needing its own.
             let drive =
@@ -522,7 +530,6 @@ impl MlM1 {
             {
                 driven
             } else {
-                let base_hz = hz_from_normalized(cutoff, max_hz);
                 // Read off `current_freq` rather than the note number so a
                 // glide carries the cutoff along with the pitch, which is what
                 // a slide is expected to sound like and costs nothing extra.

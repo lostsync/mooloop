@@ -31,7 +31,7 @@ use mooloop_dsp::{
     ChannelAudioSnapshot,
     ProcessContext, SampleData, Sampler, SourceNode, SpectrumAnalyzer, StereoBus, StretchPool,
     TimedEvent,
-    CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE, SILENCE_PEAK,
+    CONTROL_RATE_FRAMES, ControlCurve, MAX_BLOCK_SIZE, MAX_CONTROL_TICKS_PER_BLOCK, SILENCE_PEAK,
 };
 use mooloop_dsp::interpolate::{Region, SincTable};
 use mooloop_dsp::smooth::Smoothed;
@@ -682,7 +682,108 @@ const MAX_PENDING_EFFECT_PARAMS: usize = 8;
 /// one value for each rack slot at every control-rate boundary lets every
 /// effect in a channel read the exact same LFO timeline without allocating or
 /// advancing the source more than once.
-const MAX_CONTROL_TICKS_PER_BLOCK: usize = MAX_BLOCK_SIZE / CONTROL_RATE_FRAMES;
+///
+/// [`MAX_CONTROL_TICKS_PER_BLOCK`] itself now lives in `mooloop_dsp::node`,
+/// next to [`ControlCurve`] -- a node's own curve buffer and the engine's
+/// per-block pool that fills it have to agree on this bound exactly, and a
+/// value derived independently in two crates from the same two inputs is
+/// still the same value written twice in the sense `AGENTS.md`'s
+/// duplication section means; importing it is what makes that impossible
+/// rather than merely unlikely.
+const _: () = assert!(MAX_CONTROL_TICKS_PER_BLOCK == MAX_BLOCK_SIZE / CONTROL_RATE_FRAMES);
+
+/// The most destinations any single [`mooloop_core::EffectKind`]'s parameter
+/// table can drive on one effect slot at once -- `EqParams`'s fifty,
+/// verified against every kind by `mooloop_dsp`'s own
+/// `no_effect_kinds_descriptor_table_exceeds_the_curve_frames_capacity`,
+/// since this constant and that crate's identically-derived one can never be
+/// merged into a single definition across the crate boundary.
+const MAX_EFFECT_CURVE_DESTINATIONS: usize = mooloop_core::effect::EQ_DESCRIPTOR_COUNT;
+
+/// The most destinations any single [`mooloop_core::DeviceKind`]'s parameter
+/// table can drive on one channel's source at once -- DS-01's ninety-two,
+/// the largest generator table by a wide margin (`generators_never_drive_more_curve_ids_than_the_pool_holds`
+/// checks every kind against it below).
+const MAX_SOURCE_CURVE_DESTINATIONS: usize = mooloop_core::ds01::DESCRIPTORS.len();
+
+/// One node's driven destinations for one block, captured from resolved
+/// modulation/automation instead of pushed as `Event::ParamValue`s onto a
+/// shared, capacity-256 `EventList` -- `docs/plans/automation-curves/00-status.md`,
+/// written against `reports/fable-2026-09-22.md` finding 3: "one destination
+/// emits 256 events and fills the list alone; a second is silently dropped."
+///
+/// `N` bounds how many *destinations* one node can drive at once, not how
+/// many ticks: every accepted row gets the full block's
+/// `MAX_CONTROL_TICKS_PER_BLOCK`, regardless of how many other destinations
+/// are also driven, which is the whole difference from the list this
+/// replaces.
+struct CurvePool<const N: usize> {
+    ids: [u32; N],
+    ticks: [[f32; MAX_CONTROL_TICKS_PER_BLOCK]; N],
+    count: usize,
+    /// How many of each row's `MAX_CONTROL_TICKS_PER_BLOCK` slots this
+    /// block actually resolved -- set once per block by [`Self::clear`],
+    /// which is what lets [`Self::fill`] hand out the right-length slice
+    /// without the caller re-deriving the same tick count a second time.
+    active_ticks: usize,
+}
+
+impl<const N: usize> CurvePool<N> {
+    fn empty() -> Self {
+        Self {
+            ids: [0; N],
+            ticks: [[0.0; MAX_CONTROL_TICKS_PER_BLOCK]; N],
+            count: 0,
+            active_ticks: 0,
+        }
+    }
+
+    /// Empty the pool for a new node/block, recording how many ticks are
+    /// valid this time -- a short final block resolves fewer than
+    /// `MAX_CONTROL_TICKS_PER_BLOCK`, and a row's unwritten tail must never
+    /// be handed to a node as though it were this block's data.
+    fn clear(&mut self, ticks: usize) {
+        self.count = 0;
+        self.active_ticks = ticks.min(MAX_CONTROL_TICKS_PER_BLOCK);
+    }
+
+    /// Reserve the next row for `id`, returning where to write its tick
+    /// values. `None` past `N` destinations driven on this node at once --
+    /// refused and left for the caller to count, rather than silently
+    /// dropped, mirroring `RenderState::defer_command`'s refusal.
+    fn begin(&mut self, id: u32) -> Option<&mut [f32; MAX_CONTROL_TICKS_PER_BLOCK]> {
+        if self.count == N {
+            return None;
+        }
+        let index = self.count;
+        self.ids[index] = id;
+        self.count += 1;
+        Some(&mut self.ticks[index])
+    }
+
+    /// Write this pool's curves into `buf`, each trimmed to the ticks
+    /// [`Self::clear`] recorded, and return how many rows were written.
+    /// `buf` is caller-owned (a small on-stack array of `ControlCurve`,
+    /// which borrows from `self`) because `AudioNode::apply_curves` takes a
+    /// slice, not an iterator.
+    fn fill<'a>(&'a self, buf: &mut [ControlCurve<'a>]) -> usize {
+        let count = self.count.min(buf.len());
+        let active_ticks = self.active_ticks;
+        for (slot, (&id, ticks)) in buf[..count]
+            .iter_mut()
+            .zip(self.ids.iter().zip(self.ticks.iter()))
+        {
+            *slot = ControlCurve {
+                id,
+                values: &ticks[..active_ticks],
+            };
+        }
+        count
+    }
+}
+
+type EffectCurvePool = CurvePool<MAX_EFFECT_CURVE_DESTINATIONS>;
+type SourceCurvePool = CurvePool<MAX_SOURCE_CURVE_DESTINATIONS>;
 
 /// One channel's modulator outputs for one block, captured at each control
 /// subdivision.
@@ -967,8 +1068,30 @@ struct EffectChain {
     /// than a parallel array per field.
     slots: [Option<Box<EffectSlot>>; MAX_EFFECTS_PER_CHANNEL],
     /// Reused while each sequential slot processes. See
-    /// `PendingEffectParams` for why this is not stored per slot.
+    /// `PendingEffectParams` for why this is not stored per slot. Holds only
+    /// the once-per-block queued knob/buffer commands now
+    /// (`PendingEffectParams::copy_to`): a driven parameter's per-tick
+    /// values go into `curve_scratch` instead of here -- see
+    /// `control_events_for_slot`.
     event_scratch: EventList,
+    /// This slot's driven destinations for the current block, resolved by
+    /// `control_events_for_slot` and handed to the node through
+    /// `AudioNode::apply_curves` in place of pushing a `ParamValue` event per
+    /// tick per destination onto `event_scratch`. One scratch buffer is
+    /// enough for the same reason `event_scratch` is: slots process
+    /// sequentially. Boxed: `MAX_EFFECT_CURVE_DESTINATIONS` rows of
+    /// `MAX_CONTROL_TICKS_PER_BLOCK` ticks is tens of kilobytes, the same
+    /// reason `ControlOutputs` and `GateTable` are boxed elsewhere in this
+    /// file.
+    curve_scratch: Box<EffectCurvePool>,
+    /// Destinations this chain could not fit into one slot's curve pool at
+    /// once, this session -- `N` destinations already comfortably covers
+    /// every shipped effect kind's whole parameter table
+    /// (`no_effect_kinds_descriptor_table_exceeds_the_curve_frames_capacity`
+    /// in `mooloop-dsp`), so a nonzero count here means a future kind's
+    /// table grew past it. Counted rather than silently dropped, mirroring
+    /// `defer_command`'s refusal.
+    curve_refusals: u64,
     /// Parameter events `event_scratch` had no room for, since this chain was
     /// built. See [`RenderState::refused_events`].
     refused_events: u64,
@@ -1039,6 +1162,8 @@ impl EffectChain {
             bound: 0,
             slots: std::array::from_fn(|_| None),
             event_scratch: EventList::empty(),
+            curve_scratch: Box::new(EffectCurvePool::empty()),
+            curve_refusals: 0,
             refused_events: 0,
             dry_align: std::array::from_fn(|_| None),
             analyzers: std::array::from_fn(|_| None),
@@ -1295,8 +1420,19 @@ impl EffectChain {
         self.slot(slot)?.base_params.as_ref()?.get(id)
     }
 
-    /// Resolve every control signal aimed at this slot into `ParamValue`
-    /// events on the shared scratch list.
+    /// Resolve every control signal aimed at this slot into a row of
+    /// `curve_scratch`, one destination per row, one value per control tick.
+    ///
+    /// Until this plan, the per-tick loop below pushed an `Event::ParamValue`
+    /// per tick per destination onto the slot's shared, 256-slot
+    /// `event_scratch` (`event.rs::MAX_EVENTS`) -- fine for one destination
+    /// at a typical block, but at `MAX_BLOCK_SIZE` one destination alone
+    /// reaches 256 events and a second is silently dropped
+    /// (`reports/fable-2026-09-22.md`, finding 3). `curve_scratch` gives
+    /// each destination its own row instead, so nothing here competes with
+    /// anything else driven on the same slot for room; only the slot's own
+    /// *destination count* is bounded, at `MAX_EFFECT_CURVE_DESTINATIONS`,
+    /// counted as a refusal rather than silently dropped past it.
     ///
     /// Automation and modulation compose rather than compete: a lane supplies
     /// the **base** the knob would otherwise supply, and the matrix adds its
@@ -1323,13 +1459,29 @@ impl EffectChain {
     ///
     /// A recorded lane, when recording lands, is written from the knob and
     /// takes over as the base on the next control tick.
+    ///
+    /// Returns the tick count `curve_scratch`'s rows are valid for this
+    /// block, `0` when nothing on this slot is driven at all. `clear`
+    /// already records the same number on the pool itself, which is what
+    /// lets `fill` trim its rows without being told again -- the return
+    /// value is for a caller (a test, today) that wants the count without
+    /// reaching into a private field.
     fn control_events_for_slot(
         &mut self,
         slot: usize,
         scope: EffectTarget,
         modulation: Option<&ModulationBlock<'_>>,
         automation: Option<&AutomationBlock<'_>>,
-    ) {
+    ) -> usize {
+        // Cleared unconditionally, before any early return: a block on
+        // which this slot stops being driven altogether must not leave a
+        // previous block's rows in the pool for `EffectChain::process` to
+        // hand the node again. `curve_scratch.count > 0` is exactly what
+        // that call site reads to decide whether to call `apply_curves` at
+        // all, so a stale nonzero count there replays automation the
+        // engine has already stopped resolving -- caught by
+        // `a_slot_that_stops_being_driven_does_not_replay_a_stale_curve`.
+        self.curve_scratch.clear(0);
         // No route in the channel's rack and no lane under the playhead means
         // every descriptor below can only reach its `continue`. Both are facts
         // about the channel, not the descriptor, and this runs once per effect
@@ -1338,13 +1490,13 @@ impl EffectChain {
         if !modulation.is_some_and(|modulation| modulation.rack.has_routes())
             && automation.is_none()
         {
-            return;
+            return 0;
         }
         let Some(state) = self.slot(slot) else {
-            return;
+            return 0;
         };
         let (Some(kind), Some(params)) = (state.kind, state.base_params) else {
-            return;
+            return 0;
         };
         // The address a route or lane could be naming this device by. Read
         // from the slot rather than derived from its position, which is the
@@ -1357,6 +1509,7 @@ impl EffectChain {
             .chain(automation.map(|automation| automation.ticks))
             .max()
             .unwrap_or(0);
+        self.curve_scratch.clear(ticks);
 
         for descriptor in kind.descriptors() {
             let destination = ParamAddr::effect(scope, device, descriptor.id);
@@ -1375,8 +1528,18 @@ impl EffectChain {
                 continue;
             };
             let knob_normalized = descriptor.to_normalized(base);
-            for tick in 0..ticks {
-                let offset = (tick * CONTROL_RATE_FRAMES) as u32;
+            let Some(row) = self.curve_scratch.begin(descriptor.id) else {
+                // Every shipped effect kind's whole table fits
+                // `MAX_EFFECT_CURVE_DESTINATIONS` with room to spare
+                // (`mooloop_dsp`'s own
+                // `no_effect_kinds_descriptor_table_exceeds_the_curve_frames_capacity`);
+                // reaching this arm means a future kind's table has grown
+                // past it. Counted so it is a number in telemetry, not a
+                // silently missing modulation route.
+                self.curve_refusals += 1;
+                continue;
+            };
+            for (tick, slot) in row.iter_mut().enumerate().take(ticks) {
                 let base_normalized = curve
                     .as_ref()
                     .zip(automation)
@@ -1390,19 +1553,11 @@ impl EffectChain {
                     }
                     _ => 0.0,
                 };
-                let value = descriptor
+                *slot = descriptor
                     .from_normalized((base_normalized + offset_normalized).clamp(0.0, 1.0));
-                if !self.event_scratch.push_ordered(TimedEvent {
-                    offset,
-                    event: Event::ParamValue {
-                        id: descriptor.id,
-                        value,
-                    },
-                }) {
-                    self.refused_events += 1;
-                }
             }
         }
+        ticks
     }
 
     fn queue_buffer(&mut self, slot: usize, event: mooloop_core::BufferEvent) {
@@ -1835,8 +1990,24 @@ impl EffectChain {
                 let wet = self.wet_dry(slot);
                 let trim = self.output_trim(slot);
                 // `control_events_for_slot` mutates the shared scratch
-                // list, so take the node borrow only after that work.
+                // pools, so take the node borrow only after that work.
                 let node = self.nodes[slot].as_mut().expect("checked above");
+                // The common case -- nothing on this slot is modulated or
+                // automated -- skips building the on-stack curve array
+                // entirely, the same "one question in place of a hundred"
+                // shortcut `control_events_for_slot` itself takes.
+                if self.curve_scratch.count > 0 {
+                    // A small on-stack array, not a `Vec`: `apply_curves`
+                    // takes a slice, and this is the realtime thread.
+                    let mut curve_buf: [ControlCurve<'_>; MAX_EFFECT_CURVE_DESTINATIONS] =
+                        std::array::from_fn(|_| ControlCurve::default());
+                    let curve_count = self.curve_scratch.fill(&mut curve_buf);
+                    self.refused_events += node.apply_curves(
+                        &curve_buf[..curve_count],
+                        CONTROL_RATE_FRAMES,
+                        &mut self.event_scratch,
+                    );
+                }
                 node.process(context, bus, &self.event_scratch, None);
                 // Equal-power crossfade. The wet paths people actually blend
                 // (reverb, chorus, delay) are decorrelated from dry, where a
@@ -2293,6 +2464,7 @@ pub struct ChannelStorage {
     strip: Box<ChannelStrip>,
     events: Box<EventList>,
     control_outputs: Box<ControlOutputs>,
+    source_curves: Box<SourceCurvePool>,
 }
 
 pub struct ChannelStrip {
@@ -2645,16 +2817,35 @@ impl ChannelStrip {
     /// buffers. Both are empty on every project that has never authored an
     /// edge, and the devices that can use them branch once a render range on
     /// that fact.
+    ///
+    /// `events` is `&mut` now rather than `&`: `curves` (this block's driven
+    /// source parameters, resolved by the caller into a per-destination row
+    /// rather than pushed here) is handed to the generator through
+    /// `AudioNode::apply_curves` before `process_source`, and the default
+    /// implementation -- every generator's, today -- needs somewhere to put
+    /// the equivalent `ParamValue` events it falls back to. That somewhere
+    /// is this same list, which is why it has to be writable; a generator
+    /// still receives exactly what it always did, either by the old event
+    /// path directly or by the fallback reconstructing it.
+    ///
+    /// Returns how many of the fallback's events `events` had no room for.
     fn process(
         &mut self,
         context: &ProcessContext,
-        events: &EventList,
+        events: &mut EventList,
+        curves: &[ControlCurve<'_>],
         source: Option<&StereoBus>,
         ports: &mut AudioTaps,
-    ) {
+    ) -> u64 {
         let (node, bus) = self.source_and_bus();
-        node.process_source(context, bus, events, source, ports);
+        let refused = if curves.is_empty() {
+            0
+        } else {
+            node.apply_curves(curves, CONTROL_RATE_FRAMES, events)
+        };
+        node.process_source(context, bus, &*events, source, ports);
         self.publish_outlets();
+        refused
     }
 
     /// Take the generator's published control outlets for this block.
@@ -3013,6 +3204,19 @@ pub(crate) struct RenderState {
     /// unsafe aliasing or one buffer a channel.
     aux_scratch: StereoBus,
     events: Vec<Box<EventList>>,
+    /// One channel's driven source destinations for the current block,
+    /// resolved beside `events` and handed to the generator through
+    /// `AudioNode::apply_curves` instead of being pushed onto `events` as
+    /// `ParamValue`s -- see the loop this replaced, once at
+    /// `control_events_for_slot`'s doc comment for the effect-slot half of
+    /// the same change. Boxed for the reason `control_outputs` below is:
+    /// `MAX_SOURCE_CURVE_DESTINATIONS` rows of `MAX_CONTROL_TICKS_PER_BLOCK`
+    /// ticks is real size, and one addressable channel should cost a
+    /// pointer until it exists.
+    source_curves: Vec<Box<SourceCurvePool>>,
+    /// Destinations a channel's source could not fit into its curve pool at
+    /// once, counted the way `EffectChain::curve_refusals` is.
+    source_curve_refusals: u64,
     /// The saved matrix and the runnable sources are deliberately separate:
     /// the former is editable/persisted configuration; the latter contains
     /// LFO phase and other realtime-only state.
@@ -3285,6 +3489,8 @@ impl RenderState {
             audio: Box::new(AudioTapBank::new(CompiledAudioGraph::default())),
             aux_scratch: StereoBus::with_capacity(MAX_BLOCK_SIZE),
             events: Vec::with_capacity(MAX_CHANNELS),
+            source_curves: Vec::with_capacity(MAX_CHANNELS),
+            source_curve_refusals: 0,
             // Small enough that reserving the addressable length outright
             // costs 433 KiB and saves boxing every control-path access.
             modulation: (0..MAX_CHANNELS).map(|_| ModRack::default()).collect(),
@@ -3513,6 +3719,7 @@ impl RenderState {
             control_outputs: Box::new(
                 [[0.0; MAX_MODULATORS_PER_CHANNEL]; MAX_CONTROL_TICKS_PER_BLOCK],
             ),
+            source_curves: Box::new(SourceCurvePool::empty()),
         })
     }
 
@@ -3525,10 +3732,12 @@ impl RenderState {
             strip,
             events,
             control_outputs,
+            source_curves,
         } = *storage;
         self.strips.push(strip);
         self.events.push(events);
         self.control_outputs.push(control_outputs);
+        self.source_curves.push(source_curves);
     }
 
     /// Channels that both exist to the sequencer and have storage behind
@@ -6023,12 +6232,28 @@ impl RenderState {
                 outlets: &outlets,
                 ticks,
             };
-            // The generator's control events go into the channel's own note
-            // list, which is the event stream it already splits its block on.
-            // Written inline rather than as a method because the automation
-            // block holds `&self.sequencer` for the whole loop, and only the
-            // compiler's field-level borrow splitting can see that
-            // `self.events` and `self.strips` are disjoint from it.
+            // The generator's driven parameters go into their own curve
+            // pool now (`source_curves[index]`); its internal route amounts
+            // (`SourceRouteAmount`, just below) still go into the channel's
+            // own note list, the event stream it already splits its block
+            // on. Written inline rather than as a method because the
+            // automation block holds `&self.sequencer` for the whole loop,
+            // and only the compiler's field-level borrow splitting can see
+            // that `self.events`, `self.source_curves` and `self.strips`
+            // are disjoint from it.
+            // Cleared unconditionally, before the gate below: a channel
+            // whose source stops being driven altogether (the last route
+            // removed, the last lane cleared or switched off) must not
+            // leave a previous block's rows in the pool for `ChannelStrip::process`
+            // to hand the generator again through `apply_curves` -- the
+            // gate's own early skip means the descriptor loop that would
+            // otherwise refresh or empty this pool never runs, so an
+            // un-gated clear is the only thing that empties it. Caught by
+            // `two_simultaneously_modulated_source_params_survive_a_maximal_block`'s
+            // sibling in spirit, though the regression itself was found by
+            // the pre-existing `a_generator_parameter_reaches_the_device`
+            // and the "hands the knob back" family.
+            self.source_curves[index].clear(0);
             // Neither pass below can produce an event without either a route
             // in this channel's rack or a lane under the playhead, and both
             // questions are settled for the whole channel before either loop
@@ -6038,6 +6263,22 @@ impl RenderState {
             if modulation.rack.has_routes() || automation.is_some() {
                 let base = self.strips[index].source_base;
                 let scope = EffectTarget::Channel(index as u8);
+                // Shared by every descriptor below, and by `curve_scratch`'s
+                // trim: hoisted once rather than recomputed per descriptor,
+                // which the old per-event form did (harmlessly, since it
+                // was cheap per event; kept as one place now that it also
+                // decides how much of the pool's rows are valid).
+                let resolved_ticks = ticks.max(automation.as_ref().map_or(0, |a| a.ticks));
+                // This channel's driven source parameters go into their own
+                // per-destination curve pool instead of the shared,
+                // 256-slot `events[index]` list `push_ordered` used to fill
+                // one `ParamValue` at a time -- the same change
+                // `EffectChain::control_events_for_slot` makes, and for the
+                // same reason (`reports/fable-2026-09-22.md`, finding 3):
+                // this list also carries the channel's *notes*, so a
+                // maximal block with even one automated parameter and a
+                // played note could make the note lose the race.
+                self.source_curves[index].clear(resolved_ticks);
                 for descriptor in base.kind().descriptors() {
                     let destination = ParamAddr {
                         scope,
@@ -6056,7 +6297,15 @@ impl RenderState {
                         continue;
                     };
                     let knob_normalized = descriptor.to_normalized(knob);
-                    for tick in 0..ticks.max(automation.as_ref().map_or(0, |a| a.ticks)) {
+                    let Some(row) = self.source_curves[index].begin(descriptor.id) else {
+                        // Every shipped generator's whole table fits
+                        // `MAX_SOURCE_CURVE_DESTINATIONS` (DS-01's own 92 is
+                        // the bound) with room to spare; reaching this arm
+                        // means a future kind's table has grown past it.
+                        self.source_curve_refusals += 1;
+                        continue;
+                    };
+                    for (tick, slot) in row.iter_mut().enumerate().take(resolved_ticks) {
                         let base_normalized = curve
                             .as_ref()
                             .zip(automation.as_ref())
@@ -6071,17 +6320,8 @@ impl RenderState {
                         } else {
                             0.0
                         };
-                        let value = descriptor
+                        *slot = descriptor
                             .from_normalized((base_normalized + offset_normalized).clamp(0.0, 1.0));
-                        if !self.events[index].push_ordered(TimedEvent {
-                            offset: (tick * CONTROL_RATE_FRAMES) as u32,
-                            event: Event::ParamValue {
-                                id: descriptor.id,
-                                value,
-                            },
-                        }) {
-                            self.refused_events += 1;
-                        }
                     }
                 }
 
@@ -6090,6 +6330,16 @@ impl RenderState {
                 // are addressed by the route's durable id, so they resolve
                 // through the same base-plus-offset pass and leave through
                 // their own event.
+                //
+                // **Deliberately still event-based, not curve-based.**
+                // `Event::SourceRouteAmount` is a different wire shape from
+                // `Event::ParamValue` (a route id, not a descriptor id), and
+                // `ControlCurve`/`apply_curves`'s default only knows how to
+                // reconstruct the latter -- folding this in too would mean
+                // deciding what a curve *means* for a non-descriptor
+                // destination, which this pass leaves for the next one.
+                // `docs/plans/automation-curves/00-status.md` records it as
+                // not done rather than silently unaddressed.
                 let internal: Option<mooloop_core::MlP8Routes> =
                     base.internal_routes().copied();
                 for route in internal.iter().flat_map(|routes| routes.iter()) {
@@ -6108,7 +6358,7 @@ impl RenderState {
                             continue;
                         }
                         let knob_normalized = descriptor.to_normalized(route.amount);
-                        for tick in 0..ticks.max(automation.as_ref().map_or(0, |a| a.ticks)) {
+                        for tick in 0..resolved_ticks {
                             let base_normalized = curve
                                 .as_ref()
                                 .zip(automation.as_ref())
@@ -6191,11 +6441,21 @@ impl RenderState {
             {
                 let published = self.strips[index].active_source.outlets();
                 let mut ports = self.audio.ports(index, published);
+                // A small on-stack array of slice references, not a `Vec`:
+                // `apply_curves` takes a slice, and this is the realtime
+                // thread. Building it costs a `MAX_SOURCE_CURVE_DESTINATIONS`-
+                // long array of (id, empty-slice) pairs even when nothing is
+                // driven -- cheap (tens of bytes, no allocation), unlike the
+                // curve pool's own storage this borrows from.
+                let mut curve_buf: [ControlCurve<'_>; MAX_SOURCE_CURVE_DESTINATIONS] =
+                    std::array::from_fn(|_| ControlCurve::default());
+                let curve_count = self.source_curves[index].fill(&mut curve_buf);
                 let strip = &mut self.strips[index];
                 strip.bus.clear(frames);
-                strip.process(
+                self.refused_events += strip.process(
                     &context,
-                    &self.events[index],
+                    &mut self.events[index],
+                    &curve_buf[..curve_count],
                     source.then_some(&self.aux_scratch),
                     &mut ports,
                 );
@@ -6601,13 +6861,19 @@ impl RenderState {
     /// rest -- the second parameter, typically, since the first filled the
     /// list. Zero is the only right answer; a non-zero count means what was
     /// heard is not what the project says.
+    ///
+    /// A driven parameter reaches its device as a curve row now rather than
+    /// as events, so this also counts the destinations a curve pool had no
+    /// row for (`source_curve_refusals`, each chain's `curve_refusals`), and
+    /// the events `AudioNode::apply_curves`'s default fallback could not fit.
     pub fn refused_events(&self) -> u64 {
         let chains = self
             .strips
             .iter()
-            .map(|strip| strip.effects.refused_events)
-            .chain(self.buses.iter().map(|bus| bus.effects.refused_events));
-        self.refused_events + chains.sum::<u64>()
+            .map(|strip| &strip.effects)
+            .chain(self.buses.iter().map(|bus| &bus.effects))
+            .map(|chain| chain.refused_events + chain.curve_refusals);
+        self.refused_events + self.source_curve_refusals + chains.sum::<u64>()
     }
 
     pub fn play(&mut self) {
@@ -8634,6 +8900,167 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
         assert!(
             differs,
             "a source on the fader must change gain across subdivisions"
+        );
+    }
+
+    /// A test-only variant of `install_effect_as` that records the real
+    /// `EffectKind` rather than that helper's hardcoded `Filter` -- needed
+    /// here because the destination this test drives is addressed by an EQ
+    /// descriptor id, and `control_events_for_slot` reads a slot's
+    /// descriptor table from `state.kind`, not from the node it happens to
+    /// hold.
+    fn install_effect_of_kind(
+        target: EffectTarget,
+        slot: u8,
+        device: mooloop_core::DeviceId,
+        kind: mooloop_core::EffectKind,
+        node: Box<dyn AudioNode + Send>,
+    ) -> StructuralCommand {
+        let align = IntegerDelay::new(node.dry_path_latency_frames()).map(Box::new);
+        StructuralCommand::InstallEffect {
+            target,
+            slot,
+            kind,
+            resource_key: None,
+            node,
+            align,
+            analyzer: Box::new(SpectrumAnalyzer::new()),
+            state: Box::new(EffectSlot::for_device(device)),
+        }
+    }
+
+    /// The point of the whole curve pool (Plan D, `reports/fable-2026-09-22.md`
+    /// finding 3), exercised end to end rather than through
+    /// `mooloop_dsp::effects`'s own unit tests: two of an EQ's own bands
+    /// modulated at once, on a real channel, for the largest block the
+    /// engine ever hands a node.
+    ///
+    /// Under the event path this replaced, one fully-automated destination
+    /// alone reaches `event.rs`'s `MAX_EVENTS` (256) at `MAX_BLOCK_SIZE`
+    /// (8192 frames / 32 = 256 ticks) -- so a *second* simultaneously
+    /// modulated destination on the same slot had nowhere left to go and
+    /// was silently dropped by `push_ordered`'s own `if self.len ==
+    /// MAX_EVENTS { return false; }`. Two rows, not two-on-one-list, is
+    /// what the curve pool buys: `curve_refusals` -- the counted refusal
+    /// this plan added in the same place that silent drop used to be --
+    /// must still read zero after both bands rode a full block.
+    #[test]
+    fn two_simultaneously_modulated_eq_bands_survive_a_maximal_block() {
+        let mut channel = ProjectChannel::sampler(0, 1);
+        let device = mooloop_core::DeviceId(901);
+        let gain0 = mooloop_core::eq_band_param(0, mooloop_core::EQ_BAND_GAIN);
+        let gain1 = mooloop_core::eq_band_param(1, mooloop_core::EQ_BAND_GAIN);
+
+        let mut rack = ModRack::default();
+        rack.install(
+            0,
+            mooloop_core::ModulatorParams::Lfo(mooloop_core::ModLfoParams {
+                rate_hz: 4.0,
+                ..mooloop_core::ModLfoParams::default()
+            }),
+        );
+        rack.add_route(mooloop_core::ModRoute::to_slot(
+            0,
+            ParamAddr::effect(EffectTarget::Channel(0), device, gain0),
+            0.5,
+            mooloop_core::ModPolarity::Bipolar,
+        ))
+        .expect("the first route fits the matrix");
+        rack.add_route(mooloop_core::ModRoute::to_slot(
+            0,
+            ParamAddr::effect(EffectTarget::Channel(0), device, gain1),
+            0.5,
+            mooloop_core::ModPolarity::Bipolar,
+        ))
+        .expect("the second route fits the matrix");
+        channel.setup.modulation = rack;
+
+        let project = synth_project(channel);
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        let _ = render.apply_structural(install_effect_of_kind(
+            EffectTarget::Channel(0),
+            0,
+            device,
+            mooloop_core::EffectKind::Eq,
+            mooloop_dsp::build_effect_at_tempo(
+                mooloop_core::EffectParams::Eq(mooloop_core::EqParams::default()),
+                48_000,
+                120.0,
+            ),
+        ));
+        render.play();
+        render.process_block(MAX_BLOCK_SIZE);
+
+        assert_eq!(
+            render.strips[0].effects.curve_refusals, 0,
+            "a driven EQ destination was refused though the pool has room \
+             for many more than two at once"
+        );
+    }
+
+    /// The source-side half of the same change: a channel's own generator
+    /// parameters, resolved at
+    /// `RenderState::process_block_inner`'s descriptor loop, used to share
+    /// `events[index]` -- the same list the channel's *notes* travel on --
+    /// with every other driven source parameter. Two destinations driven at
+    /// once across a maximal block now cost nothing from that shared list
+    /// at all: `source_curve_refusals` reads zero, and the note this
+    /// channel plays (`synth_project` always schedules one) still reaches
+    /// the render.
+    #[test]
+    fn two_simultaneously_modulated_source_params_survive_a_maximal_block() {
+        let mut channel = ProjectChannel::sampler(0, 1);
+        let cutoff = mooloop_core::SAMPLER_PARAM_FILTER_CUTOFF;
+        // Not re-exported at the crate root like most sampler param ids;
+        // reached through its module directly.
+        let output_gain = mooloop_core::generator::SAMPLER_PARAM_OUTPUT_GAIN;
+
+        let mut rack = ModRack::default();
+        rack.install(
+            0,
+            mooloop_core::ModulatorParams::Lfo(mooloop_core::ModLfoParams {
+                rate_hz: 4.0,
+                ..mooloop_core::ModLfoParams::default()
+            }),
+        );
+        rack.add_route(mooloop_core::ModRoute::to_slot(
+            0,
+            ParamAddr {
+                scope: EffectTarget::Channel(0),
+                owner: ParamOwner::Source,
+                param: cutoff,
+            },
+            0.5,
+            mooloop_core::ModPolarity::Bipolar,
+        ))
+        .expect("the first route fits the matrix");
+        rack.add_route(mooloop_core::ModRoute::to_slot(
+            0,
+            ParamAddr {
+                scope: EffectTarget::Channel(0),
+                owner: ParamOwner::Source,
+                param: output_gain,
+            },
+            0.5,
+            mooloop_core::ModPolarity::Bipolar,
+        ))
+        .expect("the second route fits the matrix");
+        channel.setup.modulation = rack;
+
+        let project = synth_project(channel);
+        let mut render = RenderState::from_project(48_000, &project, &[]);
+        render.play();
+        let report = render.process_block(MAX_BLOCK_SIZE);
+
+        assert_eq!(
+            render.source_curve_refusals, 0,
+            "a driven source destination was refused though the pool has \
+             room for many more than two at once"
+        );
+        assert!(
+            report.peak_l.max(report.peak_r) > 0.0,
+            "the channel's own note should still have reached the render \
+             alongside its two modulated parameters"
         );
     }
 
@@ -12778,7 +13205,13 @@ mod footprint {
         // share what four nested ones would need. A chain with no container
         // pays only the pointer. Eight more is the count of events its lists
         // had no room for, which is what lets an export say it lost some.
-        assert_eq!(size_of::<EffectChain>(), 20_560);
+        //
+        // `docs/plans/automation-curves/` added sixteen: a pointer to
+        // `curve_scratch` (`Box<CurvePool<50>>`, the boxed reason next to
+        // `EffectSlot`'s own applies here too -- fifty rows of two hundred
+        // and fifty-six ticks is real size, and a chain with nothing driven
+        // pays only the pointer) and the `u64` refusal counter beside it.
+        assert_eq!(size_of::<EffectChain>(), 20_576);
         // A strip holds one node of every generator kind, so a new device is
         // paid for on every live channel whether or not anything uses it.
         // The ML-P8 is 5,776 bytes of it. Its eight voices are the bulk -- a
@@ -12837,7 +13270,23 @@ mod footprint {
         // them. Nothing on the node at all, and nothing per outlet -- a tap's
         // *buffer* is 64 KB and is allocated only when somebody subscribes,
         // which is the whole shape of that plan.
-        assert_eq!(size_of::<MlP8>(), 5_840);
+        // Grew by 64 since this figure was last written, from
+        // `docs/plans/filter-coeffs/` (`reports/fable-2026-09-22.md`
+        // finding 2 / Plan B, landed concurrently with
+        // `automation-curves/` and not this plan's doing): each voice
+        // keeps a per-sample cutoff equality cache so its filter can still
+        // recompute `SvfCoeffs` bit-identically under live route
+        // modulation while the other generators hoist the cutoff off the
+        // per-sample path outright. Recorded here rather than left stale
+        // because this assertion is the only thing that would otherwise
+        // have called the drift out.
+        //
+        // Grew by 48 more from `reports/fable-2026-09-22.md` finding 2,
+        // Plan C step 1: the finishing chorus's shared `ModulationEffect`
+        // now keeps a twelve-entry `tilt` table (`f32 * 12`) for the
+        // phaser's per-stage spread, rebuilt once when `stages` changes
+        // instead of recomputed inline on every stage of every sample.
+        assert_eq!(size_of::<MlP8>(), 5_952);
         // DS-01 is 6,832, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable
@@ -12936,7 +13385,18 @@ mod footprint {
         // `teams-2026-09-22` C4 added 8, in the strip's `EffectChain`: the
         // count of events its lists refused, so an export can say it lost
         // some rather than quietly dropping a parameter.
-        assert_eq!(size_of::<ChannelStrip>(), 42_384);
+        //
+        // `docs/plans/automation-curves/` moved this by eighty: a strip
+        // holds one `EffectChain` by value, not by pointer, so
+        // `curve_scratch`'s pointer and refusal counter (sixteen of it, the
+        // same sixteen `EffectChain` moved by above) are paid here too; the
+        // rest is alignment padding the compiler adds around them.
+        //
+        // Grew by 48 more with `MlP8`'s own figure above
+        // (`reports/fable-2026-09-22.md` finding 2, Plan C step 1): the
+        // strip holds one `MlP8` by value, so its finishing chorus's new
+        // `tilt` table is paid here too.
+        assert_eq!(size_of::<ChannelStrip>(), 42_512);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -12959,11 +13419,28 @@ mod footprint {
         assert_eq!(fixed / 1024, 487);
 
         // Paid per channel the project actually has.
-        let per_live =
-            size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
+        let per_live = size_of::<ChannelStrip>()
+            + size_of::<EventList>()
+            + size_of::<ControlOutputs>()
+            + size_of::<SourceCurvePool>();
         // The sampler's retired-sample ring is 152 of this, a take's pointer
-        // 8, and the effect chain's refused-event count the latest 8.
-        assert_eq!(per_live, 60_824);
+        // 8, and the effect chain's refused-event count 8.
+        //
+        // `docs/plans/automation-curves/` added `SourceCurvePool` itself,
+        // 94,592 of this: ninety-two rows (`DS_01`'s own descriptor count,
+        // the widest generator table, so it is the one bound has to cover)
+        // of two hundred fifty-six ticks each, the same per-destination
+        // shape `EffectChain::curve_scratch` pays per *slot* rather than
+        // per *channel*. It replaces per-tick `push_ordered`s into the
+        // channel's shared note list with rows that do not compete with
+        // each other or with notes for room -- see finding 3,
+        // `reports/fable-2026-09-22.md`. Boxed like everything else in this
+        // list, so an addressable-but-idle channel never pays it; this
+        // number is what a *live* one does.
+        //
+        // Grew by 48 with `ChannelStrip` above (Plan C step 1, same
+        // finding): the phaser's tilt table again, once per live channel.
+        assert_eq!(per_live, 155_544);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -13020,7 +13497,28 @@ mod footprint {
         // addressable channel -- so four KiB across sixteen.
         // The sampler's retired-sample ring added 152 a live channel, so
         // that a note-on never frees a buffer: 2.4 KiB across sixteen.
-        assert_eq!((fixed + per_live * 16) / 1024, 1_437);
+        //
+        // `docs/plans/automation-curves/` is the one that moved this
+        // figure by more than a rounding error: `SourceCurvePool` alone is
+        // 92.4 KiB a live channel, 1,478 KiB across sixteen -- almost all
+        // of the difference between 1,437 and 2,916. `N` is sized to
+        // DS-01's own ninety-two-descriptor table on the stated principle
+        // ("derive it, don't guess" -- a project with a smaller generator
+        // never has more destinations to drive than that table can name),
+        // and every row of it is boxed so an idle or addressable-but-empty
+        // channel never pays it, the same shape `EffectChain::curve_scratch`
+        // pays. This is the cost of removing the per-slot 256-event cap
+        // (`reports/fable-2026-09-22.md` finding 3) rather than a leak --
+        // whether it is a cost worth paying for every live channel, or
+        // whether the bound belongs somewhere narrower than "the widest
+        // generator's whole table", is a product question this run did not
+        // have standing to answer and is recorded rather than decided in
+        // `docs/plans/automation-curves/00-status.md`.
+        //
+        // Crossed one more KiB boundary with `per_live` above: the phaser's
+        // tilt table is 768 bytes across sixteen live channels (Plan C
+        // step 1, `reports/fable-2026-09-22.md` finding 2).
+        assert_eq!((fixed + per_live * 16) / 1024, 2_917);
     }
 
 }
@@ -13202,3 +13700,4 @@ mod kept_rings {
         assert_eq!(ring(&render.sends.sends[0].compensation), held);
     }
 }
+

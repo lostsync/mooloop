@@ -1,19 +1,22 @@
-//! Small filters shared by the synth voices. The sampler keeps its own
-//! inline per-voice filter math rather than calling `Svf` directly, and this
-//! is a measured decision, not inertia: `Svf::next_sample`/`tick` recompute
+//! Small filters shared by the synth voices.
+//!
+//! Until 2026-09-22 the sampler kept its own inline per-voice filter math
+//! rather than calling `Svf` directly: `Svf::next_sample`/`tick` recomputed
 //! `g`/`damping`/`a1`/`a2`/`a3` (including a `tan()`) from cutoff/resonance
-//! on every call, and the sampler needs one shared coefficient set applied
-//! to both channels of a stereo frame, which is exactly what its inline
-//! version does — computing them once and ticking L/R against the same
-//! coefficients — while calling `Svf::next_sample` once per channel would
-//! recompute them twice. A synthetic benchmark isolating just this
-//! (32 voices, 4s of audio at 48 kHz, coefficients varying every 1000
-//! frames) measured shared-coefficient-per-frame at ~154ms versus
-//! per-channel-recompute at ~310ms — about 2x, dominated by the doubled
-//! `tan()`. `docs/plans/archive/share-dsp-primitives/03-collapse-duplicate-implementations.md`
-//! asked for exactly this measurement before converting; this is the
-//! result. New instruments (mono, not stereo-per-voice) use `Svf` directly,
-//! where the doubling doesn't apply.
+//! on every call, and the sampler needed one shared coefficient set applied
+//! to both channels of a stereo frame, which its inline version got by
+//! computing the coefficients once and ticking L/R against the same values
+//! — calling `Svf::next_sample` once per channel would have recomputed them
+//! twice, and a synthetic benchmark isolating just this (32 voices, 4s of
+//! audio at 48 kHz, coefficients varying every 1000 frames) measured
+//! shared-coefficient-per-frame at ~154ms versus per-channel-recompute at
+//! ~310ms — about 2x, dominated by the doubled `tan()`
+//! (`docs/plans/archive/share-dsp-primitives/03-collapse-duplicate-implementations.md`).
+//! `SvfCoeffs` (below) removes the reason to copy the math: `Svf::tick_with`
+//! takes a coefficient set instead of deriving one, so the sampler now
+//! computes it once (`SvfCoeffs::for_cutoff`) and ticks a plain `Svf` per
+//! channel against it — one evaluation, no duplicated formula, no doubling.
+//! See `reports/fable-2026-09-22.md` finding 2, Plan B.
 
 use mooloop_core::DriveCurve;
 
@@ -88,6 +91,24 @@ impl Svf {
         self.tick(input, cutoff_hz, resonance, sample_rate)
     }
 
+    /// Process one sample from a precomputed coefficient set: only the
+    /// per-sample state update, none of [`SvfCoeffs::for_cutoff`]'s `tan()`
+    /// or divide. `tick` (and the `next_sample*` wrappers built on it) stay
+    /// the per-call convenience that derives coefficients fresh and then
+    /// calls this; a caller rendering many samples at the same, or a
+    /// lerped, coefficient set should call this directly instead — see
+    /// `effects/filter.rs`'s `process_range` and the sampler's voice
+    /// filter.
+    pub fn tick_with(&mut self, input: f32, coeffs: &SvfCoeffs) -> (f32, f32, f32) {
+        let v3 = input - self.low;
+        let v1 = coeffs.a1 * self.band + coeffs.a2 * v3;
+        let v2 = self.low + coeffs.a2 * self.band + coeffs.a3 * v3;
+        let high = input - coeffs.damping * v1 - v2;
+        self.band = 2.0 * v1 - self.band;
+        self.low = 2.0 * v2 - self.low;
+        (v2, v1, high)
+    }
+
     fn tick(
         &mut self,
         input: f32,
@@ -95,6 +116,33 @@ impl Svf {
         resonance: f32,
         sample_rate: u32,
     ) -> (f32, f32, f32) {
+        let coeffs = SvfCoeffs::for_cutoff(cutoff_hz, resonance, sample_rate);
+        self.tick_with(input, &coeffs)
+    }
+}
+
+/// The coefficient set [`Svf::tick`] used to re-derive from `cutoff_hz`,
+/// `resonance` and `sample_rate` on every call: `tan()`, a divide, and three
+/// products. Computing it once — per block, or per control tick with
+/// [`SvfCoeffs::lerp`] carrying the ramp across it — and feeding it to
+/// [`Svf::tick_with`] turns that per-sample cost into one evaluation for the
+/// whole span it covers. See this module's header and
+/// `reports/fable-2026-09-22.md` finding 2.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SvfCoeffs {
+    pub g: f32,
+    pub a1: f32,
+    pub a2: f32,
+    pub a3: f32,
+    pub damping: f32,
+}
+
+impl SvfCoeffs {
+    /// Derive the coefficient set for a cutoff/resonance/sample-rate triple.
+    /// Exactly the math [`Svf::tick`] ran inline every sample before the
+    /// split; a caller holding cutoff and resonance constant across many
+    /// samples calls this once instead of paying the `tan()` per sample.
+    pub fn for_cutoff(cutoff_hz: f32, resonance: f32, sample_rate: u32) -> Self {
         let sr = sample_rate as f32;
         let cutoff = cutoff_hz.clamp(20.0, sr * 0.45);
         let g = (core::f32::consts::PI * cutoff / sr).tan();
@@ -102,13 +150,34 @@ impl Svf {
         let a1 = 1.0 / (1.0 + g * (g + damping));
         let a2 = g * a1;
         let a3 = g * a2;
-        let v3 = input - self.low;
-        let v1 = a1 * self.band + a2 * v3;
-        let v2 = self.low + a2 * self.band + a3 * v3;
-        let high = input - damping * v1 - v2;
-        self.band = 2.0 * v1 - self.band;
-        self.low = 2.0 * v2 - self.low;
-        (v2, v1, high)
+        Self {
+            g,
+            a1,
+            a2,
+            a3,
+            damping,
+        }
+    }
+
+    /// Component-wise linear interpolation toward `other`, `t` clamped to
+    /// `[0, 1]`. The SVF is stable under an interpolated coefficient set —
+    /// that is what "topology-preserving" buys — so a caller sweeping
+    /// across a block can ramp the four numbers linearly instead of
+    /// re-deriving `tan()` every sample to stay well behaved.
+    pub fn lerp(&self, other: &Self, t: f32) -> Self {
+        let t = t.clamp(0.0, 1.0);
+        // `a * (1 - t) + b * t` rather than `a + (b - a) * t`: at `t = 0.0`
+        // and `t = 1.0` this reduces to exactly `a` and exactly `b` (a `* 0.0`
+        // term vanishes, a `* 1.0` term is untouched), which the interpolated
+        // subtraction form is not guaranteed to under IEEE 754 rounding.
+        let mix = |a: f32, b: f32| a * (1.0 - t) + b * t;
+        Self {
+            g: mix(self.g, other.g),
+            a1: mix(self.a1, other.a1),
+            a2: mix(self.a2, other.a2),
+            a3: mix(self.a3, other.a3),
+            damping: mix(self.damping, other.damping),
+        }
     }
 }
 
@@ -253,9 +322,38 @@ pub fn apply_drive(input: f32, drive: f32) -> f32 {
     if drive <= f32::EPSILON {
         return input;
     }
+    apply_drive_compensated(input, drive, drive_compensation(drive))
+}
+
+/// The part of [`apply_drive`]'s response that depends on `drive` alone, not
+/// on the sample it shapes: a `tanh` of the driven reference level.
+///
+/// A caller shaping many samples at one `drive` value -- a whole block, a
+/// whole voice between parameter events -- computes this once and reuses it
+/// through [`apply_drive_compensated`] rather than paying the `tanh` again
+/// for every sample, exactly as `apply_drive` already does internally for a
+/// single call.
+pub fn drive_compensation(drive: f32) -> f32 {
+    let drive = drive.clamp(0.0, 1.0);
+    if drive <= f32::EPSILON {
+        // Unused by `apply_drive_compensated`'s own bypass at this drive, but
+        // a finite, well-defined value rather than one that only happens to
+        // never be read.
+        return 1.0;
+    }
     let input_gain = 1.0 + drive * 15.0;
-    let compensation =
-        DRIVE_REFERENCE_LINEAR / (DRIVE_REFERENCE_LINEAR * input_gain).tanh();
+    DRIVE_REFERENCE_LINEAR / (DRIVE_REFERENCE_LINEAR * input_gain).tanh()
+}
+
+/// [`apply_drive`] with [`drive_compensation`] already computed. The per-call
+/// `tanh` of the *sample* still has to happen here -- that one genuinely
+/// varies every call -- so this only removes the one `tanh` that does not.
+pub fn apply_drive_compensated(input: f32, drive: f32, compensation: f32) -> f32 {
+    let drive = drive.clamp(0.0, 1.0);
+    if drive <= f32::EPSILON {
+        return input;
+    }
+    let input_gain = 1.0 + drive * 15.0;
     (input * input_gain).tanh() * compensation
 }
 
@@ -913,6 +1011,47 @@ mod tests {
         for sample in [0.0_f32, 0.3, -0.9, 2.0] {
             assert_eq!(stage.next_sample(sample, 0.0, SR), sample);
         }
+    }
+
+    /// `Svf::tick`'s wrapper (via `next_sample_lp_bp_hp`) has to produce the
+    /// same numbers as calling `SvfCoeffs::for_cutoff` and `tick_with`
+    /// directly -- the whole point of keeping it a thin wrapper is that the
+    /// 86 existing call sites see no change at all.
+    #[test]
+    fn tick_with_matches_the_wrapper_bit_for_bit() {
+        let sr = 48_000;
+        let cutoff = 1_234.5_f32;
+        let resonance = 0.6_f32;
+
+        let mut via_wrapper = Svf::new();
+        let mut via_coeffs = Svf::new();
+        let coeffs = SvfCoeffs::for_cutoff(cutoff, resonance, sr);
+
+        for i in 0..256 {
+            let input = (i as f32 * 0.037).sin();
+            let wrapped = via_wrapper.next_sample_lp_bp_hp(input, cutoff, resonance, sr);
+            let direct = via_coeffs.tick_with(input, &coeffs);
+            assert_eq!(wrapped, direct, "sample {i} diverged");
+        }
+    }
+
+    /// `t = 0` and `t = 1` are the endpoints exactly; the midpoint is the
+    /// arithmetic mean of each field.
+    #[test]
+    fn svf_coeffs_lerp_hits_its_endpoints_and_midpoint() {
+        let sr = 48_000;
+        let a = SvfCoeffs::for_cutoff(200.0, 0.0, sr);
+        let b = SvfCoeffs::for_cutoff(8_000.0, 0.9, sr);
+
+        assert_eq!(a.lerp(&b, 0.0), a);
+        assert_eq!(a.lerp(&b, 1.0), b);
+
+        let mid = a.lerp(&b, 0.5);
+        assert!((mid.g - (a.g + b.g) / 2.0).abs() < 1.0e-6);
+        assert!((mid.a1 - (a.a1 + b.a1) / 2.0).abs() < 1.0e-6);
+        assert!((mid.a2 - (a.a2 + b.a2) / 2.0).abs() < 1.0e-6);
+        assert!((mid.a3 - (a.a3 + b.a3) / 2.0).abs() < 1.0e-6);
+        assert!((mid.damping - (a.damping + b.damping) / 2.0).abs() < 1.0e-6);
     }
 
     #[test]

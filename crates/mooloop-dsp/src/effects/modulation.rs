@@ -42,6 +42,12 @@ pub struct ModulationEffect {
     tone_r: OnePoleLp,
     phaser_l: [AllPass; MAX_PHASER_STAGES],
     phaser_r: [AllPass; MAX_PHASER_STAGES],
+    /// Per-stage tilt for `phaser_sample`, a pure function of `stages`
+    /// (`reports/fable-2026-09-22.md` finding 2): rebuilt in
+    /// [`Self::rebuild_tilt`] whenever `stages` changes rather than once per
+    /// stage per sample. Only `[0..stages)` is meaningful; entries beyond
+    /// the current stage count are stale and never read.
+    tilt: [f32; MAX_PHASER_STAGES],
     depth: Smoothed,
     feedback: Smoothed,
     spread: Smoothed,
@@ -52,7 +58,7 @@ pub struct ModulationEffect {
 impl ModulationEffect {
     pub fn new(params: ModulationParams, sample_rate: u32) -> Self {
         let smoothed = |initial| Smoothed::new(initial, PARAM_SMOOTH_S, sample_rate);
-        Self {
+        let mut effect = Self {
             params,
             sample_rate,
             line: DelayLine::with_capacity_frames(ring_frames(sample_rate)),
@@ -63,12 +69,15 @@ impl ModulationEffect {
             tone_r: OnePoleLp::new(),
             phaser_l: [AllPass::default(); MAX_PHASER_STAGES],
             phaser_r: [AllPass::default(); MAX_PHASER_STAGES],
+            tilt: [0.0; MAX_PHASER_STAGES],
             depth: smoothed(params.depth.clamp(0.0, 1.0)),
             feedback: smoothed(params.feedback.clamp(-0.92, 0.92)),
             spread: smoothed(params.spread.clamp(0.0, 1.0)),
             tone: smoothed(params.tone.clamp(0.0, 1.0)),
             color: smoothed(params.color.clamp(0.0, 1.0)),
-        }
+        };
+        effect.rebuild_tilt();
+        effect
     }
 
     pub fn params(&self) -> ModulationParams {
@@ -84,6 +93,20 @@ impl ModulationEffect {
         self.spread.reset_to(params.spread.clamp(0.0, 1.0));
         self.tone.reset_to(params.tone.clamp(0.0, 1.0));
         self.color.reset_to(params.color.clamp(0.0, 1.0));
+        self.rebuild_tilt();
+    }
+
+    /// Refill [`Self::tilt`] from the current, clamped `stages` -- the same
+    /// formula `phaser_sample` used to evaluate per stage per sample, now
+    /// evaluated once whenever `stages` can have changed (construction, a
+    /// wholesale param load, and the `MODULATION_PARAM_STAGES` case of
+    /// [`RangeProcessor::apply_param`]).
+    fn rebuild_tilt(&mut self) {
+        let stages = usize::from(self.params.stages).clamp(4, MAX_PHASER_STAGES);
+        let denom = (stages - 1).max(1) as f32;
+        for (stage, tilt) in self.tilt.iter_mut().enumerate().take(stages) {
+            *tilt = (stage as f32 / denom - 0.5) * 1.1;
+        }
     }
 
     /// Replace `start..end` of `bus` with this node's wet output, without the
@@ -177,26 +200,26 @@ impl ModulationEffect {
         feedback: f32,
         sweep_l: f32,
         sweep_r: f32,
-        depth: f32,
-        color: f32,
+        log2_center: f32,
+        octaves: f32,
         tone: f32,
     ) -> (f32, f32) {
         let stages = usize::from(self.params.stages).clamp(4, MAX_PHASER_STAGES);
         let mut left = input_l + self.feedback_l * feedback;
         let mut right = input_r + self.feedback_r * feedback;
         for stage in 0..stages {
-            let tilt = (stage as f32 / (stages - 1).max(1) as f32 - 0.5) * 1.1;
+            let tilt = self.tilt[stage];
             left = self.phaser_l[stage].next(
                 left,
                 allpass_coefficient(
-                    self.phaser_hz(sweep_l + tilt, depth, color),
+                    self.phaser_hz(sweep_l + tilt, log2_center, octaves),
                     self.sample_rate,
                 ),
             );
             right = self.phaser_r[stage].next(
                 right,
                 allpass_coefficient(
-                    self.phaser_hz(sweep_r + tilt, depth, color),
+                    self.phaser_hz(sweep_r + tilt, log2_center, octaves),
                     self.sample_rate,
                 ),
             );
@@ -206,10 +229,18 @@ impl ModulationEffect {
         self.tone_filter(left, right, tone)
     }
 
-    fn phaser_hz(&self, lfo: f32, depth: f32, color: f32) -> f32 {
-        let center = 220.0 * 28.0f32.powf(color);
-        let octaves = 0.15 + depth * 2.2;
-        (center * 2.0f32.powf(lfo * octaves)).clamp(60.0, self.sample_rate as f32 * 0.42)
+    /// `center * 2^(lfo*octaves)`, folded into one `exp2` of a sum instead of
+    /// the two `powf` calls that used to compute `center` (`220 *
+    /// 28^color`) and the depth term separately -- both per call, up to 24
+    /// times a sample (`reports/fable-2026-09-22.md` finding 2). `color` and
+    /// `depth` no longer appear here at all: `process_range` folds them into
+    /// `log2_center` and `octaves` once per sample, before the per-stage,
+    /// per-channel calls below it, so what is left here is exactly the part
+    /// that still varies with `lfo` (the LFO sweep plus this stage's tilt).
+    fn phaser_hz(&self, lfo: f32, log2_center: f32, octaves: f32) -> f32 {
+        (log2_center + lfo * octaves)
+            .exp2()
+            .clamp(60.0, self.sample_rate as f32 * 0.42)
     }
 
     fn tone_filter(&mut self, left: f32, right: f32, tone: f32) -> (f32, f32) {
@@ -245,9 +276,18 @@ impl RangeProcessor for ModulationEffect {
             self.lfo.skip(1, self.params.rate_hz, self.sample_rate);
             let (input_l, input_r) = (bus.l[i], bus.r[i]);
             let (wet_l, wet_r) = match self.params.mode {
-                ModulationMode::Phaser => self.phaser_sample(
-                    input_l, input_r, feedback, sweep_l, sweep_r, depth, color, tone,
-                ),
+                ModulationMode::Phaser => {
+                    // Hoisted out of the per-stage, per-channel calls inside
+                    // `phaser_sample` -- both are functions of `depth` and
+                    // `color` alone, which this loop has already advanced to
+                    // their per-sample value above, so each is computed once
+                    // per sample here instead of up to 24 times inside it.
+                    let log2_center = (220.0 * 28.0f32.powf(color)).log2();
+                    let octaves = 0.15 + depth * 2.2;
+                    self.phaser_sample(
+                        input_l, input_r, feedback, sweep_l, sweep_r, log2_center, octaves, tone,
+                    )
+                }
                 mode => self.delay_sample(
                     input_l, input_r, mode, depth, feedback, spread, sweep_l, sweep_r, color, tone,
                 ),
@@ -283,7 +323,10 @@ impl RangeProcessor for ModulationEffect {
                 self.params.tone = value.clamp(0.0, 1.0);
                 self.tone.set_target(self.params.tone);
             }
-            MODULATION_PARAM_STAGES => self.params.stages = value.round().clamp(4.0, 12.0) as u8,
+            MODULATION_PARAM_STAGES => {
+                self.params.stages = value.round().clamp(4.0, 12.0) as u8;
+                self.rebuild_tilt();
+            }
             _ => {}
         }
     }
@@ -526,6 +569,91 @@ mod tests {
         assert!(
             max_step < 0.2,
             "depth change left a discontinuity of {max_step}"
+        );
+    }
+
+    /// `phaser_hz`'s `exp2`-of-a-sum is a deliberate reformulation of the
+    /// original `center * 2^(lfo*octaves)` (two `powf`), not a bit-preserving
+    /// hoist -- this pins the difference to float rounding rather than to
+    /// changed behaviour, across the ranges `depth`, `color`, and the LFO
+    /// sweep (plus tilt) actually take.
+    #[test]
+    fn phaser_hz_matches_the_original_two_powf_formula() {
+        let effect = ModulationEffect::new(
+            ModulationParams {
+                mode: ModulationMode::Phaser,
+                ..ModulationParams::default()
+            },
+            SR,
+        );
+        for depth in [0.0f32, 0.15, 0.5, 0.85, 1.0] {
+            for color in [0.0f32, 0.2, 0.45, 0.7, 1.0] {
+                for lfo in [-1.55f32, -1.0, -0.3, 0.0, 0.4, 1.0, 1.55] {
+                    let octaves = 0.15 + depth * 2.2;
+                    // The formula as it read before this change.
+                    let expected = {
+                        let center = 220.0 * 28.0f32.powf(color);
+                        (center * 2.0f32.powf(lfo * octaves)).clamp(60.0, SR as f32 * 0.42)
+                    };
+                    let log2_center = (220.0 * 28.0f32.powf(color)).log2();
+                    let actual = effect.phaser_hz(lfo, log2_center, octaves);
+                    let scale = expected.abs().max(1.0);
+                    assert!(
+                        (actual - expected).abs() / scale < 1.0e-4,
+                        "depth {depth} color {color} lfo {lfo}: old {expected}, new {actual}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// [`ModulationEffect::rebuild_tilt`] must land on exactly what
+    /// `phaser_sample` used to compute inline, per stage per sample, or the
+    /// hoist changes the phaser's sound rather than only its cost.
+    #[test]
+    fn tilt_table_matches_the_inline_per_stage_formula() {
+        for stages in 4u8..=12 {
+            let effect = ModulationEffect::new(
+                ModulationParams {
+                    mode: ModulationMode::Phaser,
+                    stages,
+                    ..ModulationParams::default()
+                },
+                SR,
+            );
+            let n = usize::from(stages);
+            for stage in 0..n {
+                let expected = (stage as f32 / (n - 1).max(1) as f32 - 0.5) * 1.1;
+                assert_eq!(
+                    effect.tilt[stage], expected,
+                    "stages {stages}, stage {stage}"
+                );
+            }
+        }
+    }
+
+    /// The tilt table has to follow a live `stages` change through
+    /// `apply_param`, not just a fresh construction -- that path is
+    /// `rebuild_tilt`'s other caller and the one the per-sample loop
+    /// actually depends on after a knob move.
+    #[test]
+    fn changing_stages_mid_stream_rebuilds_the_tilt_table() {
+        let mut effect = ModulationEffect::new(
+            ModulationParams {
+                mode: ModulationMode::Phaser,
+                stages: 4,
+                ..ModulationParams::default()
+            },
+            SR,
+        );
+        let four_stage_tilt_1 = effect.tilt[1];
+        effect.apply_param(MODULATION_PARAM_STAGES, 12.0);
+        assert_eq!(effect.params.stages, 12);
+        let expected = (1.0 / 11.0 - 0.5) * 1.1;
+        assert_eq!(effect.tilt[1], expected);
+        assert_ne!(
+            effect.tilt[1], four_stage_tilt_1,
+            "the table did not change with the stage count"
         );
     }
 }

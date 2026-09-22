@@ -29,7 +29,8 @@ use std::time::Instant;
 
 use crate::render::RenderState;
 use mooloop_core::{
-    EffectKind, EffectSlotState, MlP8Params, NoteEvent, Project, ProjectChannel,
+    EffectKind, EffectSlotState, MlP8Params, ModulationMode, ModulationParams, NoteEvent,
+    Project, ProjectChannel,
 };
 
 const SAMPLE_RATE: u32 = 48_000;
@@ -53,6 +54,71 @@ fn loaded_project(count: usize) -> Project {
         channel.notes[0].push(NoteEvent::new(index as u32 + 1, 0, 96, 48 + index as u8, 100));
         project.channels.push(channel);
     }
+    project
+}
+
+/// [`loaded_project`], with the filter actually engaged.
+///
+/// `MlP8Params::default`'s cutoff is `1.0` -- wide open, unresonant, nothing
+/// routed to it -- which is `Prepared::filter_open`'s bypass condition, so
+/// `loaded_project`'s baseline never enters `Voice::shape`'s filter half at
+/// all. This is the before/after figure for `reports/fable-2026-09-22.md`
+/// finding 2, Plan B: a closed, resonant filter is what pays for
+/// `SvfCoeffs::for_cutoff` (the `tan()`) every sample, and what
+/// `Voice::cached_hz_from_knob` (step 4's hoist) takes `hz_from_normalized`'s
+/// `powf` out of.
+fn filtered_project(count: usize) -> Project {
+    let mut project = Project::default();
+    project.channels.clear();
+    let params = MlP8Params {
+        filter_cutoff: 0.3,
+        filter_resonance: 0.4,
+        ..MlP8Params::default()
+    };
+    for index in 0..count {
+        let mut channel = ProjectChannel::mlp8_with_params(index, 1, params);
+        channel.notes[0].push(NoteEvent::new(index as u32 + 1, 0, 96, 48 + index as u8, 100));
+        project.channels.push(channel);
+    }
+    project
+}
+
+/// `count` sampler channels, each holding a *full* pattern: one note every
+/// sixty-fourth across the whole `MAX_PATTERN_STEPS` capacity, 1,024 notes
+/// per channel, built with `NoteEvent::new` in a loop the way a note-dense
+/// pattern is actually authored. `loaded_project`'s one note per channel is
+/// the figure `pattern-bank-floor/00-status.md` reads as "the engine is not
+/// a problem"; this is the scheduling walk that number has never included
+/// (`reports/fable-2026-09-22.md`, finding 1, Plan A).
+fn scheduling_project(count: usize) -> Project {
+    use mooloop_core::{MAX_PATTERN_STEPS, TICKS_PER_64TH};
+    let mut project = Project::default();
+    project.channels.clear();
+    project.pattern_lengths = vec![MAX_PATTERN_STEPS];
+    for index in 0..count {
+        let mut channel = ProjectChannel::sampler(index, 1);
+        channel.notes[0] = (0..1024u32)
+            .map(|id| NoteEvent::new(id + 1, id * TICKS_PER_64TH, TICKS_PER_64TH, 60, 100))
+            .collect();
+        project.channels.push(channel);
+    }
+    project
+}
+
+/// [`scheduling_project`]'s full patterns, placed 64 times end to end on
+/// the playlist -- Song mode's shape of the same question, and the one
+/// `block_cost.rs` has never asked at all: nothing here built a Song-mode
+/// project before this.
+fn scheduling_song_project(count: usize) -> Project {
+    let mut project = scheduling_project(count);
+    let pattern_ticks = u32::from(project.pattern_lengths[0]) * mooloop_core::TICKS_PER_STEP;
+    project.playback_mode = mooloop_core::PlaybackMode::Song;
+    project.playlist = (0..64u32)
+        .map(|instance| mooloop_core::PatternPlacement {
+            pattern: 0,
+            start_tick: instance * pattern_ticks,
+        })
+        .collect();
     project
 }
 
@@ -154,6 +220,35 @@ fn block_cost_by_channels_and_buffer() {
                 nanos as f64 / budget_nanos * 100.0
             );
         }
+    }
+}
+
+/// What scheduling itself costs, as opposed to what `loaded_project`
+/// measures.
+///
+/// `loaded_project` holds one note per channel and no Song-mode case has
+/// ever existed here, so the 13-16% of a quantum
+/// `pattern-bank-floor/00-status.md` reads as "the engine is not a
+/// problem" has never included the per-block walk over a note-dense
+/// pattern or a placed-out song
+/// (`reports/fable-2026-09-22.md`, finding 1). Sixteen channels, each
+/// holding a full 1,024-note pattern, in Pattern mode and with the same
+/// patterns placed 64 times in Song mode, at 64 and 512 frames -- printed
+/// beside `loaded_project`'s one-note figure at the same channel count and
+/// frame size so the two read together.
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn scheduling_cost() {
+    println!();
+    println!("  mode       frames  ns/block   loaded_project (1 note/ch) ns/block");
+    for frames in [64usize, 512] {
+        let baseline = per_block_nanos(&loaded_project(16), frames, 400);
+
+        let pattern_ns = per_block_nanos(&scheduling_project(16), frames, 400);
+        println!("  {:<9}  {frames:>6}  {pattern_ns:>9}   {baseline:>9}", "Pattern");
+
+        let song_ns = per_block_nanos(&scheduling_song_project(16), frames, 400);
+        println!("  {:<9}  {frames:>6}  {song_ns:>9}   {baseline:>9}", "Song");
     }
 }
 
@@ -355,6 +450,12 @@ fn playing_effect_cost() {
         EffectKind::Reverb,
         EffectKind::Plate,
         EffectKind::Drive,
+        // A closed, resonant `FilterEffect` on a static cutoff: one range
+        // covers the whole block (no `ParamValue` events), so this is
+        // squarely the case `reports/fable-2026-09-22.md` finding 2, Plan B
+        // targets -- `SvfCoeffs` computed twice a range and lerped, instead
+        // of `tan()` and a divide every sample.
+        EffectKind::Filter,
     ] {
         let mut project = loaded_project(channels);
         for channel in &mut project.channels {
@@ -365,6 +466,56 @@ fn playing_effect_cost() {
             "  {:<12}  {nanos:>9}  {:>10}",
             format!("{kind:?}"),
             nanos as i128 - bare as i128
+        );
+    }
+
+    // The modulation row above measures its default mode (chorus); a
+    // 12-stage phaser is a distinct cost shape inside the same device --
+    // up to 72 transcendental calls a sample before Plan C step 1's hoist
+    // (`reports/fable-2026-09-22.md` finding 2) -- so it gets its own row
+    // rather than being read off the chorus figure.
+    {
+        let mut project = loaded_project(channels);
+        for channel in &mut project.channels {
+            channel.setup.push_effect(EffectSlotState::modulation(ModulationParams {
+                mode: ModulationMode::Phaser,
+                stages: 12,
+                ..ModulationParams::default()
+            }));
+        }
+        let nanos = per_block_nanos(&project, frames, 400);
+        println!(
+            "  {:<12}  {nanos:>9}  {:>10}",
+            "Phaser12",
+            nanos as i128 - bare as i128
+        );
+    }
+}
+
+/// The voice filter's own cost, as opposed to the `FilterEffect`
+/// `playing_effect_cost` measures.
+///
+/// [`loaded_project`]'s default patch has the filter wide open
+/// (`filter_cutoff: 1.0`), which is `Prepared::filter_open`'s bypass
+/// condition, so that baseline never runs `Voice::shape`'s filter half at
+/// all -- a closed, resonant patch is the one that does. Companion to
+/// [`playing_effect_cost`] for `reports/fable-2026-09-22.md` finding 2,
+/// Plan B step 4 (`Voice::cached_hz_from_knob`, the sampler's
+/// `Sampler::filter_base_hz`, and the equivalent hoists in `monosynth.rs`,
+/// `polysynth.rs` and `mlm1.rs`).
+#[test]
+#[ignore = "measures wall time; run deliberately in release"]
+fn filter_engaged_cost() {
+    let channels = 8;
+    println!();
+    println!("  {channels} ML-P8 channels holding a note, filter closed and resonant");
+    println!("  frames   open ns/block   closed ns/block   over open");
+    for frames in [64usize, 128, 256, 512] {
+        let open = per_block_nanos(&loaded_project(channels), frames, 400);
+        let closed = per_block_nanos(&filtered_project(channels), frames, 400);
+        println!(
+            "  {frames:>6}  {open:>13}  {closed:>15}  {:>10}",
+            closed as i128 - open as i128
         );
     }
 }

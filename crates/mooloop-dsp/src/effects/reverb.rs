@@ -425,6 +425,32 @@ pub struct ReverbEffect {
     /// One-pole coefficient the delay lengths glide with, derived from
     /// [`SIZE_GLIDE_S`] and cached so the inner loop never recomputes it.
     size_glide: f32,
+    /// Per-dependency dirty flags, resolved lazily by [`Self::resolve_dirty`]
+    /// from [`RangeProcessor::process_range`] -- the same coalescing pattern
+    /// `PlateEffect` uses and for the same reason: `size` legitimately marks
+    /// `feedback` dirty too (`rebuild_feedback`'s RT60 formula reads the
+    /// `target_len` a size change moves), so what this buys is one rebuild
+    /// per dependency per control tick even when several parameters driving
+    /// it change together, rather than the old eager scheme's one rebuild
+    /// per `apply_param` call.
+    size_dirty: bool,
+    feedback_dirty: bool,
+    damping_dirty: bool,
+    modulation_dirty: bool,
+    /// Test-only: see `PlateEffect`'s identical field for why a behavioural
+    /// test cannot otherwise tell a dirty-flag skip apart from a redundant
+    /// rebuild landing on the same numbers.
+    #[cfg(test)]
+    rebuild_counts: ReverbRebuildCounts,
+}
+
+#[cfg(test)]
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+struct ReverbRebuildCounts {
+    size: u32,
+    feedback: u32,
+    damping: u32,
+    modulation: u32,
 }
 
 impl ReverbEffect {
@@ -455,22 +481,66 @@ impl ReverbEffect {
             ),
             width: Smoothed::new(params.width.clamp(0.0, 1.0), SMOOTH_S, sample_rate),
             size_glide: glide_coeff(SIZE_GLIDE_S, sample_rate),
+            size_dirty: true,
+            feedback_dirty: true,
+            damping_dirty: true,
+            modulation_dirty: true,
+            #[cfg(test)]
+            rebuild_counts: ReverbRebuildCounts::default(),
         };
-        effect.resize();
-        effect.rebuild_damping();
-        effect.rebuild_modulation();
+        effect.resolve_dirty();
         effect
     }
 
-    /// Retune every delay length for the current `size`, then re-solve the
-    /// feedback gains, which depend on the lengths.
+    /// Resolve whatever `apply_param` (or a sample-rate change) marked dirty
+    /// since the last call. Called from `process_range`, the same coalescing
+    /// point `PlateEffect::resolve_dirty` uses and for the same reason: size
+    /// first, because it moves the `target_len` the feedback formula reads,
+    /// so several dependencies changing within one control tick resolve into
+    /// one rebuild each rather than one per `apply_param` call.
+    fn resolve_dirty(&mut self) {
+        if self.size_dirty {
+            self.do_resize();
+            self.size_dirty = false;
+            #[cfg(test)]
+            {
+                self.rebuild_counts.size += 1;
+            }
+        }
+        if self.feedback_dirty {
+            self.do_rebuild_feedback();
+            self.feedback_dirty = false;
+            #[cfg(test)]
+            {
+                self.rebuild_counts.feedback += 1;
+            }
+        }
+        if self.damping_dirty {
+            self.do_rebuild_damping();
+            self.damping_dirty = false;
+            #[cfg(test)]
+            {
+                self.rebuild_counts.damping += 1;
+            }
+        }
+        if self.modulation_dirty {
+            self.do_rebuild_modulation();
+            self.modulation_dirty = false;
+            #[cfg(test)]
+            {
+                self.rebuild_counts.modulation += 1;
+            }
+        }
+    }
+
+    /// Retune every delay length for the current `size`.
     ///
     /// This sets *targets*. Unlike the plate's comb resize, which clears its
     /// buffers and accepts the discontinuity, the lengths here glide, because
     /// `size` is a legal modulation destination and has to survive being
     /// swept: moving a read head straight to a new offset lands it on
     /// uncorrelated history, which is a click, not a room change.
-    fn resize(&mut self) {
+    fn do_resize(&mut self) {
         let multiplier = size_multiplier(self.params.size);
         let sample_rate = self.sample_rate;
         for (i, line) in self.lines.iter_mut().enumerate() {
@@ -483,7 +553,6 @@ impl ReverbEffect {
         for (diffuser, base) in self.diffusers.iter_mut().zip(DIFFUSER_TUNING) {
             diffuser.set_len(scaled_len(base, sample_rate, multiplier) as f32);
         }
-        self.rebuild_feedback();
     }
 
     /// Solve each line's feedback gain for the target RT60.
@@ -495,7 +564,7 @@ impl ReverbEffect {
     /// would make the tail run a touch long. Solving per line rather than
     /// sharing one gain is what makes the lines' decays line up: the long lines
     /// are attenuated less per trip because they make fewer trips.
-    fn rebuild_feedback(&mut self) {
+    fn do_rebuild_feedback(&mut self) {
         let decay_s = self.params.decay_s.max(0.05);
         let sample_rate = self.sample_rate as f32;
         for line in self.lines.iter_mut() {
@@ -511,7 +580,7 @@ impl ReverbEffect {
         }
     }
 
-    fn rebuild_damping(&mut self) {
+    fn do_rebuild_damping(&mut self) {
         // `damping = 0` must be exactly transparent, not merely bright: a
         // coefficient of 1.0 makes `OnePoleLp::next_sample` return its input.
         let coeff = 1.0 - self.params.damping.clamp(0.0, 1.0) * DAMP_MAX_LOSS;
@@ -520,13 +589,12 @@ impl ReverbEffect {
         }
     }
 
-    fn rebuild_modulation(&mut self) {
+    fn do_rebuild_modulation(&mut self) {
         let depth = mod_depth_samples(self.sample_rate) * self.params.modulation.clamp(0.0, 1.0);
         for line in self.lines.iter_mut() {
             line.mod_depth = depth;
         }
     }
-
 }
 
 /// One-pole coefficient reaching ~63% of a step in `time_s`. The same
@@ -547,6 +615,7 @@ fn predelay_capacity(sample_rate: u32) -> usize {
 
 impl RangeProcessor for ReverbEffect {
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+        self.resolve_dirty();
         for i in start..end {
             let dry = (bus.l[i] + bus.r[i]) * 0.5;
 
@@ -608,15 +677,18 @@ impl RangeProcessor for ReverbEffect {
         match id {
             REVERB_PARAM_SIZE => {
                 self.params.size = value.clamp(0.0, 1.0);
-                self.resize();
+                // Marks feedback dirty too: `rebuild_feedback`'s RT60
+                // formula reads `target_len`, which this changes.
+                self.size_dirty = true;
+                self.feedback_dirty = true;
             }
             REVERB_PARAM_DECAY_S => {
                 self.params.decay_s = value.clamp(0.2, 20.0);
-                self.rebuild_feedback();
+                self.feedback_dirty = true;
             }
             REVERB_PARAM_DAMPING => {
                 self.params.damping = value.clamp(0.0, 1.0);
-                self.rebuild_damping();
+                self.damping_dirty = true;
             }
             REVERB_PARAM_PREDELAY_MS => {
                 self.params.predelay_ms = value.clamp(1.0, 200.0);
@@ -634,7 +706,7 @@ impl RangeProcessor for ReverbEffect {
             }
             REVERB_PARAM_MODULATION => {
                 self.params.modulation = value.clamp(0.0, 1.0);
-                self.rebuild_modulation();
+                self.modulation_dirty = true;
             }
             REVERB_PARAM_LOW_CUT_HZ => {
                 self.params.low_cut_hz = value.clamp(20.0, 500.0);
@@ -732,9 +804,17 @@ impl AudioNode for ReverbEffect {
                 self.params.low_cut_hz.clamp(20.0, 500.0),
                 self.sample_rate,
             );
-            self.resize();
-            self.rebuild_damping();
-            self.rebuild_modulation();
+            self.do_resize();
+            self.do_rebuild_feedback();
+            self.do_rebuild_damping();
+            self.do_rebuild_modulation();
+            #[cfg(test)]
+            {
+                self.rebuild_counts.size += 1;
+                self.rebuild_counts.feedback += 1;
+                self.rebuild_counts.damping += 1;
+                self.rebuild_counts.modulation += 1;
+            }
             self.predelay_samples
                 .set_time(PREDELAY_SMOOTH_S, self.sample_rate);
             self.predelay_samples
@@ -762,6 +842,90 @@ mod tests {
             position_ticks: 0.0,
             position_frames: 0,
         }
+    }
+
+    /// Every dependency starts dirty at construction, so `new`'s own
+    /// `resolve_dirty` should have run each rebuild exactly once.
+    #[test]
+    fn construction_resolves_every_dependency_exactly_once() {
+        let effect = ReverbEffect::new(ReverbParams::default(), 48_000);
+        assert_eq!(
+            effect.rebuild_counts,
+            ReverbRebuildCounts { size: 1, feedback: 1, damping: 1, modulation: 1 }
+        );
+    }
+
+    /// `apply_param` alone must only mark a flag; `resolve_dirty` is what
+    /// actually rebuilds, and only `process_range` calls that.
+    #[test]
+    fn apply_param_alone_defers_the_rebuild() {
+        let mut effect = ReverbEffect::new(ReverbParams::default(), 48_000);
+        effect.apply_param(REVERB_PARAM_MODULATION, 0.5);
+        assert_eq!(
+            effect.rebuild_counts,
+            ReverbRebuildCounts { size: 1, feedback: 1, damping: 1, modulation: 1 }
+        );
+    }
+
+    /// Changing `damping` alone must not rebuild `size`, `feedback` or
+    /// `modulation`.
+    #[test]
+    fn changing_damping_alone_does_not_rebuild_the_others() {
+        let mut effect = ReverbEffect::new(ReverbParams::default(), 48_000);
+        effect.apply_param(REVERB_PARAM_DAMPING, 0.8);
+        effect.resolve_dirty();
+        assert_eq!(
+            effect.rebuild_counts,
+            ReverbRebuildCounts { size: 1, feedback: 1, damping: 2, modulation: 1 }
+        );
+    }
+
+    /// Changing `modulation` alone must not rebuild `size`, `feedback` or
+    /// `damping`.
+    #[test]
+    fn changing_modulation_alone_does_not_rebuild_the_others() {
+        let mut effect = ReverbEffect::new(ReverbParams::default(), 48_000);
+        effect.apply_param(REVERB_PARAM_MODULATION, 0.6);
+        effect.resolve_dirty();
+        assert_eq!(
+            effect.rebuild_counts,
+            ReverbRebuildCounts { size: 1, feedback: 1, damping: 1, modulation: 2 }
+        );
+    }
+
+    /// The perf payoff: `size` and `decay_s` changing within one control
+    /// tick resolve into exactly one feedback rebuild, not the two the old
+    /// eager scheme paid (`resize` calling `rebuild_feedback` immediately,
+    /// then the `decay_s` event calling it again in the same tick).
+    #[test]
+    fn size_and_decay_changing_at_one_tick_rebuild_feedback_only_once() {
+        let mut effect = ReverbEffect::new(ReverbParams::default(), 48_000);
+        effect.apply_param(REVERB_PARAM_SIZE, 0.7);
+        effect.apply_param(REVERB_PARAM_DECAY_S, 6.0);
+        effect.resolve_dirty();
+        assert_eq!(
+            effect.rebuild_counts,
+            ReverbRebuildCounts { size: 2, feedback: 2, damping: 1, modulation: 1 },
+            "size and decay changing at the same tick should cost one \
+             feedback rebuild, not two"
+        );
+    }
+
+    /// `predelay_ms`, `diffusion`, `width` and `low_cut_hz` are direct
+    /// smoother/filter writes with no per-line bank loop behind them; none
+    /// should mark anything dirty.
+    #[test]
+    fn smoother_only_params_never_touch_the_dirty_flagged_dependencies() {
+        let mut effect = ReverbEffect::new(ReverbParams::default(), 48_000);
+        effect.apply_param(REVERB_PARAM_PREDELAY_MS, 40.0);
+        effect.apply_param(REVERB_PARAM_DIFFUSION, 0.3);
+        effect.apply_param(REVERB_PARAM_WIDTH, 0.9);
+        effect.apply_param(REVERB_PARAM_LOW_CUT_HZ, 200.0);
+        effect.resolve_dirty();
+        assert_eq!(
+            effect.rebuild_counts,
+            ReverbRebuildCounts { size: 1, feedback: 1, damping: 1, modulation: 1 }
+        );
     }
 
     fn impulse_response(params: ReverbParams, frames: usize) -> StereoBus {

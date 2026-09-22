@@ -1168,6 +1168,20 @@ struct Voice {
     /// Drift's cutoff offset as a frequency multiplier. Exactly `1.0` at
     /// Drift 0, for the same reason.
     cutoff_scale: f32,
+    /// The `cutoff` input `cached_hz_from_knob` was last computed from, so
+    /// `shape` can tell whether it needs recomputing this sample. See
+    /// `cached_hz_from_knob`.
+    cached_cutoff_input: f32,
+    /// `hz_from_normalized(cutoff, max_hz)` for `cached_cutoff_input`,
+    /// reused whenever this sample's `cutoff` is the same value again --
+    /// which is most of a note's life, once the smoother has settled and
+    /// nothing routes to Cutoff. Deliberately *not* multiplied by
+    /// `cutoff_scale` here: that can change from one render range to the
+    /// next (Drift is a patch control, not a modulation destination) even
+    /// while `cutoff` itself has not, so `shape` applies it fresh every
+    /// sample -- a plain multiply, not a `powf`, so caching it would save
+    /// nothing and risks serving a stale scale.
+    cached_hz_from_knob: f32,
     /// Where Spread puts this voice, in `[-1, 1]`, and the pan gains it
     /// resolves to. Both are constant across a render range, so the gains are
     /// computed once rather than per sample; at Spread 0 they are the centre
@@ -1220,6 +1234,12 @@ impl Voice {
             mod_offsets: [0.0; MLP8_MOD_DESTS],
             pitch_scale: [1.0; 3],
             cutoff_scale: 1.0,
+            // NaN so the first sample's `cutoff == cached_cutoff_input`
+            // check is false (NaN is never equal to anything, including
+            // itself) and always computes fresh rather than trusting an
+            // arbitrary initial value.
+            cached_cutoff_input: f32::NAN,
+            cached_hz_from_knob: sample_rate as f32 * 0.45,
             spread_pan: 0.0,
             spread_gain: pan_gains(0.0),
         }
@@ -2432,7 +2452,28 @@ impl Voice {
         // Drift's cutoff share rides on the authored corner rather than on
         // the tracked one, so it is a property of the voice and not something
         // that grows as a patch climbs the keyboard.
-        let base_hz = hz_from_normalized(cutoff, prep.max_hz) * self.cutoff_scale;
+        //
+        // `hz_from_normalized`'s `powf` is a pure function of `cutoff`
+        // alone, and `cutoff` is bit-for-bit the same sample to sample
+        // whenever nothing is moving it: the smoother has settled (which is
+        // most of a note's life -- `Smoothed::advance` snaps exactly to
+        // target once the remaining gap is inaudible) and no route touches
+        // Cutoff. Caching on that equality reuses the last result instead of
+        // paying the `powf` again for a value that did not change; when a
+        // route or an unsettled smoother does move it, the cache misses
+        // every time and this is exactly the per-sample computation it
+        // always was. `cutoff_scale` is applied outside the cache, every
+        // sample, because it can change range to range on its own (Drift)
+        // even while `cutoff` has not.
+        let hz_from_knob = if cutoff == self.cached_cutoff_input {
+            self.cached_hz_from_knob
+        } else {
+            let value = hz_from_normalized(cutoff, prep.max_hz);
+            self.cached_cutoff_input = cutoff;
+            self.cached_hz_from_knob = value;
+            value
+        };
+        let base_hz = hz_from_knob * self.cutoff_scale;
         // Keytracking reads the *gliding* frequency, so a slide sweeps the
         // filter with the pitch instead of stepping at the note boundary.
         let tracked = if prep.keytrack <= 0.0 {

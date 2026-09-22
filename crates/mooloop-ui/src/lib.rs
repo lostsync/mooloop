@@ -5314,7 +5314,16 @@ impl UiState {
                 .into(),
         );
 
-        window.set_aux_in_level(params.level);
+        // The pilot row (`docs/plans/generator-face-rows/`): `p2` carries
+        // Level -- `aux_in::PARAM_LEVEL` -- normalized, the same way
+        // `effect_slot_row` fills `p0..p17`.
+        let level_normalized = aux_in::descriptor(aux_in::PARAM_LEVEL)
+            .map_or(0.0, |descriptor| descriptor.to_normalized(params.level));
+        window.set_source(SourceRow {
+            kind: device_kind_to_int(DeviceKind::AuxIn),
+            p2: level_normalized,
+            ..Default::default()
+        });
         window.set_aux_in_level_text(format!("{:.1} dB", linear_to_db(params.level)).into());
 
         let graph = self.session.audio_graph_plan();
@@ -12957,12 +12966,14 @@ impl AppUi {
             });
         }
 
-        // Aux In. Three closures rather than DS-01's one indexed handler,
-        // because two of the three parameters are pickers whose *rows* are not
-        // their values: the source list is filtered to the channels that
-        // publish audio, so a row has to be mapped back to a channel index
-        // here, where the project is in hand. The value that goes on the wire
-        // is still the descriptor's, so a lane and a knob agree.
+        // Aux In. Two closures of its own, for the two parameters that are
+        // pickers whose *rows* are not their values: the source list is
+        // filtered to the channels that publish audio, so a row has to be
+        // mapped back to a channel index here, where the project is in hand.
+        // The value that goes on the wire is still the descriptor's, so a
+        // lane and a knob agree. Level, the one continuous parameter, is the
+        // pilot for `on_source_param_changed` below
+        // (`docs/plans/generator-face-rows/`) and has no closure here.
         {
             let commands = command_state.clone();
             let tx = cmd_tx.clone();
@@ -13055,21 +13066,36 @@ impl AppUi {
                 });
             });
         }
+        // The pilot for the shared generator-row callback finding 4 asks for
+        // (`docs/plans/generator-face-rows/`): `main.slint` sends the
+        // descriptor id and a normalized position for every parameter drawn
+        // from `source.pK`, exactly as `on_effect_param_changed` does for
+        // `EffectSlotRow`, and DS-01's `on_ds01_value_changed` above already
+        // does for its own ninety-two. Aux In's Level is the only source
+        // wired to it today, so `id` always resolves through its table; a
+        // second generator arriving here would need the same kind check
+        // `on_ds01_value_changed` does not need either, because nothing else
+        // fires this callback yet.
         {
             let commands = command_state.clone();
             let tx = cmd_tx.clone();
             let st = state.clone();
             let weak = window.as_weak();
-            window.on_aux_in_level_changed(move |level| {
-                let Some(window) = weak.upgrade() else { return };
-                with_gesture_history(&st, &commands, &window, "Aux level", || {
+            window.on_source_param_changed(move |id, normalized| {
+                let id = id as u32;
+                let (Some(window), Some(descriptor)) = (weak.upgrade(), aux_in::descriptor(id))
+                else {
+                    return;
+                };
+                with_gesture_history(&st, &commands, &window, descriptor.name, || {
                     let mut st = st.borrow_mut();
                     let consumer = st.session.selected;
                     let Some(channel) = st.session.channels.get_mut(consumer) else {
                         return false;
                     };
                     let mut params = GeneratorParams::AuxIn(channel.aux_in_params);
-                    let Some(value) = params.set(aux_in::PARAM_LEVEL, level) else {
+                    let Some(value) = params.set(id, descriptor.from_normalized(normalized))
+                    else {
                         return false;
                     };
                     if let GeneratorParams::AuxIn(updated) = params {
@@ -13077,7 +13103,7 @@ impl AppUi {
                     }
                     let _ = tx.send(EngineCommand::SetChannelGeneratorParam {
                         channel: consumer as u8,
-                        id: aux_in::PARAM_LEVEL,
+                        id,
                         value,
                     });
                     drop(st);

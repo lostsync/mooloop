@@ -255,6 +255,35 @@ pub struct PlateEffect {
     wet1: Smoothed,
     wet2: Smoothed,
     size_glide: f32,
+    /// Per-dependency dirty flags, resolved lazily by [`Self::resolve_dirty`]
+    /// from [`RangeProcessor::process_range`] rather than eagerly inside
+    /// `apply_param`. `size` and `decay_s` legitimately share one: a size
+    /// change moves every comb's `target_len`, which `feedback`'s RT60
+    /// formula reads, so a size change has to mark feedback dirty too. What
+    /// this buys is *coalescing*: `size` and `decay_s` changing at the same
+    /// control tick -- both curve-driven, or both landing in the same
+    /// event-timed tick -- resolve into exactly one feedback rebuild instead
+    /// of the old eager scheme's two (`resize` calling `rebuild_feedback`
+    /// immediately, then a same-tick `decay_s` event calling it again).
+    /// `width`/`predelay_ms` are direct smoother-target writes with no bank
+    /// loop behind them and so need no flag.
+    size_dirty: bool,
+    feedback_dirty: bool,
+    damping_dirty: bool,
+    /// Test-only: how many times each dependency's rebuild loop has actually
+    /// run, so a test can tell a dirty-flag skip apart from a redundant
+    /// rebuild that happens to land on the same numbers -- both are correct
+    /// and both look identical in the rendered output.
+    #[cfg(test)]
+    rebuild_counts: PlateRebuildCounts,
+}
+
+#[cfg(test)]
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+struct PlateRebuildCounts {
+    size: u32,
+    feedback: u32,
+    damping: u32,
 }
 
 impl PlateEffect {
@@ -285,13 +314,53 @@ impl PlateEffect {
             wet1: Smoothed::new(0.5 + width * 0.5, WIDTH_SMOOTH_S, sample_rate),
             wet2: Smoothed::new(0.5 - width * 0.5, WIDTH_SMOOTH_S, sample_rate),
             size_glide: glide_coeff(SIZE_GLIDE_S, sample_rate),
+            size_dirty: true,
+            feedback_dirty: true,
+            damping_dirty: true,
+            #[cfg(test)]
+            rebuild_counts: PlateRebuildCounts::default(),
         };
-        effect.resize();
-        effect.rebuild_damping();
+        effect.resolve_dirty();
         effect
     }
 
-    fn resize(&mut self) {
+    /// Resolve whatever `apply_param` (or a sample-rate change) marked dirty
+    /// since the last call, in dependency order: size first, because it
+    /// moves the `target_len` the feedback formula reads.
+    ///
+    /// Called from `process_range` rather than from `apply_param`, so that
+    /// several dependencies changing within one control tick -- `size` and
+    /// `decay_s` moving together is the common case, since a size change
+    /// legitimately marks feedback dirty too -- resolve into one rebuild
+    /// each, not one per `apply_param` call that touched them.
+    fn resolve_dirty(&mut self) {
+        if self.size_dirty {
+            self.do_resize();
+            self.size_dirty = false;
+            #[cfg(test)]
+            {
+                self.rebuild_counts.size += 1;
+            }
+        }
+        if self.feedback_dirty {
+            self.do_rebuild_feedback();
+            self.feedback_dirty = false;
+            #[cfg(test)]
+            {
+                self.rebuild_counts.feedback += 1;
+            }
+        }
+        if self.damping_dirty {
+            self.do_rebuild_damping();
+            self.damping_dirty = false;
+            #[cfg(test)]
+            {
+                self.rebuild_counts.damping += 1;
+            }
+        }
+    }
+
+    fn do_resize(&mut self) {
         let size = self.params.size;
         let sample_rate = self.sample_rate;
         for comb in self.combs_l.iter_mut().chain(self.combs_r.iter_mut()) {
@@ -300,10 +369,9 @@ impl PlateEffect {
         for allpass in self.allpass_l.iter_mut().chain(self.allpass_r.iter_mut()) {
             allpass.set_size(sample_rate, size);
         }
-        self.rebuild_feedback();
     }
 
-    fn rebuild_feedback(&mut self) {
+    fn do_rebuild_feedback(&mut self) {
         let decay_s = self.params.decay_s;
         let sample_rate = self.sample_rate;
         for comb in self.combs_l.iter_mut().chain(self.combs_r.iter_mut()) {
@@ -311,18 +379,18 @@ impl PlateEffect {
         }
     }
 
-    fn rebuild_damping(&mut self) {
+    fn do_rebuild_damping(&mut self) {
         let damping = self.params.damping;
         let sample_rate = self.sample_rate;
         for comb in self.combs_l.iter_mut().chain(self.combs_r.iter_mut()) {
             comb.set_damping(sample_rate, damping);
         }
     }
-
 }
 
 impl RangeProcessor for PlateEffect {
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
+        self.resolve_dirty();
         for i in start..end {
             let dry = (bus.l[i] + bus.r[i]) * 0.5 * INPUT_GAIN;
             let delay = self.predelay_samples.advance();
@@ -363,15 +431,18 @@ impl RangeProcessor for PlateEffect {
         match id {
             PLATE_PARAM_SIZE => {
                 self.params.size = value.clamp(0.0, 1.0);
-                self.resize();
+                // Marks feedback dirty too: `set_decay`'s RT60 formula reads
+                // `target_len`, which this changes.
+                self.size_dirty = true;
+                self.feedback_dirty = true;
             }
             PLATE_PARAM_DECAY_S => {
                 self.params.decay_s = value.clamp(0.2, 10.0);
-                self.rebuild_feedback();
+                self.feedback_dirty = true;
             }
             PLATE_PARAM_DAMPING => {
                 self.params.damping = value.clamp(0.0, 1.0);
-                self.rebuild_damping();
+                self.damping_dirty = true;
             }
             PLATE_PARAM_WIDTH => {
                 self.params.width = value.clamp(0.0, 1.0);
@@ -438,8 +509,13 @@ impl AudioNode for PlateEffect {
         // rate, so this never actually runs.
         if ctx.sample_rate != self.sample_rate {
             self.sample_rate = ctx.sample_rate.max(1);
-            self.rebuild_feedback();
-            self.rebuild_damping();
+            self.do_rebuild_feedback();
+            self.do_rebuild_damping();
+            #[cfg(test)]
+            {
+                self.rebuild_counts.feedback += 1;
+                self.rebuild_counts.damping += 1;
+            }
             self.wet1.set_time(WIDTH_SMOOTH_S, ctx.sample_rate);
             self.wet2.set_time(WIDTH_SMOOTH_S, ctx.sample_rate);
             self.predelay_samples
@@ -480,6 +556,94 @@ mod tests {
             position_ticks: 0.0,
             position_frames: 0,
         }
+    }
+
+    /// Every dependency starts dirty at construction, so `new`'s own
+    /// `resolve_dirty` should have run each rebuild exactly once -- size,
+    /// then the feedback it cascades into, then damping.
+    #[test]
+    fn construction_resolves_every_dependency_exactly_once() {
+        let effect = PlateEffect::new(PlateParams::default(), 48_000);
+        assert_eq!(
+            effect.rebuild_counts,
+            PlateRebuildCounts { size: 1, feedback: 1, damping: 1 }
+        );
+    }
+
+    /// `apply_param` alone -- with no `process_range` in between -- must not
+    /// have rebuilt anything yet; only `resolve_dirty` does that. This is
+    /// what makes the coalescing test below meaningful rather than
+    /// incidental.
+    #[test]
+    fn apply_param_alone_defers_the_rebuild() {
+        let mut effect = PlateEffect::new(PlateParams::default(), 48_000);
+        effect.apply_param(PLATE_PARAM_DAMPING, 0.7);
+        assert_eq!(
+            effect.rebuild_counts,
+            PlateRebuildCounts { size: 1, feedback: 1, damping: 1 },
+            "apply_param must only have marked a flag, not rebuilt anything"
+        );
+    }
+
+    /// Changing only `damping` must not touch `size` or `feedback` -- the
+    /// direction of the pairing finding 3 named ("a size change does not
+    /// rebuild the decay bank and vice versa") that was already true here;
+    /// what was not true is the next test.
+    #[test]
+    fn changing_damping_alone_does_not_rebuild_size_or_feedback() {
+        let mut effect = PlateEffect::new(PlateParams::default(), 48_000);
+        effect.apply_param(PLATE_PARAM_DAMPING, 0.9);
+        effect.resolve_dirty();
+        assert_eq!(
+            effect.rebuild_counts,
+            PlateRebuildCounts { size: 1, feedback: 1, damping: 2 }
+        );
+    }
+
+    /// Changing only `decay_s` must not touch `size` or `damping`.
+    #[test]
+    fn changing_decay_alone_does_not_rebuild_size_or_damping() {
+        let mut effect = PlateEffect::new(PlateParams::default(), 48_000);
+        effect.apply_param(PLATE_PARAM_DECAY_S, 3.0);
+        effect.resolve_dirty();
+        assert_eq!(
+            effect.rebuild_counts,
+            PlateRebuildCounts { size: 1, feedback: 2, damping: 1 }
+        );
+    }
+
+    /// The genuine perf payoff: `size` and `decay_s` both changing within
+    /// one control tick -- the common case for a reverb whose size is swept
+    /// and whose decay tracks it -- resolve into exactly one feedback
+    /// rebuild, not the two the old eager scheme paid (`resize` calling
+    /// `rebuild_feedback` immediately, then the `decay_s` event calling it
+    /// again in the same tick).
+    #[test]
+    fn size_and_decay_changing_at_one_tick_rebuild_feedback_only_once() {
+        let mut effect = PlateEffect::new(PlateParams::default(), 48_000);
+        effect.apply_param(PLATE_PARAM_SIZE, 0.8);
+        effect.apply_param(PLATE_PARAM_DECAY_S, 4.0);
+        effect.resolve_dirty();
+        assert_eq!(
+            effect.rebuild_counts,
+            PlateRebuildCounts { size: 2, feedback: 2, damping: 1 },
+            "size and decay changing at the same tick should cost one \
+             feedback rebuild, not two"
+        );
+    }
+
+    /// `width` and `predelay_ms` are direct smoother-target writes with no
+    /// bank dependency behind them; neither should mark anything dirty.
+    #[test]
+    fn width_and_predelay_never_touch_the_dirty_flagged_dependencies() {
+        let mut effect = PlateEffect::new(PlateParams::default(), 48_000);
+        effect.apply_param(PLATE_PARAM_WIDTH, 0.2);
+        effect.apply_param(PLATE_PARAM_PREDELAY_MS, 50.0);
+        effect.resolve_dirty();
+        assert_eq!(
+            effect.rebuild_counts,
+            PlateRebuildCounts { size: 1, feedback: 1, damping: 1 }
+        );
     }
 
     fn impulse_response(params: PlateParams, frames: usize) -> StereoBus {

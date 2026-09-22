@@ -33,9 +33,38 @@
 //! owned by the node; the trait exposes only the realtime surface.
 
 use crate::bus::StereoBus;
-use crate::event::EventList;
+use crate::event::{Event, EventList, TimedEvent};
 use crate::taps::AudioTaps;
 use mooloop_core::modulation::MAX_GENERATOR_OUTLETS;
+
+/// Control subdivisions in the largest block the engine will ever hand a
+/// node, so a per-destination curve buffer can be sized once and shared.
+///
+/// Derived rather than restated: [`crate::bus::MAX_BLOCK_SIZE`] is the
+/// executor's block-size ceiling and [`crate::modulator::CONTROL_RATE_FRAMES`]
+/// is the subdivision every control source already advances at
+/// (`docs/MODULATION.md`'s "32 or 64 frames"). `mooloop-engine`'s own
+/// per-block tables used to recompute this same division privately; it now
+/// imports this constant instead; see
+/// `docs/plans/automation-curves/00-status.md`.
+pub const MAX_CONTROL_TICKS_PER_BLOCK: usize =
+    crate::bus::MAX_BLOCK_SIZE / crate::modulator::CONTROL_RATE_FRAMES;
+
+/// One driven destination's resolved value at every control subdivision of
+/// the current block — the representation `docs/MODULATION.md` calls a
+/// curve, handed to a node instead of a step of `Event::ParamValue` events.
+///
+/// `values[t]` is the value at control tick `t`, in the same natural units
+/// [`Event::ParamValue`] always carried; the caller trims the slice to the
+/// block's actual tick count, so `values.len()` is never more than
+/// [`MAX_CONTROL_TICKS_PER_BLOCK`] and may be less on a short final block.
+#[derive(Clone, Copy, Default)]
+pub struct ControlCurve<'a> {
+    /// The destination's stable descriptor id -- exactly what an equivalent
+    /// `Event::ParamValue { id, .. }` would have carried.
+    pub id: u32,
+    pub values: &'a [f32],
+}
 
 /// Per-block context handed to every `AudioNode::process` call. Valid only
 /// for the duration of the call; must not be retained.
@@ -381,6 +410,71 @@ pub trait AudioNode {
         events_in: &EventList,
         events_out: Option<&mut EventList>,
     );
+
+    /// Deliver this block's driven parameters as curves rather than a step
+    /// of `Event::ParamValue` events, once per block, before `process`.
+    ///
+    /// `curves` holds every destination the engine resolved this block --
+    /// modulated and/or automated (`docs/MODULATION.md`'s base-plus-offset
+    /// rule; the carrier is now a curve) -- and `tick_frames` is the control
+    /// subdivision in frames the values were sampled at
+    /// ([`crate::modulator::CONTROL_RATE_FRAMES`] today), handed over rather
+    /// than assumed so a node's own tick math can never silently disagree
+    /// with the engine's.
+    ///
+    /// **The default turns each curve into the same `Event::ParamValue`
+    /// events the engine used to push directly onto this node's event list,
+    /// timed at each tick's frame offset, so `process`'s ordinary
+    /// event-driven path hears exactly what it always did.** A node that
+    /// does not override this keeps working unchanged: this is the safe
+    /// default the curve path is an addition on top of, never a removal of
+    /// the working event path.
+    ///
+    /// A node with a native curve path overrides this instead: it reads
+    /// `curves` directly -- typically driving a curve-aware split that
+    /// calls its own `apply_param` once per tick per destination rather
+    /// than once per event -- and leaves `fallback` untouched for the
+    /// destinations it is handling itself, so `process` never
+    /// double-applies them. [`crate::effects::CurveFrame`] is the shared
+    /// helper an effect uses to keep its own copy of `curves` alive between
+    /// this call and its next `process`, since the borrow here does not
+    /// outlive the call.
+    ///
+    /// # A deliberate, documented deviation
+    ///
+    /// The design note that named this method wrote its signature as
+    /// `apply_curves(&mut self, curves: &[ControlCurve], tick_frames:
+    /// usize)`, with no way for a *default* implementation to deliver the
+    /// events it promises: a default method sees only `&mut self`, and
+    /// `process`'s `events_in` belongs to the caller, not to the node. The
+    /// `fallback: &mut EventList` parameter is the minimal addition that
+    /// makes the default above implementable at all; the destinations, the
+    /// timing, and the "safe default" behaviour are exactly as specified.
+    /// See `docs/plans/automation-curves/00-status.md`.
+    ///
+    /// Returns how many events `fallback` had no room for, so the engine can
+    /// count them in `RenderState::refused_events` the way it counts its own
+    /// pushes. An override that does not use `fallback` returns zero.
+    fn apply_curves(
+        &mut self,
+        curves: &[ControlCurve<'_>],
+        tick_frames: usize,
+        fallback: &mut EventList,
+    ) -> u64 {
+        let mut refused = 0;
+        for curve in curves {
+            for (tick, &value) in curve.values.iter().enumerate() {
+                let offset = (tick * tick_frames) as u32;
+                if !fallback.push_ordered(TimedEvent {
+                    offset,
+                    event: Event::ParamValue { id: curve.id, value },
+                }) {
+                    refused += 1;
+                }
+            }
+        }
+        refused
+    }
 }
 
 /// A device that can be the source of a channel — the one call a channel
@@ -706,5 +800,77 @@ mod tests {
             feedback_tail_frames(-0.5, 100.0),
             feedback_tail_frames(0.5, 100.0)
         );
+    }
+
+    /// `AudioNode::apply_curves`'s default: for every generator here, none
+    /// of which override it, a curve must turn into exactly the
+    /// `Event::ParamValue` step a caller could have pushed by hand -- "a
+    /// node that does not override this keeps working unchanged" is the
+    /// whole of the safe-default contract, checked against the fallback
+    /// list directly rather than trusted from the doc comment.
+    #[test]
+    fn the_default_apply_curves_reconstructs_the_events_a_caller_would_have_pushed() {
+        for (name, mut node) in generators() {
+            let values = [1.0f32, -1.0, 0.5];
+            let curves = [ControlCurve { id: 7, values: &values }];
+            let mut fallback = EventList::empty();
+            node.apply_curves(&curves, 32, &mut fallback);
+
+            let got: Vec<(u32, TimedEvent)> = fallback
+                .iter()
+                .enumerate()
+                .map(|(i, ev)| (i as u32, *ev))
+                .collect();
+            assert_eq!(got.len(), values.len(), "{name}: wrong number of fallback events");
+            for (index, (_, ev)) in got.iter().enumerate() {
+                assert_eq!(ev.offset, (index * 32) as u32, "{name}: tick {index}'s offset");
+                assert_eq!(
+                    ev.event,
+                    Event::ParamValue { id: 7, value: values[index] },
+                    "{name}: tick {index}'s value"
+                );
+            }
+        }
+    }
+
+    /// A node that overrides `apply_curves` must not also have the default
+    /// fallback run -- there is exactly one trait method here, so an
+    /// override replaces the default rather than composing with it, but
+    /// this pins the observable half of that: nothing an override chooses
+    /// to leave `fallback` untouched about should appear in it.
+    #[test]
+    fn a_curve_consuming_override_leaves_the_fallback_list_untouched() {
+        struct Records {
+            captured: Vec<(u32, Vec<f32>)>,
+        }
+        impl AudioNode for Records {
+            fn process(
+                &mut self,
+                _ctx: &ProcessContext,
+                _bus: &mut StereoBus,
+                _events_in: &EventList,
+                _events_out: Option<&mut EventList>,
+            ) {
+            }
+            fn apply_curves(
+                &mut self,
+                curves: &[ControlCurve<'_>],
+                _tick_frames: usize,
+                _fallback: &mut EventList,
+            ) -> u64 {
+                self.captured = curves
+                    .iter()
+                    .map(|c| (c.id, c.values.to_vec()))
+                    .collect();
+                0
+            }
+        }
+        let mut node = Records { captured: Vec::new() };
+        let values = [2.0f32, 3.0];
+        let curves = [ControlCurve { id: 11, values: &values }];
+        let mut fallback = EventList::empty();
+        node.apply_curves(&curves, 32, &mut fallback);
+        assert!(fallback.is_empty(), "an override must not also get the default's events");
+        assert_eq!(node.captured, vec![(11, vec![2.0, 3.0])]);
     }
 }

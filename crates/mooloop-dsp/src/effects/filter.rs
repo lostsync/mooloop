@@ -7,7 +7,8 @@ use mooloop_core::{
 
 use crate::bus::StereoBus;
 use crate::event::EventList;
-use crate::filter::{apply_drive, Svf};
+use crate::filter::{apply_drive, Svf, SvfCoeffs};
+use crate::modulator::CONTROL_RATE_FRAMES;
 use crate::node::{AudioNode, ProcessContext};
 use crate::smooth::Smoothed;
 use super::{process_param_split, RangeProcessor};
@@ -76,20 +77,12 @@ impl FilterEffect {
     fn process_channel(
         stages: &mut [Svf; 2],
         input: f32,
-        cutoff: f32,
-        resonance: f32,
-        sample_rate: u32,
+        coeffs: &SvfCoeffs,
         mode: FilterMode,
         slope: FilterSlope,
     ) -> f32 {
-        let first = Self::select_output(
-            mode,
-            stages[0].next_sample_lp_bp_hp(input, cutoff, resonance, sample_rate),
-        );
-        let second = Self::select_output(
-            mode,
-            stages[1].next_sample_lp_bp_hp(first, cutoff, resonance, sample_rate),
-        );
+        let first = Self::select_output(mode, stages[0].tick_with(input, coeffs));
+        let second = Self::select_output(mode, stages[1].tick_with(first, coeffs));
         if slope == FilterSlope::Db24 {
             second
         } else {
@@ -100,32 +93,63 @@ impl FilterEffect {
 }
 
 impl RangeProcessor for FilterEffect {
+    /// Coefficients, not cutoff/resonance, are what varies per sample here.
+    /// `Svf::tick` used to re-derive `g`/`a1`/`a2`/`a3`/`damping` (a `tan()`
+    /// and a divide) from `self.cutoff.advance()` on every sample; instead
+    /// this walks the range in `CONTROL_RATE_FRAMES`-sized chunks (the rate
+    /// the engine already resolves modulation at), deriving the coefficient
+    /// set once at each chunk's start and once at its end -- the end from
+    /// `advance_by`, which lands the smoother exactly where that many
+    /// per-sample `advance()` calls would have -- and lerps between the two
+    /// per sample. The smoother now smooths the coefficient set, not the
+    /// Hz, but at the same rate it always settled at: chunking at the
+    /// control rate rather than lerping across the whole range (which can
+    /// be much longer than one control tick when nothing further automates
+    /// this parameter) is what keeps a one-off knob turn's settle time
+    /// matching `CUTOFF_SMOOTH_S`/`RESONANCE_SMOOTH_S` instead of stretching
+    /// it out to however long the block happens to be.
+    /// See `reports/fable-2026-09-22.md` finding 2, Plan B.
     fn process_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let sr = self.sample_rate;
-        for i in start..end {
-            let cutoff = self.cutoff.advance();
-            let resonance = self.resonance.advance();
-            let drive = self.drive.advance();
-            let mode = self.params.mode;
-            let slope = self.params.slope;
-            bus.l[i] = Self::process_channel(
-                &mut self.left,
-                apply_drive(bus.l[i], drive),
-                cutoff,
-                resonance,
-                sr,
-                mode,
-                slope,
-            );
-            bus.r[i] = Self::process_channel(
-                &mut self.right,
-                apply_drive(bus.r[i], drive),
-                cutoff,
-                resonance,
-                sr,
-                mode,
-                slope,
-            );
+        let mode = self.params.mode;
+        let slope = self.params.slope;
+
+        let mut pos = start;
+        while pos < end {
+            let chunk_end = (pos + CONTROL_RATE_FRAMES).min(end);
+            let chunk_frames = chunk_end - pos;
+
+            let start_coeffs =
+                SvfCoeffs::for_cutoff(self.cutoff.value(), self.resonance.value(), sr);
+            let cutoff_end = self.cutoff.advance_by(chunk_frames);
+            let resonance_end = self.resonance.advance_by(chunk_frames);
+            let end_coeffs = SvfCoeffs::for_cutoff(cutoff_end, resonance_end, sr);
+
+            for (n, i) in (pos..chunk_end).enumerate() {
+                let t = if chunk_frames > 1 {
+                    n as f32 / (chunk_frames - 1) as f32
+                } else {
+                    1.0
+                };
+                let coeffs = start_coeffs.lerp(&end_coeffs, t);
+                let drive = self.drive.advance();
+                bus.l[i] = Self::process_channel(
+                    &mut self.left,
+                    apply_drive(bus.l[i], drive),
+                    &coeffs,
+                    mode,
+                    slope,
+                );
+                bus.r[i] = Self::process_channel(
+                    &mut self.right,
+                    apply_drive(bus.r[i], drive),
+                    &coeffs,
+                    mode,
+                    slope,
+                );
+            }
+
+            pos = chunk_end;
         }
     }
 
@@ -358,6 +382,165 @@ mod tests {
         assert!(
             max_step < 0.1,
             "cutoff change left a discontinuity of {max_step}"
+        );
+    }
+
+    /// The old per-sample path: derive `Svf`'s coefficients fresh every
+    /// sample from a held-constant cutoff/resonance, exactly what
+    /// `process_channel` did before it took a precomputed `SvfCoeffs`. A
+    /// static cutoff is the case where the coefficient-lerp path's two
+    /// endpoints are identical, so this is the tightest before/after
+    /// comparison available without the old code still in the tree.
+    fn old_path_static_cutoff(input: &[f32], params: FilterParams, sample_rate: u32) -> Vec<f32> {
+        let mut stages = [Svf::new(), Svf::new()];
+        input
+            .iter()
+            .map(|&x| {
+                let first = FilterEffect::select_output(
+                    params.mode,
+                    stages[0].next_sample_lp_bp_hp(
+                        x,
+                        params.cutoff_hz,
+                        params.resonance,
+                        sample_rate,
+                    ),
+                );
+                let second = FilterEffect::select_output(
+                    params.mode,
+                    stages[1].next_sample_lp_bp_hp(
+                        first,
+                        params.cutoff_hz,
+                        params.resonance,
+                        sample_rate,
+                    ),
+                );
+                if params.slope == FilterSlope::Db24 {
+                    second
+                } else {
+                    first
+                }
+            })
+            .collect()
+    }
+
+    /// Plan B step 2's bit-compare: at an unchanging cutoff (drive off, so
+    /// `apply_drive`'s pass-through doesn't add its own difference), the
+    /// coefficient-lerp path's two endpoints coincide, so it should match
+    /// the old per-sample-`tan()` path to well under -80 dBFS RMS.
+    #[test]
+    fn coefficient_lerp_matches_the_old_path_at_a_static_cutoff() {
+        let sr = 48_000u32;
+        let frames = sr as usize / 2;
+        let params = FilterParams {
+            cutoff_hz: 1_500.0,
+            resonance: 0.4,
+            mode: FilterMode::LowPass,
+            slope: FilterSlope::Db24,
+            drive: 0.0,
+        };
+
+        // A chirp, so the comparison covers the whole passband and stopband
+        // rather than one frequency.
+        let input: Vec<f32> = (0..frames)
+            .map(|i| {
+                let t = i as f32 / sr as f32;
+                let freq = 80.0 + (12_000.0 - 80.0) * (i as f32 / frames as f32);
+                (t * freq * core::f32::consts::TAU).sin()
+            })
+            .collect();
+
+        let old = old_path_static_cutoff(&input, params, sr);
+
+        let mut bus = StereoBus::with_capacity(frames);
+        for (i, &x) in input.iter().enumerate() {
+            bus.l[i] = x;
+            bus.r[i] = x;
+        }
+        let mut effect = FilterEffect::new(params, sr);
+        let events = EventList::empty();
+        effect.process(&context(frames), &mut bus, &events, None);
+
+        let mut error_energy = 0.0f64;
+        let mut signal_energy = 0.0f64;
+        for (&sample, &reference) in bus.l.iter().zip(old.iter()).take(frames) {
+            let diff = (sample - reference) as f64;
+            error_energy += diff * diff;
+            signal_energy += (reference as f64) * (reference as f64);
+        }
+        let ratio_db = 10.0 * (error_energy / signal_energy.max(1.0e-30)).log10();
+        assert!(
+            ratio_db < -80.0,
+            "coefficient-lerp path differs from the old per-sample path by {ratio_db:.1} dB RMS"
+        );
+    }
+
+    /// Plan B step 2's zipper test: an envelope-style cutoff sweep, stepped
+    /// every 32 frames (the engine's control-tick rate) via `ParamValue`
+    /// events, must not leave a sample-to-sample step in the output bigger
+    /// than a steady tone's own frame-to-frame slope would produce on its
+    /// own -- i.e. no click from the coefficient ramp itself.
+    #[test]
+    fn envelope_sweep_leaves_no_discontinuity() {
+        let sr = 48_000u32;
+        // 200 control ticks' worth: comfortably under `EventList`'s
+        // `MAX_EVENTS` (256) at one `ParamValue` per tick, which the full
+        // half-second buffer the other tests use would not be.
+        const TICK: usize = 32;
+        let frames = 200 * TICK;
+        let mut bus = StereoBus::with_capacity(frames);
+        for i in 0..frames {
+            let t = i as f32 / sr as f32;
+            let s = (t * 220.0 * core::f32::consts::TAU).sin();
+            bus.l[i] = s;
+            bus.r[i] = s;
+        }
+        let mut effect = FilterEffect::new(
+            FilterParams {
+                cutoff_hz: 500.0,
+                // Modest resonance: this test is about a click from the
+                // coefficient ramp itself, not about how large a resonant
+                // peak's own ringing gets -- that's a property of the SVF,
+                // present identically before and after this change, and
+                // covered by `filter.rs`'s resonance-taper tests instead.
+                resonance: 0.3,
+                ..FilterParams::default()
+            },
+            sr,
+        );
+        let mut events = EventList::empty();
+        // A fast "envelope": sweep from 300 Hz to 4 kHz and back, one step
+        // per control tick.
+        let mut offset = 0u32;
+        while (offset as usize) < frames {
+            let phase = offset as f32 / frames as f32;
+            let sweep = (phase * core::f32::consts::PI).sin();
+            let cutoff = 300.0 + 3_700.0 * sweep;
+            assert!(events.push(TimedEvent {
+                offset,
+                event: Event::ParamValue {
+                    id: FILTER_PARAM_CUTOFF_HZ,
+                    value: cutoff,
+                },
+            }));
+            offset += TICK as u32;
+        }
+        effect.process(&context(frames), &mut bus, &events, None);
+
+        let max_step = (1..frames)
+            .flat_map(|i| {
+                [
+                    (bus.l[i] - bus.l[i - 1]).abs(),
+                    (bus.r[i] - bus.r[i - 1]).abs(),
+                ]
+            })
+            .fold(0.0f32, f32::max);
+        // Well above the ordinary per-sample slope of a 220 Hz tone through
+        // this filter (well under 0.1 with no automation at all -- see
+        // `cutoff_change_mid_block_does_not_click`'s bound), and well below
+        // a real click (a full-scale reversal, order 1.0-2.0).
+        assert!(
+            max_step < 0.5,
+            "envelope sweep left a discontinuity of {max_step}"
         );
     }
 }
