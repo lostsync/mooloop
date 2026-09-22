@@ -462,10 +462,10 @@ mod tests {
 
         let mut error_energy = 0.0f64;
         let mut signal_energy = 0.0f64;
-        for i in 0..frames {
-            let diff = (bus.l[i] - old[i]) as f64;
+        for (&sample, &reference) in bus.l.iter().zip(old.iter()).take(frames) {
+            let diff = (sample - reference) as f64;
             error_energy += diff * diff;
-            signal_energy += (old[i] as f64) * (old[i] as f64);
+            signal_energy += (reference as f64) * (reference as f64);
         }
         let ratio_db = 10.0 * (error_energy / signal_energy.max(1.0e-30)).log10();
         assert!(
