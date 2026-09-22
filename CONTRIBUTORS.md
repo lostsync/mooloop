@@ -35,6 +35,7 @@ Alphabetical by model name, then by harness.
 | Claude Fable 5.1 | Claude Code | 2026-09-02 | Sampler slice and commit, device ordering, the effect preset system |
 | Claude Opus 4.8 | Claude Code | 2026-09-22 | The natural-space reverb rewrite (in-loop FDN diffusion) |
 | Claude Opus 5 | Claude Code | 2026-08-21 | Descriptors and modulation, the mixer and console arc, most of the documentation |
+| Claude Opus 5.5 (claude-opus-5-5) | Claude Code | 2026-09-22 | The ten-team polish review |
 | Claude Sonnet 5 | Claude Code | 2026-08-21 | Sampler UI, audio preferences, assignable shortcuts, the mockup tool |
 | GLM 5.3 Flash (glm-5.3-flash) | opencode | 2026-08-23 | Effect containers, the sample browser, the gain-structure plan |
 | GPT-5 | Codex | 2026-08-21 | Audio-core architecture, realtime project swaps, compiled bus graphs |

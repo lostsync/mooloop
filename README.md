@@ -124,6 +124,8 @@ xattr -dr com.apple.quarantine Mooloop.app
 
 Start JACK first, or use PipeWire with JACK compatibility enabled, then run `mooloop`.
 
+File dialogs and confirmations use `zenity`. The `.deb` and `.rpm` install it; with the AppImage or a source build, install it yourself, or Open, Save and Export will have no way to ask for a file.
+
 If Mooloop is running but nothing is making noise, the JACK graph is a good place to start.
 
 ## Build It

@@ -16,6 +16,7 @@ table of which document to read for which task. Start there, not here.
 | [CURRENT.md](CURRENT.md) | What the application actually does, and where each behaviour stops. The one to update when behaviour changes. `SCOPE.md` is the list of what is missing. |
 | [TERMINOLOGY.md](TERMINOLOGY.md) | Channel, track, bus, send — which word means what, and why channel and track are not one word. Settled by Adam; read before naming anything in the mixer. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Crates, components, and the data crossing between them, in five small diagrams. |
+| [TEAMS.md](TEAMS.md) | The ten teams: which one owns each file, each symbol in a shared file, and each seam, and the `Team` label that carries it in Linear. |
 | [PROJECT_FORMAT.md](PROJECT_FORMAT.md) | The on-disk song, kit, and channel documents, and what each defaulted field is for. |
 | [GAIN_STRUCTURE.md](GAIN_STRUCTURE.md) | Operating level, summing, taper, wet/dry, metering. `gain.rs` is the authority. |
 | [REFERENCE_MEASUREMENTS.md](REFERENCE_MEASUREMENTS.md) | How to measure a reference plugin on the studio machine, and what to capture for which kind of device. Read before booking studio time for it. |
@@ -23,7 +24,7 @@ table of which document to read for which task. Start there, not here.
 | [ACTIONS.md](ACTIONS.md) | The action registry: how a shortcut, menu row, or future console command is added. |
 | [WIDGET_INVENTORY.md](WIDGET_INVENTORY.md) | UI patterns duplicated in `.slint` with no component behind them. Read before writing a new widget. |
 | [JOURNAL.md](JOURNAL.md) | The narrative: what was built, what broke, and what it taught. |
-| [LOOSE_ENDS.md](LOOSE_ENDS.md) | Small verified gaps that were deliberate stopping points. Delete a row when it is fixed. |
+| [LOOSE_ENDS.md](LOOSE_ENDS.md) | Small verified gaps recorded before Linear took over tracking. Takes no new rows; delete a row when it is fixed or moves to an issue. |
 
 ## What it is for
 
@@ -52,10 +53,12 @@ table of which document to read for which task. Start there, not here.
 
 ## Directories
 
-- [plans/](plans/) — numbered work orders. `00-status.md` in each says what has
-  landed; work the files in order. Completed directories move to
-  [plans/archive/](plans/archive/). [plans/README.md](plans/README.md) is the
-  one place that says which state every plan is in.
+- [plans/](plans/) — numbered work orders, each with a Linear project and an
+  issue for every step still to do. Linear says which state every plan and
+  step is in; `00-status.md` in each records what the doing found. Work the
+  files in order. Completed directories move to [plans/archive/](plans/archive/).
+  [plans/README.md](plans/README.md) is the narrative of how each plan got
+  where it is.
 - [workflows/](workflows/) — procedures that are run *again*, where a plan is
   work that lands once. Each carries a record of what its runs found, because a
   workflow's failure mode is looking for something that has stopped being the

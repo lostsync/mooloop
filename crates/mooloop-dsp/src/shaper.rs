@@ -47,12 +47,21 @@ fn tape(x: f32) -> f32 {
     ((x + BIAS).tanh() - BIAS_DC) / (1.0 + BIAS_DC)
 }
 
-/// Output scaling that keeps perceived level roughly steady as drive rises.
+/// Signal level (linear) that drive compensation anchors to: the operating
+/// level, `10^(REFERENCE_PEAK_DBFS/20)`. Written as a literal because it is
+/// used per sample; `drive_reference_matches_the_operating_level` holds it to
+/// `mooloop_core::gain::REFERENCE_PEAK_DBFS`.
+pub(crate) const DRIVE_REFERENCE_LINEAR: f32 = 0.251;
+
+/// Output scaling anchored at full scale: a full-scale input stays near full
+/// scale as drive rises. DS-01's Hard, Fold and Crush characters are
+/// calibrated against this; the Drive effect uses
+/// [`reference_drive_compensation`] instead.
 ///
 /// The asymptotic curves are normalized by their own response to the drive
-/// amount, so a full-scale input stays near full scale. `Hard` already bounds
-/// its output, and `Fold` is non-monotonic in drive so normalizing by its
-/// response would swing wildly — it gets a gentle square-root law instead.
+/// amount. `Hard` already bounds its output, and `Fold` is non-monotonic in
+/// drive so normalizing by its response would swing wildly — it gets a gentle
+/// square-root law instead.
 pub fn drive_compensation(curve: DriveCurve, drive: f32) -> f32 {
     let drive = drive.max(1.0);
     match curve {
@@ -60,6 +69,30 @@ pub fn drive_compensation(curve: DriveCurve, drive: f32) -> f32 {
         DriveCurve::Hard => 1.0,
         DriveCurve::Fold => 1.0 / drive.sqrt(),
     }
+}
+
+/// Output scaling anchored at the operating level, so raising drive changes
+/// character, not level: a sine peaking at [`DRIVE_REFERENCE_LINEAR`] comes out
+/// peaking there at any drive, on any curve. Signals arrive near that level
+/// (`docs/GAIN_STRUCTURE.md`), which is why this is the anchor rather than
+/// full scale -- anchored at full scale, the Drive effect's default drive was
+/// +5.6 dB of plain volume. The compromise is the same as `apply_drive`'s: a
+/// static nonlinearity cannot be level-flat at every input, and a hotter one
+/// is held down toward the reference instead.
+///
+/// It normalizes by the peak the curve gives a reference-level sine, which is
+/// what keeps it monotonic where normalizing by a single point would not be.
+/// `Hard` and `Fold` are both the identity up to 1 and never exceed it, so
+/// that peak is `min(peak_in, 1)` for both; `Tape` is asymmetric, so it
+/// takes the larger of its two half-waves.
+pub fn reference_drive_compensation(curve: DriveCurve, drive: f32) -> f32 {
+    let peak_in = DRIVE_REFERENCE_LINEAR * drive.max(1.0);
+    let peak_out = match curve {
+        DriveCurve::Soft => shape(curve, peak_in),
+        DriveCurve::Tape => shape(curve, peak_in).max(-shape(curve, -peak_in)),
+        DriveCurve::Hard | DriveCurve::Fold => peak_in.min(1.0),
+    };
+    DRIVE_REFERENCE_LINEAR / peak_out
 }
 
 /// Number of FIR taps in the oversampler's anti-imaging/anti-aliasing filter.
@@ -199,6 +232,17 @@ fn blackman_sinc_kernel() -> [f32; FIR_TAPS] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The literal is a copy of a value `mooloop-core` owns; this is what
+    /// reads the original.
+    #[test]
+    fn drive_reference_matches_the_operating_level() {
+        let operating = 10.0_f32.powf(mooloop_core::gain::REFERENCE_PEAK_DBFS / 20.0);
+        assert!(
+            (DRIVE_REFERENCE_LINEAR - operating).abs() < 5.0e-4,
+            "{DRIVE_REFERENCE_LINEAR} vs {operating}"
+        );
+    }
 
     #[test]
     fn fold_is_linear_inside_unity_and_reflects_outside() {

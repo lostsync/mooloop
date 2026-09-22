@@ -258,6 +258,43 @@ mod tests {
         session
     }
 
+    /// The fader and the pan can be picked like any device parameter, and a
+    /// lane on them reads in their own units. Shaped against the tree where
+    /// the engine played strip lanes but the picker offered no row for one,
+    /// and `automation_descriptor` answered `None` for a strip lane -- so one
+    /// loaded from a file played, and its readout was blank.
+    #[test]
+    fn the_channel_fader_and_pan_are_automation_destinations() {
+        use mooloop_core::{ParamOwner, STRIP_PARAM_PAN, STRIP_PARAM_VOLUME};
+        let mut session = Session::default();
+        let channel = mooloop_core::EffectTarget::Channel(0);
+        let destinations = session.automation_destinations();
+        for param in [STRIP_PARAM_VOLUME, STRIP_PARAM_PAN] {
+            let index = destinations
+                .iter()
+                .position(|(target, _, _)| *target == ParamAddr::strip(channel, param))
+                .expect("the strip is in the picker");
+            assert_eq!(destinations[index].1, "Channel strip");
+            session
+                .open_automation_lane(index as i32)
+                .expect("a strip lane opens like any other");
+            assert_eq!(
+                session.automation_descriptor().map(|descriptor| descriptor.id),
+                Some(param),
+                "the open strip lane has no descriptor to read its values with"
+            );
+        }
+        // Every generator and chain row comes before them: the strip is after
+        // the chain in the signal path.
+        let first_strip = destinations
+            .iter()
+            .position(|(target, _, _)| target.owner == ParamOwner::Strip)
+            .unwrap();
+        assert!(destinations[..first_strip]
+            .iter()
+            .all(|(target, _, _)| target.scope == channel && target.owner != ParamOwner::Strip));
+    }
+
     /// Opening a lane creates it in the project, so the picker's marks mean
     /// something before any point is drawn -- and re-opening it does not add
     /// a second one.

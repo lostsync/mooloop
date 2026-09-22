@@ -200,7 +200,7 @@ pub static STRIP_DESCRIPTORS: [ParamDescriptor; 2] = [
         min: 0.0,
         max: MAX_LINEAR_GAIN,
         curve: ParamCurve::Linear,
-        default: 0.8,
+        default: crate::DEFAULT_CHANNEL_VOLUME,
     },
     ParamDescriptor {
         id: STRIP_PARAM_PAN,

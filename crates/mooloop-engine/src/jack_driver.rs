@@ -400,23 +400,13 @@ impl JackDriver {
         stereo_destinations(self.client.as_client())
     }
 
-    /// Disconnect the previously configured output target (if connected) and
-    /// connect the new one, or the system default if `target` is `None`.
+    /// Connect the outputs to `target`, or to the system default if it is
+    /// `None`, and only then let go of the previous target. See [`retarget`].
     pub(crate) fn set_output_target(&self, target: Option<(String, String)>) -> Result<(), String> {
-        let jack_client = self.client.as_client();
         let previous = self.output_target.load_full();
         let next =
             target.unwrap_or_else(|| (DEFAULT_OUTPUT_L.to_owned(), DEFAULT_OUTPUT_R.to_owned()));
-        if *previous != next {
-            let _ = jack_client.disconnect_ports_by_name(OUT_L_NAME, &previous.0);
-            let _ = jack_client.disconnect_ports_by_name(OUT_R_NAME, &previous.1);
-        }
-        for (src, dst) in [(OUT_L_NAME, &next.0), (OUT_R_NAME, &next.1)] {
-            match jack_client.connect_ports_by_name(src, dst) {
-                Ok(()) | Err(jack::Error::PortAlreadyConnected(_, _)) => {}
-                Err(e) => return Err(format!("could not connect {src} to {dst}: {e}")),
-            }
-        }
+        retarget(self.client.as_client(), &previous, &next)?;
         self.output_target.store(Arc::new(next));
         Ok(())
     }
@@ -490,6 +480,78 @@ fn stereo_destinations(jack_client: &Client) -> Vec<OutputTarget> {
             })
         })
         .collect()
+}
+
+/// What one connection attempt came to, reduced to what [`retarget`] needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Connection {
+    Made,
+    AlreadyThere,
+    Refused(String),
+}
+
+/// The two port-graph operations moving the output needs, so the order they
+/// run in can be tested without a JACK server.
+trait Patchbay {
+    fn connect(&self, source: &str, destination: &str) -> Connection;
+    fn disconnect(&self, source: &str, destination: &str);
+}
+
+impl Patchbay for jack::Client {
+    fn connect(&self, source: &str, destination: &str) -> Connection {
+        match self.connect_ports_by_name(source, destination) {
+            Ok(()) => Connection::Made,
+            Err(jack::Error::PortAlreadyConnected(_, _)) => Connection::AlreadyThere,
+            Err(error) => Connection::Refused(error.to_string()),
+        }
+    }
+
+    fn disconnect(&self, source: &str, destination: &str) {
+        let _ = self.disconnect_ports_by_name(source, destination);
+    }
+}
+
+/// Move the outputs from `previous` to `next`: connect first, disconnect
+/// after.
+///
+/// The other order turned every failed choice into silence. It disconnected
+/// the pair that was playing, then found the new one would not connect and
+/// returned an error with nothing connected at all -- which is what startup
+/// did to its own fallback when the saved output had gone: the fallback
+/// found a working pair, and then applying the saved one took it away
+/// (P3 in `reports/teams-2026-09-22.md`). Now a target that will not connect
+/// leaves the output exactly where it was, and a half that did connect is
+/// undone so the output is never left split across two destinations.
+fn retarget(
+    bay: &impl Patchbay,
+    previous: &(String, String),
+    next: &(String, String),
+) -> Result<(), String> {
+    let halves = [(OUT_L_NAME, next.0.as_str()), (OUT_R_NAME, next.1.as_str())];
+    let mut made = [false; 2];
+    for (index, (source, destination)) in halves.iter().enumerate() {
+        match bay.connect(source, destination) {
+            Connection::Made => made[index] = true,
+            Connection::AlreadyThere => {}
+            Connection::Refused(error) => {
+                for ((half_source, half_destination), made) in halves.iter().zip(made) {
+                    if made {
+                        bay.disconnect(half_source, half_destination);
+                    }
+                }
+                return Err(format!("could not connect {source} to {destination}: {error}"));
+            }
+        }
+    }
+    // A half the new target shares with the old one is the connection just
+    // confirmed, so it stays.
+    if previous.0 != next.0 {
+        bay.disconnect(OUT_L_NAME, &previous.0);
+    }
+    if previous.1 != next.1 {
+        bay.disconnect(OUT_R_NAME, &previous.1);
+    }
+    Ok(())
 }
 
 /// Which destinations to try when the saved one does not exist, in order.
@@ -580,5 +642,97 @@ mod output_fallback_tests {
     #[test]
     fn nothing_available_means_no_fallback() {
         assert!(clients(&[], &gone()).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod retarget_tests {
+    use super::{retarget, Connection, Patchbay, OUT_L_NAME, OUT_R_NAME};
+    use std::cell::RefCell;
+    use std::collections::BTreeSet;
+
+    /// A port graph that holds connections and refuses the destinations it
+    /// is told are gone.
+    struct FakeGraph {
+        connected: RefCell<BTreeSet<(String, String)>>,
+        gone: Vec<&'static str>,
+    }
+
+    impl FakeGraph {
+        fn playing(pair: &(String, String), gone: Vec<&'static str>) -> Self {
+            let connected = [
+                (OUT_L_NAME.to_owned(), pair.0.clone()),
+                (OUT_R_NAME.to_owned(), pair.1.clone()),
+            ];
+            Self {
+                connected: RefCell::new(connected.into_iter().collect()),
+                gone,
+            }
+        }
+
+        fn outputs(&self) -> Vec<String> {
+            self.connected.borrow().iter().map(|(_, to)| to.clone()).collect()
+        }
+    }
+
+    impl Patchbay for FakeGraph {
+        fn connect(&self, source: &str, destination: &str) -> Connection {
+            if self.gone.contains(&destination) {
+                return Connection::Refused("no such port".into());
+            }
+            let edge = (source.to_owned(), destination.to_owned());
+            if self.connected.borrow_mut().insert(edge) {
+                Connection::Made
+            } else {
+                Connection::AlreadyThere
+            }
+        }
+
+        fn disconnect(&self, source: &str, destination: &str) {
+            self.connected
+                .borrow_mut()
+                .remove(&(source.to_owned(), destination.to_owned()));
+        }
+    }
+
+    fn pair(client: &str) -> (String, String) {
+        (format!("{client}:playback_FL"), format!("{client}:playback_FR"))
+    }
+
+    #[test]
+    fn a_new_target_replaces_the_old_one() {
+        let (speakers, headphones) = (pair("speakers"), pair("headphones"));
+        let graph = FakeGraph::playing(&speakers, vec![]);
+        assert!(retarget(&graph, &speakers, &headphones).is_ok());
+        assert_eq!(graph.outputs(), [headphones.0, headphones.1]);
+    }
+
+    /// Shaped against the old order, which disconnected first: a target that
+    /// would not connect left nothing connected at all. That is startup's
+    /// fallback being taken away when the saved output had gone.
+    #[test]
+    fn a_target_that_will_not_connect_leaves_the_output_where_it_was() {
+        let (fallback, saved) = (pair("speakers"), pair("headphones"));
+        let graph = FakeGraph::playing(&fallback, vec!["headphones:playback_FL"]);
+        assert!(retarget(&graph, &fallback, &saved).is_err());
+        assert_eq!(graph.outputs(), [fallback.0, fallback.1]);
+    }
+
+    /// Half a target is worse than the old one: the half that connected is
+    /// undone, so the output is never split across two destinations.
+    #[test]
+    fn a_half_connected_target_is_undone() {
+        let (speakers, headphones) = (pair("speakers"), pair("headphones"));
+        let graph = FakeGraph::playing(&speakers, vec!["headphones:playback_FR"]);
+        assert!(retarget(&graph, &speakers, &headphones).is_err());
+        assert_eq!(graph.outputs(), [speakers.0, speakers.1]);
+    }
+
+    #[test]
+    fn retargeting_to_the_same_pair_keeps_it_connected() {
+        let speakers = pair("speakers");
+        let graph = FakeGraph::playing(&speakers, vec![]);
+        assert!(retarget(&graph, &speakers, &speakers).is_ok());
+        assert_eq!(graph.outputs(), [speakers.0, speakers.1]);
     }
 }

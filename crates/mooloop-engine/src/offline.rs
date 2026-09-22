@@ -63,6 +63,10 @@ pub struct RenderSummary {
     pub base_frames: u64,
     pub tail_frames: u64,
     pub total_frames: u64,
+    /// Parameter events the render had no room for
+    /// (`RenderState::refused_events`). Non-zero means the file is not
+    /// quite what the project says, so it is also logged.
+    pub refused_events: u64,
 }
 
 #[derive(Debug)]
@@ -140,11 +144,12 @@ impl OfflineRenderer {
         };
         let base_frames = (f64::from(base_ticks) / state.ticks_per_sample()).ceil() as u64;
         let tail_frames = (f64::from(spec.tail_seconds) * f64::from(sample_rate)).round() as u64;
-        let summary = RenderSummary {
+        let mut summary = RenderSummary {
             sample_rate,
             base_frames,
             tail_frames,
             total_frames: base_frames.saturating_add(tail_frames),
+            refused_events: 0,
         };
 
         let temporary = temporary_path(&spec.path);
@@ -155,6 +160,16 @@ impl OfflineRenderer {
         if let Err(error) = result {
             let _ = fs::remove_file(&temporary);
             return Err(error);
+        }
+        summary.refused_events = state.refused_events();
+        if summary.refused_events > 0 {
+            mooloop_core::log_warn!(
+                "export",
+                "{} parameter events had no room in their device's event list; \
+                 {} is missing some automation or modulation",
+                summary.refused_events,
+                spec.path.display()
+            );
         }
         if spec.path.exists() {
             fs::remove_file(&spec.path)?;
@@ -173,6 +188,20 @@ fn temporary_path(target: &Path) -> PathBuf {
     parent.join(format!(".{name}.part-{}", std::process::id()))
 }
 
+/// Frames per offline block: what a live engine runs at, not the largest
+/// block the graph can take.
+///
+/// Automation and modulation resolve once per `CONTROL_RATE_FRAMES`, into a
+/// device's `EventList` of `MAX_EVENTS`. At `MAX_BLOCK_SIZE` that was 256
+/// control ticks a block, so one automated parameter filled the list and
+/// every one after it on the same device was refused: an export silenced the
+/// second automated or modulated parameter while playback, at a JACK-sized
+/// block, heard it. 512 frames is sixteen ticks, which leaves room for
+/// sixteen moving parameters per device, and is a block size live playback
+/// runs at, so what is exported is what was heard.
+const OFFLINE_BLOCK_FRAMES: usize = 512;
+const _: () = assert!(OFFLINE_BLOCK_FRAMES <= MAX_BLOCK_SIZE);
+
 fn render_blocks(
     state: &mut RenderState,
     summary: RenderSummary,
@@ -181,7 +210,7 @@ fn render_blocks(
     state.play();
     let mut remaining = summary.base_frames;
     while remaining > 0 {
-        let frames = remaining.min(MAX_BLOCK_SIZE as u64) as usize;
+        let frames = remaining.min(OFFLINE_BLOCK_FRAMES as u64) as usize;
         state.process_once_block(frames);
         sink(&state.master().l[..frames], &state.master().r[..frames])?;
         remaining -= frames as u64;
@@ -190,7 +219,7 @@ fn render_blocks(
     state.pause();
     let mut remaining = summary.tail_frames;
     while remaining > 0 {
-        let frames = remaining.min(MAX_BLOCK_SIZE as u64) as usize;
+        let frames = remaining.min(OFFLINE_BLOCK_FRAMES as u64) as usize;
         state.process_once_block(frames);
         sink(&state.master().l[..frames], &state.master().r[..frames])?;
         remaining -= frames as u64;
@@ -355,6 +384,55 @@ mod tests {
         assert!(bytes
             .windows(2)
             .any(|pair| pair[0] == 0xff && pair[1] & 0xe0 == 0xe0));
+    }
+
+    /// Two automated parameters on one device both reach it in an export.
+    ///
+    /// Shaped against the unfixed tree, which rendered offline in
+    /// `MAX_BLOCK_SIZE` blocks: 256 control ticks a block, so the cutoff lane
+    /// alone filled the filter's event list and every resonance event after
+    /// it was refused -- the export dropped the second lane that playback
+    /// played.
+    #[test]
+    fn an_export_refuses_no_automation_events() {
+        use mooloop_core::{
+            AutomationLane, AutomationPoint, DeviceId, EffectSlotState, EffectTarget,
+            FilterParams, ParamAddr, FILTER_PARAM_CUTOFF_HZ, FILTER_PARAM_RESONANCE,
+        };
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("automated.wav");
+        let mut channel = ProjectChannel::drum_synth(0, 1);
+        channel
+            .setup
+            .push_effect(EffectSlotState::filter(FilterParams::default()));
+        for (param, value) in [(FILTER_PARAM_CUTOFF_HZ, 0.3), (FILTER_PARAM_RESONANCE, 0.6)] {
+            let mut lane = AutomationLane::new(ParamAddr::effect(
+                EffectTarget::Channel(0),
+                DeviceId(0),
+                param,
+            ));
+            lane.upsert(AutomationPoint::new(1, 0, value));
+            channel.automation[0].push(lane);
+        }
+        channel.notes[0].push(NoteEvent::new(1, 0, 24, 60, 127));
+        let project = Project {
+            channels: vec![channel],
+            ..Project::default()
+        };
+
+        let summary = OfflineRenderer::render(
+            &project,
+            &[],
+            48_000,
+            &ExportSpec {
+                path,
+                scope: RenderScope::Pattern { index: 0 },
+                tail_seconds: 0.0,
+                format: ExportFormat::Wav(WavEncoding::Float32),
+            },
+        )
+        .unwrap();
+        assert_eq!(summary.refused_events, 0);
     }
 
     #[test]

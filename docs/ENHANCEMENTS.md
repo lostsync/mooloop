@@ -36,7 +36,7 @@ Standard piano roll pointer tools? Select/normal, draw mode, slice/heal (heal wi
   DONE: Select, Draw, Paint, Slice, Erase on keys 1-5, with heal/join as
   Slice plus the add-to-selection modifier.
 
-Axis-constrained note drag (lock to time-only or pitch-only) is the one
+Axis-constrained note drag (lock to time-only or pitch-only; open: MOO-164) is the one
 standard gesture deliberately left out. Every conventional binding for it is
 Alt, which is the chord you flagged as WM-hostile, and shipping it bound to
 nothing would be a dark feature. The gesture registry in `gestures.rs` is

@@ -173,7 +173,7 @@ impl ChannelState {
             kind: DeviceKind::Sampler,
             muted: false,
             solo: false,
-            volume: 0.8,
+            volume: mooloop_core::DEFAULT_CHANNEL_VOLUME,
             pan: 0.0,
             params: SamplerParams::default(),
             drum_params: DrumSynthParams::default(),
@@ -290,6 +290,30 @@ pub fn apply_sample_references(
 mod tests {
     use super::*;
     use mooloop_core::{DEFAULT_NOTE_DURATION_TICKS, TICKS_PER_64TH};
+
+    /// A new channel starts at one volume wherever it is made. Shaped
+    /// against the tree where the session's channel, the strip's volume
+    /// descriptor and the engine's reset said 0.8 while core said 1.0: a
+    /// channel added from the toolbar started 1.9 dB under the gain
+    /// contract's calibration, and double-clicking its knob, which resets to
+    /// 0 dB, made it louder. Unity is pinned too, because the knob's
+    /// double-click and the mixer fader's reset are both written as unity in
+    /// the markup.
+    #[test]
+    fn a_new_channel_starts_at_the_one_default_volume() {
+        use mooloop_core::{Channel, DeviceKind, DEFAULT_CHANNEL_VOLUME, STRIP_DESCRIPTORS};
+        assert_eq!(DEFAULT_CHANNEL_VOLUME, 1.0);
+        assert_eq!(ChannelState::new(0).volume, DEFAULT_CHANNEL_VOLUME);
+        assert_eq!(
+            Channel::new("Kick", DeviceKind::Sampler).volume,
+            DEFAULT_CHANNEL_VOLUME
+        );
+        let volume = STRIP_DESCRIPTORS
+            .iter()
+            .find(|descriptor| descriptor.id == mooloop_core::STRIP_PARAM_VOLUME)
+            .expect("the strip describes its volume");
+        assert_eq!(volume.default, DEFAULT_CHANNEL_VOLUME);
+    }
 
     #[test]
     fn copied_channel_names_are_readable_and_unique() {

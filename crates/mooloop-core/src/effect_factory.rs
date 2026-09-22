@@ -291,18 +291,16 @@ fn drive() -> Vec<EffectFactoryPatch> {
             p.drive = 4.0;
             p.tone = 0.1;
         }),
-        with("Hard Clip", &["hard", "distortion"], "Hard clipping, pulled back at the output.", |p| {
+        with("Hard Clip", &["hard", "distortion"], "Hard clipping, most of the way to a square.", |p| {
             p.curve = DriveCurve::Hard;
             p.drive = 8.0;
             p.tone = 0.2;
-            p.output = 0.8;
         }),
         with("Fold Screech", &["fold", "extreme"], "Wavefolding well past full scale.", |p| {
             p.curve = DriveCurve::Fold;
             p.drive = 12.0;
             p.tone = 0.4;
             p.mix = 0.85;
-            p.output = 0.7;
         }),
         with("Parallel Grit", &["hard", "parallel"], "Heavy clipping blended a third of the way in.", |p| {
             p.curve = DriveCurve::Hard;

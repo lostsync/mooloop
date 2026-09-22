@@ -33,6 +33,7 @@ use mooloop_dsp::{
     TimedEvent,
     CONTROL_RATE_FRAMES, MAX_BLOCK_SIZE, SILENCE_PEAK,
 };
+use mooloop_dsp::interpolate::{Region, SincTable};
 use mooloop_dsp::smooth::Smoothed;
 use mooloop_dsp::strip::Strip;
 
@@ -842,10 +843,15 @@ impl PendingEffectParams {
         }
     }
 
-    fn copy_to(&self, destination: &mut EventList) {
+    /// Returns how many of the queued events `destination` had no room for.
+    fn copy_to(&self, destination: &mut EventList) -> u64 {
+        let mut refused = 0;
         for event in self.events.iter().flatten() {
-            let _ = destination.push_ordered(*event);
+            if !destination.push_ordered(*event) {
+                refused += 1;
+            }
         }
+        refused
     }
 }
 
@@ -963,6 +969,9 @@ struct EffectChain {
     /// Reused while each sequential slot processes. See
     /// `PendingEffectParams` for why this is not stored per slot.
     event_scratch: EventList,
+    /// Parameter events `event_scratch` had no room for, since this chain was
+    /// built. See [`RenderState::refused_events`].
+    refused_events: u64,
     /// Per-slot dry-path delay matching the installed node's reported
     /// latency, so the wet/dry blend never mixes time-misaligned signals.
     /// Allocated off the realtime thread, next to the node it belongs to.
@@ -1030,6 +1039,7 @@ impl EffectChain {
             bound: 0,
             slots: std::array::from_fn(|_| None),
             event_scratch: EventList::empty(),
+            refused_events: 0,
             dry_align: std::array::from_fn(|_| None),
             analyzers: std::array::from_fn(|_| None),
             dry: StereoBus::with_capacity(MAX_BLOCK_SIZE),
@@ -1382,13 +1392,15 @@ impl EffectChain {
                 };
                 let value = descriptor
                     .from_normalized((base_normalized + offset_normalized).clamp(0.0, 1.0));
-                let _ = self.event_scratch.push_ordered(TimedEvent {
+                if !self.event_scratch.push_ordered(TimedEvent {
                     offset,
                     event: Event::ParamValue {
                         id: descriptor.id,
                         value,
                     },
-                });
+                }) {
+                    self.refused_events += 1;
+                }
             }
         }
     }
@@ -1815,7 +1827,7 @@ impl EffectChain {
                 }
                 self.event_scratch.clear();
                 if let Some(state) = self.slots[slot].as_mut() {
-                    state.events.copy_to(&mut self.event_scratch);
+                    self.refused_events += state.events.copy_to(&mut self.event_scratch);
                 }
                 self.control_events_for_slot(slot, scope, modulation, automation);
                 // Read the slot's host controls before the node borrow: they
@@ -2199,7 +2211,7 @@ impl BusStrip {
         Self {
             effects: EffectChain::new(),
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
-            // Unity, not a channel's 0.8: see `mooloop_core::MixerBus::new`.
+            // Unity, as a channel is: see `mooloop_core::MixerBus::new`.
             output: OutputStage::new(1.0),
             strip: Strip::new(StripParams::default(), sample_rate),
             polarity: false,
@@ -2362,7 +2374,7 @@ impl ChannelStrip {
             source_base: GeneratorParams::Sampler(SamplerParams::default()),
             effects: EffectChain::new(),
             bus: StereoBus::with_capacity(MAX_BLOCK_SIZE),
-            output: OutputStage::new(0.8),
+            output: OutputStage::new(mooloop_core::DEFAULT_CHANNEL_VOLUME),
             solo_silenced: false,
             destination: MASTER_BUS,
             compensation: None,
@@ -2396,7 +2408,7 @@ impl ChannelStrip {
     fn reset_slot(&mut self, source: DeviceKind, reclaim: &mut Reclaim) {
         self.reset_sources_to_defaults(source);
         self.effects.clear(reclaim);
-        self.output = OutputStage::new(0.8);
+        self.output = OutputStage::new(mooloop_core::DEFAULT_CHANNEL_VOLUME);
         self.solo_silenced = false;
         self.destination = MASTER_BUS;
     }
@@ -3092,6 +3104,10 @@ pub(crate) struct RenderState {
     /// a time: a new preview replaces the old, and the retired sample's
     /// ownership returns to the UI thread through the reclaim ring.
     preview: Option<PreviewVoice>,
+    /// The voice a new preview or a Stop displaced, fading out over
+    /// [`PREVIEW_FADE_S`] rather than cut mid-waveform. It retires through the
+    /// same ring as a preview that played to its end.
+    preview_fading: Option<PreviewVoice>,
     preview_retired: RetiredPreviews,
     /// Linear preview gain, shared with the GUI so the knob is heard live.
     /// It starts at the operating level rather than unity: an audition is
@@ -3135,6 +3151,9 @@ pub(crate) struct RenderState {
     /// compared were not simply the same render twice: a skip mechanism that
     /// never fires would pass every one of them.
     slept_strip_blocks: u64,
+    /// Events the per-channel lists had no room for, since this state was
+    /// built. See [`Self::refused_events`].
+    refused_events: u64,
     /// Where each track's channel strip runs in its block.
     ///
     /// Initialized from `mooloop_core::mixer::STRIP_PIN`, which is the one
@@ -3153,11 +3172,82 @@ pub(crate) struct RenderState {
     skip_idle: bool,
 }
 
+/// How long a preview that is stopped or replaced takes to fade out. Long
+/// enough that the cut is not a click, short enough that auditioning down a
+/// list of files still feels immediate.
+const PREVIEW_FADE_S: f64 = 0.002;
+
 /// One-shot straight to the master output: no envelope, no channel strip.
 /// A browser preview should sound like the file, not like the project.
+///
+/// "Like the file" includes its sample rate. The read position counts the
+/// file's own frames and advances by `file rate / engine rate` per output
+/// frame, through the sampler's band-limited [`SincTable`] -- read at the
+/// engine rate instead, a 44.1 kHz file auditioned 1.5 semitones sharp on a
+/// 48 kHz engine and a 96 kHz file an octave low, while the same file
+/// loaded into a sampler played at its true pitch.
 struct PreviewVoice {
     sample: Arc<SampleData>,
-    position: usize,
+    /// Position in the file's frames. Whole-numbered while the file's rate
+    /// matches the engine's, which reads each frame untouched.
+    position: f64,
+    /// Output frames left in a fade-out, and its length; `None` while the
+    /// voice is playing normally.
+    fade: Option<(u32, u32)>,
+}
+
+impl PreviewVoice {
+    fn new(sample: Arc<SampleData>) -> Self {
+        Self {
+            sample,
+            position: 0.0,
+            fade: None,
+        }
+    }
+
+    fn finished(&self) -> bool {
+        self.position >= self.sample.frames.len() as f64 || matches!(self.fade, Some((0, _)))
+    }
+
+    /// Sum up to `frames` output frames into `bus`. Returns whether the voice
+    /// has nothing left to play.
+    fn render(&mut self, bus: &mut StereoBus, frames: usize, gain: f32, engine_rate: u32) -> bool {
+        let samples = &self.sample.frames;
+        let len = samples.len();
+        // A file with no rate recorded plays at the engine's rather than not
+        // at all.
+        let file_rate = if self.sample.sample_rate == 0 {
+            engine_rate
+        } else {
+            self.sample.sample_rate
+        };
+        let rate = f64::from(file_rate) / f64::from(engine_rate.max(1));
+        let table = SincTable::shared();
+        let region = Region::whole(len);
+        for index in 0..frames {
+            if self.position >= len as f64 {
+                return true;
+            }
+            let fade_gain = match &mut self.fade {
+                None => 1.0,
+                Some((0, _)) => return true,
+                Some((left, length)) => {
+                    let level = *left as f32 / *length as f32;
+                    *left -= 1;
+                    level
+                }
+            };
+            let frame = if rate == 1.0 {
+                samples[self.position as usize]
+            } else {
+                table.read(samples, self.position, rate, region)
+            };
+            bus.l[index] += frame[0] * gain * fade_gain;
+            bus.r[index] += frame[1] * gain * fade_gain;
+            self.position += rate;
+        }
+        self.finished()
+    }
 }
 
 impl RenderState {
@@ -3172,6 +3262,7 @@ impl RenderState {
             strip_pin: STRIP_PIN,
             skip_idle: true,
             slept_strip_blocks: 0,
+            refused_events: 0,
             sequencer: Sequencer::new(1, 1, DEFAULT_STEPS as usize, mooloop_core::Ppq::DEFAULT),
             strips,
             audio_slots: slots_for_growth,
@@ -3225,6 +3316,7 @@ impl RenderState {
             seeked: false,
             deferred: [None; MAX_DEFERRED],
             preview: None,
+            preview_fading: None,
             preview_retired: RetiredPreviews::new(),
             preview_gain: Arc::new(AtomicU32::new(mooloop_core::gain::db_to_linear(mooloop_core::gain::REFERENCE_PEAK_DBFS).to_bits())),
         };
@@ -3233,6 +3325,9 @@ impl RenderState {
         // they should not disagree at rest.
         let initial = state.sequencer.active_channels();
         state.grow_channels(initial);
+        // The preview reads through the shared sinc table; build it here, on
+        // the control thread, so no audition is the first to touch it.
+        SincTable::shared();
         state
     }
 
@@ -3252,20 +3347,25 @@ impl RenderState {
         self.preview_gain = gain;
     }
 
-    /// Starts, restarts, or stops the preview voice. Returns the replaced
-    /// sample, if there was one, for off-thread disposal.
+    /// Starts, restarts, or stops the preview voice. The voice it displaces
+    /// fades out rather than stopping dead, and retires through the ring when
+    /// the fade ends. Returns the sample of a voice that was *already* fading
+    /// -- a third audition inside two milliseconds cuts it the rest of the
+    /// way -- for off-thread disposal.
     pub(crate) fn apply_preview(&mut self, command: PreviewCommand) -> Option<Arc<SampleData>> {
-        let replaced = self.preview.take().map(|voice| voice.sample);
+        let cut = self.preview_fading.take().map(|voice| voice.sample);
+        if let Some(mut voice) = self.preview.take() {
+            let length = (PREVIEW_FADE_S * f64::from(self.sample_rate)).round().max(1.0) as u32;
+            voice.fade = Some((length, length));
+            self.preview_fading = Some(voice);
+        }
         match command {
             PreviewCommand::Play { sample } => {
-                self.preview = Some(PreviewVoice {
-                    sample,
-                    position: 0,
-                });
+                self.preview = Some(PreviewVoice::new(sample));
             }
             PreviewCommand::Stop => {}
         }
-        replaced
+        cut
     }
 
     /// Hands back a sample whose preview finished, for disposal off the
@@ -3289,41 +3389,35 @@ impl RenderState {
     /// bus walk: the preview bypasses the project's chains, balance, and
     /// mute so the file is heard as the file.
     fn render_preview(&mut self, frames: usize) {
-        let Some(voice) = self.preview.as_mut() else {
+        if self.preview.is_none() && self.preview_fading.is_none() {
             return;
-        };
+        }
         let gain = f32::from_bits(self.preview_gain.load(Ordering::Relaxed));
-        let samples = &voice.sample.frames;
-        let start = voice.position.min(samples.len());
-        let count = (start + frames).min(samples.len()) - start;
         let master = &mut self.buses[MASTER_BUS as usize];
         // The preview writes into the master after the bus walk has already
         // decided whether to empty it, so it has to say that it did: a master
         // left holding the last frames of a retired preview would keep
         // playing them for as long as nothing else routed to it.
         master.dirty = true;
-        let bus = &mut master.bus;
-        for index in 0..count {
-            let frame = samples[start + index];
-            bus.l[index] += frame[0] * gain;
-            bus.r[index] += frame[1] * gain;
-        }
-        let played = start + count;
-        if played < samples.len() {
-            self.preview.as_mut().expect("preview checked above").position = played;
-            return;
-        }
-        // Finished. Retire it if there is room, and otherwise leave the voice
-        // where it is and try again next block: `start` will equal the
-        // buffer's length, so `count` is zero and nothing further is summed.
-        // Holding costs a comparison; the alternatives are a `Vec` growing
-        // here or an `Arc` freed here, and this is the realtime callback.
-        let voice = self.preview.take().expect("preview checked above");
-        if let Some(returned) = self.preview_retired.push(voice.sample) {
-            self.preview = Some(PreviewVoice {
-                sample: returned,
-                position: played,
-            });
+        for slot in [&mut self.preview, &mut self.preview_fading] {
+            let Some(voice) = slot.as_mut() else {
+                continue;
+            };
+            if !voice.render(&mut master.bus, frames, gain, self.sample_rate) {
+                continue;
+            }
+            // Finished. Retire it if there is room, and otherwise leave the
+            // voice where it is and try again next block: it is past its end,
+            // so it sums nothing further. Holding costs a comparison; the
+            // alternatives are a `Vec` growing here or an `Arc` freed here,
+            // and this is the realtime callback.
+            let voice = slot.take().expect("voice checked above");
+            if let Some(returned) = self.preview_retired.push(voice.sample) {
+                *slot = Some(PreviewVoice {
+                    sample: returned,
+                    ..voice
+                });
+            }
         }
     }
 
@@ -5611,10 +5705,12 @@ impl RenderState {
                 continue;
             };
             if let Some(events) = self.events.get_mut(audition.channel as usize) {
-                let _ = events.push_ordered(TimedEvent {
+                if !events.push_ordered(TimedEvent {
                     offset: audition.offset.min(last_frame),
                     event: audition.event,
-                });
+                }) {
+                    self.refused_events += 1;
+                }
             }
         }
     }
@@ -5977,13 +6073,15 @@ impl RenderState {
                         };
                         let value = descriptor
                             .from_normalized((base_normalized + offset_normalized).clamp(0.0, 1.0));
-                        let _ = self.events[index].push_ordered(TimedEvent {
+                        if !self.events[index].push_ordered(TimedEvent {
                             offset: (tick * CONTROL_RATE_FRAMES) as u32,
                             event: Event::ParamValue {
                                 id: descriptor.id,
                                 value,
                             },
-                        });
+                        }) {
+                            self.refused_events += 1;
+                        }
                     }
                 }
 
@@ -6028,13 +6126,15 @@ impl RenderState {
                             let amount = descriptor.from_normalized(
                                 (base_normalized + offset_normalized).clamp(0.0, 1.0),
                             );
-                            let _ = self.events[index].push_ordered(TimedEvent {
+                            if !self.events[index].push_ordered(TimedEvent {
                                 offset: (tick * CONTROL_RATE_FRAMES) as u32,
                                 event: Event::SourceRouteAmount {
                                     route: route.id,
                                     amount,
                                 },
-                            });
+                            }) {
+                                self.refused_events += 1;
+                            }
                         }
                     }
                 }
@@ -6495,6 +6595,21 @@ impl RenderState {
         self.slept_strip_blocks
     }
 
+    /// Events refused for want of room since this state was built: an
+    /// `EventList` holds `MAX_EVENTS`, and a block that resolves more
+    /// automation or modulation ticks than that for one device loses the
+    /// rest -- the second parameter, typically, since the first filled the
+    /// list. Zero is the only right answer; a non-zero count means what was
+    /// heard is not what the project says.
+    pub fn refused_events(&self) -> u64 {
+        let chains = self
+            .strips
+            .iter()
+            .map(|strip| strip.effects.refused_events)
+            .chain(self.buses.iter().map(|bus| bus.effects.refused_events));
+        self.refused_events + chains.sum::<u64>()
+    }
+
     pub fn play(&mut self) {
         self.transport.play();
     }
@@ -6542,6 +6657,17 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
 
     fn test_strip() -> ChannelStrip {
         ChannelStrip::new(Arc::new(ArcSwapOption::empty()), 48_000)
+    }
+
+    /// A strip starts, and resets, at the channel default the session and
+    /// core start a channel at, not a quieter one of its own.
+    #[test]
+    fn a_strip_starts_and_resets_at_the_channel_default_volume() {
+        let mut strip = test_strip();
+        assert_eq!(strip.output.gain, mooloop_core::DEFAULT_CHANNEL_VOLUME);
+        strip.output.set_volume(0.25);
+        strip.reset_slot(DeviceKind::Sampler, &mut Reclaim::default());
+        assert_eq!(strip.output.gain, mooloop_core::DEFAULT_CHANNEL_VOLUME);
     }
 
     #[test]
@@ -7821,20 +7947,27 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
             "the preview must reach the master bus while the transport is stopped"
         );
 
-        // Replacing a playing preview hands the old sample back for UI-side
-        // disposal before it can ever be dropped on the realtime thread.
+        // Replacing a playing preview fades the old one out rather than
+        // handing it straight back: it is still sounding. Nothing is returned
+        // for disposal, because nothing has finished yet.
         let second = Arc::new(SampleData {
             frames: vec![[1.0, 1.0]; 10],
             sample_rate: 48_000,
             root_note: 60,
         });
         let replaced = render.apply_preview(PreviewCommand::Play { sample: second.clone() });
-        assert!(Arc::ptr_eq(&replaced.expect("a preview was playing"), &first));
+        assert!(replaced.is_none(), "the displaced voice is fading, not finished");
 
-        // Ten frames are gone after one block; retirement follows.
+        // Ten frames and a two-millisecond fade are both over after one
+        // block, and both samples retire through the ring -- never dropped on
+        // the realtime thread.
         render.process_block(512);
-        let retired = render.pop_retired_preview().expect("voice finished");
-        assert!(Arc::ptr_eq(&retired, &second));
+        let retired = [
+            render.pop_retired_preview().expect("a voice finished"),
+            render.pop_retired_preview().expect("both voices finished"),
+        ];
+        assert!(retired.iter().any(|sample| Arc::ptr_eq(sample, &first)));
+        assert!(retired.iter().any(|sample| Arc::ptr_eq(sample, &second)));
         assert!(render.pop_retired_preview().is_none());
 
         // And the preview is silent again.
@@ -7846,6 +7979,74 @@ fn full_bank() -> Vec<mooloop_core::BusSetup> {
                 .iter()
                 .any(|sample| *sample != 0.0)
         );
+    }
+
+    /// A preview plays a file at the file's own rate, as the sampler does
+    /// once the same file is loaded into it. Measured as duration: a tenth of
+    /// a second of audio lasts a tenth of a second whatever rate it was
+    /// written at.
+    ///
+    /// Shaped against the unfixed tree, which copied one file frame per
+    /// output frame: the 44.1 kHz file ran 4,410 frames (1.5 semitones sharp)
+    /// and the 96 kHz one 9,600 (an octave low).
+    #[test]
+    fn preview_plays_a_file_at_its_own_rate() {
+        for file_rate in [44_100u32, 48_000, 96_000] {
+            let mut render = RenderState::new(48_000, empty_channel_audio_bank());
+            render.attach_preview_gain(Arc::new(AtomicU32::new(1.0f32.to_bits())));
+            let tenth = file_rate as usize / 10;
+            render.apply_preview(PreviewCommand::Play {
+                sample: Arc::new(SampleData {
+                    frames: vec![[0.5, 0.5]; tenth],
+                    sample_rate: file_rate,
+                    root_note: 60,
+                }),
+            });
+            let mut sounding = 0usize;
+            for _ in 0..24 {
+                render.process_block(512);
+                sounding += render.master().l[..512]
+                    .iter()
+                    .filter(|sample| **sample > 0.25)
+                    .count();
+            }
+            assert!(
+                sounding.abs_diff(4_800) <= 2,
+                "a tenth of a second at {file_rate} Hz lasted {sounding} frames at 48 kHz"
+            );
+        }
+    }
+
+    /// Stopping a preview fades it rather than cutting it mid-waveform,
+    /// which is a click on every audition that is interrupted -- and
+    /// auditioning down a list interrupts every one of them.
+    #[test]
+    fn stopping_a_preview_fades_instead_of_cutting() {
+        let mut render = RenderState::new(48_000, empty_channel_audio_bank());
+        render.attach_preview_gain(Arc::new(AtomicU32::new(1.0f32.to_bits())));
+        let sample = Arc::new(SampleData {
+            frames: vec![[0.5, 0.5]; 48_000],
+            sample_rate: 48_000,
+            root_note: 60,
+        });
+        render.apply_preview(PreviewCommand::Play { sample: sample.clone() });
+        render.process_block(512);
+        assert!(render.apply_preview(PreviewCommand::Stop).is_none());
+        render.process_block(512);
+        let out = &render.master().l[..512];
+        let fade = (PREVIEW_FADE_S * 48_000.0).round() as usize;
+        assert!((out[0] - 0.5).abs() < 1.0e-6, "the fade starts from where it was");
+        let largest_step = out[..=fade]
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            largest_step <= 0.5 / fade as f32 + 1.0e-6,
+            "the stop stepped by {largest_step}"
+        );
+        assert!(out[fade..].iter().all(|sample| *sample == 0.0), "and then it is silent");
+        let retired = render.pop_retired_preview().expect("the faded voice retires");
+        assert!(Arc::ptr_eq(&retired, &sample));
     }
 
     #[test]
@@ -12575,8 +12776,9 @@ mod footprint {
         // buffers: what a chain needs at once is one copy per box it is
         // currently in, not one per box it holds, so ten sibling containers
         // share what four nested ones would need. A chain with no container
-        // pays only the pointer.
-        assert_eq!(size_of::<EffectChain>(), 20_552);
+        // pays only the pointer. Eight more is the count of events its lists
+        // had no room for, which is what lets an export say it lost some.
+        assert_eq!(size_of::<EffectChain>(), 20_560);
         // A strip holds one node of every generator kind, so a new device is
         // paid for on every live channel whether or not anything uses it.
         // The ML-P8 is 5,776 bytes of it. Its eight voices are the bulk -- a
@@ -12730,7 +12932,11 @@ mod footprint {
         // the strip so that an install carrying the strip carries the take.
         // The ring and the status it points to are allocated only while a
         // take is armed.
-        assert_eq!(size_of::<ChannelStrip>(), 42_376);
+        //
+        // `teams-2026-09-22` C4 added 8, in the strip's `EffectChain`: the
+        // count of events its lists refused, so an export can say it lost
+        // some rather than quietly dropping a parameter.
+        assert_eq!(size_of::<ChannelStrip>(), 42_384);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -12755,9 +12961,9 @@ mod footprint {
         // Paid per channel the project actually has.
         let per_live =
             size_of::<ChannelStrip>() + size_of::<EventList>() + size_of::<ControlOutputs>();
-        // The sampler's retired-sample ring is 152 of this, and a take's
-        // pointer the latest 8.
-        assert_eq!(per_live, 60_816);
+        // The sampler's retired-sample ring is 152 of this, a take's pointer
+        // 8, and the effect chain's refused-event count the latest 8.
+        assert_eq!(per_live, 60_824);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved

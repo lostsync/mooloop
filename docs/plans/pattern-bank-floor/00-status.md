@@ -1,5 +1,8 @@
 # Pattern bank floor status
 
+Linear: project [Pattern bank floor](https://linear.app/mooloop/project/pattern-bank-floor-f75b19ccc35f);
+step 01 is MOO-152.
+
 Nothing has landed. This directory is a work order and a set of measurements,
 written 2026-09-08 out of an audio-dropout investigation that turned out to be
 about something else entirely.
