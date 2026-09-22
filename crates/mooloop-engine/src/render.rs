@@ -13071,7 +13071,13 @@ mod footprint {
         // per-sample path outright. Recorded here rather than left stale
         // because this assertion is the only thing that would otherwise
         // have called the drift out.
-        assert_eq!(size_of::<MlP8>(), 5_904);
+        //
+        // Grew by 48 more from `reports/fable-2026-09-22.md` finding 2,
+        // Plan C step 1: the finishing chorus's shared `ModulationEffect`
+        // now keeps a twelve-entry `tilt` table (`f32 * 12`) for the
+        // phaser's per-stage spread, rebuilt once when `stages` changes
+        // instead of recomputed inline on every stage of every sample.
+        assert_eq!(size_of::<MlP8>(), 5_952);
         // DS-01 is 6,832, and almost all of it is the eight-voice pool: a
         // voice carries six tone oscillators for its partial bank, an FM
         // modulator, four noise generators' worth of state, a state-variable
@@ -13172,7 +13178,12 @@ mod footprint {
         // `curve_scratch`'s pointer and refusal counter (sixteen of it, the
         // same sixteen `EffectChain` moved by above) are paid here too; the
         // rest is alignment padding the compiler adds around them.
-        assert_eq!(size_of::<ChannelStrip>(), 42_456);
+        //
+        // Grew by 48 more with `MlP8`'s own figure above
+        // (`reports/fable-2026-09-22.md` finding 2, Plan C step 1): the
+        // strip holds one `MlP8` by value, so its finishing chorus's new
+        // `tilt` table is paid here too.
+        assert_eq!(size_of::<ChannelStrip>(), 42_504);
 
         // Reserved whatever the project holds: the two small modulation
         // vectors, plus three vectors of pointers to per-channel storage.
@@ -13213,7 +13224,10 @@ mod footprint {
         // `reports/fable-2026-09-22.md`. Boxed like everything else in this
         // list, so an addressable-but-idle channel never pays it; this
         // number is what a *live* one does.
-        assert_eq!(per_live, 155_488);
+        //
+        // Grew by 48 with `ChannelStrip` above (Plan C step 1, same
+        // finding): the phaser's tilt table again, once per live channel.
+        assert_eq!(per_live, 155_536);
 
         // 42.8 MiB reserved at startup became 1.1 MiB for a sixteen-channel
         // project, with both ceilings untouched. A sixth generator kind moved
@@ -13287,7 +13301,11 @@ mod footprint {
         // generator's whole table", is a product question this run did not
         // have standing to answer and is recorded rather than decided in
         // `docs/plans/automation-curves/00-status.md`.
-        assert_eq!((fixed + per_live * 16) / 1024, 2_916);
+        //
+        // Crossed one more KiB boundary with `per_live` above: the phaser's
+        // tilt table is 768 bytes across sixteen live channels (Plan C
+        // step 1, `reports/fable-2026-09-22.md` finding 2).
+        assert_eq!((fixed + per_live * 16) / 1024, 2_917);
     }
 
 }

@@ -325,9 +325,38 @@ pub fn apply_drive(input: f32, drive: f32) -> f32 {
     if drive <= f32::EPSILON {
         return input;
     }
+    apply_drive_compensated(input, drive, drive_compensation(drive))
+}
+
+/// The part of [`apply_drive`]'s response that depends on `drive` alone, not
+/// on the sample it shapes: a `tanh` of the driven reference level.
+///
+/// A caller shaping many samples at one `drive` value -- a whole block, a
+/// whole voice between parameter events -- computes this once and reuses it
+/// through [`apply_drive_compensated`] rather than paying the `tanh` again
+/// for every sample, exactly as `apply_drive` already does internally for a
+/// single call.
+pub fn drive_compensation(drive: f32) -> f32 {
+    let drive = drive.clamp(0.0, 1.0);
+    if drive <= f32::EPSILON {
+        // Unused by `apply_drive_compensated`'s own bypass at this drive, but
+        // a finite, well-defined value rather than one that only happens to
+        // never be read.
+        return 1.0;
+    }
     let input_gain = 1.0 + drive * 15.0;
-    let compensation =
-        DRIVE_REFERENCE_LINEAR / (DRIVE_REFERENCE_LINEAR * input_gain).tanh();
+    DRIVE_REFERENCE_LINEAR / (DRIVE_REFERENCE_LINEAR * input_gain).tanh()
+}
+
+/// [`apply_drive`] with [`drive_compensation`] already computed. The per-call
+/// `tanh` of the *sample* still has to happen here -- that one genuinely
+/// varies every call -- so this only removes the one `tanh` that does not.
+pub fn apply_drive_compensated(input: f32, drive: f32, compensation: f32) -> f32 {
+    let drive = drive.clamp(0.0, 1.0);
+    if drive <= f32::EPSILON {
+        return input;
+    }
+    let input_gain = 1.0 + drive * 15.0;
     (input * input_gain).tanh() * compensation
 }
 

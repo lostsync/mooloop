@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::bus::StereoBus;
 use crate::event::{Event, EventList};
-use crate::filter::{apply_drive, Svf, SvfCoeffs};
+use crate::filter::{apply_drive_compensated, drive_compensation, Svf, SvfCoeffs};
 use crate::interpolate::{Region, RegionEdge, SincTable};
 use crate::stretch::{StretchPool, StretchReader};
 use crate::node::{AudioNode, ProcessContext, SourceNode};
@@ -374,6 +374,17 @@ struct VoiceContext {
     params: SamplerParams,
     sample_rate: u32,
     bpm: f64,
+    /// `2^(bits-1)` for `shape_frame`'s bit-reduction quantizer, a function
+    /// of `params.bit_reduction` alone -- resolved once per `render_range`
+    /// rather than once per voice per hold-window refresh, alongside
+    /// `drive_compensation` below.
+    bit_scale: f32,
+    /// [`crate::filter::drive_compensation`] of `params.drive`, resolved
+    /// once per `render_range` rather than once per sample per channel:
+    /// `apply_drive`'s own `tanh` of the *signal* still runs per sample in
+    /// `shape_frame`, this only removes the `tanh` that does not vary with
+    /// it (`reports/fable-2026-09-22.md` finding 2, Plan C step 3).
+    drive_compensation: f32,
 }
 
 /// A sample handle a sampler let go of on the audio thread, on its way to be
@@ -990,6 +1001,8 @@ impl Sampler {
         voice: &mut Voice,
         frame: [f32; 2],
         filter_base_hz: Option<f32>,
+        bit_scale: f32,
+        drive_compensation: f32,
     ) -> [f32; 2] {
         let rate_reduction = clamp01(params.rate_reduction);
         let hold_frames = 1 + (rate_reduction * 31.0).round() as u32;
@@ -998,11 +1011,9 @@ impl Sampler {
             voice.held_frame = if bit_reduction <= f32::EPSILON {
                 frame
             } else {
-                let bits = (16.0 - bit_reduction * 12.0).round().clamp(4.0, 16.0);
-                let scale = 2.0_f32.powf(bits - 1.0);
                 [
-                    (frame[0] * scale).round() / scale,
-                    (frame[1] * scale).round() / scale,
+                    (frame[0] * bit_scale).round() / bit_scale,
+                    (frame[1] * bit_scale).round() / bit_scale,
                 ]
             };
             voice.hold_remaining = hold_frames;
@@ -1012,8 +1023,8 @@ impl Sampler {
 
         let drive = clamp01(params.drive);
         if drive > f32::EPSILON {
-            let shaped = apply_drive(frame[0], drive);
-            let shaped_r = apply_drive(frame[1], drive);
+            let shaped = apply_drive_compensated(frame[0], drive, drive_compensation);
+            let shaped_r = apply_drive_compensated(frame[1], drive, drive_compensation);
             frame = [shaped, shaped_r];
         }
 
@@ -1118,6 +1129,8 @@ impl Sampler {
             params,
             sample_rate,
             bpm,
+            bit_scale,
+            drive_compensation,
         } = cx;
         let (start, end) = (range.start, range.end);
         if !voice.active {
@@ -1218,7 +1231,15 @@ impl Sampler {
                 Some(reader) => reader.read(&sample.frames, region, voice.playback_rate),
                 None => table.read(&sample.frames, pos, voice.playback_rate, region),
             };
-            let frame = Self::shape_frame(params, sample_rate, voice, raw, filter_base_hz);
+            let frame = Self::shape_frame(
+                params,
+                sample_rate,
+                voice,
+                raw,
+                filter_base_hz,
+                bit_scale,
+                drive_compensation,
+            );
             bus.l[i] += amp * frame[0];
             bus.r[i] += amp * frame[1];
 
@@ -1271,10 +1292,21 @@ impl Sampler {
 
     fn render_range(&mut self, bus: &mut StereoBus, start: usize, end: usize) {
         let params = self.params;
+        // Functions of `params` alone -- same formulas `shape_frame` used to
+        // recompute per hold-window refresh (bit reduction) and per sample
+        // per channel (the drive compensation's own `tanh`) -- resolved once
+        // here and carried to every voice through `cx`
+        // (`reports/fable-2026-09-22.md` finding 2, Plan C step 3).
+        let bit_reduction = clamp01(params.bit_reduction);
+        let bits = (16.0 - bit_reduction * 12.0).round().clamp(4.0, 16.0);
+        let bit_scale = 2.0_f32.powf(bits - 1.0);
+        let drive = clamp01(params.drive);
         let cx = VoiceContext {
             params,
             sample_rate: self.sample_rate,
             bpm: self.bpm,
+            bit_scale,
+            drive_compensation: drive_compensation(drive),
         };
         self.output_gain
             .set_target(clamp_output_gain(params.output_gain));
@@ -1302,12 +1334,18 @@ impl Sampler {
     #[cfg(test)]
     fn shape_first_voice(&mut self, frame: [f32; 2]) -> [f32; 2] {
         let filter_base_hz = Self::filter_base_hz(self.params, self.sample_rate);
+        let bit_reduction = clamp01(self.params.bit_reduction);
+        let bits = (16.0 - bit_reduction * 12.0).round().clamp(4.0, 16.0);
+        let bit_scale = 2.0_f32.powf(bits - 1.0);
+        let drive = clamp01(self.params.drive);
         Self::shape_frame(
             self.params,
             self.sample_rate,
             &mut self.voices[0],
             frame,
             filter_base_hz,
+            bit_scale,
+            drive_compensation(drive),
         )
     }
 }

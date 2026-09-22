@@ -29,7 +29,8 @@ use std::time::Instant;
 
 use crate::render::RenderState;
 use mooloop_core::{
-    EffectKind, EffectSlotState, MlP8Params, NoteEvent, Project, ProjectChannel,
+    EffectKind, EffectSlotState, MlP8Params, ModulationMode, ModulationParams, NoteEvent,
+    Project, ProjectChannel,
 };
 
 const SAMPLE_RATE: u32 = 48_000;
@@ -464,6 +465,28 @@ fn playing_effect_cost() {
         println!(
             "  {:<12}  {nanos:>9}  {:>10}",
             format!("{kind:?}"),
+            nanos as i128 - bare as i128
+        );
+    }
+
+    // The modulation row above measures its default mode (chorus); a
+    // 12-stage phaser is a distinct cost shape inside the same device --
+    // up to 72 transcendental calls a sample before Plan C step 1's hoist
+    // (`reports/fable-2026-09-22.md` finding 2) -- so it gets its own row
+    // rather than being read off the chorus figure.
+    {
+        let mut project = loaded_project(channels);
+        for channel in &mut project.channels {
+            channel.setup.push_effect(EffectSlotState::modulation(ModulationParams {
+                mode: ModulationMode::Phaser,
+                stages: 12,
+                ..ModulationParams::default()
+            }));
+        }
+        let nanos = per_block_nanos(&project, frames, 400);
+        println!(
+            "  {:<12}  {nanos:>9}  {:>10}",
+            "Phaser12",
             nanos as i128 - bare as i128
         );
     }

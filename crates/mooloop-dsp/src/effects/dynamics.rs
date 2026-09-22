@@ -239,6 +239,12 @@ pub struct CompressorEffect {
     threshold_db: Smoothed,
     ratio: Smoothed,
     makeup_db: Smoothed,
+    /// `db_to_linear_unfloored(makeup_db.value())`, cached rather than
+    /// recomputed every sample: `makeup_db` is automated approximately never
+    /// (`reports/fable-2026-09-22.md` finding 2), so this is almost always
+    /// the same number. Kept current whenever `makeup_db` is not settled;
+    /// reused as-is while it is (see [`Smoothed::is_settled`]).
+    makeup: f32,
     block: DynamicsBlock,
 }
 
@@ -247,13 +253,16 @@ impl CompressorEffect {
         let mut detector = EnvelopeFollower::new();
         detector.set_times(params.attack_ms, params.release_ms, sample_rate);
         let smoothed = |initial| Smoothed::new(initial, PARAM_SMOOTH_S, sample_rate);
+        let makeup_db = smoothed(params.makeup_db.clamp(0.0, 24.0));
+        let makeup = db_to_linear_unfloored(makeup_db.value());
         Self {
             params,
             sample_rate,
             detector,
             threshold_db: smoothed(params.threshold_db.clamp(-60.0, 0.0)),
             ratio: smoothed(params.ratio.clamp(1.0, 20.0)),
-            makeup_db: smoothed(params.makeup_db.clamp(0.0, 24.0)),
+            makeup_db,
+            makeup,
             block: DynamicsBlock::new(),
         }
     }
@@ -271,6 +280,9 @@ impl CompressorEffect {
         self.threshold_db.reset_to(params.threshold_db.clamp(-60.0, 0.0));
         self.ratio.reset_to(params.ratio.clamp(1.0, 20.0));
         self.makeup_db.reset_to(params.makeup_db.clamp(0.0, 24.0));
+        // `reset_to` snaps straight to settled, so nothing downstream would
+        // ever recompute the cache for this value without this line.
+        self.makeup = db_to_linear_unfloored(self.makeup_db.value());
     }
 
 }
@@ -282,7 +294,18 @@ impl RangeProcessor for CompressorEffect {
         for i in start..end {
             let threshold_db = self.threshold_db.advance();
             let ratio = self.ratio.advance();
-            let makeup = db_to_linear_unfloored(self.makeup_db.advance());
+            let makeup_db = self.makeup_db.advance();
+            // `db_to_linear_unfloored` is a `powf`, paid every sample below
+            // for a value that is almost always sitting still: recompute it
+            // only while the smoother has not yet settled, and reuse the
+            // cached figure the rest of the time. Bit-identical while
+            // settled (the cache holds exactly what this call would have
+            // produced); a bounded, inaudible lag of at most one sample
+            // during the ~5 ms the smoother is still moving otherwise.
+            if !self.makeup_db.is_settled() {
+                self.makeup = db_to_linear_unfloored(makeup_db);
+            }
+            let makeup = self.makeup;
             let envelope = self.detector.process(linked_peak(bus.l[i], bus.r[i]));
             let reduction_db =
                 compressor_gain_db(linear_to_db_unfloored(envelope), threshold_db, ratio, knee_db);

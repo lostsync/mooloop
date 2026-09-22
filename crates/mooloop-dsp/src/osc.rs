@@ -1,13 +1,52 @@
 //! Oscillators and noise sources for the synth voices.
 //!
 //! Saw and pulse use PolyBLEP correction so they stay band-limited enough for
-//! musical use without per-sample oversampling. Sine and triangle are naive
-//! (they alias negligibly at these frequencies). Everything is allocation-free
-//! state advanced one sample at a time.
+//! musical use without per-sample oversampling. Sine reads a lookup table
+//! (see [`table_sine`]) rather than calling `sin` per sample; triangle is
+//! still naive arithmetic. Both alias negligibly at these frequencies.
+//! Everything is allocation-free state advanced one sample at a time.
 
 use core::f32::consts::TAU;
+use std::sync::OnceLock;
 
 use mooloop_core::OscWave;
+
+/// Entries per cycle in [`sine_table`]. Large enough that linear
+/// interpolation between neighbouring entries holds a 440 Hz table sine
+/// under -90 dB THD (`sine_table_thd_is_below_90_db`), small enough that the
+/// table (8 KB, `f32`) and the one-time build cost are both trivial. Built
+/// once, process-wide, the way [`crate::interpolate::SincTable`] is.
+const SINE_TABLE_LEN: usize = 2048;
+
+static SINE_TABLE: OnceLock<[f32; SINE_TABLE_LEN]> = OnceLock::new();
+
+/// The process-wide sine table, built on first call.
+///
+/// [`Osc::new`] forces this off the audio thread — the same reason
+/// `SincTable::shared` is forced at device construction — so no
+/// `next_sample`/`next_step` call on the audio thread is ever the one that
+/// builds it.
+fn sine_table() -> &'static [f32; SINE_TABLE_LEN] {
+    SINE_TABLE.get_or_init(|| {
+        std::array::from_fn(|index| ((index as f32 / SINE_TABLE_LEN as f32) * TAU).sin())
+    })
+}
+
+/// One cycle of a sine, read at `phase` (cycles, any real value — folded to
+/// `[0, 1)`) by linear interpolation between the two nearest table entries.
+///
+/// A deliberate approximation of `(phase * TAU).sin()`, not a bit-exact
+/// stand-in for it (`reports/fable-2026-09-22.md` finding 2): the error it
+/// introduces is bounded by `sine_table_thd_is_below_90_db` rather than
+/// argued from the table size alone.
+fn table_sine(phase: f32) -> f32 {
+    let table = sine_table();
+    let scaled = phase.rem_euclid(1.0) * SINE_TABLE_LEN as f32;
+    let index = scaled as usize % SINE_TABLE_LEN;
+    let frac = scaled - scaled.floor();
+    let next = (index + 1) % SINE_TABLE_LEN;
+    table[index] + (table[next] - table[index]) * frac
+}
 
 /// One oscillator step: the waveform value, and where inside this sample the
 /// phase crossed the end of its cycle.
@@ -45,6 +84,10 @@ pub struct Osc {
 
 impl Osc {
     pub fn new() -> Self {
+        // Force the shared sine table here, on whatever thread constructs
+        // the oscillator, so no `process()` call is ever the first to
+        // build it.
+        sine_table();
         Self {
             phase: 0.0,
             last_phase: 0.0,
@@ -218,7 +261,7 @@ fn increment(freq_hz: f32, sample_rate: u32) -> f32 {
 /// width edge keeps its own.
 fn wave_value(phase: f32, wave: OscWave, pulse_width: f32, dt: f32, boundary_dt: f32) -> f32 {
     match wave {
-        OscWave::Sine => (phase * TAU).sin(),
+        OscWave::Sine => table_sine(phase),
         OscWave::Triangle => 4.0 * (phase - 0.5).abs() - 1.0,
         OscWave::Saw => 2.0 * phase - 1.0 - polyblep(phase, boundary_dt),
         OscWave::Pulse => {
@@ -472,6 +515,58 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The table sine is a deliberate approximation of `(phase * TAU).sin()`
+    /// (`reports/fable-2026-09-22.md` finding 2, Plan C step 4), gated on
+    /// this bound rather than trusted from the table size alone.
+    ///
+    /// 440 Hz at 48 kHz over exactly 1,200 samples is exactly 11 whole
+    /// cycles (`1200 * 440 / 48000 == 11`), so a single-period DFT is exact
+    /// and there is no spectral leakage to separate from real distortion —
+    /// the same trick `sync_blep_gets_the_harmonics_closer_than_a_naive_reset`
+    /// uses above. THD is every harmonic of the fundamental up to Nyquist
+    /// against the fundamental itself.
+    #[test]
+    fn sine_table_thd_is_below_90_db() {
+        let sr = 48_000u32;
+        let freq = 440.0f32;
+        let n = 1_200usize;
+        assert_eq!(n as u32 * freq as u32, sr * 11, "the exact-cycle premise moved");
+
+        let mut osc = Osc::new();
+        let samples: Vec<f32> = (0..n).map(|_| osc.next_sample(freq, OscWave::Sine, 0.5, sr)).collect();
+
+        // Magnitude of the DFT at `bin`, scaled the same way for every bin so
+        // only the ratio between them is used below.
+        let magnitude_at = |bin: usize| -> f64 {
+            let step = -core::f64::consts::TAU * bin as f64 / n as f64;
+            let (mut re, mut im) = (0.0_f64, 0.0_f64);
+            for (index, sample) in samples.iter().enumerate() {
+                let angle = step * index as f64;
+                re += *sample as f64 * angle.cos();
+                im += *sample as f64 * angle.sin();
+            }
+            (re * re + im * im).sqrt()
+        };
+
+        let fundamental_bin = 11usize;
+        let fundamental = magnitude_at(fundamental_bin);
+        assert!(fundamental > 0.0, "the fundamental itself measured zero");
+
+        let nyquist_bin = n / 2;
+        let mut harmonic_power = 0.0_f64;
+        let mut harmonic = 2usize;
+        while fundamental_bin * harmonic < nyquist_bin {
+            let magnitude = magnitude_at(fundamental_bin * harmonic);
+            harmonic_power += magnitude * magnitude;
+            harmonic += 1;
+        }
+
+        let thd_ratio = harmonic_power.sqrt() / fundamental;
+        let thd_db = 20.0 * thd_ratio.log10();
+        println!("table sine THD at 440 Hz / 48 kHz: {thd_db:.2} dB");
+        assert!(thd_db < -90.0, "THD was only {thd_db:.2} dB");
     }
 
     #[test]
