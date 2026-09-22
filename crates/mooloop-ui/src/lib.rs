@@ -2743,6 +2743,18 @@ pub fn start_logging() {
     init_logging(UiSettings::load_or_default().general.log_to_file);
 }
 
+/// The audio configuration the user saved, for opening the engine on.
+///
+/// The engine has to *start* on it rather than be re-pointed once the window
+/// is up. Startup is where a saved output that has gone -- headphones
+/// unplugged, a device renamed -- falls back to one that works, and it can
+/// only do that for the output it was asked for: started on the default and
+/// re-targeted afterwards, the saved pair was tried last, failed, and took
+/// the working fallback down with it (P3 in `reports/teams-2026-09-22.md`).
+pub fn saved_audio_config() -> mooloop_engine::AudioConfig {
+    UiSettings::load_or_default().audio.engine_config()
+}
+
 /// Brings up diagnostic logging for the run and says what build is running.
 ///
 /// The console threshold comes from `MOOLOOP_LOG` (`error`, `warn`, `info`, or
@@ -14727,22 +14739,14 @@ impl AppUi {
                             let Some(window) = weak.upgrade() else { return };
                             match action {
                                 AudioAction::ApplyPersisted(config) => {
-                                    if let Some(target) = config.output_target.clone() {
-                                        if let Err(error) = handle.set_output_target(Some(target)) {
-                                            log_warn!(
-                                                "audio",
-                                                "could not apply saved output target: {error}"
-                                            );
-                                        }
-                                    }
-                                    if let Some(frames) = config.buffer_size {
-                                        if let Err(error) = handle.set_buffer_size(frames) {
-                                            log_warn!(
-                                                "audio",
-                                                "could not apply saved buffer size: {error}"
-                                            );
-                                        }
-                                    }
+                                    // The output and the buffer size were
+                                    // applied when the engine opened, on the
+                                    // same saved config (`saved_audio_config`),
+                                    // which is the only point where a missing
+                                    // output can fall back to a working one.
+                                    // Re-applying them here tried the missing
+                                    // output again after the fallback had
+                                    // landed.
                                     handle.set_auto_reconnect(config.auto_reconnect);
                                     sync_audio_status(&handle, &window);
                                 }

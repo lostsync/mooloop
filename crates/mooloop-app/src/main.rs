@@ -21,7 +21,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "app",
         "running a development build; use `cargo run --release -p mooloop-app --bin mooloop` for reliable realtime audio"
     );
-    let (engine, handle) = mooloop_engine::Engine::new(mooloop_engine::AudioConfig::default())?;
+    // Opened on the saved output and buffer size, not the defaults: startup
+    // is where a saved output that has gone falls back to one that works.
+    let (engine, handle) = mooloop_engine::Engine::new(mooloop_ui::saved_audio_config())?;
     log_info!("audio", "engine started at {} Hz", handle.sample_rate());
     let app = mooloop_ui::AppUi::new(handle)?;
     // `engine` stays alive on the stack for the duration of the event loop and
